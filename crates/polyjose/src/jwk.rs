@@ -1,4 +1,118 @@
 //! JSON Web Key (RFC 7517): typed `oct`, `RSA`, `EC` and `OKP` keys.
+//!
+//! [`Jwk::from_json`][from_json] reads a key from untrusted bytes through
+//! polyjose's own JSON parser ([`crate::json`], ADR 0016), and
+//! [`Jwk::from_object`][from_object] reads one from an already-parsed
+//! object, such as a JOSE Header's `jwk` or `epk`. The key-type members
+//! become typed, validated [`KeyMaterial`](crate::jwk::KeyMaterial); the common members become typed
+//! fields; every other member is kept unchanged.
+//!
+//! ```
+//! use polyjose::jwk::{EcCurve, Jwk, KeyMaterial, KeyOp, KeyUse};
+//!
+//! // RFC 7517 Appendix A.2, the EC private key.
+//! let jwk = Jwk::from_json(br#"{"kty":"EC","crv":"P-256",
+//!     "x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+//!     "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+//!     "d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE",
+//!     "use":"enc","kid":"1"}"#)?;
+//! assert_eq!(jwk.kid(), Some("1"));
+//! assert_eq!(jwk.key_use(), Some(&KeyUse::Enc));
+//! assert!(jwk.permits(&KeyOp::DeriveKey) && !jwk.permits(&KeyOp::Verify));
+//! let KeyMaterial::Ec(key) = jwk.material() else { unreachable!() };
+//! assert_eq!(key.crv(), EcCurve::P256);
+//!
+//! // Debug never shows private members.
+//! assert!(format!("{jwk:?}").contains(r#"d: "<redacted>""#));
+//!
+//! // The public part has no `d`.
+//! let public = jwk.to_public().expect("EC keys have a public part");
+//! assert!(public.is_public());
+//! assert!(!public.to_json().contains("\"d\""));
+//! # Ok::<(), polyjose::Error>(())
+//! ```
+//!
+//! # What import checks
+//!
+//! Validation is structural: polyjose has no curve or RSA arithmetic until
+//! feature 0002, so on-curve checks for EC points (ADR 0007) are made
+//! there (0002 T01), as are small-order Ed25519 keys (ADR 0026 §6) and the
+//! 8192-bit RSA ceiling (ADR 0026 §2 step 8).
+//!
+//! - **`kty`** must be present and is case-sensitive (RFC 7517 §4.1).
+//!   `oct`, `RSA`, `EC` and `OKP` are supported.
+//! - **`EC`** (RFC 7518 §6.2, RFC 8812 §3.1): `crv` is `P-256`, `P-384`,
+//!   `P-521` or `secp256k1`; `x` and `y` are present and exactly 32, 48,
+//!   66 or 32 octets; `d`, if present, has the same length
+//!   (RFC 7518 §6.2.1.2–§6.2.2.1).
+//! - **`OKP`** (RFC 8037 §2): `crv` is `Ed25519` or `X25519` (Ed448 and
+//!   X448 are out of scope, ADR 0006); `x`, and `d` if present, are 32
+//!   octets.
+//! - **`RSA`**, public keys only (RFC 7518 §6.3.1, ADR 0021): `n` and `e`
+//!   are minimal Base64urlUInt values, non-empty with no leading zero octet
+//!   (RFC 7518 §2, §6.3.1.1); `n` is odd (RFC 8017 §3.1) and at least
+//!   2048 bits (RFC 7518 §3.3, ADR 0007); `e` is odd with 3 ≤ e < n
+//!   (RFC 8017 §3.1). A key with **any** private member (`d`, `p`, `q`,
+//!   `dp`, `dq`, `qi`, `oth`, RFC 7518 §6.3.2) is rejected before anything
+//!   else is read.
+//! - **`oct`** (RFC 7518 §6.4): `k` is present and not empty.
+//! - Every binary member is canonical unpadded base64url (RFC 7515 §2),
+//!   so each key has one encoding and re-serializes to the same strings.
+//! - **Common members** have their JSON types: `kid`, `use`, `alg`, `x5u`,
+//!   `x5t` and `x5t#S256` are strings, `key_ops` and `x5c` are arrays of
+//!   strings (RFC 7517 §4.2–§4.9). X.509 members are carried, never
+//!   fetched, decoded or validated (ADR 0006, ADR 0022).
+//! - **`key_ops`** has no duplicate values (RFC 7517 §4.3, a MUST).
+//! - **`use` and `key_ops`**, when both are present, are consistent
+//!   (RFC 7517 §4.3, a MUST): `sig` allows only `sign`/`verify`, and `enc`
+//!   only `encrypt`, `decrypt`, `wrapKey`, `unwrapKey`, `deriveKey` and
+//!   `deriveBits` (RFC 7517 §4.2 puts key wrapping and key agreement under
+//!   `enc`). `key_ops` alone may combine unrelated operations: RFC 7517
+//!   §4.3 only says they "SHOULD NOT" be, and WebCrypto exports such keys.
+//! - **Unregistered `use` and `key_ops` values** are allowed (RFC 7517
+//!   §4.2–§4.3: "Other values MAY be used") and kept verbatim as
+//!   [`KeyUse::Unknown`](crate::jwk::KeyUse::Unknown) / [`KeyOp::Unknown`](crate::jwk::KeyOp::Unknown). polyjose gives them no
+//!   meaning, so they never conflict on import, and an unregistered `use`
+//!   makes [`Jwk::permits`][permits] refuse every operation (fail closed).
+//! - **Unknown members** are ignored, as RFC 7517 §4 requires, and kept in
+//!   [`Jwk::other_params`][other_params] so the key re-serializes to the
+//!   same members.
+//!
+//! # Error codes
+//!
+//! One rule decides between the two key codes (ADR 0018 Q3):
+//!
+//! - [`UnsupportedAlgorithm`](crate::Error::UnsupportedAlgorithm): well-formed, but not supported in
+//!   0.1.0. An unknown `kty`; an `EC` or `OKP` `crv` not listed above
+//!   (including another key type's curve); an RSA private key (ADR 0021).
+//! - [`InvalidKey`](crate::Error::InvalidKey): malformed. A missing or wrongly typed member,
+//!   a wrong length, a non-minimal or out-of-range RSA value, an empty `k`,
+//!   duplicate `key_ops`, or inconsistent `use`/`key_ops`.
+//! - [`InvalidBase64`](crate::Error::InvalidBase64): a binary member is not canonical unpadded
+//!   base64url (the code RFC 7515 §2 decoding uses everywhere).
+//! - [`InvalidJson`](crate::Error::InvalidJson) ([`Jwk::from_json`][from_json] only): not one
+//!   I-JSON object, or a member name occurs twice (RFC 7517 §4).
+//!
+//! Every detail is a fixed string; no error contains input or key bytes
+//! (ADR 0007). No input makes import panic.
+//!
+//! # Secrets
+//!
+//! The secret members, `oct` `k` and `EC`/`OKP` `d`, are decoded straight
+//! into [`Zeroizing`](zeroize::Zeroizing) buffers of their exact size, so they are wiped when
+//! the key is dropped and never reallocated. `Debug` prints them as
+//! `"<redacted>"` and shows only the names of unknown members.
+//! [`Jwk::to_json`][to_json] returns a [`Zeroizing<String>`](zeroize::Zeroizing), and
+//! [`Jwk::to_object`][to_object] an [`Object`](crate::json::Object), which wipes its strings on
+//! drop. [`Jwk::to_public`][to_public] drops `d` and every unknown member.
+//!
+//! [from_json]: crate::jwk::Jwk::from_json
+//! [from_object]: crate::jwk::Jwk::from_object
+//! [to_json]: crate::jwk::Jwk::to_json
+//! [to_object]: crate::jwk::Jwk::to_object
+//! [to_public]: crate::jwk::Jwk::to_public
+//! [permits]: crate::jwk::Jwk::permits
+//! [other_params]: crate::jwk::Jwk::other_params
 
 use core::fmt;
 
@@ -14,7 +128,7 @@ use crate::util::{b64url_decode, b64url_encode};
 ///
 /// `kty` is a case-sensitive string (RFC 7517 §4.1), so `"ec"` is not
 /// `EC`. Any other value is rejected on import with
-/// [`Error::UnsupportedAlgorithm`](crate::Error::UnsupportedAlgorithm).
+/// [`Error::UnsupportedAlgorithm`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum KeyType {
