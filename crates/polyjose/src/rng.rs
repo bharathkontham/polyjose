@@ -4,8 +4,16 @@ use crate::{Error, Result};
 
 /// Fills `dest` with bytes from the operating-system CSPRNG.
 pub(crate) fn fill_random(dest: &mut [u8]) -> Result<()> {
-    let _ = dest;
-    Err(Error::RandomnessUnavailable)
+    let outcome = getrandom::fill(dest);
+    fail_closed(outcome)
+}
+
+/// Maps the outcome of a `getrandom` call to polyjose's result.
+fn fail_closed(outcome: core::result::Result<(), getrandom::Error>) -> Result<()> {
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(_) => Err(Error::RandomnessUnavailable),
+    }
 }
 
 #[cfg(test)]
