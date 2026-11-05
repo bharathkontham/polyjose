@@ -1,13 +1,75 @@
 //! base64url (RFC 4648 §5, no padding) helpers used throughout JOSE.
+//!
+//! JOSE serializes every binary value as "Base64url Encoding": the URL- and
+//! filename-safe alphabet of RFC 4648 §5 "with all trailing '=' characters
+//! omitted ... and without the inclusion of any line breaks, whitespace, or
+//! other additional characters" (RFC 7515 §2; RFC 7516 §2, RFC 7517 §2 and
+//! RFC 7518 §2 use the same definition).
+//!
+//! [`b64url_decode`](crate::util::b64url_decode) is strict, so each octet string has exactly one accepted
+//! encoding. That keeps signature and JWK comparisons from being fooled by
+//! alternative spellings of the same bytes. All base64url decoding in
+//! polyjose must go through it. Don't call `base64ct` directly:
+//! `Base64UrlUnpadded::decode_in_place` (base64ct 1.8.3) skips the
+//! canonical-trailing-bits check that `decode` performs.
+//!
+//! The codec is `base64ct`, which works "without data-dependent branches or
+//! lookup tables" ("best effort" constant time, per its README). That
+//! matters because secret key material (`oct` `k`, private RSA/EC/OKP
+//! members) is decoded here.
 use base64ct::{Base64UrlUnpadded, Encoding};
 use zeroize::Zeroizing;
 
-/// Encodes bytes as unpadded base64url.
+/// Encodes bytes as unpadded base64url (RFC 7515 §2, RFC 4648 §5).
+///
+/// The output uses only `A`–`Z`, `a`–`z`, `0`–`9`, `-` and `_`, never `=`,
+/// and its pad bits are zero (RFC 4648 §3.5), so it is the canonical
+/// encoding that [`b64url_decode`] accepts.
+///
+/// ```
+/// use polyjose::util::b64url_encode;
+///
+/// // RFC 7515 Appendix C.
+/// assert_eq!(b64url_encode(&[3, 236, 255, 224, 193]), "A-z_4ME");
+/// ```
 pub fn b64url_encode(data: &[u8]) -> String {
     Base64UrlUnpadded::encode_string(data)
 }
 
-/// Decodes unpadded base64url.
+/// Strictly decodes unpadded base64url (RFC 7515 §2, RFC 4648 §5).
+///
+/// The empty string decodes to no octets (RFC 4648 §10). Everything else
+/// that is not the canonical encoding of some octet string fails with
+/// [`Error::InvalidBase64`](crate::Error::InvalidBase64). That covers:
+///
+/// - `=` padding, which RFC 7515 §2 omits;
+/// - `+` and `/` from the standard alphabet (RFC 4648 §4), since base64url
+///   uses `-` and `_` (§5);
+/// - whitespace and line breaks, which RFC 7515 §2 forbids and RFC 4648 §3.3
+///   allows a specification to reject;
+/// - any other byte outside the alphabet (RFC 4648 §3.3);
+/// - a length ≡ 1 (mod 4), which no input can produce (RFC 4648 §4);
+/// - non-zero pad bits in the final quantum. RFC 4648 §3.5 lets decoders
+///   reject them, and we do so that each value has one encoding: `"QQ"` is
+///   0x41, and `"QR"` is rejected rather than read as 0x41 too.
+///
+/// `base64ct`'s `decode` already enforces all of these (its branch-free
+/// symbol decoding rejects every non-alphabet byte and impossible length,
+/// and it re-encodes the last block to compare it with the input). This
+/// module's tests pin each rule, so a behaviour change in a `base64ct`
+/// update fails the build instead of loosening JOSE parsing.
+///
+/// The error carries no input bytes (ADR 0007). The returned bytes may be key
+/// material: callers decoding secrets should wrap them in
+/// `zeroize::Zeroizing`.
+///
+/// ```
+/// use polyjose::{Error, util::b64url_decode};
+///
+/// assert_eq!(b64url_decode("QQ"), Ok(vec![0x41]));
+/// assert_eq!(b64url_decode("QR"), Err(Error::InvalidBase64)); // non-canonical
+/// assert_eq!(b64url_decode("QQ=="), Err(Error::InvalidBase64)); // padded
+/// ```
 pub fn b64url_decode(s: &str) -> crate::Result<Vec<u8>> {
     // Decode into a buffer that is wiped on drop. On failure base64ct has
     // already written every quantum before the bad one, and for an `oct` `k`
