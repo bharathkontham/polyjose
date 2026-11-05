@@ -1,0 +1,21 @@
+[package]
+name = "polyjose"
+description = "Pure-Rust JOSE: JWA, JWK, JWS, JWE and JWT per the RFCs, with no OpenSSL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["jose", "jwt", "jws", "jwe", "jwk"]
+categories = ["cryptography", "authentication", "wasm"]
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+base64ct.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
