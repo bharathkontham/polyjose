@@ -267,4 +267,39 @@ mod tests {
             );
         }
     }
+
+    /// A distinctive value standing in for untrusted input or key material.
+    const MARKER: &str = "pj-SECRET-marker-7f3a";
+
+    /// Asserts that neither `Debug` nor `Display` of `e` contains `MARKER`.
+    fn assert_no_marker(e: &Error) {
+        let debug = format!("{e:?}");
+        let display = e.to_string();
+        assert!(!debug.contains(MARKER), "Debug leaks input: {debug}");
+        assert!(!display.contains(MARKER), "Display leaks input: {display}");
+    }
+
+    #[test]
+    fn no_variant_renders_input_or_has_a_cause() {
+        // Details are &'static str, so a variant cannot hold runtime input;
+        // this guards the rendering and the (absent) cause chain.
+        for e in one_of_each() {
+            assert_no_marker(&e);
+            assert!(!e.to_string().is_empty(), "{} has no message", e.code());
+            assert!(
+                std::error::Error::source(&e).is_none(),
+                "{} exposes a cause",
+                e.code()
+            );
+        }
+    }
+
+    #[test]
+    fn decryption_failed_has_no_detail() {
+        // RFC 7516 §11.5, ADR 0007: one uniform failure, no oracle.
+        let e = Error::DecryptionFailed;
+        assert_eq!(format!("{e:?}"), "DecryptionFailed");
+        assert_eq!(e.to_string(), "decryption failed");
+        assert!(std::error::Error::source(&e).is_none());
+    }
 }
