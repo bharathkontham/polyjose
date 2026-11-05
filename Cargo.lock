@@ -518,6 +518,7 @@ name = "polyjose"
 version = "0.1.0"
 dependencies = [
  "base64ct",
+ "getrandom",
  "serde",
  "serde_json",
  "subtle",

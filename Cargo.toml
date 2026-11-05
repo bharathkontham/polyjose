@@ -26,6 +26,8 @@ thiserror = "2"
 base64ct = { version = "1.8", features = ["alloc"] }
 zeroize = { version = "1.9", features = ["derive"] }
 subtle = "2.6"
+# OS CSPRNG: the only source of randomness (ADR 0005). No default features.
+getrandom = "0.4.3"
 # Crypto: pure-Rust crates only (enforced by deny.toml) — added per algorithm as each feature lands:
 # hmac 0.13, sha1 0.11, sha2 0.11, p256/p384/p521/k256 0.14, ed25519-dalek 3, x25519-dalek 3,
-# aes-gcm 0.11, aes-kw 0.3, cbc 0.2, pbkdf2 0.13, getrandom 0.4, rsa 0.10 (constant-time; never 0.9, see SECURITY.md).
+# aes-gcm 0.11, aes-kw 0.3, cbc 0.2, pbkdf2 0.13, rsa 0.10 (constant-time; never 0.9, see SECURITY.md).
