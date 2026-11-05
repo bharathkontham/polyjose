@@ -17,8 +17,15 @@
 //!   last value (RFC 7515 §10.12).
 //! - Each registered parameter has its registered JSON type, else
 //!   [`Error::InvalidHeader`].
+//! - `crit`, if present, is a non-empty list of distinct names, none of
+//!   them defined by JWS, JWE or JWA (RFC 7515 §4.1.11, RFC 7516 §4.1.13),
+//!   else [`Error::InvalidHeader`].
 //!
 //! # What parsing does not check
+//!
+//! - That the names in `crit` are present and understood: that depends on
+//!   the complete JOSE Header and on the recipient. Call
+//!   [`Header::validate_crit_understood`][crit] once the header is complete.
 //!
 //! - That `alg` (or `enc`) is present: in the JSON serializations a
 //!   parameter may live in another header object (RFC 7515 §7.2.1,
@@ -33,6 +40,7 @@
 //!   (and are validated) where they are used.
 //!
 //! [from_json]: crate::header::Header::from_json
+//! [crit]: crate::header::Header::validate_crit_understood
 //! [signing_alg]: crate::header::Header::signing_alg
 //! [key_mgmt_alg]: crate::header::Header::key_mgmt_alg
 //! [content_enc_alg]: crate::header::Header::content_enc_alg
@@ -204,6 +212,9 @@ impl Header {
                 }
             }
         }
+        if let Some(crit) = &h.crit {
+            check_crit_shape(crit)?;
+        }
         Ok(h)
     }
 
@@ -263,6 +274,60 @@ impl Header {
         Ok(enc.clone())
     }
 
+    /// Checks the `crit` rules that do not depend on what the recipient
+    /// understands (RFC 7515 §4.1.11, RFC 7516 §4.1.13). An absent `crit`
+    /// is valid.
+    ///
+    /// Call it on the complete JOSE Header: in the JSON serializations that
+    /// is the union of the protected and unprotected headers (RFC 7515
+    /// §5.2 step 4), since the listed names may occur in any of them. That
+    /// `crit` itself occurs only in the protected header is checked by the
+    /// JWS/JWE serialization layer, which knows where each member came from.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidHeader`] if `crit`:
+    /// - is the empty list,
+    /// - lists a name defined by JWS, JWE or JWA (`alg`, `enc`, `kid`, …),
+    /// - lists a name twice, or
+    /// - lists a name that does not occur in this header.
+    pub fn validate_crit(&self) -> Result<()> {
+        let Some(crit) = &self.crit else {
+            return Ok(());
+        };
+        check_crit_shape(crit)?;
+        if crit.iter().any(|name| !self.contains(name)) {
+            return Err(Error::InvalidHeader("crit lists an absent parameter"));
+        }
+        Ok(())
+    }
+
+    /// [`validate_crit`](Self::validate_crit), then requires every listed
+    /// extension to be in `understood` (RFC 7515 §4.1.11, RFC 7516
+    /// §4.1.13: otherwise the JWS/JWE is invalid).
+    ///
+    /// polyjose's JWS layer passes `&["b64"]` (RFC 7797; ADR 0007) and its
+    /// JWE layer passes `&[]`.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidHeader`] as for [`validate_crit`](Self::validate_crit).
+    /// - [`Error::UnknownCritical`] if a listed name is not in `understood`.
+    ///   The name is not echoed.
+    pub fn validate_crit_understood(&self, understood: &[&str]) -> Result<()> {
+        self.validate_crit()?;
+        let all_understood = self
+            .crit
+            .iter()
+            .flatten()
+            .all(|name| understood.contains(&name.as_str()));
+        if all_understood {
+            Ok(())
+        } else {
+            Err(Error::UnknownCritical)
+        }
+    }
+
     /// The Public and Private Header Parameters (RFC 7515 §4.2–§4.3): every
     /// member that is not one of the typed fields, keyed by name.
     pub fn other_params(&self) -> &BTreeMap<String, Value> {
@@ -320,6 +385,40 @@ impl Header {
 }
 
 const MISSING_ALG: Error = Error::InvalidHeader("missing alg");
+
+/// Header Parameter names defined by JWS (RFC 7515 §4.1), JWE
+/// (RFC 7516 §4.1) and JWA (RFC 7518 §4.6.1, §4.7.1, §4.8.1). `crit` must
+/// not list them (RFC 7515 §4.1.11, RFC 7516 §4.1.13).
+///
+/// The JWS and JWE sets are merged because this header model serves both:
+/// a JWS whose `crit` lists a JWE-only name (`enc`, …) is rejected here,
+/// where it would otherwise fail anyway as an extension polyjose doesn't
+/// understand. `b64` (RFC 7797) is an extension and is not in this list.
+const SPEC_DEFINED_NAMES: &[&str] = &[
+    "alg", "jku", "jwk", "kid", "x5u", "x5c", "x5t", "x5t#S256", "typ", "cty", "crit", "enc",
+    "zip", "epk", "apu", "apv", "iv", "tag", "p2s", "p2c",
+];
+
+/// The `crit` rules that hold for any single header object
+/// (RFC 7515 §4.1.11, RFC 7516 §4.1.13): non-empty, no JWS/JWE/JWA names,
+/// no repeats. Linear in the list length.
+fn check_crit_shape(crit: &[String]) -> Result<()> {
+    if crit.is_empty() {
+        return Err(Error::InvalidHeader("crit must not be empty"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for name in crit {
+        if SPEC_DEFINED_NAMES.contains(&name.as_str()) {
+            return Err(Error::InvalidHeader(
+                "crit lists a parameter defined by JWS, JWE or JWA",
+            ));
+        }
+        if !seen.insert(name.as_str()) {
+            return Err(Error::InvalidHeader("crit lists a name twice"));
+        }
+    }
+    Ok(())
+}
 
 fn string(value: Value, detail: &'static str) -> Result<String> {
     match value {
@@ -869,5 +968,142 @@ mod tests {
             Header::from_json(deep.as_bytes()),
             Err(Error::InvalidJson(_))
         ));
+    }
+
+    /// Names defined by JWS, JWE and JWA for headers (IANA registry rows
+    /// from RFC 7515 §4.1, RFC 7516 §4.1 and RFC 7518 §4.6.1/§4.7.1/§4.8.1).
+    const SPEC_NAMES: &[&str] = &[
+        "alg", "jku", "jwk", "kid", "x5u", "x5c", "x5t", "x5t#S256", "typ", "cty", "crit", "enc",
+        "zip", "epk", "apu", "apv", "iv", "tag", "p2s", "p2c",
+    ];
+
+    #[test]
+    fn rfc7515_crit_example_is_valid_but_not_understood() {
+        // RFC 7515 §4.1.11 example.
+        let h = Header::from_json(br#"{"alg":"ES256","crit":["exp"],"exp":1363284000}"#).unwrap();
+        assert_eq!(h.validate_crit(), Ok(()));
+        assert_eq!(
+            h.validate_crit_understood(&["b64"]),
+            Err(Error::UnknownCritical)
+        );
+        assert_eq!(h.validate_crit_understood(&["exp"]), Ok(()));
+    }
+
+    #[test]
+    fn rfc7797_b64_crit_is_understood_by_jws() {
+        let h = Header::from_json(br#"{"alg":"HS256","b64":false,"crit":["b64"]}"#).unwrap();
+        assert_eq!(h.validate_crit_understood(&["b64"]), Ok(()));
+        // A JWE recipient understands no extensions.
+        assert_eq!(h.validate_crit_understood(&[]), Err(Error::UnknownCritical));
+    }
+
+    #[test]
+    fn absent_crit_is_valid() {
+        let h = Header::from_json(br#"{"alg":"HS256"}"#).unwrap();
+        assert_eq!(h.validate_crit(), Ok(()));
+        assert_eq!(h.validate_crit_understood(&[]), Ok(()));
+    }
+
+    #[test]
+    fn empty_crit_is_rejected() {
+        // RFC 7515 §4.1.11: producers MUST NOT use the empty list.
+        assert_eq!(
+            Header::from_json(br#"{"alg":"HS256","crit":[]}"#),
+            Err(Error::InvalidHeader("crit must not be empty"))
+        );
+    }
+
+    #[test]
+    fn crit_listing_a_spec_defined_name_is_rejected() {
+        // RFC 7515 §4.1.11, RFC 7516 §4.1.13. Each name is present, so only
+        // the "defined by this specification" rule can reject it.
+        for name in SPEC_NAMES {
+            let mut obj = serde_json::Map::new();
+            obj.insert("alg".into(), json!("HS256"));
+            obj.insert("crit".into(), json!([name]));
+            if !obj.contains_key(*name) {
+                obj.insert((*name).to_owned(), json!("v"));
+            }
+            let bytes = serde_json::to_vec(&obj).unwrap();
+            let err = Header::from_json(&bytes).err();
+            assert!(
+                matches!(err, Some(Error::InvalidHeader(_))),
+                "{name}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn crit_listing_a_name_twice_is_rejected() {
+        // RFC 7515 §4.1.11: producers MUST NOT include duplicate names.
+        assert_eq!(
+            Header::from_json(br#"{"alg":"HS256","b64":false,"crit":["b64","b64"]}"#),
+            Err(Error::InvalidHeader("crit lists a name twice"))
+        );
+    }
+
+    #[test]
+    fn crit_listing_an_absent_name_is_rejected() {
+        // RFC 7515 §4.1.11: listed names must occur in the JOSE Header.
+        let h = Header::from_json(br#"{"alg":"HS256","crit":["exp"]}"#).unwrap();
+        let absent = Err(Error::InvalidHeader("crit lists an absent parameter"));
+        assert_eq!(h.validate_crit(), absent);
+        // Structural errors win over "not understood".
+        assert_eq!(h.validate_crit_understood(&["exp"]), absent);
+        let h = Header::from_json(br#"{"alg":"HS256","crit":["b64"]}"#).unwrap();
+        assert_eq!(h.validate_crit_understood(&["b64"]), absent);
+    }
+
+    #[test]
+    fn crit_set_programmatically_is_checked_too() {
+        let mut h = Header::new();
+        h.alg = Some("HS256".into());
+        h.crit = Some(vec![]);
+        assert_eq!(
+            h.validate_crit(),
+            Err(Error::InvalidHeader("crit must not be empty"))
+        );
+        h.crit = Some(vec!["kid".into()]);
+        h.kid = Some("k".into());
+        assert!(matches!(h.validate_crit(), Err(Error::InvalidHeader(_))));
+        // Understanding a spec-defined name doesn't make it listable.
+        assert!(matches!(
+            h.validate_crit_understood(&["kid"]),
+            Err(Error::InvalidHeader(_))
+        ));
+    }
+
+    #[test]
+    fn unknown_critical_name_is_not_echoed() {
+        let marker = "pj-SECRET-marker-crit";
+        let input = format!(r#"{{"alg":"HS256","crit":["{marker}"],"{marker}":1}}"#);
+        let h = Header::from_json(input.as_bytes()).unwrap();
+        let err = h.validate_crit_understood(&["b64"]).err().unwrap();
+        assert_eq!(err, Error::UnknownCritical);
+        assert!(!format!("{err:?}").contains(marker));
+        assert!(!err.to_string().contains(marker));
+    }
+
+    #[test]
+    fn crit_may_list_non_jose_registered_names() {
+        // iss/sub/aud are registered by RFC 7519 §10.4.1, not by JWS/JWE/JWA.
+        let h = Header::from_json(br#"{"alg":"HS256","crit":["iss","aud"],"iss":"a","aud":"b"}"#)
+            .unwrap();
+        assert_eq!(h.validate_crit(), Ok(()));
+        assert_eq!(h.validate_crit_understood(&["iss", "aud"]), Ok(()));
+    }
+
+    #[test]
+    fn long_crit_list_is_checked_without_quadratic_cost() {
+        // Duplicate detection uses a set; 50k distinct names stay fast.
+        let names: Vec<String> = (0..50_000).map(|i| format!("x{i}")).collect();
+        let mut obj = serde_json::Map::new();
+        obj.insert("crit".into(), json!(names));
+        for n in &names {
+            obj.insert(n.clone(), json!(1));
+        }
+        let h = Header::from_json(&serde_json::to_vec(&obj).unwrap()).unwrap();
+        assert_eq!(h.validate_crit(), Ok(()));
+        assert_eq!(h.validate_crit_understood(&[]), Err(Error::UnknownCritical));
     }
 }
