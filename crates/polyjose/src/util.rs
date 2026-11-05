@@ -1,5 +1,6 @@
 //! base64url (RFC 4648 §5, no padding) helpers used throughout JOSE.
 use base64ct::{Base64UrlUnpadded, Encoding};
+use zeroize::Zeroizing;
 
 /// Encodes bytes as unpadded base64url.
 pub fn b64url_encode(data: &[u8]) -> String {
@@ -8,7 +9,27 @@ pub fn b64url_encode(data: &[u8]) -> String {
 
 /// Decodes unpadded base64url.
 pub fn b64url_decode(s: &str) -> crate::Result<Vec<u8>> {
-    Base64UrlUnpadded::decode_vec(s).map_err(|_| crate::Error::InvalidBase64)
+    // Decode into a buffer that is wiped on drop. On failure base64ct has
+    // already written every quantum before the bad one, and for an `oct` `k`
+    // or a private JWK member (RFC 7518 §6.4.1, §6.3.2) those bytes are key
+    // material, so they must not be left in freed memory (workspace
+    // CLAUDE.md: key material is zeroized).
+    let mut buf = Zeroizing::new(vec![0u8; decoded_len(s.len())]);
+    let len = Base64UrlUnpadded::decode(s, &mut buf)
+        .map_err(|_| crate::Error::InvalidBase64)?
+        .len();
+    buf.truncate(len);
+    // Move the allocation out without copying; the emptied wrapper is dropped.
+    Ok(core::mem::take(&mut *buf))
+}
+
+/// Exact decoded length of an unpadded base64url string of `encoded_len`
+/// characters (RFC 4648 §4: each 4-character quantum is 3 octets; a final
+/// 2- or 3-character quantum is 1 or 2 octets). A remainder of 1 is not a
+/// valid length and gets 0; the decoder rejects that input anyway. Written
+/// so that it cannot overflow.
+fn decoded_len(encoded_len: usize) -> usize {
+    encoded_len / 4 * 3 + (encoded_len % 4) * 3 / 4
 }
 
 #[cfg(test)]
@@ -142,6 +163,17 @@ mod tests {
         assert_all_rejected(&[
             "QR", "QS", "QT", "Q_", "QUF", "QUG", "QUH", "Zh", "Zm9vYh", "Zm9vYmF",
         ]);
+    }
+
+    /// The decode buffer is sized exactly: n octets encode to
+    /// ceil(4n / 3) characters without padding (RFC 4648 §4, RFC 7515 §2).
+    #[test]
+    fn decoded_len_matches_every_canonical_length() {
+        for n in 0..=64usize {
+            let encoded = b64url_encode(&vec![0xa5; n]);
+            assert_eq!(decoded_len(encoded.len()), n, "{n} octets");
+        }
+        assert_eq!(decoded_len(usize::MAX), usize::MAX / 4 * 3 + 2);
     }
 
     /// RFC 4648 §10: BASE64("") = "".
