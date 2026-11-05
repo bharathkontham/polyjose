@@ -123,6 +123,8 @@ use crate::json::{self, Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use crate::util::{b64url_decode, b64url_encode};
 
+mod thumbprint;
+
 /// The `kty` (key type) values polyjose supports (RFC 7517 §4.1,
 /// RFC 7518 §6.1, RFC 8037 §2).
 ///
@@ -963,10 +965,6 @@ impl Jwk {
     /// (RFC 7638 §3.2). A private key yields the same members as its
     /// public key. The `oct` result contains the secret `k`; the object
     /// wipes it on drop.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by JWK thumbprints (feature 0001 T06)")
-    )]
     pub(crate) fn thumbprint_members(&self) -> Object {
         let mut o = Object::new();
         match &self.material {
