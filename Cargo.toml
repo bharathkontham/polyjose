@@ -27,7 +27,9 @@ base64ct = { version = "1.8", features = ["alloc"] }
 # Default features off (ADR 0016 §3). No `derive` (it pulls syn, quote and proc-macro2): Zeroize and
 # Drop are written by hand. `alloc` provides Zeroize for the String and Vec<u8> inside Zeroizing<_>.
 zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
-subtle = "2.6"
+# Default features (std, i128) off (ADR 0016 §3): polyjose uses only Choice and ConstantTimeEq on u32,
+# which need neither.
+subtle = { version = "2.6", default-features = false }
 # Dev-only: property tests (ADR 0008 layer 2).
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 # OS CSPRNG: the only source of randomness (ADR 0005). Default features off (ADR 0016); polyjose uses
