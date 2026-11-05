@@ -245,6 +245,54 @@ mod tests {
         assert_eq!(b64url_encode(&[]), "");
     }
 
+    /// RFC 4648 §5, Table 2 ("The 'URL and Filename safe' Base 64
+    /// Alphabet"), written out independently of the codec under test.
+    const TABLE_2: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    /// RFC 4648 §5 Table 2: every 6-bit value v encodes as `TABLE_2[v]`,
+    /// both as the first symbol of a quantum (v << 2 in a 1-octet input)
+    /// and as the last symbol of a full quantum (low 6 bits of octet 3).
+    #[test]
+    fn encode_maps_every_value_per_table_2() {
+        for (v, &symbol) in (0u8..).zip(TABLE_2.iter()) {
+            assert_eq!(
+                b64url_encode(&[v << 2]).as_bytes(),
+                [symbol, b'A'],
+                "value {v} first"
+            );
+            assert_eq!(
+                b64url_encode(&[0, 0, v]).as_bytes(),
+                [b'A', b'A', b'A', symbol],
+                "value {v} last"
+            );
+        }
+    }
+
+    /// RFC 4648 §5 Table 2 and §3.3: every character U+0000..=U+00FF
+    /// decodes to its Table 2 value if it is in the alphabet and is rejected
+    /// otherwise, in the first and in the last position of a quantum.
+    #[test]
+    fn decode_maps_every_byte_per_table_2() {
+        for c in (0u8..=0xff).map(char::from) {
+            let value = u8::try_from(c)
+                .ok()
+                .and_then(|b| TABLE_2.iter().position(|&s| s == b))
+                .and_then(|v| u8::try_from(v).ok());
+            let first = b64url_decode(&format!("{c}A"));
+            let last = b64url_decode(&format!("AAA{c}"));
+            match value {
+                Some(v) => {
+                    assert_eq!(first, Ok(vec![v << 2]), "{c:?} first");
+                    assert_eq!(last, Ok(vec![0, 0, v]), "{c:?} last");
+                }
+                None => {
+                    assert_eq!(first, Err(crate::Error::InvalidBase64), "{c:?} first");
+                    assert_eq!(last, Err(crate::Error::InvalidBase64), "{c:?} last");
+                }
+            }
+        }
+    }
+
     mod properties {
         use super::super::*;
         use proptest::prelude::*;
