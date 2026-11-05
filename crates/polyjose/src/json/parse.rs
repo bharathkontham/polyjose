@@ -14,6 +14,8 @@ const BAD_NUMBER: Error = Error::InvalidJson("invalid number");
 const BAD_ESCAPE: Error = Error::InvalidJson("invalid escape");
 const LONE_SURROGATE: Error = Error::InvalidJson("lone surrogate escape");
 const CONTROL_CHAR: Error = Error::InvalidJson("unescaped control character in string");
+const BOM: Error = Error::InvalidJson("byte order mark");
+const DUPLICATE: Error = Error::InvalidJson("duplicate member name");
 const TOO_DEEP: Error = Error::InvalidJson("nesting too deep");
 
 /// Parses one JSON text (RFC 8259 §2) into a [`Value`].
@@ -22,6 +24,14 @@ pub fn parse(input: &[u8]) -> Result<Value> {
     // I-JSON messages MUST be UTF-8 (RFC 7493 §2.1). `from_utf8` rejects
     // overlong forms, encoded surrogates and code points above U+10FFFF.
     let text = core::str::from_utf8(input).map_err(|_| NOT_UTF8)?;
+    // RFC 8259 §8.1: senders MUST NOT add a byte order mark; parsers MAY
+    // ignore one. polyjose rejects it: a JOSE Header is exactly the octets
+    // that were signed (RFC 7515 §5.2), and accepting U+FEFF would give the
+    // same object two encodings. It is the clearest error to report, since
+    // U+FEFF is not JSON whitespace either.
+    if text.starts_with('\u{feff}') {
+        return Err(BOM);
+    }
     let mut parser = Parser {
         text,
         bytes: text.as_bytes(),
@@ -144,6 +154,8 @@ impl Parser<'_> {
 
     /// RFC 8259 §4: `object = { member *( , member ) }`,
     /// `member = string : value`; no trailing comma.
+    ///
+    /// Duplicate member names are rejected (see [`unique`]).
     fn object(&mut self, depth: usize) -> Result<Object> {
         Self::enter(depth)?;
         self.expect(b'{')?;
@@ -172,7 +184,7 @@ impl Parser<'_> {
                 Some(b',') => self.pos += 1,
                 Some(b'}') => {
                     self.pos += 1;
-                    return Ok(Object::from_unique_members(members));
+                    return unique(members).map(Object::from_unique_members);
                 }
                 Some(_) => return Err(UNEXPECTED),
                 None => return Err(EOF),
@@ -312,6 +324,28 @@ impl Parser<'_> {
             Ok(())
         }
     }
+}
+
+/// Rejects an object with two members of the same name.
+///
+/// RFC 8259 §4 only says names SHOULD be unique, but JOSE requires either
+/// rejecting duplicates or using a parser that returns the last one
+/// (RFC 7515 §5.2 step 4, RFC 7516 §5.2 step 4), and I-JSON objects MUST
+/// NOT have duplicate names (RFC 7493 §2.3). Picking one silently lets two
+/// parsers read different headers from the same bytes, so polyjose rejects,
+/// at every nesting level.
+///
+/// Names are compared after unescaping, so `"a"` and `"\u0061"` are the
+/// same name, and code point by code point (RFC 8259 §8.3), so `"a"` and
+/// `"A"`, or precomposed and decomposed `"é"`, are different. Sorting keeps
+/// the check O(n log n) for large objects.
+fn unique(members: Vec<(String, Value)>) -> Result<Vec<(String, Value)>> {
+    let mut names: Vec<&str> = members.iter().map(|(n, _)| n.as_str()).collect();
+    names.sort_unstable();
+    if names.windows(2).any(|w| matches!(w, [a, b] if a == b)) {
+        return Err(DUPLICATE);
+    }
+    Ok(members)
 }
 
 #[cfg(test)]
@@ -516,6 +550,43 @@ mod tests {
         ] {
             assert!(matches!(err(s.as_bytes()), Error::InvalidJson(_)), "{s}");
         }
+    }
+
+    #[test]
+    fn duplicate_member_names_are_rejected_after_unescaping() {
+        // RFC 7515 §5.2 step 4, RFC 7516 §5.2 step 4, RFC 7493 §2.3.
+        for s in [
+            r#"{"a":1,"a":1}"#,
+            r#"{"a":1,"a":2}"#,
+            r#"{"alg":"HS256","b":0,"alg":"none"}"#,
+            r#"{"a":1,"a":2}"#,
+            r#"{"é":1,"é":2}"#,
+            r#"{"😀":1,"😀":2}"#,
+            r#"{"\/":1,"/":2}"#,
+            r#"{"":1,"":2}"#,
+            r#"[{"x":{"y":[{"k":1,"k":2}]}}]"#,
+        ] {
+            assert_eq!(err(s.as_bytes()), DUPLICATE, "{s}");
+        }
+    }
+
+    #[test]
+    fn similar_but_distinct_names_are_not_duplicates() {
+        // Names compare code point by code point: no case folding and no
+        // Unicode normalization (RFC 8259 §8.3).
+        let v = ok(r#"{"a":1,"A":2,"é":3,"é":4,"a ":5}"#);
+        assert_eq!(v.as_object().map(Object::len), Some(5));
+        // The same name in different objects is fine.
+        assert!(parse(br#"{"a":{"a":{"a":1}},"b":{"a":2}}"#).is_ok());
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_rejected() {
+        assert_eq!(err(b"\xef\xbb\xbf{}"), BOM);
+        assert_eq!(err(b"\xef\xbb\xbf"), BOM);
+        // U+FEFF is an ordinary character inside a string.
+        assert_eq!(ok("\"\u{feff}\""), Value::from("\u{feff}"));
+        assert_eq!(err(b"{} \xef\xbb\xbf"), TRAILING);
     }
 
     #[test]
