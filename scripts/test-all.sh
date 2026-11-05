@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run polyjose's test suites on every platform (or the ones named as arguments).
-# A platform whose toolchain is missing is reported as SKIPPED, never silently passed.
+# A platform whose toolchain or test suite is missing is reported as SKIPPED with the reason,
+# never silently passed; a suite that exists always runs and can FAIL.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 platforms=("$@"); [ ${#platforms[@]} -eq 0 ] && platforms=(rust wasm node android apple)
