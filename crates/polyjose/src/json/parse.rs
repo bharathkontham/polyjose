@@ -3,9 +3,6 @@
 use super::{Number, Object, Value};
 use crate::{Error, Result};
 
-/// Nesting depth limit (arrays and objects).
-const MAX_DEPTH: usize = 32;
-
 const EOF: Error = Error::InvalidJson("unexpected end of input");
 const UNEXPECTED: Error = Error::InvalidJson("unexpected character");
 const NOT_UTF8: Error = Error::InvalidJson("invalid UTF-8");
@@ -17,9 +14,81 @@ const CONTROL_CHAR: Error = Error::InvalidJson("unescaped control character in s
 const BOM: Error = Error::InvalidJson("byte order mark");
 const DUPLICATE: Error = Error::InvalidJson("duplicate member name");
 const TOO_DEEP: Error = Error::InvalidJson("nesting too deep");
+const TOO_LARGE: Error = Error::InvalidJson("input too large");
+const TOO_MANY: Error = Error::InvalidJson("too many members or elements");
 
-/// Parses one JSON text (RFC 8259 §2) into a [`Value`].
+/// Resource limits for [`parse_with_limits`].
+///
+/// JOSE parses untrusted headers, claims and keys, so every limit fails
+/// closed with [`Error::InvalidJson`]. RFC 8259 §9 lets a parser limit the
+/// size of texts, the nesting depth and other values; these defaults are
+/// far above what any JOSE object needs:
+///
+/// | limit | default | bounds |
+/// |---|---|---|
+/// | [`max_depth`](Limits::max_depth) | 32 | recursion depth |
+/// | [`max_input_len`](Limits::max_input_len) | 1 MiB | work and memory per call |
+/// | [`max_entries`](Limits::max_entries) | 10 000 | members of one object, elements of one array |
+///
+/// Start from [`Limits::default`] and change a field:
+///
+/// ```
+/// use polyjose::json::{parse_with_limits, Limits};
+///
+/// let mut limits = Limits::default();
+/// limits.max_depth = 2;
+/// assert!(parse_with_limits(b"[[1]]", &limits).is_ok());
+/// assert!(parse_with_limits(b"[[[1]]]", &limits).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Limits {
+    /// Maximum nesting of arrays and objects. A scalar has depth 0, `[]`
+    /// depth 1 and `[{}]` depth 2. Values above
+    /// [`MAX_DEPTH_CEILING`](Limits::MAX_DEPTH_CEILING) act as the ceiling.
+    pub max_depth: usize,
+    /// Maximum input length in bytes, checked before anything else.
+    pub max_input_len: usize,
+    /// Maximum number of members in any one object, or elements in any one
+    /// array. With `max_input_len` it bounds the per-object duplicate-name
+    /// check and keeps container sizes predictable for callers.
+    pub max_entries: usize,
+}
+
+impl Limits {
+    /// The default limits: depth 32, 1 MiB of input, 10 000 entries per
+    /// container.
+    pub const DEFAULT: Limits = Limits {
+        max_depth: 32,
+        max_input_len: 1024 * 1024,
+        max_entries: 10_000,
+    };
+
+    /// Hard cap on [`max_depth`](Limits::max_depth).
+    ///
+    /// The parser recurses once per level, and so do `Drop`, `Clone`,
+    /// equality and serialization of the resulting [`Value`], so the depth
+    /// must stay small enough for any thread's stack, including WASM's.
+    pub const MAX_DEPTH_CEILING: usize = 128;
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits::DEFAULT
+    }
+}
+
+/// Parses one JSON text (RFC 8259 §2) into a [`Value`], with the default
+/// [`Limits`].
 pub fn parse(input: &[u8]) -> Result<Value> {
+    parse_with_limits(input, &Limits::DEFAULT)
+}
+
+/// Parses one JSON text (RFC 8259 §2) into a [`Value`], within `limits`.
+pub fn parse_with_limits(input: &[u8], limits: &Limits) -> Result<Value> {
+    if input.len() > limits.max_input_len {
+        return Err(TOO_LARGE);
+    }
     // RFC 8259 §8.1: JSON exchanged between systems MUST be UTF-8, and
     // I-JSON messages MUST be UTF-8 (RFC 7493 §2.1). `from_utf8` rejects
     // overlong forms, encoded surrogates and code points above U+10FFFF.
@@ -36,6 +105,8 @@ pub fn parse(input: &[u8]) -> Result<Value> {
         text,
         bytes: text.as_bytes(),
         pos: 0,
+        max_depth: limits.max_depth.min(Limits::MAX_DEPTH_CEILING),
+        max_entries: limits.max_entries,
     };
     parser.skip_ws();
     let value = parser.value(0)?;
@@ -52,6 +123,9 @@ struct Parser<'a> {
     bytes: &'a [u8],
     /// Always at a char boundary of `text`, and `<= bytes.len()`.
     pos: usize,
+    /// At most [`Limits::MAX_DEPTH_CEILING`].
+    max_depth: usize,
+    max_entries: usize,
 }
 
 impl Parser<'_> {
@@ -116,10 +190,11 @@ impl Parser<'_> {
         }
     }
 
-    /// The recursion is bounded by [`MAX_DEPTH`], so hostile nesting cannot
-    /// exhaust the stack.
-    fn enter(depth: usize) -> Result<()> {
-        if depth > MAX_DEPTH {
+    /// Opens a container at `depth`. The recursion is bounded by
+    /// `max_depth` (itself capped), so hostile nesting cannot exhaust the
+    /// stack.
+    fn enter(&self, depth: usize) -> Result<()> {
+        if depth > self.max_depth {
             Err(TOO_DEEP)
         } else {
             Ok(())
@@ -129,7 +204,7 @@ impl Parser<'_> {
     /// RFC 8259 §5: `array = [ value *( , value ) ]` with insignificant
     /// whitespace; no trailing comma.
     fn array(&mut self, depth: usize) -> Result<Vec<Value>> {
-        Self::enter(depth)?;
+        self.enter(depth)?;
         self.expect(b'[')?;
         let mut items = Vec::new();
         self.skip_ws();
@@ -138,6 +213,9 @@ impl Parser<'_> {
         }
         loop {
             self.skip_ws();
+            if items.len() >= self.max_entries {
+                return Err(TOO_MANY);
+            }
             items.push(self.value(depth)?);
             self.skip_ws();
             match self.peek() {
@@ -157,7 +235,7 @@ impl Parser<'_> {
     ///
     /// Duplicate member names are rejected (see [`unique`]).
     fn object(&mut self, depth: usize) -> Result<Object> {
-        Self::enter(depth)?;
+        self.enter(depth)?;
         self.expect(b'{')?;
         let mut members = Vec::new();
         self.skip_ws();
@@ -172,6 +250,9 @@ impl Parser<'_> {
                 } else {
                     UNEXPECTED
                 });
+            }
+            if members.len() >= self.max_entries {
+                return Err(TOO_MANY);
             }
             let name = self.string()?;
             self.skip_ws();
@@ -598,19 +679,100 @@ mod tests {
         assert_eq!(err(b"\"a\"/**/"), TRAILING);
     }
 
+    fn nested_arrays(depth: usize) -> String {
+        format!("{}{}", "[".repeat(depth), "]".repeat(depth))
+    }
+
+    fn with(limits: Limits, input: &[u8]) -> Result<Value> {
+        parse_with_limits(input, &limits)
+    }
+
     #[test]
-    fn nesting_is_bounded() {
-        let at_limit = format!("{}{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
-        assert!(parse(at_limit.as_bytes()).is_ok());
-        let over = format!("{}{}", "[".repeat(MAX_DEPTH + 1), "]".repeat(MAX_DEPTH + 1));
-        assert_eq!(err(over.as_bytes()), TOO_DEEP);
-        let objects = format!(
-            "{}1{}",
-            r#"{"a":"#.repeat(MAX_DEPTH + 1),
-            "}".repeat(MAX_DEPTH + 1)
-        );
+    fn default_limits_are_the_documented_values() {
+        let l = Limits::default();
+        assert_eq!(l, Limits::DEFAULT);
+        assert_eq!(l.max_depth, 32);
+        assert_eq!(l.max_input_len, 1024 * 1024);
+        assert_eq!(l.max_entries, 10_000);
+    }
+
+    #[test]
+    fn nesting_is_bounded_by_max_depth() {
+        assert!(parse(nested_arrays(32).as_bytes()).is_ok());
+        assert_eq!(err(nested_arrays(33).as_bytes()), TOO_DEEP);
+        let objects = format!("{}1{}", r#"{"a":"#.repeat(33), "}".repeat(33));
         assert_eq!(err(objects.as_bytes()), TOO_DEEP);
+        let mixed = format!("{}1{}", r#"[{"a":"#.repeat(16), "}]".repeat(16));
+        assert!(parse(mixed.as_bytes()).is_ok());
+        let mixed = format!("[{}1{}]", r#"[{"a":"#.repeat(16), "}]".repeat(16));
+        assert_eq!(err(mixed.as_bytes()), TOO_DEEP);
         // Far deeper than any stack could recurse: rejected, not a crash.
         assert_eq!(err("[".repeat(100_000).as_bytes()), TOO_DEEP);
+    }
+
+    #[test]
+    fn max_depth_is_configurable_up_to_the_ceiling() {
+        let mut l = Limits {
+            max_depth: 2,
+            ..Limits::DEFAULT
+        };
+        assert!(with(l, b"[[1]]").is_ok());
+        assert_eq!(with(l, b"[[[1]]]"), Err(TOO_DEEP));
+        l.max_depth = 0;
+        assert!(with(l, b"\"scalars need no depth\"").is_ok());
+        assert_eq!(with(l, b"[]"), Err(TOO_DEEP));
+        // Larger settings are capped, so recursion stays bounded.
+        l.max_depth = usize::MAX;
+        let ceiling = Limits::MAX_DEPTH_CEILING;
+        assert!(with(l, nested_arrays(ceiling).as_bytes()).is_ok());
+        assert_eq!(
+            with(l, nested_arrays(ceiling + 1).as_bytes()),
+            Err(TOO_DEEP)
+        );
+    }
+
+    #[test]
+    fn input_size_is_bounded_by_max_input_len() {
+        let max = Limits::DEFAULT.max_input_len;
+        let fits = format!("\"{}\"", "a".repeat(max - 2));
+        assert!(parse(fits.as_bytes()).is_ok());
+        let over = format!("{fits} ");
+        assert_eq!(err(over.as_bytes()), TOO_LARGE);
+        // The size check comes first, before any other validation.
+        assert_eq!(err(&vec![0xff; max + 1]), TOO_LARGE);
+
+        let l = Limits {
+            max_input_len: 4,
+            ..Limits::DEFAULT
+        };
+        assert!(with(l, b"[ 1]").is_ok());
+        assert_eq!(with(l, b"[ 1 ]"), Err(TOO_LARGE));
+    }
+
+    #[test]
+    fn container_sizes_are_bounded_by_max_entries() {
+        let max = Limits::DEFAULT.max_entries;
+        let array = |n: usize| format!("[{}]", vec!["0"; n].join(","));
+        assert!(parse(array(max).as_bytes()).is_ok());
+        assert_eq!(err(array(max + 1).as_bytes()), TOO_MANY);
+        let object = |n: usize| {
+            let members: Vec<String> = (0..n).map(|i| format!("\"{i}\":0")).collect();
+            format!("{{{}}}", members.join(","))
+        };
+        assert!(parse(object(max).as_bytes()).is_ok());
+        assert_eq!(err(object(max + 1).as_bytes()), TOO_MANY);
+
+        // The limit is per container, not a total.
+        let mut l = Limits {
+            max_entries: 2,
+            ..Limits::DEFAULT
+        };
+        assert!(with(l, b"[[1,2],[3,4]]").is_ok());
+        assert_eq!(with(l, b"[1,2,3]"), Err(TOO_MANY));
+        assert_eq!(with(l, br#"{"a":1,"b":2,"c":3}"#), Err(TOO_MANY));
+        l.max_entries = 0;
+        assert!(with(l, b"[]").is_ok());
+        assert!(with(l, b"{}").is_ok());
+        assert_eq!(with(l, b"[1]"), Err(TOO_MANY));
     }
 }
