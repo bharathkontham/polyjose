@@ -24,7 +24,7 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 /// Deterministic byte source for reproducing published test vectors.
 #[cfg(any(test, feature = "test-vectors"))]
 pub mod test_vectors {
-    use zeroize::Zeroizing;
+    use zeroize::{Zeroize, Zeroizing};
 
     use crate::{Error, Result};
 
@@ -45,13 +45,26 @@ pub mod test_vectors {
 
         /// Fills `dest` with the next `dest.len()` bytes.
         pub fn fill(&mut self, dest: &mut [u8]) -> Result<()> {
-            let _ = (dest, &self.bytes, self.pos);
-            Err(Error::RandomnessUnavailable)
+            let next = self
+                .pos
+                .checked_add(dest.len())
+                .and_then(|end| self.bytes.get(self.pos..end).map(|src| (src, end)));
+            match next {
+                Some((src, end)) => {
+                    dest.copy_from_slice(src);
+                    self.pos = end;
+                    Ok(())
+                }
+                None => {
+                    dest.zeroize();
+                    Err(Error::RandomnessUnavailable)
+                }
+            }
         }
 
         /// The number of bytes not yet handed out.
         pub fn remaining(&self) -> usize {
-            0
+            self.bytes.len().saturating_sub(self.pos)
         }
     }
 
