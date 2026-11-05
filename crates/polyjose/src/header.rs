@@ -620,6 +620,20 @@ mod tests {
         let h = assert_round_trip(&bytes);
         assert_eq!(h.alg.as_deref(), Some("RSA-OAEP"));
         assert_eq!(h.content_enc_alg().unwrap(), ContentEncAlg::A256GCM);
+        // RSA-OAEP (SHA-1) is not shipped (ADR 0022): it round-trips, but
+        // fails as soon as it is used.
+        assert_eq!(h.key_mgmt_alg(), Err(Error::UnsupportedAlgorithm));
+        assert_eq!(h.to_json().unwrap().as_bytes(), bytes.as_slice());
+    }
+
+    #[test]
+    fn rsa1_5_header_round_trips_and_is_unsupported() {
+        // RSA1_5 is not shipped in either direction (ADR 0021).
+        let bytes = br#"{"alg":"RSA1_5","enc":"A128CBC-HS256"}"#;
+        let h = assert_round_trip(bytes);
+        assert_eq!(h.to_json().unwrap().as_bytes(), bytes);
+        assert_eq!(h.key_mgmt_alg(), Err(Error::UnsupportedAlgorithm));
+        assert_eq!(h.signing_alg(), Err(Error::UnsupportedAlgorithm));
     }
 
     #[test]

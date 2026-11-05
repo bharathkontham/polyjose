@@ -15,7 +15,8 @@
 //! [`Error::UnsupportedAlgorithm`], which never echoes the value.
 //!
 //! "Unknown" includes registered names that polyjose deliberately does not
-//! implement, such as `Ed448` (ADR 0006), and anything registered later.
+//! implement: `RSA-OAEP` (SHA-1, ADR 0022), `RSA1_5` (ADR 0021), `Ed448`
+//! (ADR 0006), and anything registered later.
 //!
 //! Construct values with `From<&str>`/`From<String>` (or the variants).
 //! Building `Unknown` directly from a known name (e.g.
@@ -172,11 +173,10 @@ alg_enum! {
 
 alg_enum! {
     /// JWE `alg` (key management) values (RFC 7516 §4.1.1, RFC 7518 §4.1).
+    ///
+    /// `RSA-OAEP` (SHA-1, ADR 0022) and `RSA1_5` (ADR 0021) are registered
+    /// but not implemented, so they are [`KeyMgmtAlg::Unknown`].
     KeyMgmtAlg {
-        /// `RSA1_5`: RSAES-PKCS1-v1_5 (RFC 7518 §4.2).
-        RsaPkcs1v15 => "RSA1_5",
-        /// `RSA-OAEP`: RSAES OAEP using default parameters (RFC 7518 §4.3).
-        RsaOaep => "RSA-OAEP",
         /// `RSA-OAEP-256`: RSAES OAEP using SHA-256 and MGF1 with SHA-256
         /// (RFC 7518 §4.3). Encryption to RSA public keys only (ADR 0021).
         RsaOaep256 => "RSA-OAEP-256",
@@ -241,8 +241,6 @@ mod tests {
         "PS256", "PS384", "PS512", "EdDSA", "Ed25519", "none",
     ];
     const JWE_ALG_NAMES: &[&str] = &[
-        "RSA1_5",
-        "RSA-OAEP",
         "RSA-OAEP-256",
         "A128KW",
         "A192KW",
@@ -320,6 +318,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rsa_oaep_sha1_is_unknown_and_unsupported() {
+        // ADR 0022: RSA-OAEP (SHA-1) is registered but not implemented.
+        let alg = KeyMgmtAlg::from("RSA-OAEP");
+        assert_eq!(alg, KeyMgmtAlg::Unknown("RSA-OAEP".into()));
+        assert_eq!(alg.as_str(), "RSA-OAEP");
+        assert_eq!(alg.ensure_known(), Err(Error::UnsupportedAlgorithm));
+    }
+
+    #[test]
+    fn rsa1_5_is_unknown_and_unsupported() {
+        // ADR 0021: RSA1_5 is not shipped in either direction.
+        let alg = KeyMgmtAlg::from("RSA1_5");
+        assert_eq!(alg, KeyMgmtAlg::Unknown("RSA1_5".into()));
+        assert_eq!(alg.as_str(), "RSA1_5");
+        assert_eq!(alg.ensure_known(), Err(Error::UnsupportedAlgorithm));
+    }
+
     /// Values that are not shipped: wrong case, registered but out of scope
     /// (Ed448, RSA-OAEP, RSA1_5, RSA-OAEP-384, HPKE-0, ML-DSA-44), the other
     /// family's names, whitespace, NUL, full-width forms and empty strings.
@@ -342,6 +358,8 @@ mod tests {
         "A128GCM",
     ];
     const NOT_JWE_ALG: &[&str] = &[
+        "RSA-OAEP",
+        "RSA1_5",
         "rsa-oaep-256",
         "RSA-OAEP-384",
         "RSA_1_5",
