@@ -1,0 +1,17 @@
+# cargo-deny: enforces the pure-Rust crypto rule (no OpenSSL, ring or aws-lc) and license policy.
+[bans]
+multiple-versions = "warn"
+deny = [
+  { name = "openssl" }, { name = "openssl-sys" },
+  { name = "ring" },
+  { name = "aws-lc-rs" }, { name = "aws-lc-sys" },
+  { name = "boring" }, { name = "boring-sys" },
+  { name = "libsodium-sys" },
+]
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "MPL-2.0"]
+
+[advisories]
+# RUSTSEC-2023-0071 (rsa 0.9 Marvin timing leak) must never be ignored: polyjose requires rsa >= 0.10.
+ignore = []
