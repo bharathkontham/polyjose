@@ -1,0 +1,17 @@
+{
+  "source": "polyjose",
+  "description": "An EC key without its required \"y\" member (RFC 7518 §6.2.1) has no thumbprint (RFC 7638 §3.2)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

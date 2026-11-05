@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7638 §3 over the RFC 8037 Appendix A.6 key",
+  "description": "Thumbprint of Bob's X25519 public key from RFC 8037 A.6 (RFC 7748 §6.1); the expected value is not printed in an RFC and was derived independently (Python hashlib over the RFC 7638 §3 input)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "kid": "Bob",
+      "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "giQqigT_IKcuzHl0FVJ3k5ts3_TWNAxvsC08UZsfcM8",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:giQqigT_IKcuzHl0FVJ3k5ts3_TWNAxvsC08UZsfcM8"
+  }
+}

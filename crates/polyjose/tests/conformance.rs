@@ -505,6 +505,23 @@ fn conformance_vectors() {
     );
 }
 
+/// Every implemented operation has vectors, and every operation that can
+/// fail has both success and failure vectors.
+#[test]
+fn every_implemented_operation_has_vectors() {
+    let report = run_dir(&conformance_dir().join("vectors"));
+    for spec in SPECS {
+        let all = report.passed.get(spec.name).copied().unwrap_or(0);
+        let negative = report.passed_negative.get(spec.name).copied().unwrap_or(0);
+        assert!(all > negative, "{}: no passing success vectors", spec.name);
+        assert!(
+            !spec.can_fail || negative > 0,
+            "{}: no passing failure vectors",
+            spec.name
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // schema.json and this runner must say the same thing.
 // ---------------------------------------------------------------------------
