@@ -1,0 +1,22 @@
+{
+  "source": "RFC 7638 §3 over the RFC 7517 Appendix A.2 key",
+  "description": "Thumbprint of the RFC 7517 A.2 P-256 private key equals its public key's (\"d\" is not hashed); the expected value is not printed in an RFC and was derived independently (Python hashlib over the RFC 7638 §3 input)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+      "d": "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE",
+      "use": "enc",
+      "kid": "1"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s"
+  }
+}

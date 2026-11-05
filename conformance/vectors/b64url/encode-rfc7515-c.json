@@ -1,0 +1,12 @@
+{
+  "source": "RFC 7515 Appendix C",
+  "description": "The octets 3 236 255 224 193 encode to \"A-z_4ME\", using \"-\" and \"_\" for 62 and 63 (RFC 4648 §5)",
+  "operation": "b64url.encode",
+  "input": {
+    "bytes_hex": "03ecffe0c1"
+  },
+  "expect": {
+    "ok": true,
+    "b64u": "A-z_4ME"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "source": "polyjose",
+  "description": "A padded \"k\" is not base64url (RFC 7515 §2, RFC 7518 §6.4.1)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg=="
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

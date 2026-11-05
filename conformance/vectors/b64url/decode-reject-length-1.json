@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "One character cannot encode an octet: a final quantum has 2, 3 or 4 characters (RFC 4648 §4)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "Z"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

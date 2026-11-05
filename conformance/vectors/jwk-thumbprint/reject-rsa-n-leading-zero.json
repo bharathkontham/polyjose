@@ -1,0 +1,17 @@
+{
+  "source": "polyjose",
+  "description": "\"n\" with a leading zero octet is not the minimal Base64urlUInt (RFC 7518 §2, §6.3.1.1), so no second thumbprint exists for the key (RFC 7638 §7)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "RSA",
+      "n": "ANL8e2oKHmxnEErrj4iyV2abTfZ53a0Jm1xKbNmogBW1oTO_C4VseHG23wALVU_Os8LtUSu2jxRcboQ0dS-rUqHPwSRAj3m1ikV4wWQohVeJ96JJ44TLLZ-uLWf9lvuSbBmOB3OZ_cgVwK8Jfd5are_0TecOgn9IeEMkOb_uuWBo0EdPxQ1tkL86mN-vEEDInALWkqs7PCiWYJ2G_XO3dM4HQGR87uqjEL0S-YWo659Z_dQmzqWyEg9PKjS8q3ZLfmxU1oQCOLzEBYelnmbtHzOJRXdjXEcK91z5LCDR2kPhv8QZ4iKm8NC7NYxeOPnLBQrq_pBIFPGsGqScyp6gyoM",
+      "e": "AQAB"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

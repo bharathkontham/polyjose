@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Non-zero pad bits in a 3-character final quantum (\"QUE\" is canonical) (RFC 4648 §3.5)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "QUF"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

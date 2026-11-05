@@ -1,0 +1,12 @@
+{
+  "source": "RFC 4648 §10",
+  "description": "BASE64(\"fooba\") = \"Zm9vYmE=\", in the URL and Filename Safe alphabet (RFC 4648 §5) with the trailing \"=\" omitted (RFC 7515 §2)",
+  "operation": "b64url.encode",
+  "input": {
+    "bytes_hex": "666f6f6261"
+  },
+  "expect": {
+    "ok": true,
+    "b64u": "Zm9vYmE"
+  }
+}

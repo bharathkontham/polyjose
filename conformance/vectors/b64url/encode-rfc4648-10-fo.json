@@ -1,0 +1,12 @@
+{
+  "source": "RFC 4648 §10",
+  "description": "BASE64(\"fo\") = \"Zm8=\", in the URL and Filename Safe alphabet (RFC 4648 §5) with the trailing \"=\" omitted (RFC 7515 §2)",
+  "operation": "b64url.encode",
+  "input": {
+    "bytes_hex": "666f"
+  },
+  "expect": {
+    "ok": true,
+    "b64u": "Zm8"
+  }
+}

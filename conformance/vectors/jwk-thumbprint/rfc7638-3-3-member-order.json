@@ -1,0 +1,24 @@
+{
+  "source": "RFC 7638 §3.3",
+  "description": "The RFC 7517 A.1 P-256 key with its members reordered and other optional members added and changed: the hash input holds only the required members in lexicographic order, so the thumbprint is unchanged; the expected value is not printed in an RFC and was derived independently (Python hashlib over the RFC 7638 §3 input)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kid": "another-id",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+      "alg": "ECDH-ES",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "ext": true,
+      "crv": "P-256",
+      "use": "enc",
+      "kty": "EC",
+      "x5u": "https://example.com/c"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s"
+  }
+}

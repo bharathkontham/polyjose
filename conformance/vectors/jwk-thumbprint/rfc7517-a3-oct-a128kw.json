@@ -1,0 +1,18 @@
+{
+  "source": "RFC 7638 §3 over the RFC 7517 Appendix A.3 key",
+  "description": "Thumbprint of the RFC 7517 A.3 AES key: only \"k\" and \"kty\" are hashed; the expected value is not printed in an RFC and was derived independently (Python hashlib over the RFC 7638 §3 input)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "alg": "A128KW",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "k1JnWRfC-5zzmL72vXIuBgTLfVROXBakS4OmGcrMCoc",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:k1JnWRfC-5zzmL72vXIuBgTLfVROXBakS4OmGcrMCoc"
+  }
+}

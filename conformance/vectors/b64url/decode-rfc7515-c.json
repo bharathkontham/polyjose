@@ -1,0 +1,12 @@
+{
+  "source": "RFC 7515 Appendix C",
+  "description": "\"A-z_4ME\" decodes to the octets 3 236 255 224 193",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "A-z_4ME"
+  },
+  "expect": {
+    "ok": true,
+    "bytes_hex": "03ecffe0c1"
+  }
+}

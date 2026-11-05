@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "polyjose conformance vector",
+  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test are given in lowercase hex, never base64url, so the codec is not checked against itself.",
+  "type": "object",
+  "required": ["source", "description", "operation", "input", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "description": "Where the expected value comes from: an RFC section (\"RFC 7638 §3.1\"), an upstream suite, or \"polyjose\" for a project-defined negative vector.",
+      "$ref": "#/$defs/text"
+    },
+    "description": {
+      "description": "What the vector checks, in one sentence.",
+      "$ref": "#/$defs/text"
+    },
+    "operation": {
+      "enum": [
+        "b64url.encode",
+        "b64url.decode",
+        "jwk.thumbprint",
+        "jws.sign",
+        "jws.verify",
+        "jwe.encrypt",
+        "jwe.decrypt",
+        "jwt.validate"
+      ]
+    },
+    "input": {
+      "type": "object"
+    },
+    "expect": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "b64url.encode" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/b64url_encode_input" },
+          "expect": { "$ref": "#/$defs/b64url_encode_ok" }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "b64url.decode" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/b64url_decode_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/b64url_decode_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "jwk.thumbprint" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/jwk_thumbprint_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/jwk_thumbprint_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "hex": {
+      "description": "Lowercase hexadecimal, two digits per octet; empty for zero octets.",
+      "type": "string",
+      "pattern": "^([0-9a-f]{2})*$"
+    },
+    "base64url": {
+      "description": "Characters of the base64url alphabet (RFC 4648 §5), no padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]*$"
+    },
+    "error_code": {
+      "description": "A stable error code (crates/polyjose/src/error.rs, Error::CODES).",
+      "enum": [
+        "InvalidBase64",
+        "InvalidJson",
+        "InvalidHeader",
+        "UnsupportedAlgorithm",
+        "AlgorithmNotAllowed",
+        "InvalidKey",
+        "KeyAlgorithmMismatch",
+        "InvalidSignature",
+        "DecryptionFailed",
+        "UnknownCritical",
+        "TokenExpired",
+        "TokenNotYetValid",
+        "InvalidClaim",
+        "RandomnessUnavailable"
+      ]
+    },
+    "failure": {
+      "description": "The operation must fail with exactly this error code.",
+      "type": "object",
+      "required": ["ok", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": false },
+        "error": { "$ref": "#/$defs/error_code" }
+      }
+    },
+    "b64url_encode_input": {
+      "description": "Octets to encode as unpadded base64url (RFC 7515 §2).",
+      "type": "object",
+      "required": ["bytes_hex"],
+      "additionalProperties": false,
+      "properties": {
+        "bytes_hex": { "$ref": "#/$defs/hex" }
+      }
+    },
+    "b64url_encode_ok": {
+      "description": "Encoding cannot fail, so only a success expectation exists.",
+      "type": "object",
+      "required": ["ok", "b64u"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "b64u": { "$ref": "#/$defs/base64url" }
+      }
+    },
+    "b64url_decode_input": {
+      "description": "Text to decode; any string, since rejected encodings are under test.",
+      "type": "object",
+      "required": ["b64u"],
+      "additionalProperties": false,
+      "properties": {
+        "b64u": { "type": "string" }
+      }
+    },
+    "b64url_decode_ok": {
+      "type": "object",
+      "required": ["ok", "bytes_hex"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "bytes_hex": { "$ref": "#/$defs/hex" }
+      }
+    },
+    "jwk_thumbprint_input": {
+      "description": "A JWK (RFC 7517 §4) as a JSON object, imported and then hashed (RFC 7638 §3). Its members are deliberately unconstrained: invalid keys are under test.",
+      "type": "object",
+      "required": ["jwk", "hash"],
+      "additionalProperties": false,
+      "properties": {
+        "jwk": { "type": "object" },
+        "hash": { "enum": ["sha-256"] }
+      }
+    },
+    "jwk_thumbprint_ok": {
+      "description": "The base64url JWK Thumbprint (RFC 7638 §3) and its JWK Thumbprint URI (RFC 9278 §3).",
+      "type": "object",
+      "required": ["ok", "thumbprint", "thumbprint_uri"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "thumbprint": { "$ref": "#/$defs/base64url" },
+        "thumbprint_uri": { "type": "string" }
+      }
+    }
+  }
+}
