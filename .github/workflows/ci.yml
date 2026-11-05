@@ -1,0 +1,102 @@
+# Pull-request gates for polyjose (ADR 0009). The steps mirror `scripts/test-all.sh rust`,
+# so a green local run and a green CI run check the same things.
+#
+# Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
+# that SHA was resolved from. Bump both together.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: the workflow only reads the repository. No job needs a write scope.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rust:
+    name: rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # rustup on the runner reads rust-toolchain.toml, so the channel, components and targets
+      # stay defined in one place. That file lists every binding target (WASM, Android, iOS,
+      # macOS), so this step downloads their standard libraries too. It costs some setup time
+      # but keeps CI and local builds on the same toolchain.
+      - name: Install toolchain (rust-toolchain.toml)
+        id: toolchain
+        run: |
+          rustup toolchain install
+          rustup show
+          cargo --version
+
+      # Only pushes to main save the cache; pull requests restore it read-only, so PR runs
+      # cannot churn or poison the cache that later runs start from.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        id: install-deny
+        with:
+          tool: cargo-deny@0.20.2
+
+      # Once setup succeeded, every gate runs even if an earlier gate failed, so one run reports
+      # every failure.
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: test
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo test --workspace --locked
+
+      # Enforces ADR 0002 (no OpenSSL, ring, aws-lc, boring or libsodium) and ADR 0003
+      # (RUSTSEC-2023-0071 is never ignored). Dev-dependencies are part of the graph, and
+      # --all-features also covers optional, off-by-default features.
+      - name: cargo deny
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.install-deny.outcome == 'success' }}
+        run: cargo deny --locked --all-features check
+
+  # The single required status check for branch protection on main (see git-ops). It needs every
+  # gate job, and it fails unless all of them succeeded, so a skipped or cancelled job can never
+  # count as green. Add each new job (WASM, Node, Swift, Android) to `needs` as it lands.
+  ci-ok:
+    name: ci-ok
+    if: ${{ always() }}
+    needs: [rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every gate job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'length > 0 and (to_entries | all(.value.result == "success"))' > /dev/null

@@ -13,8 +13,11 @@ run() { local name=$1; shift; echo "==> $name"; if "$@"; then record "$name" PAS
 for p in "${platforms[@]}"; do
   case $p in
     rust)
-      if have cargo; then run rust bash -c 'cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && { ! command -v cargo-deny >/dev/null || cargo deny check; }'
-      else record rust "SKIPPED (cargo missing)"; fi ;;
+      if have cargo; then run rust bash -c 'cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
+      else record rust "SKIPPED (cargo missing)"; fi
+      # Same deny invocation as CI: full graph, dev-dependencies and every feature included.
+      if have cargo && have cargo-deny; then run deny cargo deny --all-features check
+      else record deny "SKIPPED (cargo-deny missing; CI runs it)"; fi ;;
     wasm)
       if have wasm-pack; then run wasm bash -c 'cd bindings/wasm && wasm-pack test --node && wasm-pack test --headless --chrome'
       else record wasm "SKIPPED (wasm-pack missing)"; fi ;;
