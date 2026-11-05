@@ -61,6 +61,7 @@ impl Jwk {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json;
 
     /// RFC 7638 §3.1: the example RSA public key, with optional members.
     const RFC7638_RSA: &str = r#"{"kty":"RSA",
@@ -136,5 +137,225 @@ mod tests {
             .strip_prefix("urn:ietf:params:oauth:jwk-thumbprint:sha-256:")
             .expect("RFC 9278 §3 prefix and §4 hash name");
         assert_eq!(thumbprint, key.thumbprint_sha256());
+    }
+
+    // Expected values below that no RFC publishes were computed outside
+    // polyjose (Python hashlib/base64 over the hand-written RFC 7638 §3.3
+    // input), as test oracles.
+
+    /// RFC 7517 Appendix A.1: the EC P-256 public key.
+    const RFC7517_EC_PUBLIC: &str = r#"{"kty":"EC","crv":"P-256",
+        "x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+        "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+        "use":"enc","kid":"1"}"#;
+
+    /// RFC 7517 Appendix A.2: the private key of [`RFC7517_EC_PUBLIC`].
+    const RFC7517_EC_PRIVATE: &str = r#"{"kty":"EC","crv":"P-256",
+        "x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+        "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+        "d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE",
+        "use":"enc","kid":"1"}"#;
+
+    /// RFC 7520 §3.1: the EC P-521 public key (66-octet coordinates).
+    const RFC7520_P521_PUBLIC: &str = r#"{"kty":"EC",
+        "kid":"bilbo.baggins@hobbiton.example","use":"sig","crv":"P-521",
+        "x":"AHKZLLOsCOzz5cY97ewNUajB957y-C-U88c3v13nmGZx6sYl_oJXu9A5RkTKqjqvjyekWF-7ytDyRXYgCF5cj0Kt",
+        "y":"AdymlHvOiLxXkEhayXQnNCvDX4h9htZaCJN34kfmC6pV5OhQHiraVySsUdaQkAgDPrwQrJmbnX9cwlGfP-HqHZR1"}"#;
+
+    /// RFC 7520 §3.2: the private key of [`RFC7520_P521_PUBLIC`].
+    const RFC7520_P521_PRIVATE: &str = r#"{"kty":"EC",
+        "kid":"bilbo.baggins@hobbiton.example","use":"sig","crv":"P-521",
+        "x":"AHKZLLOsCOzz5cY97ewNUajB957y-C-U88c3v13nmGZx6sYl_oJXu9A5RkTKqjqvjyekWF-7ytDyRXYgCF5cj0Kt",
+        "y":"AdymlHvOiLxXkEhayXQnNCvDX4h9htZaCJN34kfmC6pV5OhQHiraVySsUdaQkAgDPrwQrJmbnX9cwlGfP-HqHZR1",
+        "d":"AAhRON2r9cqXX1hg-RoI6R1tX5p2rUAYdmpHZoC1XNM56KtscrX6zbKipQrCW9CGZH3T4ubpnoTKLDYJ_fF3_rJt"}"#;
+
+    /// RFC 8037 Appendix A.2: the public part of [`RFC8037_ED25519_PRIVATE`].
+    const RFC8037_ED25519_PUBLIC: &str = r#"{"kty":"OKP","crv":"Ed25519",
+        "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#;
+
+    /// RFC 8037 Appendix A.6: Bob's X25519 public key (RFC 7748 §6.1).
+    const RFC8037_X25519_PUBLIC: &str =
+        r#"{"kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"}"#;
+
+    /// RFC 7517 Appendix A.3: the AES key wrap key.
+    const RFC7517_OCT_AES: &str = r#"{"kty":"oct","alg":"A128KW","k":"GawgguFyGrWKav7AX4VKUg"}"#;
+
+    /// RFC 7517 Appendix A.3: the HMAC key.
+    const RFC7517_OCT_HMAC: &str = r#"{"kty":"oct",
+        "k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
+        "kid":"HMAC key used in JWS spec Appendix A.1 example"}"#;
+
+    #[test]
+    fn every_key_type_has_its_rfc7638_thumbprint() {
+        let cases = [
+            (RFC7638_RSA, "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"),
+            (
+                RFC7517_EC_PUBLIC,
+                "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s",
+            ),
+            (
+                RFC7520_P521_PUBLIC,
+                "dHri3SADZkrush5HU_50AoRhcKFryN-PI6jPBtPL55M",
+            ),
+            (
+                RFC8037_ED25519_PUBLIC,
+                "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+            ),
+            (
+                RFC8037_X25519_PUBLIC,
+                "giQqigT_IKcuzHl0FVJ3k5ts3_TWNAxvsC08UZsfcM8",
+            ),
+            (
+                RFC7517_OCT_AES,
+                "k1JnWRfC-5zzmL72vXIuBgTLfVROXBakS4OmGcrMCoc",
+            ),
+            (
+                RFC7517_OCT_HMAC,
+                "y_x3gCJnL6oKGBBIXScabduwxTVy2Wd2bzRVEUbdUzc",
+            ),
+        ];
+        for (json, expected) in cases {
+            let key = jwk(json);
+            let thumbprint = key.thumbprint_sha256();
+            assert_eq!(thumbprint, expected, "{json}");
+            // 32 SHA-256 octets are 43 unpadded base64url characters.
+            assert_eq!(thumbprint.len(), 43);
+            assert_eq!(
+                key.thumbprint_uri_sha256(),
+                format!("{SHA256_URI_PREFIX}{expected}")
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_input_holds_only_the_required_members_in_order() {
+        // RFC 7638 §3.2 members, lexicographic (§3.3); no `d`, `kid`, `use`
+        // or `alg`.
+        assert_eq!(
+            jwk(RFC7517_EC_PRIVATE).canonical_input().as_str(),
+            r#"{"crv":"P-256","kty":"EC","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#
+        );
+        assert_eq!(
+            jwk(RFC7517_OCT_AES).canonical_input().as_str(),
+            r#"{"k":"GawgguFyGrWKav7AX4VKUg","kty":"oct"}"#
+        );
+    }
+
+    #[test]
+    fn oct_canonical_input_is_a_zeroizing_buffer() {
+        // RFC 7638 §3.2: the symmetric key's input contains the secret `k`,
+        // so it must be wiped on drop (RFC 7638 §7).
+        let input: Zeroizing<String> = jwk(RFC7517_OCT_HMAC).canonical_input();
+        assert!(input.starts_with(r#"{"k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ"#));
+    }
+
+    #[test]
+    fn private_key_has_the_thumbprint_of_its_public_key() {
+        // RFC 7638 §3.2.1, for EC (P-256, P-521) and OKP.
+        let pairs = [
+            (RFC7517_EC_PRIVATE, RFC7517_EC_PUBLIC),
+            (RFC7520_P521_PRIVATE, RFC7520_P521_PUBLIC),
+            (RFC8037_ED25519_PRIVATE, RFC8037_ED25519_PUBLIC),
+        ];
+        for (private, public) in pairs {
+            let private = jwk(private);
+            let public = jwk(public);
+            assert!(!private.is_public() && public.is_public());
+            assert_eq!(private.thumbprint_sha256(), public.thumbprint_sha256());
+            assert_eq!(
+                private.thumbprint_uri_sha256(),
+                public.thumbprint_uri_sha256()
+            );
+            let derived = private.to_public().expect("EC and OKP have a public part");
+            assert_eq!(derived.thumbprint_sha256(), public.thumbprint_sha256());
+        }
+    }
+
+    #[test]
+    fn optional_and_unknown_members_do_not_change_the_thumbprint() {
+        // RFC 7638 §3.2.2: only required members are hashed. Same RSA key as
+        // RFC 7638 §3.1, members reordered, `alg`/`kid` dropped and other
+        // optional and unknown members added.
+        let n = jwk(RFC7638_RSA);
+        let n = n.thumbprint_members();
+        let n = n.get("n").and_then(json::Value::as_str).expect("RSA n");
+        let variants = [
+            format!(r#"{{"n":"{n}","e":"AQAB","kty":"RSA"}}"#),
+            format!(
+                r#"{{"e":"AQAB","use":"sig","key_ops":["verify"],"kid":"other",
+                "x5t#S256":"abc","ext":{{"nested":[1,2,"é"]}},"n":"{n}",
+                "kty":"RSA","alg":"PS256"}}"#
+            ),
+        ];
+        for json in &variants {
+            assert_eq!(
+                jwk(json).thumbprint_sha256(),
+                "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_different_key_has_a_different_thumbprint() {
+        // Same curve and members, `x` of RFC 8037 A.6 Alice instead of Bob.
+        let alice = jwk(
+            r#"{"kty":"OKP","crv":"X25519","x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"}"#,
+        );
+        let bob = jwk(RFC8037_X25519_PUBLIC);
+        assert_ne!(alice.thumbprint_sha256(), bob.thumbprint_sha256());
+        // `kty`/`crv` are hashed too: the same 32 octets as an Ed25519 key.
+        let as_ed25519 = jwk(
+            r#"{"kty":"OKP","crv":"Ed25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"}"#,
+        );
+        assert_ne!(as_ed25519.thumbprint_sha256(), bob.thumbprint_sha256());
+    }
+
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::json::{Object, Value};
+
+        fn member_value() -> impl Strategy<Value = Value> {
+            prop_oneof![
+                any::<String>().prop_map(Value::from),
+                any::<bool>().prop_map(Value::from),
+                Just(Value::Null),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// RFC 7638 §3.2.2: any `kid` and any unknown members, in any
+            /// order, leave the thumbprint unchanged.
+            #[test]
+            fn extra_members_never_change_the_thumbprint(
+                kid in any::<String>(),
+                extra in proptest::collection::vec(("[a-z]{1,8}", member_value()), 0..6),
+                kid_first in any::<bool>(),
+            ) {
+                for json in [RFC7517_EC_PRIVATE, RFC8037_ED25519_PRIVATE, RFC7517_OCT_HMAC] {
+                    let base = jwk(json);
+                    let mut object = Object::new();
+                    if kid_first {
+                        object.insert("kid", kid.as_str());
+                    }
+                    for (name, value) in base.thumbprint_members().iter() {
+                        object.insert(name, value.clone());
+                    }
+                    if !kid_first {
+                        object.insert("kid", kid.as_str());
+                    }
+                    for (name, value) in &extra {
+                        // Prefixed so they never collide with a JWK member.
+                        object.insert(format!("ext_{name}"), value.clone());
+                    }
+                    let key = Jwk::from_object(&object).expect("still a valid key");
+                    prop_assert_eq!(key.thumbprint_sha256(), base.thumbprint_sha256());
+                }
+            }
+        }
     }
 }
