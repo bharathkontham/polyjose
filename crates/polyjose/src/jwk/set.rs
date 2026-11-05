@@ -656,7 +656,10 @@ mod tests {
     /// `member` with extra common members spliced in after its opening
     /// brace, e.g. `with(OCT, r#""kid":"a""#)`.
     fn with(member: &str, extra: &str) -> String {
-        format!("{{{extra},{}", &member[1..])
+        match &member[1..] {
+            "}" => format!("{{{extra}}}"),
+            rest => format!("{{{extra},{rest}"),
+        }
     }
 
     /// The indices `verification_candidates` returns.
@@ -854,5 +857,219 @@ mod tests {
         assert_eq!(set.skipped(), 2);
         assert_eq!(candidates(&set, &SigningAlg::HS256, Some("b")), [1]);
         assert_eq!(candidates(&set, &SigningAlg::HS256, None), [0, 1]);
+    }
+
+    /// ADR 0008 layer 2: parser robustness and the selection filter against
+    /// an independent oracle.
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// What a pool member must do to the set.
+        #[derive(Clone, Copy, Debug)]
+        enum Expect {
+            /// Kept, with its family tag, JWK `alg`, `use` and `key_ops`.
+            Keep(
+                &'static str,
+                Option<&'static str>,
+                Option<&'static str>,
+                Option<&'static [&'static str]>,
+            ),
+            Skip,
+            /// An RSA private key: the whole set fails.
+            Fatal,
+        }
+
+        /// Pool members (objects, so a `kid` can be spliced in), each with
+        /// its expected outcome.
+        fn pool() -> Vec<(String, Expect)> {
+            use Expect::{Fatal, Keep, Skip};
+            vec![
+                (OCT.to_owned(), Keep("oct", None, None, None)),
+                (
+                    with(OCT, r#""alg":"HS384""#),
+                    Keep("oct", Some("HS384"), None, None),
+                ),
+                (
+                    with(OCT, r#""use":"enc""#),
+                    Keep("oct", None, Some("enc"), None),
+                ),
+                (
+                    with(OCT, r#""alg":"A128KW""#),
+                    Keep("oct", Some("A128KW"), None, None),
+                ),
+                (EC_P256.to_owned(), Keep("P-256", None, None, None)),
+                (
+                    with(EC_P256, r#""use":"sig""#),
+                    Keep("P-256", None, Some("sig"), None),
+                ),
+                (
+                    with(EC_P256, r#""key_ops":["sign"]"#),
+                    Keep("P-256", None, None, Some(&["sign"])),
+                ),
+                (
+                    with(EC_P256, r#""key_ops":["verify"]"#),
+                    Keep("P-256", None, None, Some(&["verify"])),
+                ),
+                (
+                    ec("P-384", 48).to_json().to_string(),
+                    Keep("P-384", None, None, None),
+                ),
+                (
+                    ec("secp256k1", 32).to_json().to_string(),
+                    Keep("secp256k1", None, None, None),
+                ),
+                (RSA_2048.to_owned(), Keep("RSA", None, None, None)),
+                (
+                    with(RSA_2048, r#""alg":"PS256""#),
+                    Keep("RSA", Some("PS256"), None, None),
+                ),
+                (ED25519.to_owned(), Keep("Ed25519", None, None, None)),
+                (
+                    with(ED25519, r#""alg":"Ed25519""#),
+                    Keep("Ed25519", Some("Ed25519"), None, None),
+                ),
+                (
+                    with(ED25519, r#""alg":"EdDSA""#),
+                    Keep("Ed25519", Some("EdDSA"), None, None),
+                ),
+                (
+                    with(ED25519, r#""use":"x-other""#),
+                    Keep("Ed25519", None, Some("x-other"), None),
+                ),
+                (X25519.to_owned(), Keep("X25519", None, None, None)),
+                (r#"{"kty":"XYZ"}"#.to_owned(), Skip),
+                (r#"{"kty":"OKP","crv":"Ed448","x":"AA"}"#.to_owned(), Skip),
+                (
+                    r#"{"kty":"EC","crv":"P-256","x":"AA","y":"AA"}"#.to_owned(),
+                    Skip,
+                ),
+                (r#"{"kty":"RSA","n":"AQAB","e":"AQAB"}"#.to_owned(), Skip),
+                (r#"{"kty":"oct","k":"AA=="}"#.to_owned(), Skip),
+                ("{}".to_owned(), Skip),
+                (r#"{"kty":"RSA","d":"AQAB"}"#.to_owned(), Fatal),
+            ]
+        }
+
+        /// The ADR 0026 §2 step 8 table restated as test data: the family
+        /// tag that serves each JWS `alg`.
+        fn family_of(alg: &str) -> Option<&'static str> {
+            Some(match alg {
+                "HS256" | "HS384" | "HS512" => "oct",
+                "RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" => "RSA",
+                "ES256" => "P-256",
+                "ES384" => "P-384",
+                "ES512" => "P-521",
+                "ES256K" => "secp256k1",
+                "EdDSA" | "Ed25519" => "Ed25519",
+                _ => return None,
+            })
+        }
+
+        const KIDS: &[Option<&str>] = &[None, Some("a"), Some("b"), Some("A")];
+
+        /// Header `alg` values: every known one, plus unknown strings.
+        fn header_alg() -> impl Strategy<Value = SigningAlg> {
+            let mut algs: Vec<SigningAlg> = SigningAlg::KNOWN.to_vec();
+            algs.push(SigningAlg::from("HS1"));
+            algs.push(SigningAlg::from("A128KW"));
+            prop::sample::select(algs)
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            /// No input makes set parsing panic, and every failure is one of
+            /// the three set-level codes.
+            #[test]
+            fn arbitrary_bytes_never_panic(bytes in prop::collection::vec(any::<u8>(), 0..256)) {
+                match JwkSet::from_json(&bytes) {
+                    Ok(set) => prop_assert!(set.len() + set.skipped() <= bytes.len()),
+                    Err(e) => prop_assert!(
+                        matches!(e, Error::InvalidJson(_) | Error::InvalidKey(_) | Error::UnsupportedAlgorithm),
+                        "{e:?}"
+                    ),
+                }
+            }
+
+            /// Byte mutations of RFC 7517 A.1 never panic and fail only with
+            /// the set-level codes.
+            #[test]
+            fn mutated_a1_never_panics(
+                edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..4)
+            ) {
+                let mut bytes = A1.as_bytes().to_vec();
+                for (index, byte) in edits {
+                    let at = index.index(bytes.len());
+                    bytes[at] = byte;
+                }
+                if let Err(e) = JwkSet::from_json(&bytes) {
+                    prop_assert!(
+                        matches!(e, Error::InvalidJson(_) | Error::InvalidKey(_) | Error::UnsupportedAlgorithm),
+                        "{e:?}"
+                    );
+                }
+            }
+
+            /// Generated sets: kept, skipped and fatal members behave as the
+            /// pool says, order is preserved, and the candidates are exactly
+            /// the kept keys the oracle accepts, in order.
+            #[test]
+            fn generated_sets_and_selection_match_the_oracle(
+                picks in prop::collection::vec(
+                    (any::<prop::sample::Index>(), prop::sample::select(KIDS)),
+                    0..12,
+                ),
+                alg in header_alg(),
+                header_kid in prop::sample::select(KIDS),
+            ) {
+                let pool = pool();
+                let mut members = Vec::new();
+                let mut expected = Vec::new();
+                let mut fatal = false;
+                for (index, kid) in &picks {
+                    let (json, expect) = &pool[index.index(pool.len())];
+                    let json = match kid {
+                        Some(kid) => with(json, &format!(r#""kid":"{kid}""#)),
+                        None => json.clone(),
+                    };
+                    members.push(json);
+                    match expect {
+                        Expect::Keep(..) => expected.push((*expect, *kid)),
+                        Expect::Skip => {}
+                        Expect::Fatal => fatal = true,
+                    }
+                }
+                let members: Vec<&str> = members.iter().map(String::as_str).collect();
+                let result = parse(&set_of(&members));
+                if fatal {
+                    prop_assert_eq!(result.unwrap_err(), Error::UnsupportedAlgorithm);
+                    return Ok(());
+                }
+                let set = result.unwrap();
+                prop_assert_eq!(set.len(), expected.len());
+                prop_assert_eq!(set.skipped(), picks.len() - expected.len());
+                let expected_kids: Vec<Option<&str>> = expected.iter().map(|(_, kid)| *kid).collect();
+                prop_assert_eq!(kids(&set), expected_kids);
+
+                let oracle: Vec<usize> = expected
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (expect, kid))| {
+                        let Expect::Keep(family, key_alg, key_use, key_ops) = *expect else {
+                            unreachable!()
+                        };
+                        family_of(alg.as_str()) == Some(family)
+                            && key_alg.is_none_or(|a| a == alg.as_str())
+                            && key_use.is_none_or(|u| u == "sig")
+                            && key_ops.is_none_or(|ops| ops.contains(&"verify"))
+                            && header_kid.is_none_or(|h| *kid == Some(h))
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                prop_assert_eq!(candidates(&set, &alg, header_kid), oracle);
+            }
+        }
     }
 }
