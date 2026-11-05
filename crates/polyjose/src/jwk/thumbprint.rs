@@ -1,4 +1,13 @@
 //! JWK Thumbprints (RFC 7638) and JWK Thumbprint URIs (RFC 9278).
+//!
+//! A thumbprint is the SHA-256 hash of the key's required members in a
+//! canonical JSON form (RFC 7638 §3). It identifies the key, not the JWK
+//! it came in, so it is a stable `kid` candidate (RFC 7638 §3.4).
+//! Only SHA-256 is provided: it is the hash RFC 9278 §5 makes mandatory.
+//!
+//! The canonical form is unique per key because [`Jwk`] accepts only
+//! canonical base64url and minimal RSA integers (RFC 7638 §7: thumbprints
+//! are unique only if the implementation validates the representation).
 
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -20,6 +29,29 @@ impl Jwk {
     /// other optional member never change the value (RFC 7638 §3.2.2).
     /// A private key has the thumbprint of its public key
     /// (RFC 7638 §3.2.1).
+    ///
+    /// ```
+    /// use polyjose::jwk::Jwk;
+    ///
+    /// // RFC 7638 §3.1.
+    /// let jwk = Jwk::from_json(br#"{"kty":"RSA",
+    ///     "n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+    ///     "e":"AQAB","alg":"RS256","kid":"2011-04-29"}"#)?;
+    /// assert_eq!(jwk.thumbprint_sha256(), "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs");
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    ///
+    /// # Security
+    ///
+    /// - **`oct` keys:** the hash input is the secret `k`. A hash of a
+    ///   symmetric key can leak information about it, so its thumbprint
+    ///   should be kept from parties that do not hold the key unless the
+    ///   application knows SHA-256 protects it well enough (RFC 7638 §7).
+    ///   polyjose wipes the hash input and the hash state; the returned
+    ///   thumbprint is not secret material and is not wiped.
+    /// - **Not a blocklist:** an attacker can transform a key (an RSA
+    ///   modulus 3·N, say) so it gets another thumbprint, so comparing
+    ///   thumbprints cannot reliably exclude a key (RFC 7638 §7).
     pub fn thumbprint_sha256(&self) -> String {
         // RFC 7638 §3 step 2, with H = SHA-256 (RFC 7638 §3.4).
         let digest = Sha256::digest(self.canonical_input().as_bytes());
@@ -33,6 +65,27 @@ impl Jwk {
     /// `sha-256` is the IANA Named Information "Hash Name String" for
     /// SHA-256 (RFC 9278 §4), the hash RFC 9278 §5 makes mandatory to
     /// implement.
+    ///
+    /// ```
+    /// use polyjose::jwk::Jwk;
+    ///
+    /// // RFC 8037 Appendix A.2 and A.3.
+    /// let jwk = Jwk::from_json(br#"{"kty":"OKP","crv":"Ed25519",
+    ///     "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#)?;
+    /// assert_eq!(
+    ///     jwk.thumbprint_uri_sha256(),
+    ///     "urn:ietf:params:oauth:jwk-thumbprint:sha-256:kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+    /// );
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    ///
+    /// # Security
+    ///
+    /// The [`Jwk::thumbprint_sha256`] cautions apply (RFC 9278 §7). For
+    /// X25519 several public keys are equivalent to one another
+    /// (RFC 7748 §7), so a URI used as an identifier should be bound to the
+    /// actual key, for instance by a signature over that key
+    /// (RFC 9278 §7.1).
     pub fn thumbprint_uri_sha256(&self) -> String {
         let thumbprint = self.thumbprint_sha256();
         let mut uri = String::with_capacity(SHA256_URI_PREFIX.len() + thumbprint.len());
