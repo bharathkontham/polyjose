@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 polyjose.workspace = true
 napi = "3.16"
-napi-derive = "3"
+napi-derive = "3.7"
 
 [build-dependencies]
 napi-build = "2"
