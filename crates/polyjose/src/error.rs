@@ -332,6 +332,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn display_text_of_every_variant() {
+        // Not part of the stability contract (codes are), but pinned so a
+        // change to the formatting code cannot alter messages by accident.
+        let expected = [
+            "invalid base64url",
+            "invalid JSON: syntax error",
+            "invalid header: missing \"alg\"",
+            "unsupported algorithm",
+            "algorithm not allowed",
+            "invalid key: RSA modulus is under 2048 bits",
+            "key does not match the algorithm",
+            "signature verification failed",
+            "decryption failed",
+            "unknown critical header parameter",
+            "token expired",
+            "token not yet valid",
+            "invalid claim: aud",
+            "randomness unavailable",
+        ];
+        let actual: Vec<String> = one_of_each().iter().map(Error::to_string).collect();
+        assert_eq!(actual, expected);
+    }
+
     /// A distinctive value standing in for untrusted input or key material.
     const MARKER: &str = "pj-SECRET-marker-7f3a";
 
