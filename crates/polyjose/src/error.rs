@@ -14,10 +14,10 @@
 //!
 //! An error never contains key material or bytes of the input being
 //! processed: a detail can only be a string literal from polyjose itself,
-//! and conversions from dependency errors (such as `serde_json::Error`, whose
-//! message quotes input) keep only a static category. JWE decryption has a
-//! single, detail-free failure, [`Error::DecryptionFailed`]
-//! (RFC 7516 §11.5).
+//! and no error wraps another error as its `source()`. polyjose parses JSON
+//! and base64url itself (ADR 0016), so no dependency's error message, which
+//! might quote input, ever reaches an `Error`. JWE decryption has a single,
+//! detail-free failure, [`Error::DecryptionFailed`] (RFC 7516 §11.5).
 //!
 //! # Adding a variant
 //!
@@ -47,14 +47,13 @@
 /// // Match on the code (or the variant), never on the message text.
 /// assert_eq!(Error::DecryptionFailed.code(), "DecryptionFailed");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
     /// Input is not valid unpadded base64url (RFC 7515 §2, RFC 4648 §5).
     ///
     /// Raised when decoding any base64url-encoded JOSE component
     /// (RFC 7515 §5.2 steps 2, 6 and 7; RFC 7516 §5.2) or JWK member.
-    #[error("invalid base64url")]
     InvalidBase64,
 
     /// Input is not a valid JSON object of the expected shape.
@@ -63,7 +62,6 @@ pub enum Error {
     /// step 3, RFC 7516 §5.2 step 3), and so must a JWT Claims Set
     /// (RFC 7519 §7.2 step 10) and a JWK (RFC 7517 §4). The detail names
     /// the failure category only, never the offending input.
-    #[error("invalid JSON: {0}")]
     InvalidJson(&'static str),
 
     /// The JOSE Header is structurally invalid.
@@ -73,7 +71,6 @@ pub enum Error {
     /// type, a Header Parameter name is duplicated (RFC 7515 §5.2 step 4,
     /// RFC 7516 §5.2 step 4), or `crit` itself is malformed
     /// (RFC 7515 §4.1.11, RFC 7516 §4.1.13).
-    #[error("invalid header: {0}")]
     InvalidHeader(&'static str),
 
     /// The `alg` or `enc` value does not name an algorithm polyjose
@@ -82,7 +79,6 @@ pub enum Error {
     /// The JWS is invalid if `alg` is not a supported algorithm
     /// (RFC 7515 §4.1.1); the same holds for JWE `alg` and `enc`
     /// (RFC 7516 §4.1.1–§4.1.2). The rejected value is not echoed.
-    #[error("unsupported algorithm")]
     UnsupportedAlgorithm,
 
     /// The algorithm is supported but not in the caller's allow-list.
@@ -90,7 +86,6 @@ pub enum Error {
     /// Libraries must let the caller specify the accepted algorithms and
     /// must not use any other (RFC 8725 §3.1, §2.1; ADR 0007). `none` is
     /// never allowed.
-    #[error("algorithm not allowed")]
     AlgorithmNotAllowed,
 
     /// The key is malformed or too weak for any use.
@@ -100,7 +95,6 @@ pub enum Error {
     /// §4.2), an HMAC key shorter than the hash output (RFC 7518 §3.2), or
     /// an EC point that is not on its curve (RFC 8725 §3.4). The detail
     /// never contains key material.
-    #[error("invalid key: {0}")]
     InvalidKey(&'static str),
 
     /// The key is valid but not for this algorithm or operation.
@@ -109,11 +103,9 @@ pub enum Error {
     /// which blocks the RS256→HS256 confusion attack (RFC 8725 §2.1). Also
     /// raised when the JWK `alg`, `use` or `key_ops` members forbid the
     /// operation (RFC 7517 §4.2–§4.4).
-    #[error("key does not match the algorithm")]
     KeyAlgorithmMismatch,
 
     /// A JWS signature or MAC did not validate (RFC 7515 §5.2 step 8).
-    #[error("signature verification failed")]
     InvalidSignature,
 
     /// JWE decryption failed.
@@ -123,24 +115,20 @@ pub enum Error {
     /// must not distinguish format, padding and length errors
     /// (RFC 7516 §11.5), so no padding or key-unwrap oracle is exposed
     /// (RFC 7516 §5.2, ADR 0007).
-    #[error("decryption failed")]
     DecryptionFailed,
 
     /// `crit` lists an extension polyjose does not understand.
     ///
     /// Recipients must reject the JWS/JWE in that case (RFC 7515 §4.1.11,
     /// RFC 7516 §4.1.13). The unknown name is not echoed.
-    #[error("unknown critical header parameter")]
     UnknownCritical,
 
     /// The JWT `exp` time has passed, allowing for the configured clock
     /// skew (RFC 7519 §4.1.4).
-    #[error("token expired")]
     TokenExpired,
 
     /// The JWT `nbf` time has not been reached yet, allowing for the
     /// configured clock skew (RFC 7519 §4.1.5).
-    #[error("token not yet valid")]
     TokenNotYetValid,
 
     /// A JWT claim is missing, malformed or failed validation.
@@ -148,7 +136,6 @@ pub enum Error {
     /// The detail names the claim (for example `"aud"`), never its value.
     /// Covers RFC 7519 §4.1 and §7.2 and the RFC 8725 §3.8–§3.9 issuer and
     /// audience checks.
-    #[error("invalid claim: {0}")]
     InvalidClaim(&'static str),
 
     /// The operating-system CSPRNG could not supply random bytes.
@@ -156,7 +143,6 @@ pub enum Error {
     /// Keys, IVs and CEKs require a cryptographically secure source
     /// (RFC 7515 §10.1, RFC 8725 §3.5); polyjose never falls back to a
     /// weaker one (ADR 0005).
-    #[error("randomness unavailable")]
     RandomnessUnavailable,
 }
 
@@ -206,32 +192,38 @@ impl Error {
     }
 }
 
-/// [`Error::InvalidJson`] detail for input that is not syntactically JSON.
-const JSON_SYNTAX: &str = "syntax error";
-/// [`Error::InvalidJson`] detail for JSON of the wrong type or structure.
-const JSON_DATA: &str = "unexpected type or structure";
-/// [`Error::InvalidJson`] detail for truncated JSON.
-const JSON_EOF: &str = "unexpected end of input";
-/// [`Error::InvalidJson`] detail for a failed read of the JSON source.
-const JSON_IO: &str = "read failed";
-
-/// Maps a `serde_json` error to [`Error::InvalidJson`] by category only.
+/// Human-readable text: a fixed phrase per variant, followed by the
+/// `&'static str` detail for the variants that carry one.
 ///
-/// `serde_json::Error`'s message can quote the input (for example
-/// `invalid type: string "..."` or ``unknown field `...` ``), and that input
-/// may be a secret JWK member or claim value. Only the error category is
-/// kept, so nothing from the input reaches `Debug` or `Display` (ADR 0007).
-impl From<serde_json::Error> for Error {
-    fn from(e: serde_json::Error) -> Self {
-        use serde_json::error::Category;
-        Error::InvalidJson(match e.classify() {
-            Category::Syntax => JSON_SYNTAX,
-            Category::Data => JSON_DATA,
-            Category::Eof => JSON_EOF,
-            Category::Io => JSON_IO,
-        })
+/// The text holds nothing but string literals from polyjose, so it never
+/// contains input or key material (ADR 0007). It is not stable: match on
+/// [`Error::code`] instead.
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::InvalidBase64 => f.write_str("invalid base64url"),
+            Error::InvalidJson(detail) => write!(f, "invalid JSON: {detail}"),
+            Error::InvalidHeader(detail) => write!(f, "invalid header: {detail}"),
+            Error::UnsupportedAlgorithm => f.write_str("unsupported algorithm"),
+            Error::AlgorithmNotAllowed => f.write_str("algorithm not allowed"),
+            Error::InvalidKey(detail) => write!(f, "invalid key: {detail}"),
+            Error::KeyAlgorithmMismatch => f.write_str("key does not match the algorithm"),
+            Error::InvalidSignature => f.write_str("signature verification failed"),
+            Error::DecryptionFailed => f.write_str("decryption failed"),
+            Error::UnknownCritical => f.write_str("unknown critical header parameter"),
+            Error::TokenExpired => f.write_str("token expired"),
+            Error::TokenNotYetValid => f.write_str("token not yet valid"),
+            Error::InvalidClaim(detail) => write!(f, "invalid claim: {detail}"),
+            Error::RandomnessUnavailable => f.write_str("randomness unavailable"),
+        }
     }
 }
+
+/// No variant has a [`source`](std::error::Error::source): an error never
+/// wraps a dependency's error, whose message could quote input (ADR 0007).
+/// In particular [`Error::DecryptionFailed`] exposes no cause, so callers
+/// cannot tell decryption failures apart (RFC 7516 §11.5).
+impl std::error::Error for Error {}
 
 /// Result alias using [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
@@ -332,6 +324,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn display_text_of_every_variant() {
+        // Not part of the stability contract (codes are), but pinned so a
+        // change to the formatting code cannot alter messages by accident.
+        let expected = [
+            "invalid base64url",
+            "invalid JSON: syntax error",
+            "invalid header: missing \"alg\"",
+            "unsupported algorithm",
+            "algorithm not allowed",
+            "invalid key: RSA modulus is under 2048 bits",
+            "key does not match the algorithm",
+            "signature verification failed",
+            "decryption failed",
+            "unknown critical header parameter",
+            "token expired",
+            "token not yet valid",
+            "invalid claim: aud",
+            "randomness unavailable",
+        ];
+        let actual: Vec<String> = one_of_each().iter().map(Error::to_string).collect();
+        assert_eq!(actual, expected);
+    }
+
     /// A distinctive value standing in for untrusted input or key material.
     const MARKER: &str = "pj-SECRET-marker-7f3a";
 
@@ -367,62 +383,63 @@ mod tests {
         assert!(std::error::Error::source(&e).is_none());
     }
 
-    /// serde_json errors built from input containing `MARKER`, one per
-    /// `serde_json::error::Category`, with the detail we expect for each.
-    fn json_errors_from_marked_input() -> Vec<(serde_json::Error, &'static str)> {
-        #[derive(Debug, serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Strict {
-            #[serde(rename = "a")]
-            _a: u8,
-        }
-        struct FailingReader;
-        impl std::io::Read for FailingReader {
-            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other(MARKER))
-            }
-        }
-        let data_value = format!("\"{MARKER}\"");
-        let unknown_field = format!("{{\"{MARKER}\":1}}");
-        let syntax = format!("{{\"{MARKER}\" {MARKER}}}");
-        let eof = format!("{{\"{MARKER}\":");
-        let errs = [
-            (serde_json::from_str::<u32>(&data_value).err(), JSON_DATA),
+    /// Malformed JSON texts containing `MARKER`, each with the
+    /// [`Error::InvalidJson`] detail that [`crate::json::parse`] must return.
+    ///
+    /// The marker sits next to the fault, where a parser that quotes the
+    /// offending input (as `serde_json` does) would echo it.
+    fn marked_malformed_json() -> Vec<(Vec<u8>, &'static str)> {
+        let mut invalid_utf8 = format!("\"{MARKER}").into_bytes();
+        invalid_utf8.extend_from_slice(&[0xff, 0xfe, b'"']);
+        vec![
             (
-                serde_json::from_str::<Strict>(&unknown_field).err(),
-                JSON_DATA,
+                format!("{{\"{MARKER}\" {MARKER}}}").into_bytes(),
+                "unexpected character",
             ),
             (
-                serde_json::from_str::<serde_json::Value>(&syntax).err(),
-                JSON_SYNTAX,
+                format!("{{\"{MARKER}\":").into_bytes(),
+                "unexpected end of input",
             ),
             (
-                serde_json::from_str::<serde_json::Value>(&eof).err(),
-                JSON_EOF,
+                format!("\"{MARKER}\" {MARKER}").into_bytes(),
+                "trailing content after the value",
+            ),
+            (format!("\"{MARKER}\\q\"").into_bytes(), "invalid escape"),
+            (
+                format!("\"{MARKER}\\ud800\"").into_bytes(),
+                "lone surrogate escape",
             ),
             (
-                serde_json::from_reader::<_, serde_json::Value>(FailingReader).err(),
-                JSON_IO,
+                format!("\"{MARKER}\n\"").into_bytes(),
+                "unescaped control character in string",
             ),
-        ];
-        errs.into_iter()
-            .map(|(e, detail)| (e.unwrap_or_else(|| unreachable!("input must fail")), detail))
-            .collect()
+            (
+                format!("{{\"{MARKER}\":1,\"{MARKER}\":2}}").into_bytes(),
+                "duplicate member name",
+            ),
+            (
+                format!("{{\"{MARKER}\":1e400}}").into_bytes(),
+                "number out of range",
+            ),
+            (invalid_utf8, "invalid UTF-8"),
+        ]
     }
 
     #[test]
-    fn serde_json_errors_map_to_invalid_json_without_input() {
-        let mut echoed = 0;
-        for (json_err, detail) in json_errors_from_marked_input() {
-            if json_err.to_string().contains(MARKER) {
-                echoed += 1;
+    fn json_errors_are_invalid_json_without_input() {
+        for (input, detail) in marked_malformed_json() {
+            // The probe is meaningful only if the marker is in the input.
+            assert!(
+                input.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()),
+                "probe for {detail:?} lacks the marker"
+            );
+            let e = crate::json::parse(&input).err();
+            assert_eq!(e, Some(Error::InvalidJson(detail)));
+            if let Some(e) = e {
+                assert_eq!(e.code(), "InvalidJson");
+                assert_no_marker(&e);
+                assert!(std::error::Error::source(&e).is_none());
             }
-            let e = Error::from(json_err);
-            assert_eq!(e, Error::InvalidJson(detail));
-            assert_eq!(e.code(), "InvalidJson");
-            assert_no_marker(&e);
         }
-        // Proves the test is meaningful: serde_json itself does echo input.
-        assert!(echoed >= 3, "expected serde_json to echo the marker");
     }
 }
