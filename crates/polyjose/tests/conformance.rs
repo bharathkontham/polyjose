@@ -630,6 +630,21 @@ fn schema_and_runner_agree() {
         at(&schema, &["$schema"]).as_str(),
         Some("https://json-schema.org/draft/2020-12/schema")
     );
+    // Root keywords: annotations plus exactly the constraints checked below.
+    assert_eq!(
+        member_names(&schema),
+        [
+            "$schema",
+            "title",
+            "description",
+            "type",
+            "required",
+            "additionalProperties",
+            "properties",
+            "allOf",
+            "$defs"
+        ]
+    );
     assert_eq!(at(&schema, &["type"]).as_str(), Some("object"));
     assert_eq!(
         at(&schema, &["additionalProperties"]).as_bool(),
@@ -638,8 +653,9 @@ fn schema_and_runner_agree() {
     assert_eq!(strings(at(&schema, &["required"])), TOP_LEVEL);
     assert_eq!(member_names(at(&schema, &["properties"])), TOP_LEVEL);
     for name in ["source", "description"] {
-        let property = at(&schema, &["properties", name]);
-        assert_eq!(def_ref(property, &mut used), "text");
+        let property = annotated(at(&schema, &["properties", name]));
+        assert_eq!(property, parse(r##"{"$ref":"#/$defs/text"}"##));
+        def_ref(&property, &mut used);
     }
     assert_eq!(
         *at(defs, &["text"]),
@@ -647,6 +663,10 @@ fn schema_and_runner_agree() {
             r#"{{"type":"string","minLength":1,"pattern":{}}}"#,
             Value::from(TEXT_PATTERN).to_json()
         ))
+    );
+    assert_eq!(
+        member_names(at(&schema, &["properties", "operation"])),
+        ["enum"]
     );
     assert_eq!(
         strings(at(&schema, &["properties", "operation", "enum"])),
@@ -661,18 +681,19 @@ fn schema_and_runner_agree() {
         parse(r#"{"type":"object","required":["ok"],"properties":{"ok":{"type":"boolean"}}}"#)
     );
 
-    assert_eq!(at(defs, &["hex", "pattern"]).as_str(), Some(HEX_PATTERN));
-    assert_eq!(annotated(at(defs, &["hex"])).as_object().unwrap().len(), 2);
+    for (name, pattern) in [("hex", HEX_PATTERN), ("base64url", BASE64URL_PATTERN)] {
+        assert_eq!(
+            annotated(at(defs, &[name])),
+            parse(&format!(
+                r#"{{"type":"string","pattern":{}}}"#,
+                Value::from(pattern).to_json()
+            )),
+            "{name}"
+        );
+    }
     assert_eq!(
-        at(defs, &["base64url", "pattern"]).as_str(),
-        Some(BASE64URL_PATTERN)
-    );
-    assert_eq!(
-        annotated(at(defs, &["base64url"]))
-            .as_object()
-            .unwrap()
-            .len(),
-        2
+        member_names(&annotated(at(defs, &["error_code"]))),
+        ["enum"]
     );
     assert_eq!(strings(at(defs, &["error_code", "enum"])), Error::CODES);
     assert_eq!(
