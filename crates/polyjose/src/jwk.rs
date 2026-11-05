@@ -32,6 +32,15 @@
 //! # Ok::<(), polyjose::Error>(())
 //! ```
 //!
+//! # JWK Sets
+//!
+//! [`JwkSet`](crate::jwk::JwkSet) reads a JWK Set (RFC 7517 §5), keeping
+//! the supported, valid keys in order, skipping the rest, and failing on
+//! an RSA private key (ADR 0021).
+//! [`JwkSet::verification_candidates`](crate::jwk::JwkSet::verification_candidates)
+//! picks the keys that may verify a JWS by family, `alg`, `use`, `key_ops`
+//! and `kid` (ADR 0029 §2).
+//!
 //! # What import checks
 //!
 //! Validation is structural: polyjose has no curve or RSA arithmetic until
@@ -123,7 +132,9 @@ use crate::json::{self, Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use crate::util::{b64url_decode, b64url_encode};
 
+mod set;
 mod thumbprint;
+pub use set::JwkSet;
 
 /// The `kty` (key type) values polyjose supports (RFC 7517 §4.1,
 /// RFC 7518 §6.1, RFC 8037 §2).
@@ -741,6 +752,62 @@ impl KeyMaterial {
             KeyMaterial::Okp(_) => KeyType::Okp,
         }
     }
+
+    /// Whether this key is of the family JWS `alg` requires: the key
+    /// binding table of ADR 0026 §2 step 8, the **only** copy of it. JWS
+    /// key binding (feature 0002) and JWK Set candidate selection
+    /// (ADR 0029 §2 item 1, [`JwkSet::verification_candidates`]) both call
+    /// this; nothing else may restate the table.
+    ///
+    /// | `alg` | key |
+    /// |---|---|
+    /// | `HS256`, `HS384`, `HS512` (RFC 7518 §3.2) | `oct` |
+    /// | `RS*`, `PS*` (RFC 7518 §3.3, §3.5) | `RSA` |
+    /// | `ES256` / `ES384` / `ES512` (RFC 7518 §3.4) | `EC` `P-256` / `P-384` / `P-521` |
+    /// | `ES256K` (RFC 8812 §3.2) | `EC` `secp256k1` |
+    /// | `EdDSA` (RFC 8037 §3.1), `Ed25519` (RFC 9864 §2.2) | `OKP` `Ed25519` |
+    ///
+    /// `none` and unknown algorithms are served by no key (RFC 8725 §3.1).
+    /// `X25519` keys are key agreement keys (RFC 8037 §3.2) and serve no
+    /// JWS algorithm. Only the family is checked here; the JWK `alg`,
+    /// `use` and `key_ops` members and key strength are separate checks.
+    pub(crate) fn serves_signing_alg(&self, alg: &SigningAlg) -> bool {
+        use SigningAlg as A;
+        match (alg, self) {
+            (A::HS256 | A::HS384 | A::HS512, KeyMaterial::Oct(_)) => true,
+            (
+                A::RS256 | A::RS384 | A::RS512 | A::PS256 | A::PS384 | A::PS512,
+                KeyMaterial::Rsa(_),
+            ) => true,
+            (A::ES256, KeyMaterial::Ec(key)) => key.crv == EcCurve::P256,
+            (A::ES384, KeyMaterial::Ec(key)) => key.crv == EcCurve::P384,
+            (A::ES512, KeyMaterial::Ec(key)) => key.crv == EcCurve::P521,
+            (A::ES256K, KeyMaterial::Ec(key)) => key.crv == EcCurve::Secp256k1,
+            (A::EdDSA | A::Ed25519, KeyMaterial::Okp(key)) => key.crv == OkpCurve::Ed25519,
+            // Every variant is listed (no `_` for `alg`), so a new
+            // algorithm does not compile until it has a row above.
+            (
+                A::HS256
+                | A::HS384
+                | A::HS512
+                | A::RS256
+                | A::RS384
+                | A::RS512
+                | A::PS256
+                | A::PS384
+                | A::PS512
+                | A::ES256
+                | A::ES384
+                | A::ES512
+                | A::ES256K
+                | A::EdDSA
+                | A::Ed25519
+                | A::None
+                | A::Unknown(_),
+                _,
+            ) => false,
+        }
+    }
 }
 
 /// Every secret in the material is a [`Zeroizing`] buffer.
@@ -1229,12 +1296,9 @@ fn key_kind(object: &Object) -> Result<KeyKind> {
 
 /// Whether `object` is a key whose `kty`, or `EC`/`OKP` `crv`, is a string
 /// polyjose does not support: the members RFC 7517 §5 says a JWK Set
-/// reader SHOULD ignore, and ADR 0029 §3 skips. Malformed members and RSA
-/// private keys are not included: they fail the set (ADR 0029 §3).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by JWK Set parsing (feature 0001 T07)")
-)]
+/// reader SHOULD ignore, and ADR 0029 §3 skips. Malformed members are not
+/// included (the set skips them separately), nor are RSA private keys
+/// (they fail the set, ADR 0021).
 pub(crate) fn is_unsupported_key_kind(object: &Object) -> bool {
     matches!(key_kind(object), Err(Error::UnsupportedAlgorithm))
 }
