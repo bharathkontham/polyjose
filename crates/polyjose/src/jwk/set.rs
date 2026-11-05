@@ -1,4 +1,10 @@
 //! JWK Set (RFC 7517 §5) and verification key selection (ADR 0029 §2).
+//!
+//! The public contract is documented on [`JwkSet`]. The alg → key family
+//! table selection uses is [`KeyMaterial::serves_signing_alg`]
+//! (ADR 0026 §2 step 8), the single copy JWS key binding also uses.
+//!
+//! [`KeyMaterial::serves_signing_alg`]: super::KeyMaterial::serves_signing_alg
 
 use core::fmt;
 
@@ -18,9 +24,61 @@ const NO_KEYS_ARRAY: &str = "a JWK Set must have a keys member that is an array"
 /// document, in document order, plus its other top-level members.
 ///
 /// Build one with [`JwkSet::from_json`] (untrusted bytes) or
-/// [`JwkSet::from_object`] (an already-parsed object). See the
-/// [module documentation](crate::jwk) for which members are kept, skipped
-/// or fatal.
+/// [`JwkSet::from_object`] (an already-parsed object), and pick the keys
+/// that may verify a JWS with [`JwkSet::verification_candidates`]
+/// (ADR 0029 §2).
+///
+/// # What import keeps
+///
+/// | `keys` entry | outcome |
+/// |---|---|
+/// | a valid, supported JWK | kept, in document order |
+/// | unsupported `kty`, or `EC`/`OKP` `crv` (`XYZ`, `Ed448`, `P-192`, ...) | skipped (RFC 7517 §5, ADR 0029 §3) |
+/// | otherwise invalid (not an object, missing or mistyped members, wrong lengths, bad base64url, RSA modulus under 2048 bits, ...) | skipped (RFC 7517 §5) |
+/// | an RSA private key | the whole set fails, [`Error::UnsupportedAlgorithm`] (ADR 0021) |
+///
+/// Skipping invalid entries, rather than failing the set, follows the
+/// RFC 7517 §5 "SHOULD ignore" for members "missing required members, or
+/// for which values are out of the supported ranges" (a 0001-T07 lead
+/// decision; ADR 0029 §3 left the choice to T07). Skipping can only remove
+/// verification candidates, never add one, and [`JwkSet::skipped`] counts
+/// what was left out. An entry's validation is that of
+/// [`Jwk::from_object`].
+///
+/// Document-level problems always fail: JSON errors, including a duplicate
+/// member name anywhere in the document, are [`Error::InvalidJson`], and a
+/// missing or non-array `keys` is [`Error::InvalidKey`].
+///
+/// # Indexes
+///
+/// A `key_index` (ADR 0029 §4) is an index into [`JwkSet::keys`], which
+/// leaves skipped entries out, so it is deterministic for a given document
+/// and polyjose version. A later version that supports more key types may
+/// keep entries this one skips: identify keys across versions by `kid`.
+///
+/// # Secrets
+///
+/// `oct` keys, and `EC`/`OKP` keys with `d`, are secret. Every key is a
+/// [`Jwk`], wiped on drop, and `Debug` prints each key's redacted `Debug`
+/// and only the *names* of the other top-level members.
+///
+/// ```
+/// use polyjose::Error;
+/// use polyjose::jwk::JwkSet;
+///
+/// // RFC 7517 §5: a key type polyjose does not know is ignored.
+/// let set = JwkSet::from_json(br#"{"keys":[
+///     {"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","kid":"ed"},
+///     {"kty":"XYZ","kid":"unknown"}
+/// ]}"#)?;
+/// assert_eq!((set.len(), set.skipped()), (1, 1));
+/// assert_eq!(set.keys()[0].kid(), Some("ed"));
+///
+/// // ADR 0021: an RSA private key fails the whole set.
+/// let leaked = br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB"}]}"#;
+/// assert_eq!(JwkSet::from_json(leaked).unwrap_err(), Error::UnsupportedAlgorithm);
+/// # Ok::<(), polyjose::Error>(())
+/// ```
 #[derive(Clone)]
 pub struct JwkSet {
     /// The members that imported as a [`Jwk`], in document order.

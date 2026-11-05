@@ -32,6 +32,15 @@
 //! # Ok::<(), polyjose::Error>(())
 //! ```
 //!
+//! # JWK Sets
+//!
+//! [`JwkSet`](crate::jwk::JwkSet) reads a JWK Set (RFC 7517 §5), keeping
+//! the supported, valid keys in order, skipping the rest, and failing on
+//! an RSA private key (ADR 0021).
+//! [`JwkSet::verification_candidates`](crate::jwk::JwkSet::verification_candidates)
+//! picks the keys that may verify a JWS by family, `alg`, `use`, `key_ops`
+//! and `kid` (ADR 0029 §2).
+//!
 //! # What import checks
 //!
 //! Validation is structural: polyjose has no curve or RSA arithmetic until
