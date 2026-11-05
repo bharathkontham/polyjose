@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Non-zero pad bits after a full quantum (\"Zm9vYg\" is canonical) (RFC 4648 §3.5)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "Zm9vYh"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

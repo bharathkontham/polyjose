@@ -488,6 +488,23 @@ fn conformance_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
 }
 
+/// The shared vectors: every file must be schema-valid and pass.
+#[test]
+fn conformance_vectors() {
+    let report = run_dir(&conformance_dir().join("vectors"));
+    assert!(
+        report.failures.is_empty(),
+        "{} of {} conformance vector file(s) failed:\n  {}",
+        report.failures.len(),
+        report.files,
+        report.failures.join("\n  ")
+    );
+    eprintln!(
+        "conformance: {} vectors passed {:?}",
+        report.files, report.passed
+    );
+}
+
 // ---------------------------------------------------------------------------
 // schema.json and this runner must say the same thing.
 // ---------------------------------------------------------------------------

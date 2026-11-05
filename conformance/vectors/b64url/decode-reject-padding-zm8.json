@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Padding is not allowed: base64url omits all trailing \"=\" (RFC 7515 §2)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "Zm8="
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

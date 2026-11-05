@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Whitespace is not allowed in base64url (RFC 7515 §2)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "Zm9v Ym"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}
