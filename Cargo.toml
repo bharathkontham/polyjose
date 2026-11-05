@@ -24,7 +24,9 @@ polyjose = { path = "crates/polyjose" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64ct = { version = "1.8", features = ["alloc"] }
-zeroize = { version = "1.9", features = ["derive"] }
+# Default features off (ADR 0016 §3). No `derive` (it pulls syn, quote and proc-macro2): Zeroize and
+# Drop are written by hand. `alloc` provides Zeroize for the String and Vec<u8> inside Zeroizing<_>.
+zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 subtle = "2.6"
 # Dev-only: property tests (ADR 0008 layer 2).
 proptest = { version = "1.12", default-features = false, features = ["std"] }
