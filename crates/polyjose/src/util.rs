@@ -8,7 +8,7 @@ pub fn b64url_encode(data: &[u8]) -> String {
 
 /// Decodes unpadded base64url.
 pub fn b64url_decode(s: &str) -> crate::Result<Vec<u8>> {
-    Base64UrlUnpadded::decode_vec(s).map_err(|_| crate::Error::Base64)
+    Base64UrlUnpadded::decode_vec(s).map_err(|_| crate::Error::InvalidBase64)
 }
 
 #[cfg(test)]

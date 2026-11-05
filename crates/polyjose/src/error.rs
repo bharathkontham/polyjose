@@ -1,27 +1,172 @@
-/// Errors returned by polyjose. Stable error codes come in T02.
-#[derive(Debug, thiserror::Error)]
+//! The polyjose error type and its stable, cross-platform error codes.
+
+/// Errors returned by polyjose.
+///
+/// Each variant has a stable [`code`](Error::code). The code is the contract
+/// shared by every binding and every conformance vector (ADR 0007), so it
+/// never changes once released. New variants may be added (the enum is
+/// `#[non_exhaustive]`).
+///
+/// No variant carries key material or bytes from the input being processed.
+/// Any detail is a `&'static str` written into polyjose itself, so `Debug`
+/// and `Display` never echo untrusted input or secrets (ADR 0007).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
-    /// Input is not valid unpadded base64url (RFC 7515 §2).
+    /// Input is not valid unpadded base64url (RFC 7515 §2, RFC 4648 §5).
+    ///
+    /// Raised when decoding any base64url-encoded JOSE component
+    /// (RFC 7515 §5.2 steps 2, 6 and 7; RFC 7516 §5.2) or JWK member.
     #[error("invalid base64url")]
-    Base64,
-    /// Input is not valid JSON.
+    InvalidBase64,
+
+    /// Input is not a valid JSON object of the expected shape.
+    ///
+    /// A JOSE Header must be a completely valid JSON object (RFC 7515 §5.2
+    /// step 3, RFC 7516 §5.2 step 3), and so must a JWT Claims Set
+    /// (RFC 7519 §7.2 step 10) and a JWK (RFC 7517 §4). The detail names
+    /// the failure category only, never the offending input.
     #[error("invalid JSON: {0}")]
-    Json(#[from] serde_json::Error),
-    /// The algorithm is not supported by polyjose.
-    #[error("unsupported algorithm: {0}")]
-    UnsupportedAlgorithm(String),
-    /// The key is malformed or unsuitable for the operation.
+    InvalidJson(&'static str),
+
+    /// The JOSE Header is structurally invalid.
+    ///
+    /// For example: a required parameter such as `alg` is missing
+    /// (RFC 7515 §4.1.1, RFC 7516 §4.1.1–§4.1.2), a parameter has the wrong
+    /// type, a Header Parameter name is duplicated (RFC 7515 §5.2 step 4,
+    /// RFC 7516 §5.2 step 4), or `crit` itself is malformed
+    /// (RFC 7515 §4.1.11, RFC 7516 §4.1.13).
+    #[error("invalid header: {0}")]
+    InvalidHeader(&'static str),
+
+    /// The `alg` or `enc` value does not name an algorithm polyjose
+    /// implements.
+    ///
+    /// The JWS is invalid if `alg` is not a supported algorithm
+    /// (RFC 7515 §4.1.1); the same holds for JWE `alg` and `enc`
+    /// (RFC 7516 §4.1.1–§4.1.2). The rejected value is not echoed.
+    #[error("unsupported algorithm")]
+    UnsupportedAlgorithm,
+
+    /// The algorithm is supported but not in the caller's allow-list.
+    ///
+    /// Libraries must let the caller specify the accepted algorithms and
+    /// must not use any other (RFC 8725 §3.1, §2.1; ADR 0007). `none` is
+    /// never allowed.
+    #[error("algorithm not allowed")]
+    AlgorithmNotAllowed,
+
+    /// The key is malformed or too weak for any use.
+    ///
+    /// For example: missing or malformed JWK members (RFC 7517 §4,
+    /// RFC 7518 §6), an RSA modulus under 2048 bits (RFC 7518 §3.3, §3.5,
+    /// §4.2), an HMAC key shorter than the hash output (RFC 7518 §3.2), or
+    /// an EC point that is not on its curve (RFC 8725 §3.4). The detail
+    /// never contains key material.
     #[error("invalid key: {0}")]
-    InvalidKey(String),
-    /// A JWS signature or MAC did not verify.
+    InvalidKey(&'static str),
+
+    /// The key is valid but not for this algorithm or operation.
+    ///
+    /// Each key must be used with exactly one algorithm (RFC 8725 §3.1),
+    /// which blocks the RS256→HS256 confusion attack (RFC 8725 §2.1). Also
+    /// raised when the JWK `alg`, `use` or `key_ops` members forbid the
+    /// operation (RFC 7517 §4.2–§4.4).
+    #[error("key does not match the algorithm")]
+    KeyAlgorithmMismatch,
+
+    /// A JWS signature or MAC did not validate (RFC 7515 §5.2 step 8).
     #[error("signature verification failed")]
     InvalidSignature,
-    /// JWE decryption failed. The cause is deliberately not reported (no oracle).
+
+    /// JWE decryption failed.
+    ///
+    /// Every decryption failure maps to this one variant, whatever the
+    /// internal cause, and it deliberately carries no detail. The recipient
+    /// must not distinguish format, padding and length errors
+    /// (RFC 7516 §11.5), so no padding or key-unwrap oracle is exposed
+    /// (RFC 7516 §5.2, ADR 0007).
     #[error("decryption failed")]
     DecryptionFailed,
-    /// The token is malformed or failed validation.
-    #[error("invalid token: {0}")]
-    InvalidToken(String),
+
+    /// `crit` lists an extension polyjose does not understand.
+    ///
+    /// Recipients must reject the JWS/JWE in that case (RFC 7515 §4.1.11,
+    /// RFC 7516 §4.1.13). The unknown name is not echoed.
+    #[error("unknown critical header parameter")]
+    UnknownCritical,
+
+    /// The JWT `exp` time has passed, allowing for the configured clock
+    /// skew (RFC 7519 §4.1.4).
+    #[error("token expired")]
+    TokenExpired,
+
+    /// The JWT `nbf` time has not been reached yet, allowing for the
+    /// configured clock skew (RFC 7519 §4.1.5).
+    #[error("token not yet valid")]
+    TokenNotYetValid,
+
+    /// A JWT claim is missing, malformed or failed validation.
+    ///
+    /// The detail names the claim (for example `"aud"`), never its value.
+    /// Covers RFC 7519 §4.1 and §7.2 and the RFC 8725 §3.8–§3.9 issuer and
+    /// audience checks.
+    #[error("invalid claim: {0}")]
+    InvalidClaim(&'static str),
+
+    /// The operating-system CSPRNG could not supply random bytes.
+    ///
+    /// Keys, IVs and CEKs require a cryptographically secure source
+    /// (RFC 7515 §10.1, RFC 8725 §3.5); polyjose never falls back to a
+    /// weaker one (ADR 0005).
+    #[error("randomness unavailable")]
+    RandomnessUnavailable,
+}
+
+impl Error {
+    /// Every stable error code, in declaration order.
+    ///
+    /// Bindings and the conformance harness use this to check that an
+    /// expected `error` value names a real code.
+    pub const CODES: &'static [&'static str] = &[
+        "InvalidBase64",
+        "InvalidJson",
+        "InvalidHeader",
+        "UnsupportedAlgorithm",
+        "AlgorithmNotAllowed",
+        "InvalidKey",
+        "KeyAlgorithmMismatch",
+        "InvalidSignature",
+        "DecryptionFailed",
+        "UnknownCritical",
+        "TokenExpired",
+        "TokenNotYetValid",
+        "InvalidClaim",
+        "RandomnessUnavailable",
+    ];
+
+    /// The stable, cross-platform code for this error (ADR 0007).
+    ///
+    /// Match on this, not on the `Display` text: the code never changes,
+    /// while the message may be reworded.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Error::InvalidBase64 => "InvalidBase64",
+            Error::InvalidJson(_) => "InvalidJson",
+            Error::InvalidHeader(_) => "InvalidHeader",
+            Error::UnsupportedAlgorithm => "UnsupportedAlgorithm",
+            Error::AlgorithmNotAllowed => "AlgorithmNotAllowed",
+            Error::InvalidKey(_) => "InvalidKey",
+            Error::KeyAlgorithmMismatch => "KeyAlgorithmMismatch",
+            Error::InvalidSignature => "InvalidSignature",
+            Error::DecryptionFailed => "DecryptionFailed",
+            Error::UnknownCritical => "UnknownCritical",
+            Error::TokenExpired => "TokenExpired",
+            Error::TokenNotYetValid => "TokenNotYetValid",
+            Error::InvalidClaim(_) => "InvalidClaim",
+            Error::RandomnessUnavailable => "RandomnessUnavailable",
+        }
+    }
 }
 
 /// Result alias using [`Error`].
