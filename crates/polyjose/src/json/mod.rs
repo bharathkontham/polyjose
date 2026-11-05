@@ -25,9 +25,10 @@
 //!
 //! # What the parser accepts
 //!
-//! [`parse`] (and [`parse_with_limits`]) accepts exactly one RFC 8259 JSON
-//! text, of any type, with these restrictions. Every failure is
-//! [`Error::InvalidJson`](crate::Error::InvalidJson) with a fixed detail
+//! [`parse`](crate::json::parse) (and
+//! [`parse_with_limits`](crate::json::parse_with_limits)) accepts exactly one
+//! RFC 8259 JSON text, of any type, with these restrictions. Every failure is
+//! [`InvalidJson`](crate::Error::InvalidJson) with a fixed detail
 //! that never contains input bytes (ADR 0007), and no input can make it
 //! panic or recurse without bound.
 //!
@@ -49,10 +50,10 @@
 //!   RFC 7493 §2.3), at any nesting level, compared after unescaping and
 //!   code point by code point (RFC 8259 §8.3).
 //! - **Finite numbers only** (RFC 8259 §6, RFC 7493 §2.2): a number that
-//!   rounds to an infinity, like `1e400`, is rejected. See [`Number`] for
-//!   how exact integers are kept.
-//! - **[`Limits`]**: nesting depth 32, 1 MiB of input and 10 000 entries per
-//!   object or array by default (RFC 8259 §9).
+//!   rounds to an infinity, like `1e400`, is rejected. See
+//!   [`Number`](crate::json::Number) for how exact integers are kept.
+//! - **[`Limits`](crate::json::Limits)**: nesting depth 32, 1 MiB of input
+//!   and 10 000 entries per object or array by default (RFC 8259 §9).
 //!
 //! JSONTestSuite (`tests/third_party/JSONTestSuite`) is run in full: every
 //! `y_` case is accepted except the two with duplicate names, every `n_`
@@ -60,15 +61,17 @@
 //!
 //! # Serializing
 //!
-//! [`Value::to_json`] and [`Object::to_json`] write compact JSON with
+//! [`Value::to_json`](crate::json::Value::to_json) and
+//! [`Object::to_json`](crate::json::Object::to_json) write compact JSON with
 //! minimal escaping and one canonical number form, in member order. The
 //! output is a deterministic function of the value, which RFC 7638
-//! thumbprints rely on (with [`Object::sort_members`]).
+//! thumbprints rely on (with
+//! [`Object::sort_members`](crate::json::Object::sort_members)).
 //!
 //! # Fuzzing
 //!
-//! [`parse`] takes raw bytes and has no other inputs, so a `cargo fuzz`
-//! target can call it directly.
+//! [`parse`](crate::json::parse) takes raw bytes and has no other inputs, so
+//! a `cargo fuzz` target can call it directly.
 
 mod number;
 mod parse;
