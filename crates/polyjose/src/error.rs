@@ -169,6 +169,33 @@ impl Error {
     }
 }
 
+/// [`Error::InvalidJson`] detail for input that is not syntactically JSON.
+const JSON_SYNTAX: &str = "syntax error";
+/// [`Error::InvalidJson`] detail for JSON of the wrong type or structure.
+const JSON_DATA: &str = "unexpected type or structure";
+/// [`Error::InvalidJson`] detail for truncated JSON.
+const JSON_EOF: &str = "unexpected end of input";
+/// [`Error::InvalidJson`] detail for a failed read of the JSON source.
+const JSON_IO: &str = "read failed";
+
+/// Maps a `serde_json` error to [`Error::InvalidJson`] by category only.
+///
+/// `serde_json::Error`'s message can quote the input (for example
+/// `invalid type: string "..."` or ``unknown field `...` ``), and that input
+/// may be a secret JWK member or claim value. Only the error category is
+/// kept, so nothing from the input reaches `Debug` or `Display` (ADR 0007).
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        use serde_json::error::Category;
+        Error::InvalidJson(match e.classify() {
+            Category::Syntax => JSON_SYNTAX,
+            Category::Data => JSON_DATA,
+            Category::Eof => JSON_EOF,
+            Category::Io => JSON_IO,
+        })
+    }
+}
+
 /// Result alias using [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -308,9 +335,9 @@ mod tests {
     fn json_errors_from_marked_input() -> Vec<(serde_json::Error, &'static str)> {
         #[derive(Debug, serde::Deserialize)]
         #[serde(deny_unknown_fields)]
-        #[allow(dead_code)]
         struct Strict {
-            a: u8,
+            #[serde(rename = "a")]
+            _a: u8,
         }
         struct FailingReader;
         impl std::io::Read for FailingReader {
@@ -324,10 +351,22 @@ mod tests {
         let eof = format!("{{\"{MARKER}\":");
         let errs = [
             (serde_json::from_str::<u32>(&data_value).err(), JSON_DATA),
-            (serde_json::from_str::<Strict>(&unknown_field).err(), JSON_DATA),
-            (serde_json::from_str::<serde_json::Value>(&syntax).err(), JSON_SYNTAX),
-            (serde_json::from_str::<serde_json::Value>(&eof).err(), JSON_EOF),
-            (serde_json::from_reader::<_, serde_json::Value>(FailingReader).err(), JSON_IO),
+            (
+                serde_json::from_str::<Strict>(&unknown_field).err(),
+                JSON_DATA,
+            ),
+            (
+                serde_json::from_str::<serde_json::Value>(&syntax).err(),
+                JSON_SYNTAX,
+            ),
+            (
+                serde_json::from_str::<serde_json::Value>(&eof).err(),
+                JSON_EOF,
+            ),
+            (
+                serde_json::from_reader::<_, serde_json::Value>(FailingReader).err(),
+                JSON_IO,
+            ),
         ];
         errs.into_iter()
             .map(|(e, detail)| (e.unwrap_or_else(|| unreachable!("input must fail")), detail))
