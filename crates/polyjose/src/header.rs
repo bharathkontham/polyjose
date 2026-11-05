@@ -2,8 +2,8 @@
 //! RFC 7516 §4.1, RFC 7518 §4.6.1/§4.7.1/§4.8.1, RFC 7797 §3) plus any
 //! Public or Private Header Parameters (RFC 7515 §4.2–§4.3).
 //!
-//! [`Header::from_json`] is the only way to read a header from untrusted
-//! bytes. `Header` deliberately does not implement `Deserialize`, so it
+//! [`Header::from_json`][from_json] is the only way to read a header from
+//! untrusted bytes. `Header` deliberately does not implement `Deserialize`, so it
 //! can't be built by a parser that skips the checks below.
 //!
 //! # What parsing checks
@@ -22,14 +22,20 @@
 //!
 //! - That `alg` (or `enc`) is present: in the JSON serializations a
 //!   parameter may live in another header object (RFC 7515 §7.2.1,
-//!   RFC 7516 §7.2.1). Use [`Header::signing_alg`],
-//!   [`Header::key_mgmt_alg`] and [`Header::content_enc_alg`] on the
-//!   complete JOSE Header.
+//!   RFC 7516 §7.2.1). Use [`Header::signing_alg`][signing_alg],
+//!   [`Header::key_mgmt_alg`][key_mgmt_alg] and
+//!   [`Header::content_enc_alg`][content_enc_alg] on the complete JOSE
+//!   Header.
 //! - base64url members (`apu`, `apv`, `iv`, `tag`, `p2s`, `x5t`, …) are
 //!   kept as their encoded strings; decoding belongs to the algorithm that
 //!   uses them.
 //! - `jwk` and `epk` are kept as raw JSON objects; they become typed keys
 //!   (and are validated) where they are used.
+//!
+//! [from_json]: crate::header::Header::from_json
+//! [signing_alg]: crate::header::Header::signing_alg
+//! [key_mgmt_alg]: crate::header::Header::key_mgmt_alg
+//! [content_enc_alg]: crate::header::Header::content_enc_alg
 
 use std::collections::BTreeMap;
 

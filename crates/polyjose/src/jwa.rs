@@ -10,20 +10,23 @@
 //! Any other string parses as `Unknown(String)` and serializes back to the
 //! exact same string, so a header can be read and re-written without loss.
 //! An unknown value only fails when it is about to be used:
-//! [`SigningAlg::ensure_known`] (and its siblings) return
+//! [`SigningAlg::ensure_known`][ensure_known] (and its siblings) return
 //! [`Error::UnsupportedAlgorithm`], which never echoes the value.
 //!
-//! Construct values with `From<&str>`/`From<String>` (or the variants). Building
-//! `Unknown` directly from a registered name (e.g. `Unknown("HS256".into())`)
+//! Construct values with `From<&str>`/`From<String>` (or the variants).
+//! Building `Unknown` directly from a registered name (e.g. `Unknown("HS256".into())`)
 //! is non-canonical: it compares unequal to the named variant, so it fails
 //! closed against an allow-list, and `ensure_known` rejects it.
 //!
 //! # `none`
 //!
-//! [`SigningAlg::None`] (RFC 7518 §3.6) is a known identifier so that headers
-//! using it can be parsed and diagnosed, but it is never verifiable: the
-//! verify allow-list rejects it with [`Error::AlgorithmNotAllowed`]
+//! [`SigningAlg::None`][none] (RFC 7518 §3.6) is a known identifier so that
+//! headers using it can be parsed and diagnosed, but it is never verifiable:
+//! the verify allow-list rejects it with [`Error::AlgorithmNotAllowed`]
 //! (RFC 8725 §3.1, ADR 0007). Being "known" here only means "recognised".
+//!
+//! [ensure_known]: crate::jwa::SigningAlg::ensure_known
+//! [none]: crate::jwa::SigningAlg::None
 
 use core::fmt;
 
