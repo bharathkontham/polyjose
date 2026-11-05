@@ -30,7 +30,10 @@ for p in "${platforms[@]}"; do
       else record deny "SKIPPED (cargo-deny missing; CI runs it)"; fi
       # No binding may enable polyjose's test-vectors feature (ADR 0005).
       if have cargo; then run test-vectors-off scripts/check-test-vectors-off.sh
-      else record test-vectors-off "SKIPPED (cargo missing)"; fi ;;
+      else record test-vectors-off "SKIPPED (cargo missing)"; fi
+      # The core's runtime tree matches deps-allowlist.txt and CREDITS.md (ADR 0016, ADR 0020).
+      if have cargo; then run deps scripts/check-deps.sh
+      else record deps "SKIPPED (cargo missing)"; fi ;;
     wasm)
       if ! have wasm-pack; then record wasm "SKIPPED (wasm-pack missing)"
       elif ! has_wasm_suite; then record wasm "SKIPPED (no wasm test suite yet: no wasm-bindgen-test dev-dependency in bindings/wasm/Cargo.toml)"
