@@ -1,4 +1,30 @@
 //! The polyjose error type and its stable, cross-platform error codes.
+//!
+//! # Stability contract
+//!
+//! - **Stable:** the code strings returned by [`Error::code`] and listed in
+//!   [`Error::CODES`]. Every binding (Node, WASM, Kotlin, Swift) surfaces
+//!   them unchanged, and the shared conformance vectors name them in
+//!   `"expect": { "ok": false, "error": "<code>" }`. A released code is never
+//!   renamed or removed; new codes may be added.
+//! - **Not stable:** the `Display` text and the `&'static str` details. They
+//!   are for humans and may be reworded in any release. Don't match on them.
+//!
+//! # No secrets, no input (ADR 0007)
+//!
+//! An error never contains key material or bytes of the input being
+//! processed: a detail can only be a string literal from polyjose itself,
+//! and conversions from dependency errors (such as `serde_json::Error`, whose
+//! message quotes input) keep only a static category. JWE decryption has a
+//! single, detail-free failure, [`Error::DecryptionFailed`]
+//! (RFC 7516 §11.5).
+//!
+//! # Adding a variant
+//!
+//! Give it a doc comment citing its RFC section, add its code to
+//! [`Error::code`] and [`Error::CODES`] (same order as the declaration), and
+//! add it to `one_of_each` in this module's tests. The compiler flags the
+//! first and the last; the tests check the list.
 
 /// Errors returned by polyjose.
 ///
@@ -10,6 +36,17 @@
 /// No variant carries key material or bytes from the input being processed.
 /// Any detail is a `&'static str` written into polyjose itself, so `Debug`
 /// and `Display` never echo untrusted input or secrets (ADR 0007).
+///
+/// ```
+/// use polyjose::Error;
+///
+/// let err = Error::InvalidClaim("aud");
+/// assert_eq!(err.code(), "InvalidClaim");
+/// assert!(Error::CODES.contains(&err.code()));
+///
+/// // Match on the code (or the variant), never on the message text.
+/// assert_eq!(Error::DecryptionFailed.code(), "DecryptionFailed");
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
