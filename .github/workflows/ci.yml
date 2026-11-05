@@ -82,3 +82,21 @@ jobs:
       - name: cargo deny
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.install-deny.outcome == 'success' }}
         run: cargo deny --locked --all-features check
+
+  # The single required status check for branch protection on main (see git-ops). It needs every
+  # gate job, and it fails unless all of them succeeded, so a skipped or cancelled job can never
+  # count as green. Add each new job (WASM, Node, Swift, Android) to `needs` as it lands.
+  ci-ok:
+    name: ci-ok
+    if: ${{ always() }}
+    needs: [rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every gate job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'length > 0 and (to_entries | all(.value.result == "success"))' > /dev/null
