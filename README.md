@@ -7,7 +7,7 @@
 | Rust | [`polyjose`](https://crates.io/crates/polyjose) on crates.io | — |
 | Node.js | `@polyjose/node` on npm | napi-rs |
 | Web / edge (WASM) | `@polyjose/wasm` on npm | wasm-bindgen |
-| Android, Kotlin, Java | `io.github.bharathkontham:polyjose` on Maven Central | UniFFI + cargo-ndk |
+| Android, Kotlin, Java | `dev.polyjose:polyjose` on Maven Central | UniFFI + cargo-ndk |
 | iOS, iPadOS, macOS, tvOS, watchOS, visionOS | Swift Package `Polyjose` | UniFFI + XCFramework |
 
 > Status: **pre-alpha**. Nothing is published yet. Don't use it in production.
@@ -37,4 +37,6 @@ scripts/test-all.sh rust node  # only some platforms
 ```
 
 ## License
-Dual-licensed under MIT or Apache-2.0, at your option.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
+
+Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in polyjose, as defined in the Apache-2.0 license, is dual-licensed as above, without any additional terms or conditions.
