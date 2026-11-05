@@ -14,10 +14,10 @@
 //!
 //! An error never contains key material or bytes of the input being
 //! processed: a detail can only be a string literal from polyjose itself,
-//! and conversions from dependency errors (such as `serde_json::Error`, whose
-//! message quotes input) keep only a static category. JWE decryption has a
-//! single, detail-free failure, [`Error::DecryptionFailed`]
-//! (RFC 7516 §11.5).
+//! and no error wraps another error as its `source()`. polyjose parses JSON
+//! and base64url itself (ADR 0016), so no dependency's error message, which
+//! might quote input, ever reaches an `Error`. JWE decryption has a single,
+//! detail-free failure, [`Error::DecryptionFailed`] (RFC 7516 §11.5).
 //!
 //! # Adding a variant
 //!
@@ -224,33 +224,6 @@ impl core::fmt::Display for Error {
 /// In particular [`Error::DecryptionFailed`] exposes no cause, so callers
 /// cannot tell decryption failures apart (RFC 7516 §11.5).
 impl std::error::Error for Error {}
-
-/// [`Error::InvalidJson`] detail for input that is not syntactically JSON.
-const JSON_SYNTAX: &str = "syntax error";
-/// [`Error::InvalidJson`] detail for JSON of the wrong type or structure.
-const JSON_DATA: &str = "unexpected type or structure";
-/// [`Error::InvalidJson`] detail for truncated JSON.
-const JSON_EOF: &str = "unexpected end of input";
-/// [`Error::InvalidJson`] detail for a failed read of the JSON source.
-const JSON_IO: &str = "read failed";
-
-/// Maps a `serde_json` error to [`Error::InvalidJson`] by category only.
-///
-/// `serde_json::Error`'s message can quote the input (for example
-/// `invalid type: string "..."` or ``unknown field `...` ``), and that input
-/// may be a secret JWK member or claim value. Only the error category is
-/// kept, so nothing from the input reaches `Debug` or `Display` (ADR 0007).
-impl From<serde_json::Error> for Error {
-    fn from(e: serde_json::Error) -> Self {
-        use serde_json::error::Category;
-        Error::InvalidJson(match e.classify() {
-            Category::Syntax => JSON_SYNTAX,
-            Category::Data => JSON_DATA,
-            Category::Eof => JSON_EOF,
-            Category::Io => JSON_IO,
-        })
-    }
-}
 
 /// Result alias using [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
