@@ -17,6 +17,8 @@
 # Fails closed: if cargo or python3 is missing, or any command errors, it exits non-zero.
 # Runs on macOS /bin/bash 3.2 and on Linux bash, so no associative arrays or mapfile.
 set -euo pipefail
+# sort and comm must agree on one byte order whatever the caller's locale is.
+export LC_ALL=C
 cd "$(dirname "$0")/.."
 root=$(pwd); root_physical=$(pwd -P)
 
