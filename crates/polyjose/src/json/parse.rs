@@ -80,6 +80,19 @@ impl Default for Limits {
 
 /// Parses one JSON text (RFC 8259 §2) into a [`Value`], with the default
 /// [`Limits`].
+///
+/// The rules are listed in the [module docs](crate::json). Any failure is
+/// [`Error::InvalidJson`] with a fixed detail and no input bytes.
+///
+/// ```
+/// use polyjose::{json::parse, Error};
+///
+/// let v = parse(br#" [1, {"a": null}] "#).unwrap();
+/// assert_eq!(v.to_json(), r#"[1,{"a":null}]"#);
+///
+/// assert_eq!(parse(b"[1,]"), Err(Error::InvalidJson("unexpected character")));
+/// assert_eq!(parse(b"{} {}"), Err(Error::InvalidJson("trailing content after the value")));
+/// ```
 pub fn parse(input: &[u8]) -> Result<Value> {
     parse_with_limits(input, &Limits::DEFAULT)
 }
