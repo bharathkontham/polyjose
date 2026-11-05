@@ -291,11 +291,13 @@ impl Parser<'_> {
     /// point except `"`, `\` and the controls U+0000–U+001F.
     ///
     /// The string may be key material (a JWK `d` or `k`), so it is built in
-    /// a [`Zeroizing`] buffer: on any error the partial string is wiped as
-    /// it is dropped.
+    /// a [`Zeroizing`] buffer that never reallocates: unescaping never makes
+    /// text longer (each escape of n bytes decodes to at most n bytes), so
+    /// the quoted span's length is enough capacity. On any error the
+    /// partial string is wiped as it is dropped.
     fn string(&mut self) -> Result<Zeroizing<String>> {
         self.expect(b'"')?;
-        let mut out = Zeroizing::new(String::new());
+        let mut out = Zeroizing::new(String::with_capacity(self.quoted_len()));
         loop {
             let start = self.pos;
             // Bytes >= 0x80 belong to multi-byte UTF-8 sequences, whose bytes
@@ -318,6 +320,24 @@ impl Parser<'_> {
                 None => return Err(EOF),
             }
         }
+    }
+
+    /// The number of bytes from `pos` to the closing quote of the current
+    /// string, skipping the byte after each `\`, or to the end of the input
+    /// if the string is unterminated. Only sizes the buffer:
+    /// [`string`](Self::string) validates the content and reports the first
+    /// error.
+    fn quoted_len(&self) -> usize {
+        let rest = self.bytes.get(self.pos..).unwrap_or_default();
+        let mut i = 0;
+        while let Some(&b) = rest.get(i) {
+            match b {
+                b'"' => return i,
+                b'\\' => i += 2,
+                _ => i += 1,
+            }
+        }
+        rest.len()
     }
 
     /// RFC 8259 §7: the character after a `\`.
@@ -801,5 +821,32 @@ mod tests {
         assert!(with(l, b"[]").is_ok());
         assert!(with(l, b"{}").is_ok());
         assert_eq!(with(l, b"[1]"), Err(TOO_MANY));
+    }
+
+    /// The capacity of a parsed string's buffer.
+    fn string_capacity(input: &str) -> usize {
+        match ok(input) {
+            Value::String(s) => s.capacity(),
+            other => unreachable!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_buffers_are_sized_from_the_input_and_never_grow() {
+        // A grown String leaves a freed copy of its bytes behind, which for a
+        // JWK private member would be key material. Unescaping never makes a
+        // string longer, so a buffer sized from the quoted span never grows.
+        let escapes = format!("\"{}\"", "\\n".repeat(1000));
+        assert_eq!(string_capacity(&escapes), 2000);
+        let raw = format!("\"{}\"", "k".repeat(5000));
+        assert_eq!(string_capacity(&raw), 5000);
+        let pairs = format!("\"{}\"", "\\ud83d\\ude00".repeat(100));
+        assert_eq!(string_capacity(&pairs), 1200);
+        let names = ok(&format!("{{\"{}\":1}}", "n".repeat(300)));
+        let name = names
+            .as_object()
+            .and_then(|o| o.iter().next())
+            .map(|(n, _)| n.len());
+        assert_eq!(name, Some(300));
     }
 }
