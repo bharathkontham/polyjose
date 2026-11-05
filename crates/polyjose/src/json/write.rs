@@ -34,23 +34,59 @@ impl Value {
     /// let v = parse(br#"{ "b": [1.0, 2.50, 1E21], "a": "\u00e9\n" }"#).unwrap();
     /// assert_eq!(v.to_json(), "{\"b\":[1,2.5,1e+21],\"a\":\"\u{e9}\\n\"}");
     /// ```
+    ///
+    /// **Secrets:** the output contains every string in the value, so for a
+    /// private JWK it contains key material. It is a plain `String` and the
+    /// caller owns wiping it: wrap it in `zeroize::Zeroizing` when the value
+    /// holds secrets. The buffer is allocated once, at its exact final size
+    /// (a counting pass runs first), so serializing leaves no stale partial
+    /// copies in freed memory.
     pub fn to_json(&self) -> String {
-        let mut out = String::new();
+        let mut size = Counter(0);
+        write_value(&mut size, self);
+        let mut out = String::with_capacity(size.0);
         write_value(&mut out, self);
         out
     }
 }
 
 impl Object {
-    /// Serializes to compact JSON text, as [`Value::to_json`] does.
+    /// Serializes to compact JSON text, as [`Value::to_json`] does, with the
+    /// same exact-size buffer and the same caller obligation for secrets.
     pub fn to_json(&self) -> String {
-        let mut out = String::new();
+        let mut size = Counter(0);
+        write_object(&mut size, self);
+        let mut out = String::with_capacity(size.0);
         write_object(&mut out, self);
         out
     }
 }
 
-fn write_value(out: &mut String, value: &Value) {
+/// Where serialized text goes: the output, or a byte counter that sizes it.
+trait Sink {
+    fn push_str(&mut self, s: &str);
+
+    fn push(&mut self, c: char) {
+        self.push_str(c.encode_utf8(&mut [0; 4]));
+    }
+}
+
+impl Sink for String {
+    fn push_str(&mut self, s: &str) {
+        String::push_str(self, s);
+    }
+}
+
+/// Counts the bytes [`write_value`] would emit.
+struct Counter(usize);
+
+impl Sink for Counter {
+    fn push_str(&mut self, s: &str) {
+        self.0 = self.0.saturating_add(s.len());
+    }
+}
+
+fn write_value(out: &mut impl Sink, value: &Value) {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
@@ -71,7 +107,7 @@ fn write_value(out: &mut String, value: &Value) {
     }
 }
 
-fn write_object(out: &mut String, object: &Object) {
+fn write_object(out: &mut impl Sink, object: &Object) {
     out.push('{');
     for (i, (name, value)) in object.iter().enumerate() {
         if i > 0 {
@@ -84,7 +120,7 @@ fn write_object(out: &mut String, object: &Object) {
     out.push('}');
 }
 
-fn write_string(out: &mut String, s: &str) {
+fn write_string(out: &mut impl Sink, s: &str) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     out.push('"');
     for c in s.chars() {
@@ -109,7 +145,7 @@ fn write_string(out: &mut String, s: &str) {
     out.push('"');
 }
 
-fn write_number(out: &mut String, n: Number) {
+fn write_number(out: &mut impl Sink, n: Number) {
     if let Some(i) = n.as_i64() {
         out.push_str(&i.to_string());
         return;
@@ -277,5 +313,25 @@ mod tests {
             jwk.to_json(),
             format!(r#"{{"e":"AQAB","kty":"RSA","n":"{n}"}}"#)
         );
+    }
+
+    #[test]
+    fn output_buffer_is_allocated_once_at_its_exact_size() {
+        // The output may hold secrets (a private JWK), so it must not grow
+        // through reallocations that leave freed copies behind.
+        let inputs = [
+            r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#,
+            r#"[1,-2.5,1e300,5e-324,true,null,"\u0000\n\"",{"":[]}]"#,
+            r#""""#,
+            "0",
+        ];
+        for input in inputs {
+            let v = parse(input.as_bytes()).unwrap_or(Value::Null);
+            let out = v.to_json();
+            assert_eq!(out.capacity(), out.len(), "{input}");
+        }
+        let long = Value::from("x".repeat(10_000));
+        let out = long.to_json();
+        assert_eq!(out.capacity(), out.len());
     }
 }
