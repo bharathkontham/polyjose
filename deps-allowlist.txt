@@ -1,0 +1,38 @@
+# Every crate allowed in the runtime dependency tree of crates/polyjose (ADR 0016 §4), exactly as
+#   cargo tree -p polyjose -e normal --all-features --target all --prefix none
+# resolves it. scripts/check-deps.sh enforces this file in both directions: a crate in the tree
+# that is not listed here fails, and so does an entry here that the tree no longer contains.
+# Every entry must also be credited in CREDITS.md, and CREDITS.md may credit nothing else (ADR 0020).
+#
+# Adding an entry needs an ADR (ADR 0016 §4). Crypto crates arrive with the features that use them.
+#
+# Format: one crate name per line; `#` starts a comment. Each crate belongs to exactly one group, and
+# each group starts with a `# group: <id>` line followed by comments that say why it is allowed.
+
+# group: primitives
+# Cryptographic primitive crates (ADR 0002) and their own dependencies (ADR 0016 §1).
+# sha2: SHA-256 for RFC 7638 JWK thumbprints. The rest is sha2's own tree: the RustCrypto digest
+# traits and buffers, the typenum/hybrid-array sizes they use, and cpufeatures, which detects the
+# SHA CPU extensions at run time on aarch64, x86 and x86_64.
+sha2
+digest
+block-buffer
+crypto-common
+hybrid-array
+typenum
+cpufeatures
+
+# group: randomness
+# The OS CSPRNG, the only source of randomness (ADR 0005, ADR 0016 §1), and its per-OS dependencies:
+# libc (system calls on Unix-like systems), r-efi (UEFI only) and cfg-if (compile-time selection).
+# sha2 also uses cfg-if, and cpufeatures uses libc on some aarch64 and loongarch64 targets.
+getrandom
+cfg-if
+libc
+r-efi
+
+# group: hygiene
+# Part of the primitives' own security model and already in their tree (ADR 0016 §1, ADR 0020 §2):
+# constant-time comparison and wiping secrets on drop.
+subtle
+zeroize

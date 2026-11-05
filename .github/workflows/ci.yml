@@ -83,6 +83,12 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.install-deny.outcome == 'success' }}
         run: cargo deny --locked --all-features check
 
+      # Enforces ADR 0016 (the core's runtime tree matches deps-allowlist.txt, with default features
+      # off) and ADR 0020 §5 (deps-allowlist.txt and CREDITS.md list the same crates).
+      - name: dependency allowlist
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/check-deps.sh
+
   # The single required status check for branch protection on main (see git-ops). It needs every
   # gate job, and it fails unless all of them succeeded, so a skipped or cancelled job can never
   # count as green. Add each new job (WASM, Node, Swift, Android) to `needs` as it lands.
