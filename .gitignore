@@ -1,0 +1,9 @@
+target/
+node_modules/
+pkg/
+*.node
+bindings/mobile/out/
+platforms/android/build/
+platforms/android/src/main/jniLibs/
+platforms/apple/*.xcframework
+.build/
