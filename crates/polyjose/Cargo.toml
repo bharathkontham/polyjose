@@ -19,3 +19,6 @@ thiserror.workspace = true
 base64ct.workspace = true
 zeroize.workspace = true
 subtle.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
