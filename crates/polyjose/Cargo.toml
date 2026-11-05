@@ -31,3 +31,7 @@ getrandom.workspace = true
 proptest.workspace = true
 # Differential-test oracle for util's own base64url codec (ADR 0016 §5); never shipped.
 base64ct.workspace = true
+# Test oracles for the json module's differential tests (ADR 0016 §5). float_roundtrip makes
+# serde_json's double parsing correctly rounded, like core's str::parse::<f64>.
+serde.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }

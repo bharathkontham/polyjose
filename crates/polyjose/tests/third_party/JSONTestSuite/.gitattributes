@@ -1,0 +1,6 @@
+# Vendored test inputs: keep every byte exactly as upstream (no EOL or
+# encoding conversion), since many cases test exact bytes.
+* -text -diff
+LICENSE text
+README.md text
+.gitattributes text
