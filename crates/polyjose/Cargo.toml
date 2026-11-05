@@ -22,3 +22,7 @@ subtle.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# Test oracles for the json module's differential tests (ADR 0016 §5). float_roundtrip makes
+# serde_json's double parsing correctly rounded, like core's str::parse::<f64>.
+serde.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
