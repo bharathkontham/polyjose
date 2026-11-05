@@ -20,8 +20,6 @@ default = []
 test-vectors = []
 
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
 zeroize.workspace = true
 subtle.workspace = true
 getrandom.workspace = true
