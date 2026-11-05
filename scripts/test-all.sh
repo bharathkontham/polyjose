@@ -8,6 +8,15 @@ summary=""; status=0
 record() { summary="$summary
   $1: $2"; [ "$2" = FAIL ] && status=1; return 0; }
 have() { command -v "$1" >/dev/null 2>&1; }
+# True when bindings/wasm/Cargo.toml declares wasm-bindgen-test as a dev-dependency in any form
+# (plain or target-specific [dev-dependencies], its own table, or renamed via `package =`),
+# i.e. a wasm test suite exists.
+has_wasm_suite() {
+  awk '/^[[:space:]]*\[/ { dev = /dev-dependencies(\.[^]]*)?\]/; if (/dev-dependencies\."?wasm-bindgen-test"?\]/) found = 1; next }
+       dev && /^[[:space:]]*"?wasm-bindgen-test"?[[:space:]]*[.=]/ { found = 1 }
+       dev && /package[[:space:]]*=[[:space:]]*"wasm-bindgen-test"/ { found = 1 }
+       END { exit !found }' bindings/wasm/Cargo.toml
+}
 run() { local name=$1; shift; echo "==> $name"; if "$@"; then record "$name" PASS; else record "$name" FAIL; fi; }
 
 for p in "${platforms[@]}"; do
@@ -22,8 +31,9 @@ for p in "${platforms[@]}"; do
       if have cargo; then run test-vectors-off scripts/check-test-vectors-off.sh
       else record test-vectors-off "SKIPPED (cargo missing)"; fi ;;
     wasm)
-      if have wasm-pack; then run wasm bash -c 'cd bindings/wasm && wasm-pack test --node && wasm-pack test --headless --chrome'
-      else record wasm "SKIPPED (wasm-pack missing)"; fi ;;
+      if ! have wasm-pack; then record wasm "SKIPPED (wasm-pack missing)"
+      elif ! has_wasm_suite; then record wasm "SKIPPED (no wasm test suite yet: no wasm-bindgen-test dev-dependency in bindings/wasm/Cargo.toml)"
+      else run wasm bash -c 'cd bindings/wasm && wasm-pack test --node && wasm-pack test --headless --chrome'; fi ;;
     node)
       if have npm && have cargo; then run node bash -c 'cd bindings/node && npm ci && npm run build && npm test'
       else record node "SKIPPED (npm or cargo missing)"; fi ;;
