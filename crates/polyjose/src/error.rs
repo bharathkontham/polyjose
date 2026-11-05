@@ -391,62 +391,63 @@ mod tests {
         assert!(std::error::Error::source(&e).is_none());
     }
 
-    /// serde_json errors built from input containing `MARKER`, one per
-    /// `serde_json::error::Category`, with the detail we expect for each.
-    fn json_errors_from_marked_input() -> Vec<(serde_json::Error, &'static str)> {
-        #[derive(Debug, serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Strict {
-            #[serde(rename = "a")]
-            _a: u8,
-        }
-        struct FailingReader;
-        impl std::io::Read for FailingReader {
-            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other(MARKER))
-            }
-        }
-        let data_value = format!("\"{MARKER}\"");
-        let unknown_field = format!("{{\"{MARKER}\":1}}");
-        let syntax = format!("{{\"{MARKER}\" {MARKER}}}");
-        let eof = format!("{{\"{MARKER}\":");
-        let errs = [
-            (serde_json::from_str::<u32>(&data_value).err(), JSON_DATA),
+    /// Malformed JSON texts containing `MARKER`, each with the
+    /// [`Error::InvalidJson`] detail that [`crate::json::parse`] must return.
+    ///
+    /// The marker sits next to the fault, where a parser that quotes the
+    /// offending input (as `serde_json` does) would echo it.
+    fn marked_malformed_json() -> Vec<(Vec<u8>, &'static str)> {
+        let mut invalid_utf8 = format!("\"{MARKER}").into_bytes();
+        invalid_utf8.extend_from_slice(&[0xff, 0xfe, b'"']);
+        vec![
             (
-                serde_json::from_str::<Strict>(&unknown_field).err(),
-                JSON_DATA,
+                format!("{{\"{MARKER}\" {MARKER}}}").into_bytes(),
+                "unexpected character",
             ),
             (
-                serde_json::from_str::<serde_json::Value>(&syntax).err(),
-                JSON_SYNTAX,
+                format!("{{\"{MARKER}\":").into_bytes(),
+                "unexpected end of input",
             ),
             (
-                serde_json::from_str::<serde_json::Value>(&eof).err(),
-                JSON_EOF,
+                format!("\"{MARKER}\" {MARKER}").into_bytes(),
+                "trailing content after the value",
+            ),
+            (format!("\"{MARKER}\\q\"").into_bytes(), "invalid escape"),
+            (
+                format!("\"{MARKER}\\ud800\"").into_bytes(),
+                "lone surrogate escape",
             ),
             (
-                serde_json::from_reader::<_, serde_json::Value>(FailingReader).err(),
-                JSON_IO,
+                format!("\"{MARKER}\n\"").into_bytes(),
+                "unescaped control character in string",
             ),
-        ];
-        errs.into_iter()
-            .map(|(e, detail)| (e.unwrap_or_else(|| unreachable!("input must fail")), detail))
-            .collect()
+            (
+                format!("{{\"{MARKER}\":1,\"{MARKER}\":2}}").into_bytes(),
+                "duplicate member name",
+            ),
+            (
+                format!("{{\"{MARKER}\":1e400}}").into_bytes(),
+                "number out of range",
+            ),
+            (invalid_utf8, "invalid UTF-8"),
+        ]
     }
 
     #[test]
-    fn serde_json_errors_map_to_invalid_json_without_input() {
-        let mut echoed = 0;
-        for (json_err, detail) in json_errors_from_marked_input() {
-            if json_err.to_string().contains(MARKER) {
-                echoed += 1;
+    fn json_errors_are_invalid_json_without_input() {
+        for (input, detail) in marked_malformed_json() {
+            // The probe is meaningful only if the marker is in the input.
+            assert!(
+                input.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()),
+                "probe for {detail:?} lacks the marker"
+            );
+            let e = crate::json::parse(&input).err();
+            assert_eq!(e, Some(Error::InvalidJson(detail)));
+            if let Some(e) = e {
+                assert_eq!(e.code(), "InvalidJson");
+                assert_no_marker(&e);
+                assert!(std::error::Error::source(&e).is_none());
             }
-            let e = Error::from(json_err);
-            assert_eq!(e, Error::InvalidJson(detail));
-            assert_eq!(e.code(), "InvalidJson");
-            assert_no_marker(&e);
         }
-        // Proves the test is meaningful: serde_json itself does echo input.
-        assert!(echoed >= 3, "expected serde_json to echo the marker");
     }
 }
