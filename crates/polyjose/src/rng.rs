@@ -21,6 +21,79 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
     }
 }
 
+/// Deterministic byte source for reproducing published test vectors.
+#[cfg(any(test, feature = "test-vectors"))]
+pub mod test_vectors {
+    use zeroize::Zeroizing;
+
+    use crate::{Error, Result};
+
+    /// Replays a fixed byte sequence.
+    pub struct FixedRng {
+        bytes: Zeroizing<Vec<u8>>,
+        pos: usize,
+    }
+
+    impl FixedRng {
+        /// Creates a source that hands out `bytes` in order, exactly once.
+        pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
+            Self {
+                bytes: Zeroizing::new(bytes.into()),
+                pos: 0,
+            }
+        }
+
+        /// Fills `dest` with the next `dest.len()` bytes.
+        pub fn fill(&mut self, dest: &mut [u8]) -> Result<()> {
+            let _ = (dest, &self.bytes, self.pos);
+            Err(Error::RandomnessUnavailable)
+        }
+
+        /// The number of bytes not yet handed out.
+        pub fn remaining(&self) -> usize {
+            0
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn replays_bytes_in_order_across_calls() {
+            let mut rng = FixedRng::new([1u8, 2, 3, 4, 5]);
+            let (mut a, mut b) = ([0u8; 2], [0u8; 3]);
+            assert_eq!(rng.fill(&mut a), Ok(()));
+            assert_eq!(rng.fill(&mut b), Ok(()));
+            assert_eq!((a, b), ([1, 2], [3, 4, 5]));
+            assert_eq!(rng.remaining(), 0);
+        }
+
+        #[test]
+        fn empty_request_consumes_nothing() {
+            let mut rng = FixedRng::new([7u8]);
+            assert_eq!(rng.fill(&mut []), Ok(()));
+            assert_eq!(rng.remaining(), 1);
+        }
+
+        #[test]
+        fn exhaustion_fails_closed_without_wrapping() {
+            // Never repeat or pad: a reused AES-GCM IV breaks JWE
+            // (RFC 7518 §8.4). Asking for more than is left is an error, the
+            // output is zeroed and nothing is consumed.
+            let mut rng = FixedRng::new([1u8, 2, 3]);
+            let mut buf = [0xA5u8; 4];
+            assert_eq!(rng.fill(&mut buf), Err(Error::RandomnessUnavailable));
+            assert_eq!(buf, [0u8; 4]);
+            assert_eq!(rng.remaining(), 3);
+            let mut rest = [0u8; 3];
+            assert_eq!(rng.fill(&mut rest), Ok(()));
+            assert_eq!(rest, [1, 2, 3]);
+            assert_eq!(rng.fill(&mut [0u8; 1]), Err(Error::RandomnessUnavailable));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
