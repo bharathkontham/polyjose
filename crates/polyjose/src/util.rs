@@ -182,4 +182,49 @@ mod tests {
         assert_eq!(b64url_decode("").unwrap(), Vec::<u8>::new());
         assert_eq!(b64url_encode(&[]), "");
     }
+
+    mod properties {
+        use super::super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            // ADR 0008 layer 2: bounded case counts in the fast suite.
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// RFC 4648 §5 / RFC 7515 §2: decoding inverts encoding, and the
+            /// encoding is unpadded and uses only the URL-safe alphabet.
+            #[test]
+            fn encode_then_decode_round_trips(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
+                let encoded = b64url_encode(&bytes);
+                prop_assert!(encoded.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
+                prop_assert_eq!(encoded.len(), (bytes.len() * 4).div_ceil(3));
+                prop_assert_eq!(b64url_decode(&encoded)?, bytes);
+            }
+
+            /// RFC 4648 §3.5: each octet string has exactly one encoding, so
+            /// whenever a string over the alphabet decodes, re-encoding gives
+            /// it back unchanged (non-canonical pad bits are rejected).
+            #[test]
+            fn decode_accepts_only_canonical_alphabet_strings(s in "[A-Za-z0-9_-]{0,96}") {
+                if let Ok(bytes) = b64url_decode(&s) {
+                    prop_assert_eq!(b64url_encode(&bytes), s);
+                }
+            }
+
+            /// Same property over strings that mix in the characters RFC 7515
+            /// §2 forbids (`=`, `+`, `/`, whitespace) and arbitrary Unicode.
+            /// Decoding never panics, and any success is canonical.
+            #[test]
+            fn decode_of_arbitrary_text_is_canonical_or_rejected(
+                s in prop_oneof![
+                    "[A-Za-z0-9_=+/ \\t\\r\\n-]{0,64}",
+                    any::<String>(),
+                ]
+            ) {
+                if let Ok(bytes) = b64url_decode(&s) {
+                    prop_assert_eq!(b64url_encode(&bytes), s);
+                }
+            }
+        }
+    }
 }
