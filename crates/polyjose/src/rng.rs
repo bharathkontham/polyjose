@@ -44,4 +44,45 @@ mod tests {
         assert_eq!(fill_random(&mut buf), Ok(()));
         assert!(buf.chunks(32).all(|c| c.iter().any(|&b| b != 0)));
     }
+
+    /// Every `getrandom::Error` a test can construct. OS errors (`errno`)
+    /// can't be built outside getrandom; they take the same `Err(_)` arm.
+    fn injected_errors() -> [getrandom::Error; 5] {
+        [
+            getrandom::Error::UNSUPPORTED,
+            getrandom::Error::ERRNO_NOT_POSITIVE,
+            getrandom::Error::UNEXPECTED,
+            getrandom::Error::new_custom(0),
+            getrandom::Error::new_custom(u16::MAX),
+        ]
+    }
+
+    #[test]
+    fn success_passes_through() {
+        assert_eq!(fail_closed(Ok(())), Ok(()));
+    }
+
+    #[test]
+    fn every_getrandom_error_maps_to_randomness_unavailable() {
+        for injected in injected_errors() {
+            let e = fail_closed(Err(injected)).err();
+            assert_eq!(e, Some(Error::RandomnessUnavailable), "{injected:?}");
+        }
+    }
+
+    #[test]
+    fn mapped_error_carries_no_backend_detail() {
+        // getrandom's own message names the backend or OS error; ours must
+        // not, and must not expose it as a cause either (ADR 0007).
+        for injected in injected_errors() {
+            let Err(e) = fail_closed(Err(injected)) else {
+                unreachable!("an injected error must fail");
+            };
+            assert_eq!(e.code(), "RandomnessUnavailable");
+            assert_eq!(format!("{e:?}"), "RandomnessUnavailable");
+            assert_eq!(e.to_string(), "randomness unavailable");
+            assert!(!e.to_string().contains(&injected.to_string()));
+            assert!(std::error::Error::source(&e).is_none());
+        }
+    }
 }
