@@ -8,15 +8,21 @@
 //!
 //! [`b64url_decode`](crate::util::b64url_decode) is strict, so each octet string has exactly one accepted
 //! encoding. That keeps signature and JWK comparisons from being fooled by
-//! alternative spellings of the same bytes. All base64url decoding in
-//! polyjose must go through it. Don't call `base64ct` directly:
-//! `Base64UrlUnpadded::decode_in_place` (base64ct 1.8.3) skips the
-//! canonical-trailing-bits check that `decode` performs.
+//! alternative spellings of the same bytes. All base64url encoding and
+//! decoding in polyjose must go through this module.
 //!
-//! The codec is `base64ct`, which works "without data-dependent branches or
-//! lookup tables" ("best effort" constant time, per its README). That
-//! matters because secret key material (`oct` `k`, private RSA/EC/OKP
-//! members) is decoded here.
+//! The codec is polyjose's own (ADR 0016: no base64 crate in the core). It
+//! is constant-time with respect to the encoded or decoded content, because
+//! secret key material (`oct` `k`, private RSA/EC/OKP members, RFC 7518 §6)
+//! passes through it. Only the input length, which is public, affects
+//! control flow. The alphabet mapping in both directions is branch-free,
+//! table-free arithmetic over the five contiguous runs of RFC 4648 §5
+//! Table 2, the decoder folds every fault into one `subtle::Choice` that it
+//! checks once at the end, and a rejected decode wipes its partial output.
+//! This is "best effort" constant time at the source level: Rust gives no
+//! guarantee about the machine code, as for any pure-Rust implementation.
+//! `base64ct` serves only as a dev-dependency oracle in the differential
+//! tests (`tests/base64url_differential.rs`).
 use subtle::{Choice, ConstantTimeEq};
 use zeroize::Zeroizing;
 
