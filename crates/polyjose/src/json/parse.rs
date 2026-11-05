@@ -2,6 +2,7 @@
 
 use super::{Number, Object, Value};
 use crate::{Error, Result};
+use zeroize::Zeroizing;
 
 const EOF: Error = Error::InvalidJson("unexpected end of input");
 const UNEXPECTED: Error = Error::InvalidJson("unexpected character");
@@ -288,9 +289,13 @@ impl Parser<'_> {
 
     /// RFC 8259 §7: a quoted string. Unescaped characters are any code
     /// point except `"`, `\` and the controls U+0000–U+001F.
-    fn string(&mut self) -> Result<String> {
+    ///
+    /// The string may be key material (a JWK `d` or `k`), so it is built in
+    /// a [`Zeroizing`] buffer: on any error the partial string is wiped as
+    /// it is dropped.
+    fn string(&mut self) -> Result<Zeroizing<String>> {
         self.expect(b'"')?;
-        let mut out = String::new();
+        let mut out = Zeroizing::new(String::new());
         loop {
             let start = self.pos;
             // Bytes >= 0x80 belong to multi-byte UTF-8 sequences, whose bytes
@@ -420,6 +425,12 @@ impl Parser<'_> {
     }
 }
 
+/// An object's members while parsing. Names are [`Zeroizing`] and values
+/// wipe their strings, so dropping a partial object on an error path, or
+/// the old buffer when the `Vec` grows (which holds only pointers, lengths
+/// and non-secret scalars), leaves no string contents behind.
+type Members = Vec<(Zeroizing<String>, Value)>;
+
 /// Rejects an object with two members of the same name.
 ///
 /// RFC 8259 §4 only says names SHOULD be unique, but JOSE requires either
@@ -433,7 +444,7 @@ impl Parser<'_> {
 /// same name, and code point by code point (RFC 8259 §8.3), so `"a"` and
 /// `"A"`, or precomposed and decomposed `"é"`, are different. Sorting keeps
 /// the check O(n log n) for large objects.
-fn unique(members: Vec<(String, Value)>) -> Result<Vec<(String, Value)>> {
+fn unique(members: Members) -> Result<Members> {
     let mut names: Vec<&str> = members.iter().map(|(n, _)| n.as_str()).collect();
     names.sort_unstable();
     if names.windows(2).any(|w| matches!(w, [a, b] if a == b)) {

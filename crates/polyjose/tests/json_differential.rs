@@ -34,7 +34,7 @@ fn same(ours: &Value, theirs: &serde_json::Value) -> bool {
     match (ours, theirs) {
         (Value::Null, J::Null) => true,
         (Value::Bool(a), J::Bool(b)) => a == b,
-        (Value::String(a), J::String(b)) => a == b,
+        (Value::String(a), J::String(b)) => a.as_str() == b.as_str(),
         (Value::Number(a), J::Number(b)) => {
             let doubles_equal = b.as_f64() == Some(a.as_f64());
             // An integer serde_json read exactly, within the I-JSON range,

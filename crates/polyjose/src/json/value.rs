@@ -1,6 +1,7 @@
 //! The owned JSON value tree (RFC 8259 §3).
 
 use super::Number;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// A JSON value (RFC 8259 §3): `null`, `true`/`false`, a number, a string,
 /// an array or an object.
@@ -13,9 +14,20 @@ use super::Number;
 /// (an object is unordered, RFC 8259 §4) and numbers compare as doubles
 /// (see [`Number`]).
 ///
-/// `Value` is plain data and does not zeroize its strings. When a value
-/// holds secrets (a private JWK's members), move them into zeroizing types
-/// and drop the value promptly.
+/// # Secrets
+///
+/// A value may hold key material: a private JWK's `d`, `k`, `p`, `q`,
+/// `dp`, `dq` and `qi` members (RFC 7517 §4, RFC 7518 §6) are strings. Every
+/// string a `Value` owns, member names included, is a [`Zeroizing<String>`],
+/// so its bytes are wiped when it is dropped, replaced or removed
+/// (workspace secrets rule). The parser sizes each string's buffer before
+/// filling it, so no reallocation leaves a stale copy, and partial results
+/// are wiped on every error path. [`Zeroize`] wipes a value in place.
+///
+/// Not covered: the caller's input bytes, copies the caller makes (for
+/// example with `as_str().to_owned()`), and [`to_json`](Value::to_json)
+/// output, which the caller must wipe (see there). `Debug` prints strings as
+/// `Zeroizing { .. }`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// `null` (RFC 8259 §3).
@@ -24,8 +36,8 @@ pub enum Value {
     Bool(bool),
     /// A finite number (RFC 8259 §6, RFC 7493 §2.2).
     Number(Number),
-    /// A string (RFC 8259 §7).
-    String(String),
+    /// A string (RFC 8259 §7), wiped on drop.
+    String(Zeroizing<String>),
     /// An array (RFC 8259 §5).
     Array(Vec<Value>),
     /// An object (RFC 8259 §4) with unique member names.
@@ -73,7 +85,7 @@ impl Value {
     /// The string, if this is a string.
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            Value::String(s) => Some(s),
+            Value::String(s) => Some(s.as_str()),
             _ => None,
         }
     }
@@ -118,6 +130,24 @@ impl Value {
     }
 }
 
+impl Zeroize for Value {
+    /// Wipes every string in the value (names and values, at every level)
+    /// and leaves [`Value::Null`]. Recursion follows the nesting, which the
+    /// parser caps at [`Limits::MAX_DEPTH_CEILING`](super::Limits::MAX_DEPTH_CEILING).
+    fn zeroize(&mut self) {
+        match self {
+            Value::String(s) => s.zeroize(),
+            Value::Array(items) => items.zeroize(),
+            Value::Object(o) => o.zeroize(),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+        *self = Value::Null;
+    }
+}
+
+/// Every string a `Value` owns is a [`Zeroizing<String>`].
+impl ZeroizeOnDrop for Value {}
+
 impl From<bool> for Value {
     fn from(b: bool) -> Value {
         Value::Bool(b)
@@ -132,13 +162,13 @@ impl From<Number> for Value {
 
 impl From<&str> for Value {
     fn from(s: &str) -> Value {
-        Value::String(s.to_owned())
+        Value::String(Zeroizing::new(s.to_owned()))
     }
 }
 
 impl From<String> for Value {
     fn from(s: String) -> Value {
-        Value::String(s)
+        Value::String(Zeroizing::new(s))
     }
 }
 
@@ -166,7 +196,7 @@ impl From<Object> for Value {
 /// Equality ignores member order (RFC 8259 §4: an object is unordered).
 #[derive(Debug, Clone, Default)]
 pub struct Object {
-    members: Vec<(String, Value)>,
+    members: Vec<(Zeroizing<String>, Value)>,
 }
 
 impl Object {
@@ -176,7 +206,7 @@ impl Object {
     }
 
     /// Wraps members whose names the caller has already checked are unique.
-    pub(crate) fn from_unique_members(members: Vec<(String, Value)>) -> Object {
+    pub(crate) fn from_unique_members(members: Vec<(Zeroizing<String>, Value)>) -> Object {
         Object { members }
     }
 
@@ -197,7 +227,7 @@ impl Object {
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.members
             .iter()
-            .find_map(|(n, v)| (n == name).then_some(v))
+            .find_map(|(n, v)| (n.as_str() == name).then_some(v))
     }
 
     /// Whether a member called `name` exists.
@@ -208,7 +238,9 @@ impl Object {
     /// Sets member `name` to `value`.
     ///
     /// A new name is appended. An existing name keeps its position and its
-    /// old value is returned, so names stay unique.
+    /// old value is returned, so names stay unique. The returned value, like
+    /// any `Value`, wipes its strings when dropped, and so does the unused
+    /// copy of `name`.
     ///
     /// ```
     /// use polyjose::json::{Object, Value};
@@ -219,9 +251,13 @@ impl Object {
     /// assert_eq!(o.len(), 1);
     /// ```
     pub fn insert(&mut self, name: impl Into<String>, value: impl Into<Value>) -> Option<Value> {
-        let name = name.into();
+        let name = Zeroizing::new(name.into());
         let value = value.into();
-        match self.members.iter_mut().find(|(n, _)| *n == name) {
+        match self
+            .members
+            .iter_mut()
+            .find(|(n, _)| n.as_str() == name.as_str())
+        {
             Some((_, slot)) => Some(core::mem::replace(slot, value)),
             None => {
                 self.members.push((name, value));
@@ -231,9 +267,10 @@ impl Object {
     }
 
     /// Removes member `name`, returning its value. Later members keep
-    /// their relative order.
+    /// their relative order. The removed name is wiped; the returned value
+    /// wipes its strings when dropped.
     pub fn remove(&mut self, name: &str) -> Option<Value> {
-        let index = self.members.iter().position(|(n, _)| n == name)?;
+        let index = self.members.iter().position(|(n, _)| n.as_str() == name)?;
         Some(self.members.remove(index).1)
     }
 
@@ -243,7 +280,8 @@ impl Object {
     /// Rust compares `str` by UTF-8 bytes, and UTF-8 byte order is code
     /// point order.
     pub fn sort_members(&mut self) {
-        self.members.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        self.members
+            .sort_unstable_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
     }
 
     /// The members as `(name, value)` pairs, in order.
@@ -251,6 +289,20 @@ impl Object {
         Iter(self.members.iter())
     }
 }
+
+impl Zeroize for Object {
+    /// Wipes every member name and value, then removes all members.
+    fn zeroize(&mut self) {
+        for (name, value) in &mut self.members {
+            name.zeroize();
+            value.zeroize();
+        }
+        self.members.clear();
+    }
+}
+
+/// Member names are [`Zeroizing<String>`]s and values are [`Value`]s.
+impl ZeroizeOnDrop for Object {}
 
 impl PartialEq for Object {
     /// Order-insensitive: same names, and equal values for each name.
@@ -265,7 +317,7 @@ impl PartialEq for Object {
 
 /// Iterator over an [`Object`]'s members, in order.
 #[derive(Debug, Clone)]
-pub struct Iter<'a>(core::slice::Iter<'a, (String, Value)>);
+pub struct Iter<'a>(core::slice::Iter<'a, (Zeroizing<String>, Value)>);
 
 impl<'a> Iterator for Iter<'a> {
     type Item = (&'a str, &'a Value);
@@ -290,14 +342,15 @@ impl<'a> IntoIterator for &'a Object {
     }
 }
 
-/// Owning iterator over an [`Object`]'s members, in order.
+/// Owning iterator over an [`Object`]'s members, in order. Names stay
+/// [`Zeroizing`], and members not taken are wiped when it is dropped.
 #[derive(Debug)]
-pub struct IntoIter(std::vec::IntoIter<(String, Value)>);
+pub struct IntoIter(std::vec::IntoIter<(Zeroizing<String>, Value)>);
 
 impl Iterator for IntoIter {
-    type Item = (String, Value);
+    type Item = (Zeroizing<String>, Value);
 
-    fn next(&mut self) -> Option<(String, Value)> {
+    fn next(&mut self) -> Option<(Zeroizing<String>, Value)> {
         self.0.next()
     }
 
@@ -309,7 +362,7 @@ impl Iterator for IntoIter {
 impl ExactSizeIterator for IntoIter {}
 
 impl IntoIterator for Object {
-    type Item = (String, Value);
+    type Item = (Zeroizing<String>, Value);
     type IntoIter = IntoIter;
 
     fn into_iter(self) -> IntoIter {
@@ -320,6 +373,7 @@ impl IntoIterator for Object {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeroize::ZeroizeOnDrop;
 
     fn int(i: i64) -> Value {
         Number::from_i64(i).map_or(Value::Null, Value::Number)
@@ -446,7 +500,7 @@ mod tests {
         let o = sample();
         assert_eq!(o.iter().len(), 4);
         let borrowed: Vec<String> = (&o).into_iter().map(|(n, _)| n.to_owned()).collect();
-        let owned: Vec<String> = o.into_iter().map(|(n, _)| n).collect();
+        let owned: Vec<String> = o.into_iter().map(|(n, _)| n.as_str().to_owned()).collect();
         assert_eq!(borrowed, owned);
         assert_eq!(owned, ["kty", "n", "ok", "list"]);
     }
@@ -454,10 +508,13 @@ mod tests {
     #[test]
     fn from_conversions_pick_the_matching_variant() {
         assert_eq!(Value::from(false), Value::Bool(false));
-        assert_eq!(Value::from("s"), Value::String("s".to_owned()));
+        assert_eq!(
+            Value::from("s"),
+            Value::String(Zeroizing::new("s".to_owned()))
+        );
         assert_eq!(
             Value::from(String::from("s")),
-            Value::String("s".to_owned())
+            Value::String(Zeroizing::new("s".to_owned()))
         );
         assert_eq!(Value::from(Vec::new()), Value::Array(Vec::new()));
         assert_eq!(Value::from(Object::new()), Value::Object(Object::new()));
@@ -467,5 +524,43 @@ mod tests {
                 .and_then(|v| v.as_f64()),
             Some(0.5)
         );
+    }
+
+    fn assert_zeroize_on_drop<T: Zeroize + ZeroizeOnDrop>() {}
+
+    #[test]
+    fn values_and_objects_zeroize_their_strings_on_drop() {
+        // JWK private members (RFC 7517 §4, RFC 7518 §6) pass through these
+        // types, so every string they own is wiped when dropped.
+        assert_zeroize_on_drop::<Value>();
+        assert_zeroize_on_drop::<Object>();
+        let Value::String(payload) = Value::from("secret") else {
+            unreachable!("From<&str> builds a string")
+        };
+        let _: &Zeroizing<String> = &payload;
+        let names: Vec<Zeroizing<String>> = sample().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names.len(), 4);
+    }
+
+    #[test]
+    fn zeroize_wipes_a_value_in_place() {
+        let mut v = Value::from(vec![Value::from("d"), Value::from(sample())]);
+        v.zeroize();
+        assert!(v.is_null());
+        let mut o = sample();
+        o.zeroize();
+        assert!(o.is_empty());
+        let mut s = Value::from(String::from("k"));
+        s.zeroize();
+        assert!(s.is_null());
+    }
+
+    #[test]
+    fn replaced_and_removed_members_come_back_zeroizing() {
+        let mut o = sample();
+        let old = o.insert("kty", "oct");
+        assert!(matches!(old, Some(Value::String(_))));
+        let removed = o.remove("kty");
+        assert_eq!(removed.as_ref().and_then(Value::as_str), Some("oct"));
     }
 }
