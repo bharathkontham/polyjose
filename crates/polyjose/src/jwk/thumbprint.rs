@@ -6,6 +6,11 @@ use zeroize::Zeroizing;
 use super::Jwk;
 use crate::util::b64url_encode;
 
+/// The RFC 9278 §3 URI prefix, `urn:ietf:params:oauth:jwk-thumbprint`,
+/// the colon separator, the RFC 9278 §4 hash name for SHA-256 and the
+/// colon before the thumbprint.
+const SHA256_URI_PREFIX: &str = "urn:ietf:params:oauth:jwk-thumbprint:sha-256:";
+
 impl Jwk {
     /// The JWK SHA-256 Thumbprint of the key (RFC 7638 §3), base64url
     /// encoded without padding (RFC 7515 §2).
@@ -19,6 +24,21 @@ impl Jwk {
         // RFC 7638 §3 step 2, with H = SHA-256 (RFC 7638 §3.4).
         let digest = Sha256::digest(self.canonical_input().as_bytes());
         b64url_encode(&digest)
+    }
+
+    /// The JWK Thumbprint URI of the key with SHA-256 (RFC 9278 §3):
+    /// `urn:ietf:params:oauth:jwk-thumbprint:sha-256:` followed by
+    /// [`Jwk::thumbprint_sha256`].
+    ///
+    /// `sha-256` is the IANA Named Information "Hash Name String" for
+    /// SHA-256 (RFC 9278 §4), the hash RFC 9278 §5 makes mandatory to
+    /// implement.
+    pub fn thumbprint_uri_sha256(&self) -> String {
+        let thumbprint = self.thumbprint_sha256();
+        let mut uri = String::with_capacity(SHA256_URI_PREFIX.len() + thumbprint.len());
+        uri.push_str(SHA256_URI_PREFIX);
+        uri.push_str(&thumbprint);
+        uri
     }
 
     /// The RFC 7638 §3 step 1 hash input: a JSON object of the required
@@ -97,5 +117,24 @@ mod tests {
             jwk(RFC8037_ED25519_PRIVATE).thumbprint_sha256(),
             "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
         );
+    }
+
+    #[test]
+    fn rfc9278_6_example_uri() {
+        // RFC 9278 §6, without the display line break.
+        assert_eq!(
+            jwk(RFC7638_RSA).thumbprint_uri_sha256(),
+            "urn:ietf:params:oauth:jwk-thumbprint:sha-256:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+        );
+    }
+
+    #[test]
+    fn uri_is_the_prefix_hash_name_and_thumbprint() {
+        let key = jwk(RFC8037_ED25519_PRIVATE);
+        let uri = key.thumbprint_uri_sha256();
+        let thumbprint = uri
+            .strip_prefix("urn:ietf:params:oauth:jwk-thumbprint:sha-256:")
+            .expect("RFC 9278 §3 prefix and §4 hash name");
+        assert_eq!(thumbprint, key.thumbprint_sha256());
     }
 }
