@@ -1,18 +1,23 @@
 //! The single source of randomness in polyjose: the OS CSPRNG (ADR 0005).
 
+use zeroize::Zeroize;
+
 use crate::{Error, Result};
 
 /// Fills `dest` with bytes from the operating-system CSPRNG.
 pub(crate) fn fill_random(dest: &mut [u8]) -> Result<()> {
     let outcome = getrandom::fill(dest);
-    fail_closed(outcome)
+    fail_closed(dest, outcome)
 }
 
 /// Maps the outcome of a `getrandom` call to polyjose's result.
-fn fail_closed(outcome: core::result::Result<(), getrandom::Error>) -> Result<()> {
+fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Error>) -> Result<()> {
     match outcome {
         Ok(()) => Ok(()),
-        Err(_) => Err(Error::RandomnessUnavailable),
+        Err(_) => {
+            dest.zeroize();
+            Err(Error::RandomnessUnavailable)
+        }
     }
 }
 
@@ -58,14 +63,27 @@ mod tests {
     }
 
     #[test]
-    fn success_passes_through() {
-        assert_eq!(fail_closed(Ok(())), Ok(()));
+    fn success_passes_through_untouched() {
+        let mut buf = [0xA5u8; 16];
+        assert_eq!(fail_closed(&mut buf, Ok(())), Ok(()));
+        assert_eq!(buf, [0xA5u8; 16]);
+    }
+
+    #[test]
+    fn failure_leaves_no_partial_output() {
+        // A backend may fail after writing part of `dest` (getrandom chunks
+        // large requests); none of it may survive as if it were usable.
+        for injected in injected_errors() {
+            let mut buf = [0xA5u8; 16];
+            assert!(fail_closed(&mut buf, Err(injected)).is_err());
+            assert_eq!(buf, [0u8; 16], "{injected:?}");
+        }
     }
 
     #[test]
     fn every_getrandom_error_maps_to_randomness_unavailable() {
         for injected in injected_errors() {
-            let e = fail_closed(Err(injected)).err();
+            let e = fail_closed(&mut [0u8; 4], Err(injected)).err();
             assert_eq!(e, Some(Error::RandomnessUnavailable), "{injected:?}");
         }
     }
@@ -75,7 +93,7 @@ mod tests {
         // getrandom's own message names the backend or OS error; ours must
         // not, and must not expose it as a cause either (ADR 0007).
         for injected in injected_errors() {
-            let Err(e) = fail_closed(Err(injected)) else {
+            let Err(e) = fail_closed(&mut [0u8; 4], Err(injected)) else {
                 unreachable!("an injected error must fail");
             };
             assert_eq!(e.code(), "RandomnessUnavailable");
