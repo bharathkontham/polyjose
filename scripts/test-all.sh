@@ -35,8 +35,11 @@ for p in "${platforms[@]}"; do
       elif ! has_wasm_suite; then record wasm "SKIPPED (no wasm test suite yet: no wasm-bindgen-test dev-dependency in bindings/wasm/Cargo.toml)"
       else run wasm bash -c 'cd bindings/wasm && wasm-pack test --node && wasm-pack test --headless --chrome'; fi ;;
     node)
-      if have npm && have cargo; then run node bash -c 'cd bindings/node && npm ci && npm run build && npm test'
-      else record node "SKIPPED (npm or cargo missing)"; fi ;;
+      # `npm pkg get` prints {} for a missing key; an unreadable package.json is not skipped, so it FAILs.
+      if ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"
+      elif [ ! -f bindings/node/package-lock.json ]; then record node "SKIPPED (no node test suite yet: bindings/node/package-lock.json missing)"
+      elif [ "$(cd bindings/node && npm pkg get scripts.test 2>/dev/null)" = "{}" ]; then record node "SKIPPED (no node test suite yet: no test script in bindings/node/package.json)"
+      else run node bash -c 'cd bindings/node && npm ci && npm run build && npm test'; fi ;;
     android)
       if have cargo-ndk && [ -x platforms/android/gradlew ]; then run android bash -c 'cd platforms/android && ./gradlew test'
       else record android "SKIPPED (cargo-ndk or Gradle project missing)"; fi ;;
