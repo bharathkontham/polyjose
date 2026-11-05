@@ -1151,4 +1151,130 @@ mod tests {
         assert_eq!(h.validate_crit(), Ok(()));
         assert_eq!(h.validate_crit_understood(&[]), Err(Error::UnknownCritical));
     }
+
+    mod robustness {
+        //! Parser robustness (ADR 0008 layer 2): no input makes header
+        //! parsing panic, every failure is a stable code, and whatever
+        //! parses re-serializes to an equal object.
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Names that steer generation into the typed fields, `crit`
+        /// targets and private parameters.
+        const NAMES: &[&str] = &[
+            "alg", "enc", "zip", "jku", "jwk", "kid", "x5u", "x5c", "x5t", "x5t#S256", "typ",
+            "cty", "crit", "epk", "apu", "apv", "iv", "tag", "p2s", "p2c", "b64", "exp", "iss",
+            "x", "\u{0}", "é", "",
+        ];
+
+        fn name() -> impl Strategy<Value = String> {
+            prop_oneof![
+                4 => proptest::sample::select(NAMES).prop_map(str::to_owned),
+                1 => "\\PC{0,6}",
+            ]
+        }
+
+        fn leaf() -> impl Strategy<Value = Value> {
+            prop_oneof![
+                Just(Value::Null),
+                any::<bool>().prop_map(Value::from),
+                (-json::MAX_SAFE_INTEGER..=json::MAX_SAFE_INTEGER)
+                    .prop_filter_map("exact", |i| Number::from_i64(i).map(Value::from)),
+                (-3i64..10_001).prop_filter_map("exact", |i| Number::from_i64(i).map(Value::from)),
+                any::<f64>().prop_filter_map("finite", |f| Number::from_f64(f).map(Value::from)),
+                proptest::sample::select(NAMES).prop_map(Value::from),
+                proptest::sample::select(&["HS256", "none", "RSA-OAEP", "A128GCM", "dir"][..])
+                    .prop_map(Value::from),
+                "\\PC{0,8}".prop_map(Value::from),
+            ]
+        }
+
+        fn value() -> impl Strategy<Value = Value> {
+            leaf().prop_recursive(3, 32, 5, |inner| {
+                prop_oneof![
+                    prop::collection::vec(inner.clone(), 0..5).prop_map(Value::from),
+                    prop::collection::vec((name(), inner), 0..5).prop_map(|members| {
+                        let mut o = Object::new();
+                        for (n, v) in members {
+                            o.insert(n, v);
+                        }
+                        Value::from(o)
+                    }),
+                ]
+            })
+        }
+
+        fn header_object() -> impl Strategy<Value = Object> {
+            prop::collection::vec((name(), value()), 0..10).prop_map(|members| {
+                let mut o = Object::new();
+                for (n, v) in members {
+                    o.insert(n, v);
+                }
+                o
+            })
+        }
+
+        /// Exercises every accessor; none may panic.
+        fn use_everything(h: &Header) {
+            let _ = h.signing_alg();
+            let _ = h.key_mgmt_alg();
+            let _ = h.content_enc_alg();
+            let _ = h.validate_crit();
+            let _ = h.validate_crit_understood(&["b64"]);
+            for name in NAMES {
+                let _ = h.contains(name);
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            #[test]
+            fn arbitrary_bytes_never_panic(bytes in prop::collection::vec(any::<u8>(), 0..256)) {
+                match Header::from_json(&bytes) {
+                    Ok(h) => use_everything(&h),
+                    Err(e) => prop_assert!(
+                        matches!(e, Error::InvalidJson(_) | Error::InvalidHeader(_)),
+                        "{e:?}"
+                    ),
+                }
+            }
+
+            #[test]
+            fn mutated_headers_never_panic(
+                edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..8)
+            ) {
+                let mut bytes = ALL_PARAMS.as_bytes().to_vec();
+                for (at, byte) in edits {
+                    let i = at.index(bytes.len());
+                    bytes[i] = byte;
+                }
+                match Header::from_json(&bytes) {
+                    Ok(h) => use_everything(&h),
+                    Err(e) => prop_assert!(
+                        matches!(e, Error::InvalidJson(_) | Error::InvalidHeader(_)),
+                        "{e:?}"
+                    ),
+                }
+            }
+
+            #[test]
+            fn arbitrary_objects_parse_or_fail_as_invalid_header(obj in header_object()) {
+                let text = obj.to_json();
+                match Header::from_json(text.as_bytes()) {
+                    Ok(h) => {
+                        use_everything(&h);
+                        let again = h.to_json().unwrap();
+                        prop_assert_eq!(
+                            json::parse(again.as_bytes()).unwrap(),
+                            json::parse(text.as_bytes()).unwrap()
+                        );
+                        prop_assert_eq!(Header::from_json(again.as_bytes()).unwrap(), h);
+                    }
+                    // A valid JSON object can only fail the header rules.
+                    Err(e) => prop_assert!(matches!(e, Error::InvalidHeader(_)), "{e:?}"),
+                }
+            }
+        }
+    }
 }
