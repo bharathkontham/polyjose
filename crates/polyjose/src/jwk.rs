@@ -746,7 +746,7 @@ impl KeyMaterial {
     /// Whether this key is of the family JWS `alg` requires: the key
     /// binding table of ADR 0026 §2 step 8, the **only** copy of it. JWS
     /// key binding (feature 0002) and JWK Set candidate selection
-    /// (ADR 0029 §2 item 1, `JwkSet::verification_candidates`) both call
+    /// (ADR 0029 §2 item 1, [`JwkSet::verification_candidates`]) both call
     /// this; nothing else may restate the table.
     ///
     /// | `alg` | key |
@@ -761,10 +761,6 @@ impl KeyMaterial {
     /// `X25519` keys are key agreement keys (RFC 8037 §3.2) and serve no
     /// JWS algorithm. Only the family is checked here; the JWK `alg`,
     /// `use` and `key_ops` members and key strength are separate checks.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by JWK Set selection (feature 0001 T07)")
-    )]
     pub(crate) fn serves_signing_alg(&self, alg: &SigningAlg) -> bool {
         use SigningAlg as A;
         match (alg, self) {

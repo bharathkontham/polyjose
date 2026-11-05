@@ -4,9 +4,10 @@ use core::fmt;
 
 use zeroize::ZeroizeOnDrop;
 
-use super::{Jwk, MemberNames, is_unsupported_key_kind};
+use super::{Jwk, KeyAlg, KeyOp, MemberNames, is_unsupported_key_kind};
 use crate::error::{Error, Result};
 use crate::json::{self, Object, Value};
+use crate::jwa::SigningAlg;
 
 /// Detail for a JWK Set document that is valid JSON but not an object.
 const NOT_AN_OBJECT: &str = "a JWK Set must be a JSON object";
@@ -131,6 +132,84 @@ impl JwkSet {
     pub fn other_params(&self) -> &Object {
         &self.other
     }
+
+    /// The keys that may verify a JWS whose protected header has `alg` and,
+    /// if present, `kid`: the candidate filter of ADR 0029 §2. Each item is
+    /// `(key_index, key)`, in set order, where `key_index` indexes
+    /// [`JwkSet::keys`].
+    ///
+    /// A key is a candidate iff all of these hold:
+    ///
+    /// 1. **Family:** its `kty`/`crv` serves `alg` (the ADR 0026 §2 step 8
+    ///    table, e.g. `HS*` → `oct`, `ES256` → `EC` `P-256`, `EdDSA` and
+    ///    `Ed25519` → `OKP` `Ed25519`). `none` and unknown algorithms
+    ///    select nothing (RFC 8725 §3.1).
+    /// 2. **JWK `alg`:** absent, or exactly `alg` (RFC 7517 §4.4,
+    ///    RFC 8725 §3.1). `EdDSA` and `Ed25519` differ (RFC 9864 §2.2).
+    /// 3. **`use`:** absent or `sig` (RFC 7517 §4.2).
+    /// 4. **`key_ops`:** absent or contains `verify` (RFC 7517 §4.3).
+    /// 5. **`kid`:** if `kid` is `Some`, the key has an identical `kid`
+    ///    (exact, case-sensitive string equality; RFC 7515 §4.1.4,
+    ///    RFC 7517 §4.5). If it is `None`, keys with and without a `kid`
+    ///    all qualify, so a set rotated without `kid`s still verifies.
+    ///
+    /// Pass the header values only after the `alg` has passed the
+    /// caller's allow-list (ADR 0026 §2 steps 1-7, ADR 0029 §1). The `kid`
+    /// is only compared for equality, never used as a path, URL or query
+    /// (RFC 8725 §3.10). Selection checks no key strength (HMAC key
+    /// length, RSA ceiling): that is key binding at verify time
+    /// (ADR 0026 §2 step 8). Bounding the number of candidates tried is
+    /// the caller's job (ADR 0029 §4).
+    ///
+    /// ```
+    /// use polyjose::jwa::SigningAlg;
+    /// use polyjose::jwk::JwkSet;
+    ///
+    /// let set = JwkSet::from_json(br#"{"keys":[
+    ///     {"kty":"oct","k":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","kid":"old"},
+    ///     {"kty":"oct","k":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8","kid":"new","use":"sig"},
+    ///     {"kty":"oct","k":"QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8","use":"enc"},
+    ///     {"kty":"XYZ","kid":"from the future"}
+    /// ]}"#)?;
+    /// assert_eq!(set.len(), 3);
+    /// assert_eq!(set.skipped(), 1);
+    ///
+    /// let by_kid: Vec<usize> = set
+    ///     .verification_candidates(&SigningAlg::HS256, Some("new"))
+    ///     .map(|(index, _)| index)
+    ///     .collect();
+    /// assert_eq!(by_kid, [1]);
+    ///
+    /// // Without a kid, every compatible key: the `enc` key is not one.
+    /// let all: Vec<usize> = set
+    ///     .verification_candidates(&SigningAlg::HS256, None)
+    ///     .map(|(index, _)| index)
+    ///     .collect();
+    /// assert_eq!(all, [0, 1]);
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    pub fn verification_candidates<'a>(
+        &'a self,
+        alg: &'a SigningAlg,
+        kid: Option<&'a str>,
+    ) -> impl Iterator<Item = (usize, &'a Jwk)> + 'a {
+        self.keys
+            .iter()
+            .enumerate()
+            .filter(move |(_, key)| is_verification_candidate(key, alg, kid))
+    }
+}
+
+/// The ADR 0029 §2 filter, in its order (see
+/// [`JwkSet::verification_candidates`]).
+fn is_verification_candidate(key: &Jwk, alg: &SigningAlg, kid: Option<&str>) -> bool {
+    key.material().serves_signing_alg(alg)
+        && key
+            .alg()
+            .is_none_or(|key_alg| matches!(key_alg, KeyAlg::Signing(a) if a == alg))
+        // `use` absent or `sig`, `key_ops` absent or containing `verify`.
+        && key.permits(&KeyOp::Verify)
+        && kid.is_none_or(|kid| key.kid() == Some(kid))
 }
 
 /// Imports one `keys` entry: `Ok(Some)` to keep it, `Ok(None)` to skip it,
@@ -572,5 +651,208 @@ mod tests {
         assert!(debug.contains("secret_value_member"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
         assert!(debug.contains("skipped"), "{debug}");
+    }
+
+    /// `member` with extra common members spliced in after its opening
+    /// brace, e.g. `with(OCT, r#""kid":"a""#)`.
+    fn with(member: &str, extra: &str) -> String {
+        format!("{{{extra},{}", &member[1..])
+    }
+
+    /// The indices `verification_candidates` returns.
+    fn candidates(set: &JwkSet, alg: &SigningAlg, kid: Option<&str>) -> Vec<usize> {
+        let found: Vec<(usize, &Jwk)> = set.verification_candidates(alg, kid).collect();
+        for (index, key) in &found {
+            assert!(core::ptr::eq(*key, &set.keys()[*index]));
+        }
+        found.into_iter().map(|(index, _)| index).collect()
+    }
+
+    fn set_from(members: &[String]) -> JwkSet {
+        let members: Vec<&str> = members.iter().map(String::as_str).collect();
+        parse(&set_of(&members)).unwrap()
+    }
+
+    #[test]
+    fn rfc7517_a1_selection() {
+        let set = parse(A1).unwrap();
+        assert_eq!(
+            candidates(&set, &SigningAlg::RS256, Some("2011-04-29")),
+            [1]
+        );
+        assert_eq!(candidates(&set, &SigningAlg::RS256, None), [1]);
+        // The JWK `alg` is RS256 (RFC 7517 §4.4).
+        assert!(candidates(&set, &SigningAlg::PS256, None).is_empty());
+        // The EC key is `use` `enc` (RFC 7517 §4.2).
+        assert!(candidates(&set, &SigningAlg::ES256, Some("1")).is_empty());
+        assert!(candidates(&set, &SigningAlg::ES256, None).is_empty());
+    }
+
+    /// RFC 7515 §4.1.4, RFC 7517 §4.5: a header `kid` selects the members
+    /// with an identical `kid` (exact, case-sensitive).
+    #[test]
+    fn header_kid_selects_by_exact_kid() {
+        let set = set_from(&[
+            with(OCT, r#""kid":"a""#),
+            with(OCT, r#""kid":"b""#),
+            OCT.to_owned(),
+            with(OCT, r#""kid":"A""#),
+            with(OCT, r#""kid":"a""#),
+        ]);
+        let hs = SigningAlg::HS256;
+        assert_eq!(candidates(&set, &hs, Some("a")), [0, 4]);
+        assert_eq!(candidates(&set, &hs, Some("A")), [3]);
+        assert_eq!(candidates(&set, &hs, Some("b")), [1]);
+        // No member carries this kid, and a kid-less member never matches
+        // a header kid.
+        for kid in ["c", "", "a ", " a", "\u{0430}"] {
+            assert!(candidates(&set, &hs, Some(kid)).is_empty(), "{kid:?}");
+        }
+    }
+
+    /// ADR 0029 §2 item 5 and the T07 criterion: without a header `kid`,
+    /// every compatible member is a candidate, with or without a `kid`.
+    #[test]
+    fn without_header_kid_all_compatible_keys_are_candidates() {
+        let set = set_from(&[
+            OCT.to_owned(),
+            EC_P256.to_owned(),
+            with(OCT, r#""use":"sig""#),
+            with(OCT, r#""kid":"k1""#),
+            OCT.to_owned(),
+            with(OCT, r#""use":"enc""#),
+        ]);
+        assert_eq!(candidates(&set, &SigningAlg::HS256, None), [0, 2, 3, 4]);
+        assert_eq!(candidates(&set, &SigningAlg::HS512, None), [0, 2, 3, 4]);
+        assert_eq!(candidates(&set, &SigningAlg::ES256, None), [1]);
+    }
+
+    /// RFC 7517 §4.4, RFC 8725 §3.1: a JWK `alg` must equal the header
+    /// `alg` exactly; absent allows any algorithm of the family.
+    #[test]
+    fn jwk_alg_must_equal_header_alg() {
+        let set = set_from(&[
+            with(RSA_2048, r#""alg":"RS256""#),
+            with(RSA_2048, r#""alg":"RS384""#),
+            RSA_2048.to_owned(),
+            with(RSA_2048, r#""alg":"PS256""#),
+            with(RSA_2048, r#""alg":"rs256""#),
+            with(RSA_2048, r#""alg":"RSA-OAEP-256""#),
+        ]);
+        assert_eq!(candidates(&set, &SigningAlg::RS256, None), [0, 2]);
+        assert_eq!(candidates(&set, &SigningAlg::RS384, None), [1, 2]);
+        assert_eq!(candidates(&set, &SigningAlg::PS256, None), [2, 3]);
+        assert_eq!(candidates(&set, &SigningAlg::PS512, None), [2]);
+        // An oct key bound to a JWE algorithm serves no JWS algorithm.
+        let set = set_from(&[
+            with(OCT, r#""alg":"A128KW""#),
+            with(OCT, r#""alg":"HS256""#),
+        ]);
+        assert_eq!(candidates(&set, &SigningAlg::HS256, None), [1]);
+        assert!(candidates(&set, &SigningAlg::HS384, None).is_empty());
+    }
+
+    /// RFC 9864 §2.2, ADR 0026 §2 step 8: `EdDSA` and `Ed25519` are
+    /// different JWK `alg` values, although both are served by an Ed25519
+    /// key.
+    #[test]
+    fn eddsa_is_not_ed25519() {
+        let set = set_from(&[
+            with(ED25519, r#""alg":"EdDSA""#),
+            with(ED25519, r#""alg":"Ed25519""#),
+            ED25519.to_owned(),
+            X25519.to_owned(),
+        ]);
+        assert_eq!(candidates(&set, &SigningAlg::EdDSA, None), [0, 2]);
+        assert_eq!(candidates(&set, &SigningAlg::Ed25519, None), [1, 2]);
+    }
+
+    /// RFC 7517 §4.2-§4.3: `use` absent or `sig`, and `key_ops` absent or
+    /// containing `verify`.
+    #[test]
+    fn use_and_key_ops_must_allow_verify() {
+        let set = set_from(&[
+            with(EC_P256, r#""use":"sig""#),
+            with(EC_P256, r#""use":"enc""#),
+            with(EC_P256, r#""use":"x-custom""#),
+            with(EC_P256, r#""key_ops":["verify"]"#),
+            with(EC_P256, r#""key_ops":["sign"]"#),
+            with(EC_P256, r#""key_ops":["sign","verify"]"#),
+            with(EC_P256, r#""key_ops":[]"#),
+            with(EC_P256, r#""key_ops":["encrypt","verify"]"#),
+            with(EC_P256, r#""use":"sig","key_ops":["sign"]"#),
+            with(EC_P256, r#""use":"sig","key_ops":["verify"]"#),
+            with(EC_P256, r#""key_ops":["Verify"]"#),
+        ]);
+        assert_eq!(set.skipped(), 0);
+        assert_eq!(candidates(&set, &SigningAlg::ES256, None), [0, 3, 5, 7, 9]);
+    }
+
+    /// ADR 0026 §2 step 8 via ADR 0029 §2 item 1: the key's family must
+    /// serve the header `alg`.
+    #[test]
+    fn family_must_match() {
+        let set = set_from(&[
+            EC_P256.to_owned(),
+            OCT.to_owned(),
+            ec("P-384", 48).to_json().to_string(),
+            RSA_2048.to_owned(),
+            ED25519.to_owned(),
+        ]);
+        assert_eq!(candidates(&set, &SigningAlg::HS256, None), [1]);
+        assert_eq!(candidates(&set, &SigningAlg::ES256, None), [0]);
+        assert_eq!(candidates(&set, &SigningAlg::ES384, None), [2]);
+        assert!(candidates(&set, &SigningAlg::ES512, None).is_empty());
+        assert!(candidates(&set, &SigningAlg::ES256K, None).is_empty());
+        assert_eq!(candidates(&set, &SigningAlg::RS256, None), [3]);
+        assert_eq!(candidates(&set, &SigningAlg::EdDSA, None), [4]);
+        // A kid match does not override the family.
+        let set = set_from(&[with(EC_P256, r#""kid":"k""#)]);
+        assert!(candidates(&set, &SigningAlg::HS256, Some("k")).is_empty());
+    }
+
+    /// RFC 8725 §3.1: `none` and unknown algorithms select nothing, even
+    /// for a key whose `alg` names them.
+    #[test]
+    fn none_and_unknown_algorithms_select_nothing() {
+        let set = set_from(&[
+            OCT.to_owned(),
+            with(OCT, r#""alg":"none""#),
+            with(OCT, r#""alg":"HS999""#),
+            RSA_2048.to_owned(),
+        ]);
+        for alg in [
+            SigningAlg::None,
+            SigningAlg::from("HS999"),
+            SigningAlg::from(""),
+        ] {
+            assert!(candidates(&set, &alg, None).is_empty(), "{alg}");
+        }
+    }
+
+    /// ADR 0029 §3: EC and OKP members with private parameters are
+    /// candidates; only their public part is used to verify.
+    #[test]
+    fn ec_private_members_are_candidates() {
+        let set = parse(&set_of(&[
+            r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE","kid":"1"}"#,
+        ]))
+        .unwrap();
+        assert_eq!(candidates(&set, &SigningAlg::ES256, Some("1")), [0]);
+    }
+
+    /// ADR 0029 §4: `key_index` is the position in [`JwkSet::keys`], which
+    /// leaves skipped entries out.
+    #[test]
+    fn indices_count_kept_keys_only() {
+        let set = set_from(&[
+            r#"{"kty":"XYZ"}"#.to_owned(),
+            with(OCT, r#""kid":"a""#),
+            "{}".to_owned(),
+            with(OCT, r#""kid":"b""#),
+        ]);
+        assert_eq!(set.skipped(), 2);
+        assert_eq!(candidates(&set, &SigningAlg::HS256, Some("b")), [1]);
+        assert_eq!(candidates(&set, &SigningAlg::HS256, None), [0, 1]);
     }
 }
