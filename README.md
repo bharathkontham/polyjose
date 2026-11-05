@@ -37,6 +37,6 @@ scripts/test-all.sh rust node  # only some platforms
 ```
 
 ## License
-Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE).
 
-Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in polyjose, as defined in the Apache-2.0 license, is dual-licensed as above, without any additional terms or conditions.
+Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in polyjose is licensed under the Apache License 2.0, without any additional terms or conditions (Apache-2.0 §5).
