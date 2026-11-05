@@ -23,10 +23,11 @@ test-vectors = []
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-base64ct.workspace = true
 zeroize.workspace = true
 subtle.workspace = true
 getrandom.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# Differential-test oracle for util's own base64url codec (ADR 0016 §5); never shipped.
+base64ct.workspace = true
