@@ -8,12 +8,19 @@
 //! - [`jwt`]  RFC 7519 – tokens and claims
 //! - [`util`] base64url and other helpers
 
+/// Error type.
 pub mod error;
+/// Algorithm identifiers (RFC 7518).
 pub mod jwa;
+/// JSON Web Encryption (RFC 7516).
 pub mod jwe;
+/// JSON Web Key (RFC 7517).
 pub mod jwk;
+/// JSON Web Signature (RFC 7515).
 pub mod jws;
+/// JSON Web Token (RFC 7519).
 pub mod jwt;
+/// base64url and helpers.
 pub mod util;
 
 pub use error::{Error, Result};
