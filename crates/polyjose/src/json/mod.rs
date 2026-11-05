@@ -3,6 +3,7 @@
 mod number;
 mod parse;
 mod value;
+mod write;
 
 pub use number::{MAX_SAFE_INTEGER, Number};
 pub use parse::{Limits, parse, parse_with_limits};
