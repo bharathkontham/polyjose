@@ -500,10 +500,13 @@ mod tests {
             ok(r#""\"\\\/\b\f\n\r\t""#),
             Value::from("\"\\/\u{8}\u{c}\n\r\t")
         );
-        assert_eq!(ok(r#""Aéé€""#), Value::from("A\u{e9}\u{e9}\u{20ac}"));
+        assert_eq!(
+            ok(r#""\u0041\u00e9\u00E9\u20AC""#),
+            Value::from("A\u{e9}\u{e9}\u{20ac}")
+        );
         assert_eq!(ok(r#""\u0000""#), Value::from("\u{0}"));
-        assert_eq!(ok(r#""𝄞""#), Value::from("\u{1d11e}"));
-        assert_eq!(ok(r#""􏿿""#), Value::from("\u{10ffff}"));
+        assert_eq!(ok(r#""\ud834\udd1e""#), Value::from("\u{1d11e}"));
+        assert_eq!(ok(r#""\uDBFF\uDFFF""#), Value::from("\u{10ffff}"));
         assert_eq!(
             ok("\"\u{e9}\u{1d11e}\u{7f}\""),
             Value::from("\u{e9}\u{1d11e}\u{7f}")
@@ -535,7 +538,7 @@ mod tests {
             r#""\uDFFF""#,
             r#""\ud800abc""#,
             r#""\ud800\n""#,
-            r#""\ud800A""#,
+            r#""\ud800\u0041""#,
             r#""\ud800\ud800""#,
             r#""\udd1e\ud834""#,
             r#""\uD800\""#,
@@ -640,9 +643,9 @@ mod tests {
             r#"{"a":1,"a":1}"#,
             r#"{"a":1,"a":2}"#,
             r#"{"alg":"HS256","b":0,"alg":"none"}"#,
-            r#"{"a":1,"a":2}"#,
-            r#"{"é":1,"é":2}"#,
-            r#"{"😀":1,"😀":2}"#,
+            r#"{"a":1,"\u0061":2}"#,
+            r#"{"\u00e9":1,"é":2}"#,
+            r#"{"\ud83d\ude00":1,"😀":2}"#,
             r#"{"\/":1,"/":2}"#,
             r#"{"":1,"":2}"#,
             r#"[{"x":{"y":[{"k":1,"k":2}]}}]"#,
@@ -655,7 +658,7 @@ mod tests {
     fn similar_but_distinct_names_are_not_duplicates() {
         // Names compare code point by code point: no case folding and no
         // Unicode normalization (RFC 8259 §8.3).
-        let v = ok(r#"{"a":1,"A":2,"é":3,"é":4,"a ":5}"#);
+        let v = ok(r#"{"a":1,"A":2,"\u00e9":3,"e\u0301":4,"a ":5}"#);
         assert_eq!(v.as_object().map(Object::len), Some(5));
         // The same name in different objects is fine.
         assert!(parse(br#"{"a":{"a":{"a":1}},"b":{"a":2}}"#).is_ok());
