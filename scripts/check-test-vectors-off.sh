@@ -2,15 +2,26 @@
 # Fails if any binding crate's dependency graph enables polyjose's `test-vectors` feature.
 #
 # That feature exposes a deterministic byte source for reproducing published test vectors and
-# must never ship (ADR 0005). Every crate under bindings/ is checked on every target, so a
+# must never ship (ADR 0005). Every workspace package under bindings/ is checked on every target
+# (cargo lists the packages, so a manifest with several targets or a new binding is covered), and a
 # binding (or a dependency of one) can't turn it on silently.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+root=$(pwd); root_physical=$(pwd -P)
+
+# One line per workspace member: "<name> v<version> (<path>)". Keep those under bindings/.
+members=$(cargo tree --locked --workspace -e normal --depth 0 --prefix none)
+pkgs=()
+while read -r name _version path; do
+  case $path in
+    "($root/bindings/"* | "($root_physical/bindings/"*) pkgs+=("$name") ;;
+  esac
+done <<<"$members"
+# Fail loudly rather than pass vacuously if cargo's output format or the layout changes.
+[ ${#pkgs[@]} -gt 0 ] || { echo "FAIL: found no binding packages under bindings/; check the script"; exit 1; }
 
 status=0
-for manifest in bindings/*/Cargo.toml; do
-  pkg=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)
-  [ -n "$pkg" ] || { echo "FAIL: no package name in $manifest"; status=1; continue; }
+for pkg in "${pkgs[@]}"; do
   # --target all includes target-specific dependencies (e.g. wasm32-only ones).
   if ! tree=$(cargo tree --locked -e features -p "$pkg" --target all 2>&1); then
     echo "FAIL: cargo tree failed for $pkg:"; echo "$tree"; status=1; continue
