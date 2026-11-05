@@ -124,6 +124,7 @@ use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use crate::util::{b64url_decode, b64url_encode};
 
 mod set;
+pub use set::JwkSet;
 
 /// The `kty` (key type) values polyjose supports (RFC 7517 §4.1,
 /// RFC 7518 §6.1, RFC 8037 §2).
@@ -1293,12 +1294,9 @@ fn key_kind(object: &Object) -> Result<KeyKind> {
 
 /// Whether `object` is a key whose `kty`, or `EC`/`OKP` `crv`, is a string
 /// polyjose does not support: the members RFC 7517 §5 says a JWK Set
-/// reader SHOULD ignore, and ADR 0029 §3 skips. Malformed members and RSA
-/// private keys are not included: they fail the set (ADR 0029 §3).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by JWK Set parsing (feature 0001 T07)")
-)]
+/// reader SHOULD ignore, and ADR 0029 §3 skips. Malformed members are not
+/// included (the set skips them separately), nor are RSA private keys
+/// (they fail the set, ADR 0021).
 pub(crate) fn is_unsupported_key_kind(object: &Object) -> bool {
     matches!(key_kind(object), Err(Error::UnsupportedAlgorithm))
 }
