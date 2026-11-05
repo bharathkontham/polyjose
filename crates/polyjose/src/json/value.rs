@@ -175,6 +175,11 @@ impl Object {
         Object::default()
     }
 
+    /// Wraps members whose names the caller has already checked are unique.
+    pub(crate) fn from_unique_members(members: Vec<(String, Value)>) -> Object {
+        Object { members }
+    }
+
     /// The number of members.
     pub fn len(&self) -> usize {
         self.members.len()
