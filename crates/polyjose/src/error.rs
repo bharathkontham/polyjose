@@ -302,4 +302,51 @@ mod tests {
         assert_eq!(e.to_string(), "decryption failed");
         assert!(std::error::Error::source(&e).is_none());
     }
+
+    /// serde_json errors built from input containing `MARKER`, one per
+    /// `serde_json::error::Category`, with the detail we expect for each.
+    fn json_errors_from_marked_input() -> Vec<(serde_json::Error, &'static str)> {
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Strict {
+            a: u8,
+        }
+        struct FailingReader;
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other(MARKER))
+            }
+        }
+        let data_value = format!("\"{MARKER}\"");
+        let unknown_field = format!("{{\"{MARKER}\":1}}");
+        let syntax = format!("{{\"{MARKER}\" {MARKER}}}");
+        let eof = format!("{{\"{MARKER}\":");
+        let errs = [
+            (serde_json::from_str::<u32>(&data_value).err(), JSON_DATA),
+            (serde_json::from_str::<Strict>(&unknown_field).err(), JSON_DATA),
+            (serde_json::from_str::<serde_json::Value>(&syntax).err(), JSON_SYNTAX),
+            (serde_json::from_str::<serde_json::Value>(&eof).err(), JSON_EOF),
+            (serde_json::from_reader::<_, serde_json::Value>(FailingReader).err(), JSON_IO),
+        ];
+        errs.into_iter()
+            .map(|(e, detail)| (e.unwrap_or_else(|| unreachable!("input must fail")), detail))
+            .collect()
+    }
+
+    #[test]
+    fn serde_json_errors_map_to_invalid_json_without_input() {
+        let mut echoed = 0;
+        for (json_err, detail) in json_errors_from_marked_input() {
+            if json_err.to_string().contains(MARKER) {
+                echoed += 1;
+            }
+            let e = Error::from(json_err);
+            assert_eq!(e, Error::InvalidJson(detail));
+            assert_eq!(e.code(), "InvalidJson");
+            assert_no_marker(&e);
+        }
+        // Proves the test is meaningful: serde_json itself does echo input.
+        assert!(echoed >= 3, "expected serde_json to echo the marker");
+    }
 }
