@@ -1,37 +1,40 @@
 //! Algorithm identifiers: JWS `alg`, JWE `alg` and JWE `enc` (RFC 7518).
 //!
-//! Each enum covers the polyjose 0.1.0 algorithm matrix (ADR 0006). The
-//! string form of every variant is the name registered in the IANA "JSON Web
-//! Signature and Encryption Algorithms" registry (RFC 7518 §7.1), matched
-//! case-sensitively (RFC 7515 §4.1.1, RFC 7516 §4.1.1–§4.1.2).
+//! Each enum covers the algorithms polyjose 0.1.0 ships (ADR 0006, as
+//! amended by ADRs 0021 and 0022). The string form of every variant is the
+//! name registered in the IANA "JSON Web Signature and Encryption
+//! Algorithms" registry (RFC 7518 §7.1), matched case-sensitively
+//! (RFC 7515 §4.1.1, RFC 7516 §4.1.1–§4.1.2).
 //!
 //! # Unknown values
 //!
-//! Any other string parses as `Unknown(String)` and serializes back to the
+//! Any other string becomes `Unknown(String)` and converts back to the
 //! exact same string, so a header can be read and re-written without loss.
 //! An unknown value only fails when it is about to be used:
 //! [`SigningAlg::ensure_known`][ensure_known] (and its siblings) return
 //! [`Error::UnsupportedAlgorithm`], which never echoes the value.
 //!
+//! "Unknown" includes registered names that polyjose deliberately does not
+//! implement, such as `Ed448` (ADR 0006), and anything registered later.
+//!
 //! Construct values with `From<&str>`/`From<String>` (or the variants).
-//! Building `Unknown` directly from a registered name (e.g. `Unknown("HS256".into())`)
-//! is non-canonical: it compares unequal to the named variant, so it fails
-//! closed against an allow-list, and `ensure_known` rejects it.
+//! Building `Unknown` directly from a known name (e.g.
+//! `Unknown("HS256".into())`) is non-canonical: it compares unequal to the
+//! named variant, so it fails closed against an allow-list, and
+//! `ensure_known` rejects it.
 //!
 //! # `none`
 //!
 //! [`SigningAlg::None`][none] (RFC 7518 §3.6) is a known identifier so that
 //! headers using it can be parsed and diagnosed, but it is never verifiable:
 //! the verify allow-list rejects it with [`Error::AlgorithmNotAllowed`]
-//! (RFC 8725 §3.1, ADR 0007). Being "known" here only means "recognised".
+//! (RFC 8725 §3.1, ADR 0007, ADR 0026 §2 step 7). Being "known" here only
+//! means "recognised".
 //!
 //! [ensure_known]: crate::jwa::SigningAlg::ensure_known
 //! [none]: crate::jwa::SigningAlg::None
 
 use core::fmt;
-
-use serde::de::{self, Deserializer, Visitor};
-use serde::{Deserialize, Serialize, Serializer};
 
 use crate::error::{Error, Result};
 
@@ -41,7 +44,7 @@ use crate::error::{Error, Result};
 macro_rules! alg_enum {
     (
         $(#[$meta:meta])*
-        $name:ident, $expecting:literal {
+        $name:ident {
             $( $(#[$vmeta:meta])* $variant:ident => $s:literal, )*
         }
     ) => {
@@ -50,16 +53,16 @@ macro_rules! alg_enum {
         #[non_exhaustive]
         pub enum $name {
             $( $(#[$vmeta])* $variant, )*
-            /// A value that is not one of the registered names above.
+            /// A value polyjose does not implement, preserved verbatim.
             ///
-            /// Preserved verbatim so it round-trips through serialization;
-            /// it fails with [`Error::UnsupportedAlgorithm`] when used
+            /// It converts back to the same string, and fails with
+            /// [`Error::UnsupportedAlgorithm`] when used
             /// (RFC 7515 §4.1.1, RFC 7516 §4.1.1–§4.1.2).
             Unknown(String),
         }
 
         impl $name {
-            /// Every registered (known) value, in declaration order.
+            /// Every known value, in declaration order.
             pub const KNOWN: &'static [$name] = &[$($name::$variant),*];
 
             /// The identifier string, exactly as it appears in a header.
@@ -70,8 +73,8 @@ macro_rules! alg_enum {
                 }
             }
 
-            /// Returns the variant whose registered name is exactly `name`
-            /// (case-sensitive), if any.
+            /// The variant whose registered name is exactly `name`
+            /// (case-sensitive), if polyjose implements it.
             fn lookup(name: &str) -> Option<Self> {
                 match name {
                     $( $s => Some(Self::$variant), )*
@@ -79,12 +82,12 @@ macro_rules! alg_enum {
                 }
             }
 
-            /// Whether this is a registered value (not `Unknown`).
+            /// Whether this is a known value (not `Unknown`).
             pub fn is_known(&self) -> bool {
                 !matches!(self, Self::Unknown(_))
             }
 
-            /// Returns `self` if it is a registered value.
+            /// Returns `self` if it is a known value.
             ///
             /// # Errors
             ///
@@ -116,37 +119,15 @@ macro_rules! alg_enum {
                 f.write_str(self.as_str())
             }
         }
-
-        impl Serialize for $name {
-            fn serialize<S: Serializer>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error> {
-                serializer.serialize_str(self.as_str())
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, D::Error> {
-                struct V;
-                impl Visitor<'_> for V {
-                    type Value = $name;
-                    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                        f.write_str($expecting)
-                    }
-                    fn visit_str<E: de::Error>(self, v: &str) -> core::result::Result<$name, E> {
-                        Ok($name::from(v))
-                    }
-                    fn visit_string<E: de::Error>(self, v: String) -> core::result::Result<$name, E> {
-                        Ok($name::from(v))
-                    }
-                }
-                deserializer.deserialize_str(V)
-            }
-        }
     };
 }
 
 alg_enum! {
     /// JWS `alg` values (RFC 7515 §4.1.1, RFC 7518 §3.1).
-    SigningAlg, "a JWS alg string" {
+    ///
+    /// RS*/PS* are known so that tokens from identity providers can be
+    /// verified; polyjose does not sign with RSA (ADR 0021).
+    SigningAlg {
         /// `HS256`: HMAC using SHA-256 (RFC 7518 §3.2).
         HS256 => "HS256",
         /// `HS384`: HMAC using SHA-384 (RFC 7518 §3.2).
@@ -191,14 +172,13 @@ alg_enum! {
 
 alg_enum! {
     /// JWE `alg` (key management) values (RFC 7516 §4.1.1, RFC 7518 §4.1).
-    KeyMgmtAlg, "a JWE alg string" {
+    KeyMgmtAlg {
         /// `RSA1_5`: RSAES-PKCS1-v1_5 (RFC 7518 §4.2).
-        ///
-        /// Implemented only behind a feature gate (ADR 0003).
         RsaPkcs1v15 => "RSA1_5",
         /// `RSA-OAEP`: RSAES OAEP using default parameters (RFC 7518 §4.3).
         RsaOaep => "RSA-OAEP",
-        /// `RSA-OAEP-256`: RSAES OAEP using SHA-256 and MGF1 with SHA-256 (RFC 7518 §4.3).
+        /// `RSA-OAEP-256`: RSAES OAEP using SHA-256 and MGF1 with SHA-256
+        /// (RFC 7518 §4.3). Encryption to RSA public keys only (ADR 0021).
         RsaOaep256 => "RSA-OAEP-256",
         /// `A128KW`: AES Key Wrap with a 128-bit key (RFC 7518 §4.4).
         A128KW => "A128KW",
@@ -233,7 +213,7 @@ alg_enum! {
 
 alg_enum! {
     /// JWE `enc` (content encryption) values (RFC 7516 §4.1.2, RFC 7518 §5.1).
-    ContentEncAlg, "a JWE enc string" {
+    ContentEncAlg {
         /// `A128CBC-HS256`: AES-128-CBC with HMAC SHA-256 (RFC 7518 §5.2.3).
         A128CbcHs256 => "A128CBC-HS256",
         /// `A192CBC-HS384`: AES-192-CBC with HMAC SHA-384 (RFC 7518 §5.2.4).
@@ -253,8 +233,9 @@ alg_enum! {
 mod tests {
     use super::*;
 
-    /// The in-scope rows of the IANA "JSON Web Signature and Encryption
-    /// Algorithms" registry (ADR 0006), copied from the registry CSV.
+    /// The shipped rows of the IANA "JSON Web Signature and Encryption
+    /// Algorithms" registry (ADR 0006 as amended by ADRs 0021/0022), copied
+    /// from the registry CSV.
     const JWS_NAMES: &[&str] = &[
         "HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "ES256K",
         "PS256", "PS384", "PS512", "EdDSA", "Ed25519", "none",
@@ -287,23 +268,17 @@ mod tests {
         "A256GCM",
     ];
 
-    fn json(s: &str) -> String {
-        format!("\"{s}\"")
-    }
-
-    /// Every registered name parses to a known variant and serializes back
+    /// Every registered name converts to a known variant and back
     /// byte-for-byte; the known set is exactly the registry list.
     fn assert_names<T>(names: &[&str], known: &[T])
     where
-        T: for<'de> Deserialize<'de> + Serialize + PartialEq + fmt::Debug + fmt::Display,
-        T: for<'a> From<&'a str>,
+        T: PartialEq + fmt::Debug + fmt::Display + for<'a> From<&'a str> + From<String>,
     {
         for name in names {
-            let parsed: T = serde_json::from_str(&json(name)).unwrap_or_else(|_| unreachable!());
-            assert_eq!(parsed, T::from(*name), "{name}");
+            let parsed = T::from(*name);
             assert!(known.contains(&parsed), "{name} must be a known variant");
+            assert_eq!(T::from((*name).to_owned()), parsed, "{name}");
             assert_eq!(parsed.to_string(), *name);
-            assert_eq!(serde_json::to_string(&parsed).ok(), Some(json(name)));
         }
         let known_names: Vec<String> = known.iter().map(ToString::to_string).collect();
         assert_eq!(known_names, names, "KNOWN must match the registry list");
@@ -312,16 +287,25 @@ mod tests {
     #[test]
     fn jws_alg_names_match_the_iana_registry() {
         assert_names(JWS_NAMES, SigningAlg::KNOWN);
+        for alg in SigningAlg::KNOWN {
+            assert_eq!(SigningAlg::from(alg.as_str()), *alg);
+        }
     }
 
     #[test]
     fn jwe_alg_names_match_the_iana_registry() {
         assert_names(JWE_ALG_NAMES, KeyMgmtAlg::KNOWN);
+        for alg in KeyMgmtAlg::KNOWN {
+            assert_eq!(KeyMgmtAlg::from(alg.as_str()), *alg);
+        }
     }
 
     #[test]
     fn jwe_enc_names_match_the_iana_registry() {
         assert_names(JWE_ENC_NAMES, ContentEncAlg::KNOWN);
+        for enc in ContentEncAlg::KNOWN {
+            assert_eq!(ContentEncAlg::from(enc.as_str()), *enc);
+        }
     }
 
     #[test]
@@ -329,7 +313,6 @@ mod tests {
         assert_eq!(SigningAlg::from("ES256K"), SigningAlg::ES256K);
         assert_eq!(SigningAlg::from("Ed25519"), SigningAlg::Ed25519);
         assert_eq!(SigningAlg::from("none"), SigningAlg::None);
-        assert_eq!(KeyMgmtAlg::from("RSA1_5"), KeyMgmtAlg::RsaPkcs1v15);
         assert_eq!(KeyMgmtAlg::from("A192GCMKW"), KeyMgmtAlg::A192GCMKW);
         assert_eq!(
             KeyMgmtAlg::from("PBES2-HS512+A256KW"),
@@ -337,9 +320,9 @@ mod tests {
         );
     }
 
-    /// Values that are not in scope: wrong case, registered but out of
-    /// scope (Ed448, RSA-OAEP-384, HPKE-0, ML-DSA-44), the other family's
-    /// names, whitespace and empty strings.
+    /// Values that are not shipped: wrong case, registered but out of scope
+    /// (Ed448, RSA-OAEP, RSA1_5, RSA-OAEP-384, HPKE-0, ML-DSA-44), the other
+    /// family's names, whitespace, NUL, full-width forms and empty strings.
     const NOT_JWS: &[&str] = &[
         "hs256",
         "Hs256",
@@ -352,12 +335,14 @@ mod tests {
         "ES256k",
         " HS256",
         "HS256 ",
+        "HS256\0",
+        "ＨＳ256",
         "",
-        "RSA-OAEP",
+        "RSA-OAEP-256",
         "A128GCM",
     ];
     const NOT_JWE_ALG: &[&str] = &[
-        "rsa-oaep",
+        "rsa-oaep-256",
         "RSA-OAEP-384",
         "RSA_1_5",
         "Dir",
@@ -373,13 +358,12 @@ mod tests {
 
     fn assert_unknown_round_trips<T>(values: &[&str], unknown: fn(String) -> T)
     where
-        T: for<'de> Deserialize<'de> + Serialize + PartialEq + fmt::Debug + fmt::Display,
+        T: PartialEq + fmt::Debug + fmt::Display + for<'a> From<&'a str> + From<String>,
     {
         for value in values {
-            let input = serde_json::to_string(value).unwrap_or_else(|_| unreachable!());
-            let parsed: T = serde_json::from_str(&input).unwrap_or_else(|_| unreachable!());
+            let parsed = T::from(*value);
             assert_eq!(parsed, unknown((*value).to_owned()), "{value:?}");
-            assert_eq!(serde_json::to_string(&parsed).ok(), Some(input));
+            assert_eq!(T::from((*value).to_owned()), parsed, "{value:?}");
             assert_eq!(parsed.to_string(), *value);
         }
     }
@@ -397,24 +381,6 @@ mod tests {
     #[test]
     fn unknown_jwe_enc_round_trips_exactly() {
         assert_unknown_round_trips(NOT_JWE_ENC, ContentEncAlg::Unknown);
-    }
-
-    #[test]
-    fn unknown_with_escapes_and_unicode_round_trips() {
-        // JSON escapes decode before lookup; the decoded value is preserved.
-        let parsed: SigningAlg =
-            serde_json::from_str(r#""HS256""#).unwrap_or_else(|_| unreachable!());
-        assert_eq!(parsed, SigningAlg::HS256);
-        let parsed: SigningAlg =
-            serde_json::from_str(r#""HS256\u0000""#).unwrap_or_else(|_| unreachable!());
-        assert_eq!(parsed, SigningAlg::Unknown("HS256\0".into()));
-        let parsed: SigningAlg =
-            serde_json::from_str("\"ＨＳ256\"").unwrap_or_else(|_| unreachable!());
-        assert_eq!(parsed, SigningAlg::Unknown("ＨＳ256".into()));
-        assert_eq!(
-            serde_json::to_string(&parsed).ok().as_deref(),
-            Some("\"ＨＳ256\"")
-        );
     }
 
     #[test]
@@ -441,28 +407,20 @@ mod tests {
         }
         for alg in KeyMgmtAlg::KNOWN {
             assert_eq!(alg.ensure_known().ok(), Some(alg));
+            assert!(alg.is_known());
         }
         for enc in ContentEncAlg::KNOWN {
             assert_eq!(enc.ensure_known().ok(), Some(enc));
+            assert!(enc.is_known());
         }
         assert!(!SigningAlg::from("HS1").is_known());
     }
 
     #[test]
     fn non_canonical_unknown_fails_closed() {
-        // Building `Unknown` from a registered name never equals the variant.
+        // Building `Unknown` from a known name never equals the variant.
         let forged = SigningAlg::Unknown("HS256".into());
         assert_ne!(forged, SigningAlg::HS256);
         assert_eq!(forged.ensure_known(), Err(Error::UnsupportedAlgorithm));
-    }
-
-    #[test]
-    fn non_string_json_is_rejected_without_echo() {
-        for input in ["256", "null", "true", "[\"HS256\"]", "{\"alg\":\"HS256\"}"] {
-            let err = serde_json::from_str::<SigningAlg>(input)
-                .err()
-                .unwrap_or_else(|| unreachable!("{input} must fail"));
-            assert_eq!(Error::from(err).code(), "InvalidJson");
-        }
     }
 }
