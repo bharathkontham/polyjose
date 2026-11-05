@@ -22,10 +22,11 @@ impl Value {
     ///
     /// **Numbers** (RFC 8259 §6): an exact integer (see [`Number`]) is
     /// written in decimal, with no fraction or exponent; `-0`, and a value
-    /// that underflowed to zero, is written as `0`. Other values use the shortest digits that parse back to the same
-    /// double, in fixed notation when 10^-6 ≤ |v| < 10^21 and as
-    /// `d.ddde±n` otherwise, the same text as ECMAScript's
-    /// `Number.prototype.toString`. Parsing the output yields an equal value.
+    /// that underflowed to zero, is written as `0`. Other values use the
+    /// shortest digits that parse back to the same double, in fixed notation
+    /// when 10^-6 ≤ |v| < 10^21 and as `d.ddde±n` otherwise, the same text
+    /// as ECMAScript's `Number.prototype.toString`. Parsing the output
+    /// yields an equal value.
     ///
     /// ```
     /// use polyjose::json::parse;
