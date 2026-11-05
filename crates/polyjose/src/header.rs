@@ -2,19 +2,21 @@
 //! RFC 7516 §4.1, RFC 7518 §4.6.1/§4.7.1/§4.8.1, RFC 7797 §3) plus any
 //! Public or Private Header Parameters (RFC 7515 §4.2–§4.3).
 //!
-//! [`Header::from_json`][from_json] is the only way to read a header from
-//! untrusted bytes. `Header` deliberately does not implement `Deserialize`, so it
-//! can't be built by a parser that skips the checks below.
+//! [`Header::from_json`][from_json] reads a header from untrusted bytes
+//! through polyjose's own JSON parser ([`crate::json`], ADR 0016).
 //!
 //! # What parsing checks
 //!
-//! - The input is a UTF-8 encoded, completely valid JSON object
-//!   (RFC 7515 §5.2 step 3, RFC 7516 §5.2 step 3), else
+//! - The input is a UTF-8 encoded, completely valid I-JSON object
+//!   (RFC 7515 §5.2 step 3, RFC 7516 §5.2 step 3, RFC 7493), else
 //!   [`Error::InvalidJson`].
-//! - No member name occurs twice, in the header or in any nested object
-//!   (RFC 7515 §4 and §5.2 step 4, RFC 7516 §4 and §5.2 step 4), else
-//!   [`Error::InvalidHeader`]. Duplicates are rejected, not resolved to the
-//!   last value (RFC 7515 §10.12).
+//! - No member name occurs twice, in the header or in any nested object,
+//!   compared after unescaping (RFC 7515 §4 and §5.2 step 4, RFC 7516 §4
+//!   and §5.2 step 4). The JSON parser rejects duplicates with
+//!   [`Error::InvalidJson`] rather than keeping the last value, which would
+//!   let two implementations read different values from one header
+//!   (RFC 7515 §10.12). Nested objects are included: `jwk` and `epk` are
+//!   JWKs, whose parsers may reject duplicates too (RFC 7517 §4).
 //! - Each registered parameter has its registered JSON type, else
 //!   [`Error::InvalidHeader`].
 //! - `crit`, if present, is a non-empty list of distinct names, none of
@@ -26,7 +28,6 @@
 //! - That the names in `crit` are present and understood: that depends on
 //!   the complete JOSE Header and on the recipient. Call
 //!   [`Header::validate_crit_understood`][crit] once the header is complete.
-//!
 //! - That `alg` (or `enc`) is present: in the JSON serializations a
 //!   parameter may live in another header object (RFC 7515 §7.2.1,
 //!   RFC 7516 §7.2.1). Use [`Header::signing_alg`][signing_alg],
@@ -37,7 +38,8 @@
 //!   kept as their encoded strings; decoding belongs to the algorithm that
 //!   uses them.
 //! - `jwk` and `epk` are kept as raw JSON objects; they become typed keys
-//!   (and are validated) where they are used.
+//!   (and are validated) where they are used. They are never used to
+//!   select the verification key (ADR 0026 §2).
 //!
 //! [from_json]: crate::header::Header::from_json
 //! [crit]: crate::header::Header::validate_crit_understood
@@ -45,13 +47,12 @@
 //! [key_mgmt_alg]: crate::header::Header::key_mgmt_alg
 //! [content_enc_alg]: crate::header::Header::content_enc_alg
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
-use serde::Serialize;
-use serde::ser::{SerializeMap, Serializer};
-use serde_json::{Map, Value};
+use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
+use crate::json::{self, Number, Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 
 /// Detail for input that is valid JSON but not a JSON object.
@@ -60,18 +61,22 @@ const NOT_AN_OBJECT: &str = "expected a JSON object";
 /// A JOSE Header (RFC 7515 §4, RFC 7516 §4).
 ///
 /// Registered parameters are typed fields; every other member is kept,
-/// unchanged, in [`Header::other_params`]. Parsing then serializing a header
-/// yields an equal JSON object (member order is not preserved, and need not
-/// be: signatures cover the original encoded bytes, RFC 7515 §5.1).
+/// unchanged and in order, in [`Header::other_params`]. Parsing then
+/// serializing a header yields an equal JSON object. The registered
+/// parameters come first in a fixed order, so the bytes may differ from
+/// the input; signatures cover the original encoded bytes, never a
+/// re-serialization (RFC 7515 §5.1–§5.2).
 ///
 /// ```
 /// use polyjose::header::Header;
+/// use polyjose::json::Value;
 /// use polyjose::jwa::SigningAlg;
 ///
 /// let h = Header::from_json(br#"{"alg":"HS256","typ":"JWT","x-tenant":"a"}"#)?;
 /// assert_eq!(h.signing_alg()?, SigningAlg::HS256);
 /// assert_eq!(h.typ.as_deref(), Some("JWT"));
-/// assert_eq!(h.other_params()["x-tenant"], "a");
+/// assert_eq!(h.other_params().get("x-tenant").and_then(Value::as_str), Some("a"));
+/// assert_eq!(h.to_json()?, r#"{"alg":"HS256","typ":"JWT","x-tenant":"a"}"#);
 /// # Ok::<(), polyjose::Error>(())
 /// ```
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -91,7 +96,7 @@ pub struct Header {
     pub jku: Option<String>,
     /// `jwk`: the public key, as a raw JSON object (RFC 7515 §4.1.3,
     /// RFC 7516 §4.1.5).
-    pub jwk: Option<Map<String, Value>>,
+    pub jwk: Option<Object>,
     /// `kid`: Key ID (RFC 7515 §4.1.4, RFC 7516 §4.1.6).
     pub kid: Option<String>,
     /// `x5u`: X.509 URL (RFC 7515 §4.1.5, RFC 7516 §4.1.7).
@@ -100,7 +105,7 @@ pub struct Header {
     /// (RFC 7515 §4.1.6, RFC 7516 §4.1.8).
     pub x5c: Option<Vec<String>>,
     /// `x5t`: base64url SHA-1 certificate thumbprint (RFC 7515 §4.1.7,
-    /// RFC 7516 §4.1.9).
+    /// RFC 7516 §4.1.9). Carried, never computed or checked (ADR 0022).
     pub x5t: Option<String>,
     /// `x5t#S256`: base64url SHA-256 certificate thumbprint
     /// (RFC 7515 §4.1.8, RFC 7516 §4.1.10).
@@ -116,7 +121,7 @@ pub struct Header {
     pub crit: Option<Vec<String>>,
     /// `epk`: ECDH-ES ephemeral public key, as a raw JSON object
     /// (RFC 7518 §4.6.1.1).
-    pub epk: Option<Map<String, Value>>,
+    pub epk: Option<Object>,
     /// `apu`: base64url Agreement PartyUInfo (RFC 7518 §4.6.1.2).
     pub apu: Option<String>,
     /// `apv`: base64url Agreement PartyVInfo (RFC 7518 §4.6.1.3).
@@ -130,16 +135,19 @@ pub struct Header {
     pub p2s: Option<String>,
     /// `p2c`: PBES2 iteration count, a positive integer (RFC 7518 §4.8.1.2).
     ///
-    /// Only the type is checked here; the JWE layer enforces the upper bound
-    /// (ADR 0007).
+    /// JSON has one number type (RFC 8259 §6), so `1000` and `1000.0` are
+    /// the same integer. Values above 2^53 − 1 are not exact in I-JSON
+    /// (RFC 7493 §2.2) and are rejected. Only the type is checked here; the
+    /// JWE layer enforces the upper bound (ADR 0007, ADR 0023).
     pub p2c: Option<u64>,
     /// `b64`: whether the JWS payload is base64url-encoded (RFC 7797 §3).
     pub b64: Option<bool>,
-    /// All other (Public or Private, RFC 7515 §4.2–§4.3) parameters.
+    /// All other (Public or Private, RFC 7515 §4.2–§4.3) parameters, in
+    /// order.
     ///
     /// Private so that it can never hold a name that is also a field above,
     /// which would serialize as a duplicate member.
-    other: BTreeMap<String, Value>,
+    other: Object,
 }
 
 /// Every parameter name modelled as a [`Header`] field, in serialization
@@ -161,36 +169,36 @@ impl Header {
     /// # Errors
     ///
     /// - [`Error::InvalidJson`] if the bytes are not a UTF-8 encoded,
-    ///   completely valid JSON object (RFC 7515 §5.2 step 3).
-    /// - [`Error::InvalidHeader`] if a member name occurs twice in any
-    ///   object, at any depth (RFC 7515 §4, §5.2 step 4; RFC 7516 §4,
-    ///   §5.2 step 4), or a registered parameter has the wrong type.
+    ///   completely valid I-JSON object (RFC 7515 §5.2 step 3), including
+    ///   when a member name occurs twice in any object, at any depth
+    ///   (RFC 7515 §4, §5.2 step 4; RFC 7516 §4, §5.2 step 4), or the
+    ///   [`json::Limits`] are exceeded.
+    /// - [`Error::InvalidHeader`] if a registered parameter has the wrong
+    ///   type or `crit` is malformed (RFC 7515 §4.1.11, RFC 7516 §4.1.13).
     ///
     /// No error contains any part of the input.
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
-        match strict_json::parse_object(bytes) {
-            Ok(map) => Self::from_map(map),
-            Err(strict_json::StrictJsonError::DuplicateName) => {
-                Err(Error::InvalidHeader("duplicate member name"))
-            }
-            Err(strict_json::StrictJsonError::NotAnObject) => {
-                Err(Error::InvalidJson(NOT_AN_OBJECT))
-            }
-            Err(strict_json::StrictJsonError::Json(e)) => Err(e.into()),
-        }
+        let object = json::parse(bytes)?
+            .into_object()
+            .ok_or(Error::InvalidJson(NOT_AN_OBJECT))?;
+        Self::from_object(object)
     }
 
-    /// Builds a header from an already-parsed JSON object, checking the type
-    /// of every registered parameter.
-    pub(crate) fn from_map(map: Map<String, Value>) -> Result<Self> {
+    /// Builds a header from an already-parsed JSON object (whose names the
+    /// parser has made unique), checking the type of every registered
+    /// parameter and the shape of `crit`.
+    ///
+    /// Linear in the number of members, whatever their names.
+    pub(crate) fn from_object(object: Object) -> Result<Self> {
         let mut h = Self::default();
-        for (name, value) in map {
+        let mut other = Vec::new();
+        for (name, value) in object {
             match name.as_str() {
                 "alg" => h.alg = Some(string(value, "alg must be a string")?),
                 "enc" => h.enc = Some(string(value, "enc must be a string")?.into()),
                 "zip" => h.zip = Some(string(value, "zip must be a string")?),
                 "jku" => h.jku = Some(string(value, "jku must be a string")?),
-                "jwk" => h.jwk = Some(object(value, "jwk must be a JSON object")?),
+                "jwk" => h.jwk = Some(object_member(value, "jwk must be a JSON object")?),
                 "kid" => h.kid = Some(string(value, "kid must be a string")?),
                 "x5u" => h.x5u = Some(string(value, "x5u must be a string")?),
                 "x5c" => h.x5c = Some(strings(value, "x5c must be an array of strings")?),
@@ -199,33 +207,126 @@ impl Header {
                 "typ" => h.typ = Some(string(value, "typ must be a string")?),
                 "cty" => h.cty = Some(string(value, "cty must be a string")?),
                 "crit" => h.crit = Some(strings(value, "crit must be an array of strings")?),
-                "epk" => h.epk = Some(object(value, "epk must be a JSON object")?),
+                "epk" => h.epk = Some(object_member(value, "epk must be a JSON object")?),
                 "apu" => h.apu = Some(string(value, "apu must be a string")?),
                 "apv" => h.apv = Some(string(value, "apv must be a string")?),
                 "iv" => h.iv = Some(string(value, "iv must be a string")?),
                 "tag" => h.tag = Some(string(value, "tag must be a string")?),
                 "p2s" => h.p2s = Some(string(value, "p2s must be a string")?),
-                "p2c" => h.p2c = Some(positive_int(value, "p2c must be a positive integer")?),
-                "b64" => h.b64 = Some(boolean(value, "b64 must be a boolean")?),
-                _ => {
-                    h.other.insert(name, value);
-                }
+                "p2c" => h.p2c = Some(positive_int(&value, P2C_NOT_POSITIVE)?),
+                "b64" => h.b64 = Some(boolean(&value, "b64 must be a boolean")?),
+                _ => other.push((name, value)),
             }
         }
+        // The names left over were unique in `object` and are not field
+        // names, so they are unique among themselves.
+        h.other = Object::from_unique_members(other);
         if let Some(crit) = &h.crit {
             check_crit_shape(crit)?;
         }
         Ok(h)
     }
 
-    /// Serializes the header as compact JSON.
+    /// The header as a JSON object: the typed fields in a fixed order
+    /// (alg, enc, zip, jku, jwk, kid, x5u, x5c, x5t, x5t#S256, typ, cty,
+    /// crit, epk, apu, apv, iv, tag, p2s, p2c, b64), then
+    /// [`other_params`](Self::other_params) in their order. Every name
+    /// occurs once (RFC 7515 §4).
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidJson`] only if serialization fails, which a `Header`
-    /// built through this API cannot cause.
-    pub fn to_json(&self) -> Result<Vec<u8>> {
-        Ok(serde_json::to_vec(self)?)
+    /// [`Error::InvalidHeader`] if `p2c` is set to zero or to more than
+    /// 2^53 − 1, which JSON cannot carry as an exact positive integer
+    /// (RFC 7518 §4.8.1.2, RFC 7493 §2.2).
+    pub fn to_object(&self) -> Result<Object> {
+        let mut members: Vec<(Zeroizing<String>, Value)> =
+            Vec::with_capacity(FIELD_NAMES.len() + self.other.len());
+        let mut push = |name: &str, value: Value| {
+            members.push((Zeroizing::new(name.to_owned()), value));
+        };
+        let str_value = |s: &String| Value::from(s.as_str());
+        let strs_value = |v: &Vec<String>| Value::from(v.iter().map(str_value).collect::<Vec<_>>());
+        if let Some(v) = &self.alg {
+            push("alg", str_value(v));
+        }
+        if let Some(v) = &self.enc {
+            push("enc", Value::from(v.as_str()));
+        }
+        if let Some(v) = &self.zip {
+            push("zip", str_value(v));
+        }
+        if let Some(v) = &self.jku {
+            push("jku", str_value(v));
+        }
+        if let Some(v) = &self.jwk {
+            push("jwk", Value::from(v.clone()));
+        }
+        if let Some(v) = &self.kid {
+            push("kid", str_value(v));
+        }
+        if let Some(v) = &self.x5u {
+            push("x5u", str_value(v));
+        }
+        if let Some(v) = &self.x5c {
+            push("x5c", strs_value(v));
+        }
+        if let Some(v) = &self.x5t {
+            push("x5t", str_value(v));
+        }
+        if let Some(v) = &self.x5t_s256 {
+            push("x5t#S256", str_value(v));
+        }
+        if let Some(v) = &self.typ {
+            push("typ", str_value(v));
+        }
+        if let Some(v) = &self.cty {
+            push("cty", str_value(v));
+        }
+        if let Some(v) = &self.crit {
+            push("crit", strs_value(v));
+        }
+        if let Some(v) = &self.epk {
+            push("epk", Value::from(v.clone()));
+        }
+        if let Some(v) = &self.apu {
+            push("apu", str_value(v));
+        }
+        if let Some(v) = &self.apv {
+            push("apv", str_value(v));
+        }
+        if let Some(v) = &self.iv {
+            push("iv", str_value(v));
+        }
+        if let Some(v) = &self.tag {
+            push("tag", str_value(v));
+        }
+        if let Some(v) = &self.p2s {
+            push("p2s", str_value(v));
+        }
+        if let Some(v) = self.p2c {
+            let n = Number::from_u64(v)
+                .filter(|_| v > 0)
+                .ok_or(Error::InvalidHeader(P2C_NOT_POSITIVE))?;
+            push("p2c", Value::from(n));
+        }
+        if let Some(v) = self.b64 {
+            push("b64", Value::from(v));
+        }
+        for (name, value) in &self.other {
+            push(name, value.clone());
+        }
+        // Field names are distinct, and `other` never holds one of them.
+        Ok(Object::from_unique_members(members))
+    }
+
+    /// Serializes the header as compact JSON (see
+    /// [`to_object`](Self::to_object) for the member order).
+    ///
+    /// # Errors
+    ///
+    /// As for [`to_object`](Self::to_object).
+    pub fn to_json(&self) -> Result<String> {
+        Ok(self.to_object()?.to_json())
     }
 
     /// The JWS `alg` (RFC 7515 §4.1.1).
@@ -238,7 +339,7 @@ impl Header {
     ///   (RFC 7515 §4.1.1: the JWS is then invalid). The value is not echoed.
     ///
     /// A known value, including `none`, still has to pass the caller's
-    /// allow-list (RFC 8725 §3.1).
+    /// allow-list (RFC 8725 §3.1, ADR 0026 §2 step 7).
     pub fn signing_alg(&self) -> Result<SigningAlg> {
         let alg = SigningAlg::from(self.alg.as_deref().ok_or(MISSING_ALG)?);
         alg.ensure_known()?;
@@ -250,8 +351,9 @@ impl Header {
     /// # Errors
     ///
     /// - [`Error::InvalidHeader`] if `alg` is absent (RFC 7516 §4.1.1).
-    /// - [`Error::UnsupportedAlgorithm`] if it is not a known JWE key
-    ///   management algorithm (RFC 7516 §4.1.1).
+    /// - [`Error::UnsupportedAlgorithm`] if it is not a JWE key management
+    ///   algorithm polyjose implements (RFC 7516 §4.1.1), including
+    ///   `RSA-OAEP` (ADR 0022) and `RSA1_5` (ADR 0021).
     pub fn key_mgmt_alg(&self) -> Result<KeyMgmtAlg> {
         let alg = KeyMgmtAlg::from(self.alg.as_deref().ok_or(MISSING_ALG)?);
         alg.ensure_known()?;
@@ -282,7 +384,8 @@ impl Header {
     /// is the union of the protected and unprotected headers (RFC 7515
     /// §5.2 step 4), since the listed names may occur in any of them. That
     /// `crit` itself occurs only in the protected header is checked by the
-    /// JWS/JWE serialization layer, which knows where each member came from.
+    /// JWS/JWE serialization layer, which knows where each member came from
+    /// (ADR 0026 §2 step 4).
     ///
     /// # Errors
     ///
@@ -296,18 +399,29 @@ impl Header {
             return Ok(());
         };
         check_crit_shape(crit)?;
-        if crit.iter().any(|name| !self.contains(name)) {
-            return Err(Error::InvalidHeader("crit lists an absent parameter"));
+        // One pass over the other parameters, so a long `crit` list stays
+        // O(n log n) rather than O(n * m).
+        let other: BTreeSet<&str> = self.other.iter().map(|(name, _)| name).collect();
+        let present = |name: &str| {
+            if FIELD_NAMES.contains(&name) {
+                self.contains(name)
+            } else {
+                other.contains(name)
+            }
+        };
+        if crit.iter().all(|name| present(name)) {
+            Ok(())
+        } else {
+            Err(Error::InvalidHeader("crit lists an absent parameter"))
         }
-        Ok(())
     }
 
     /// [`validate_crit`](Self::validate_crit), then requires every listed
     /// extension to be in `understood` (RFC 7515 §4.1.11, RFC 7516
     /// §4.1.13: otherwise the JWS/JWE is invalid).
     ///
-    /// polyjose's JWS layer passes `&["b64"]` (RFC 7797; ADR 0007) and its
-    /// JWE layer passes `&[]`.
+    /// polyjose's JWS layer passes `&["b64"]` (RFC 7797; ADR 0007,
+    /// ADR 0026 §2 step 5) and its JWE layer passes `&[]`.
     ///
     /// # Errors
     ///
@@ -329,25 +443,29 @@ impl Header {
     }
 
     /// The Public and Private Header Parameters (RFC 7515 §4.2–§4.3): every
-    /// member that is not one of the typed fields, keyed by name.
-    pub fn other_params(&self) -> &BTreeMap<String, Value> {
+    /// member that is not one of the typed fields, in order.
+    pub fn other_params(&self) -> &Object {
         &self.other
     }
 
     /// Sets a Public or Private Header Parameter (RFC 7515 §4.2–§4.3),
-    /// returning the previous value.
+    /// returning the previous value. A new name is appended.
     ///
     /// # Errors
     ///
     /// [`Error::InvalidHeader`] if `name` is one of the typed fields (set the
     /// field instead), so a header can never hold the same name twice
     /// (RFC 7515 §4).
-    pub fn insert_other(&mut self, name: impl Into<String>, value: Value) -> Result<Option<Value>> {
-        let name = name.into();
+    pub fn insert_other(
+        &mut self,
+        name: impl Into<String>,
+        value: impl Into<Value>,
+    ) -> Result<Option<Value>> {
+        let name = Zeroizing::new(name.into());
         if FIELD_NAMES.contains(&name.as_str()) {
             return Err(Error::InvalidHeader("parameter has a typed field"));
         }
-        Ok(self.other.insert(name, value))
+        Ok(self.other.insert(name.as_str(), value))
     }
 
     /// Removes a Public or Private Header Parameter, returning its value.
@@ -379,12 +497,13 @@ impl Header {
             "p2s" => self.p2s.is_some(),
             "p2c" => self.p2c.is_some(),
             "b64" => self.b64.is_some(),
-            _ => self.other.contains_key(name),
+            _ => self.other.contains(name),
         }
     }
 }
 
 const MISSING_ALG: Error = Error::InvalidHeader("missing alg");
+const P2C_NOT_POSITIVE: &str = "p2c must be a positive integer";
 
 /// Header Parameter names defined by JWS (RFC 7515 §4.1), JWE
 /// (RFC 7516 §4.1) and JWA (RFC 7518 §4.6.1, §4.7.1, §4.8.1). `crit` must
@@ -401,12 +520,12 @@ const SPEC_DEFINED_NAMES: &[&str] = &[
 
 /// The `crit` rules that hold for any single header object
 /// (RFC 7515 §4.1.11, RFC 7516 §4.1.13): non-empty, no JWS/JWE/JWA names,
-/// no repeats. Linear in the list length.
+/// no repeats. O(n log n) in the list length.
 fn check_crit_shape(crit: &[String]) -> Result<()> {
     if crit.is_empty() {
         return Err(Error::InvalidHeader("crit must not be empty"));
     }
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     for name in crit {
         if SPEC_DEFINED_NAMES.contains(&name.as_str()) {
             return Err(Error::InvalidHeader(
@@ -420,18 +539,16 @@ fn check_crit_shape(crit: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// A JSON string, moved out of its wiped-on-drop buffer without a copy.
 fn string(value: Value, detail: &'static str) -> Result<String> {
     match value {
-        Value::String(s) => Ok(s),
+        Value::String(mut s) => Ok(core::mem::take(&mut *s)),
         _ => Err(Error::InvalidHeader(detail)),
     }
 }
 
-fn object(value: Value, detail: &'static str) -> Result<Map<String, Value>> {
-    match value {
-        Value::Object(m) => Ok(m),
-        _ => Err(Error::InvalidHeader(detail)),
-    }
+fn object_member(value: Value, detail: &'static str) -> Result<Object> {
+    value.into_object().ok_or(Error::InvalidHeader(detail))
 }
 
 fn strings(value: Value, detail: &'static str) -> Result<Vec<String>> {
@@ -441,191 +558,17 @@ fn strings(value: Value, detail: &'static str) -> Result<Vec<String>> {
     }
 }
 
-fn boolean(value: Value, detail: &'static str) -> Result<bool> {
-    match value {
-        Value::Bool(b) => Ok(b),
-        _ => Err(Error::InvalidHeader(detail)),
-    }
+fn boolean(value: &Value, detail: &'static str) -> Result<bool> {
+    value.as_bool().ok_or(Error::InvalidHeader(detail))
 }
 
-/// A positive JSON integer (RFC 7518 §4.8.1.2). Floats such as `1.0` are not
-/// integers here.
-fn positive_int(value: Value, detail: &'static str) -> Result<u64> {
+/// A positive JSON integer (RFC 7518 §4.8.1.2), exact under I-JSON
+/// (RFC 7493 §2.2): `1000` and `1000.0` qualify, `1.5`, `0`, `-1` and
+/// `9007199254740992` (2^53) do not.
+fn positive_int(value: &Value, detail: &'static str) -> Result<u64> {
     match value.as_u64() {
         Some(n) if n > 0 => Ok(n),
         _ => Err(Error::InvalidHeader(detail)),
-    }
-}
-
-impl Serialize for Header {
-    fn serialize<S: Serializer>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(None)?;
-        macro_rules! field {
-            ($name:literal, $field:expr) => {
-                if let Some(v) = &$field {
-                    map.serialize_entry($name, v)?;
-                }
-            };
-        }
-        field!("alg", self.alg);
-        field!("enc", self.enc);
-        field!("zip", self.zip);
-        field!("jku", self.jku);
-        field!("jwk", self.jwk);
-        field!("kid", self.kid);
-        field!("x5u", self.x5u);
-        field!("x5c", self.x5c);
-        field!("x5t", self.x5t);
-        field!("x5t#S256", self.x5t_s256);
-        field!("typ", self.typ);
-        field!("cty", self.cty);
-        field!("crit", self.crit);
-        field!("epk", self.epk);
-        field!("apu", self.apu);
-        field!("apv", self.apv);
-        field!("iv", self.iv);
-        field!("tag", self.tag);
-        field!("p2s", self.p2s);
-        field!("p2c", self.p2c);
-        field!("b64", self.b64);
-        for (name, value) in &self.other {
-            map.serialize_entry(name, value)?;
-        }
-        map.end()
-    }
-}
-
-/// JSON parsing that rejects duplicate member names.
-///
-/// RFC 7515 §4 and RFC 7516 §4 let a parser either reject duplicate Header
-/// Parameter names or keep the lexically last one; polyjose rejects them,
-/// because a parser that silently picks one value is a source of the
-/// "ambiguous and potentially exploitable situations" of RFC 7515 §10.12
-/// (two implementations reading different `alg` values from one header).
-/// `serde_json` on its own keeps the last value, hence this parser.
-///
-/// Duplicates are rejected in nested objects too: `jwk` and `epk` are JWKs,
-/// whose parsers may also reject duplicates (RFC 7517 §4), and applying the
-/// same rule to Private Header Parameter values keeps the behaviour uniform
-/// and free of parser differentials. Names compare after JSON unescaping
-/// (RFC 8259 §7), so `"\u0061lg"` duplicates `"alg"`.
-///
-/// Nesting depth is bounded by `serde_json`'s recursion limit (128), which
-/// fails with an error rather than exhausting the stack.
-///
-/// `pub(crate)` so that the JWS/JWE JSON serializations, JWT claims
-/// (RFC 7519 §4) and JWKs can apply the same rule.
-pub(crate) mod strict_json {
-    use core::cell::Cell;
-    use core::fmt;
-
-    use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
-    use serde_json::{Map, Number, Value};
-
-    /// Why [`parse_object`] failed.
-    #[derive(Debug)]
-    pub(crate) enum StrictJsonError {
-        /// A member name occurred twice in one object.
-        DuplicateName,
-        /// Valid JSON, but the top level is not an object.
-        NotAnObject,
-        /// Not valid JSON (syntax, encoding, trailing data, depth).
-        Json(serde_json::Error),
-    }
-
-    /// Parses `bytes` as one complete JSON object (no trailing data) and
-    /// rejects duplicate member names at every depth.
-    pub(crate) fn parse_object(bytes: &[u8]) -> Result<Map<String, Value>, StrictJsonError> {
-        let duplicate = Cell::new(false);
-        let mut de = serde_json::Deserializer::from_slice(bytes);
-        let parsed = StrictValue {
-            duplicate: &duplicate,
-        }
-        .deserialize(&mut de);
-        let parsed = parsed.and_then(|value| de.end().map(|()| value));
-        match parsed {
-            Ok(Value::Object(map)) => Ok(map),
-            Ok(_) => Err(StrictJsonError::NotAnObject),
-            Err(_) if duplicate.get() => Err(StrictJsonError::DuplicateName),
-            Err(e) => Err(StrictJsonError::Json(e)),
-        }
-    }
-
-    /// Builds a [`Value`], flagging the first duplicate name it meets.
-    #[derive(Clone, Copy)]
-    struct StrictValue<'a> {
-        duplicate: &'a Cell<bool>,
-    }
-
-    impl<'de> DeserializeSeed<'de> for StrictValue<'_> {
-        type Value = Value;
-
-        fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
-            deserializer.deserialize_any(self)
-        }
-    }
-
-    impl<'de> Visitor<'de> for StrictValue<'_> {
-        type Value = Value;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a JSON value")
-        }
-
-        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value, E> {
-            Ok(Value::Bool(v))
-        }
-
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value, E> {
-            Ok(Value::Number(v.into()))
-        }
-
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value, E> {
-            Ok(Value::Number(v.into()))
-        }
-
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> {
-            Number::from_f64(v)
-                .map(Value::Number)
-                .ok_or_else(|| E::custom("non-finite number"))
-        }
-
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Value, E> {
-            Ok(Value::String(v.to_owned()))
-        }
-
-        fn visit_string<E: de::Error>(self, v: String) -> Result<Value, E> {
-            Ok(Value::String(v))
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Value, E> {
-            Ok(Value::Null)
-        }
-
-        fn visit_none<E: de::Error>(self) -> Result<Value, E> {
-            Ok(Value::Null)
-        }
-
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
-            let mut items = Vec::new();
-            while let Some(item) = seq.next_element_seed(self)? {
-                items.push(item);
-            }
-            Ok(Value::Array(items))
-        }
-
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
-            let mut members = Map::new();
-            while let Some(name) = map.next_key::<String>()? {
-                if members.contains_key(&name) {
-                    self.duplicate.set(true);
-                    return Err(de::Error::custom("duplicate member name"));
-                }
-                let value = map.next_value_seed(self)?;
-                members.insert(name, value);
-            }
-            Ok(Value::Object(members))
-        }
     }
 }
 
@@ -633,19 +576,32 @@ pub(crate) mod strict_json {
 mod tests {
     use super::*;
     use base64ct::{Base64UrlUnpadded, Encoding};
-    use serde_json::json;
 
     fn b64(s: &str) -> Vec<u8> {
         Base64UrlUnpadded::decode_vec(s).unwrap()
     }
 
-    /// Parse, re-serialize and compare as JSON values (order-insensitive).
+    /// Parse, re-serialize and compare as JSON values (member order is
+    /// ignored by `Value` equality).
     fn assert_round_trip(bytes: &[u8]) -> Header {
         let h = Header::from_json(bytes).unwrap();
-        let original: Value = serde_json::from_slice(bytes).unwrap();
-        let again: Value = serde_json::from_slice(&h.to_json().unwrap()).unwrap();
+        let original = json::parse(bytes).unwrap();
+        let again = json::parse(h.to_json().unwrap().as_bytes()).unwrap();
         assert_eq!(again, original);
+        assert_eq!(
+            Header::from_json(h.to_json().unwrap().as_bytes()).unwrap(),
+            h
+        );
         h
+    }
+
+    fn assert_invalid_header(input: &[u8]) {
+        let err = Header::from_json(input).err();
+        assert!(
+            matches!(err, Some(Error::InvalidHeader(_))),
+            "{:?}: {err:?}",
+            String::from_utf8_lossy(input)
+        );
     }
 
     #[test]
@@ -662,7 +618,7 @@ mod tests {
         // RFC 7516 Appendix A.1.1: {"alg":"RSA-OAEP","enc":"A256GCM"}
         let bytes = b64("eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ");
         let h = assert_round_trip(&bytes);
-        assert_eq!(h.key_mgmt_alg().unwrap(), KeyMgmtAlg::RsaOaep);
+        assert_eq!(h.alg.as_deref(), Some("RSA-OAEP"));
         assert_eq!(h.content_enc_alg().unwrap(), ContentEncAlg::A256GCM);
     }
 
@@ -697,45 +653,89 @@ mod tests {
         assert_eq!(h.key_mgmt_alg().unwrap(), KeyMgmtAlg::EcdhEsA128KW);
         assert_eq!(h.kid.as_deref(), Some("peregrin.took@tuckborough.example"));
         let epk = h.epk.as_ref().unwrap();
-        assert_eq!(epk["kty"], "EC");
-        assert_eq!(epk["crv"], "P-384");
+        assert_eq!(epk.get("kty").and_then(Value::as_str), Some("EC"));
+        assert_eq!(epk.get("crv").and_then(Value::as_str), Some("P-384"));
         assert_eq!(h.enc, Some(ContentEncAlg::A128GCM));
+        // The member order of the cookbook header is alg, kid, epk, enc;
+        // ours puts enc second. Equal as JSON, different as bytes.
+        assert_ne!(h.to_json().unwrap().as_bytes(), bytes.as_slice());
     }
 
     #[test]
-    fn rfc7797_b64_header_parses() {
+    fn rfc7797_b64_header_parses_and_serializes_exactly() {
         // RFC 7797 §4.2: {"alg":"HS256","b64":false,"crit":["b64"]}
         let bytes = b64("eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19");
         let h = assert_round_trip(&bytes);
         assert_eq!(h.b64, Some(false));
         assert_eq!(h.crit.as_deref(), Some(&["b64".to_owned()][..]));
+        assert_eq!(
+            h.to_json().unwrap(),
+            r#"{"alg":"HS256","crit":["b64"],"b64":false}"#
+        );
     }
 
     #[test]
+    fn every_known_algorithm_name_serializes_exactly() {
+        for alg in SigningAlg::KNOWN {
+            let input = format!(r#"{{"alg":"{alg}"}}"#);
+            let h = Header::from_json(input.as_bytes()).unwrap();
+            assert_eq!(h.signing_alg().as_ref(), Ok(alg));
+            assert_eq!(h.to_json().unwrap(), input);
+        }
+        for alg in KeyMgmtAlg::KNOWN {
+            let input = format!(r#"{{"alg":"{alg}"}}"#);
+            let h = Header::from_json(input.as_bytes()).unwrap();
+            assert_eq!(h.key_mgmt_alg().as_ref(), Ok(alg));
+            assert_eq!(h.to_json().unwrap(), input);
+        }
+        for enc in ContentEncAlg::KNOWN {
+            let input = format!(r#"{{"enc":"{enc}"}}"#);
+            let h = Header::from_json(input.as_bytes()).unwrap();
+            assert_eq!(h.content_enc_alg().as_ref(), Ok(enc));
+            assert_eq!(h.to_json().unwrap(), input);
+        }
+    }
+
+    const ALL_PARAMS: &str = r#"{
+        "alg": "ECDH-ES+A256KW", "enc": "A256GCM", "zip": "DEF",
+        "jku": "https://example.com/jwks", "jwk": {"kty": "OKP", "crv": "X25519", "x": "AA"},
+        "kid": "k1", "x5u": "https://example.com/c", "x5c": ["MIIB", "MIIC"],
+        "x5t": "dGh1bWI", "x5t#S256": "dGh1bWIy", "typ": "JOSE", "cty": "JWT",
+        "crit": ["exp"], "exp": 1363284000,
+        "epk": {"kty": "EC", "crv": "P-256", "x": "AA", "y": "AA"},
+        "apu": "QWxpY2U", "apv": "Qm9i", "iv": "aXY", "tag": "dGFn",
+        "p2s": "c2FsdA", "p2c": 1000, "b64": true,
+        "x-private": {"nested": [1, 2.5, null, false, "s"]}
+    }"#;
+
+    #[test]
     fn every_registered_parameter_round_trips() {
-        let input = json!({
-            "alg": "ECDH-ES+A256KW", "enc": "A256GCM", "zip": "DEF",
-            "jku": "https://example.com/jwks", "jwk": {"kty": "OKP", "crv": "X25519", "x": "AA"},
-            "kid": "k1", "x5u": "https://example.com/c", "x5c": ["MIIB", "MIIC"],
-            "x5t": "dGh1bWI", "x5t#S256": "dGh1bWIy", "typ": "JOSE", "cty": "JWT",
-            "crit": ["exp"], "exp": 1363284000,
-            "epk": {"kty": "EC", "crv": "P-256", "x": "AA", "y": "AA"},
-            "apu": "QWxpY2U", "apv": "Qm9i", "iv": "aXY", "tag": "dGFn",
-            "p2s": "c2FsdA", "p2c": 1000, "b64": true,
-            "x-private": {"nested": [1, 2.5, null, false, "s"]}
-        });
-        let bytes = serde_json::to_vec(&input).unwrap();
-        let h = assert_round_trip(&bytes);
+        let h = assert_round_trip(ALL_PARAMS.as_bytes());
         assert_eq!(h.x5t_s256.as_deref(), Some("dGh1bWIy"));
         assert_eq!(h.x5c.as_ref().map(Vec::len), Some(2));
         assert_eq!(h.other_params().len(), 2);
-        assert_eq!(h.other_params()["exp"], 1363284000);
+        assert_eq!(
+            h.other_params().get("exp").and_then(Value::as_i64),
+            Some(1363284000)
+        );
+    }
+
+    #[test]
+    fn serialization_order_is_fields_then_other_params_in_order() {
+        let h = Header::from_json(br#"{"z":1,"kid":"k","a":2,"alg":"HS256"}"#).unwrap();
+        assert_eq!(
+            h.to_json().unwrap(),
+            r#"{"alg":"HS256","kid":"k","z":1,"a":2}"#
+        );
+        let names: Vec<&str> = h.other_params().iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["z", "a"]);
     }
 
     #[test]
     fn unknown_alg_and_enc_round_trip_and_fail_when_used() {
         let bytes = br#"{"alg":"Ed448","enc":"A128CBC"}"#;
         let h = assert_round_trip(bytes);
+        assert_eq!(h.to_json().unwrap().as_bytes(), bytes);
         assert_eq!(h.alg.as_deref(), Some("Ed448"));
         assert_eq!(h.enc, Some(ContentEncAlg::Unknown("A128CBC".into())));
         assert_eq!(h.signing_alg(), Err(Error::UnsupportedAlgorithm));
@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn alg_of_the_other_family_is_unsupported() {
-        let jwe = Header::from_json(br#"{"alg":"RSA-OAEP"}"#).unwrap();
+        let jwe = Header::from_json(br#"{"alg":"A128KW"}"#).unwrap();
         assert_eq!(jwe.signing_alg(), Err(Error::UnsupportedAlgorithm));
         let jws = Header::from_json(br#"{"alg":"HS256"}"#).unwrap();
         assert_eq!(jws.key_mgmt_alg(), Err(Error::UnsupportedAlgorithm));
@@ -775,29 +775,58 @@ mod tests {
             r#"{"alg":256}"#,
             r#"{"alg":null}"#,
             r#"{"enc":["A128GCM"]}"#,
+            r#"{"zip":true}"#,
+            r#"{"jku":1}"#,
             r#"{"kid":{"a":1}}"#,
+            r#"{"x5u":[]}"#,
             r#"{"jwk":"eyJ9"}"#,
             r#"{"epk":[]}"#,
             r#"{"x5c":"MIIB"}"#,
             r#"{"x5c":["MIIB",1]}"#,
+            r#"{"x5t":false}"#,
             r#"{"x5t#S256":true}"#,
+            r#"{"typ":0}"#,
+            r#"{"cty":{}}"#,
             r#"{"crit":"b64"}"#,
             r#"{"crit":[1]}"#,
+            r#"{"apu":1}"#,
+            r#"{"apv":null}"#,
+            r#"{"iv":[]}"#,
+            r#"{"tag":null}"#,
+            r#"{"p2s":1}"#,
             r#"{"b64":"false"}"#,
             r#"{"b64":0}"#,
             r#"{"p2c":"8192"}"#,
             r#"{"p2c":0}"#,
             r#"{"p2c":-1}"#,
             r#"{"p2c":1.5}"#,
-            r#"{"p2c":1000.0}"#,
+            r#"{"p2c":9007199254740992}"#,
             r#"{"p2c":18446744073709551616}"#,
-            r#"{"tag":null}"#,
         ];
         for input in cases {
-            let err = Header::from_json(input.as_bytes()).err();
-            assert!(
-                matches!(err, Some(Error::InvalidHeader(_))),
-                "{input}: {err:?}"
+            assert_invalid_header(input.as_bytes());
+        }
+    }
+
+    #[test]
+    fn integral_p2c_written_as_a_float_is_the_same_integer() {
+        // RFC 8259 §6 has one number type; 1000.0 is the integer 1000.
+        let h = Header::from_json(br#"{"p2c":1000.0}"#).unwrap();
+        assert_eq!(h.p2c, Some(1000));
+        assert_eq!(h.to_json().unwrap(), r#"{"p2c":1000}"#);
+        let h = Header::from_json(br#"{"p2c":9007199254740991}"#).unwrap();
+        assert_eq!(h.p2c, Some(9_007_199_254_740_991));
+    }
+
+    #[test]
+    fn unrepresentable_p2c_is_not_serialized() {
+        for p2c in [0, 9_007_199_254_740_992, u64::MAX] {
+            let mut h = Header::new();
+            h.p2c = Some(p2c);
+            assert_eq!(
+                h.to_json(),
+                Err(Error::InvalidHeader(P2C_NOT_POSITIVE)),
+                "{p2c}"
             );
         }
     }
@@ -819,6 +848,7 @@ mod tests {
             b"\xEF\xBB\xBF{\"alg\":\"HS256\"}",
             b"{\"alg\":\"\xff\"}",
             b"{\"alg\":\"\\ud800\"}",
+            b"{\"p2c\":1e400}",
         ];
         for input in cases {
             let err = Header::from_json(input).err();
@@ -837,6 +867,8 @@ mod tests {
             format!(r#"{{"kid":["{marker}"]}}"#),
             format!(r#"["{marker}"]"#),
             format!(r#"{{"{marker}":1"#),
+            format!(r#"{{"{marker}":1,"{marker}":2}}"#),
+            format!(r#"{{"crit":["{marker}","{marker}"],"{marker}":1}}"#),
         ];
         for input in cases {
             let err = Header::from_json(input.as_bytes()).err().unwrap();
@@ -850,103 +882,98 @@ mod tests {
         let mut h = Header::new();
         for name in FIELD_NAMES {
             assert_eq!(
-                h.insert_other(*name, json!("x")),
+                h.insert_other(*name, "x"),
                 Err(Error::InvalidHeader("parameter has a typed field")),
                 "{name}"
             );
         }
-        assert_eq!(h.insert_other("exp", json!(1)), Ok(None));
-        assert_eq!(h.insert_other("exp", json!(2)), Ok(Some(json!(1))));
+        assert_eq!(h.insert_other("exp", Value::from(true)), Ok(None));
+        assert_eq!(
+            h.insert_other("exp", Value::from(false)),
+            Ok(Some(Value::from(true)))
+        );
         assert!(h.contains("exp"));
-        assert_eq!(h.remove_other("exp"), Some(json!(2)));
+        assert_eq!(h.remove_other("exp"), Some(Value::from(false)));
         assert!(!h.contains("exp"));
     }
 
     #[test]
     fn contains_covers_every_typed_field() {
-        let mut all = serde_json::Map::new();
-        for name in FIELD_NAMES {
-            let v = match *name {
-                "jwk" | "epk" => json!({}),
-                "x5c" => json!(["a"]),
-                "crit" => json!(["x"]),
-                "p2c" => json!(1),
-                "b64" => json!(true),
-                _ => json!("v"),
-            };
-            all.insert((*name).to_owned(), v);
-        }
-        all.insert("x".to_owned(), json!(1));
-        let h = Header::from_json(&serde_json::to_vec(&all).unwrap()).unwrap();
-        assert!(h.other_params().len() == 1);
+        let h = Header::from_json(ALL_PARAMS.as_bytes()).unwrap();
         for name in FIELD_NAMES {
             assert!(h.contains(name), "{name}");
             assert!(!Header::new().contains(name), "{name}");
         }
+        assert!(h.contains("x-private"));
+        assert!(!h.contains("x-absent"));
     }
 
     #[test]
-    fn serialization_emits_each_name_once() {
+    fn programmatic_header_serializes_each_name_once() {
         let mut h = Header::new();
         h.alg = Some("HS256".into());
-        h.insert_other("kid2", json!("x")).unwrap();
-        let s = String::from_utf8(h.to_json().unwrap()).unwrap();
-        assert_eq!(s, r#"{"alg":"HS256","kid2":"x"}"#);
+        h.jwk = Some(Object::new());
+        h.b64 = Some(true);
+        h.insert_other("kid2", "x").unwrap();
+        assert_eq!(
+            h.to_json().unwrap(),
+            r#"{"alg":"HS256","jwk":{},"b64":true,"kid2":"x"}"#
+        );
     }
 
-    const DUPLICATE: Error = Error::InvalidHeader("duplicate member name");
+    /// The input must be rejected as `InvalidJson`, while serde_json (a
+    /// dev-only oracle that keeps the last duplicate) accepts it: so the
+    /// duplicate is the only reason.
+    fn assert_duplicate_rejected(input: &[u8]) {
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(input).is_ok(),
+            "test input must be otherwise valid: {:?}",
+            String::from_utf8_lossy(input)
+        );
+        let err = Header::from_json(input).err();
+        assert!(
+            matches!(err, Some(Error::InvalidJson(_))),
+            "{:?}: {err:?}",
+            String::from_utf8_lossy(input)
+        );
+    }
 
     #[test]
     fn duplicate_registered_name_is_rejected() {
-        // RFC 7515 §4 / §5.2 step 4: serde_json alone would keep the last
-        // value and accept this header as `none`.
-        let input = br#"{"alg":"HS256","alg":"none"}"#;
-        assert!(serde_json::from_slice::<Value>(input).is_ok());
-        assert_eq!(Header::from_json(input), Err(DUPLICATE));
+        // RFC 7515 §4 / §5.2 step 4: keeping the last value would read
+        // this header as `none`.
+        assert_duplicate_rejected(br#"{"alg":"HS256","alg":"none"}"#);
     }
 
     #[test]
     fn duplicate_with_identical_value_is_rejected() {
-        let input = br#"{"alg":"HS256","kid":"a","alg":"HS256"}"#;
-        assert_eq!(Header::from_json(input), Err(DUPLICATE));
+        assert_duplicate_rejected(br#"{"alg":"HS256","kid":"a","alg":"HS256"}"#);
     }
 
     #[test]
     fn duplicate_private_name_is_rejected() {
-        let input = br#"{"alg":"HS256","exp":1,"exp":2}"#;
-        assert_eq!(Header::from_json(input), Err(DUPLICATE));
+        assert_duplicate_rejected(br#"{"alg":"HS256","exp":1,"exp":2}"#);
     }
 
     #[test]
     fn duplicate_spelled_with_escapes_is_rejected() {
-        // Names compare after JSON unescaping (RFC 8259 §7): "alg" is "alg".
-        for input in [
-            br#"{"alg":"HS256","alg":"none"}"#.as_slice(),
-            br#"{"b64":true,"b64":false}"#.as_slice(),
-            br#"{"x\/y":1,"x/y":2}"#.as_slice(),
-        ] {
-            assert_eq!(Header::from_json(input), Err(DUPLICATE));
-        }
+        // Names compare after JSON unescaping (RFC 8259 §7, §8.3).
+        assert_duplicate_rejected(br#"{"alg":"HS256","\u0061lg":"none"}"#);
+        assert_duplicate_rejected(br#"{"b64":true,"\u0062\u0036\u0034":false}"#);
+        assert_duplicate_rejected(br#"{"x\/y":1,"x/y":2}"#);
     }
 
     #[test]
     fn duplicate_in_crit_bearing_header_is_rejected() {
-        let input = br#"{"alg":"HS256","b64":false,"crit":["b64"],"b64":true}"#;
-        assert_eq!(Header::from_json(input), Err(DUPLICATE));
+        assert_duplicate_rejected(br#"{"alg":"HS256","b64":false,"crit":["b64"],"b64":true}"#);
     }
 
     #[test]
     fn duplicate_in_nested_objects_is_rejected() {
-        // jwk/epk are JWKs (RFC 7517 §4: reject or take the last; we reject),
-        // and private objects get the same treatment for consistency.
-        for input in [
-            br#"{"jwk":{"kty":"oct","kty":"RSA"}}"#.as_slice(),
-            br#"{"epk":{"kty":"EC","crv":"P-256","crv":"P-384"}}"#.as_slice(),
-            br#"{"x-priv":{"a":1,"a":1}}"#.as_slice(),
-            br#"{"x-priv":[{"a":{"b":1,"b":2}}]}"#.as_slice(),
-        ] {
-            assert_eq!(Header::from_json(input), Err(DUPLICATE), "{input:?}");
-        }
+        assert_duplicate_rejected(br#"{"jwk":{"kty":"oct","kty":"RSA"}}"#);
+        assert_duplicate_rejected(br#"{"epk":{"kty":"EC","crv":"P-256","crv":"P-384"}}"#);
+        assert_duplicate_rejected(br#"{"x-priv":{"a":1,"a":1}}"#);
+        assert_duplicate_rejected(br#"{"x-priv":[{"a":{"b":1,"b":2}}]}"#);
     }
 
     #[test]
@@ -1018,18 +1045,13 @@ mod tests {
         // RFC 7515 §4.1.11, RFC 7516 §4.1.13. Each name is present, so only
         // the "defined by this specification" rule can reject it.
         for name in SPEC_NAMES {
-            let mut obj = serde_json::Map::new();
-            obj.insert("alg".into(), json!("HS256"));
-            obj.insert("crit".into(), json!([name]));
-            if !obj.contains_key(*name) {
-                obj.insert((*name).to_owned(), json!("v"));
+            let mut obj = Object::new();
+            obj.insert("alg", "HS256");
+            obj.insert("crit", Value::from(vec![Value::from(*name)]));
+            if !obj.contains(name) {
+                obj.insert(*name, "v");
             }
-            let bytes = serde_json::to_vec(&obj).unwrap();
-            let err = Header::from_json(&bytes).err();
-            assert!(
-                matches!(err, Some(Error::InvalidHeader(_))),
-                "{name}: {err:?}"
-            );
+            assert_invalid_header(obj.to_json().as_bytes());
         }
     }
 
@@ -1094,15 +1116,24 @@ mod tests {
     }
 
     #[test]
-    fn long_crit_list_is_checked_without_quadratic_cost() {
-        // Duplicate detection uses a set; 50k distinct names stay fast.
-        let names: Vec<String> = (0..50_000).map(|i| format!("x{i}")).collect();
-        let mut obj = serde_json::Map::new();
-        obj.insert("crit".into(), json!(names));
+    fn long_crit_list_within_the_json_limits_is_checked() {
+        // 5,000 listed names plus 5,000 members stays under the parser's
+        // 10,000-entry limit; the crit checks are set-based, not quadratic.
+        let names: Vec<String> = (0..5_000).map(|i| format!("x{i}")).collect();
+        let mut obj = Object::new();
+        obj.insert(
+            "crit",
+            Value::from(
+                names
+                    .iter()
+                    .map(|n| Value::from(n.as_str()))
+                    .collect::<Vec<_>>(),
+            ),
+        );
         for n in &names {
-            obj.insert(n.clone(), json!(1));
+            obj.insert(n.as_str(), true);
         }
-        let h = Header::from_json(&serde_json::to_vec(&obj).unwrap()).unwrap();
+        let h = Header::from_json(obj.to_json().as_bytes()).unwrap();
         assert_eq!(h.validate_crit(), Ok(()));
         assert_eq!(h.validate_crit_understood(&[]), Err(Error::UnknownCritical));
     }
