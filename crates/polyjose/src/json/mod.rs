@@ -68,6 +68,16 @@
 //! thumbprints rely on (with
 //! [`Object::sort_members`](crate::json::Object::sort_members)).
 //!
+//! # Secrets
+//!
+//! Private JWK members are strings in a [`Value`](crate::json::Value), so
+//! every string the parser builds or a `Value` owns is wiped on drop: it is
+//! a `zeroize::Zeroizing<String>`, its buffer is sized up front so it never
+//! reallocates, and partial results are wiped on error paths. The
+//! serializer allocates its output once at the exact size, but the
+//! returned `String` is the caller's to wipe. See the `Value` docs for what
+//! is not covered.
+//!
 //! # Fuzzing
 //!
 //! [`parse`](crate::json::parse) takes raw bytes and has no other inputs, so
