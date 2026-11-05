@@ -11,6 +11,10 @@
 //! - The input is a UTF-8 encoded, completely valid JSON object
 //!   (RFC 7515 §5.2 step 3, RFC 7516 §5.2 step 3), else
 //!   [`Error::InvalidJson`].
+//! - No member name occurs twice, in the header or in any nested object
+//!   (RFC 7515 §4 and §5.2 step 4, RFC 7516 §4 and §5.2 step 4), else
+//!   [`Error::InvalidHeader`]. Duplicates are rejected, not resolved to the
+//!   last value (RFC 7515 §10.12).
 //! - Each registered parameter has its registered JSON type, else
 //!   [`Error::InvalidHeader`].
 //!
@@ -144,15 +148,21 @@ impl Header {
     ///
     /// - [`Error::InvalidJson`] if the bytes are not a UTF-8 encoded,
     ///   completely valid JSON object (RFC 7515 §5.2 step 3).
-    /// - [`Error::InvalidHeader`] if a registered parameter has the wrong
-    ///   type.
+    /// - [`Error::InvalidHeader`] if a member name occurs twice in any
+    ///   object, at any depth (RFC 7515 §4, §5.2 step 4; RFC 7516 §4,
+    ///   §5.2 step 4), or a registered parameter has the wrong type.
     ///
     /// No error contains any part of the input.
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
-        let value: Value = serde_json::from_slice(bytes)?;
-        match value {
-            Value::Object(map) => Self::from_map(map),
-            _ => Err(Error::InvalidJson(NOT_AN_OBJECT)),
+        match strict_json::parse_object(bytes) {
+            Ok(map) => Self::from_map(map),
+            Err(strict_json::StrictJsonError::DuplicateName) => {
+                Err(Error::InvalidHeader("duplicate member name"))
+            }
+            Err(strict_json::StrictJsonError::NotAnObject) => {
+                Err(Error::InvalidJson(NOT_AN_OBJECT))
+            }
+            Err(strict_json::StrictJsonError::Json(e)) => Err(e.into()),
         }
     }
 
@@ -377,6 +387,140 @@ impl Serialize for Header {
             map.serialize_entry(name, value)?;
         }
         map.end()
+    }
+}
+
+/// JSON parsing that rejects duplicate member names.
+///
+/// RFC 7515 §4 and RFC 7516 §4 let a parser either reject duplicate Header
+/// Parameter names or keep the lexically last one; polyjose rejects them,
+/// because a parser that silently picks one value is a source of the
+/// "ambiguous and potentially exploitable situations" of RFC 7515 §10.12
+/// (two implementations reading different `alg` values from one header).
+/// `serde_json` on its own keeps the last value, hence this parser.
+///
+/// Duplicates are rejected in nested objects too: `jwk` and `epk` are JWKs,
+/// whose parsers may also reject duplicates (RFC 7517 §4), and applying the
+/// same rule to Private Header Parameter values keeps the behaviour uniform
+/// and free of parser differentials. Names compare after JSON unescaping
+/// (RFC 8259 §7), so `"\u0061lg"` duplicates `"alg"`.
+///
+/// Nesting depth is bounded by `serde_json`'s recursion limit (128), which
+/// fails with an error rather than exhausting the stack.
+///
+/// `pub(crate)` so that the JWS/JWE JSON serializations, JWT claims
+/// (RFC 7519 §4) and JWKs can apply the same rule.
+pub(crate) mod strict_json {
+    use core::cell::Cell;
+    use core::fmt;
+
+    use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
+    use serde_json::{Map, Number, Value};
+
+    /// Why [`parse_object`] failed.
+    #[derive(Debug)]
+    pub(crate) enum StrictJsonError {
+        /// A member name occurred twice in one object.
+        DuplicateName,
+        /// Valid JSON, but the top level is not an object.
+        NotAnObject,
+        /// Not valid JSON (syntax, encoding, trailing data, depth).
+        Json(serde_json::Error),
+    }
+
+    /// Parses `bytes` as one complete JSON object (no trailing data) and
+    /// rejects duplicate member names at every depth.
+    pub(crate) fn parse_object(bytes: &[u8]) -> Result<Map<String, Value>, StrictJsonError> {
+        let duplicate = Cell::new(false);
+        let mut de = serde_json::Deserializer::from_slice(bytes);
+        let parsed = StrictValue {
+            duplicate: &duplicate,
+        }
+        .deserialize(&mut de);
+        let parsed = parsed.and_then(|value| de.end().map(|()| value));
+        match parsed {
+            Ok(Value::Object(map)) => Ok(map),
+            Ok(_) => Err(StrictJsonError::NotAnObject),
+            Err(_) if duplicate.get() => Err(StrictJsonError::DuplicateName),
+            Err(e) => Err(StrictJsonError::Json(e)),
+        }
+    }
+
+    /// Builds a [`Value`], flagging the first duplicate name it meets.
+    #[derive(Clone, Copy)]
+    struct StrictValue<'a> {
+        duplicate: &'a Cell<bool>,
+    }
+
+    impl<'de> DeserializeSeed<'de> for StrictValue<'_> {
+        type Value = Value;
+
+        fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
+            deserializer.deserialize_any(self)
+        }
+    }
+
+    impl<'de> Visitor<'de> for StrictValue<'_> {
+        type Value = Value;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a JSON value")
+        }
+
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value, E> {
+            Ok(Value::Bool(v))
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value, E> {
+            Ok(Value::Number(v.into()))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value, E> {
+            Ok(Value::Number(v.into()))
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> {
+            Number::from_f64(v)
+                .map(Value::Number)
+                .ok_or_else(|| E::custom("non-finite number"))
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Value, E> {
+            Ok(Value::String(v.to_owned()))
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Value, E> {
+            Ok(Value::String(v))
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Value, E> {
+            Ok(Value::Null)
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Value, E> {
+            Ok(Value::Null)
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+            let mut items = Vec::new();
+            while let Some(item) = seq.next_element_seed(self)? {
+                items.push(item);
+            }
+            Ok(Value::Array(items))
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+            let mut members = Map::new();
+            while let Some(name) = map.next_key::<String>()? {
+                if members.contains_key(&name) {
+                    self.duplicate.set(true);
+                    return Err(de::Error::custom("duplicate member name"));
+                }
+                let value = map.next_value_seed(self)?;
+                members.insert(name, value);
+            }
+            Ok(Value::Object(members))
+        }
     }
 }
 
@@ -643,5 +787,81 @@ mod tests {
         h.insert_other("kid2", json!("x")).unwrap();
         let s = String::from_utf8(h.to_json().unwrap()).unwrap();
         assert_eq!(s, r#"{"alg":"HS256","kid2":"x"}"#);
+    }
+
+    const DUPLICATE: Error = Error::InvalidHeader("duplicate member name");
+
+    #[test]
+    fn duplicate_registered_name_is_rejected() {
+        // RFC 7515 §4 / §5.2 step 4: serde_json alone would keep the last
+        // value and accept this header as `none`.
+        let input = br#"{"alg":"HS256","alg":"none"}"#;
+        assert!(serde_json::from_slice::<Value>(input).is_ok());
+        assert_eq!(Header::from_json(input), Err(DUPLICATE));
+    }
+
+    #[test]
+    fn duplicate_with_identical_value_is_rejected() {
+        let input = br#"{"alg":"HS256","kid":"a","alg":"HS256"}"#;
+        assert_eq!(Header::from_json(input), Err(DUPLICATE));
+    }
+
+    #[test]
+    fn duplicate_private_name_is_rejected() {
+        let input = br#"{"alg":"HS256","exp":1,"exp":2}"#;
+        assert_eq!(Header::from_json(input), Err(DUPLICATE));
+    }
+
+    #[test]
+    fn duplicate_spelled_with_escapes_is_rejected() {
+        // Names compare after JSON unescaping (RFC 8259 §7): "alg" is "alg".
+        for input in [
+            br#"{"alg":"HS256","alg":"none"}"#.as_slice(),
+            br#"{"b64":true,"b64":false}"#.as_slice(),
+            br#"{"x\/y":1,"x/y":2}"#.as_slice(),
+        ] {
+            assert_eq!(Header::from_json(input), Err(DUPLICATE));
+        }
+    }
+
+    #[test]
+    fn duplicate_in_crit_bearing_header_is_rejected() {
+        let input = br#"{"alg":"HS256","b64":false,"crit":["b64"],"b64":true}"#;
+        assert_eq!(Header::from_json(input), Err(DUPLICATE));
+    }
+
+    #[test]
+    fn duplicate_in_nested_objects_is_rejected() {
+        // jwk/epk are JWKs (RFC 7517 §4: reject or take the last; we reject),
+        // and private objects get the same treatment for consistency.
+        for input in [
+            br#"{"jwk":{"kty":"oct","kty":"RSA"}}"#.as_slice(),
+            br#"{"epk":{"kty":"EC","crv":"P-256","crv":"P-384"}}"#.as_slice(),
+            br#"{"x-priv":{"a":1,"a":1}}"#.as_slice(),
+            br#"{"x-priv":[{"a":{"b":1,"b":2}}]}"#.as_slice(),
+        ] {
+            assert_eq!(Header::from_json(input), Err(DUPLICATE), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn names_differing_only_in_case_are_distinct() {
+        let h = Header::from_json(br#"{"alg":"HS256","Alg":"none","ALG":"x"}"#).unwrap();
+        assert_eq!(h.signing_alg(), Ok(SigningAlg::HS256));
+        assert_eq!(h.other_params().len(), 2);
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error_not_a_crash() {
+        let deep = format!("{{\"x\":{}{}}}", "[".repeat(100_000), "]".repeat(100_000));
+        assert!(matches!(
+            Header::from_json(deep.as_bytes()),
+            Err(Error::InvalidJson(_))
+        ));
+        let deep = format!("{}{}", "{\"a\":".repeat(10_000), "}".repeat(10_000));
+        assert!(matches!(
+            Header::from_json(deep.as_bytes()),
+            Err(Error::InvalidJson(_))
+        ));
     }
 }
