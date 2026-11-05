@@ -2,6 +2,7 @@
 //! polyjose: JSON Object Signing and Encryption in pure Rust.
 //!
 //! - [`jwa`]  RFC 7518 – algorithm identifiers
+//! - [`header`] RFC 7515/7516 – the JOSE Header
 //! - [`jwk`]  RFC 7517 – keys and key sets
 //! - [`jws`]  RFC 7515 – signatures
 //! - [`jwe`]  RFC 7516 – encryption
@@ -10,6 +11,8 @@
 
 /// Error type.
 pub mod error;
+/// The JOSE Header (RFC 7515 §4, RFC 7516 §4).
+pub mod header;
 /// Algorithm identifiers (RFC 7518).
 pub mod jwa;
 /// JSON Web Encryption (RFC 7516).
