@@ -1,16 +1,51 @@
 //! The single source of randomness in polyjose: the OS CSPRNG (ADR 0005).
+//!
+//! JOSE is only as strong as its random values. Keys need enough entropy
+//! (RFC 7515 §10.1); JWE also draws Content Encryption Keys and IVs from it
+//! (RFC 7516 §11.1, RFC 7518 §8.9), AES-CBC needs a random 128-bit IV
+//! (RFC 7518 §5.2.2.1), an AES-GCM IV must never repeat under one key
+//! (RFC 7518 §8.4), ECDH-ES needs a fresh ephemeral key per operation
+//! (RFC 7518 §4.6) and PBES2 a fresh random salt per encryption
+//! (RFC 7518 §4.8.1.1).
+//!
+//! Every random byte comes from [`fill_random`], which calls the OS CSPRNG
+//! through `getrandom` 0.4 and fails closed: there is no fallback source, no
+//! retry loop of our own and no switchable source in production code. On
+//! `wasm32-unknown-unknown` the backend is `crypto.getRandomValues`, which
+//! the WASM binding selects with getrandom's `wasm_js` crate feature (see
+//! `bindings/wasm/Cargo.toml`).
+//!
+//! The only other byte source is `test_vectors::FixedRng`, compiled for
+//! polyjose's own tests and behind the off-by-default `test-vectors`
+//! feature, which no binding may enable (`scripts/check-test-vectors-off.sh`).
 
 use zeroize::Zeroize;
 
 use crate::{Error, Result};
 
-/// Fills `dest` with bytes from the operating-system CSPRNG.
+/// Fills `dest` with bytes from the operating-system CSPRNG (ADR 0005).
+///
+/// Use it for every key, CEK, IV, salt and ephemeral key (RFC 7515 §10.1,
+/// RFC 7516 §11.1, RFC 7518 §8.9).
+///
+/// # Errors
+///
+/// [`Error::RandomnessUnavailable`] if the OS source fails. The call is
+/// made once; getrandom itself only retries interrupted system calls. On
+/// failure `dest` is zeroed, so no partial output survives, and the error
+/// carries no backend or OS detail.
 pub(crate) fn fill_random(dest: &mut [u8]) -> Result<()> {
     let outcome = getrandom::fill(dest);
     fail_closed(dest, outcome)
 }
 
-/// Maps the outcome of a `getrandom` call to polyjose's result.
+/// Maps the outcome of a `getrandom` call to polyjose's result, failing
+/// closed.
+///
+/// Any `getrandom::Error` becomes a detail-free
+/// [`Error::RandomnessUnavailable`] (ADR 0005, ADR 0007) and `dest` is
+/// zeroed. It is a separate pure function so tests can inject every
+/// `getrandom::Error` without a switchable source in production code.
 fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Error>) -> Result<()> {
     match outcome {
         Ok(()) => Ok(()),
@@ -22,13 +57,35 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 }
 
 /// Deterministic byte source for reproducing published test vectors.
+///
+/// **Never use this in production.** Its output is fixed by the caller and
+/// is not random. It exists only so tests can reproduce outputs that depend
+/// on "random" values, such as the CEKs and IVs of the RFC 7520 JWE
+/// examples. Outside polyjose's own unit tests it exists only with the
+/// off-by-default `test-vectors` cargo feature (ADR 0005), and
+/// `scripts/check-test-vectors-off.sh` fails if any binding enables it.
+///
+/// ```
+/// use polyjose::test_vectors::FixedRng;
+///
+/// let mut rng = FixedRng::new([0x01, 0x02, 0x03]);
+/// let mut iv = [0u8; 2];
+/// rng.fill(&mut iv)?;
+/// assert_eq!(iv, [0x01, 0x02]);
+/// assert!(rng.fill(&mut [0u8; 2]).is_err()); // only one byte is left
+/// # Ok::<(), polyjose::Error>(())
+/// ```
 #[cfg(any(test, feature = "test-vectors"))]
 pub mod test_vectors {
     use zeroize::{Zeroize, Zeroizing};
 
     use crate::{Error, Result};
 
-    /// Replays a fixed byte sequence.
+    /// Replays a fixed byte sequence, in order and exactly once.
+    ///
+    /// It never wraps around or pads: a repeated IV would break AES-GCM
+    /// (RFC 7518 §8.4), so running out is an error, just like a failing OS
+    /// source. The bytes are zeroized on drop, since they become test keys.
     pub struct FixedRng {
         bytes: Zeroizing<Vec<u8>>,
         pos: usize,
@@ -44,6 +101,12 @@ pub mod test_vectors {
         }
 
         /// Fills `dest` with the next `dest.len()` bytes.
+        ///
+        /// # Errors
+        ///
+        /// [`Error::RandomnessUnavailable`] if fewer than `dest.len()` bytes
+        /// are left. Nothing is consumed and `dest` is zeroed, matching the
+        /// fail-closed behaviour of the OS source.
         pub fn fill(&mut self, dest: &mut [u8]) -> Result<()> {
             let next = self
                 .pos
