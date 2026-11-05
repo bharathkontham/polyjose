@@ -26,6 +26,17 @@ use zeroize::Zeroizing;
 /// and its pad bits are zero (RFC 4648 §3.5), so it is the canonical
 /// encoding that [`b64url_decode`] accepts.
 ///
+/// # Constant time
+///
+/// `data` may be secret (exporting an `oct` `k` or a private JWK member), so
+/// the running time depends only on `data.len()`, which is public. Each
+/// 3-octet group (RFC 4648 §4) is split into 6-bit values and every value
+/// goes through `encode_symbol`, which is pure arithmetic: no branch and
+/// no table lookup depends on the octets. The only branches are on lengths.
+/// Each character pushed is ASCII, so `String::push` takes the same one-byte
+/// path for every input. The output is allocated once at its exact length
+/// (RFC 7515 §2: ⌈4n/3⌉ characters), so no reallocation leaves copies behind.
+///
 /// ```
 /// use polyjose::util::b64url_encode;
 ///
@@ -33,7 +44,60 @@ use zeroize::Zeroizing;
 /// assert_eq!(b64url_encode(&[3, 236, 255, 224, 193]), "A-z_4ME");
 /// ```
 pub fn b64url_encode(data: &[u8]) -> String {
-    Base64UrlUnpadded::encode_string(data)
+    let mut out = String::with_capacity(encoded_len(data.len()));
+    for group in data.chunks(3) {
+        // RFC 4648 §4: a short final group is padded with zero bits on the
+        // right, which makes the pad bits zero (§3.5).
+        let mut octets = [0u8; 3];
+        octets[..group.len()].copy_from_slice(group);
+        let bits = u32::from(octets[0]) << 16 | u32::from(octets[1]) << 8 | u32::from(octets[2]);
+        // 1, 2 or 3 octets give 2, 3 or 4 symbols, no `=` (RFC 7515 §2).
+        for i in 0..=group.len() {
+            // Truncation is intended: encode_symbol uses only the low 6 bits.
+            let value = (bits >> (18 - 6 * i)) as u8;
+            out.push(char::from(encode_symbol(value)));
+        }
+    }
+    out
+}
+
+/// Length of the unpadded base64url encoding of `len` octets: ⌈4·len/3⌉
+/// (RFC 4648 §4, with the `=` padding of RFC 4648 §3.2 dropped per RFC 7515
+/// §2). Divides before multiplying so it cannot overflow for any slice length.
+fn encoded_len(len: usize) -> usize {
+    len / 3 * 4 + (len % 3 * 4).div_ceil(3)
+}
+
+/// `-1` (all bits set) if `x >= k`, else `0`, without a branch.
+///
+/// For `0 <= x, k < 2^15`, `k - 1 - x` is negative exactly when `x >= k`,
+/// and an arithmetic right shift by 15 spreads the sign bit over the word.
+#[inline]
+fn ge_mask(x: i16, k: i16) -> i16 {
+    (k - 1 - x) >> 15
+}
+
+/// Maps the low 6 bits of `value` to its RFC 4648 §5 (Table 2) character.
+///
+/// # Constant time
+///
+/// Table 2 is five contiguous runs, each a fixed offset from the value:
+/// 0–25 → `'A' + v`, 26–51 → `'a' + (v - 26)`, 52–61 → `'0' + (v - 52)`,
+/// 62 → `'-'`, 63 → `'_'`. Instead of choosing a run with a branch or a
+/// table lookup indexed by the (secret) value, we start from the first
+/// run's offset and add the difference to the next run's offset under a
+/// mask from [`ge_mask`]. Every value runs the same instructions and touches
+/// no memory, so neither timing nor cache state depends on it.
+#[inline]
+fn encode_symbol(value: u8) -> u8 {
+    let v = i16::from(value & 0x3f);
+    let mut offset = i16::from(b'A');
+    offset += ge_mask(v, 26) & ((i16::from(b'a') - 26) - i16::from(b'A'));
+    offset += ge_mask(v, 52) & ((i16::from(b'0') - 52) - (i16::from(b'a') - 26));
+    offset += ge_mask(v, 62) & ((i16::from(b'-') - 62) - (i16::from(b'0') - 52));
+    offset += ge_mask(v, 63) & ((i16::from(b'_') - 63) - (i16::from(b'-') - 62));
+    // In range: the sum is one of the 64 ASCII alphabet bytes.
+    (v + offset) as u8
 }
 
 /// Strictly decodes unpadded base64url (RFC 7515 §2, RFC 4648 §5).
@@ -290,6 +354,20 @@ mod tests {
                     assert_eq!(last, Err(crate::Error::InvalidBase64), "{c:?} last");
                 }
             }
+        }
+    }
+
+    /// The arithmetic symbol mapping agrees with Table 2 for all 64 values,
+    /// and only the low 6 bits of its argument matter.
+    #[test]
+    fn encode_symbol_matches_table_2() {
+        for (v, &symbol) in (0u8..).zip(TABLE_2.iter()) {
+            assert_eq!(encode_symbol(v), symbol, "value {v}");
+            assert_eq!(
+                encode_symbol(v | 0xc0),
+                symbol,
+                "value {v} with high bits set"
+            );
         }
     }
 
