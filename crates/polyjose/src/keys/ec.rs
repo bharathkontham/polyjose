@@ -32,12 +32,14 @@ use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, ToSec1Point};
 use p256::elliptic_curve::{
     AffinePoint, CurveArithmetic, FieldBytes, FieldBytesSize, PublicKey, SecretKey,
 };
+use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
 use super::jwk_build;
+use super::pkcs8;
 use super::sec1::{self, EcPrivateKey};
 use super::spki;
-use super::types::{AlgId, SpkiParts};
+use super::types::{AlgId, Pkcs8Parts, SpkiParts};
 use crate::error::{Error, Result};
 use crate::jwk::{EcCurve, EcKey, Jwk};
 
@@ -261,6 +263,81 @@ pub(crate) fn to_sec1(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
         private_key: d,
         parameters: Some(key.crv()),
         public_key: Some(&point),
+    })
+}
+
+/// Imports an EC private key from a decoded PKCS#8 OneAsymmetricKey
+/// (RFC 5958 §2) whose privateKeyAlgorithm is id-ecPublicKey with a
+/// namedCurve (RFC 5480 §2.1.1), as a private JWK with `crv`, `x`, `y` and
+/// `d` (RFC 7518 §6.2) and no `alg`.
+///
+/// - The privateKey OCTET STRING holds an ECPrivateKey (RFC 5915 §1, §3),
+///   decoded by `sec1::decode`. Anything else, such as an RFC 8410
+///   CurvePrivateKey, is `InvalidKey`.
+/// - The inner `[0]` may be absent (RFC 5915 erratum 5008; RFC 7468
+///   Fig. 12 and OpenSSL omit it) or must name the AlgorithmIdentifier's
+///   curve (RFC 5915 §1; ADR 0018 §3).
+/// - The embedded public key is the inner `[1]` (RFC 5915 §3) or the v2
+///   `[1]` publicKey (RFC 5958 §2). When both are present they must be the
+///   same point. It must be d·G, checked by `Jwk::from_object`
+///   (ADR 0043 §3); without one, the point is derived from d.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] if `parts.alg` is not an EC curve, the inner
+/// structure is malformed or names another curve, the privateKey has the
+/// wrong length, d is out of range, a point is invalid, or the points
+/// disagree with each other or with d.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
+pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
+    let crv = ec_curve(parts.alg)?;
+    let inner = sec1::decode(parts.private_key)?;
+    if inner.parameters.is_some_and(|named| named != crv) {
+        return Err(Error::InvalidKey(
+            "ECPrivateKey parameters disagree with the PKCS#8 algorithm",
+        ));
+    }
+    let embedded = match (parts.public_key, inner.public_key) {
+        (Some(outer), Some(nested)) => {
+            // Both are public values; compared as decoded points, so a
+            // compressed and an uncompressed encoding of one point agree.
+            let (a, b) = (decode_point(crv, outer)?, decode_point(crv, nested)?);
+            if !bool::from(a.x.as_slice().ct_eq(&b.x) & a.y.as_slice().ct_eq(&b.y)) {
+                return Err(Error::InvalidKey(
+                    "PKCS#8 publicKey and ECPrivateKey publicKey differ",
+                ));
+            }
+            Some(outer)
+        }
+        (outer, nested) => outer.or(nested),
+    };
+    private_jwk(crv, inner.private_key, embedded)
+}
+
+/// Exports the private `key` as a DER PKCS#8 v1 PrivateKeyInfo (RFC 5958
+/// §2, RFC 5208 §5): id-ecPublicKey with the key's namedCurve (RFC 5480
+/// §2.1.1), and an ECPrivateKey with the `[1]` uncompressed publicKey and
+/// no `[0]` (RFC 5915 §1 and erratum 5008; ADR 0018 §3), byte for byte what
+/// OpenSSL 4 writes. The output is zeroized on drop.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] if `key` has no `d`.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
+pub(crate) fn to_pkcs8(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
+    let d = key.d().ok_or(Error::InvalidKey(NOT_PRIVATE))?;
+    let point = uncompressed_point(key);
+    let inner = sec1::encode(&EcPrivateKey {
+        private_key: d,
+        parameters: None,
+        public_key: Some(&point),
+    })?;
+    pkcs8::encode(&Pkcs8Parts {
+        // v1(0): no outer publicKey (RFC 5958 §2).
+        version: 0,
+        alg: AlgId::Ec(key.crv()),
+        private_key: &inner,
+        public_key: None,
     })
 }
 
@@ -666,6 +743,221 @@ mod tests {
             let jwk = expected("openssl/expected", "ec-p256-spki.jwk.json");
             assert_eq!(
                 to_sec1(ec_key(&jwk)).unwrap_err(),
+                Error::InvalidKey(NOT_PRIVATE)
+            );
+        }
+    }
+
+    mod pkcs8_form {
+        use super::*;
+
+        fn import(der: &[u8]) -> Result<Jwk> {
+            pkcs8::decode(der).and_then(from_pkcs8)
+        }
+
+        fn invalid(result: Result<Jwk>) -> &'static str {
+            match result {
+                Err(Error::InvalidKey(detail)) => detail,
+                other => panic!("expected InvalidKey, got {other:?}"),
+            }
+        }
+
+        /// PKCS#8 for `d` on `crv` with the inner `[0]`/`[1]` and the outer
+        /// v2 `[1]` as given.
+        fn pkcs8_of(
+            crv: EcCurve,
+            d: &[u8],
+            inner_curve: Option<EcCurve>,
+            inner_point: Option<&[u8]>,
+            outer_point: Option<&[u8]>,
+        ) -> Vec<u8> {
+            let inner = sec1::encode(&EcPrivateKey {
+                private_key: d,
+                parameters: inner_curve,
+                public_key: inner_point,
+            })
+            .unwrap();
+            pkcs8::encode(&Pkcs8Parts {
+                version: u8::from(outer_point.is_some()),
+                alg: AlgId::Ec(crv),
+                private_key: &inner,
+                public_key: outer_point,
+            })
+            .unwrap()
+            .to_vec()
+        }
+
+        #[test]
+        fn rfc_pkcs8_vectors_round_trip() {
+            // RFC 7517 App. A.2 (built) and RFC 7468 §10 Fig. 12
+            // (secp256k1, inner ECPrivateKey without [0], verbatim).
+            for (file, json) in [
+                (
+                    "rfc7517-a2-ec-p256-pkcs8.der",
+                    "rfc7517-a2-ec-p256-pkcs8.jwk.json",
+                ),
+                (
+                    "rfc7468-fig12-secp256k1-pkcs8.pem",
+                    "rfc7468-fig12-secp256k1-pkcs8.jwk.json",
+                ),
+            ] {
+                let der = fixtures::load("rfc", file);
+                let jwk = import(&der).unwrap();
+                assert_same(&jwk, &expected("rfc", json), file);
+                assert_eq!(*to_pkcs8(ec_key(&jwk)).unwrap(), der, "{file}");
+            }
+        }
+
+        #[test]
+        fn openssl_pkcs8_round_trips() {
+            for (name, _) in CURVES {
+                let der = fixtures::load("openssl", &format!("ec-{name}-pkcs8.der"));
+                let want = expected("openssl/expected", &format!("ec-{name}-pkcs8.jwk.json"));
+                let jwk = import(&der).unwrap();
+                assert_same(&jwk, &want, name);
+                assert_eq!(*to_pkcs8(ec_key(&jwk)).unwrap(), der, "{name}");
+            }
+        }
+
+        #[test]
+        fn consistency_rejections_are_invalid() {
+            // N50: inner [0] P-384 under a P-256 AlgorithmIdentifier
+            // (RFC 5915 §1). N51: an RFC 8410 CurvePrivateKey body under
+            // id-ecPublicKey (RFC 5915 §3). N52: the inner [1] of another
+            // valid key (ADR 0043 §3).
+            let detail = |id| invalid(import(&fixtures::negative(id)));
+            assert_eq!(
+                detail("N50"),
+                "ECPrivateKey parameters disagree with the PKCS#8 algorithm"
+            );
+            assert_eq!(detail("N51"), "DER unexpected tag");
+            assert_eq!(detail("N52"), "EC private key d does not match x and y");
+        }
+
+        #[test]
+        fn inner_parameters_absent_or_matching_are_accepted() {
+            // RFC 5915 erratum 5008: absent; RFC 5915 §3: present and equal.
+            // Export always omits [0], as OpenSSL does.
+            for (name, crv) in CURVES {
+                let der = fixtures::load("openssl", &format!("ec-{name}-pkcs8.der"));
+                let jwk = import(&der).unwrap();
+                let key = ec_key(&jwk);
+                let point = uncompressed_point(key);
+                let with_curve = pkcs8_of(crv, key.d().unwrap(), Some(crv), Some(&point), None);
+                let again = import(&with_curve).unwrap();
+                assert_same(&again, &jwk, name);
+                assert_eq!(*to_pkcs8(ec_key(&again)).unwrap(), der, "{name}");
+                // And without [1]: the point is derived.
+                let bare = pkcs8_of(crv, key.d().unwrap(), None, None, None);
+                assert_same(&import(&bare).unwrap(), &jwk, name);
+            }
+        }
+
+        #[test]
+        fn v2_public_keys_must_agree() {
+            let a2 = import(&fixtures::load("rfc", "rfc7517-a2-ec-p256-pkcs8.der")).unwrap();
+            let other = from_sec1(&fixtures::load("rfc", "rfc9500-testECCP256-sec1.pem")).unwrap();
+            let key = ec_key(&a2);
+            let d = key.d().unwrap();
+            let point = uncompressed_point(key);
+            let other_point = uncompressed_point(ec_key(&other));
+            let crv = EcCurve::P256;
+
+            // Outer only, and outer and inner equal: accepted.
+            assert_same(
+                &import(&pkcs8_of(crv, d, None, None, Some(&point))).unwrap(),
+                &a2,
+                "outer",
+            );
+            assert_same(
+                &import(&pkcs8_of(crv, d, None, Some(&point), Some(&point))).unwrap(),
+                &a2,
+                "both",
+            );
+            // One compressed, one uncompressed encoding of the same point.
+            let mut compressed = vec![0x02 | (key.y()[31] & 1)];
+            compressed.extend_from_slice(key.x());
+            assert_same(
+                &import(&pkcs8_of(crv, d, None, Some(&compressed), Some(&point))).unwrap(),
+                &a2,
+                "mixed forms",
+            );
+            // Outer and inner disagree.
+            assert_eq!(
+                invalid(import(&pkcs8_of(
+                    crv,
+                    d,
+                    None,
+                    Some(&point),
+                    Some(&other_point)
+                ))),
+                "PKCS#8 publicKey and ECPrivateKey publicKey differ"
+            );
+            // Outer only, of another key: jwk.rs rejects it.
+            assert_eq!(
+                invalid(import(&pkcs8_of(crv, d, None, None, Some(&other_point)))),
+                "EC private key d does not match x and y"
+            );
+            // Both of another key, agreeing with each other.
+            assert_eq!(
+                invalid(import(&pkcs8_of(
+                    crv,
+                    d,
+                    None,
+                    Some(&other_point),
+                    Some(&other_point)
+                ))),
+                "EC private key d does not match x and y"
+            );
+        }
+
+        #[test]
+        fn unsupported_curves_and_explicit_parameters_are_unsupported() {
+            for file in [
+                "reject-ec-brainpoolp256r1-pkcs8.pem",
+                "reject-ec-p256-explicit-pkcs8.pem",
+            ] {
+                let der = fixtures::load("openssl", file);
+                assert_eq!(
+                    import(&der).unwrap_err(),
+                    Error::UnsupportedAlgorithm,
+                    "{file}"
+                );
+            }
+            // An unsupported curve in the inner [0] fails as unsupported too.
+            let jwk = expected("openssl/expected", "ec-p256-pkcs8.jwk.json");
+            let d = ec_key(&jwk).d().unwrap().to_vec();
+            let mut der = pkcs8_of(EcCurve::P256, &d, Some(EcCurve::P256), None, None);
+            let named = super::super::super::oid::OID_P256;
+            let at = der.windows(named.len()).rposition(|w| w == named).unwrap();
+            // 30 L | 02 01 00 | 30 13 <alg> | 04 L | 30 L | 02 01 01 |
+            // 04 20 d | a0 0a <OID>: every length is short form. secp224r1
+            // (1.3.132.0.33) is shorter; replace the OID and fix the outer,
+            // OCTET STRING, ECPrivateKey and [0] lengths.
+            assert_eq!((der[26], der[28], der[at - 2]), (0x04, 0x30, 0xA0));
+            let secp224r1 = [0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x21];
+            let shrink = u8::try_from(named.len() - secp224r1.len()).unwrap();
+            der.splice(at..at + named.len(), secp224r1);
+            for offset in [1, 27, 29, at - 1] {
+                der[offset] -= shrink;
+            }
+            assert_eq!(import(&der).unwrap_err(), Error::UnsupportedAlgorithm);
+        }
+
+        #[test]
+        fn a_non_ec_algorithm_is_refused() {
+            let der = fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der");
+            assert_eq!(
+                import(&der).unwrap_err(),
+                Error::InvalidKey("not an EC key")
+            );
+        }
+
+        #[test]
+        fn a_public_key_has_no_pkcs8_form() {
+            let jwk = expected("openssl/expected", "ec-p256-spki.jwk.json");
+            assert_eq!(
+                to_pkcs8(ec_key(&jwk)).unwrap_err(),
                 Error::InvalidKey(NOT_PRIVATE)
             );
         }
