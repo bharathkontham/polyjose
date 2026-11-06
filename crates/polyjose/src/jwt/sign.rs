@@ -243,3 +243,140 @@ pub fn sign(claims: &Claims, opts: &IssueOptions, key: &Jwk) -> Result<String> {
     let payload = Zeroizing::new(claims.to_json());
     sign_compact(&protected, payload.as_bytes(), key, &SignOptions::new())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jws::{Verified, verify_compact};
+    use crate::jwt::typ::{Layer, check_jwt_header};
+    use crate::jwt::validate::validate_claims;
+    use crate::jwt::{Audience, FixedClock, NumericDate, Policy};
+
+    /// RFC 7515 Appendix A.3.1: the P-256 key.
+    const P256: &str = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","d":"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"}"#;
+    const ISSUER: &str = "https://issuer.example";
+    const AUDIENCE: &str = "https://api.example";
+    const ES256: [SigningAlg; 1] = [SigningAlg::ES256];
+
+    fn key() -> Jwk {
+        Jwk::from_json(P256.as_bytes()).expect("RFC 7515 A.3.1 key")
+    }
+
+    /// The seven claims RFC 9068 §2.2 requires of a JWT access token.
+    fn access_token_claims() -> Claims {
+        let mut c = Claims::new();
+        c.iss = Some(ISSUER.into());
+        c.exp = NumericDate::from_secs(1_300_819_380);
+        c.aud = Some(Audience::One(AUDIENCE.into()));
+        c.sub = Some("5ba552d67".into());
+        c.insert("client_id", "s6BhdRkqt3").expect("client_id");
+        c.iat = NumericDate::from_secs(1_300_818_000);
+        c.jti = Some("dbe39bf3a3ba4238a513f51d6e1691c4".into());
+        c
+    }
+
+    /// Verifies `token` with the JWS layer (ADR 0026), as T07's pipeline
+    /// will before the JWT header and claim checks.
+    fn verify(token: &str, policy: &Policy<'_>) -> Verified {
+        let public = key().to_public().expect("public half");
+        verify_compact(token, &public, &policy.verify_options()).expect("JWS verifies")
+    }
+
+    /// T04's header rules on the verified token's protected header.
+    fn check_header(v: &Verified, policy: &Policy<'_>) -> Result<()> {
+        let protected = v
+            .protected
+            .as_ref()
+            .expect("compact JWS has a protected header");
+        check_jwt_header(protected, v.unprotected.as_ref(), policy, Layer::Signed)
+    }
+
+    #[test]
+    fn access_token_passes_the_rfc9068_header_and_claim_checks() {
+        // RFC 9068 §2.1 (typ at+jwt), §2.2 (the seven claims), §4
+        // (validation), through T04 and T06 (ADR 0027 §5).
+        let clock = FixedClock(1_300_819_000);
+        let policy = Policy::access_token(&clock, &ES256, &[ISSUER], &[AUDIENCE]).expect("policy");
+        let opts = IssueOptions::new(SigningAlg::ES256).access_token();
+        let token = sign(&access_token_claims(), &opts, &key()).expect("issued");
+
+        let verified = verify(&token, &policy);
+        assert_eq!(check_header(&verified, &policy), Ok(()));
+        let claims = Claims::from_json(&verified.payload).expect("claims parse");
+        assert_eq!(claims, access_token_claims());
+        assert_eq!(validate_claims(&claims, &policy), Ok(()));
+    }
+
+    #[test]
+    fn the_same_claims_with_the_default_typ_fail_the_access_token_header_check() {
+        // RFC 8725 §3.12: a generic JWT must not pass as an access token.
+        let clock = FixedClock(1_300_819_000);
+        let policy = Policy::access_token(&clock, &ES256, &[ISSUER], &[AUDIENCE]).expect("policy");
+        let token = sign(
+            &access_token_claims(),
+            &IssueOptions::new(SigningAlg::ES256),
+            &key(),
+        )
+        .expect("issued");
+        let err = check_header(&verify(&token, &policy), &policy).expect_err("typ JWT");
+        assert!(matches!(err, Error::InvalidHeader(_)), "{err:?}");
+
+        let untyped = sign(
+            &access_token_claims(),
+            &IssueOptions::new(SigningAlg::ES256).no_typ(),
+            &key(),
+        )
+        .expect("issued");
+        let err = check_header(&verify(&untyped, &policy), &policy).expect_err("no typ");
+        assert!(matches!(err, Error::InvalidHeader(_)), "{err:?}");
+    }
+
+    #[test]
+    fn an_access_token_fails_the_default_header_check() {
+        // RFC 8725 §3.12, ADR 0027 §5: the other direction; an explicitly
+        // typed token stays out of generic validation.
+        let clock = FixedClock(1_300_819_000);
+        let policy = Policy::new(&clock, &ES256).expect("policy");
+        let opts = IssueOptions::new(SigningAlg::ES256).access_token();
+        let token = sign(&access_token_claims(), &opts, &key()).expect("issued");
+        let err = check_header(&verify(&token, &policy), &policy).expect_err("typ at+jwt");
+        assert!(matches!(err, Error::InvalidHeader(_)), "{err:?}");
+    }
+
+    #[test]
+    fn issuable_algorithms_are_an_explicit_list() {
+        // ADR 0027 §8, ADR 0021: fail-closed on anything not listed.
+        for alg in SigningAlg::KNOWN {
+            let expected = match alg {
+                SigningAlg::None => Err(Error::AlgorithmNotAllowed),
+                SigningAlg::RS256
+                | SigningAlg::RS384
+                | SigningAlg::RS512
+                | SigningAlg::PS256
+                | SigningAlg::PS384
+                | SigningAlg::PS512 => Err(Error::UnsupportedAlgorithm),
+                _ => Ok(()),
+            };
+            assert_eq!(check_issuable(alg), expected, "{alg:?}");
+        }
+        assert_eq!(
+            check_issuable(&SigningAlg::from("ES999")),
+            Err(Error::UnsupportedAlgorithm)
+        );
+    }
+
+    #[test]
+    fn protected_header_order_is_alg_typ_kid_then_extras() {
+        let opts = IssueOptions::new(SigningAlg::HS256)
+            .header_param("x5t#S256", "abc")
+            .expect("x5t#S256 is a string");
+        let protected = opts.protected_header(Some("k1")).expect("header");
+        let json = crate::util::b64url_decode(protected.encoded()).expect("base64url");
+        assert_eq!(
+            json,
+            br#"{"alg":"HS256","typ":"JWT","kid":"k1","x5t#S256":"abc"}"#
+        );
+        assert_eq!(protected.header().kid.as_deref(), Some("k1"));
+        assert_eq!(protected.header().x5t_s256.as_deref(), Some("abc"));
+    }
+}
