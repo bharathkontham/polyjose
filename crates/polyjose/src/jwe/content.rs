@@ -96,26 +96,41 @@ pub(crate) fn iv_len(enc: &ContentEncAlg) -> Result<usize> {
     }
 }
 
-/// Draws a random CEK of [`cek_len`] bytes (RFC 7516 §5.1 step 2,
-/// RFC 7518 §8.9). Filled in by T02.
+/// Draws a random CEK of exactly [`cek_len`] bytes from `rng` (RFC 7516
+/// §5.1 step 2: "generate a random Content Encryption Key"; RFC 7518 §8.9:
+/// a key must not be reused across algorithms), as the first draw of a
+/// message (see `jwe::random` for the draw order).
+///
+/// The bytes go straight into the zeroizing [`Cek`] buffer; no other copy
+/// is made.
 ///
 /// # Errors
 ///
-/// [`Error::UnsupportedAlgorithm`] for an unknown `enc`;
-/// [`Error::RandomnessUnavailable`] if `rng` fails.
-pub(crate) fn generate_cek(_enc: &ContentEncAlg, _rng: &mut dyn RandomSource) -> Result<Cek> {
-    Err(Error::UnsupportedAlgorithm)
+/// [`Error::UnsupportedAlgorithm`] for an unknown `enc`, before anything
+/// is drawn; [`Error::RandomnessUnavailable`] if `rng` fails (ADR 0005:
+/// fail closed, never a short key).
+pub(crate) fn generate_cek(enc: &ContentEncAlg, rng: &mut dyn RandomSource) -> Result<Cek> {
+    let mut cek = Zeroizing::new(vec![0u8; cek_len(enc)?]);
+    rng.fill(&mut cek)?;
+    Ok(Cek::new(cek))
 }
 
-/// Draws a random content IV of [`iv_len`] bytes (RFC 7516 §5.1 step 9,
-/// RFC 7518 §5.2.2.1, §5.3). Filled in by T02.
+/// Draws a random content IV of exactly [`iv_len`] bytes from `rng`
+/// (RFC 7516 §5.1 step 9: "generate a random JWE Initialization Vector of
+/// the correct size for the content encryption algorithm"): 16 bytes for
+/// A*CBC-HS* (RFC 7518 §5.2.2.1) and 12 for A*GCM (RFC 7518 §5.3).
+///
+/// A random 96-bit GCM IV under one key is safe for at most 2^32
+/// messages (RFC 7518 §8.4); that bound is documented, not enforced.
 ///
 /// # Errors
 ///
-/// [`Error::UnsupportedAlgorithm`] for an unknown `enc`;
-/// [`Error::RandomnessUnavailable`] if `rng` fails.
-pub(crate) fn generate_iv(_enc: &ContentEncAlg, _rng: &mut dyn RandomSource) -> Result<Vec<u8>> {
-    Err(Error::UnsupportedAlgorithm)
+/// [`Error::UnsupportedAlgorithm`] for an unknown `enc`, before anything
+/// is drawn; [`Error::RandomnessUnavailable`] if `rng` fails (ADR 0005).
+pub(crate) fn generate_iv(enc: &ContentEncAlg, rng: &mut dyn RandomSource) -> Result<Vec<u8>> {
+    let mut iv = vec![0u8; iv_len(enc)?];
+    rng.fill(&mut iv)?;
+    Ok(iv)
 }
 
 /// The Additional Authenticated Data of RFC 7516 §5.1 step 14 (and §5.2
@@ -176,6 +191,8 @@ pub(crate) fn decrypt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jwe::random::OsRandom;
+    use crate::rng::insecure_test_vectors::FixedRng;
 
     fn assert_zeroize_on_drop<T: Zeroize + ZeroizeOnDrop>() {}
 
@@ -211,6 +228,78 @@ mod tests {
         let unknown = ContentEncAlg::from("A128CTR");
         assert_eq!(cek_len(&unknown), Err(Error::UnsupportedAlgorithm));
         assert_eq!(iv_len(&unknown), Err(Error::UnsupportedAlgorithm));
+    }
+
+    /// `0, 1, 2, ...`, so a draw's bytes show where in the stream it read.
+    fn counting_rng(len: usize) -> FixedRng {
+        FixedRng::new((0..len).map(|i| (i % 251) as u8).collect::<Vec<u8>>())
+    }
+
+    #[test]
+    fn cek_and_iv_are_the_injected_bytes_in_draw_order() {
+        // RFC 7516 §5.1 steps 2 and 9: the CEK is drawn first, then the IV
+        // (the documented draw order of `jwe::random`), and each takes
+        // exactly cek_len / iv_len bytes of the stream, nothing more.
+        for enc in ContentEncAlg::KNOWN {
+            let (cek_n, iv_n) = (cek_len(enc).unwrap(), iv_len(enc).unwrap());
+            let mut rng = counting_rng(cek_n + iv_n + 5);
+            let cek = generate_cek(enc, &mut rng).unwrap();
+            assert_eq!(rng.remaining(), iv_n + 5, "{enc}: CEK draw size");
+            let iv = generate_iv(enc, &mut rng).unwrap();
+            assert_eq!(rng.remaining(), 5, "{enc}: IV draw size");
+            let expected: Vec<u8> = (0..cek_n + iv_n).map(|i| i as u8).collect();
+            assert_eq!(cek.as_bytes(), &expected[..cek_n], "{enc}");
+            assert_eq!(iv, &expected[cek_n..], "{enc}");
+        }
+    }
+
+    #[test]
+    fn cek_and_iv_from_the_os_are_fresh() {
+        // 128 bits or more per draw: equal draws are a 2^-96 event at
+        // worst (the 96-bit GCM IV), not flakiness.
+        for enc in ContentEncAlg::KNOWN {
+            let mut os = OsRandom;
+            let (a, b) = (generate_cek(enc, &mut os), generate_cek(enc, &mut os));
+            let (a, b) = (a.unwrap(), b.unwrap());
+            assert_eq!(a.len(), cek_len(enc).unwrap());
+            assert_ne!(a.as_bytes(), b.as_bytes(), "{enc}");
+            let (a, b) = (generate_iv(enc, &mut os), generate_iv(enc, &mut os));
+            let (a, b) = (a.unwrap(), b.unwrap());
+            assert_eq!(a.len(), iv_len(enc).unwrap());
+            assert_ne!(a, b, "{enc}");
+        }
+    }
+
+    #[test]
+    fn cek_and_iv_fail_closed() {
+        // An unknown `enc` draws nothing (RFC 7516 §4.1.2); a source that
+        // runs short fails with RandomnessUnavailable (ADR 0005), never a
+        // short or padded key or IV.
+        let unknown = ContentEncAlg::from("A128CTR");
+        let mut rng = counting_rng(64);
+        assert_eq!(
+            generate_cek(&unknown, &mut rng).map(|_| ()),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        assert_eq!(
+            generate_iv(&unknown, &mut rng),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        assert_eq!(rng.remaining(), 64);
+        for enc in ContentEncAlg::KNOWN {
+            let mut short = counting_rng(cek_len(enc).unwrap() - 1);
+            assert_eq!(
+                generate_cek(enc, &mut short).map(|_| ()),
+                Err(Error::RandomnessUnavailable),
+                "{enc}"
+            );
+            let mut short = counting_rng(iv_len(enc).unwrap() - 1);
+            assert_eq!(
+                generate_iv(enc, &mut short),
+                Err(Error::RandomnessUnavailable),
+                "{enc}"
+            );
+        }
     }
 
     #[test]
