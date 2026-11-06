@@ -31,20 +31,24 @@ export LC_ALL=C
 # workspace crates). It is inside $scratch, which lib.sh deletes on exit.
 symbols_target="$scratch/target"
 dump_dir=""
+# A case that changes polyjose's own code needs only the all-features build to show that the
+# symbol check catches it (each configuration is another full polyjose build); the clean tree,
+# the binding case and the look-alikes run every configuration.
+only=""
 gate_name=check-rsa-symbols.sh
 run_gate() {
-  if [ -n "$dump_dir" ]; then
-    scripts/check-rsa-symbols.sh --target-dir "$symbols_target" --dump "$dump_dir"
-  else
-    scripts/check-rsa-symbols.sh --target-dir "$symbols_target"
-  fi
+  set -- --target-dir "$symbols_target"
+  if [ -n "$dump_dir" ]; then set -- "$@" --dump "$dump_dir"; fi
+  if [ -n "$only" ]; then set -- "$@" --only "$only"; fi
+  scripts/check-rsa-symbols.sh "$@"
 }
 
 # expect_symbol <description> <fixed string>: the last run's dump (see run_gate) lists a symbol
 # that contains the string, i.e. the gate saw it and let it pass.
 expect_symbol() {
   tests_run=$((tests_run + 1))
-  if [ -n "$dump_dir" ] && cat "$dump_dir"/*.txt 2>/dev/null | grep -Fq -- "$2"; then
+  # grep reads the files itself: under pipefail, `cat | grep -q` fails when grep stops early.
+  if [ -n "$dump_dir" ] && grep -Fqs -- "$2" "$dump_dir"/*.txt; then
     echo "ok   - $1: scanned and allowed: $2"
   else
     echo "FAIL - $1: no scanned symbol contains $2 (dump: $dump_dir)"
@@ -75,6 +79,9 @@ expect_symbol "unchanged tree" "rsa::pkcs1v15::verifying_key::VerifyingKey<sha2:
 expect_symbol "unchanged tree" "rsa::pss::verifying_key::VerifyingKey<sha2::Sha512>"
 expect_symbol "unchanged tree" "polyjose::jws::rsa::sign"
 dump_dir=""
+
+# Cases 1-7 change polyjose itself: its all-features build is enough.
+only=polyjose-all-features
 
 # 1. `use {rsa as r};`
 new_case brace-alias
@@ -142,6 +149,8 @@ pub fn evil(key: rsa::RsaPrivateKey, msg: &[u8]) -> Vec<u8> {
 }'
 expect_fail "pss::SigningKey" "rsa::pss::signing_key::SigningKey<sha2::Sha256>" "$sym_fail"
 
+only=""
+
 # 8. Generic in polyjose, instantiated only by a binding: polyjose's objects have no RSA code,
 #    the binding's do, so only the binding's objects may be named.
 new_case binding-instantiates
@@ -179,7 +188,12 @@ pub mod private_key {
         /// Test only.
         pub fn new(x: u8) -> Self { Self(x) }
     }
-}'
+}
+fn look_alikes() -> u8 {
+    traits::Decryptor(2).decrypt() ^ private_key::RsaPrivateKey::new(3).0
+}
+#[used]
+static KEEP_LOOK_ALIKES: fn() -> u8 = look_alikes;'
 append_to "$lib_rs" '/// Test only: a cbc::Decryptor like the one of A*CBC-HS* in feature 0003 (RFC 7518 §5.2).
 #[doc(hidden)]
 pub mod cbc {
@@ -193,10 +207,7 @@ pub mod cbc {
 /// Test only.
 #[doc(hidden)]
 pub fn look_alikes() -> u8 {
-    let a = cbc::Decryptor(1u8).decrypt();
-    let b = crate::jws::rsa::traits::Decryptor(2).decrypt();
-    let c = crate::jws::rsa::private_key::RsaPrivateKey::new(3).0;
-    a ^ b ^ c
+    cbc::Decryptor(1u8).decrypt()
 }'
 expect_pass "cbc::Decryptor, polyjose::jws::rsa::traits::Decryptor and ::private_key::RsaPrivateKey"
 expect_symbol "look-alikes" "polyjose::cbc::Decryptor<u8>>::decrypt"
