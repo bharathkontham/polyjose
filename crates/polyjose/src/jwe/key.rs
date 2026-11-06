@@ -12,7 +12,7 @@
 use core::fmt;
 
 use p256::elliptic_curve::{Curve, FieldBytes, SecretKey};
-use zeroize::Zeroizing;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use super::content;
 use super::keymgmt::{self, Mode};
@@ -351,6 +351,28 @@ fn rsa_key(key: &RsaPublicKey, direction: Direction) -> Result<RecipientKey> {
         e: key.e().to_vec(),
     })
 }
+
+/// Whether `jwk` may be tried for a recipient whose header `kid` is
+/// `header_kid` (RFC 7516 §4.1.6: `kid` "is a hint indicating which key
+/// was used"): when both carry one they must be equal, compared exactly
+/// (RFC 7517 §4.5: "a case-sensitive string"); otherwise `kid` does not
+/// narrow the candidates (plan.md recipient selection). `kid` is not
+/// secret, so the comparison need not be constant-time.
+///
+/// The key's own `kid` is `Jwk::kid`; a [`RecipientKey`] does not repeat
+/// it, because selection runs on the `Jwk` before the key is bound.
+pub(crate) fn kid_matches(jwk: &Jwk, header_kid: Option<&str>) -> bool {
+    match (jwk.kid(), header_kid) {
+        (Some(key_kid), Some(header_kid)) => key_kid == header_kid,
+        _ => true,
+    }
+}
+
+/// Every secret variant holds a type that wipes itself on drop:
+/// `Zeroizing` (`Symmetric`, `Password`), `p256`/`p384`/`p521`
+/// `SecretKey`, and `x25519_dalek::StaticSecret` (`zeroize` feature).
+/// The public variants hold no secret (ADR 0007).
+impl ZeroizeOnDrop for RecipientKey {}
 
 impl fmt::Debug for RecipientKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1010,5 +1032,82 @@ mod tests {
         // An empty list allows nothing.
         let key = oct(16, r#","key_ops":[]"#);
         assert_eq!(bind(&key, &A::A128KW, &GCM128, Encrypt), Err(MISMATCH));
+    }
+
+    #[test]
+    fn kid_selects_only_when_both_sides_carry_one() {
+        // RFC 7516 §4.1.6, RFC 7517 §4.5: `kid` is a case-sensitive hint;
+        // plan.md recipient selection compares it when both have one.
+        let with = p521("");
+        let without = oct(16, "");
+        assert!(kid_matches(&with, Some("bilbo.baggins@hobbiton.example")));
+        assert!(!kid_matches(&with, Some("Bilbo.Baggins@hobbiton.example")));
+        assert!(!kid_matches(&with, Some("")));
+        assert!(kid_matches(&with, None));
+        assert!(kid_matches(&without, Some("anything")));
+        assert!(kid_matches(&without, None));
+    }
+
+    #[test]
+    fn debug_of_every_variant_prints_no_key_bytes() {
+        // Marker values: 0xC5 repeated, so any byte, decimal, hex or
+        // base64url rendering of them would show up.
+        let marker = [0xC5_u8; 32];
+        let k = b64url_encode(&marker);
+        let symmetric = jwk(&format!(r#"{{"kty":"oct","k":"{k}"}}"#));
+        let keys = [
+            RecipientKey::from_jwk(&symmetric, &A::A256KW, &GCM128, Encrypt),
+            RecipientKey::from_jwk(&symmetric, &A::Pbes2Hs256A128KW, &GCM128, Decrypt),
+            RecipientKey::from_jwk(&rsa(""), &A::RsaOaep256, &GCM128, Encrypt),
+            RecipientKey::from_jwk(&x25519_private(""), &A::EcdhEs, &GCM128, Encrypt),
+            Ok(RecipientKey::X25519Secret(
+                x25519_dalek::StaticSecret::from(marker),
+            )),
+        ];
+        let mut keys: Vec<RecipientKey> = keys
+            .into_iter()
+            .map(|k| k.unwrap_or_else(|e| panic!("{e}")))
+            .collect();
+        for (_, private, ..) in ec_cases() {
+            for d in [Encrypt, Decrypt] {
+                let key = RecipientKey::from_jwk(&private, &A::EcdhEs, &GCM128, d);
+                keys.push(key.unwrap_or_else(|e| panic!("{e}")));
+            }
+        }
+        let secrets = [
+            k.clone(),
+            "c5c5".to_owned(),
+            "C5C5".to_owned(),
+            "197".to_owned(),
+            RFC7520_P256_D.to_owned(),
+            RFC7520_P384_D.to_owned(),
+            RFC7520_P521_D.to_owned(),
+            X25519_BOB_D.to_owned(),
+        ];
+        let mut names = Vec::new();
+        for key in &keys {
+            let debug = format!("{key:?}");
+            for secret in &secrets {
+                assert!(!debug.contains(secret.as_str()), "{debug}");
+            }
+            let name = debug
+                .strip_prefix("RecipientKey::")
+                .and_then(|d| d.strip_suffix("(<redacted>)"));
+            names.push(name.unwrap_or_else(|| panic!("{debug}")).to_owned());
+        }
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 11, "every variant is covered: {names:?}");
+    }
+
+    #[test]
+    fn every_secret_variant_wipes_itself_on_drop() {
+        fn zeroize_on_drop<T: ZeroizeOnDrop>() {}
+        zeroize_on_drop::<Zeroizing<Vec<u8>>>(); // Symmetric, Password
+        zeroize_on_drop::<p256::SecretKey>();
+        zeroize_on_drop::<p384::SecretKey>();
+        zeroize_on_drop::<p521::SecretKey>();
+        zeroize_on_drop::<x25519_dalek::StaticSecret>();
+        zeroize_on_drop::<RecipientKey>();
     }
 }
