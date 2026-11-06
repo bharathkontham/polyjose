@@ -488,9 +488,11 @@ fn sign_public_api_error_rows() {
             .code(),
         "InvalidHeader"
     );
-    // b64:false, non-UTF-8 payload -> InvalidFormat (attached only)
+    // b64:false, non-UTF-8 payload -> InvalidFormat (attached only: it
+    // cannot be a JSON string, RFC 7797 §5.3)
     let s = Signer::new(&k).protected(f);
-    let e = sign_flattened(&s, &[0xff, 0xfe], &SignOptions::new());
-    // may be UnsupportedAlgorithm while HMAC is a stub only if checked before; assert not Ok
-    assert!(e.is_err());
+    assert_eq!(
+        sign_flattened(&s, &[0xff, 0xfe], &SignOptions::new()).map_err(|e| e.code()),
+        Err("InvalidFormat")
+    );
 }
