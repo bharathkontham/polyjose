@@ -79,6 +79,7 @@ mod tests {
     use super::*;
     use crate::rng::insecure_test_vectors::FixedRng;
     use crate::test_counters::ecdh_agreements;
+    use crate::test_support::wycheproof::{self, Deviation, Outcome, Summary, Test};
     use crate::util::{b64url_decode, b64url_encode};
 
     /// 32 bytes from 64 lowercase hex digits (RFC 7748 §5.2, §6.1 print
@@ -226,5 +227,94 @@ mod tests {
         let (zero, n) = ecdh_agreements::count(|| agree(&alice, &PublicKey::from([0u8; 32])));
         assert!(zero.is_err());
         assert_eq!(n, 1);
+    }
+
+    /// Why polyjose picks a side on Wycheproof's `acceptable` X25519 tests.
+    /// `x25519_test.json` and `x25519_jwk_test.json` number the same cases
+    /// 1..=518 identically, so one list serves both.
+    const ZERO_SHARED: &str = "RFC 7748 §6.1: an all-zero shared secret (a low-order public \
+        key) is rejected, as RFC 8725 §3.4 asks for ECDH-ES";
+    const SPECIAL_PUBLIC: &str = "RFC 7748 §5: every 32-octet public key is accepted: the top \
+        bit is masked, a non-canonical u is reduced mod p, twist and torsion points go through \
+        the clamped ladder (ADR 0043)";
+    const XDH: &[Deviation] = &[
+        // `LowOrderPublic` / `ZeroSharedSecret`.
+        Deviation::range(32, 33, Outcome::Reject, ZERO_SHARED),
+        Deviation::range(63, 86, Outcome::Reject, ZERO_SHARED),
+        Deviation::range(117, 118, Outcome::Reject, ZERO_SHARED),
+        Deviation::tests(&[154, 165, 166], Outcome::Reject, ZERO_SHARED),
+        // `Twist`, `NonCanonicalPublic`, `SpecialPublicKey` and the other
+        // acceptable cases with a non-zero shared secret.
+        Deviation::range(2, 31, Outcome::Accept, SPECIAL_PUBLIC),
+        Deviation::range(87, 99, Outcome::Accept, SPECIAL_PUBLIC),
+        Deviation::tests(
+            &[
+                101, 103, 106, 108, 111, 112, 114, 115, 116, 119, 121, 124, 126, 127, 129, 130,
+                133, 136, 139, 140, 147, 148, 155, 159, 160, 162, 167, 169, 176, 181, 182, 183,
+                186, 192, 193, 196, 197, 198, 199, 200, 201, 205, 206, 207, 210, 211, 215, 216,
+                217, 221, 222, 226, 229, 231, 232, 233, 234, 237, 239, 240, 242, 243, 247, 251,
+                253, 256, 257, 259, 260, 261, 262, 263, 265, 266, 271, 272, 274, 276, 279, 281,
+                283, 284, 286, 287, 288, 290, 291, 293, 296, 298, 300, 302, 306, 307, 313, 314,
+                315, 318, 320, 323, 326, 327, 328, 329, 333, 335, 338, 344, 346, 350, 356, 357,
+                362, 364, 365, 366, 370, 373, 375, 380, 381, 382, 387, 388, 390, 392, 394, 395,
+                396, 401, 405, 406, 412, 415, 416, 418, 419, 420, 421, 425, 427, 430, 431, 432,
+                435, 438, 443, 445, 446, 447, 448, 450, 451, 452, 457, 458, 461, 462, 463, 464,
+                466, 469, 472, 473, 477, 478, 481, 482, 484, 485, 488, 489, 492, 494, 498, 501,
+                503, 505, 506, 512,
+            ],
+            Outcome::Accept,
+            SPECIAL_PUBLIC,
+        ),
+    ];
+
+    /// Whether Wycheproof marks `test` as a low-order or zero-secret case.
+    fn is_low_order(test: &Test) -> bool {
+        test.flags
+            .iter()
+            .any(|f| f == "LowOrderPublic" || f == "ZeroSharedSecret")
+    }
+
+    /// Checks one agreement against the test beyond accept/reject: an
+    /// accepted case has exactly the expected Z, and a rejected one is
+    /// exactly the flagged low-order cases, with the all-zero error.
+    fn check_agreement(test: &Test, result: &Result<Zeroizing<[u8; 32]>>, shared: &[u8]) {
+        let id = test.tc_id;
+        match result {
+            Ok(z) => assert_eq!(&z[..], shared, "tcId {id}: wrong shared secret"),
+            Err(err) => {
+                assert_eq!(*err, Error::InvalidKey("X25519 shared secret is all-zero"));
+                assert_eq!(shared, [0u8; 32], "tcId {id}: rejected a non-zero secret");
+            }
+        }
+        assert_eq!(
+            result.is_err(),
+            is_low_order(test),
+            "tcId {id} ({:?}, flags {:?})",
+            test.comment,
+            test.flags
+        );
+    }
+
+    /// Every case outside the flagged ones is accepted, every flagged one
+    /// rejected: 518 tests, 31 of them low order, 223 other acceptable.
+    const XDH_SUMMARY: Summary = Summary {
+        tests: 518,
+        accepted: 487,
+        rejected: 31,
+        deviations: 254,
+    };
+
+    #[test]
+    fn wycheproof_x25519() {
+        let suite = wycheproof::load("x25519");
+        let summary = wycheproof::assert_conforms(&suite, XDH, |_, test| {
+            let (public, private, shared) = test.agreement();
+            let secret = StaticSecret::from(<[u8; 32]>::try_from(private).unwrap());
+            let public = PublicKey::from(<[u8; 32]>::try_from(public).unwrap());
+            let result = agree(&secret, &public);
+            check_agreement(test, &result, shared);
+            Outcome::of(&result)
+        });
+        assert_eq!(summary, XDH_SUMMARY);
     }
 }
