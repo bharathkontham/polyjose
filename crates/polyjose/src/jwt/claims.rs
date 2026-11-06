@@ -204,10 +204,71 @@ impl Claims {
     /// the registered claims in the order `iss, sub, aud, exp, nbf, iat,
     /// jti`, then the other claims in insertion order (ADR 0027 §1).
     ///
-    /// **Not implemented yet** (feature 0004 T03): returns an empty
-    /// string.
+    /// An [`Audience::One`] is written as a string and an
+    /// [`Audience::Many`] as an array (RFC 7519 §4.1.3), so a parsed `aud`
+    /// re-serializes in the form it was received. An integral
+    /// [`NumericDate`] is written without a fraction
+    /// ([`NumericDate::to_json_value`]). Strings and numbers use the
+    /// crate's canonical JSON writer ([`Value::to_json`]), so the output is
+    /// deterministic and [`from_json`](Claims::from_json) of it gives an
+    /// equal Claims Set.
+    ///
+    /// ```
+    /// use polyjose::json::Value;
+    /// use polyjose::jwt::{Audience, Claims, NumericDate};
+    ///
+    /// let mut claims = Claims::new();
+    /// claims.insert("http://example.com/is_root", Value::Bool(true))?;
+    /// claims.exp = NumericDate::from_secs(1300819380);
+    /// claims.aud = Some(Audience::Many(vec!["a".into(), "b".into()]));
+    /// claims.iss = Some("joe".into());
+    /// assert_eq!(
+    ///     claims.to_json(),
+    ///     r#"{"iss":"joe","aud":["a","b"],"exp":1300819380,"http://example.com/is_root":true}"#
+    /// );
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    ///
+    /// **Secrets:** like [`Value::to_json`], the output is allocated once
+    /// at its exact size and the members are staged in wiping buffers, but
+    /// the returned `String` is the caller's to wipe if the claims are
+    /// secret (ADR 0049 §4).
     pub fn to_json(&self) -> String {
-        String::new()
+        /// A member name, in a wiping buffer like every `Object` name.
+        fn name(name: &str) -> Zeroizing<String> {
+            Zeroizing::new(name.to_owned())
+        }
+
+        let mut members = Vec::with_capacity(REGISTERED_CLAIMS.len() + self.other.len());
+        let strings = [("iss", &self.iss), ("sub", &self.sub)];
+        for (claim, value) in strings {
+            if let Some(value) = value {
+                members.push((name(claim), Value::from(value.as_str())));
+            }
+        }
+        if let Some(aud) = &self.aud {
+            let value = match aud {
+                Audience::One(one) => Value::from(one.as_str()),
+                Audience::Many(many) => {
+                    Value::Array(many.iter().map(|a| Value::from(a.as_str())).collect())
+                }
+            };
+            members.push((name("aud"), value));
+        }
+        let dates = [("exp", &self.exp), ("nbf", &self.nbf), ("iat", &self.iat)];
+        for (claim, date) in dates {
+            if let Some(date) = date {
+                members.push((name(claim), date.to_json_value()));
+            }
+        }
+        if let Some(jti) = &self.jti {
+            members.push((name("jti"), Value::from(jti.as_str())));
+        }
+        // `other` never holds a registered name (`insert` refuses one and
+        // `from_json` routes them to the typed fields), and its own names
+        // are unique, so every name is unique.
+        members.extend(self.other.clone());
+        Object::from_unique_members(members).to_json()
     }
 
     /// The claim `name` if it is not a registered claim (RFC 7519
