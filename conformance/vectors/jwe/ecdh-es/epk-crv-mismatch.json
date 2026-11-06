@@ -1,0 +1,33 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.6, RFC 8725 §3.4: a valid P-384 \"epk\" (RFC 7520 §5.4) for a P-256 recipient key is DecryptionFailed",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTEyOEdDTSIsImVwayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMzg0IiwieCI6InVCbzRrSFB3Nmtiang1bDB4b3dyZF9vWXpCbWF6LUdLRlp1NHhBRkZrYllpV2d1dEVLNml1RURzUTZ3TmROZzMiLCJ5Ijoic3AzcDVTR2haVkMyZmFYdW1JLWU5SlUyTW84S3BvWXJGRHI1eVBOVnRXNFBnRXdaT3lRVEEtSmRhWTh0YjdFMCJ9fQ..NTU1NTU1NTU1NTU1.zY_FwXYs6OPUNKjHQ21YsPM8K83HmQ.GVZsLVJ4SmGr_eXqKC809w",
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+      "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck",
+      "d": "VEmDZpDXXK8p8N0Cndsxs924q6nS1RXFASRl6BfUqdw"
+    },
+    "allowed_algs": [
+      "ECDH-ES",
+      "ECDH-ES+A128KW",
+      "ECDH-ES+A192KW",
+      "ECDH-ES+A256KW"
+    ],
+    "allowed_enc": [
+      "A128GCM",
+      "A192GCM",
+      "A256GCM",
+      "A128CBC-HS256",
+      "A192CBC-HS384",
+      "A256CBC-HS512"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

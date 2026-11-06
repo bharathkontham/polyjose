@@ -1,0 +1,33 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.1 step 5, RFC 7518 §4.6: Direct Key Agreement fixes the CEK from one recipient, so a general JSON ECDH-ES encryption to two recipients is InvalidFormat",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "general",
+    "enc": "A128GCM",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "ECDH-ES",
+        "key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+          "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck"
+        }
+      },
+      {
+        "alg": "ECDH-ES",
+        "key": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}
