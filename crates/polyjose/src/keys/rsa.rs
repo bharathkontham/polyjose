@@ -12,6 +12,10 @@
 //!   body is decoded.
 //! - PKCS#1 DER: `pkcs1::decode` recognizes the RSAPrivateKey shape from
 //!   its version and the framing of the INTEGERs after it.
+//! - A PKCS#1 RSAPrivateKey read as PKCS#8 or SEC1 (under `PRIVATE KEY` or
+//!   `EC PRIVATE KEY`, ADR 0018 §3): `pkcs8::decode` and
+//!   `sec1::decode_standalone` fail their own parse, then
+//!   `pkcs1::relabel_rsa_private_key` recognizes the same framing.
 //!
 //! This module never uses the rsa crate: an RSA public key is two DER
 //! INTEGERs, and [`Jwk::from_object`](crate::jwk::Jwk::from_object), reached
