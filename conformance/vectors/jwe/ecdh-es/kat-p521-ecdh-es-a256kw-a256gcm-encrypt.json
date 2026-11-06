@@ -1,0 +1,29 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.6 ECDH-ES+A256KW with A256GCM on P-521 (a Node-generated P-521 key), the drawn bytes in the documented order: the exact compact JWE, computed independently with Node.js crypto (OpenSSL)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A256GCM",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "ECDH-ES+A256KW",
+        "key": {
+          "kty": "EC",
+          "crv": "P-521",
+          "x": "AQgPCmwvTq-Kc6aJTUqEzAqdCSpbj6m1ZXWVTcjKC9yNaLL7Rj0d2EZQHSwDueBw_bNg7gJIkyvZPBeUagxxCsWq",
+          "y": "AYL3pbw7G2TiJtgJQEt7lozdY0iXK7EPyxyGOv-aeS6ykLtI7-kuS4ShWjI-6POOzLMWb-uxleEvlPEKb1D7IISw"
+        }
+      }
+    ],
+    "rng_b64u": "REREREREREREREREREREREREREREREREREREREREREQBIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyM2NjY2NjY2NjY2NjY"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00iLCJlcGsiOnsia3R5IjoiRUMiLCJjcnYiOiJQLTUyMSIsIngiOiJBWkt5ckdmUk1YcjVhcldSVkR5bWlIRlBVMGpDZVlnbEFxQ0x3anUxSXBPN1BHVWtPSG45bVBGOEtCSXlTU0NCeXExMmVsampScTY3UUtVNGlpX0t5eGxaIiwieSI6IkFRN3QyaTZ1VG5QdzU5T2htZm5Hem5zZ2taeWluZU9rc2lDbG9CeDNjekxLYWFodGJ1VmMxUnV4YkJmZmg5M2hSdnlsSUY5Ym56ZUpvcmoxZEpReGpKZHgifX0.VmIpkwgdpDaoeKI4FkzF3rtasM_e06XBO1a3JYKNYrLiM_y2pgIGOA.NjY2NjY2NjY2NjY2.2MTFEux6zvZeNKWBvJiC3LsqAjkHhQ.arsTYx5T-LTg436pt3q71Q"
+  },
+  "features": [
+    "fixed-rng"
+  ]
+}

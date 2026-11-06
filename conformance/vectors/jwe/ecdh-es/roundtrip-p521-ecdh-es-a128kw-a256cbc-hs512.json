@@ -1,0 +1,39 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.1/§5.2: a compact ECDH-ES+A128KW + A256CBC-HS512 encryption to a P-521 public key on the OS CSPRNG (RFC 7518 §4.6, a fresh ephemeral key) decrypts with the private key to the plaintext",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A256CBC-HS512",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "ECDH-ES+A128KW",
+        "key": {
+          "kty": "EC",
+          "crv": "P-521",
+          "x": "AQgPCmwvTq-Kc6aJTUqEzAqdCSpbj6m1ZXWVTcjKC9yNaLL7Rj0d2EZQHSwDueBw_bNg7gJIkyvZPBeUagxxCsWq",
+          "y": "AYL3pbw7G2TiJtgJQEt7lozdY0iXK7EPyxyGOv-aeS6ykLtI7-kuS4ShWjI-6POOzLMWb-uxleEvlPEKb1D7IISw"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "decrypt_with": {
+      "key": {
+        "kty": "EC",
+        "crv": "P-521",
+        "x": "AQgPCmwvTq-Kc6aJTUqEzAqdCSpbj6m1ZXWVTcjKC9yNaLL7Rj0d2EZQHSwDueBw_bNg7gJIkyvZPBeUagxxCsWq",
+        "y": "AYL3pbw7G2TiJtgJQEt7lozdY0iXK7EPyxyGOv-aeS6ykLtI7-kuS4ShWjI-6POOzLMWb-uxleEvlPEKb1D7IISw",
+        "d": "AJEhLbh3NK7njT9yn0hgDie98hTZGPZhVjjrtzU18RiqXFDbcRavq1bAgS92NDHSdlJY2tXh14UUGVhN-76ImmzZ"
+      },
+      "allowed_algs": [
+        "ECDH-ES+A128KW"
+      ],
+      "allowed_enc": [
+        "A256CBC-HS512"
+      ]
+    }
+  }
+}

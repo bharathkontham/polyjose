@@ -1,0 +1,31 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.6 ECDH-ES with A128GCM on P-256 (RFC 7518 Appendix C keys, apu \"Alice\" and apv \"Bob\"), the drawn bytes in the documented order: the exact compact JWE, computed independently with Node.js crypto (OpenSSL)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "ECDH-ES",
+        "key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+          "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck"
+        },
+        "apu_b64u": "QWxpY2U",
+        "apv_b64u": "Qm9i"
+      }
+    ],
+    "rng_b64u": "0_NxaRPUMQoAJt50Gz8YiTr8gRTwyEaCumd-MToTmIo1NTU1NTU1NTU1NTU"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTEyOEdDTSIsImVwayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImdJMEdBSUxCZHU3VDUzYWtyRm1NeUdjc0YzbjVkTzdNbXdOQkhLVzVTVjAiLCJ5IjoiU0xXX3hTZmZ6bFBXckhFVkkzMERITV80ZWdWd3QzTlFxZVVEN25NRnBwcyJ9LCJhcHUiOiJRV3hwWTJVIiwiYXB2IjoiUW05aSJ9..NTU1NTU1NTU1NTU1.zY_FwXYs6OPUNKjHQ21YsPM8K83HmQ.GVZsLVJ4SmGr_eXqKC809w"
+  },
+  "features": [
+    "fixed-rng"
+  ]
+}
