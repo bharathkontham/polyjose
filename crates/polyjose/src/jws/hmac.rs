@@ -126,6 +126,9 @@ fn check<M: Mac + KeyInit>(k: &[u8], signing_input: &[u8], signature: &[u8]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::wycheproof::{
+        Deviation, Expected, Outcome, Summary, assert_conforms, load,
+    };
     use crate::util::{b64url_decode, b64url_encode};
 
     /// RFC 7515 Appendix A.1: the encoded JWS Protected Header, whose JSON
@@ -405,5 +408,89 @@ mod tests {
                 Err(Error::KeyAlgorithmMismatch)
             );
         }
+    }
+
+    /// Where polyjose differs from Wycheproof's `hmac_sha{256,384,512}`
+    /// files, which share one layout (tcIds 1..=174):
+    ///
+    /// - 1..=81: full key and tag. No deviation.
+    /// - 82..=162: full key, tag truncated to half the hash; the valid ones
+    ///   are 82..=108 (the invalid ones are rejected anyway).
+    /// - 163..=168: a key of half the hash size, full (163..=165) or
+    ///   truncated (166..=168) tag.
+    /// - 169..=174: a 65-octet key, full (169..=171) or truncated
+    ///   (172..=174) tag.
+    const WYCHEPROOF_HMAC: &[Deviation] = &[
+        Deviation::range(
+            82,
+            108,
+            Outcome::Reject,
+            "RFC 7518 §3.2: a JWS HMAC tag is the full hash output, never truncated",
+        ),
+        Deviation::range(
+            163,
+            168,
+            Outcome::Reject,
+            "RFC 7518 §3.2: a key shorter than the hash output MUST NOT be used",
+        ),
+        Deviation::range(
+            172,
+            174,
+            Outcome::Reject,
+            "RFC 7518 §3.2: a JWS HMAC tag is the full hash output, never truncated",
+        ),
+    ];
+
+    /// Runs one Wycheproof HMAC suite through [`verify`], with an `oct` JWK
+    /// built from each test's key, and checks the error kind as well as the
+    /// outcome: a short key is [`Error::InvalidKey`] (checked first, as in
+    /// ADR 0026 §2 step 8 before step 9), anything else that fails is
+    /// [`Error::InvalidSignature`].
+    fn wycheproof_hmac(name: &str, alg: SigningAlg, hash_bits: u32) -> Summary {
+        let suite = load(name);
+        assert_eq!(suite.groups.len(), 6, "{name}: layout of WYCHEPROOF_HMAC");
+        assert_conforms(&suite, WYCHEPROOF_HMAC, |group, test| {
+            let (k, msg, tag) = test.mac();
+            let result = verify(&alg, &oct(k), msg, tag);
+            let key_bits = group.key_size.unwrap();
+            let tag_bits = group.tag_size.unwrap();
+            assert_eq!(key_bits as usize, k.len() * 8, "tcId {}", test.tc_id);
+            let expected_error = if key_bits < hash_bits {
+                Some(Error::InvalidKey(SHORT_KEY))
+            } else if tag_bits < hash_bits || test.result == Expected::Invalid {
+                Some(Error::InvalidSignature)
+            } else {
+                None
+            };
+            assert_eq!(result.clone().err(), expected_error, "tcId {}", test.tc_id);
+            Outcome::of(&result)
+        })
+    }
+
+    /// Per file: 30 accepted (27 in group 1, 3 with the 65-octet key),
+    /// 144 rejected, 36 of those by the deviation list.
+    const WYCHEPROOF_HMAC_SUMMARY: Summary = Summary {
+        tests: 174,
+        accepted: 30,
+        rejected: 144,
+        deviations: 36,
+    };
+
+    #[test]
+    fn wycheproof_hmac_sha256() {
+        let summary = wycheproof_hmac("hmac_sha256", SigningAlg::HS256, 256);
+        assert_eq!(summary, WYCHEPROOF_HMAC_SUMMARY);
+    }
+
+    #[test]
+    fn wycheproof_hmac_sha384() {
+        let summary = wycheproof_hmac("hmac_sha384", SigningAlg::HS384, 384);
+        assert_eq!(summary, WYCHEPROOF_HMAC_SUMMARY);
+    }
+
+    #[test]
+    fn wycheproof_hmac_sha512() {
+        let summary = wycheproof_hmac("hmac_sha512", SigningAlg::HS512, 512);
+        assert_eq!(summary, WYCHEPROOF_HMAC_SUMMARY);
     }
 }
