@@ -1755,7 +1755,12 @@ fn scalar_in_range<C: Curve>(d: &[u8]) -> bool {
 ///   back the same 32 octets;
 /// - the point is not of small order (`VerifyingKey::is_weak`), since a
 ///   small-order key "can be used to generate a signature that's valid for
-///   almost every message".
+///   almost every message";
+/// - the point has no torsion component, that is it lies in the subgroup
+///   of prime order L (`EdwardsPoint::is_torsion_free`, ADR 0043 §1). A
+///   mixed-order key passes RFC 8032 §5.1.7 and `verify_strict`, but
+///   implementations disagree on it and honest keys (RFC 8032 §5.1.5:
+///   A = [s]B) never have one.
 fn ed25519_public_is_valid(x: &[u8]) -> bool {
     let Ok(bytes) = <&[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]>::try_from(x) else {
         return false;
@@ -1763,8 +1768,9 @@ fn ed25519_public_is_valid(x: &[u8]) -> bool {
     let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(bytes) else {
         return false;
     };
-    let canonical = ed25519_dalek::VerifyingKey::from(key.to_edwards()).to_bytes() == *bytes;
-    canonical && !key.is_weak()
+    let point = key.to_edwards();
+    let canonical = ed25519_dalek::VerifyingKey::from(point).to_bytes() == *bytes;
+    canonical && !key.is_weak() && point.is_torsion_free()
 }
 
 /// `kty` `OKP` (RFC 8037 §2).
