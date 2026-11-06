@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"\": the empty string names no algorithm.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": ""
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

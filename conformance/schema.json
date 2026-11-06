@@ -25,6 +25,7 @@
         "keys.export_pem",
         "keys.import_der",
         "keys.export_der",
+        "keys.generate_for",
         "jwe.encrypt",
         "jwe.decrypt",
         "jwt.validate"
@@ -187,6 +188,23 @@
           "expect": {
             "oneOf": [
               { "$ref": "#/$defs/keys_export_der_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.generate_for" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_generate_for_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/keys_generate_for_ok" },
               { "$ref": "#/$defs/failure" }
             ]
           }
@@ -532,6 +550,37 @@
       "properties": {
         "ok": { "const": true },
         "der_b64u": { "$ref": "#/$defs/base64url" }
+      }
+    },
+    "keys_generate_for_input": {
+      "description": "Generate a private key for an algorithm with the library's generate_for (ADR 0018 §5) from the OS CSPRNG. alg is a JWS alg, a JWE alg or a JWE enc name, resolved in the one registry of RFC 7518 §7.1 (names unique and case-sensitive); any string, since unknown names are under test.",
+      "type": "object",
+      "required": ["alg"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "type": "string" }
+      }
+    },
+    "keys_generated_shape": {
+      "description": "What a generated key is, without its random material: kty, crv (EC and OKP only), the alg the key is bound to (RFC 7517 §4.4) and the length of k in octets (oct only). Compared as a JSON value, so a member the generated key has and the shape omits fails too.",
+      "type": "object",
+      "required": ["kty", "alg"],
+      "additionalProperties": false,
+      "properties": {
+        "kty": { "enum": ["EC", "OKP", "oct"] },
+        "crv": { "type": "string" },
+        "alg": { "type": "string" },
+        "k_octets": { "$ref": "#/$defs/count" }
+      }
+    },
+    "keys_generate_for_ok": {
+      "description": "Generated keys are random, so only their shape is expected. The runner also checks that the key is private, has exactly the members RFC 7518 §6.2.1-§6.2.2 (EC), RFC 8037 §2 (OKP) or RFC 7518 §6.4.1 (oct) define plus alg, and imports back unchanged; any failure there fails the vector.",
+      "type": "object",
+      "required": ["ok", "shape"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "shape": { "$ref": "#/$defs/keys_generated_shape" }
       }
     }
   }

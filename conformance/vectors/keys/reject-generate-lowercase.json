@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"es256\": algorithm names are case-sensitive (RFC 7518 §7.1), so es256 is not ES256.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "es256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "source": "RFC 8037 §3.1",
+  "description": "Key generation for an algorithm: EdDSA is generated on Ed25519 (RFC 8037 §3.1), the only EdDSA curve polyjose supports (ADR 0006); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "EdDSA"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"ECDH-ES+A128KW\": ECDH-ES+A128KW works on several curves (RFC 7518 §4.6), so a key for it needs a curve (ADR 0018 §5).",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "ECDH-ES+A128KW"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

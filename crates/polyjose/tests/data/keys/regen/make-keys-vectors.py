@@ -161,4 +161,51 @@ for name, source, jd, jf, fmt, d, pem, what in exports:
     write(name.replace('export-', 'export-der-', 1), source, 'DER export of ' + what + '.', 'keys.export_der', {'jwk': jwk(jd, jf), 'format': fmt}, {'ok': True, 'der_b64u': der_input(text(d, pem))['der_b64u']})
 for name, src, j, fmt, code, what in export_refusals:
     write(name.replace('reject-export-', 'reject-export-der-', 1), src, 'DER export refusal: ' + what + '.', 'keys.export_der', {'jwk': j, 'format': fmt}, {'ok': False, 'error': code})
+
+# --- generate_for: shapes and refusals (ADR 0018 §5) -----------------------
+# A generated key is random, so a success vector expects only its shape. The
+# shapes are the RFC sizes and curves per algorithm, written out here.
+def oct_shape(alg, octets): return {'kty': 'oct', 'alg': alg, 'k_octets': octets}
+def curve_shape(kty, crv, alg): return {'kty': kty, 'crv': crv, 'alg': alg}
+gen_ok = [
+  ('hs256', 'RFC 7518 §3.2', oct_shape('HS256', 32), 'an HS256 key is 32 octets, the size of the SHA-256 output (RFC 7518 §3.2)'),
+  ('hs384', 'RFC 7518 §3.2', oct_shape('HS384', 48), 'an HS384 key is 48 octets, the size of the SHA-384 output (RFC 7518 §3.2)'),
+  ('hs512', 'RFC 7518 §3.2', oct_shape('HS512', 64), 'an HS512 key is 64 octets, the size of the SHA-512 output (RFC 7518 §3.2)'),
+  ('a128kw', 'RFC 7518 §4.4', oct_shape('A128KW', 16), 'an A128KW key is a 128-bit AES key (RFC 7518 §4.4)'),
+  ('a192kw', 'RFC 7518 §4.4', oct_shape('A192KW', 24), 'an A192KW key is a 192-bit AES key (RFC 7518 §4.4)'),
+  ('a256kw', 'RFC 7518 §4.4', oct_shape('A256KW', 32), 'an A256KW key is a 256-bit AES key (RFC 7518 §4.4)'),
+  ('a128gcmkw', 'RFC 7518 §4.7', oct_shape('A128GCMKW', 16), 'an A128GCMKW key is a 128-bit AES key (RFC 7518 §4.7)'),
+  ('a192gcmkw', 'RFC 7518 §4.7', oct_shape('A192GCMKW', 24), 'an A192GCMKW key is a 192-bit AES key (RFC 7518 §4.7)'),
+  ('a256gcmkw', 'RFC 7518 §4.7', oct_shape('A256GCMKW', 32), 'an A256GCMKW key is a 256-bit AES key (RFC 7518 §4.7)'),
+  ('a128gcm', 'RFC 7518 §5.3', oct_shape('A128GCM', 16), 'an A128GCM content encryption key is 128 bits (RFC 7518 §5.3)'),
+  ('a192gcm', 'RFC 7518 §5.3', oct_shape('A192GCM', 24), 'an A192GCM content encryption key is 192 bits (RFC 7518 §5.3)'),
+  ('a256gcm', 'RFC 7518 §5.3', oct_shape('A256GCM', 32), 'an A256GCM content encryption key is 256 bits (RFC 7518 §5.3)'),
+  ('a128cbc-hs256', 'RFC 7518 §5.2.3', oct_shape('A128CBC-HS256', 32), 'an A128CBC-HS256 key is 32 octets, MAC_KEY then ENC_KEY (RFC 7518 §5.2.3)'),
+  ('a192cbc-hs384', 'RFC 7518 §5.2.4', oct_shape('A192CBC-HS384', 48), 'an A192CBC-HS384 key is 48 octets (RFC 7518 §5.2.4)'),
+  ('a256cbc-hs512', 'RFC 7518 §5.2.5', oct_shape('A256CBC-HS512', 64), 'an A256CBC-HS512 key is 64 octets (RFC 7518 §5.2.5)'),
+  ('es256', 'RFC 7518 §3.4', curve_shape('EC', 'P-256', 'ES256'), 'ES256 uses the P-256 curve (RFC 7518 §3.4)'),
+  ('es384', 'RFC 7518 §3.4', curve_shape('EC', 'P-384', 'ES384'), 'ES384 uses the P-384 curve (RFC 7518 §3.4)'),
+  ('es512', 'RFC 7518 §3.4', curve_shape('EC', 'P-521', 'ES512'), 'ES512 uses the P-521 curve (RFC 7518 §3.4)'),
+  ('es256k', 'RFC 8812 §3.2', curve_shape('EC', 'secp256k1', 'ES256K'), 'ES256K uses the secp256k1 curve (RFC 8812 §3.2)'),
+  ('eddsa', 'RFC 8037 §3.1', curve_shape('OKP', 'Ed25519', 'EdDSA'), 'EdDSA is generated on Ed25519 (RFC 8037 §3.1), the only EdDSA curve polyjose supports (ADR 0006)'),
+  ('ed25519', 'RFC 9864', curve_shape('OKP', 'Ed25519', 'Ed25519'), 'the fully-specified Ed25519 algorithm uses the Ed25519 curve (RFC 9864)'),
+]
+for name, source, shape, what in gen_ok:
+    write('generate-' + name, source, 'Key generation for an algorithm: ' + what + '; the key is random, so only its shape is compared.', 'keys.generate_for', {'alg': shape['alg']}, {'ok': True, 'shape': shape})
+gen_refusals = [
+  ('ecdh-es', 'ECDH-ES', 'InvalidKey', 'ECDH-ES works on several curves (RFC 7518 §4.6), so a key for it needs a curve, and polyjose never picks one for the caller (ADR 0018 §5)'),
+  ('ecdh-es-a128kw', 'ECDH-ES+A128KW', 'InvalidKey', 'ECDH-ES+A128KW works on several curves (RFC 7518 §4.6), so a key for it needs a curve (ADR 0018 §5)'),
+  ('rs256', 'RS256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0021)'),
+  ('ps256', 'PS256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0021)'),
+  ('rsa-oaep-256', 'RSA-OAEP-256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0021)'),
+  ('dir', 'dir', 'UnsupportedAlgorithm', 'a dir key is the content encryption key of its enc (RFC 7518 §4.5), so its size is not known from dir'),
+  ('pbes2-hs256-a128kw', 'PBES2-HS256+A128KW', 'UnsupportedAlgorithm', 'a PBES2 key is a password (RFC 7518 §4.8), which polyjose does not generate'),
+  ('none', 'none', 'UnsupportedAlgorithm', 'none has no key (RFC 7518 §3.6)'),
+  ('rsa-oaep', 'RSA-OAEP', 'UnsupportedAlgorithm', 'RSA-OAEP is not implemented (ADR 0022)'),
+  ('ed448', 'Ed448', 'UnsupportedAlgorithm', 'Ed448 is not supported (ADR 0006)'),
+  ('lowercase', 'es256', 'UnsupportedAlgorithm', 'algorithm names are case-sensitive (RFC 7518 §7.1), so es256 is not ES256'),
+  ('empty', '', 'UnsupportedAlgorithm', 'the empty string names no algorithm'),
+]
+for name, alg, code, what in gen_refusals:
+    write('reject-generate-' + name, 'polyjose', 'Key generation refuses ' + json.dumps(alg) + ': ' + what + '.', 'keys.generate_for', {'alg': alg}, {'ok': False, 'error': code})
 print(n, 'vectors written')

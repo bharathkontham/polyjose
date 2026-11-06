@@ -22,7 +22,11 @@
 //!   gives the exact PEM text;
 //! - for `keys.import_der`, `der_b64u` is decoded (a non-canonical value is
 //!   a broken vector, never an outcome) and imported in the named `format`;
-//!   `keys.export_der` gives the exact DER, as canonical base64url.
+//!   `keys.export_der` gives the exact DER, as canonical base64url;
+//! - for `keys.generate_for` (ADR 0018 §5), `alg` is resolved in the one
+//!   RFC 7518 §7.1 registry, and a generated key, being random, is compared
+//!   by its shape, after the runner checks it is private, has exactly the
+//!   RFC members plus `alg`, and imports back unchanged.
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
@@ -42,10 +46,10 @@ use std::path::{Path, PathBuf};
 use polyjose::Error;
 use polyjose::header::Header;
 use polyjose::json::{self, Number, Object, Value};
-use polyjose::jwa::SigningAlg;
+use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use polyjose::jwk::Jwk;
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
-use polyjose::keys::KeyFormat;
+use polyjose::keys::{JoseAlg, KeyFormat, generate_for};
 use polyjose::util::{b64url_decode, b64url_encode};
 
 /// Top-level members of a vector; all required (schema `required`).
@@ -64,6 +68,7 @@ const OPERATIONS: &[&str] = &[
     "keys.export_pem",
     "keys.import_der",
     "keys.export_der",
+    "keys.generate_for",
     "jwe.encrypt",
     "jwe.decrypt",
     "jwt.validate",
@@ -389,6 +394,34 @@ const KEYS_EXPORT_DER_OK: Shape = Shape {
     members: &[req("der_b64u", Kind::Base64url)],
     rules: &[],
 };
+// ADR 0018 §5 generation through `keys::generate_for`: a JWS `alg`, a JWE
+// `alg` or a JWE `enc` name, any string (unknown names are under test).
+const KEYS_GENERATE_FOR_INPUT: Shape = Shape {
+    def: "keys_generate_for_input",
+    members: &[req("alg", Kind::String)],
+    rules: &[],
+};
+/// What a generated key is, without its random material: `kty`, `crv`
+/// (EC and OKP), the `alg` it is bound to (RFC 7517 §4.4) and the length
+/// of `k` in octets (`oct`). Compared as a JSON value, so a member the
+/// generated key has and the vector omits fails too.
+const KEYS_GENERATED_SHAPE: Shape = Shape {
+    def: "keys_generated_shape",
+    members: &[
+        req("kty", Kind::Enum(&["EC", "OKP", "oct"])),
+        opt("crv", Kind::String),
+        req("alg", Kind::String),
+        opt("k_octets", Kind::Count),
+    ],
+    rules: &[],
+};
+/// A generated key is random, so only its shape is expected; the runner
+/// checks the rest itself (see [`generated_shape`]).
+const KEYS_GENERATE_FOR_OK: Shape = Shape {
+    def: "keys_generate_for_ok",
+    members: &[req("shape", Kind::Nested(&KEYS_GENERATED_SHAPE))],
+    rules: &[],
+};
 
 /// The operations this runner implements.
 const SPECS: &[OpSpec] = &[
@@ -444,6 +477,12 @@ const SPECS: &[OpSpec] = &[
         name: "keys.export_der",
         input: &KEYS_EXPORT_DER_INPUT,
         ok: &[&KEYS_EXPORT_DER_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "keys.generate_for",
+        input: &KEYS_GENERATE_FOR_INPUT,
+        ok: &[&KEYS_GENERATE_FOR_OK],
         can_fail: true,
     },
 ];
@@ -1089,6 +1128,92 @@ fn run_keys_export_der(input: &Object, out: &mut Object) -> Result<Result<(), Er
     }
 }
 
+/// The identifier `name` registers. RFC 7518 §7.1 keeps JWS `alg`, JWE
+/// `alg` and JWE `enc` values in one registry whose names are unique
+/// (case-sensitive), so at most one of the three enums knows `name`. A name
+/// none of them knows stays `SigningAlg::Unknown`, which generation refuses
+/// with `UnsupportedAlgorithm`.
+fn jose_alg(name: &str) -> JoseAlg {
+    let signing = SigningAlg::from(name);
+    if signing.is_known() {
+        return signing.into();
+    }
+    let key_mgmt = KeyMgmtAlg::from(name);
+    if key_mgmt.is_known() {
+        return key_mgmt.into();
+    }
+    let enc = ContentEncAlg::from(name);
+    if enc.is_known() {
+        return enc.into();
+    }
+    signing.into()
+}
+
+/// The members a generated private key has: those RFC 7518 §6.2.1–§6.2.2
+/// (EC), RFC 8037 §2 (OKP) or RFC 7518 §6.4.1 (oct) define, plus the `alg`
+/// it is bound to (RFC 7517 §4.4). Sorted.
+fn generated_members(kty: &str) -> Option<&'static [&'static str]> {
+    match kty {
+        "EC" => Some(&["alg", "crv", "d", "kty", "x", "y"]),
+        "OKP" => Some(&["alg", "crv", "d", "kty", "x"]),
+        "oct" => Some(&["alg", "k", "kty"]),
+        _ => None,
+    }
+}
+
+/// The shape of a generated key, after checking what a shape cannot say:
+/// the key is private, has exactly the members of
+/// [`generated_members`], and imports back (`Jwk::from_object`) to the
+/// same JWK. Any failure there fails the vector.
+fn generated_shape(key: &Jwk) -> Result<Object, String> {
+    if key.is_public() {
+        return Err("generate_for returned a public key".to_owned());
+    }
+    let jwk = key.to_object();
+    let kty = jwk.get("kty").and_then(Value::as_str).unwrap_or_default();
+    let mut names: Vec<&str> = jwk.iter().map(|(name, _)| name).collect();
+    names.sort_unstable();
+    match generated_members(kty) {
+        Some(expected) if names == expected => {}
+        _ => {
+            return Err(format!(
+                "generate_for returned a JWK with members {names:?}"
+            ));
+        }
+    }
+    let again = Jwk::from_object(&jwk)
+        .map_err(|e| format!("the generated JWK does not import ({})", e.code()))?;
+    if again.to_object() != jwk {
+        return Err("the generated JWK imports as a different key".to_owned());
+    }
+    let mut shape = Object::new();
+    for name in ["kty", "crv", "alg"] {
+        if let Some(value) = jwk.get(name) {
+            shape.insert(name, value.clone());
+        }
+    }
+    if let Some(k) = jwk.get("k").and_then(Value::as_str) {
+        let octets = b64url_decode(k).map_err(|e| format!("generated k: {}", e.code()))?;
+        let octets = u64::try_from(octets.len()).expect("a length fits u64");
+        shape.insert(
+            "k_octets",
+            Number::from_u64(octets).expect("a key length is a safe integer"),
+        );
+    }
+    Ok(shape)
+}
+
+/// `keys.generate_for`: resolve `alg` (see [`jose_alg`]), generate, and
+/// return the key's shape (see [`generated_shape`]).
+fn run_keys_generate_for(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let key = match generate_for(jose_alg(input_str(input, "alg"))) {
+        Ok(key) => key,
+        Err(e) => return Ok(Err(e)),
+    };
+    out.insert("shape", generated_shape(&key)?);
+    Ok(Ok(()))
+}
+
 /// Runs the operation through the public API: the success outputs, or the
 /// library's error.
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
@@ -1148,6 +1273,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
         }
         "keys.export_der" => {
             if let Err(e) = run_keys_export_der(input, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "keys.generate_for" => {
+            if let Err(e) = run_keys_generate_for(input, &mut out)? {
                 return Ok(Err(e));
             }
         }
@@ -1784,6 +1914,28 @@ fn valid_vectors_pass() {
             r#"{"format":"spki","jwk":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}}"#,
             r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
         ),
+        // RFC 7518 §3.4 and §3.2; generated keys are compared by shape.
+        vector(
+            "keys.generate_for",
+            r#"{"alg":"ES256"}"#,
+            r#"{"ok":true,"shape":{"alg":"ES256","crv":"P-256","kty":"EC"}}"#,
+        ),
+        vector(
+            "keys.generate_for",
+            r#"{"alg":"HS256"}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","alg":"HS256","k_octets":32}}"#,
+        ),
+        // A JWE `enc` name resolves too (RFC 7518 §7.1, one registry).
+        vector(
+            "keys.generate_for",
+            r#"{"alg":"A128CBC-HS256"}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","alg":"A128CBC-HS256","k_octets":32}}"#,
+        ),
+        vector(
+            "keys.generate_for",
+            r#"{"alg":"RS256"}"#,
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+        ),
     ];
     for json in cases {
         assert!(
@@ -1949,6 +2101,89 @@ fn keys_vectors_fail_when_wrong_or_malformed() {
     ] {
         fails_naming_source(name, &json, needle);
     }
+}
+
+/// `keys.generate_for` is compared by shape only, but exactly: a wrong or
+/// missing shape member, an extra one and a malformed input all fail.
+#[test]
+fn generate_for_vectors_fail_when_wrong_or_malformed() {
+    for (name, input, expect, needle) in [
+        (
+            "wrong-curve.json",
+            r#"{"alg":"ES256"}"#,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-384","alg":"ES256"}}"#,
+            "`shape`",
+        ),
+        (
+            "no-curve.json",
+            r#"{"alg":"ES256"}"#,
+            r#"{"ok":true,"shape":{"kty":"EC","alg":"ES256"}}"#,
+            "`shape`",
+        ),
+        (
+            "wrong-length.json",
+            r#"{"alg":"A256GCM"}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","alg":"A256GCM","k_octets":16}}"#,
+            "`shape`",
+        ),
+        (
+            "key-material.json",
+            r#"{"alg":"HS256"}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","alg":"HS256","k_octets":32,"k":"AA"}}"#,
+            "/expect/shape/k",
+        ),
+        (
+            "rsa-shape.json",
+            r#"{"alg":"RS256"}"#,
+            r#"{"ok":true,"shape":{"kty":"RSA","alg":"RS256"}}"#,
+            "/expect/shape/kty",
+        ),
+        (
+            "jwk-output.json",
+            r#"{"alg":"HS256"}"#,
+            r#"{"ok":true,"jwk":{"kty":"oct"}}"#,
+            "/expect/jwk",
+        ),
+        (
+            "no-alg.json",
+            r#"{"enc":"A128GCM"}"#,
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+            "/input/enc",
+        ),
+        (
+            "curve-required.json",
+            r#"{"alg":"ECDH-ES"}"#,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-256","alg":"ECDH-ES"}}"#,
+            "expected success, got error InvalidKey",
+        ),
+    ] {
+        let json = vector("keys.generate_for", input, expect);
+        fails_naming_source(&format!("generate-{name}"), &json, needle);
+    }
+}
+
+/// The checks a shape cannot express catch a public key, a member RFC 7518
+/// §6 does not define for a generated key (here `kid`) and a missing `alg`;
+/// a well-formed private key yields its shape.
+#[test]
+fn generated_shape_checks_what_a_shape_cannot_say() {
+    let jwk = |json: &str| Jwk::from_json(json.as_bytes()).unwrap();
+    let public = jwk(A3_PUBLIC);
+    assert!(generated_shape(&public).unwrap_err().contains("public key"));
+    let with_kid = jwk(r#"{"kty":"oct","alg":"A128KW","kid":"1","k":"GawgguFyGrWKav7AX4VKUg"}"#);
+    assert!(generated_shape(&with_kid).unwrap_err().contains("members"));
+    let no_alg = jwk(A3_PRIVATE);
+    assert!(generated_shape(&no_alg).unwrap_err().contains("members"));
+    let bound = jwk(&A3_PRIVATE.replace(r#""kty":"EC""#, r#""kty":"EC","alg":"ES256""#));
+    assert_eq!(
+        Value::from(generated_shape(&bound).unwrap()),
+        parse(r#"{"kty":"EC","crv":"P-256","alg":"ES256"}"#)
+    );
+    let oct = jwk(r#"{"kty":"oct","alg":"A128KW","k":"GawgguFyGrWKav7AX4VKUg"}"#);
+    assert_eq!(
+        Value::from(generated_shape(&oct).unwrap()),
+        parse(r#"{"kty":"oct","alg":"A128KW","k_octets":16}"#)
+    );
 }
 
 /// Criterion 1: an operation the schema does not know fails the run.

@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §3.2",
+  "description": "Key generation for an algorithm: an HS256 key is 32 octets, the size of the SHA-256 output (RFC 7518 §3.2); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "HS256"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "HS256",
+      "k_octets": 32
+    }
+  }
+}
