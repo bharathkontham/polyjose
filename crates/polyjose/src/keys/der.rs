@@ -358,8 +358,20 @@ pub(crate) const MAX_DEPTH: usize = 16;
 ///   RELATIVE-OID subidentifiers minimal (§8.19.2, §8.20.2);
 /// - a BIT STRING has an initial octet of at most 7 (§8.6.2.2), 0 when no
 ///   octet follows (§8.6.2.3), and zero unused bits (§11.2.1);
-/// - SET and SET OF components are in ascending order (§11.6; for a SET
-///   this matches the tag order of §10.3, since tags are low-number).
+/// - the components of every SET are in SET OF order: their whole
+///   encodings ascending as octet strings (§11.6).
+///
+/// A SET and a SET OF have the same tag, UNIVERSAL 17 (X.690 §8.11.1,
+/// §8.12.1), and this walk has no schema to tell them apart, so every
+/// nested SET is checked as a SET OF. The SET rule of §10.3 orders by tag
+/// instead (X.680 §8.6: class, then number), and the two orders are not
+/// the same: the identifier octet puts the P/C bit (bit 6, §8.1.2.5)
+/// between the class (bits 8-7) and the number (bits 5-1) (§8.1.2.2), so
+/// a primitive `[1]` (0x81) sorts before a constructed `[0]` (0xA0) as
+/// octets but after it by tag. A DER SET whose components are in tag
+/// order but not in octet order is therefore rejected. This fails closed
+/// on values polyjose ignores; the SETs a PKCS#8 attribute is built from,
+/// Attributes (RFC 5958 §2) and attrValues (RFC 5652 §5.3), are SET OFs.
 pub(crate) fn check_well_formed(contents: &[u8], set_of: bool) -> Result<()> {
     #[derive(Clone, Copy)]
     struct Level<'a> {
@@ -1247,7 +1259,7 @@ mod tests {
         // tag order of a SET (§10.3, X.680 §8.6: class, then number) puts
         // [0] first. A SET and a SET OF share UNIVERSAL 17, and without a
         // schema every nested SET is checked as a SET OF (§11.6), here the
-        // attrValues of an Attribute (RFC 5958 §2, RFC 5280 §4.1.2.4).
+        // attrValues of an Attribute (RFC 5652 §5.3).
         let attribute = |values: &[u8]| {
             wrap(
                 0x30,
