@@ -473,8 +473,9 @@ proptest! {
         let pool = pool();
         let members: Vec<String> = picks.iter().map(|&i| pool[i].clone()).collect();
         let mut doc = set(&members).into_bytes();
-        if let Some((pos, byte)) = flip {
-            if !doc.is_empty() { let p = pos % doc.len(); doc[p] = byte; }
+        if let Some((pos, byte)) = flip && !doc.is_empty() {
+            let p = pos % doc.len();
+            doc[p] = byte;
         }
         if let Ok(s) = JwkSet::from_json(&doc) {
             let alg = &SigningAlg::KNOWN[alg_i % SigningAlg::KNOWN.len()];

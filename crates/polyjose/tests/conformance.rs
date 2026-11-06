@@ -142,7 +142,7 @@ fn is_text(s: &str) -> bool {
 }
 
 fn is_hex(s: &str) -> bool {
-    s.len() % 2 == 0 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    s.len().is_multiple_of(2) && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn is_base64url_alphabet(s: &str) -> bool {
