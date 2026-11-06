@@ -37,15 +37,6 @@ pub mod jwt;
 /// Key generation and PEM/DER key import and export (RFC 7468, RFC 5958,
 /// RFC 5280 §4.1, RFC 5915, RFC 8410, RFC 8017 App. A.1.1).
 pub mod keys;
-// Internal: nothing calls the CSPRNG until the JWE/key-generation features
-// land; the expectation fails (and must be removed) once something does.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fill_random is the RNG boundary for later JWE and key-generation features"
-    )
-)]
 mod rng;
 #[cfg(feature = "insecure-test-vectors")]
 pub use rng::insecure_test_vectors;

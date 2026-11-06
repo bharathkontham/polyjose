@@ -129,9 +129,23 @@ fn ec_and_okp_unknown_or_out_of_scope_curves_are_unsupported() {
 #[test]
 fn okp_x_and_d_must_be_32_octets() {
     for crv in ["Ed25519", "X25519"] {
+        // At 32 octets, the RFC 8037 A.1 key pair: import rejects Ed25519
+        // points with a torsion component and a `d` that does not derive
+        // `x` (ADR 0043 §1, §3). The other lengths fail on length alone.
+        let sized = |len: usize, real: &str| if len == 32 { real.to_owned() } else { b(len) };
         let key = |x: usize, d: Option<usize>| {
-            let d = d.map(|d| format!(r#","d":"{}""#, b(d))).unwrap_or_default();
-            format!(r#"{{"kty":"OKP","crv":"{crv}","x":"{}"{d}}}"#, b(x))
+            let d = d
+                .map(|d| {
+                    format!(
+                        r#","d":"{}""#,
+                        sized(d, "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A")
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                r#"{{"kty":"OKP","crv":"{crv}","x":"{}"{d}}}"#,
+                sized(x, "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo")
+            )
         };
         assert_eq!(code(&key(32, None)), "OK");
         assert_eq!(code(&key(32, Some(32))), "OK");
