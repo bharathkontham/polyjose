@@ -316,6 +316,116 @@ fn sign(seed: &[u8; 32], msg: &[u8]) -> [u8; 64] {
 }'
 expect_pass "ed25519_dalek::SigningKey over several lines in a file that does not use rsa"
 
+# --- Check 9, macro rule (ADR 0049 §1): rsa as an identifier inside a macro call ----------------
+# A macro can turn an `rsa` identifier into the head of a path (`$c::pkcs1v15::SigningKey`), which
+# no other text rule sees. The compiled-symbol check sees it only in code that is codegened, so
+# these three public but uncodegened spellings (found by the F01 tester) are this rule's alone:
+# an uncalled #[inline] pub fn, an uninstantiated generic pub fn, and cfg(not(debug_assertions))
+# code (the release pass of check-rsa-symbols.sh also catches the last, see rsa-symbols.sh).
+lib_rs=crates/polyjose/src/lib.rs
+node_rs=bindings/node/src/lib.rs
+key_macro='macro_rules! k { ($c:ident) => { $c::pkcs1v15::SigningKey::<sha2::Sha256> } }'
+macro_body='{
+    use p256::ecdsa::signature::{SignatureEncoding, Signer as _};
+    let mut rng = p256::elliptic_curve::rand_core::UnwrapErr(crate::rng::CryptoRngAdapter::os());
+    let key = <k!(rsa)>::random(&mut rng, 2048).unwrap();
+    key.sign(msg).to_vec()
+}'
+in_k='rsa as an identifier inside the macro call k!'
+
+new_case macro-inline-pub
+append_to "$lib_rs" "$key_macro
+#[inline] pub fn evil(msg: &[u8]) -> Vec<u8> $macro_body"
+expect_fail "uncalled #[inline] pub fn with <k!(rsa)>::random" "$lib_rs:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-generic-pub
+append_to "$lib_rs" "$key_macro
+pub fn evil<T>(msg: &[u8], _t: T) -> Vec<u8> $macro_body"
+expect_fail "uninstantiated generic pub fn<T> with <k!(rsa)>::random" "$lib_rs:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-release-only
+append_to "$lib_rs" "$key_macro
+#[cfg(not(debug_assertions))] pub fn evil(msg: &[u8]) -> Vec<u8> $macro_body"
+expect_fail "#[cfg(not(debug_assertions))] pub fn with <k!(rsa)>::random" "$lib_rs:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-brackets
+append_to "$hmac" 'type K = k![rsa];'
+expect_fail "k![rsa]" "$hmac:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-braces
+append_to "$hmac" $'k! {\n    rsa\n}'
+expect_fail "k! { rsa } over several lines" "$hmac:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-split-comment
+append_to "$hmac" $'type K = k\n    ! /* x */ (\n    // y\n    rsa);'
+expect_fail "k / ! /* x */ ( / // y / rsa)" "$hmac:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-raw-ident
+append_to "$hmac" 'type K = k!(r#rsa);'
+expect_fail "k!(r#rsa)" "$hmac:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-global-path
+append_to "$hmac" 'type K = k!(::rsa);'
+expect_fail "k!(::rsa), the crate as a global path" "$hmac:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-in-std-macro
+append_to "$hmac" 'fn f() { assert!(<k!(rsa)>::random(&mut rng(), 2048).is_ok()); }'
+expect_fail "assert!(<k!(rsa)>::random(..))" "$hmac:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-std-macro-in-macro
+append_to "$hmac" 'k!(assert!(rsa));'
+expect_fail "k!(assert!(rsa)): k! receives the tokens of assert!(..)" "$hmac:[0-9]+: $in_k" "$src_fail"
+
+new_case macro-qualified-std-name
+append_to "$hmac" 'fn f() { self::assert!(rsa); }'
+expect_fail "self::assert!(rsa) is not the std assert!" "$hmac:[0-9]+: rsa as an identifier inside the macro call assert!" "$src_fail"
+
+new_case macro-rules-body
+append_to "$hmac" 'macro_rules! j { ($($t:tt)*) => { rsa $($t)* } }
+type K = j!(::pkcs1v15::SigningKey<sha2::Sha256>);'
+expect_fail "rsa in a macro_rules! body" "$hmac:[0-9]+: rsa as an identifier inside the macro call macro_rules! j" "$src_fail"
+
+new_case macro-attribute
+append_to "$hmac" '#[evil(rsa)] fn f() {}'
+expect_fail "#[evil(rsa)]: an attribute macro gets its arguments as tokens" "$hmac:[0-9]+: rsa as an identifier inside the attribute #\\[evil" "$src_fail"
+
+new_case macro-binding
+append_to "$node_rs" "$key_macro
+pub fn evil<T>(msg: &[u8], _t: T) -> Vec<u8> $macro_body"
+expect_fail "<k!(rsa)>::random in a binding" "$node_rs:[0-9]+: $in_k" "$src_fail"
+
+# The std macros whose arguments the rule trusts must not be redefined or renamed in.
+new_case macro-shadow-rules
+append_to "$hmac" 'macro_rules! assert_eq { ($c:ident) => { $c::pkcs1v15::SigningKey<sha2::Sha256> } }'
+expect_fail "macro_rules! assert_eq" "$hmac:[0-9]+: macro_rules! assert_eq: a macro named like a std macro" "$src_fail"
+
+new_case macro-shadow-use-as
+append_to "$hmac" 'pub(crate) use k as assert;'
+expect_fail "use k as assert" "$hmac:[0-9]+: as assert: a macro named like a std macro" "$src_fail"
+
+# Must pass: polyjose paths that end in a module named rsa, literals and comments, std macros
+# whose arguments are ordinary expressions, and rsa outside any macro call.
+new_case macro-polyjose-paths
+append_to "$node_rs" 'k!(polyjose::jws::rsa::verify);
+k!(::polyjose::jws::rsa::verify);'
+append_to crates/polyjose/src/jws/mod.rs 'k!(self::rsa::verify);
+k!(crate::jws::rsa::verify);
+macro_rules! m { () => { k!($crate::jws::rsa::verify) } }'
+append_to "$hmac" 'k!(super::rsa::verify);'
+expect_pass "macro calls naming polyjose::jws::rsa, ::polyjose::.., self::rsa, crate::jws::rsa, \$crate::jws::rsa and super::rsa"
+
+new_case macro-literals-comments
+append_to "$hmac" $'fn f() -> String { format!("rsa") }\nk!("rsa", r#"rsa"#, b"rsa", \'r\', c"rsa");\n// k!(rsa)\n/* k!(rsa) */\nk!(/* rsa */ x);\n/// k!(rsa)\nfn g() {}'
+expect_pass "format!(\"rsa\"), rsa in string, raw string, byte string and comments inside macro calls"
+
+new_case macro-std-arguments
+append_to "$hmac" $'fn f(rsa: u8) {\n    assert!(rsa > 0, "{rsa}");\n    assert_eq!(names(&rsa), ["e"]);\n    debug_assert_ne!(rsa, 1);\n    let _ = format!("{}", rsa);\n    let _ = vec![rsa; 2];\n    let _ = matches!(rsa, 0);\n}'
+expect_pass "assert!(rsa > 0), assert_eq!(names(&rsa), ..) and other std macros with a variable named rsa"
+
+new_case macro-not-a-call
+append_to crates/polyjose/src/jws/plain.rs $'use super::{hmac, rsa};\nfn f(rsa: u8) -> bool {\n    if !(rsa == 0) { return !(rsa == 1); }\n    rsa != (rsa)\n}'
+expect_pass "use super::{hmac, rsa}, if !(rsa ..), return !(rsa ..) and rsa != (rsa) outside macro calls"
+
 # --- Check 10: sha1 --------------------------------------------------------------------------------
 new_case sha1
 add_core_dependency 'sha1 = { version = "0.11", default-features = false }'
