@@ -370,8 +370,11 @@ fn encrypt_nested_refuses_a_different_caller_cty() {
 }
 
 /// RFC 7515 §7.1, ADR 0027 §6–§7: the input must be a three-part compact
-/// JWS. A nested JWT (five parts), a JWS JSON serialization, or anything
-/// else is `InvalidFormat`, before the caller's `cty` is looked at.
+/// JWS. A nested JWT (five parts), a JWS JSON serialization, an empty
+/// signature part (an Unsecured JWS, RFC 7519 §6; RFC 8725 §3.2), a
+/// protected header that is not base64url-encoded JSON object text
+/// (RFC 7515 §5.2 steps 2–3), or anything else is `InvalidFormat`,
+/// before the caller's `cty` or `zip` is looked at.
 #[test]
 fn encrypt_nested_needs_a_compact_jws() {
     let inner = inner_es256();
@@ -383,6 +386,16 @@ fn encrypt_nested_needs_a_compact_jws() {
         inner.split('.').nth(2).unwrap(),
     );
     let with_newline = format!("{inner}\n");
+    let (head, rest) = inner.split_once('.').unwrap();
+    let (payload, _) = rest.split_once('.').unwrap();
+    // A signed JWT with its signature part emptied.
+    let no_signature = format!("{head}.{payload}.");
+    // Protected headers that are not base64url JSON objects.
+    let with_header = |h: &[u8]| format!("{}.{payload}.c2ln", b64url_encode(h));
+    let not_json = with_header(b"not json");
+    let an_array = with_header(br#"["alg","none"]"#);
+    let duplicate_alg = with_header(br#"{"alg":"ES256","alg":"none"}"#);
+    let not_utf8 = with_header(b"{\"alg\":\"\xff\"}");
     for input in [
         "",
         "not a jws",
@@ -391,14 +404,154 @@ fn encrypt_nested_needs_a_compact_jws() {
         json.as_str(),
         with_newline.as_str(),
         ".eyJ9.sig",
+        no_signature.as_str(),
+        // RFC 7519 §6.1: the example Unsecured JWT.
+        "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.",
+        // Review probe (b): `{"alg":"none"}`, `{"sub":"x"}`, no signature.
+        "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.",
+        // Not base64url: one character in a final quantum, and a
+        // non-canonical final quantum (RFC 4648 §3.5, §4).
+        "e.eyJ9.sig",
+        "QR.eyJ9.sig",
+        not_json.as_str(),
+        an_array.as_str(),
+        duplicate_alg.as_str(),
+        not_utf8.as_str(),
     ] {
-        for e in [kw("{}"), kw(r#"{"cty":"JOSE"}"#)] {
+        for e in [kw("{}"), kw(r#"{"cty":"JOSE"}"#), kw("{}").compress()] {
             assert!(
                 matches!(jwt::encrypt_nested(input, &e), Err(Error::InvalidFormat(_))),
                 "{input:?}"
             );
         }
     }
+}
+
+/// RFC 8725 §3.2, ADR 0007, ADR 0027 §8: `none` is never produced. An
+/// inner protected header with `alg: none` is `AlgorithmNotAllowed` even
+/// with a non-empty (fake) signature part, before the caller's `cty` and
+/// `zip` are looked at. A missing or non-string `alg` (RFC 7515 §4.1.1:
+/// it "MUST be present" and is a string) is `InvalidHeader("alg")`. Only
+/// the protected header is decoded.
+#[test]
+fn encrypt_nested_refuses_an_unsecured_or_alg_less_jws() {
+    let encryptors = [
+        kw("{}"),
+        kw(r#"{"typ":"JWT","kid":"outer-1"}"#),
+        kw(r#"{"cty":"JOSE"}"#),
+        kw("{}").compress(),
+        kw(r#"{"cty":"JOSE"}"#).compress(),
+    ];
+    let with_header = |h: &str| format!("{}.eyJzdWIiOiJ4In0.c2ln", b64url_encode(h.as_bytes()));
+    for h in [
+        r#"{"alg":"none"}"#,
+        r#"{"typ":"JWT","alg":"none"}"#,
+        r#"{"alg":"none","kid":"k1","crit":["exp"],"exp":1}"#,
+        "  {\"alg\" : \"none\"}\n",
+    ] {
+        let input = with_header(h);
+        for e in &encryptors {
+            assert_eq!(
+                jwt::encrypt_nested(&input, e),
+                Err(Error::AlgorithmNotAllowed),
+                "{h}"
+            );
+        }
+    }
+    // The review's probe (b) with a fake signature part.
+    for e in &encryptors {
+        assert_eq!(
+            jwt::encrypt_nested("eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.c2ln", e),
+            Err(Error::AlgorithmNotAllowed)
+        );
+    }
+    for h in [
+        "{}",
+        r#"{"typ":"JWT"}"#,
+        r#"{"alg":null}"#,
+        r#"{"alg":1}"#,
+        r#"{"alg":["none"]}"#,
+        r#"{"alg":{"none":true}}"#,
+        r#"{"Alg":"none"}"#,
+    ] {
+        let input = with_header(h);
+        for e in &encryptors {
+            assert_eq!(
+                jwt::encrypt_nested(&input, e),
+                Err(Error::InvalidHeader("alg")),
+                "{h}"
+            );
+        }
+    }
+    // RFC 7515 §4.1.1: any other string `alg` is the receiver's to check
+    // against its allow-list; the issuer checks the shape and `none` only.
+    let other = with_header(r#"{"alg":"x-unregistered"}"#);
+    assert_eq!(code(jwt::encrypt_nested(&other, &kw("{}"))), "ok");
+}
+
+/// RFC 8725 §3.6: compression before encryption "SHOULD NOT" be done
+/// (compressed data "often reveals information about the plaintext"), so
+/// `encrypt_nested` refuses an encryptor that would set `zip`, in every
+/// build: one built with `Encryptor::compress()`, or one whose protected
+/// header sets a `zip` member (RFC 7516 §4.1.3). `InvalidHeader("zip")`,
+/// after the caller's `cty` check.
+#[test]
+fn encrypt_nested_refuses_compression() {
+    let inner = inner_es256();
+    for e in [
+        kw("{}").compress(),
+        kw(r#"{"cty":"JWT"}"#).compress(),
+        kw(r#"{"typ":"JWT","kid":"outer-1"}"#).compress(),
+        kw(r#"{"zip":"DEF"}"#),
+        kw(r#"{"zip":"XYZ"}"#),
+        kw(r#"{"zip":"def"}"#),
+        kw(r#"{"cty":"JWT","zip":"DEF"}"#),
+        kw(r#"{"zip":"DEF"}"#).compress(),
+    ] {
+        assert_eq!(
+            jwt::encrypt_nested(&inner, &e),
+            Err(Error::InvalidHeader("zip")),
+            "{e:?}"
+        );
+    }
+    // The caller's `cty` is checked first.
+    for e in [
+        kw(r#"{"cty":"JOSE"}"#).compress(),
+        kw(r#"{"cty":"JOSE","zip":"DEF"}"#),
+    ] {
+        assert_eq!(
+            jwt::encrypt_nested(&inner, &e),
+            Err(Error::InvalidHeader("cty")),
+            "{e:?}"
+        );
+    }
+}
+
+/// With the `deflate` codec (ADR 0017), the same encryptor would compress
+/// (`zip: "DEF"`, RFC 7516 §4.1.3), so the refusal is `encrypt_nested`'s
+/// own (RFC 8725 §3.6). Receiving is unchanged: a compressed nested JWT
+/// made with 0003's encryptor directly still decrypts and verifies, since
+/// RFC 7516 §5.2 step 17 allows it and `DecryptPolicy::max_decompressed_len`
+/// bounds it.
+#[cfg(feature = "deflate")]
+#[test]
+fn encrypt_nested_refuses_deflate_but_decrypt_nested_accepts_it() {
+    let inner = inner_es256();
+    let compressing = kw("{}").compress();
+    let plain_jwe = compressing.encrypt_compact(inner.as_bytes()).unwrap();
+    assert_eq!(outer_header_of(&plain_jwe).zip.as_deref(), Some("DEF"));
+    assert_eq!(
+        jwt::encrypt_nested(&inner, &compressing),
+        Err(Error::InvalidHeader("zip"))
+    );
+    let received = kw(r#"{"cty":"JWT"}"#)
+        .compress()
+        .encrypt_compact(inner.as_bytes())
+        .unwrap();
+    assert_eq!(outer_header_of(&received).zip.as_deref(), Some("DEF"));
+    let v = open(&received).unwrap();
+    assert_eq!(v.inner.claims.iss.as_deref(), Some(ISSUER));
+    assert_eq!(v.outer_header.zip.as_deref(), Some("DEF"));
 }
 
 /// RFC 7516 §7.1: the output is compact, so the encryptor's compact
@@ -483,15 +636,26 @@ fn an_inner_alg_outside_the_jwt_policy_is_algorithm_not_allowed() {
 }
 
 /// RFC 8725 §3.2, ADR 0007: an inner Unsecured JWS (`alg: none`) is never
-/// accepted, even inside a valid JWE.
+/// accepted, even inside a valid JWE, with an empty or a fake signature.
+/// `encrypt_nested` never makes one, so the JWE is built with 0003's
+/// encryptor directly.
 #[test]
 fn an_inner_alg_none_is_algorithm_not_allowed() {
     let payload = b64url_encode(claims().to_json().as_bytes());
-    let inner = format!("{}.{payload}.", b64url_encode(br#"{"alg":"none"}"#));
-    assert!(matches!(
-        open(&nest(&inner)),
-        Err(Error::AlgorithmNotAllowed)
-    ));
+    let header = b64url_encode(br#"{"alg":"none"}"#);
+    for inner in [
+        format!("{header}.{payload}."),
+        format!("{header}.{payload}.c2ln"),
+    ] {
+        assert!(jwt::encrypt_nested(&inner, &kw("{}")).is_err(), "{inner}");
+        assert!(
+            matches!(
+                open(&nest_raw(&inner, r#"{"cty":"JWT"}"#)),
+                Err(Error::AlgorithmNotAllowed)
+            ),
+            "{inner}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -658,6 +822,54 @@ fn the_default_typ_mode_applies_to_the_outer_typ() {
     }
     let token = nest_raw(&inner, r#"{"cty":"JWT","typ":"secevent+jwt"}"#);
     assert!(matches!(open(&token), Err(Error::InvalidHeader(_))));
+}
+
+/// Review N3, ADR 0027 §7: under an explicit-type policy
+/// (`Policy::access_token`, `Policy::expect_typ`) an outer JWE `typ` that
+/// is present must match the same type, so the common issuer habit of an
+/// outer `typ: JWT` is `InvalidHeader("typ")`; RFC 8725 §3.11 types the
+/// inner JWT. An issuer omits the outer `typ`, as `encrypt_nested` does
+/// unless the caller's protected header sets one.
+#[test]
+fn an_outer_typ_jwt_fails_an_explicit_type_policy() {
+    let key = es256_key();
+    let at = jwt::sign(
+        &access_token_claims(),
+        &IssueOptions::new(SigningAlg::ES256).access_token(),
+        &key,
+    )
+    .unwrap();
+    let clock = FixedClock(NOW);
+    let verifier = public(&key);
+    let policies = [
+        Policy::access_token(&clock, &SIGNING, &[ISSUER], &[AUDIENCE]).unwrap(),
+        Policy::new(&clock, &SIGNING)
+            .unwrap()
+            .audiences(&[AUDIENCE])
+            .expect_typ("at+jwt"),
+    ];
+    let omitted = jwt::encrypt_nested(&at, &kw("{}")).unwrap();
+    let outer_jwt = jwt::encrypt_nested(&at, &kw(r#"{"typ":"JWT"}"#)).unwrap();
+    let outer_same = jwt::encrypt_nested(&at, &kw(r#"{"typ":"at+jwt"}"#)).unwrap();
+    assert_eq!(outer_header_of(&omitted).typ, None);
+    assert_eq!(outer_header_of(&outer_jwt).typ.as_deref(), Some("JWT"));
+    for policy in &policies {
+        let run = |token: &str| {
+            jwt::decrypt_nested(
+                token,
+                &jwk(KEK),
+                &decrypt_policy(),
+                Keys::One(&verifier),
+                policy,
+            )
+        };
+        assert_eq!(code(run(&omitted)), "ok");
+        assert_eq!(code(run(&outer_same)), "ok");
+        assert_eq!(
+            run(&outer_jwt).map(|_| ()),
+            Err(Error::InvalidHeader("typ"))
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -944,4 +1156,126 @@ fn the_pbes2_budget_applies_to_nested_decryption() {
     assert_eq!(run(1).unwrap_err(), Error::DecryptionFailed);
     assert!(run(1_000).is_ok());
     assert!(run(10_000).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// F02 tester probes: error order and header-only decoding
+// ---------------------------------------------------------------------------
+
+/// ADR 0027 §8 / F02: the documented order (shape, inner `alg`, caller
+/// `cty`, `zip`, encrypt) is exact for every two-fault pairing.
+#[test]
+fn encrypt_nested_error_order_is_exact_for_every_pair() {
+    let good = inner_es256();
+    let hdr = |h: &str| format!("{}.eyJzdWIiOiJ4In0.c2ln", b64url_encode(h.as_bytes()));
+    let none = hdr(r#"{"alg":"none"}"#);
+    let no_alg = hdr("{}");
+    let bad_shape = "a.b".to_string();
+    let bad_cty = || kw(r#"{"cty":"JOSE"}"#);
+    let zipped = || kw(r#"{"zip":"DEF"}"#);
+    let enc_fail = || kw("{}").aad(b"aad".to_vec());
+    let both = |c: &str| kw(&format!(r#"{{"cty":"JOSE","zip":"{c}"}}"#));
+    // (input, encryptor, expected code)
+    let cases: Vec<(&str, Encryptor, &str)> = vec![
+        // shape beats everything
+        (&bad_shape, kw("{}"), "InvalidFormat"),
+        (&bad_shape, bad_cty(), "InvalidFormat"),
+        (&bad_shape, zipped(), "InvalidFormat"),
+        (&bad_shape, enc_fail(), "InvalidFormat"),
+        // inner alg beats cty, zip, encrypt
+        (&none, bad_cty(), "AlgorithmNotAllowed"),
+        (&none, zipped(), "AlgorithmNotAllowed"),
+        (&none, enc_fail(), "AlgorithmNotAllowed"),
+        (&no_alg, bad_cty(), "InvalidHeader"),
+        (&no_alg, zipped(), "InvalidHeader"),
+        // cty beats zip and encrypt
+        (&good, both("DEF"), "InvalidHeader"),
+        (&good, bad_cty().aad(b"x".to_vec()), "InvalidHeader"),
+        // zip beats encrypt
+        (&good, zipped().aad(b"x".to_vec()), "InvalidHeader"),
+        // encrypt last
+        (&good, enc_fail(), "ok_or_other"),
+    ];
+    for (input, e, want) in cases {
+        let got = jwt::encrypt_nested(input, &e);
+        if want == "ok_or_other" {
+            assert!(got.is_err(), "encrypt failure must surface");
+            continue;
+        }
+        assert_eq!(code(got), want, "{input}");
+    }
+    // distinguish the two invalid_header causes
+    assert_eq!(
+        jwt::encrypt_nested(&no_alg, &bad_cty()),
+        Err(Error::InvalidHeader("alg"))
+    );
+    assert_eq!(
+        jwt::encrypt_nested(&good, &both("DEF")),
+        Err(Error::InvalidHeader("cty"))
+    );
+    assert_eq!(
+        jwt::encrypt_nested(&good, &zipped().aad(b"x".to_vec())),
+        Err(Error::InvalidHeader("zip"))
+    );
+    assert_eq!(
+        jwt::encrypt_nested(&none, &zipped()),
+        Err(Error::AlgorithmNotAllowed)
+    );
+}
+
+/// Only the protected header is decoded: a payload part that is not valid
+/// base64url (but is base64url characters) never changes the result.
+#[test]
+fn encrypt_nested_never_decodes_the_payload() {
+    let h = |s: &str| b64url_encode(s.as_bytes());
+    // "A" and "QR" are not canonical base64url quanta; "####" is not chars.
+    for payload in ["A", "QR", "AAAAA", "_-_-_"] {
+        let ok = format!("{}.{payload}.c2ln", h(r#"{"alg":"ES256"}"#));
+        assert_eq!(code(jwt::encrypt_nested(&ok, &kw("{}"))), "ok", "{payload}");
+        let none = format!("{}.{payload}.c2ln", h(r#"{"alg":"none"}"#));
+        assert_eq!(
+            jwt::encrypt_nested(&none, &kw("{}")),
+            Err(Error::AlgorithmNotAllowed),
+            "{payload}"
+        );
+    }
+    // Empty payload part is shape-valid too.
+    let empty = format!("{}..c2ln", h(r#"{"alg":"ES256"}"#));
+    assert_eq!(code(jwt::encrypt_nested(&empty, &kw("{}"))), "ok");
+}
+
+/// Odd inner `alg` spellings: duplicates are a parse error (InvalidFormat,
+/// as documented), null/number/array are `InvalidHeader("alg")`, and an
+/// escaped spelling of `none` is still `none` after JSON unescaping.
+#[test]
+fn encrypt_nested_inner_alg_edge_spellings() {
+    let hdr = |h: &str| format!("{}.eyJ9.c2ln", b64url_encode(h.as_bytes()));
+    for h in [
+        r#"{"alg":"none","alg":"ES256"}"#,
+        r#"{"alg":"ES256","alg":"none"}"#,
+    ] {
+        assert!(
+            matches!(
+                jwt::encrypt_nested(&hdr(h), &kw("{}")),
+                Err(Error::InvalidFormat(_))
+            ),
+            "{h}"
+        );
+    }
+    for h in [r#"{"alg":null}"#, r#"{"alg":1}"#, r#"{"alg":true}"#] {
+        assert_eq!(
+            jwt::encrypt_nested(&hdr(h), &kw("{}")),
+            Err(Error::InvalidHeader("alg")),
+            "{h}"
+        );
+    }
+    assert_eq!(
+        jwt::encrypt_nested(&hdr(r#"{"alg":"none"}"#), &kw("{}")),
+        Err(Error::AlgorithmNotAllowed)
+    );
+    // A JSON-escaped spelling of `none` is still `none` once unescaped.
+    assert_eq!(
+        jwt::encrypt_nested(&hdr("{\"alg\":\"\\u006eone\"}"), &kw("{}")),
+        Err(Error::AlgorithmNotAllowed)
+    );
 }

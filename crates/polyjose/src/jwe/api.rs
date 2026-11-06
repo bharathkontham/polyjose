@@ -462,6 +462,16 @@ impl Encryptor {
         self.protected.as_ref()
     }
 
+    /// Whether [`compress`](Self::compress) was called, so that encrypting
+    /// would set `zip: "DEF"` in the JWE Protected Header (RFC 7516
+    /// §4.1.3).
+    ///
+    /// Crate-internal: the nested-JWT issuer refuses compression before
+    /// encryption (RFC 8725 §3.6: it "SHOULD NOT" be done).
+    pub(crate) fn compresses(&self) -> bool {
+        self.compress
+    }
+
     /// The JWE Shared Unprotected Header (RFC 7516 §7.2.1 `unprotected`),
     /// JSON only. Not integrity-protected: the receiver must not trust its
     /// contents (ADR 0050 §3).
