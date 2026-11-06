@@ -1,7 +1,10 @@
 //! Loader for the vendored Wycheproof vectors (ADR 0008 layer 1).
 #![cfg(test)]
 
+use serde::Deserialize;
+use serde::de::IgnoredAny;
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The vendored directory, `tests/third_party/wycheproof`.
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/third_party/wycheproof");
@@ -83,6 +86,686 @@ fn verify_entry(entry: &ManifestEntry, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// The test-vector schema of a suite, from its `schema` member. It fixes
+/// which group and test fields are present.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Schema {
+    /// `mac_test_schema_v1.json`: groups of type `MacTest`, tests with
+    /// [`Input::Mac`].
+    Mac,
+    /// `rsassa_pkcs1_verify_schema_v1.json` (`RsassaPkcs1Verify`): RSASSA-PKCS1-v1_5,
+    /// RFC 8017 §8.2. Groups carry `keyJwk` and an RSA [`PublicKey`].
+    RsassaPkcs1Verify,
+    /// `rsassa_pss_verify_schema_v1.json` (`RsassaPssVerify`): RSASSA-PSS,
+    /// RFC 8017 §8.1, MGF1. Groups carry `publicKeyJwk`, an RSA [`PublicKey`]
+    /// and the salt length.
+    RsassaPssVerify,
+    /// `ecdsa_p1363_verify_schema_v1.json` (`EcdsaP1363Verify`): ECDSA with
+    /// the `R || S` signature encoding that JWS uses (RFC 7518 §3.4).
+    EcdsaP1363Verify,
+    /// `eddsa_verify_schema_v1.json` (`EddsaVerify`): Ed25519, RFC 8032 §5.1.
+    EddsaVerify,
+    /// `json_web_signature_schema_v1.json` (`JsonWebSignature`): whole JWS
+    /// objects (RFC 7515), tests with [`Input::Jws`] and groups with
+    /// [`JwsKeys`].
+    JsonWebSignature,
+}
+
+impl Schema {
+    /// The value of each group's `type` member under this schema.
+    fn group_type(self) -> &'static str {
+        match self {
+            Schema::Mac => "MacTest",
+            Schema::RsassaPkcs1Verify => "RsassaPkcs1Verify",
+            Schema::RsassaPssVerify => "RsassaPssVerify",
+            Schema::EcdsaP1363Verify => "EcdsaP1363Verify",
+            Schema::EddsaVerify => "EddsaVerify",
+            Schema::JsonWebSignature => "JsonWebSignature",
+        }
+    }
+
+    /// The upstream schema file name.
+    fn file(self) -> &'static str {
+        match self {
+            Schema::Mac => "mac_test_schema_v1.json",
+            Schema::RsassaPkcs1Verify => "rsassa_pkcs1_verify_schema_v1.json",
+            Schema::RsassaPssVerify => "rsassa_pss_verify_schema_v1.json",
+            Schema::EcdsaP1363Verify => "ecdsa_p1363_verify_schema_v1.json",
+            Schema::EddsaVerify => "eddsa_verify_schema_v1.json",
+            Schema::JsonWebSignature => "json_web_signature_schema_v1.json",
+        }
+    }
+}
+
+/// Every vendored suite: `(name, schema, algorithm)`. The name is the file
+/// name without `_test.json`; `algorithm` is the file's `algorithm` member
+/// (the JOSE-level file has none).
+const SUITES: &[(&str, Schema, Option<&str>)] = &[
+    ("hmac_sha256", Schema::Mac, Some("HMACSHA256")),
+    ("hmac_sha384", Schema::Mac, Some("HMACSHA384")),
+    ("hmac_sha512", Schema::Mac, Some("HMACSHA512")),
+    (
+        "rsa_signature_2048_sha256",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_2048_sha384",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_2048_sha512",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_3072_sha256",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_3072_sha384",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_3072_sha512",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_4096_sha256",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_4096_sha384",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_4096_sha512",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_signature_8192_sha256",
+        Schema::RsassaPkcs1Verify,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_pss_2048_sha256_mgf1_32",
+        Schema::RsassaPssVerify,
+        Some(PSS),
+    ),
+    (
+        "rsa_pss_2048_sha384_mgf1_48",
+        Schema::RsassaPssVerify,
+        Some(PSS),
+    ),
+    (
+        "rsa_pss_3072_sha256_mgf1_32",
+        Schema::RsassaPssVerify,
+        Some(PSS),
+    ),
+    (
+        "rsa_pss_4096_sha256_mgf1_32",
+        Schema::RsassaPssVerify,
+        Some(PSS),
+    ),
+    (
+        "rsa_pss_4096_sha384_mgf1_48",
+        Schema::RsassaPssVerify,
+        Some(PSS),
+    ),
+    (
+        "rsa_pss_4096_sha512_mgf1_64",
+        Schema::RsassaPssVerify,
+        Some(PSS),
+    ),
+    (
+        "ecdsa_secp256r1_sha256_p1363",
+        Schema::EcdsaP1363Verify,
+        Some("ECDSA"),
+    ),
+    (
+        "ecdsa_secp384r1_sha384_p1363",
+        Schema::EcdsaP1363Verify,
+        Some("ECDSA"),
+    ),
+    (
+        "ecdsa_secp521r1_sha512_p1363",
+        Schema::EcdsaP1363Verify,
+        Some("ECDSA"),
+    ),
+    (
+        "ecdsa_secp256k1_sha256_p1363",
+        Schema::EcdsaP1363Verify,
+        Some("ECDSA"),
+    ),
+    ("ed25519", Schema::EddsaVerify, Some("EDDSA")),
+    ("json_web_signature", Schema::JsonWebSignature, None),
+];
+const PKCS1: &str = "RSASSA-PKCS1-v1_5";
+const PSS: &str = "RSASSA-PSS";
+
+/// The names of the vendored suites that start with `prefix`, for example
+/// `names("rsa_pss_")`. Panics if none does, so a typo cannot select an
+/// empty set.
+pub(crate) fn names(prefix: &str) -> Vec<&'static str> {
+    let found: Vec<&'static str> = SUITES
+        .iter()
+        .map(|(name, _, _)| *name)
+        .filter(|name| name.starts_with(prefix))
+        .collect();
+    assert!(
+        !found.is_empty(),
+        "no vendored Wycheproof suite starts with {prefix:?}"
+    );
+    found
+}
+
+/// A parsed Wycheproof file.
+pub(crate) struct Suite {
+    /// The suite name: the file name without `_test.json`.
+    pub(crate) name: String,
+    /// The file's schema; every group and test follows it.
+    pub(crate) schema: Schema,
+    /// The file's `algorithm` member (`None` for `json_web_signature`).
+    pub(crate) algorithm: Option<String>,
+    /// The flag definitions (`notes`): flag name → note. Every test flag is
+    /// one of these.
+    pub(crate) notes: BTreeMap<String, Note>,
+    /// The test groups, in file order.
+    pub(crate) groups: Vec<Group>,
+}
+
+impl Suite {
+    /// Every test with its group, in file order.
+    pub(crate) fn tests(&self) -> impl Iterator<Item = (&Group, &Test)> {
+        self.groups
+            .iter()
+            .flat_map(|group| group.tests.iter().map(move |test| (group, test)))
+    }
+}
+
+/// What a flag means (`notes` in the file).
+pub(crate) struct Note {
+    /// Upstream's classification, e.g. `AUTH_BYPASS`, `EDGE_CASE`.
+    pub(crate) bug_type: String,
+    /// Upstream's description of the flag.
+    pub(crate) description: String,
+}
+
+/// A test group: one key (or key size) and its tests.
+///
+/// Which fields are `Some` depends on the [`Schema`]; [`load`] checks them,
+/// so a family test may rely on its schema's fields being present.
+pub(crate) struct Group {
+    /// The group's `comment` (`JsonWebSignature` only: the algorithm or
+    /// topic, e.g. `"es256"`, `"rfc7520"`).
+    pub(crate) comment: Option<String>,
+    /// `keySize` in bits (`Mac`, `RsassaPkcs1Verify`, `RsassaPssVerify`).
+    pub(crate) key_size: Option<u32>,
+    /// `tagSize` in bits (`Mac`). A JWS MAC is never truncated
+    /// (RFC 7518 §3.2), so groups with `tag_size` below the hash size hold
+    /// truncated MACs.
+    pub(crate) tag_size: Option<u32>,
+    /// `sha`, the message digest, e.g. `"SHA-256"` (the RSA and ECDSA
+    /// schemas).
+    pub(crate) sha: Option<String>,
+    /// `mgfSha`, the MGF1 digest (`RsassaPssVerify`; the MGF is always MGF1).
+    pub(crate) mgf_sha: Option<String>,
+    /// `sLen`, the PSS salt length in bytes (`RsassaPssVerify`).
+    pub(crate) salt_len: Option<u32>,
+    /// The group's public key as a JWK, as JSON text: `keyJwk`
+    /// (`RsassaPkcs1Verify`) or `publicKeyJwk` (the other signature
+    /// schemas), for `polyjose::jwk::Jwk::from_json(jwk.as_bytes())`.
+    /// Always present for RSA; absent on some ECDSA and EdDSA edge-case
+    /// groups, which have only [`Group::public_key`].
+    ///
+    /// The text is re-serialized from the parsed value, so member order and
+    /// whitespace may differ from the file; the members and values do not.
+    pub(crate) key_jwk: Option<String>,
+    /// The raw public key (`publicKey`), for the signature schemas.
+    pub(crate) public_key: Option<PublicKey>,
+    /// The `private` and `public` JWKs (`JsonWebSignature`).
+    pub(crate) jws_keys: Option<JwsKeys>,
+    /// The tests, in file order.
+    pub(crate) tests: Vec<Test>,
+}
+
+/// The raw public key of a signature group, as Wycheproof prints it. The
+/// integers are big-endian bytes decoded from the file's hex; they may carry
+/// a leading `00` (ASN.1 style) or be shorter than the field size.
+pub(crate) enum PublicKey {
+    /// `modulus` and `publicExponent`.
+    Rsa {
+        modulus: Vec<u8>,
+        public_exponent: Vec<u8>,
+    },
+    /// An EC point: `curve` (e.g. `"secp256r1"`), `wx` and `wy`.
+    Ec {
+        curve: String,
+        wx: Vec<u8>,
+        wy: Vec<u8>,
+    },
+    /// An EdDSA key: `curve` (`"edwards25519"`) and the encoded point `pk`.
+    Eddsa { curve: String, pk: Vec<u8> },
+}
+
+/// The keys of a `JsonWebSignature` group, as JWK JSON text.
+pub(crate) struct JwsKeys {
+    /// `private`: the signing key (for `oct` keys, the only key).
+    pub(crate) private: String,
+    /// `public`: the verification key, when it differs from `private`.
+    pub(crate) public: Option<String>,
+}
+
+/// One test case.
+pub(crate) struct Test {
+    /// `tcId`, unique within the file. Deviation lists key on it.
+    pub(crate) tc_id: u32,
+    /// Upstream's comment.
+    pub(crate) comment: String,
+    /// Upstream's flags; each is a key of [`Suite::notes`].
+    pub(crate) flags: Vec<String>,
+    /// Upstream's expected result.
+    pub(crate) result: Expected,
+    /// The inputs; the variant follows the [`Schema`].
+    pub(crate) input: Input,
+}
+
+/// A test's inputs.
+pub(crate) enum Input {
+    /// The signature schemas: `msg` and `sig`.
+    Signature { msg: Vec<u8>, sig: Vec<u8> },
+    /// `Mac`: the per-test `key`, `msg` and `tag`.
+    Mac {
+        key: Vec<u8>,
+        msg: Vec<u8>,
+        tag: Vec<u8>,
+    },
+    /// `JsonWebSignature`: the JWS, in compact or JSON serialization.
+    Jws(String),
+}
+
+impl Test {
+    /// `(msg, sig)` of a signature test. Panics on another schema.
+    pub(crate) fn signature(&self) -> (&[u8], &[u8]) {
+        match &self.input {
+            Input::Signature { msg, sig } => (msg, sig),
+            _ => panic!("tcId {} is not a signature test", self.tc_id),
+        }
+    }
+
+    /// `(key, msg, tag)` of a `Mac` test. Panics on another schema.
+    pub(crate) fn mac(&self) -> (&[u8], &[u8], &[u8]) {
+        match &self.input {
+            Input::Mac { key, msg, tag } => (key, msg, tag),
+            _ => panic!("tcId {} is not a MAC test", self.tc_id),
+        }
+    }
+
+    /// The JWS text of a `JsonWebSignature` test. Panics on another schema.
+    pub(crate) fn jws(&self) -> &str {
+        match &self.input {
+            Input::Jws(jws) => jws,
+            _ => panic!("tcId {} is not a JWS test", self.tc_id),
+        }
+    }
+
+    /// Whether the test carries `flag`.
+    pub(crate) fn has_flag(&self, flag: &str) -> bool {
+        self.flags.iter().any(|f| f == flag)
+    }
+}
+
+/// A test's expected result (`result`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Expected {
+    /// The input is valid and must be accepted.
+    Valid,
+    /// The input is invalid and must be rejected.
+    Invalid,
+    /// Either outcome is allowed (upstream `doc/files.md`); polyjose's
+    /// choice goes in the family's deviation list.
+    Acceptable,
+}
+
+/// Loads and checks the vendored suite `name` (see [`names`]), e.g.
+/// `load("hmac_sha256")` for `hmac_sha256_test.json`.
+///
+/// Panics, naming the problem, if the name is not vendored, the file does
+/// not match its README checksum, or the file does not follow its schema:
+/// an unknown member, a missing field, bad hex, a duplicate `tcId`, an
+/// undefined flag or a wrong `numberOfTests`.
+pub(crate) fn load(name: &str) -> Suite {
+    let Some(&(_, schema, algorithm)) = SUITES.iter().find(|(n, _, _)| *n == name) else {
+        panic!("{name:?} is not a vendored Wycheproof suite");
+    };
+    let file = format!("{name}_test.json");
+    let entries = manifest();
+    let Some(entry) = entries.iter().find(|e| e.file == file) else {
+        panic!("{file} is not in the README checksum table");
+    };
+    let path = format!("{DIR}/{file}");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+    if let Err(e) = verify_entry(entry, &bytes) {
+        panic!("{e}");
+    }
+    let text = core::str::from_utf8(&bytes).unwrap_or_else(|e| panic!("{file}: {e}"));
+    parse(name, schema, algorithm, text).unwrap_or_else(|e| panic!("{file}: {e}"))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawSuite {
+    algorithm: Option<String>,
+    schema: String,
+    number_of_tests: usize,
+    #[serde(rename = "header")]
+    _header: IgnoredAny,
+    notes: BTreeMap<String, RawNote>,
+    test_groups: Vec<RawGroup>,
+}
+
+/// Notes may also carry `effect`, `cves` and `links`, which are ignored.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawNote {
+    bug_type: String,
+    description: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawGroup {
+    #[serde(rename = "type")]
+    group_type: String,
+    #[serde(rename = "source")]
+    _source: IgnoredAny,
+    comment: Option<String>,
+    key_size: Option<u32>,
+    tag_size: Option<u32>,
+    sha: Option<String>,
+    mgf: Option<String>,
+    mgf_sha: Option<String>,
+    s_len: Option<u32>,
+    public_key: Option<RawPublicKey>,
+    // The ASN.1, DER and PEM encodings repeat `publicKey`.
+    #[serde(rename = "publicKeyAsn")]
+    _public_key_asn: Option<IgnoredAny>,
+    #[serde(rename = "publicKeyDer")]
+    _public_key_der: Option<IgnoredAny>,
+    #[serde(rename = "publicKeyPem")]
+    _public_key_pem: Option<IgnoredAny>,
+    key_jwk: Option<serde_json::Value>,
+    public_key_jwk: Option<serde_json::Value>,
+    private: Option<serde_json::Value>,
+    public: Option<serde_json::Value>,
+    tests: Vec<RawTest>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawPublicKey {
+    #[serde(rename = "type")]
+    key_type: Option<String>,
+    curve: Option<String>,
+    key_size: Option<u32>,
+    uncompressed: Option<String>,
+    wx: Option<String>,
+    wy: Option<String>,
+    pk: Option<String>,
+    modulus: Option<String>,
+    public_exponent: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawTest {
+    tc_id: u32,
+    comment: String,
+    flags: Vec<String>,
+    result: Expected,
+    key: Option<String>,
+    msg: Option<String>,
+    sig: Option<String>,
+    tag: Option<String>,
+    jws: Option<String>,
+}
+
+/// Decodes hex (either case, even length).
+fn hex(text: &str) -> Result<Vec<u8>, String> {
+    let digit = |c: u8| match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => Err(format!("not hex: {text:?}")),
+    };
+    if text.len() % 2 != 0 {
+        return Err(format!("odd-length hex: {text:?}"));
+    }
+    text.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| Ok((digit(pair[0])? << 4) | digit(pair[1])?))
+        .collect()
+}
+
+fn json_text(value: &serde_json::Value) -> Result<String, String> {
+    if !value.is_object() {
+        return Err("a JWK must be a JSON object".to_owned());
+    }
+    serde_json::to_string(value).map_err(|e| e.to_string())
+}
+
+fn parse(name: &str, schema: Schema, algorithm: Option<&str>, text: &str) -> Result<Suite, String> {
+    let raw: RawSuite = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    if raw.schema != schema.file() {
+        return Err(format!(
+            "schema {:?}, expected {:?}",
+            raw.schema,
+            schema.file()
+        ));
+    }
+    if raw.algorithm.as_deref() != algorithm {
+        return Err(format!(
+            "algorithm {:?}, expected {algorithm:?}",
+            raw.algorithm
+        ));
+    }
+    let notes: BTreeMap<String, Note> = raw
+        .notes
+        .into_iter()
+        .map(|(flag, note)| {
+            let note = Note {
+                bug_type: note.bug_type,
+                description: note.description,
+            };
+            (flag, note)
+        })
+        .collect();
+    let mut tc_ids = BTreeSet::new();
+    let mut groups = Vec::with_capacity(raw.test_groups.len());
+    for raw_group in raw.test_groups {
+        let group = parse_group(schema, raw_group)?;
+        for test in &group.tests {
+            if !tc_ids.insert(test.tc_id) {
+                return Err(format!("duplicate tcId {}", test.tc_id));
+            }
+            if let Some(flag) = test.flags.iter().find(|f| !notes.contains_key(*f)) {
+                return Err(format!("tcId {}: flag {flag:?} has no note", test.tc_id));
+            }
+        }
+        groups.push(group);
+    }
+    if tc_ids.len() != raw.number_of_tests {
+        return Err(format!(
+            "{} tests, numberOfTests says {}",
+            tc_ids.len(),
+            raw.number_of_tests
+        ));
+    }
+    Ok(Suite {
+        name: name.to_owned(),
+        schema,
+        algorithm: raw.algorithm,
+        notes,
+        groups,
+    })
+}
+
+fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
+    if raw.group_type != schema.group_type() {
+        return Err(format!(
+            "group type {:?} in a {:?} file",
+            raw.group_type,
+            schema.group_type()
+        ));
+    }
+    let key_jwk = match (&raw.key_jwk, &raw.public_key_jwk) {
+        (Some(_), Some(_)) => return Err("group has both keyJwk and publicKeyJwk".to_owned()),
+        (Some(jwk), None) | (None, Some(jwk)) => Some(json_text(jwk)?),
+        (None, None) => None,
+    };
+    let public_key = raw.public_key.map(parse_public_key).transpose()?;
+    let jws_keys = match (&raw.private, &raw.public) {
+        (Some(private), public) => Some(JwsKeys {
+            private: json_text(private)?,
+            public: public.as_ref().map(json_text).transpose()?,
+        }),
+        (None, Some(_)) => return Err("group has `public` without `private`".to_owned()),
+        (None, None) => None,
+    };
+    let is_rsa = |k: &Option<PublicKey>| matches!(k, Some(PublicKey::Rsa { .. }));
+    let is_ec = |k: &Option<PublicKey>| matches!(k, Some(PublicKey::Ec { .. }));
+    let is_eddsa = |k: &Option<PublicKey>| matches!(k, Some(PublicKey::Eddsa { .. }));
+    // The fields each schema must have (and the key fields it must not).
+    let shape_ok = match schema {
+        Schema::Mac => {
+            raw.key_size.is_some()
+                && raw.tag_size.is_some()
+                && public_key.is_none()
+                && key_jwk.is_none()
+        }
+        Schema::RsassaPkcs1Verify => {
+            raw.key_size.is_some()
+                && raw.sha.is_some()
+                && raw.key_jwk.is_some()
+                && is_rsa(&public_key)
+        }
+        Schema::RsassaPssVerify => {
+            raw.key_size.is_some()
+                && raw.sha.is_some()
+                && raw.mgf.as_deref() == Some("MGF1")
+                && raw.mgf_sha.is_some()
+                && raw.s_len.is_some()
+                && raw.public_key_jwk.is_some()
+                && is_rsa(&public_key)
+        }
+        Schema::EcdsaP1363Verify => raw.sha.is_some() && is_ec(&public_key),
+        Schema::EddsaVerify => is_eddsa(&public_key),
+        Schema::JsonWebSignature => jws_keys.is_some() && public_key.is_none() && key_jwk.is_none(),
+    };
+    if !shape_ok {
+        return Err(format!(
+            "a {} group is missing a field or has an unexpected key",
+            schema.group_type()
+        ));
+    }
+    let tests = raw
+        .tests
+        .into_iter()
+        .map(|t| parse_test(schema, t))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Group {
+        comment: raw.comment,
+        key_size: raw.key_size,
+        tag_size: raw.tag_size,
+        sha: raw.sha,
+        mgf_sha: raw.mgf_sha,
+        salt_len: raw.s_len,
+        key_jwk,
+        public_key,
+        jws_keys,
+        tests,
+    })
+}
+
+fn parse_public_key(raw: RawPublicKey) -> Result<PublicKey, String> {
+    let RawPublicKey {
+        key_type,
+        curve,
+        key_size,
+        uncompressed,
+        wx,
+        wy,
+        pk,
+        modulus,
+        public_exponent,
+    } = raw;
+    let ec_type = key_type.as_deref() == Some("EcPublicKey");
+    let eddsa_type = key_type.as_deref() == Some("EDDSAPublicKey");
+    match (modulus, public_exponent, wx, wy, pk) {
+        (Some(n), Some(e), None, None, None) if key_type.is_none() && curve.is_none() => {
+            Ok(PublicKey::Rsa {
+                modulus: hex(&n)?,
+                public_exponent: hex(&e)?,
+            })
+        }
+        (None, None, Some(x), Some(y), None) if ec_type && key_size.is_some() => {
+            let (Some(curve), Some(_)) = (curve, uncompressed) else {
+                return Err("EC public key without curve or uncompressed point".to_owned());
+            };
+            Ok(PublicKey::Ec {
+                curve,
+                wx: hex(&x)?,
+                wy: hex(&y)?,
+            })
+        }
+        (None, None, None, None, Some(pk)) if eddsa_type && key_size.is_some() => {
+            let Some(curve) = curve else {
+                return Err("EdDSA public key without curve".to_owned());
+            };
+            Ok(PublicKey::Eddsa {
+                curve,
+                pk: hex(&pk)?,
+            })
+        }
+        _ => Err("publicKey is not an RSA, EC or EdDSA key".to_owned()),
+    }
+}
+
+fn parse_test(schema: Schema, raw: RawTest) -> Result<Test, String> {
+    let tc_id = raw.tc_id;
+    let input = match (schema, raw.key, raw.msg, raw.sig, raw.tag, raw.jws) {
+        (Schema::Mac, Some(key), Some(msg), None, Some(tag), None) => Input::Mac {
+            key: hex(&key)?,
+            msg: hex(&msg)?,
+            tag: hex(&tag)?,
+        },
+        (Schema::JsonWebSignature, None, None, None, None, Some(jws)) => Input::Jws(jws),
+        (Schema::Mac | Schema::JsonWebSignature, ..) => {
+            return Err(format!("tcId {tc_id}: fields do not match the schema"));
+        }
+        (_, None, Some(msg), Some(sig), None, None) => Input::Signature {
+            msg: hex(&msg)?,
+            sig: hex(&sig)?,
+        },
+        _ => return Err(format!("tcId {tc_id}: fields do not match the schema")),
+    };
+    Ok(Test {
+        tc_id,
+        comment: raw.comment,
+        flags: raw.flags,
+        result: raw.result,
+        input,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +840,391 @@ mod tests {
     #[test]
     fn hex_is_lowercase() {
         assert_eq!(to_hex(&[0x00, 0x0f, 0xa5, 0xff]), "000fa5ff");
+    }
+
+    use base64ct::{Base64UrlUnpadded, Encoding};
+
+    fn jwk_value(text: Option<&str>) -> serde_json::Value {
+        let text = text.unwrap_or_else(|| panic!("no JWK"));
+        serde_json::from_str(text).unwrap_or_else(|e| panic!("bad JWK text: {e}"))
+    }
+
+    fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
+        let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+        &bytes[start..]
+    }
+
+    /// `(name, digest bits)` from a name such as `rsa_pss_2048_sha256_mgf1_32`.
+    fn digest_bits(name: &str) -> u32 {
+        let sha = name
+            .split('_')
+            .find_map(|part| part.strip_prefix("sha"))
+            .unwrap_or_else(|| panic!("{name} names no digest"));
+        sha.parse().unwrap_or_else(|_| panic!("{name}: bad digest"))
+    }
+
+    fn count(suite: &Suite, expected: Expected) -> usize {
+        suite.tests().filter(|(_, t)| t.result == expected).count()
+    }
+
+    #[test]
+    fn every_vendored_suite_loads_and_is_in_the_readme() {
+        let mut listed: Vec<String> = manifest().into_iter().map(|e| e.file).collect();
+        listed.retain(|f| f != "LICENSE");
+        listed.sort();
+        let mut known: Vec<String> = SUITES
+            .iter()
+            .map(|(n, _, _)| format!("{n}_test.json"))
+            .collect();
+        known.sort();
+        assert_eq!(listed, known);
+        for &(name, schema, algorithm) in SUITES {
+            let suite = load(name);
+            assert_eq!(suite.name, name);
+            assert_eq!(suite.schema, schema);
+            assert_eq!(suite.algorithm.as_deref(), algorithm);
+            assert!(suite.tests().count() > 0, "{name} has no tests");
+            for (flag, note) in &suite.notes {
+                assert!(
+                    !note.bug_type.is_empty() && !note.description.is_empty(),
+                    "{name}: {flag}"
+                );
+            }
+            for (_, test) in suite.tests() {
+                assert!(test.flags.iter().all(|f| test.has_flag(f)));
+                assert!(!test.has_flag("NoSuchFlag"));
+                let _ = &test.comment;
+            }
+        }
+        assert_eq!(names("").len(), SUITES.len());
+    }
+
+    #[test]
+    fn hmac_suites_have_per_test_keys_and_truncated_groups() {
+        let names = names("hmac_");
+        assert_eq!(names.len(), 3);
+        for name in names {
+            let suite = load(name);
+            let hash_bits = digest_bits(name);
+            assert_eq!(suite.schema, Schema::Mac);
+            assert_eq!(suite.tests().count(), 174, "{name}");
+            for (group, test) in suite.tests() {
+                let (key, msg, tag) = test.mac();
+                let key_size = group.key_size.unwrap_or_default();
+                let tag_size = group.tag_size.unwrap_or_default();
+                assert_eq!(
+                    key.len() * 8,
+                    key_size as usize,
+                    "{name} tcId {}",
+                    test.tc_id
+                );
+                if test.result == Expected::Valid {
+                    assert_eq!(
+                        tag.len() * 8,
+                        tag_size as usize,
+                        "{name} tcId {}",
+                        test.tc_id
+                    );
+                }
+                assert!(msg.len() < 1 << 20);
+                assert!(group.public_key.is_none() && group.key_jwk.is_none());
+            }
+            // Full-length MACs, truncated MACs (RFC 7518 §3.2 forbids them in
+            // JWS) and keys shorter than the hash output are all present.
+            assert!(suite.groups.iter().any(|g| g.tag_size == Some(hash_bits)));
+            assert!(suite.groups.iter().any(|g| g.tag_size < Some(hash_bits)));
+            assert!(suite.groups.iter().any(|g| g.key_size < Some(hash_bits)));
+            assert_eq!(count(&suite, Expected::Acceptable), 0);
+        }
+    }
+
+    /// The JWK `n`/`e` are the raw modulus and exponent (RFC 7518 §6.3.1).
+    fn assert_rsa_jwk_matches(name: &str, group: &Group) {
+        let jwk = jwk_value(group.key_jwk.as_deref());
+        let Some(PublicKey::Rsa {
+            modulus,
+            public_exponent,
+        }) = &group.public_key
+        else {
+            panic!("{name}: no RSA public key");
+        };
+        assert_eq!(jwk["kty"], "RSA", "{name}");
+        let n = Base64UrlUnpadded::encode_string(strip_leading_zeros(modulus));
+        let e = Base64UrlUnpadded::encode_string(strip_leading_zeros(public_exponent));
+        assert_eq!(jwk["n"], n.as_str(), "{name}");
+        assert_eq!(jwk["e"], e.as_str(), "{name}");
+        let bits = strip_leading_zeros(modulus).len() * 8;
+        assert_eq!(Some(bits as u32), group.key_size, "{name}");
+    }
+
+    #[test]
+    fn rsa_pkcs1_suites_carry_a_key_jwk_matching_the_raw_key() {
+        let names = names("rsa_signature_");
+        assert_eq!(names.len(), 10);
+        for name in names {
+            let suite = load(name);
+            let sha = format!("SHA-{}", digest_bits(name));
+            assert_eq!(suite.schema, Schema::RsassaPkcs1Verify);
+            for group in &suite.groups {
+                assert_eq!(group.sha.as_deref(), Some(sha.as_str()), "{name}");
+                assert_rsa_jwk_matches(name, group);
+            }
+            for (group, test) in suite.tests() {
+                let (_, sig) = test.signature();
+                if test.result == Expected::Valid {
+                    let bits = group.key_size.unwrap_or_default() as usize;
+                    assert_eq!(sig.len() * 8, bits, "{name} tcId {}", test.tc_id);
+                }
+            }
+            assert!(count(&suite, Expected::Valid) > 0);
+            assert!(count(&suite, Expected::Invalid) > 0);
+            assert_eq!(count(&suite, Expected::Acceptable), 1, "{name}");
+        }
+    }
+
+    #[test]
+    fn rsa_pss_suites_use_mgf1_with_the_message_digest_and_a_hash_length_salt() {
+        let names = names("rsa_pss_");
+        assert_eq!(names.len(), 6);
+        for name in names {
+            let suite = load(name);
+            let bits = digest_bits(name);
+            let sha = format!("SHA-{bits}");
+            assert_eq!(suite.schema, Schema::RsassaPssVerify);
+            for group in &suite.groups {
+                // The JWS PS* profile (RFC 7518 §3.5).
+                assert_eq!(group.sha.as_deref(), Some(sha.as_str()), "{name}");
+                assert_eq!(group.mgf_sha.as_deref(), Some(sha.as_str()), "{name}");
+                assert_eq!(group.salt_len, Some(bits / 8), "{name}");
+                assert_rsa_jwk_matches(name, group);
+            }
+            for (_, test) in suite.tests() {
+                let (msg, sig) = test.signature();
+                assert!(!sig.is_empty() || test.result == Expected::Invalid);
+                assert!(msg.len() < 1 << 20);
+            }
+        }
+    }
+
+    #[test]
+    fn ecdsa_p1363_suites_have_points_and_nine_groups_without_a_jwk() {
+        let names = names("ecdsa_");
+        assert_eq!(names.len(), 4);
+        for (name, curve, field_bytes) in [
+            ("ecdsa_secp256r1_sha256_p1363", "secp256r1", 32),
+            ("ecdsa_secp384r1_sha384_p1363", "secp384r1", 48),
+            ("ecdsa_secp521r1_sha512_p1363", "secp521r1", 66),
+            ("ecdsa_secp256k1_sha256_p1363", "secp256k1", 32),
+        ] {
+            assert!(names.contains(&name));
+            let suite = load(name);
+            assert_eq!(suite.schema, Schema::EcdsaP1363Verify);
+            let sha = format!("SHA-{}", digest_bits(name));
+            let without_jwk = suite.groups.iter().filter(|g| g.key_jwk.is_none()).count();
+            assert_eq!(without_jwk, 9, "{name}");
+            for group in &suite.groups {
+                assert_eq!(group.sha.as_deref(), Some(sha.as_str()), "{name}");
+                let Some(PublicKey::Ec { curve: c, wx, wy }) = &group.public_key else {
+                    panic!("{name}: no EC public key");
+                };
+                assert_eq!(c, curve, "{name}");
+                assert!(strip_leading_zeros(wx).len() <= field_bytes, "{name}");
+                assert!(strip_leading_zeros(wy).len() <= field_bytes, "{name}");
+            }
+            for (_, test) in suite.tests() {
+                let (_, sig) = test.signature();
+                if test.result == Expected::Valid {
+                    assert_eq!(sig.len(), 2 * field_bytes, "{name} tcId {}", test.tc_id);
+                }
+            }
+            // High-S signatures are valid ECDSA (research.md §3).
+            assert!(count(&suite, Expected::Valid) > count(&suite, Expected::Invalid));
+            assert_eq!(count(&suite, Expected::Acceptable), 0);
+        }
+    }
+
+    #[test]
+    fn ed25519_suite_has_32_byte_keys_and_acceptable_small_order_cases() {
+        let suite = load("ed25519");
+        assert_eq!(suite.schema, Schema::EddsaVerify);
+        assert_eq!(suite.tests().count(), 210);
+        assert_eq!(
+            suite.groups.iter().filter(|g| g.key_jwk.is_none()).count(),
+            33
+        );
+        for group in &suite.groups {
+            let Some(PublicKey::Eddsa { curve, pk }) = &group.public_key else {
+                panic!("no EdDSA public key");
+            };
+            assert_eq!(curve, "edwards25519");
+            assert_eq!(pk.len(), 32);
+        }
+        let acceptable: Vec<&Test> = suite
+            .tests()
+            .filter(|(_, t)| t.result == Expected::Acceptable)
+            .map(|(_, t)| t)
+            .collect();
+        assert_eq!(acceptable.len(), 29);
+        for test in acceptable {
+            assert!(
+                test.has_flag("SmallOrderPublicKey") || test.has_flag("MixedOrderPublicKey"),
+                "tcId {}: {:?}",
+                test.tc_id,
+                test.flags
+            );
+        }
+    }
+
+    #[test]
+    fn json_web_signature_suite_has_jws_text_and_group_keys() {
+        let suite = load("json_web_signature");
+        assert_eq!(suite.schema, Schema::JsonWebSignature);
+        assert_eq!(suite.groups.len(), 23);
+        assert_eq!(suite.tests().count(), 401);
+        assert_eq!(count(&suite, Expected::Valid), 46);
+        assert_eq!(count(&suite, Expected::Invalid), 355);
+        for group in &suite.groups {
+            assert!(group.comment.is_some());
+            let keys = group
+                .jws_keys
+                .as_ref()
+                .unwrap_or_else(|| panic!("no JWS keys"));
+            assert!(jwk_value(Some(&keys.private)).is_object());
+            if let Some(public) = &keys.public {
+                assert!(
+                    jwk_value(Some(public)).get("d").is_none(),
+                    "public JWK has d"
+                );
+            }
+        }
+        assert!(
+            suite
+                .groups
+                .iter()
+                .any(|g| g.jws_keys.as_ref().is_some_and(|k| k.public.is_none()))
+        );
+        // The empty string is one of the invalid inputs.
+        let empty: Vec<&Test> = suite
+            .tests()
+            .map(|(_, t)| t)
+            .filter(|t| t.jws().is_empty())
+            .collect();
+        assert!(!empty.is_empty() && empty.iter().all(|t| t.result == Expected::Invalid));
+        // Both serializations are present (RFC 7515 §7.1, §7.2).
+        assert!(suite.tests().any(|(_, t)| t.jws().starts_with('{')));
+        assert!(suite.tests().any(|(_, t)| t.jws().starts_with("ey")));
+    }
+
+    #[test]
+    fn input_accessors_reject_the_wrong_schema() {
+        let suite = load("ed25519");
+        let (_, test) = suite.tests().next().unwrap_or_else(|| panic!("no tests"));
+        assert!(std::panic::catch_unwind(|| test.mac()).is_err());
+        assert!(std::panic::catch_unwind(|| test.jws()).is_err());
+        let _ = test.signature();
+    }
+
+    #[test]
+    fn hex_decoding_is_strict() {
+        assert_eq!(hex(""), Ok(vec![]));
+        assert_eq!(hex("00ffA5"), Ok(vec![0x00, 0xff, 0xa5]));
+        assert!(hex("0").is_err());
+        assert!(hex("0g").is_err());
+        assert!(hex(" 00").is_err());
+        assert!(hex("+0").is_err());
+    }
+
+    /// A minimal `MacTest` file, with `{test}` replaced by one test object.
+    fn mac_file(number_of_tests: usize, extra_group_member: &str, test: &str) -> String {
+        format!(
+            r#"{{"algorithm":"HMACSHA256","schema":"mac_test_schema_v1.json",
+               "numberOfTests":{number_of_tests},"header":[],
+               "notes":{{"Pseudorandom":{{"bugType":"FUNCTIONALITY","description":"d"}}}},
+               "testGroups":[{{"type":"MacTest","source":{{}},"keySize":8,"tagSize":8,
+               {extra_group_member}"tests":[{test}]}}]}}"#
+        )
+    }
+
+    const GOOD_TEST: &str = r#"{"tcId":1,"comment":"","flags":["Pseudorandom"],"key":"00","msg":"","tag":"ff","result":"valid"}"#;
+
+    fn parse_mac(text: &str) -> Result<Suite, String> {
+        parse("hmac_sha256", Schema::Mac, Some("HMACSHA256"), text)
+    }
+
+    #[test]
+    fn parse_accepts_a_minimal_file() {
+        let suite = parse_mac(&mac_file(1, "", GOOD_TEST));
+        let suite = suite.unwrap_or_else(|e| panic!("{e}"));
+        let (_, test) = suite.tests().next().unwrap_or_else(|| panic!("no test"));
+        assert_eq!(test.tc_id, 1);
+        assert_eq!(test.mac(), (&[0x00][..], &[][..], &[0xff][..]));
+    }
+
+    #[test]
+    fn parse_rejects_files_that_break_the_schema() {
+        let cases = [
+            (
+                "unknown group member",
+                mac_file(1, r#""surprise":1,"#, GOOD_TEST),
+            ),
+            ("wrong numberOfTests", mac_file(2, "", GOOD_TEST)),
+            (
+                "duplicate tcId",
+                mac_file(2, "", &format!("{GOOD_TEST},{GOOD_TEST}")),
+            ),
+            (
+                "undefined flag",
+                mac_file(1, "", &GOOD_TEST.replace("Pseudorandom", "Nope")),
+            ),
+            (
+                "bad hex",
+                mac_file(1, "", &GOOD_TEST.replace(r#""ff""#, r#""f""#)),
+            ),
+            (
+                "unknown result",
+                mac_file(1, "", &GOOD_TEST.replace("valid", "maybe")),
+            ),
+            (
+                "signature in a MAC file",
+                mac_file(1, "", &GOOD_TEST.replace("tag", "sig")),
+            ),
+            (
+                "missing key",
+                mac_file(1, "", &GOOD_TEST.replace(r#""key":"00","#, "")),
+            ),
+            (
+                "unknown test member",
+                mac_file(1, "", &GOOD_TEST.replace("{", r#"{"x":1,"#)),
+            ),
+            (
+                "public key in a MAC group",
+                mac_file(
+                    1,
+                    r#""publicKey":{"modulus":"01","publicExponent":"03"},"#,
+                    GOOD_TEST,
+                ),
+            ),
+            (
+                "wrong schema",
+                mac_file(1, "", GOOD_TEST).replace("mac_test", "mac_tset"),
+            ),
+            (
+                "wrong algorithm",
+                mac_file(1, "", GOOD_TEST).replace("HMACSHA256", "HMACSHA1"),
+            ),
+            (
+                "wrong group type",
+                mac_file(1, "", GOOD_TEST).replace("MacTest", "Mac"),
+            ),
+        ];
+        for (what, text) in cases {
+            assert!(parse_mac(&text).is_err(), "{what} was accepted");
+        }
+    }
+
+    #[test]
+    fn load_rejects_unknown_names() {
+        assert!(std::panic::catch_unwind(|| load("hmac_sha1")).is_err());
+        assert!(std::panic::catch_unwind(|| names("nope")).is_err());
     }
 }
