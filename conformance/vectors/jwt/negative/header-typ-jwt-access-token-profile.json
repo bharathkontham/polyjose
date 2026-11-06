@@ -1,0 +1,27 @@
+{
+  "source": "RFC 9068 §2.1, §4; RFC 8725 §3.11; ADR 0027 §5; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "typ JWT under profile access_token, with every RFC 9068 §2.2 claim present and matching: the profile requires typ at+jwt: InvalidHeader",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoiYXBpIiwiZXhwIjoxNzAwMDAwNjAwLCJpYXQiOjE2OTk5OTk5OTAsImp0aSI6Imp0aS0xIiwiY2xpZW50X2lkIjoiY2xpZW50LTEifQ.CAVj8NO1O081RmNFEdvCENSdyHKd5lH6iTXlTsGhUV0",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "profile": "access_token",
+      "issuer": "https://issuer.example",
+      "audience": [
+        "api"
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

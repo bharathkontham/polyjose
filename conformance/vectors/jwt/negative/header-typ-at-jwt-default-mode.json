@@ -1,0 +1,20 @@
+{
+  "source": "RFC 8725 §3.11, §3.12; RFC 9068 §2.1; ADR 0027 §5; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "typ at+jwt under the default typing mode (absent or JWT only): an explicitly typed access token is kept out of generic validation: InvalidHeader",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJleHAiOjE3MDAwMDA2MDB9.55ShSerV6SpW5_HBhy8UfhpeRZaPooVRn_bE2L00kFA",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}
