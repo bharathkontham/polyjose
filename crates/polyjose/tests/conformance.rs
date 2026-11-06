@@ -55,7 +55,7 @@ use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use polyjose::jwe::{self, DecryptPolicy, Encryptor, JsonForm, Recipient};
 use polyjose::jwk::{Jwk, JwkSet};
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
-use polyjose::jwt::{self, FixedClock, Keys, Policy, VerifiedJwt};
+use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt};
 use polyjose::keys::{JoseAlg, KeyFormat, generate_for};
 use polyjose::util::{b64url_decode, b64url_encode};
 
@@ -122,6 +122,7 @@ const OPERATIONS: &[&str] = &[
     "jwe.encrypt",
     "jwe.decrypt",
     "jwt.validate",
+    "jwt.issue",
 ];
 
 /// `$defs/hex/pattern`: lowercase hex, two digits per octet.
@@ -172,6 +173,8 @@ enum Kind {
     Seconds,
     /// `{"type": ["string", "array"], "items": {"type": "string"}}`
     StringOrList,
+    /// `{"type": ["string", "null"]}`
+    StringOrNull,
 }
 
 impl Kind {
@@ -192,7 +195,8 @@ impl Kind {
             | Kind::Bool
             | Kind::List(_)
             | Kind::StringList
-            | Kind::StringOrList => None,
+            | Kind::StringOrList
+            | Kind::StringOrNull => None,
         }
     }
 }
@@ -708,6 +712,61 @@ const JWT_VALIDATE_OK: Shape = Shape {
     ],
     rules: &[],
 };
+/// How a `jwt.issue` vector validates the token it issued: the members of
+/// [`JWT_VALIDATE_INPUT`] other than `token`, with the same rules.
+const JWT_ISSUE_VALIDATE: Shape = Shape {
+    def: "jwt_issue_validate",
+    members: &[
+        req("now", Kind::Seconds),
+        req("allowed_algs", Kind::AlgList),
+        opt("key", Kind::Object),
+        opt("jwks", Kind::Object),
+        opt("policy", Kind::Nested(&JWT_POLICY)),
+        opt("decrypt", Kind::Nested(&JWT_DECRYPT)),
+    ],
+    rules: &[Rule::ExactlyOne(&["key", "jwks"])],
+};
+/// The JWE layer of a nested JWT to issue (RFC 7519 §7.1 step 5, §11.2;
+/// ADR 0027 §7): one recipient's key management `alg`, its JWK, and the
+/// content encryption `enc`.
+const JWT_ENCRYPT: Shape = Shape {
+    def: "jwt_encrypt",
+    members: &[
+        req("alg", Kind::String),
+        req("enc", Kind::String),
+        req("key", Kind::Object),
+    ],
+    rules: &[],
+};
+// RFC 7519 §7.1 through `jwt::sign` (ADR 0027 §8), then, with `encrypt`,
+// `jwt::encrypt_nested` (§7). `typ`: absent is the library default (JWT),
+// a string sets it, null omits it (RFC 7519 §5.1).
+const JWT_ISSUE_INPUT: Shape = Shape {
+    def: "jwt_issue_input",
+    members: &[
+        req("claims", Kind::Object),
+        req("alg", Kind::String),
+        req("key", Kind::Object),
+        opt("typ", Kind::StringOrNull),
+        opt("encrypt", Kind::Nested(&JWT_ENCRYPT)),
+        opt("validate", Kind::Nested(&JWT_ISSUE_VALIDATE)),
+    ],
+    rules: &[],
+};
+/// A deterministic signed JWT's exact token (HMAC, EdDSA; RFC 7515 §7.1),
+/// compared as a string.
+const JWT_ISSUE_EXACT: Shape = Shape {
+    def: "jwt_issue_exact",
+    members: &[req("token", Kind::String)],
+    rules: &[],
+};
+/// A token the runner checks itself: its compact shape, and the round trip
+/// through `validate` (see [`check_jwt_issue`] for when that is required).
+const JWT_ISSUE_VALIDATED: Shape = Shape {
+    def: "jwt_issue_validated",
+    members: &[],
+    rules: &[],
+};
 
 /// The operations this runner implements.
 const SPECS: &[OpSpec] = &[
@@ -787,6 +846,12 @@ const SPECS: &[OpSpec] = &[
         name: "jwt.validate",
         input: &JWT_VALIDATE_INPUT,
         ok: &[&JWT_VALIDATE_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "jwt.issue",
+        input: &JWT_ISSUE_INPUT,
+        ok: &[&JWT_ISSUE_EXACT, &JWT_ISSUE_VALIDATED],
         can_fail: true,
     },
 ];
@@ -902,6 +967,7 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
                     .as_array()
                     .is_some_and(|items| items.iter().all(|item| item.as_str().is_some()))
         }
+        Kind::StringOrNull => value.as_str().is_some() || value.is_null(),
         // Matched above when the value has the right type.
         Kind::Nested(_) | Kind::List(_) => false,
     };
@@ -921,6 +987,7 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
             Kind::Bool => "a boolean".to_owned(),
             Kind::Seconds => format!("an integer from -{SECONDS_MAX} to {SECONDS_MAX}"),
             Kind::StringOrList => "a string or an array of strings".to_owned(),
+            Kind::StringOrNull => "a string or null".to_owned(),
             Kind::Nested(shape) => format!("an object ({})", shape.def),
             Kind::List(shape) => format!("a non-empty array of objects ({})", shape.def),
         };
@@ -1163,6 +1230,9 @@ fn validate(value: &Value) -> Result<Vector, String> {
     if operation == "jwe.encrypt" && spec(operation).is_some() {
         check_jwe_encrypt_features(input, &features)?;
     }
+    if operation == "jwt.issue" {
+        check_jwt_issue(input, &expect)?;
+    }
     Ok(Vector {
         operation: operation.to_owned(),
         input: input.clone(),
@@ -1222,6 +1292,40 @@ fn check_jwe_encrypt_features(input: &Object, features: &[&str]) -> Result<(), S
         }
     }
     Ok(())
+}
+
+/// The rules of a `jwt.issue` vector that tie its input to its
+/// expectation (conformance/README.md), checked with the schema:
+///
+/// - with `encrypt` the token is randomized (the CEK, IV and any ephemeral
+///   key come from the OS CSPRNG, RFC 7516 §5.1), so there is no exact
+///   `token` to expect;
+/// - `{"ok": true}` without `token` is checked by validating the issued
+///   token with `validate`, which it therefore needs. Only with `encrypt`
+///   may `validate` be left out, for a recipient whose key polyjose cannot
+///   decrypt with (RSA-OAEP-256, ADR 0021); then only the token's compact
+///   shape is checked;
+/// - `validate` is used only on success, so a failure vector has none.
+fn check_jwt_issue(input: &Object, expect: &Expect) -> Result<(), String> {
+    let encrypt = input.contains("encrypt");
+    let validate = input.contains("validate");
+    match expect {
+        Expect::Ok(want) if want.contains("token") && encrypt => Err(violation(
+            "/expect/token",
+            "an encrypted token is randomized (RFC 7516 §5.1), so with `encrypt` \
+             expect {\"ok\": true} and give `validate`",
+        )),
+        Expect::Ok(want) if !want.contains("token") && !validate && !encrypt => Err(violation(
+            "/input/validate",
+            "required when the expectation has no `token`: the runner validates \
+             the token it issued (only `encrypt` may go without)",
+        )),
+        Expect::Err(_) if validate => Err(violation(
+            "/input/validate",
+            "used only when the issue succeeds, so a failure vector has none",
+        )),
+        _ => Ok(()),
+    }
 }
 
 fn hex_decode(s: &str) -> Vec<u8> {
@@ -2180,6 +2284,115 @@ fn run_jwt_validate(input: &Object, out: &mut Object) -> Result<Result<(), Error
     Ok(Ok(()))
 }
 
+/// `jwt.issue` (RFC 7519 §7.1). The steps run in the order
+/// conformance/README.md fixes, the first error being the outcome: import
+/// `key` (RFC 7517), parse `claims` (RFC 7519 §4; ADR 0027 §1–§2), import
+/// `encrypt.key`, sign with `alg` and `typ` (ADR 0027 §8), then encrypt
+/// (ADR 0027 §7). The output must be a compact JWS (three parts, RFC 7515
+/// §7.1) or, with `encrypt`, a compact JWE (five, RFC 7516 §7.1). An exact
+/// expectation gets it as `token`; with `validate`, it is also validated
+/// ([`check_jwt_issue_round_trip`]), any failure there failing the vector.
+fn run_jwt_issue(
+    input: &Object,
+    expect: &Expect,
+    out: &mut Object,
+) -> Result<Result<(), Error>, String> {
+    let key = match Jwk::from_object(input_object(input, "key")) {
+        Ok(key) => key,
+        Err(e) => return Ok(Err(e)),
+    };
+    let claims_in = input.get("claims").expect("validated");
+    let claims = match Claims::from_json(claims_in.to_json().as_bytes()) {
+        Ok(claims) => claims,
+        Err(e) => return Ok(Err(e)),
+    };
+    let encryptor = match input.get("encrypt").and_then(Value::as_object) {
+        Some(encrypt) => {
+            let recipient_key = match Jwk::from_object(input_object(encrypt, "key")) {
+                Ok(key) => key,
+                Err(e) => return Ok(Err(e)),
+            };
+            let recipient =
+                Recipient::new(KeyMgmtAlg::from(input_str(encrypt, "alg")), &recipient_key);
+            Some(
+                Encryptor::new(ContentEncAlg::from(input_str(encrypt, "enc"))).recipient(recipient),
+            )
+        }
+        None => None,
+    };
+    let alg = input_str(input, "alg");
+    let mut opts = IssueOptions::new(SigningAlg::from(alg));
+    match input.get("typ") {
+        Some(Value::Null) => opts = opts.no_typ(),
+        Some(typ) => opts = opts.typ(typ.as_str().expect("validated")),
+        None => {}
+    }
+    let signed = match jwt::sign(&claims, &opts, &key) {
+        Ok(signed) => signed,
+        Err(e) => return Ok(Err(e)),
+    };
+    let (token, parts) = match &encryptor {
+        Some(encryptor) => match jwt::encrypt_nested(&signed, encryptor) {
+            Ok(token) => (token, 5),
+            Err(e) => return Ok(Err(e)),
+        },
+        None => (signed, 3),
+    };
+    if token.split('.').count() != parts {
+        return Err(format!(
+            "the issued token is not {parts} compact parts: {token}"
+        ));
+    }
+    if let Some(validate) = input.get("validate").and_then(Value::as_object) {
+        check_jwt_issue_round_trip(&token, alg, claims_in, validate)?;
+    }
+    if matches!(expect, Expect::Ok(want) if want.contains("token")) {
+        out.insert("token", token);
+    }
+    Ok(Ok(()))
+}
+
+/// Validates an issued token with the vector's `validate` (RFC 7519 §7.2):
+/// it must validate, with the `alg` it was signed with and the Claims Set
+/// it was issued with (compared as JSON values). Any failure, including a
+/// `validate` the library refuses, fails the vector.
+fn check_jwt_issue_round_trip(
+    token: &str,
+    alg: &str,
+    claims: &Value,
+    validate: &Object,
+) -> Result<(), String> {
+    let validation = jwt_validation(validate)
+        .map_err(|e| format!("round trip: `validate` does not import ({})", e.code()))?;
+    let policy = jwt_policy(
+        &validation.clock,
+        &validation.algs,
+        validation.policy.as_ref(),
+    )?
+    .map_err(|e| format!("round trip: `validate/policy` is refused ({})", e.code()))?;
+    let verified = jwt_verify(token, &validation, &policy).map_err(|e| {
+        format!(
+            "round trip: the issued token does not validate with `validate` ({})",
+            e.code()
+        )
+    })?;
+    if verified.alg.as_str() != alg {
+        return Err(format!(
+            "round trip: validated with alg {}, issued with {alg}",
+            verified.alg.as_str()
+        ));
+    }
+    let validated = claims_value(&verified)?;
+    if validated != *claims {
+        return Err(format!(
+            "round trip: validated claims {} are not the issued {}",
+            validated.to_json(),
+            claims.to_json()
+        ));
+    }
+    Ok(())
+}
+
 /// Runs the operation through the public API: the success outputs, or the
 /// library's error.
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
@@ -2259,6 +2472,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
         }
         "jwt.validate" => {
             if let Err(e) = run_jwt_validate(input, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "jwt.issue" => {
+            if let Err(e) = run_jwt_issue(input, &vector.expect, &mut out)? {
                 return Ok(Err(e));
             }
         }
@@ -2568,6 +2786,7 @@ fn schema_kind(kind: Kind) -> Value {
         }
         Kind::StringList => parse(r#"{"type":"array","items":{"type":"string"}}"#),
         Kind::StringOrList => parse(r#"{"type":["string","array"],"items":{"type":"string"}}"#),
+        Kind::StringOrNull => parse(r#"{"type":["string","null"]}"#),
         Kind::Bool => parse(r#"{"type":"boolean"}"#),
         Kind::List(shape) => parse(&format!(
             r##"{{"type":"array","minItems":1,"items":{{"$ref":"#/$defs/{}"}}}}"##,
@@ -5749,6 +5968,309 @@ fn jwt_validate_mismatches_fail() {
                 &failure("InvalidHeader"),
             ),
             "contradicts `policy/profile`",
+        ),
+    ];
+    for (what, json, needle) in cases {
+        fails_naming_source(&format!("failing ({what}).json"), &json, needle);
+    }
+}
+
+/// The §3.1 claims issued with HS256 and `extra` input members.
+fn jwt_issue_input(alg: &str, key: &str, extra: &str) -> String {
+    format!(r#"{{"claims":{JWT_CLAIMS},"alg":"{alg}","key":{key}{extra}}}"#)
+}
+
+/// A `validate` member checking the issued token with `key`.
+fn jwt_issue_validate(algs: &str, key: &str, extra: &str) -> String {
+    format!(r#","validate":{{"now":{JWT_NOW},"allowed_algs":{algs},"key":{key}{extra}}}"#)
+}
+
+/// The exact HS256 token of the §3.1 claims with `{"alg":"HS256",
+/// "typ":"JWT"}`, as conformance/vectors/jwt/rfc7519/3-1-hs256-issue-exact.json
+/// derives it independently.
+const JWT_ISSUED_HS256: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJqb2UiLCJleHAiOjEzMDA4MTkzODAsImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.d6nMDXnJZfNNj-1o1e75s6d0six0lkLp5hSrGaz4o9A";
+
+/// Every `jwt.issue` input and expectation form runs: exact, validated
+/// round trips (with `typ` set, defaulted and omitted, ES256 randomized),
+/// and the import, claims and signing errors.
+#[test]
+fn jwt_issue_vectors_pass() {
+    let hs = |extra: &str| jwt_issue_input("HS256", A1_KEY, extra);
+    let hs_validate = |extra: &str| jwt_issue_validate(r#"["HS256"]"#, A1_KEY, extra);
+    let exact = format!(r#"{{"ok":true,"token":"{JWT_ISSUED_HS256}"}}"#);
+    let validated = r#"{"ok":true}"#;
+    let cases = [
+        vector("jwt.issue", &hs(""), &exact),
+        // An exact token with `validate` is also validated.
+        vector("jwt.issue", &hs(&hs_validate("")), &exact),
+        vector("jwt.issue", &hs(&hs_validate("")), validated),
+        // typ null omits it (RFC 7519 §5.1), and the default mode accepts
+        // that; an explicit typ needs the matching mode (RFC 8725 §3.11).
+        vector(
+            "jwt.issue",
+            &hs(&format!(r#","typ":null{}"#, hs_validate(""))),
+            validated,
+        ),
+        vector(
+            "jwt.issue",
+            &hs(&format!(
+                r#","typ":"secevent+jwt"{}"#,
+                hs_validate(r#","policy":{"typ":{"mode":"exact","value":"secevent+jwt"}}"#)
+            )),
+            validated,
+        ),
+        // ECDSA is randomized: only a round trip can check it.
+        vector(
+            "jwt.issue",
+            &jwt_issue_input(
+                "ES256",
+                A3_PRIVATE,
+                &jwt_issue_validate(r#"["ES256"]"#, A3_PUBLIC, ""),
+            ),
+            validated,
+        ),
+        // Validation through a JWK Set.
+        vector(
+            "jwt.issue",
+            &jwt_issue_input(
+                "ES256",
+                A3_PRIVATE,
+                &format!(
+                    r#","validate":{{"now":{JWT_NOW},"allowed_algs":["ES256"],"jwks":{{"keys":[{OTHER_P256},{A3_PUBLIC}]}}}}"#
+                ),
+            ),
+            validated,
+        ),
+        // Errors, in step order: key import, claims, signing.
+        vector(
+            "jwt.issue",
+            &jwt_issue_input("HS256", r#"{"kty":"oct","k":"Zg=="}"#, ""),
+            &failure("InvalidBase64"),
+        ),
+        vector(
+            "jwt.issue",
+            &hs("").replace(r#""exp":1300819380"#, r#""exp":"1300819380""#),
+            &failure("InvalidClaim"),
+        ),
+        vector(
+            "jwt.issue",
+            &jwt_issue_input("none", A1_KEY, ""),
+            &failure("AlgorithmNotAllowed"),
+        ),
+        vector(
+            "jwt.issue",
+            &jwt_issue_input("HS257", A1_KEY, ""),
+            &failure("UnsupportedAlgorithm"),
+        ),
+        vector(
+            "jwt.issue",
+            &jwt_issue_input("ES384", A3_PRIVATE, ""),
+            &failure("KeyAlgorithmMismatch"),
+        ),
+        // An `encrypt.key` import error is the outcome, before signing.
+        vector(
+            "jwt.issue",
+            &jwt_issue_input(
+                "none",
+                A1_KEY,
+                r#","encrypt":{"alg":"A128KW","enc":"A128GCM","key":{"kty":"oct","k":"Zg=="}}"#,
+            ),
+            &failure("InvalidBase64"),
+        ),
+    ];
+    assert_passes(&cases);
+}
+
+/// The `jwt.issue` schema and its cross-member rules fail the run, naming
+/// the member.
+#[test]
+fn jwt_issue_schema_violations_fail() {
+    let exact = format!(r#"{{"ok":true,"token":"{JWT_ISSUED_HS256}"}}"#);
+    let validated = r#"{"ok":true}"#.to_owned();
+    let validate = jwt_issue_validate(r#"["HS256"]"#, A1_KEY, "");
+    let encrypt = r#","encrypt":{"alg":"A128KW","enc":"A128GCM","key":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}}"#;
+    let hs = |extra: &str| jwt_issue_input("HS256", A1_KEY, extra);
+    let cases: &[(&str, String, String, &str)] = &[
+        (
+            "misspelled member",
+            hs("").replace(r#""claims""#, r#""claim""#),
+            exact.clone(),
+            "/input/claim: unknown member",
+        ),
+        (
+            "missing alg",
+            hs("").replace(r#""alg":"HS256","#, ""),
+            exact.clone(),
+            "/input/alg: required member is missing",
+        ),
+        (
+            "claims not an object",
+            hs("").replace(JWT_CLAIMS, "[]"),
+            exact.clone(),
+            "/input/claims",
+        ),
+        (
+            "typ a number",
+            hs(r#","typ":1"#),
+            exact.clone(),
+            "/input/typ",
+        ),
+        (
+            "encrypt without enc",
+            hs(&encrypt.replace(r#""enc":"A128GCM","#, "")),
+            validated.clone(),
+            "/input/encrypt/enc: required member is missing",
+        ),
+        (
+            "validate with a token",
+            hs(&validate.replace(r#""now""#, r#""token":"a.b.c","now""#)),
+            validated.clone(),
+            "/input/validate/token: unknown member",
+        ),
+        (
+            "validate without now",
+            hs(&validate.replace(&format!(r#""now":{JWT_NOW},"#), "")),
+            validated.clone(),
+            "/input/validate/now: required member is missing",
+        ),
+        (
+            "validate with both key and jwks",
+            hs(&validate.replace(r#""key""#, r#""jwks":{"keys":[]},"key""#)),
+            validated.clone(),
+            "/input/validate: needs exactly one of `key`, `jwks` (oneOf), has 2",
+        ),
+        (
+            "validate with a misspelled policy member",
+            hs(&jwt_issue_validate(
+                r#"["HS256"]"#,
+                A1_KEY,
+                r#","policy":{"leway":0}"#,
+            )),
+            validated.clone(),
+            "/input/validate/policy/leway: unknown member",
+        ),
+        (
+            "an exact token with encrypt",
+            hs(encrypt),
+            exact.clone(),
+            "/expect/token: an encrypted token is randomized",
+        ),
+        (
+            "validated without validate or encrypt",
+            hs(""),
+            validated.clone(),
+            "/input/validate: required when the expectation has no `token`",
+        ),
+        (
+            "a failure with validate",
+            hs(&validate),
+            failure("AlgorithmNotAllowed"),
+            "/input/validate: used only when the issue succeeds",
+        ),
+        (
+            "token not a string",
+            hs(""),
+            r#"{"ok":true,"token":7}"#.to_owned(),
+            "/expect",
+        ),
+        (
+            "an unknown success member",
+            hs(""),
+            format!(r#"{{"ok":true,"token":"{JWT_ISSUED_HS256}","kid":"a"}}"#),
+            "/expect",
+        ),
+    ];
+    for (what, input, expect, needle) in cases {
+        let json = vector("jwt.issue", input, expect);
+        fails_naming_source(&format!("invalid ({what}).json"), &json, needle);
+    }
+}
+
+/// A `jwt.issue` vector whose expectation the library does not meet fails:
+/// a wrong exact token, and every way a round trip can fail.
+#[test]
+fn jwt_issue_mismatches_fail() {
+    let hs = |extra: &str| jwt_issue_input("HS256", A1_KEY, extra);
+    let validated = r#"{"ok":true}"#;
+    let cases = [
+        (
+            "wrong exact token",
+            vector(
+                "jwt.issue",
+                &hs(""),
+                &format!(r#"{{"ok":true,"token":"{}"}}"#, a1_compact()),
+            ),
+            "`token`: expected",
+        ),
+        (
+            "round trip with the wrong key",
+            vector(
+                "jwt.issue",
+                // RFC 7515 A.1's key with its first octets changed.
+                &hs(&jwt_issue_validate(
+                    r#"["HS256"]"#,
+                    &A1_KEY.replace("AyM1", "ByM1"),
+                    "",
+                )),
+                validated,
+            ),
+            "round trip: the issued token does not validate with `validate` (InvalidSignature)",
+        ),
+        (
+            "round trip after expiry",
+            vector(
+                "jwt.issue",
+                &hs(&jwt_issue_validate(r#"["HS256"]"#, A1_KEY, "").replace(JWT_NOW, "1300819440")),
+                validated,
+            ),
+            "(TokenExpired)",
+        ),
+        (
+            "round trip with a refused policy",
+            vector(
+                "jwt.issue",
+                &hs(&jwt_issue_validate(
+                    r#"["HS256"]"#,
+                    A1_KEY,
+                    r#","policy":{"leeway":601}"#,
+                )),
+                validated,
+            ),
+            "round trip: `validate/policy` is refused (InvalidClaim)",
+        ),
+        (
+            "round trip with a key that does not import",
+            vector(
+                "jwt.issue",
+                &hs(&jwt_issue_validate(
+                    r#"["HS256"]"#,
+                    r#"{"kty":"oct","k":"Zg=="}"#,
+                    "",
+                )),
+                validated,
+            ),
+            "round trip: `validate` does not import (InvalidBase64)",
+        ),
+        (
+            "round trip with typ omitted but exact typ required",
+            vector(
+                "jwt.issue",
+                &hs(&format!(
+                    r#","typ":null{}"#,
+                    jwt_issue_validate(
+                        r#"["HS256"]"#,
+                        A1_KEY,
+                        r#","policy":{"typ":{"mode":"exact","value":"JWT"}}"#
+                    )
+                )),
+                validated,
+            ),
+            "(InvalidHeader)",
+        ),
+        (
+            "expected an error, but issued",
+            vector("jwt.issue", &hs(""), &failure("UnsupportedAlgorithm")),
+            "succeeded",
         ),
     ];
     for (what, json, needle) in cases {

@@ -28,7 +28,8 @@
         "keys.generate_for",
         "jwe.encrypt",
         "jwe.decrypt",
-        "jwt.validate"
+        "jwt.validate",
+        "jwt.issue"
       ]
     },
     "input": {
@@ -263,6 +264,24 @@
           "expect": {
             "oneOf": [
               { "$ref": "#/$defs/jwt_validate_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "jwt.issue" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/jwt_issue_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/jwt_issue_exact" },
+              { "$ref": "#/$defs/jwt_issue_validated" },
               { "$ref": "#/$defs/failure" }
             ]
           }
@@ -941,6 +960,93 @@
         "claims": { "type": "object" },
         "alg": { "type": "string" },
         "key_index": { "$ref": "#/$defs/count" }
+      }
+    },
+    "jwt_issue_validate": {
+      "description": "How the runner validates the token a jwt.issue vector issued: the jwt_validate_input members other than token, with the same rules (exactly one of key or jwks).",
+      "type": "object",
+      "required": ["now", "allowed_algs"],
+      "additionalProperties": false,
+      "properties": {
+        "now": { "$ref": "#/$defs/seconds" },
+        "allowed_algs": { "$ref": "#/$defs/alg_list" },
+        "key": {
+          "description": "One verification JWK (RFC 7517 §4) as a JSON object.",
+          "type": "object"
+        },
+        "jwks": {
+          "description": "A JWK Set (RFC 7517 §5) as a JSON object.",
+          "type": "object"
+        },
+        "policy": { "$ref": "#/$defs/jwt_policy" },
+        "decrypt": { "$ref": "#/$defs/jwt_decrypt" }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            { "required": ["key"] },
+            { "required": ["jwks"] }
+          ]
+        }
+      ]
+    },
+    "jwt_encrypt": {
+      "description": "The JWE layer of a nested JWT to issue (RFC 7519 §7.1 step 5, §11.2; ADR 0027 §7): one recipient's key management alg and JWK (a public key, or an oct key), and the content encryption enc, each passed as given. polyjose puts cty JWT in the protected header itself.",
+      "type": "object",
+      "required": ["alg", "enc", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "type": "string" },
+        "enc": { "type": "string" },
+        "key": {
+          "description": "The recipient's JWK (RFC 7517 §4) as a JSON object. Unconstrained: an import error is the vector's outcome.",
+          "type": "object"
+        }
+      }
+    },
+    "jwt_issue_input": {
+      "description": "Issue a JWT (RFC 7519 §7.1): sign claims with alg and key (ADR 0027 §8), then, with encrypt, encrypt the signed JWT as a nested JWT (ADR 0027 §7). The runner imports key, then parses claims, then imports encrypt.key, then signs, then encrypts; the first error is the outcome. With validate, it validates what it issued. RS* and PS* issuing is UnsupportedAlgorithm (ADR 0021).",
+      "type": "object",
+      "required": ["claims", "alg", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "description": "The JWT Claims Set (RFC 7519 §4) as a JSON object. Unconstrained: claim errors are under test.",
+          "type": "object"
+        },
+        "alg": {
+          "description": "The JWS alg (RFC 7515 §4.1.1), passed as given.",
+          "type": "string"
+        },
+        "key": {
+          "description": "The signing JWK (RFC 7517 §4) as a JSON object. Unconstrained: an import error is the vector's outcome.",
+          "type": "object"
+        },
+        "typ": {
+          "description": "The header typ (RFC 7519 §5.1): absent for the library default (JWT), a string to set it (for example at+jwt), null to omit it.",
+          "type": ["string", "null"]
+        },
+        "encrypt": { "$ref": "#/$defs/jwt_encrypt" },
+        "validate": { "$ref": "#/$defs/jwt_issue_validate" }
+      }
+    },
+    "jwt_issue_exact": {
+      "description": "A deterministic signed JWT (HMAC, EdDSA): the exact compact token, compared as a string. Not with encrypt, whose output is randomized. With validate, the runner also validates it.",
+      "type": "object",
+      "required": ["ok", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "token": { "type": "string" }
+      }
+    },
+    "jwt_issue_validated": {
+      "description": "A token the runner checks itself: it must be a compact JWS (three parts) or, with encrypt, a compact JWE (five), and with validate it must validate, with the issued alg and claims. validate is required unless encrypt is given (an RSA-OAEP-256 recipient cannot be decrypted, ADR 0021).",
+      "type": "object",
+      "required": ["ok"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true }
       }
     }
   }
