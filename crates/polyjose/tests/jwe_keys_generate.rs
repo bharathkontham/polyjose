@@ -12,8 +12,8 @@
 use polyjose::Error;
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
 use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient, decrypt_compact};
-use polyjose::jwk::{Jwk, KeyAlg, KeyMaterial, KeyType};
-use polyjose::keys::generate_for;
+use polyjose::jwk::{EcCurve, Jwk, KeyAlg, KeyMaterial, KeyType, OkpCurve};
+use polyjose::keys::{KeySpec, generate, generate_for};
 
 use ContentEncAlg as E;
 use KeyMgmtAlg as A;
@@ -127,6 +127,55 @@ fn generate_for_enc_does_not_decrypt_another_enc() {
                 Err(Error::KeyAlgorithmMismatch),
                 "{enc} key, {other} token"
             );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A256KW (RFC 7518 §4.4)
+// ---------------------------------------------------------------------------
+
+/// `generate_for(A256KW)` is a 32-octet `oct` key bound to A256KW
+/// (RFC 7518 §4.4, RFC 7517 §4.4) that wraps and unwraps the CEK of every
+/// `enc`.
+#[test]
+fn generate_for_a256kw_round_trips_with_a256kw() {
+    let key = key_for(A::A256KW);
+    assert_eq!(key.key_type(), KeyType::Oct);
+    assert_eq!(key.alg(), Some(&KeyAlg::KeyMgmt(A::A256KW)));
+    let KeyMaterial::Oct(k) = key.material() else {
+        panic!("not oct")
+    };
+    assert_eq!(k.len(), 32);
+    for (enc, _) in &ENCS {
+        round_trip(&A::A256KW, &key, &key, enc);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ECDH-ES+A128KW (RFC 7518 §4.6, RFC 8037 §3.2)
+// ---------------------------------------------------------------------------
+
+/// ECDH-ES works on several curves, so `generate_for(ECDH-ES+A128KW)` has
+/// no default and asks for one (`InvalidKey("curve required")`); the key
+/// comes from `generate` with an explicit curve instead. The sender
+/// encrypts to its public part (RFC 7518 §4.6.1, the recipient's static
+/// public key); the recipient decrypts with the private key
+/// (RFC 7518 §4.6.2).
+#[test]
+fn explicit_curve_keys_round_trip_with_ecdh_es_a128kw() {
+    assert_eq!(
+        generate_for(A::EcdhEsA128KW).map(|_| ()),
+        Err(Error::InvalidKey("curve required"))
+    );
+    for spec in [KeySpec::Ec(EcCurve::P256), KeySpec::Okp(OkpCurve::X25519)] {
+        let private = generate(spec).unwrap_or_else(|e| panic!("{e}"));
+        let public = private
+            .to_public()
+            .unwrap_or_else(|| panic!("no public part"));
+        assert!(public.is_public());
+        for (enc, _) in &ENCS {
+            round_trip(&A::EcdhEsA128KW, &public, &private, enc);
         }
     }
 }
