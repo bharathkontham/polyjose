@@ -573,4 +573,124 @@ mod tests {
             ["iss", "exp", "aud", "sub", "client_id", "iat", "jti"]
         );
     }
+
+    #[test]
+    fn media_type_eq_edge_inputs() {
+        // RFC 7515 §4.1.9 prepends `application/` only to a value "not
+        // containing a '/'" anywhere; the RFC's own `example;part="1/2"`
+        // shows a '/' inside the parameters counts.
+        assert_eq_both_ways("", "");
+        assert_eq_both_ways("", "application/");
+        assert_eq_both_ways("", "APPLICATION/");
+        assert_ne_both_ways("application/", "jwt");
+        assert_ne_both_ways("application/", "application//");
+        assert_ne_both_ways("/jwt", "jwt");
+        assert_ne_both_ways("/jwt", "application/jwt");
+        assert_eq_both_ways("/JWT", "/jwt");
+        assert_ne_both_ways("a;b/c", "application/a;b/c");
+        assert_eq_both_ways("a;b/c", "A;b/c");
+        assert_ne_both_ways("a;b/c", "A;B/c");
+        assert_ne_both_ways("jwt;x=a/b", "application/jwt;x=a/b");
+        assert_ne_both_ways("jwt;x=a/b", "jwt");
+        assert_eq_both_ways("JWT;x=a/b", "jwt;x=a/b");
+        assert_eq_both_ways("jwt;x=ab", "application/JWT;x=ab");
+        // Only the first `;` splits; a second `;` stays in the parameters.
+        assert_ne_both_ways("jwt;;", "jwt;");
+        assert_eq_both_ways(";", ";");
+        assert_ne_both_ways(";", "");
+        // Non-ASCII bytes, including a multi-byte char straddling the
+        // `application/` prefix length, must not panic.
+        assert_ne_both_ways("applicatio\u{e9}/jwt", "jwt");
+        assert_ne_both_ways("\u{1F600}\u{1F600}\u{1F600}\u{1F600}", "jwt");
+        assert_ne_both_ways("jwt;\u{e9}", "jwt;\u{c9}");
+        assert_eq_both_ways("\u{e9}/\u{e9}", "\u{e9}/\u{e9}");
+        // Embedded NUL and control bytes are ordinary bytes.
+        assert_ne_both_ways("jwt\0", "jwt");
+        assert_eq_both_ways("JWT\0", "jwt\0");
+    }
+
+    #[test]
+    fn modes_per_layer_and_check_order() {
+        let exact = default_policy().expect_typ(AT_JWT);
+        // Outer + Exact: absent typ is fine (explicit typing is the inner JWT's).
+        assert_eq!(outer(&header(r#""cty":"JWT""#), &exact), Ok(()));
+        // Signed + Exact: absent typ fails.
+        assert_eq!(
+            signed(&header(""), &exact),
+            Err(Error::InvalidHeader("typ"))
+        );
+        // Signed order: b64 first, then cty, then typ.
+        let h = header(r#""b64":false,"crit":["b64"],"cty":"JWT","typ":"at+jwt""#);
+        assert_eq!(
+            signed(&h, &default_policy()),
+            Err(Error::InvalidHeader("b64"))
+        );
+        let h = header(r#""cty":"JWT","typ":"at+jwt""#);
+        assert_eq!(
+            signed(&h, &default_policy()),
+            Err(Error::InvalidHeader("cty"))
+        );
+        // Outer order: cty before typ.
+        let h = header(r#""cty":"JOSE","typ":"at+jwt""#);
+        assert_eq!(
+            outer(&h, &default_policy()),
+            Err(Error::InvalidHeader("cty"))
+        );
+        // Outer ignores b64 (a JWS parameter) entirely.
+        let h = header(r#""b64":false,"crit":["b64"],"cty":"JWT""#);
+        assert_eq!(outer(&h, &default_policy()), Ok(()));
+        // The unprotected rule runs before everything else.
+        let unprot = Header::from_json(br#"{"typ":"JWT"}"#).unwrap();
+        let h = header(r#""b64":false,"crit":["b64"]"#);
+        assert_eq!(
+            check_jwt_header(&h, Some(&unprot), &default_policy(), Layer::Signed),
+            Err(Error::InvalidHeader("typ must be in the protected header"))
+        );
+        // Outer cty in a valid protected header plus unprotected typ is still rejected.
+        assert!(is_invalid_header(check_jwt_header(
+            &header(r#""cty":"JWT""#),
+            Some(&unprot),
+            &default_policy().any_typ(),
+            Layer::Outer
+        )));
+    }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn media_type_eq_never_panics_and_is_reflexive_and_symmetric(
+                a in "\\PC*", b in "\\PC*"
+            ) {
+                prop_assert!(media_type_eq(&a, &a));
+                prop_assert_eq!(media_type_eq(&a, &b), media_type_eq(&b, &a));
+            }
+
+            #[test]
+            fn short_form_equals_full_form_when_no_slash(
+                t in "[a-zA-Z0-9.+-]{0,12}", params in "(;[a-z0-9=]{0,6}){0,2}"
+            ) {
+                let short = format!("{t}{params}");
+                let full = format!("application/{t}{params}");
+                prop_assert!(media_type_eq(&short, &full));
+                let shouted = format!("{}{params}", t.to_ascii_uppercase());
+                prop_assert!(media_type_eq(&shouted, &full));
+            }
+
+            #[test]
+            fn check_jwt_header_never_panics(typ in "\\PC*", cty in "\\PC*") {
+                let mut h = Header::new();
+                h.typ = Some(typ);
+                h.cty = Some(cty);
+                for p in [default_policy(), default_policy().expect_typ(AT_JWT), default_policy().any_typ()] {
+                    let _ = check_jwt_header(&h, None, &p, Layer::Signed);
+                    let _ = check_jwt_header(&h, Some(&h), &p, Layer::Outer);
+                }
+            }
+        }
+    }
 }
