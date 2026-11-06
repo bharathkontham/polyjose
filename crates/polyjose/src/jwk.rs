@@ -44,9 +44,10 @@
 //! # What import checks
 //!
 //! Validation is structural, plus the curve checks the primitives provide
-//! (ADR 0041 §4, ADR 0007): EC points must be on their curve, EC private
-//! scalars in range, and Ed25519 public keys valid. The 8192-bit RSA
-//! ceiling is enforced where an RSA key is used (ADR 0026 §2 step 8).
+//! (ADR 0041 §4, ADR 0043, ADR 0007): EC points must be on their curve, EC
+//! private scalars in range, Ed25519 public keys valid, and a private key
+//! must be the key of its own public part. The 8192-bit RSA ceiling is
+//! enforced where an RSA key is used (ADR 0026 §2 step 8).
 //!
 //! - **`kty`** must be present and is case-sensitive (RFC 7517 §4.1).
 //!   `oct`, `RSA`, `EC` and `OKP` are supported.
@@ -57,12 +58,19 @@
 //!   curve, with reduced coordinates, other than the identity (SEC 1 v2
 //!   §3.2.2.1), and `d` must be in [1, n − 1] for the group order n
 //!   (SEC 1 v2 §3.2.1), both checked by the curve crate (ADR 0041 §4).
+//!   Last, `d` must be the private key of the point: d·G = (`x`, `y`)
+//!   (SEC 1 v2 §3.2.1; ADR 0043 §3).
 //! - **`OKP`** (RFC 8037 §2): `crv` is `Ed25519` or `X25519` (Ed448 and
 //!   X448 are out of scope, ADR 0006); `x`, and `d` if present, are 32
 //!   octets. An `Ed25519` `x` must decode canonically to a point
 //!   (RFC 8032 §5.1.3) that is not of small order (ADR 0026 §6,
-//!   ADR 0041 §4). An `X25519` `x` has no further check: every 32-octet
-//!   string is a valid u-coordinate (RFC 7748 §5).
+//!   ADR 0041 §4) and has no torsion component (ADR 0043 §1), and a `d`
+//!   must derive that `x` (RFC 8032 §5.1.5, RFC 8037 §2; ADR 0043 §3). An
+//!   `X25519` `x` has no further check: every 32-octet string is a valid
+//!   u-coordinate (RFC 7748 §5), and torsion is neutralised by clamping
+//!   (ADR 0043 §2). Whether an `X25519` `d` derives `x` (ADR 0043 §3) is not
+//!   checked yet: this release has no X25519 primitive, and feature 0003
+//!   adds the check together with X25519 key agreement.
 //! - **`RSA`**, public keys only (RFC 7518 §6.3.1, ADR 0021): `n` and `e`
 //!   are minimal Base64urlUInt values, non-empty with no leading zero octet
 //!   (RFC 7518 §2, §6.3.1.1); `n` is odd (RFC 8017 §3.1) and at least
@@ -119,8 +127,9 @@
 //! 2. For `RSA`, any private member (→ `UnsupportedAlgorithm`, ADR 0021),
 //!    before anything else is read.
 //! 3. Every structural check: the key-type members (for `EC`, the lengths
-//!    of `x`, `y` and `d` first, then the point, then the scalar; for `OKP`,
-//!    the lengths, then the `Ed25519` key), then `use`, `key_ops` (and their
+//!    of `x`, `y` and `d` first, then the point, then the scalar, then
+//!    whether `d` derives the point; for `OKP`, the lengths, then the
+//!    `Ed25519` `x`, then whether `d` derives it), then `use`, `key_ops` (and their
 //!    consistency), `alg`'s type, `kid`, `x5u`, `x5c`, `x5t`, `x5t#S256`
 //!    (→ `InvalidKey` or `InvalidBase64`).
 //! 4. The `alg` value: `RSA1_5`/`RSA-OAEP` (→ `UnsupportedAlgorithm`), then
@@ -142,9 +151,10 @@
 //!   (RFC 7517 §4.4, RFC 8725 §3.1).
 //! - [`InvalidKey`](crate::Error::InvalidKey): malformed. A missing or wrongly typed member,
 //!   a wrong length, a non-minimal or out-of-range RSA value, an EC point
-//!   off its curve, an EC `d` outside [1, n − 1], an invalid or small-order
-//!   Ed25519 key, an empty `k`, duplicate `key_ops`, or inconsistent
-//!   `use`/`key_ops`.
+//!   off its curve, an EC `d` outside [1, n − 1], an invalid, small-order
+//!   or mixed-order Ed25519 key, an EC or Ed25519 `d` that is not the
+//!   private key of the public part, an empty `k`, duplicate `key_ops`, or
+//!   inconsistent `use`/`key_ops`.
 //! - [`InvalidBase64`](crate::Error::InvalidBase64): a binary member is not canonical unpadded
 //!   base64url (the code RFC 7515 §2 decoding uses everywhere).
 //! - [`InvalidJson`](crate::Error::InvalidJson) ([`Jwk::from_json`][from_json] only): not one
@@ -188,6 +198,7 @@ use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, Sec1Point, ToSec1Po
 use p256::elliptic_curve::{
     AffinePoint, Curve, CurveArithmetic, FieldBytes, FieldBytesSize, PublicKey, SecretKey,
 };
+use subtle::ConstantTimeEq as _;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::error::{Error, Result};
@@ -656,8 +667,8 @@ impl fmt::Debug for RsaPublicKey {
 ///
 /// The curve is supported, every member has its exact length, the point is
 /// on the curve and is not the identity, and `d` is in [1, n − 1]
-/// (ADR 0007, ADR 0041 §4). Whether `d` belongs to (`x`, `y`) is not
-/// checked on import.
+/// (ADR 0007, ADR 0041 §4), and `d` is the private key of (`x`, `y`)
+/// (ADR 0043 §3).
 ///
 /// `d` is held in a buffer that is wiped on drop, and `Debug` prints
 /// `"<redacted>"` instead of it.
@@ -693,10 +704,6 @@ impl EcKey {
     }
 
     /// The private scalar `d`, if present (RFC 7518 §6.2.2.1).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the ES* signing and ECDH-ES features")
-    )]
     pub(crate) fn d(&self) -> Option<&[u8]> {
         self.d.as_deref().map(Vec::as_slice)
     }
@@ -732,10 +739,12 @@ impl ZeroizeOnDrop for EcKey {}
 /// for a private key, `d`.
 ///
 /// The curve is supported and `x` and `d` have their exact length. An
-/// `Ed25519` `x` must also decode canonically and not be of small order
-/// (RFC 8032 §5.1.3, ADR 0026 §6, ADR 0041 §4); an `X25519` `x` can be any
-/// 32 octets (RFC 7748 §5). Whether `d` belongs to `x` is not checked on
-/// import.
+/// `Ed25519` `x` must also decode canonically, not be of small order and
+/// have no torsion component (RFC 8032 §5.1.3, ADR 0026 §6, ADR 0041 §4,
+/// ADR 0043 §1), and an `Ed25519` `d` must derive `x` (ADR 0043 §3). An
+/// `X25519` `x` can be any 32 octets (RFC 7748 §5); whether an `X25519` `d`
+/// derives `x` is not checked yet (ADR 0043 §3 is completed by feature
+/// 0003, which brings the X25519 primitive).
 ///
 /// `d` is held in a buffer that is wiped on drop, and `Debug` prints
 /// `"<redacted>"` instead of it.
@@ -763,10 +772,6 @@ impl OkpKey {
     }
 
     /// The private key `d`, if present (RFC 8037 §2).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the EdDSA signing and ECDH-ES features")
-    )]
     pub(crate) fn d(&self) -> Option<&[u8]> {
         self.d.as_deref().map(Vec::as_slice)
     }
@@ -1431,6 +1436,31 @@ impl fmt::Debug for MemberNames<'_> {
 /// wiped on drop.
 impl ZeroizeOnDrop for Jwk {}
 
+#[cfg(test)]
+impl Jwk {
+    /// Test builds only: an `OKP` key that skips every import check, so a
+    /// family can prove its own defence-in-depth checks on a key import
+    /// would refuse (ADR 0043 §3: signing keeps its own check).
+    pub(crate) fn okp_unchecked(crv: OkpCurve, x: &[u8], d: Option<&[u8]>) -> Jwk {
+        Jwk {
+            material: KeyMaterial::Okp(OkpKey {
+                crv,
+                x: x.to_vec(),
+                d: d.map(|d| Zeroizing::new(d.to_vec())),
+            }),
+            key_use: None,
+            key_ops: None,
+            alg: None,
+            kid: None,
+            x5u: None,
+            x5c: None,
+            x5t: None,
+            x5t_s256: None,
+            other: Object::new(),
+        }
+    }
+}
+
 /// One JSON object member. The name is a [`Zeroizing<String>`] like every
 /// name an [`Object`] owns; a `String` value moves into the [`Value`]
 /// without a copy.
@@ -1680,6 +1710,12 @@ fn parse_ec(object: &Object, crv: EcCurve) -> Result<EcKey> {
     if d.as_ref().is_some_and(|d| !ec_scalar_is_valid(crv, d)) {
         return Err(Error::InvalidKey(EC_SCALAR_INVALID));
     }
+    // ADR 0043 §3: last, a private key must be the key of its own point.
+    if d.as_ref()
+        .is_some_and(|d| !ec_private_matches(crv, &x, &y, d))
+    {
+        return Err(Error::InvalidKey(EC_PRIVATE_MISMATCH));
+    }
     Ok(EcKey { crv, x, y, d })
 }
 
@@ -1687,8 +1723,13 @@ fn parse_ec(object: &Object, crv: EcCurve) -> Result<EcKey> {
 const EC_POINT_INVALID: &str = "EC point is not on the curve";
 /// Detail for an `EC` private scalar outside [1, n − 1].
 const EC_SCALAR_INVALID: &str = "EC private key d is out of range";
+/// Detail for an `EC` private scalar `d` whose public point is not
+/// (`x`, `y`).
+const EC_PRIVATE_MISMATCH: &str = "EC private key d does not match x and y";
 /// Detail for an `OKP` `Ed25519` `x` that is not a usable public key.
 const ED25519_PUBLIC_INVALID: &str = "Ed25519 public key is invalid";
+/// Detail for an `OKP` `Ed25519` `d` whose public key is not `x`.
+const ED25519_PRIVATE_MISMATCH: &str = "Ed25519 private key d does not match x";
 
 /// Whether (`x`, `y`) is a point of `crv` other than the identity
 /// (ADR 0041 §4, ADR 0007; SEC 1 v2 §3.2.2.1 public key validation).
@@ -1725,6 +1766,55 @@ fn ec_scalar_is_valid(crv: EcCurve, d: &[u8]) -> bool {
     }
 }
 
+/// Whether the valid scalar `d` is the private key of the valid point
+/// (`x`, `y`) of `crv`: Q = d·G (SEC 1 v2 §3.2.1; RFC 7518 §6.2.2.1: `d`
+/// is "the Elliptic Curve private key value" of the key's point). A
+/// mismatched pair would sign for a key other than the published one
+/// (ADR 0043 §3, the class behind RUSTSEC-2022-0093). The caller has
+/// checked the point and the range of `d`; anything else is a mismatch.
+fn ec_private_matches(crv: EcCurve, x: &[u8], y: &[u8], d: &[u8]) -> bool {
+    match crv {
+        EcCurve::P256 => private_matches_point::<p256::NistP256>(x, y, d),
+        EcCurve::P384 => private_matches_point::<p384::NistP384>(x, y, d),
+        EcCurve::P521 => private_matches_point::<p521::NistP521>(x, y, d),
+        EcCurve::Secp256k1 => private_matches_point::<k256::Secp256k1>(x, y, d),
+    }
+}
+
+/// See [`ec_private_matches`]: the curve crate derives d·G
+/// (`SecretKey::public_key`, in its constant-time arithmetic) and the two
+/// points are compared with `subtle`'s constant-time equality, since the
+/// derived point is computed from the secret. `d` is borrowed from its
+/// wiped-on-drop buffer, and the `SecretKey` built from it is wiped when
+/// dropped.
+fn private_matches_point<C>(x: &[u8], y: &[u8], d: &[u8]) -> bool
+where
+    C: CurveArithmetic,
+    AffinePoint<C>: FromSec1Point<C> + ToSec1Point<C>,
+    FieldBytesSize<C>: ModulusSize,
+{
+    let (Ok(x), Ok(y), Ok(d)) = (
+        <&FieldBytes<C>>::try_from(x),
+        <&FieldBytes<C>>::try_from(y),
+        <&FieldBytes<C>>::try_from(d),
+    ) else {
+        return false;
+    };
+    let Ok(secret) = SecretKey::<C>::from_bytes(d) else {
+        return false;
+    };
+    let point = Sec1Point::<C>::from_affine_coordinates(x, y, false);
+    let Some(public) = PublicKey::<C>::from_sec1_point(&point).into_option() else {
+        return false;
+    };
+    bool::from(
+        secret
+            .public_key()
+            .to_projective()
+            .ct_eq(&public.to_projective()),
+    )
+}
+
 /// See [`ec_point_is_valid`]: `PublicKey::from_sec1_point` on the
 /// uncompressed SEC 1 point (`0x04` ‖ `x` ‖ `y`).
 fn point_on_curve<C>(x: &[u8], y: &[u8]) -> bool
@@ -1759,7 +1849,12 @@ fn scalar_in_range<C: Curve>(d: &[u8]) -> bool {
 ///   back the same 32 octets;
 /// - the point is not of small order (`VerifyingKey::is_weak`), since a
 ///   small-order key "can be used to generate a signature that's valid for
-///   almost every message".
+///   almost every message";
+/// - the point has no torsion component, that is it lies in the subgroup
+///   of prime order L (`EdwardsPoint::is_torsion_free`, ADR 0043 §1). A
+///   mixed-order key passes RFC 8032 §5.1.7 and `verify_strict`, but
+///   implementations disagree on it and honest keys (RFC 8032 §5.1.5:
+///   A = [s]B) never have one.
 fn ed25519_public_is_valid(x: &[u8]) -> bool {
     let Ok(bytes) = <&[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]>::try_from(x) else {
         return false;
@@ -1767,8 +1862,26 @@ fn ed25519_public_is_valid(x: &[u8]) -> bool {
     let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(bytes) else {
         return false;
     };
-    let canonical = ed25519_dalek::VerifyingKey::from(key.to_edwards()).to_bytes() == *bytes;
-    canonical && !key.is_weak()
+    let point = key.to_edwards();
+    let canonical = ed25519_dalek::VerifyingKey::from(point).to_bytes() == *bytes;
+    canonical && !key.is_weak() && point.is_torsion_free()
+}
+
+/// Whether the 32-octet seed `d` is the private key of the Ed25519 public
+/// key `x` (RFC 8037 §2: `d` is the private key of `x`; RFC 8032 §5.1.5
+/// derives the public key from the seed). A mismatched pair would sign for
+/// a key other than the published one, the root of RUSTSEC-2022-0093
+/// (ADR 0043 §3). ed25519-dalek derives the key (`SigningKey::from_bytes`,
+/// `SigningKey::verifying_key`); the `SigningKey` is wiped on drop (its
+/// `zeroize` feature), `d` is borrowed from its wiped-on-drop buffer, and
+/// the comparison uses `subtle`'s constant-time equality, since the
+/// derived key is computed from the secret.
+fn ed25519_private_matches(x: &[u8], d: &[u8]) -> bool {
+    let Ok(seed) = <&ed25519_dalek::SecretKey>::try_from(d) else {
+        return false;
+    };
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(seed);
+    bool::from(signing_key.verifying_key().as_bytes()[..].ct_eq(x))
 }
 
 /// `kty` `OKP` (RFC 8037 §2).
@@ -1796,11 +1909,19 @@ fn parse_okp(object: &Object, crv: OkpCurve) -> Result<OkpKey> {
     // only: every 32-octet string is a valid u-coordinate (RFC 7748 §5
     // masks the top bit, and "Implementations MUST accept non-canonical
     // values and process them as if they had been reduced modulo the field
-    // prime"), so it has no decoding failure. A small-order input shows up
-    // as an all-zero shared secret, which ECDH-ES checks where it computes
-    // one (RFC 7748 §6.1, feature 0003).
+    // prime"), so it has no decoding failure. Torsion components are normal
+    // for X25519 and clamping neutralises them (ADR 0043 §2). A small-order
+    // input shows up as an all-zero shared secret, which ECDH-ES checks
+    // where it computes one (RFC 7748 §6.1, feature 0003).
     if crv == OkpCurve::Ed25519 && !ed25519_public_is_valid(&x) {
         return Err(Error::InvalidKey(ED25519_PUBLIC_INVALID));
+    }
+    // ADR 0043 §3: last, a private key must be the key of its own `x`. An
+    // X25519 `d` is not checked yet: the 0002 tree has no X25519 primitive
+    // to derive `x` with, and feature 0003 adds the check with x25519-dalek
+    // (RFC 7748 §6.1).
+    if crv == OkpCurve::Ed25519 && d.as_ref().is_some_and(|d| !ed25519_private_matches(&x, d)) {
+        return Err(Error::InvalidKey(ED25519_PRIVATE_MISMATCH));
     }
     Ok(OkpKey { crv, x, d })
 }

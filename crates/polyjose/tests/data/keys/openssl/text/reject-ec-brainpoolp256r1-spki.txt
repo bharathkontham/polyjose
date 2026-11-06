@@ -1,0 +1,8 @@
+Public-Key: (256 bit field, 128 bit security level)
+pub:
+    04:64:5f:6b:59:f6:9d:50:68:69:2b:94:fd:6a:99:a4:
+    fa:d7:7f:63:8f:d2:63:cd:5a:31:d3:f8:89:02:71:a4:
+    03:9a:47:53:40:42:0e:89:c2:8b:b1:c9:cc:59:c7:06:
+    2c:92:e7:2c:43:6b:6e:a6:30:3d:97:7c:48:10:9d:ea:
+    06
+ASN1 OID: brainpoolP256r1

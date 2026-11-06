@@ -397,11 +397,18 @@ mod tests {
         );
         let bob = jwk(RFC8037_X25519_PUBLIC);
         assert_ne!(alice.thumbprint_sha256(), bob.thumbprint_sha256());
-        // `kty`/`crv` are hashed too: the same 32 octets as an Ed25519 key.
-        let as_ed25519 = jwk(
-            r#"{"kty":"OKP","crv":"Ed25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"}"#,
+        // `kty`/`crv` are hashed too: the same 32 octets as an X25519 and
+        // as an Ed25519 key. RFC 8037 A.2's `x` is used, a valid key of
+        // both kinds (Bob's X25519 octets are not a torsion-free Ed25519
+        // point, ADR 0043 §1).
+        let as_x25519 = jwk(
+            r#"{"kty":"OKP","crv":"X25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#,
         );
-        assert_ne!(as_ed25519.thumbprint_sha256(), bob.thumbprint_sha256());
+        let as_ed25519 = jwk(RFC8037_ED25519_PUBLIC);
+        assert_ne!(
+            as_ed25519.thumbprint_sha256(),
+            as_x25519.thumbprint_sha256()
+        );
     }
 
     mod properties {

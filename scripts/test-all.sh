@@ -19,6 +19,22 @@ has_wasm_suite() {
        END { exit !found }' bindings/wasm/Cargo.toml
 }
 run() { local name=$1; shift; echo "==> $name"; if "$@"; then record "$name" PASS; else record "$name" FAIL; fi; }
+# The negative tests of the gate scripts: every scripts/tests/<gate>/*.sh, each its own step
+# ("negative: <gate>/<script>"), except lib.sh, the helpers they source. A script that is not
+# executable FAILs (it would otherwise drop out unnoticed), and so does finding none at all.
+# The gate scripts guard what CI relies on, e.g. check-deps.sh's ADR 0021 guard, which deny.toml's
+# RUSTSEC-2023-0071 ignore depends on, so their own tests gate too.
+run_negative_tests() {
+  local t name found=0
+  for t in scripts/tests/*/*.sh; do
+    [ -e "$t" ] || continue # bash 3.2 has no nullglob by default: an unmatched glob stays literal
+    case ${t##*/} in lib.sh) continue ;; esac
+    found=1; name="negative: ${t#scripts/tests/}"
+    if [ -x "$t" ]; then run "$name" "$t"
+    else echo "$t is not executable"; record "$name" FAIL; fi
+  done
+  if [ "$found" -eq 0 ]; then echo "no negative tests found (scripts/tests/*/*.sh)"; record negative-tests FAIL; fi
+}
 
 for p in "${platforms[@]}"; do
   case $p in
@@ -55,7 +71,11 @@ for p in "${platforms[@]}"; do
       else record test-vectors-off "SKIPPED (cargo missing)"; fi
       # The core's runtime tree matches deps-allowlist.txt and CREDITS.md (ADR 0016, ADR 0020).
       if have cargo; then run deps scripts/check-deps.sh
-      else record deps "SKIPPED (cargo missing)"; fi ;;
+      else record deps "SKIPPED (cargo missing)"; fi
+      # The gate scripts' own negative tests (scripts/tests/*/*.sh), e.g. that check-deps.sh
+      # still rejects RSA private-key use and the guarded groups' second paths.
+      if have cargo; then run_negative_tests
+      else record negative-tests "SKIPPED (cargo missing)"; fi ;;
     wasm)
       if ! have wasm-pack; then record wasm "SKIPPED (wasm-pack missing)"
       elif ! has_wasm_suite; then record wasm "SKIPPED (no wasm test suite yet: no wasm-bindgen-test dev-dependency in bindings/wasm/Cargo.toml)"
