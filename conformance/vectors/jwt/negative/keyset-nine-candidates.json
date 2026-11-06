@@ -1,0 +1,74 @@
+{
+  "source": "RFC 8725 §3.1; ADR 0029 §4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "A kid-less ES256 token and a set of nine kid-less P-256 members (the first is the signing key): nine candidates exceed the default max_key_candidates 8, refused before any signature is computed: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ.h0lcdqL0Q_Iu0eMXk3pBsd365CjQFr_V3h_QxAyzhQRd1eS1g-v8d7MgJOcz-39rurPUoID4d2HFO1-SmUDyJA",
+    "now": 1700000000,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "veFmhYCtqSHviMxLOuvn3KOaC1prHxYfq5GI9sCTgMc",
+          "y": "aVnGcc1rZHjUHOPyuGItVPHbMds_wEoTO9mil0DSgTE"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "jjgFcO4B9fBwnRZ8E1LOCM3ZJzRC-xfUm32gnyEtVew",
+          "y": "C0MPLKegZh95o8tRrtCEI74o_ydt0_jw97NHWK_Oa3Q"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "E85pHKYaeBBNe-CI6UtPtYY5p8WHE3m3-1kCTweJiis",
+          "y": "XeNaod_9kYFUDwhUCOecuRQsdcKYfr3KDmneZRXCkg4"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "HmvF0dzezyqzawzC3drjzWfPOisH76QN-DxYdbbPkrE",
+          "y": "qCZ9UiVCkI57XUsg-rLPkyR0EsfEPytm3qehouMfuHg"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "2Iqyc6OBkKRDPnEf8HqaVVyDTXLjkmrIPihl13F0Yfc",
+          "y": "gsH5hx7zPcENDKcJuP0gTpX8YBKp9-fXxUJuRy_aklk"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "qSeAkY4849A6_vAG-PJwlH4zD6DHxrSbE4mdnWyqffU",
+          "y": "HGQCNzl0Z6Dd2-f6Ko521VTxD8qDQR9-ZzPFaQXMfP8"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "KZw7nmfbO6w3ZY9OySUJuOJpImDDHnMfAGmOHCab_Sw",
+          "y": "-tfU976-KZMXjg-xavhJJF_tGJzhNnQ7aMitMViMi_U"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "yKmwJxfz0yt8DcrniKtydCu_TCUW6RaL-Va_EdpgBKk",
+          "y": "_HroA-DHZ_dL11xU5MS5msvGZfnBX_PTs9n7XMlqGJ4"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "SdISjqOXC7XxWNbDV1jw2Tjj6gxWWCnoNJeeyUDJd7U",
+          "y": "pQv8_ydX5IA29x6oEQVb_tfxHeWWpDa70Kbr_DG2ccs"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

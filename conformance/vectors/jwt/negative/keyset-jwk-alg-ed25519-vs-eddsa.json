@@ -1,0 +1,26 @@
+{
+  "source": "RFC 7517 §4.4; RFC 8725 §3.1; RFC 9864 §2.2; ADR 0029 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "An EdDSA token and a set whose only member (the signing Ed25519 key) has JWK alg Ed25519: the JWK alg must be absent or equal the header alg exactly, and EdDSA ≠ Ed25519: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ.m42SaO6WpX7qZ4cw2Cfeyrt5onwCVW0ddzv3iLdqrdlM-_mjACEkIKWM1DCL1gzELqo9zMvWBCOe0NZAtik3CQ",
+    "now": 1700000000,
+    "allowed_algs": [
+      "EdDSA"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+          "alg": "Ed25519"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "source": "RFC 7517 §4.2; ADR 0029 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The only member with kid a (the signing key) has use enc: not a signature key, so not a candidate: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImEifQ.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ.aNhUa_BfOrYPUw760Zh_JLGK1AtzTKscqzB6IkG7bns9Ur-ooxSvSUams0vzSUJrHJj0vw19U4oh0z4WVBjF2g",
+    "now": 1700000000,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "9k4oxJo3yFhw4XvUDFOFlmhgwqGrC25aBd7xhpkFB6Y",
+          "y": "zE-06UddsK2b0rpGKPXn9gz55y3tneIwQbTHPYn4o_I",
+          "kid": "a",
+          "use": "enc"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "kYUQsFzddzDVWQ2zrOHzLvP5Xh0vfUGlmngWR9XMJTw",
+          "y": "8uWP4BrVkuiNMETAGTs-RXFQpR9p5DtW6MzL2D6yXX8",
+          "kid": "b"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}
