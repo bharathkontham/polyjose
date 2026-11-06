@@ -839,3 +839,116 @@ fn jwt_sign_round_trips() {
     assert_eq!(v.claims, claims);
     assert_eq!(v.header.typ.as_deref(), Some("JWT"));
 }
+
+// ---------------------------------------------------------------------------
+// Tester probes (adversarial; 0004 T07 test report)
+// ---------------------------------------------------------------------------
+
+/// ADR 0049 §2: the flattened rewrap with an unprotected `typ: at+jwt`
+/// is `InvalidFormat` under `Policy::access_token` too, with one key or a
+/// set, so the attacker's `typ` cannot satisfy the RFC 9068 policy.
+#[test]
+fn the_flattened_rewrap_is_invalid_format_under_the_access_token_policy() {
+    let key = jwk(OCT_64);
+    let keys = set(&[OCT_64]);
+    let clock = FixedClock(1_300_819_320);
+    let policy = Policy::access_token(&clock, &HS256, &[ISSUER], &[AUDIENCE]).unwrap();
+    for source in [Keys::One(&key), Keys::Set(&keys)] {
+        assert!(matches!(
+            jwt::verify(ORACLE_FLATTENED_REWRAP, source, &policy),
+            Err(Error::InvalidFormat(_))
+        ));
+    }
+}
+
+/// RFC 8725 §3.1 alg confusion: an HS256 token whose HMAC secret is the
+/// public key's JSON, or whose header names HS256 for an EC key, never
+/// verifies against an asymmetric key, and an asymmetric-only allow-list
+/// refuses the HS256 header first.
+#[test]
+fn alg_confusion_does_not_verify() {
+    let clock = FixedClock(1_300_819_320);
+    let ec_public = public(&jwk(P256));
+    let ec_json = ec_public.to_json();
+    let hmac_with_public_key = Jwk::from_json(
+        format!(
+            r#"{{"kty":"oct","k":"{}"}}"#,
+            b64url_encode(ec_json.as_bytes())
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let claims = rfc7519_claims().to_json();
+    let forged = sign_raw(
+        r#"{"alg":"HS256","typ":"JWT"}"#,
+        claims.as_bytes(),
+        &hmac_with_public_key,
+    );
+    let es_only = Policy::new(&clock, &ES256).unwrap();
+    let both = Policy::new(&clock, &[SigningAlg::ES256, SigningAlg::HS256]).unwrap();
+    let keys = set(&[ec_json.as_str()]);
+    for source in [Keys::One(&ec_public), Keys::Set(&keys)] {
+        assert_eq!(
+            jwt::verify(&forged, source, &es_only).map(|_| ()),
+            Err(Error::AlgorithmNotAllowed)
+        );
+        assert!(jwt::verify(&forged, source, &both).is_err());
+    }
+    assert_eq!(
+        jwt::verify(&forged, Keys::One(&ec_public), &both).map(|_| ()),
+        Err(Error::KeyAlgorithmMismatch)
+    );
+}
+
+/// Untrusted input never panics: every truncation and every single-byte
+/// substitution of RFC 7519 §3.1 is an error (only the unmodified token
+/// verifies), with one key and with a set.
+#[test]
+fn mutated_tokens_never_panic_and_never_verify() {
+    let key = jwk(OCT_64);
+    let keys = set(&[OCT_64]);
+    let clock = FixedClock(1_300_819_320);
+    let policy = Policy::new(&clock, &HS256).unwrap();
+    let bytes = RFC7519_3_1.as_bytes();
+    for cut in 0..bytes.len() {
+        let t = &RFC7519_3_1[..cut];
+        assert!(jwt::verify(t, Keys::One(&key), &policy).is_err(), "{t}");
+    }
+    for i in 0..bytes.len() {
+        for sub in [b'A', b'.', b'=', b'\0', b'-'] {
+            if bytes[i] == sub {
+                continue;
+            }
+            let mut m = bytes.to_vec();
+            m[i] = sub;
+            let t = String::from_utf8(m).unwrap();
+            for source in [Keys::One(&key), Keys::Set(&keys)] {
+                // Replacing the last char of the signature may keep the
+                // same octets (unused trailing bits): strict base64url
+                // must reject those, so every mutation fails.
+                assert!(jwt::verify(&t, source, &policy).is_err(), "{t}");
+            }
+        }
+    }
+}
+
+/// ADR 0049 §4: a payload that fails to parse or validate leaves no
+/// payload content in the error's `Display` or `Debug`.
+#[test]
+fn errors_do_not_echo_payload_content() {
+    let key = jwk(OCT_64);
+    let clock = FixedClock(1_300_819_320);
+    let policy = Policy::new(&clock, &HS256).unwrap();
+    for payload in [
+        &br#"{"iss":"SECRET-SENTINEL-9f3","exp":"SECRET-SENTINEL-9f3"}"#[..],
+        br#"{"iss":"SECRET-SENTINEL-9f3","exp":1,"exp":2}"#,
+        br#"{"iss":"SECRET-SENTINEL-9f3""#,
+        br#"{"iss":"SECRET-SENTINEL-9f3","exp":1300819380,"sub":5}"#,
+        br#"{"SECRET-SENTINEL-9f3":1}"#,
+    ] {
+        let token = sign_raw(r#"{"alg":"HS256"}"#, payload, &key);
+        let err = jwt::verify(&token, Keys::One(&key), &policy).unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("SECRET-SENTINEL"), "{shown}");
+    }
+}
