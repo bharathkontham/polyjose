@@ -8,6 +8,8 @@
 //! not derived from the library, so they check it independently.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
+mod common;
+
 use polyjose::Error;
 use polyjose::json::{self, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
@@ -29,9 +31,9 @@ const KINDS: &[&str] = &[
     "X25519",
 ];
 
-/// An open JWK object (no closing brace) of `kind`. EC and OKP coordinates
-/// have the right length; import is structural (on-curve checks are
-/// 0002-T01), so filler octets are fine.
+/// An open JWK object (no closing brace) of `kind`. EC points and the
+/// Ed25519 key are real (import checks them, ADR 0041 §4); the X25519 and
+/// `oct` members are filler octets of the right length.
 fn prefix(kind: &str) -> String {
     let coordinate = |len: usize| b64url_encode(&vec![7u8; len]);
     match kind {
@@ -40,16 +42,25 @@ fn prefix(kind: &str) -> String {
         "P-256" | "secp256k1" => ec(kind, 32),
         "P-384" => ec(kind, 48),
         "P-521" => ec(kind, 66),
-        "Ed25519" | "X25519" => {
-            format!(r#"{{"kty":"OKP","crv":"{kind}","x":"{}""#, coordinate(32))
-        }
+        "Ed25519" => format!(
+            r#"{{"kty":"OKP","crv":"Ed25519","x":"{}""#,
+            common::ED25519_X
+        ),
+        "X25519" => format!(r#"{{"kty":"OKP","crv":"X25519","x":"{}""#, coordinate(32)),
         other => panic!("unknown kind {other}"),
     }
 }
 
+/// An open EC JWK: the curve's generator when `len` is its coordinate
+/// length, otherwise filler coordinates of `len` octets (a wrong length).
 fn ec(crv: &str, len: usize) -> String {
-    let c = b64url_encode(&vec![7u8; len]);
-    format!(r#"{{"kty":"EC","crv":"{crv}","x":"{c}","y":"{c}""#)
+    let g = common::generator(crv);
+    if g.len == len {
+        format!(r#"{{"kty":"EC","crv":"{crv}","x":"{}","y":"{}""#, g.x, g.y)
+    } else {
+        let c = b64url_encode(&vec![7u8; len]);
+        format!(r#"{{"kty":"EC","crv":"{crv}","x":"{c}","y":"{c}""#)
+    }
 }
 
 /// A JWK of `kind` with `"alg": alg`.

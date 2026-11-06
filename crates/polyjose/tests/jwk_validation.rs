@@ -3,6 +3,8 @@
 //! error code, through the public API with raw JSON input.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
+mod common;
+
 use polyjose::Error;
 use polyjose::json::{self, Value};
 use polyjose::jwk::{Jwk, KeyMaterial, KeyOp, KeyUse, OkpCurve};
@@ -95,9 +97,11 @@ fn ec_accepts_exact_lengths_for_every_curve() {
         ("P-521", 66),
         ("secp256k1", 32),
     ] {
-        let public = ok(&ec(crv, &b64(len, 1), &b64(len, 2), None));
+        // Real points: import checks that they are on the curve (ADR 0041 §4).
+        let g = common::generator(crv);
+        let public = ok(&ec(crv, g.x, g.y, None));
         assert!(public.is_public(), "{crv}");
-        let private = ok(&ec(crv, &b64(len, 1), &b64(len, 2), Some(&b64(len, 3))));
+        let private = ok(&ec(crv, g.x, g.y, Some(g.d)));
         assert!(!private.is_public(), "{crv}");
         let KeyMaterial::Ec(key) = private.material() else {
             panic!("not EC")
@@ -106,7 +110,9 @@ fn ec_accepts_exact_lengths_for_every_curve() {
         assert_eq!((key.x().len(), key.y().len()), (len, len));
         // Leading zero octets are part of the fixed-size encoding (RFC 8812
         // §3.1: "with any leading zeros preserved").
-        ok(&ec(crv, &b64(len, 0), &b64(len, 0), Some(&b64(len, 0))));
+        let z = common::LEADING_ZEROS.iter().find(|k| k.crv == crv).unwrap();
+        assert_eq!(z.len, len);
+        ok(&ec(crv, z.x, z.y, Some(z.d)));
     }
 }
 

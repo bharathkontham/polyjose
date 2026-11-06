@@ -322,7 +322,7 @@ mod tests {
     use crate::Error;
     use crate::json;
     use crate::jwa::{KeyMgmtAlg, SigningAlg};
-    use crate::jwk::{Jwk, JwkSet, KeyAlg, KeyType};
+    use crate::jwk::{Jwk, JwkSet, KeyAlg, KeyMaterial, KeyType};
 
     /// RFC 7517 Appendix A.1, the P-256 public key.
     const EC_P256: &str = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#;
@@ -337,12 +337,32 @@ mod tests {
     const X25519: &str =
         r#"{"kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"}"#;
 
-    /// An EC public key on `crv`, with coordinates of the right length (the
-    /// family table does not look at the point).
+    /// The generator G of `crv` as an EC public key (SEC 2 values): a real
+    /// point, since import checks that it is on the curve (ADR 0041 §4).
+    /// `len` is the coordinate length the caller expects.
     fn ec(crv: &str, len: usize) -> Jwk {
-        let coordinate = crate::util::b64url_encode(&vec![7u8; len]);
-        let json = format!(r#"{{"kty":"EC","crv":"{crv}","x":"{coordinate}","y":"{coordinate}"}}"#);
-        Jwk::from_json(json.as_bytes()).unwrap()
+        let (x, y) = match crv {
+            "P-384" => (
+                "qofKIr6LBTeOscce8yCtdG4dO2KLp5uYWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3",
+                "NhfeSpYmLG9dnpi_kpLcKfj0Hb0omhR86doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f",
+            ),
+            "P-521" => (
+                "AMaFjga3BATpzZ4-y2YjlbRCnGSBOQU_tSH4KK9ga009uqFLXnfv51ko_h3BJ6L_qN4zSLPBhWpCm_l-fjHC5b1m",
+                "ARg5KWp4mjvABFyKX7QsfRvZmPVESVebRGgXr70XJz5mLJfucple9CZAxVC5AT-tB2E1PHCGonLCQIi-lHaf0WZQ",
+            ),
+            "secp256k1" => (
+                "eb5mfvncu6xVoGKVzocLBwKb_NstzijZWfKBWxb4F5g",
+                "SDradyajxGVdpPv8DhEIqP0XtEimhVQZnEfQj_sQ1Lg",
+            ),
+            other => panic!("no EC fixture for {other}"),
+        };
+        let json = format!(r#"{{"kty":"EC","crv":"{crv}","x":"{x}","y":"{y}"}}"#);
+        let key = Jwk::from_json(json.as_bytes()).unwrap();
+        let KeyMaterial::Ec(ec) = key.material() else {
+            unreachable!()
+        };
+        assert_eq!(ec.x().len(), len, "{crv}");
+        key
     }
 
     fn jwk(json: &str) -> Jwk {

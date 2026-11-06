@@ -5,6 +5,8 @@
 //! implementation.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
+mod common;
+
 use polyjose::Error;
 use polyjose::jwk::Jwk;
 use polyjose::util::b64url_encode;
@@ -36,12 +38,19 @@ fn ec_every_curve_member_and_length_cell() {
         ("P-521", 66),
         ("secp256k1", 32),
     ] {
+        // A member of the curve's own length is the real generator key (G,
+        // d = 1), since import checks the point and the scalar (ADR 0041
+        // §4); any other length is filler, rejected before those checks.
+        let g = common::generator(crv);
+        let member = |n: usize, real: &str| if n == len { real.to_owned() } else { b(n) };
         let key = |x: usize, y: usize, d: Option<usize>| {
-            let d = d.map(|d| format!(r#","d":"{}""#, b(d))).unwrap_or_default();
+            let d = d
+                .map(|d| format!(r#","d":"{}""#, member(d, g.d)))
+                .unwrap_or_default();
             format!(
                 r#"{{"kty":"EC","crv":"{crv}","x":"{}","y":"{}"{d}}}"#,
-                b(x),
-                b(y)
+                member(x, g.x),
+                member(y, g.y)
             )
         };
         assert_eq!(code(&key(len, len, None)), "OK", "{crv} public");
@@ -221,8 +230,11 @@ fn rsa_any_private_member_alone_wins_over_every_other_error() {
 fn private_members_are_not_special_on_other_key_types() {
     // `p`/`q`/`oth` on EC, OKP and oct are unknown members, kept and ignored
     // (RFC 7517 §4), never an RSA private key.
-    let x = b(32);
-    let ec = format!(r#"{{"kty":"EC","crv":"P-256","x":"{x}","y":"{x}","p":"AQAB","oth":[]}}"#);
+    let g = common::generator("P-256");
+    let ec = format!(
+        r#"{{"kty":"EC","crv":"P-256","x":"{}","y":"{}","p":"AQAB","oth":[]}}"#,
+        g.x, g.y
+    );
     assert_eq!(code(&ec), "OK");
     assert_eq!(code(r#"{"kty":"oct","k":"AA","d":"AQAB","p":1}"#), "OK");
 }

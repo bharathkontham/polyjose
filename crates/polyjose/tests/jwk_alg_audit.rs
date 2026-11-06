@@ -5,6 +5,8 @@
 //! is caught. JWK Set cases cover escaped member names and member placement.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
+mod common;
+
 use polyjose::Error;
 use polyjose::jwk::{Jwk, JwkSet, KeyAlg};
 use polyjose::util::b64url_encode;
@@ -27,11 +29,12 @@ fn key(kind: &str, tail: &str) -> String {
     let head = match kind {
         "oct" => format!(r#"{{"kty":"oct","k":"{}""#, c(32)),
         "RSA" => format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB""#),
-        "P-256" | "secp256k1" => {
-            format!(r#"{{"kty":"EC","crv":"{kind}","x":"{0}","y":"{0}""#, c(32))
+        // Real points (the generators): import checks that a point is on
+        // its curve (ADR 0041 §4).
+        "P-256" | "secp256k1" | "P-384" | "P-521" => {
+            let g = common::generator(kind);
+            format!(r#"{{"kty":"EC","crv":"{kind}","x":"{}","y":"{}""#, g.x, g.y)
         }
-        "P-384" => format!(r#"{{"kty":"EC","crv":"P-384","x":"{0}","y":"{0}""#, c(48)),
-        "P-521" => format!(r#"{{"kty":"EC","crv":"P-521","x":"{0}","y":"{0}""#, c(66)),
         _ => format!(r#"{{"kty":"OKP","crv":"{kind}","x":"{}""#, c(32)),
     };
     format!("{head}{tail}}}")
