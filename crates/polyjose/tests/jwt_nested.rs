@@ -374,7 +374,7 @@ fn encrypt_nested_refuses_a_different_caller_cty() {
 /// signature part (an Unsecured JWS, RFC 7519 §6; RFC 8725 §3.2), a
 /// protected header that is not base64url-encoded JSON object text
 /// (RFC 7515 §5.2 steps 2–3), or anything else is `InvalidFormat`,
-/// before the caller's `cty` is looked at.
+/// before the caller's `cty` or `zip` is looked at.
 #[test]
 fn encrypt_nested_needs_a_compact_jws() {
     let inner = inner_es256();
@@ -487,6 +487,71 @@ fn encrypt_nested_refuses_an_unsecured_or_alg_less_jws() {
     // against its allow-list; the issuer checks the shape and `none` only.
     let other = with_header(r#"{"alg":"x-unregistered"}"#);
     assert_eq!(code(jwt::encrypt_nested(&other, &kw("{}"))), "ok");
+}
+
+/// RFC 8725 §3.6: compression before encryption "SHOULD NOT" be done
+/// (compressed data "often reveals information about the plaintext"), so
+/// `encrypt_nested` refuses an encryptor that would set `zip`, in every
+/// build: one built with `Encryptor::compress()`, or one whose protected
+/// header sets a `zip` member (RFC 7516 §4.1.3). `InvalidHeader("zip")`,
+/// after the caller's `cty` check.
+#[test]
+fn encrypt_nested_refuses_compression() {
+    let inner = inner_es256();
+    for e in [
+        kw("{}").compress(),
+        kw(r#"{"cty":"JWT"}"#).compress(),
+        kw(r#"{"typ":"JWT","kid":"outer-1"}"#).compress(),
+        kw(r#"{"zip":"DEF"}"#),
+        kw(r#"{"zip":"XYZ"}"#),
+        kw(r#"{"zip":"def"}"#),
+        kw(r#"{"cty":"JWT","zip":"DEF"}"#),
+        kw(r#"{"zip":"DEF"}"#).compress(),
+    ] {
+        assert_eq!(
+            jwt::encrypt_nested(&inner, &e),
+            Err(Error::InvalidHeader("zip")),
+            "{e:?}"
+        );
+    }
+    // The caller's `cty` is checked first.
+    for e in [
+        kw(r#"{"cty":"JOSE"}"#).compress(),
+        kw(r#"{"cty":"JOSE","zip":"DEF"}"#),
+    ] {
+        assert_eq!(
+            jwt::encrypt_nested(&inner, &e),
+            Err(Error::InvalidHeader("cty")),
+            "{e:?}"
+        );
+    }
+}
+
+/// With the `deflate` codec (ADR 0017), the same encryptor would compress
+/// (`zip: "DEF"`, RFC 7516 §4.1.3), so the refusal is `encrypt_nested`'s
+/// own (RFC 8725 §3.6). Receiving is unchanged: a compressed nested JWT
+/// made with 0003's encryptor directly still decrypts and verifies, since
+/// RFC 7516 §5.2 step 17 allows it and `DecryptPolicy::max_decompressed_len`
+/// bounds it.
+#[cfg(feature = "deflate")]
+#[test]
+fn encrypt_nested_refuses_deflate_but_decrypt_nested_accepts_it() {
+    let inner = inner_es256();
+    let compressing = kw("{}").compress();
+    let plain_jwe = compressing.encrypt_compact(inner.as_bytes()).unwrap();
+    assert_eq!(outer_header_of(&plain_jwe).zip.as_deref(), Some("DEF"));
+    assert_eq!(
+        jwt::encrypt_nested(&inner, &compressing),
+        Err(Error::InvalidHeader("zip"))
+    );
+    let received = kw(r#"{"cty":"JWT"}"#)
+        .compress()
+        .encrypt_compact(inner.as_bytes())
+        .unwrap();
+    assert_eq!(outer_header_of(&received).zip.as_deref(), Some("DEF"));
+    let v = open(&received).unwrap();
+    assert_eq!(v.inner.claims.iss.as_deref(), Some(ISSUER));
+    assert_eq!(v.outer_header.zip.as_deref(), Some("DEF"));
 }
 
 /// RFC 7516 §7.1: the output is compact, so the encryptor's compact

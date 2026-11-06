@@ -65,6 +65,12 @@ pub struct VerifiedNestedJwt {
 ///   media-type comparison (RFC 7515 §4.1.10, so `jwt` or
 ///   `application/JWT`) is rewritten to `JWT`; any other `cty` is
 ///   refused (ADR 0027 §7). `encryptor` itself is not changed.
+/// - **No compression**: RFC 8725 §3.6 says compression before
+///   encryption "SHOULD NOT" be done (the compressed length leaks the
+///   plaintext). An `encryptor` built with [`Encryptor::compress`], or
+///   whose protected header sets `zip` (RFC 7516 §4.1.3), is refused in
+///   every build, with or without the `deflate` feature (ADR 0017).
+///   [`decrypt_nested`] still accepts a compressed nested JWT.
 /// - The output is the JWE Compact Serialization (RFC 7516 §7.1), so
 ///   `encryptor` needs exactly one recipient and no unprotected header or
 ///   AAD.
@@ -86,7 +92,9 @@ pub struct VerifiedNestedJwt {
 ///    `none`.
 /// 3. **The caller's `cty`**: [`Error::InvalidHeader`]`("cty")` if the
 ///    encryptor's protected header sets a `cty` other than `JWT`.
-/// 4. **Encryption**: the errors of [`Encryptor::encrypt_compact`].
+/// 4. **Compression**: [`Error::InvalidHeader`]`("zip")` if the encryptor
+///    compresses or its protected header sets `zip` (RFC 8725 §3.6).
+/// 5. **Encryption**: the errors of [`Encryptor::encrypt_compact`].
 pub fn encrypt_nested(signed_jwt: &str, encryptor: &Encryptor) -> Result<String> {
     // 1. Shape (RFC 7515 §7.1), with a signature (RFC 8725 §3.2).
     let inner_header = check_compact_jws_shape(signed_jwt)?;
@@ -100,6 +108,10 @@ pub fn encrypt_nested(signed_jwt: &str, encryptor: &Encryptor) -> Result<String>
         .is_some_and(|cty| !media_type_eq(cty, JWT))
     {
         return Err(Error::InvalidHeader("cty"));
+    }
+    // 4. RFC 8725 §3.6: no compression before encryption.
+    if encryptor.compresses() || protected.zip.is_some() {
+        return Err(Error::InvalidHeader("zip"));
     }
     protected.cty = Some(JWT.into());
     encryptor
