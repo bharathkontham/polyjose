@@ -1,6 +1,8 @@
 //! The owned JSON value tree (RFC 8259 §3).
 
-use super::Number;
+use core::fmt;
+
+use super::{Limits, Number};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// A JSON value (RFC 8259 §3): `null`, `true`/`false`, a number, a string,
@@ -26,9 +28,39 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 ///
 /// Not covered: the caller's input bytes, copies the caller makes (for
 /// example with `as_str().to_owned()`), and [`to_json`](Value::to_json)
-/// output, which the caller must wipe (see there). `Debug` prints strings as
-/// `Zeroizing { .. }`.
-#[derive(Debug, Clone, PartialEq)]
+/// output, which the caller must wipe (see there).
+///
+/// # Debug
+///
+/// `Debug` is polyjose's own and never prints the text of a string, so a
+/// logged value cannot leak a key (workspace secrets rule). It does not rely
+/// on how `zeroize` formats [`Zeroizing`].
+///
+/// - Every string prints as `String("<redacted>")`, whatever its content
+///   or length, so not even the length of a secret shows.
+/// - Member names print: they say which members are present (`"kty"`,
+///   `"d"`, …) and are not secret. JOSE never carries key material in a
+///   name (RFC 7515 §4, RFC 7517 §4).
+/// - `null`, booleans and numbers print. JOSE has no secret of those types:
+///   every private key member is a base64url string (RFC 7518 §6.2.2,
+///   §6.3.2, §6.4.1; RFC 8037 §2), while numbers are values like `exp` or
+///   `p2c` (RFC 7519 §4.1.4, RFC 7518 §4.8.1.2).
+/// - Arrays and objects print their structure. A container nested more
+///   than [`Limits::MAX_DEPTH_CEILING`] deep prints as `<too deep>`, so
+///   `Debug` of a hand-built value, which has no depth limit, recurses no
+///   deeper than the parser ever nests.
+///
+/// ```
+/// use polyjose::json::{parse, Value};
+///
+/// let jwk = parse(br#"{"kty":"oct","k":"c2VjcmV0","ext":true}"#)?;
+/// assert_eq!(
+///     format!("{jwk:?}"),
+///     r#"Object({"kty": String("<redacted>"), "k": String("<redacted>"), "ext": Bool(true)})"#
+/// );
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+#[derive(Clone, PartialEq)]
 pub enum Value {
     /// `null` (RFC 8259 §3).
     Null,
@@ -148,6 +180,17 @@ impl Zeroize for Value {
 /// Every string a `Value` owns is a [`Zeroizing<String>`].
 impl ZeroizeOnDrop for Value {}
 
+/// Redacting: strings print as `"<redacted>"` (see [`Value`#debug]).
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Redacted {
+            value: self,
+            depth: 0,
+        }
+        .fmt(f)
+    }
+}
+
 impl From<bool> for Value {
     fn from(b: bool) -> Value {
         Value::Bool(b)
@@ -196,7 +239,10 @@ impl From<Object> for Value {
 /// Equality ignores member order (RFC 8259 §4: an object is unordered) and
 /// is O(n log n) in the member count, so comparing untrusted objects is not
 /// quadratic.
-#[derive(Debug, Clone, Default)]
+///
+/// `Debug` prints the members as a map of names to redacted values, like
+/// `{"kty": String("<redacted>"), "ext": Bool(true)}` (see [`Value`#debug]).
+#[derive(Clone, Default)]
 pub struct Object {
     members: Vec<(Zeroizing<String>, Value)>,
 }
@@ -313,6 +359,96 @@ impl Zeroize for Object {
 /// Member names are [`Zeroizing<String>`]s and values are [`Value`]s.
 impl ZeroizeOnDrop for Object {}
 
+/// Redacting: names print, string values print as `"<redacted>"` (see
+/// [`Value`#debug]).
+impl fmt::Debug for Object {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        RedactedMembers {
+            members: &self.members,
+            depth: 1,
+        }
+        .fmt(f)
+    }
+}
+
+/// What `Debug` prints instead of a string's text.
+const REDACTED: &str = "<redacted>";
+
+/// What `Debug` prints instead of a container nested more than
+/// [`Limits::MAX_DEPTH_CEILING`] deep.
+const TOO_DEEP: &str = "<too deep>";
+
+/// The redacting `Debug` of a [`Value`] that `depth` containers enclose.
+///
+/// Recursion goes through `depth`, which grows by one per container and
+/// stops at [`Limits::MAX_DEPTH_CEILING`], so it is bounded however deep a
+/// hand-built value is.
+struct Redacted<'a> {
+    value: &'a Value,
+    depth: usize,
+}
+
+impl fmt::Debug for Redacted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let depth = self.depth + 1;
+        match self.value {
+            Value::Null => f.write_str("Null"),
+            Value::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
+            Value::Number(n) => f.debug_tuple("Number").field(n).finish(),
+            Value::String(_) => f.debug_tuple("String").field(&REDACTED).finish(),
+            Value::Array(_) | Value::Object(_) if self.depth >= Limits::MAX_DEPTH_CEILING => {
+                f.write_str(TOO_DEEP)
+            }
+            Value::Array(items) => f
+                .debug_tuple("Array")
+                .field(&RedactedItems { items, depth })
+                .finish(),
+            Value::Object(o) => f
+                .debug_tuple("Object")
+                .field(&RedactedMembers {
+                    members: &o.members,
+                    depth,
+                })
+                .finish(),
+        }
+    }
+}
+
+/// The redacting `Debug` of array elements that `depth` containers enclose.
+struct RedactedItems<'a> {
+    items: &'a [Value],
+    depth: usize,
+}
+
+impl fmt::Debug for RedactedItems<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let depth = self.depth;
+        f.debug_list()
+            .entries(self.items.iter().map(|value| Redacted { value, depth }))
+            .finish()
+    }
+}
+
+/// The redacting `Debug` of object members whose values `depth` containers
+/// enclose: a map from each name to its redacted value.
+struct RedactedMembers<'a> {
+    members: &'a [(Zeroizing<String>, Value)],
+    depth: usize,
+}
+
+impl fmt::Debug for RedactedMembers<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let depth = self.depth;
+        f.debug_map()
+            .entries(
+                self.members
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), Redacted { value, depth })),
+            )
+            .finish()
+    }
+}
+
 impl PartialEq for Object {
     /// Order-insensitive (RFC 8259 §4: an object is unordered): same names,
     /// and equal values for each name.
@@ -399,8 +535,9 @@ impl Object {
     }
 }
 
-/// Iterator over an [`Object`]'s members, in order.
-#[derive(Debug, Clone)]
+/// Iterator over an [`Object`]'s members, in order. `Debug` prints the
+/// members not yet yielded, redacted like [`Object`]'s.
+#[derive(Clone)]
 pub struct Iter<'a>(core::slice::Iter<'a, (Zeroizing<String>, Value)>);
 
 impl<'a> Iterator for Iter<'a> {
@@ -417,6 +554,17 @@ impl<'a> Iterator for Iter<'a> {
 
 impl ExactSizeIterator for Iter<'_> {}
 
+impl fmt::Debug for Iter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Iter")
+            .field(&RedactedMembers {
+                members: self.0.as_slice(),
+                depth: 1,
+            })
+            .finish()
+    }
+}
+
 impl<'a> IntoIterator for &'a Object {
     type Item = (&'a str, &'a Value);
     type IntoIter = Iter<'a>;
@@ -428,7 +576,7 @@ impl<'a> IntoIterator for &'a Object {
 
 /// Owning iterator over an [`Object`]'s members, in order. Names stay
 /// [`Zeroizing`], and members not taken are wiped when it is dropped.
-#[derive(Debug)]
+/// `Debug` prints the members not yet yielded, redacted like [`Object`]'s.
 pub struct IntoIter(std::vec::IntoIter<(Zeroizing<String>, Value)>);
 
 impl Iterator for IntoIter {
@@ -444,6 +592,17 @@ impl Iterator for IntoIter {
 }
 
 impl ExactSizeIterator for IntoIter {}
+
+impl fmt::Debug for IntoIter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("IntoIter")
+            .field(&RedactedMembers {
+                members: self.0.as_slice(),
+                depth: 1,
+            })
+            .finish()
+    }
+}
 
 impl IntoIterator for Object {
     type Item = (Zeroizing<String>, Value);
@@ -740,6 +899,119 @@ mod tests {
             assert!(!equal);
             assert!(count <= n_log_n_bound(N), "{count} comparisons");
         }
+    }
+
+    /// Secret text for the `Debug` tests; a leak would contain it.
+    const SECRET: &str = "MARKERsecret";
+
+    #[test]
+    fn debug_prints_strings_as_a_placeholder() {
+        let v = Value::from(SECRET);
+        assert_eq!(format!("{v:?}"), r#"String("<redacted>")"#);
+        assert_eq!(format!("{v:#?}"), "String(\n    \"<redacted>\",\n)");
+        // The placeholder is the same whatever the length: no length leaks.
+        assert_eq!(format!("{:?}", Value::from("")), format!("{v:?}"));
+    }
+
+    #[test]
+    fn debug_prints_null_bools_and_numbers() {
+        assert_eq!(format!("{:?}", Value::Null), "Null");
+        assert_eq!(format!("{:?}", Value::Bool(true)), "Bool(true)");
+        // Numbers are not secret in JOSE (`exp`, `p2c`, ...); `Number`'s own
+        // Debug is used.
+        let Some(n) = Number::from_i64(3) else {
+            unreachable!("3 is an exact integer")
+        };
+        assert_eq!(format!("{:?}", Value::Number(n)), format!("Number({n:?})"));
+    }
+
+    #[test]
+    fn debug_prints_object_names_and_structure_but_no_string() {
+        let mut inner = Object::new();
+        inner.insert("d", SECRET);
+        let mut o = Object::new();
+        o.insert("kty", "EC");
+        o.insert("ok", true);
+        o.insert("keys", vec![Value::from(inner), Value::from(SECRET)]);
+        assert_eq!(
+            format!("{o:?}"),
+            r#"{"kty": String("<redacted>"), "ok": Bool(true), "keys": Array([Object({"d": String("<redacted>")}), String("<redacted>")])}"#
+        );
+        let v = Value::from(o);
+        let debug = format!("{v:?}");
+        assert!(debug.starts_with(r#"Object({"kty": "#), "{debug}");
+        let pretty = format!("{v:#?}");
+        assert!(!pretty.contains(SECRET), "{pretty}");
+        assert!(pretty.contains("\"d\": String(\n"), "{pretty}");
+        assert_eq!(format!("{:?}", Object::new()), "{}");
+    }
+
+    #[test]
+    fn debug_of_the_iterators_is_redacted() {
+        let mut o = Object::new();
+        o.insert("k", SECRET);
+        let mut iter = o.iter();
+        assert_eq!(format!("{iter:?}"), r#"Iter({"k": String("<redacted>")})"#);
+        assert!(iter.next().is_some());
+        assert_eq!(format!("{iter:?}"), "Iter({})");
+        assert_eq!(
+            format!("{:?}", o.into_iter()),
+            r#"IntoIter({"k": String("<redacted>")})"#
+        );
+    }
+
+    /// An array nested `depth` times around a string, built without
+    /// recursion.
+    fn nested_arrays(depth: usize) -> Value {
+        let mut v = Value::from(SECRET);
+        for _ in 0..depth {
+            v = Value::Array(vec![v]);
+        }
+        v
+    }
+
+    /// Takes `v` apart one level at a time, so dropping a value deeper than
+    /// the stack allows does not recurse.
+    fn dismantle(mut v: Value) {
+        while let Value::Array(mut items) = v {
+            v = items.pop().unwrap_or(Value::Null);
+        }
+    }
+
+    #[test]
+    fn debug_prints_everything_the_parser_can_produce() {
+        // The parser accepts at most `MAX_DEPTH_CEILING` nested containers.
+        let ceiling = super::super::Limits::MAX_DEPTH_CEILING;
+        let v = nested_arrays(ceiling);
+        let debug = format!("{v:?}");
+        assert_eq!(debug.matches("Array(").count(), ceiling);
+        assert!(debug.contains("String(\"<redacted>\")"), "{debug}");
+        assert!(!debug.contains("<too deep>"));
+        dismantle(v);
+    }
+
+    #[test]
+    fn debug_of_a_deep_hand_built_value_is_bounded() {
+        // Hand-built values have no depth limit. Debug stops at the parser's
+        // ceiling instead of recursing, so it cannot overflow the stack.
+        let ceiling = super::super::Limits::MAX_DEPTH_CEILING;
+        let v = nested_arrays(100_000);
+        for debug in [format!("{v:?}"), format!("{v:#?}")] {
+            assert_eq!(debug.matches("Array(").count(), ceiling);
+            assert_eq!(debug.matches("<too deep>").count(), 1);
+            assert!(!debug.contains(SECRET));
+        }
+        dismantle(v);
+
+        let mut o = Object::new();
+        for _ in 0..200 {
+            let mut outer = Object::new();
+            outer.insert("x", o);
+            o = outer;
+        }
+        let debug = format!("{o:?}");
+        assert_eq!(debug.matches("Object(").count(), ceiling - 1);
+        assert_eq!(debug.matches("<too deep>").count(), 1);
     }
 
     #[test]

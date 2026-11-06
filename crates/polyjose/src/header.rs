@@ -79,6 +79,26 @@ const NOT_AN_OBJECT: &str = "expected a JSON object";
 /// assert_eq!(h.to_json()?, r#"{"alg":"HS256","typ":"JWT","x-tenant":"a"}"#);
 /// # Ok::<(), polyjose::Error>(())
 /// ```
+///
+/// # Debug
+///
+/// `Debug` never prints key material, following the same split as a
+/// [`Jwk`](crate::jwk::Jwk)'s `Debug`:
+///
+/// - `jwk`, `epk` and [`other_params`](Header::other_params) are JSON
+///   objects and print through [`Object`]'s redacting `Debug`: member names
+///   and structure show, every string prints as `"<redacted>"`. A `jwk` or
+///   `epk` should be a public key (RFC 7515 §4.1.3, RFC 7516 §4.1.5,
+///   RFC 7518 §4.6.1.1), but a sender may wrongly include a private member
+///   such as `d` or `k` (RFC 7517 §4, RFC 7518 §6), and a Private Header
+///   Parameter (RFC 7515 §4.3) can hold anything.
+/// - The typed registered parameters (`alg`, `kid`, `typ`, `p2s`, `iv`,
+///   `x5c`, …) print in full. None is secret: every header parameter
+///   travels in the clear: base64url-encoded or as plain JSON, integrity
+///   protected at most, never encrypted (RFC 7515 §3.1 and §7.2.1,
+///   RFC 7516 §2 and §3.1), and they are what a reader needs to
+///   diagnose a failure. They may be attacker-chosen; `Debug` escapes
+///   control characters, so they cannot forge log lines.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct Header {
@@ -601,6 +621,36 @@ mod tests {
             matches!(err, Some(Error::InvalidHeader(_))),
             "{:?}: {err:?}",
             String::from_utf8_lossy(input)
+        );
+    }
+
+    /// `Debug` of a header never prints the strings of `jwk`, `epk` or a
+    /// Private Header Parameter (RFC 7515 §4.3), which may hold private key
+    /// members (RFC 7517 §4, RFC 7518 §6.2.2.1, §6.4.1), but does print the
+    /// registered parameters, which travel in the clear (RFC 7515 §4,
+    /// RFC 7516 §4).
+    #[test]
+    fn debug_redacts_jwk_epk_and_private_parameter_strings() {
+        const SECRET: &str = "MARKERsecretMARKERsecretMARKERsecretMARKERs";
+        let jwk = format!(r#"{{"kty":"EC","crv":"P-256","x":"AA","y":"AA","d":"{SECRET}"}}"#);
+        let epk = format!(r#"{{"kty":"OKP","crv":"X25519","x":"AA","d":"{SECRET}"}}"#);
+        let oct = format!(r#"{{"kty":"oct","k":"{SECRET}"}}"#);
+        let input = format!(
+            r#"{{"alg":"ECDH-ES","enc":"A128GCM","kid":"k1","p2s":"c2FsdA","jwk":{jwk},"epk":{epk},"x-key":{oct},"x-secret":"{SECRET}","x-n":7}}"#
+        );
+        let h = Header::from_json(input.as_bytes()).unwrap();
+        for debug in [format!("{h:?}"), format!("{h:#?}")] {
+            assert!(!debug.contains("MARKER"), "{debug}");
+            assert!(debug.contains("\"<redacted>\""), "{debug}");
+            assert!(debug.contains("\"d\""), "names print: {debug}");
+        }
+        let debug = format!("{h:?}");
+        assert!(debug.contains(r#"alg: Some("ECDH-ES")"#), "{debug}");
+        assert!(debug.contains(r#"kid: Some("k1")"#), "{debug}");
+        assert!(debug.contains(r#"p2s: Some("c2FsdA")"#), "{debug}");
+        assert!(
+            debug.contains(r#""x-secret": String("<redacted>")"#),
+            "{debug}"
         );
     }
 
