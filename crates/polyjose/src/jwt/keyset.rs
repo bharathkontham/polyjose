@@ -669,4 +669,121 @@ mod tests {
             (Err(Error::NoMatchingKey), 0, 0)
         );
     }
+
+    // ---- No header-supplied keys (ADR 0026 §2, RFC 8725 §3.10) ----
+
+    /// CVE-2018-0114: a `jwk` header with the attacker's key and a `kid`
+    /// matching nothing in the set → `NoMatchingKey`; without a `kid`,
+    /// the set's keys are tried and none verifies.
+    #[test]
+    fn an_embedded_jwk_never_supplies_a_key() {
+        let embedded = p256_member(&ATTACKER, r#","kid":"evil""#);
+        let by_kid = es256(
+            &format!(r#"{{"alg":"ES256","kid":"evil","jwk":{embedded}}}"#),
+            &ATTACKER,
+        );
+        assert_eq!(
+            counted(&by_kid, &selection(), &policy()),
+            (Err(Error::NoMatchingKey), 0, 0)
+        );
+        let kid_less = es256(&format!(r#"{{"alg":"ES256","jwk":{embedded}}}"#), &ATTACKER);
+        assert_eq!(
+            counted(&kid_less, &selection(), &policy()),
+            (Err(Error::InvalidSignature), 3, 0)
+        );
+    }
+
+    /// `jku` and `x5u` are data: they never select or fetch a key. A token
+    /// carrying them verifies only with the set's own key.
+    #[test]
+    fn jku_and_x5u_headers_are_never_dereferenced() {
+        let header = r#"{"alg":"ES256","kid":"b","jku":"https://attacker.example/jwks.json","x5u":"https://attacker.example/cert.pem"}"#;
+        assert_eq!(selected(&es256(header, &KEY_B), &selection()), Ok(1));
+        assert_eq!(
+            selected(&es256(header, &ATTACKER), &selection()),
+            Err(Error::InvalidSignature)
+        );
+    }
+
+    /// No network, file or process API appears in this module's code, so
+    /// a header URL cannot be dereferenced from here (ADR 0029 §5: no I/O
+    /// in the core).
+    #[test]
+    fn the_module_has_no_io_api() {
+        let source = include_str!("keyset.rs");
+        let code = &source[..source.find("#[cfg(test)]").unwrap()];
+        for needle in [
+            "std::net",
+            "std::fs",
+            "std::io",
+            "std::process",
+            "TcpStream",
+            "UdpSocket",
+            "ToSocketAddrs",
+        ] {
+            assert!(!code.contains(needle), "{needle}");
+        }
+    }
+
+    // ---- kid and alg from the protected header only (ADR 0049 §2) ----
+
+    /// A `kid` in a JSON-serialization unprotected header can never reach
+    /// selection: only the compact serialization is accepted, and it has
+    /// no unprotected header (RFC 7515 §7.1).
+    #[test]
+    fn an_unprotected_kid_is_never_read() {
+        let jws = es256(r#"{"alg":"ES256"}"#, &KEY_B);
+        let [protected, payload, signature]: [&str; 3] =
+            jws.split('.').collect::<Vec<_>>().try_into().unwrap();
+        let flattened = format!(
+            r#"{{"protected":"{protected}","header":{{"kid":"b"}},"payload":"{payload}","signature":"{signature}"}}"#
+        );
+        assert_eq!(
+            selected(&flattened, &selection()).map_err(|e| e.code()),
+            Err("InvalidFormat")
+        );
+    }
+
+    /// A `kid` or `alg` in the payload is not a header parameter: the
+    /// kid-less protected header selects every compatible key.
+    #[test]
+    fn kid_and_alg_in_the_payload_are_ignored() {
+        let protected =
+            ProtectedHeader::from_encoded(&b64url_encode(br#"{"alg":"ES256"}"#)).unwrap();
+        let jws = sign_compact(
+            &protected,
+            br#"{"kid":"zzz","alg":"HS256"}"#,
+            &p256_signer(&KEY_B),
+            &SignOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            candidate_indices(&jws, &selection(), &policy()),
+            Ok(vec![0, 1, 2])
+        );
+        assert_eq!(selected(&jws, &selection()), Ok(1));
+    }
+
+    // ---- select_and_verify (the T07 seam) ----
+
+    /// [`select_and_verify`] on a precheck gives exactly what
+    /// [`verify_with_set`] gives on the token.
+    #[test]
+    fn select_and_verify_matches_verify_with_set() {
+        let p = policy();
+        let opts = p.verify_options();
+        let tokens = [
+            es256(r#"{"alg":"ES256","kid":"b"}"#, &KEY_B),
+            es256(r#"{"alg":"ES256"}"#, &CAND_1),
+            es256(r#"{"alg":"ES256","kid":"zzz"}"#, &KEY_B),
+            es256(r#"{"alg":"ES256"}"#, &ATTACKER),
+        ];
+        for jws in &tokens {
+            let pre = precheck_compact(jws, &opts).unwrap();
+            assert_eq!(
+                select_and_verify(&pre, &selection(), &p),
+                verify_with_set(jws, &selection(), &p)
+            );
+        }
+    }
 }
