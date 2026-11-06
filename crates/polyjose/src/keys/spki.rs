@@ -535,23 +535,19 @@ mod tests {
     }
 
     mod properties {
-        use std::sync::OnceLock;
-
         use proptest::prelude::*;
         use proptest::sample::Index;
 
         use super::super::super::der::fixtures;
         use super::{decode, encode, positive};
 
-        /// The positive SPKI fixtures, loaded once.
-        fn corpus() -> &'static [Vec<u8>] {
-            static CORPUS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
-            CORPUS.get_or_init(|| {
-                positive()
-                    .into_iter()
-                    .map(|(dir, file, ..)| fixtures::load(dir, &file))
-                    .collect()
-            })
+        /// The positive SPKI fixtures, loaded when the strategy is built
+        /// (once per property, without global state).
+        fn corpus() -> Vec<Vec<u8>> {
+            positive()
+                .into_iter()
+                .map(|(dir, file, ..)| fixtures::load(dir, &file))
+                .collect()
         }
 
         /// Never panics, and canonical: whatever decodes re-encodes to
@@ -594,8 +590,8 @@ mod tests {
             }
 
             #[test]
-            fn single_byte_mutations_never_panic(fixture in any::<Index>(), at in any::<Index>(), byte in any::<u8>()) {
-                let mut der = fixture.get(corpus()).clone();
+            fn single_byte_mutations_never_panic(fixture in proptest::sample::select(corpus()), at in any::<Index>(), byte in any::<u8>()) {
+                let mut der = fixture;
                 let i = at.index(der.len());
                 der[i] = byte;
                 canonical(&der)?;
