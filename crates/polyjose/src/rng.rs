@@ -87,12 +87,12 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 ///   its source variant do not exist otherwise, so no production path can
 ///   select it, and nothing global can switch an `os()` adapter to it.
 ///
-/// Callers that need randomness take `&mut CryptoRngAdapter` (or
-/// `&mut impl TryCryptoRng`) as a parameter; public APIs create
-/// [`CryptoRngAdapter::os`] themselves. Uses: the added entropy of hedged
-/// RFC 6979 ECDSA signing (`ecdsa`'s `try_sign_with_rng`; RFC 7518 §3.4,
-/// RFC 8812 §3.2), which ADR 0005 requires so that a weak RNG cannot leak
-/// the key, and later JWE and key generation.
+/// Callers that need randomness take `&mut CryptoRngAdapter` (or a
+/// `&mut R` generic over `R: TryCryptoRng`) as a parameter; public APIs
+/// create [`CryptoRngAdapter::os`] themselves. Uses: the added entropy of
+/// hedged RFC 6979 ECDSA signing (`ecdsa`'s `try_sign_with_rng`; RFC 7518
+/// §3.4, RFC 8812 §3.2), which ADR 0005 requires so that a weak RNG cannot
+/// leak the key, and later JWE and key generation.
 ///
 /// A failure is [`Error::RandomnessUnavailable`] and leaves no partial
 /// output (the OS path through [`fill_random`], a `FixedRng` by running
