@@ -998,10 +998,20 @@ struct Passed {
     negative: bool,
 }
 
+/// Parses a vector file. Vector files are trusted test data, so they get a
+/// 4 MiB input limit (conformance/README.md), room for a JWS just over the
+/// library's 1 MiB default (ADR 0026 §7); every other JSON limit, and the
+/// library under test, keep their defaults.
+fn parse_vector_file(bytes: &[u8]) -> polyjose::Result<Value> {
+    let mut limits = json::Limits::DEFAULT;
+    limits.max_input_len = 4 * 1024 * 1024;
+    json::parse_with_limits(bytes, &limits)
+}
+
 /// Checks one vector file: parse, validate, run, compare. Returns what
 /// passed, or a failure message naming the file and the `source`.
 fn check_vector(name: &str, bytes: &[u8]) -> Result<Passed, String> {
-    let value = json::parse(bytes)
+    let value = parse_vector_file(bytes)
         .map_err(|e| format!("{name}: not a valid JSON text ({e}); see conformance/schema.json"))?;
     let source = usable_source(&value).unwrap_or_else(|| "<missing>".to_owned());
     let fail = |problem: String| format!("{name} (source: {source}): {problem}");
@@ -2688,7 +2698,8 @@ fn binding_ready(text: &str) -> Result<(), String> {
             ));
         }
     }
-    let value = json::parse(text.as_bytes()).map_err(|e| format!("not JSON ({})", e.code()))?;
+    let value =
+        parse_vector_file(text.as_bytes()).map_err(|e| format!("not JSON ({})", e.code()))?;
     let mut members = Vec::new();
     members_deep(&value, String::new(), &mut members);
     for (pointer, name, member) in members {
@@ -2720,7 +2731,7 @@ fn is_jws_vector(relative: &Path, text: &str) -> bool {
     let jws_dir = parts.first().is_some_and(|first| first.starts_with("jws-"));
     let third_party_jws = parts.first().is_some_and(|first| first == "third_party")
         && parts[..parts.len() - 1].iter().any(|part| part == "jws");
-    let jws_operation = json::parse(text.as_bytes()).is_ok_and(|v| {
+    let jws_operation = parse_vector_file(text.as_bytes()).is_ok_and(|v| {
         v.get("operation")
             .and_then(Value::as_str)
             .is_some_and(|op| op.starts_with("jws."))
