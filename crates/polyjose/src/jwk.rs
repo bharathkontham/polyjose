@@ -590,10 +590,6 @@ impl OctKey {
     }
 
     /// The secret key value (RFC 7518 §6.4.1).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the HMAC, AES and dir features")
-    )]
     pub(crate) fn k(&self) -> &[u8] {
         &self.k
     }
@@ -763,10 +759,6 @@ impl OkpKey {
     }
 
     /// The private key `d`, if present (RFC 8037 §2).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the EdDSA signing and ECDH-ES features")
-    )]
     pub(crate) fn d(&self) -> Option<&[u8]> {
         self.d.as_deref().map(Vec::as_slice)
     }
