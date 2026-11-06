@@ -765,6 +765,68 @@ mod tests {
         }
     }
 
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// One of the three `enc` values with a K of its length.
+        fn enc_and_key() -> impl Strategy<Value = (ContentEncAlg, Vec<u8>)> {
+            (0..ENCS.len()).prop_flat_map(|i| {
+                let (enc, k_len, _) = ENCS[i].clone();
+                prop::collection::vec(any::<u8>(), k_len).prop_map(move |k| (enc.clone(), k))
+            })
+        }
+
+        proptest! {
+            // ADR 0008 layer 2: bounded case counts in the fast suite.
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// RFC 7518 §5.2.2.1–§5.2.2.2: decryption inverts encryption
+            /// for any K, IV, A and P; E is P padded to whole blocks and T
+            /// is T_LEN octets. A tag one octet shorter or longer fails
+            /// (§5.2.3–§5.2.5), as does any flipped bit of E, T, IV or A.
+            #[test]
+            fn round_trip_and_any_change_fails(
+                (enc, k) in enc_and_key(),
+                iv in any::<[u8; 16]>(),
+                aad in prop::collection::vec(any::<u8>(), 0..80),
+                plaintext in prop::collection::vec(any::<u8>(), 0..80),
+                extra in any::<u8>(),
+                flip in any::<(u8, prop::sample::Index)>(),
+            ) {
+                let (e, t) = encrypt(&enc, &k, &iv, &aad, &plaintext).unwrap();
+                prop_assert_eq!(e.len(), (plaintext.len() / 16 + 1) * 16);
+                prop_assert_eq!(t.len(), k.len() / 2);
+                let opened = decrypt(&enc, &k, &iv, &aad, &e, &t).unwrap();
+                prop_assert_eq!(&opened[..], &plaintext[..]);
+
+                let failed = Err(Error::DecryptionFailed);
+                prop_assert_eq!(decrypt(&enc, &k, &iv, &aad, &e, &t[..t.len() - 1]), failed.clone());
+                let mut longer = t.clone();
+                longer.push(extra);
+                prop_assert_eq!(decrypt(&enc, &k, &iv, &aad, &e, &longer), failed.clone());
+
+                let (bit, at) = flip;
+                let mask = 1 << (bit % 8);
+                let mut bad_e = e.clone();
+                bad_e[at.index(e.len())] ^= mask;
+                prop_assert_eq!(decrypt(&enc, &k, &iv, &aad, &bad_e, &t), failed.clone());
+                let mut bad_t = t.clone();
+                bad_t[at.index(t.len())] ^= mask;
+                prop_assert_eq!(decrypt(&enc, &k, &iv, &aad, &e, &bad_t), failed.clone());
+                let mut bad_iv = iv;
+                bad_iv[at.index(16)] ^= mask;
+                prop_assert_eq!(decrypt(&enc, &k, &bad_iv, &aad, &e, &t), failed.clone());
+                if !aad.is_empty() {
+                    let mut bad_aad = aad.clone();
+                    bad_aad[at.index(aad.len())] ^= mask;
+                    prop_assert_eq!(decrypt(&enc, &k, &iv, &bad_aad, &e, &t), failed);
+                }
+            }
+        }
+    }
+
     /// M, the full HMAC output over A || IV || E || AL (RFC 7518 §5.2.2.1
     /// step 5), for forging test inputs under a known K.
     fn full_mac(enc: &ContentEncAlg, k: &[u8], iv: &[u8], a: &[u8], e: &[u8]) -> Vec<u8> {
