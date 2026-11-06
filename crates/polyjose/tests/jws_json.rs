@@ -232,7 +232,7 @@ fn unknown_members_are_ignored() {
 
 #[test]
 fn header_rules_across_objects() {
-    let sig = |prot: Option<&str>, hdr: Option<&str>| {
+    let sig = |prot: Option<&str>, hdr: Option<&str>, signature: &str| {
         let mut m = Vec::new();
         if let Some(x) = prot {
             m.push(format!(r#""protected":"{}""#, p(x)));
@@ -240,7 +240,7 @@ fn header_rules_across_objects() {
         if let Some(x) = hdr {
             m.push(format!(r#""header":{x}"#));
         }
-        m.push(format!(r#""signature":"{S}""#));
+        m.push(format!(r#""signature":"{signature}""#));
         format!(r#"{{"payload":"AA",{}}}"#, m.join(","))
     };
     for (prot, hdr) in [
@@ -258,15 +258,17 @@ fn header_rules_across_objects() {
         (Some(r#"{"alg":5}"#), None),                    // type
         (Some(HS), Some(r#"{"kid":5}"#)),                // type in header
     ] {
-        let want = match (prot, hdr) {
-            (None, Some(_)) => "ok-not-header", // alg may live in the unprotected header
-            _ => "InvalidHeader",
-        };
-        let c = code(&sig(prot, hdr), &opts());
-        if want == "InvalidHeader" {
-            assert_eq!(c, "InvalidHeader", "{prot:?} {hdr:?}");
+        let c = code(&sig(prot, hdr, S), &opts());
+        if let (None, Some(_)) = (prot, hdr) {
+            // alg may live in the unprotected header (RFC 7515 §7.2.1): the
+            // zero tag fails only at step 9 and a real signature, over an
+            // empty protected part (RFC 7515 §5.1), verifies.
+            assert_eq!(c, "InvalidSignature", "{prot:?} {hdr:?}");
+            let v = assert_verifies(&sig(prot, hdr, &real_sig(None, AA)), &opts(), AA, 0);
+            assert_eq!(v.protected, None);
+            assert_eq!(v.unprotected.and_then(|h| h.alg).as_deref(), Some("HS256"));
         } else {
-            assert_ne!(c, "InvalidHeader", "{prot:?} {hdr:?}");
+            assert_eq!(c, "InvalidHeader", "{prot:?} {hdr:?}");
         }
     }
     // an unprotected-only alg of "none" is never accepted
@@ -283,11 +285,12 @@ fn b64_mixed_across_signatures_rejects_the_whole_jws() {
     let jws = general("AA", &[f, t]);
     assert_eq!(code(&jws, &opts()), "InvalidHeader");
     // explicit b64:true with b64 absent is still the same encoding
-    let tt = sigobj(r#"{"alg":"HS256","b64":true,"crit":["b64"]}"#);
-    assert_ne!(
-        code(&general("AA", &[sigobj(HS), tt]), &opts()),
-        "InvalidHeader"
-    );
+    // (zero tag first, so index 1 proves the b64:true entry verified)
+    let tt = r#"{"alg":"HS256","b64":true,"crit":["b64"]}"#;
+    let jws = general("AA", &[sigobj(HS), real(tt, AA)]);
+    assert_verifies(&jws, &opts(), AA, 1);
+    let zeros = general("AA", &[sigobj(HS), sigobj(tt)]);
+    assert_eq!(code(&zeros, &opts()), "InvalidSignature");
 }
 
 #[test]
@@ -347,10 +350,14 @@ fn processing_order() {
 #[test]
 fn b64_false_payload_is_not_base64_checked_and_unprotected_b64_does_not_choose() {
     let f = sigobj(F);
-    // payload is a free string under b64:false
-    assert_ne!(
+    // payload is a free string under b64:false (RFC 7797 §5.3): the
+    // octets are the payload; the zero tag fails only at step 9
+    let raw = b"a=+/ x.y";
+    let jws = general("a=+/ x.y", &[real(F, raw)]);
+    assert_verifies(&jws, &opts(), raw, 0);
+    assert_eq!(
         code(&general("a=+/ x.y", std::slice::from_ref(&f)), &opts()),
-        "InvalidBase64"
+        "InvalidSignature"
     );
     // b64:false disagreement beats a bad payload encoding
     let t = sigobj(HS);
@@ -374,23 +381,37 @@ fn detached_rules() {
         p(HS)
     );
     let no_payload = format!(r#"{{"protected":"{}","signature":"{S}"}}"#, p(HS));
+    let detached = |prot: &str, payload: &[u8]| {
+        format!(
+            r#"{{"protected":"{}","signature":"{}"}}"#,
+            p(prot),
+            real_sig(Some(prot), payload)
+        )
+    };
     let d = opts().detached_payload(b"abc");
     assert_eq!(code(&flat, &d), "InvalidFormat");
     assert_eq!(code(&no_payload, &opts()), "InvalidFormat");
-    assert_ne!(code(&no_payload, &d), "InvalidFormat");
+    assert_eq!(code(&no_payload, &d), "InvalidSignature");
+    let abc = detached(HS, b"abc");
+    assert_verifies(&abc, &d, b"abc", 0);
     let empty = opts().detached_payload(b"");
     assert_eq!(code(&flat, &empty), "InvalidFormat");
-    assert_ne!(code(&no_payload, &empty), "InvalidFormat");
+    assert_eq!(code(&no_payload, &empty), "InvalidSignature");
+    assert_verifies(&detached(HS, b""), &empty, b"", 0);
+    // a signature over "abc" is not one over the empty detached payload
+    assert_eq!(code(&abc, &empty), "InvalidSignature");
     // detached general
     let g = format!(r#"{{"signatures":[{}]}}"#, sigobj(HS));
-    assert_ne!(code(&g, &d), "InvalidFormat");
+    assert_eq!(code(&g, &d), "InvalidSignature");
+    assert_eq!(code(&g, &opts()), "InvalidFormat");
+    let g = format!(r#"{{"signatures":[{},{}]}}"#, sigobj(HS), real(HS, b"abc"));
+    assert_verifies(&g, &d, b"abc", 1);
     assert_eq!(code(&g, &opts()), "InvalidFormat");
     // detached bytes need not be UTF-8 (b64:false verify)
+    let raw = [0xff, 0xfe];
     let f = format!(r#"{{"protected":"{}","signature":"{S}"}}"#, p(F));
-    assert_ne!(
-        code(&f, &opts().detached_payload(&[0xff, 0xfe])),
-        "InvalidFormat"
-    );
+    assert_eq!(code(&f, &opts().detached_payload(&raw)), "InvalidSignature");
+    assert_verifies(&detached(F, &raw), &opts().detached_payload(&raw), &raw, 0);
 }
 
 #[test]
