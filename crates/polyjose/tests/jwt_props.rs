@@ -44,7 +44,7 @@ use core::cmp::Ordering;
 use polyjose::Error;
 use polyjose::json::{MAX_SAFE_INTEGER, Number, Object, Value, parse};
 use polyjose::jwa::SigningAlg;
-use polyjose::jwk::Jwk;
+use polyjose::jwk::{Jwk, JwkSet};
 use polyjose::jwt::{self, Audience, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy};
 use polyjose::util::b64url_encode;
 use proptest::collection::vec;
@@ -785,6 +785,318 @@ proptest! {
             prop_assert_eq!(&v.claims, &claims);
             prop_assert_eq!(v.alg, signer.alg());
             prop_assert_eq!(v.key_index, None);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4. The selection model (ADR 0029 §2, §4)
+// ---------------------------------------------------------------------------
+
+/// RFC 7515 Appendix A.3: the P-256 key pair `(x, y, d)`.
+const RFC7515_A3: (&str, &str, &str) = (
+    "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+    "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+    "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI",
+);
+
+/// The key material of a set member: a fixed pool, so the same material
+/// can appear more than once in a set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Material {
+    /// An HMAC key from [`hmac_k`] (at least 32 octets).
+    Oct(usize),
+    /// A 16-octet HMAC key: too short for HS256 (RFC 7518 §3.2).
+    ShortOct,
+    /// An Ed25519 key from [`ED25519`].
+    Ed25519(usize),
+    /// A P-256 key: RFC 7515 A.3 or the generator (`common`).
+    P256(usize),
+    /// A P-384 key (`common`), which serves none of the token algorithms.
+    P384,
+}
+
+impl Material {
+    fn p256(i: usize) -> (&'static str, &'static str, &'static str) {
+        if i.is_multiple_of(2) {
+            RFC7515_A3
+        } else {
+            let g = common::generator("P-256");
+            (g.x, g.y, g.d)
+        }
+    }
+
+    /// The public JWK members (`oct` keys are secret by nature,
+    /// ADR 0029 §3).
+    fn public_members(self) -> String {
+        match self {
+            Material::Oct(i) => format!(r#""kty":"oct","k":"{}""#, hmac_k(i)),
+            Material::ShortOct => format!(r#""kty":"oct","k":"{}""#, oct_k(&[0x42; 16])),
+            Material::Ed25519(i) => {
+                let (x, _) = ED25519[i % ED25519.len()];
+                format!(r#""kty":"OKP","crv":"Ed25519","x":"{x}""#)
+            }
+            Material::P256(i) => {
+                let (x, y, _) = Self::p256(i);
+                format!(r#""kty":"EC","crv":"P-256","x":"{x}","y":"{y}""#)
+            }
+            Material::P384 => {
+                let g = common::generator("P-384");
+                format!(r#""kty":"EC","crv":"P-384","x":"{}","y":"{}""#, g.x, g.y)
+            }
+        }
+    }
+
+    /// The signing JWK, with `kid` (copied into the JWS header by
+    /// `jwt::sign`, ADR 0027 §8).
+    fn signing_key(self, kid: Option<&str>) -> Jwk {
+        let private = match self {
+            Material::Ed25519(i) => format!(r#","d":"{}""#, ED25519[i % ED25519.len()].1),
+            Material::P256(i) => format!(r#","d":"{}""#, Self::p256(i).2),
+            _ => String::new(),
+        };
+        let kid = kid.map_or(String::new(), |kid| format!(r#","kid":"{kid}""#));
+        jwk(&format!("{{{}{private}{kid}}}", self.public_members()))
+    }
+
+    /// Whether the material serves `alg` (ADR 0029 §2 step 1, the
+    /// ADR 0026 §2 step 8 family table).
+    fn serves(self, alg: &str) -> bool {
+        match self {
+            Material::Oct(_) | Material::ShortOct => alg == "HS256",
+            Material::Ed25519(_) => alg == "EdDSA" || alg == "Ed25519",
+            Material::P256(_) => alg == "ES256",
+            Material::P384 => alg == "ES384",
+        }
+    }
+
+    /// The equivalence of key material: the same fixture verifies the
+    /// same signatures.
+    fn same(self, other: Material) -> bool {
+        match (self, other) {
+            (Material::Oct(a), Material::Oct(b)) => a % 3 == b % 3,
+            (Material::Ed25519(a), Material::Ed25519(b)) => a % 3 == b % 3,
+            (Material::P256(a), Material::P256(b)) => a % 2 == b % 2,
+            (a, b) => a == b,
+        }
+    }
+}
+
+/// A JWK Set member, as data: material plus the RFC 7517 §4 parameters
+/// that ADR 0029 §2 filters on.
+#[derive(Debug, Clone)]
+struct Member {
+    material: Material,
+    kid: Option<&'static str>,
+    key_use: Option<&'static str>,
+    key_ops: Option<Vec<&'static str>>,
+    alg: Option<&'static str>,
+}
+
+impl Member {
+    fn json(&self) -> String {
+        let mut json = format!("{{{}", self.material.public_members());
+        if let Some(kid) = self.kid {
+            json += &format!(r#","kid":"{kid}""#);
+        }
+        if let Some(key_use) = self.key_use {
+            json += &format!(r#","use":"{key_use}""#);
+        }
+        if let Some(ops) = &self.key_ops {
+            let ops: Vec<String> = ops.iter().map(|op| format!(r#""{op}""#)).collect();
+            json += &format!(r#","key_ops":[{}]"#, ops.join(","));
+        }
+        if let Some(alg) = self.alg {
+            json += &format!(r#","alg":"{alg}""#);
+        }
+        json + "}"
+    }
+
+    /// ADR 0029 §2: the candidate filter, in its order.
+    fn is_candidate(&self, alg: &str, kid: Option<&str>) -> bool {
+        self.material.serves(alg) // 1. family
+            && self.alg.is_none_or(|a| a == alg) // 2. JWK alg, exact (EdDSA ≠ Ed25519)
+            && self.key_use.is_none_or(|u| u == "sig") // 3. use
+            && self.key_ops.as_ref().is_none_or(|ops| ops.contains(&"verify")) // 4. key_ops
+            && kid.is_none_or(|kid| self.kid == Some(kid)) // 5. kid, exact
+    }
+}
+
+fn material() -> impl Strategy<Value = Material> {
+    prop_oneof![
+        3 => (0usize..3).prop_map(Material::Oct),
+        1 => Just(Material::ShortOct),
+        3 => (0usize..3).prop_map(Material::Ed25519),
+        2 => (0usize..2).prop_map(Material::P256),
+        1 => Just(Material::P384),
+    ]
+}
+
+/// A signing material and the header `alg` it signs with: HS256, EdDSA or
+/// Ed25519 (RFC 9864), ES256.
+fn signing_material() -> impl Strategy<Value = (Material, &'static str)> {
+    prop_oneof![
+        3 => (0usize..3).prop_map(|i| (Material::Oct(i), "HS256")),
+        3 => ((0usize..3), select(vec!["EdDSA", "Ed25519"]))
+            .prop_map(|(i, alg)| (Material::Ed25519(i), alg)),
+        1 => (0usize..2).prop_map(|i| (Material::P256(i), "ES256")),
+    ]
+}
+
+fn kid() -> impl Strategy<Value = Option<&'static str>> {
+    proptest::option::of(select(vec!["a", "b", "c"]))
+}
+
+fn member(material: impl Strategy<Value = Material>) -> impl Strategy<Value = Member> {
+    (
+        material,
+        kid(),
+        proptest::option::of(select(vec!["sig", "enc"])),
+        proptest::option::of(select(vec![
+            vec![],
+            vec!["verify"],
+            vec!["sign"],
+            vec!["sign", "verify"],
+            vec!["encrypt"],
+        ])),
+        proptest::option::weighted(
+            0.3,
+            select(vec!["HS256", "HS384", "EdDSA", "Ed25519", "ES256", "ES384"]),
+        ),
+    )
+        .prop_map(|(material, kid, key_use, key_ops, alg)| Member {
+            material,
+            kid,
+            key_use,
+            key_ops,
+            alg,
+        })
+}
+
+/// A selection case: the set's members (the signer's own member at
+/// `signer_at`), the signing material, header `alg` and `kid`, and the
+/// candidate bound (`None`: the default 8, ADR 0029 §4).
+#[derive(Debug, Clone)]
+struct SelectionCase {
+    members: Vec<Member>,
+    signer: Material,
+    alg: &'static str,
+    header_kid: Option<&'static str>,
+    limit: Option<usize>,
+}
+
+fn selection_case() -> impl Strategy<Value = SelectionCase> {
+    (
+        signing_material(),
+        kid(),
+        vec(member(material()), 0..10),
+        any::<prop::sample::Index>(),
+        proptest::option::of(0usize..=10),
+    )
+        .prop_flat_map(|((signer, alg), header_kid, decoys, at, limit)| {
+            let own = member(Just(signer));
+            (Just((signer, alg, header_kid, decoys, at, limit)), own)
+        })
+        .prop_map(|((signer, alg, header_kid, mut members, at, limit), own)| {
+            let at = at.index(members.len() + 1);
+            members.insert(at, own);
+            SelectionCase {
+                members,
+                signer,
+                alg,
+                header_kid,
+                limit,
+            }
+        })
+}
+
+/// The selection model's prediction: the index (in the imported set) of
+/// the key that verifies, or the error.
+fn model_selection(imported: &[&Member], case: &SelectionCase) -> Result<usize, Error> {
+    let limit = case.limit.unwrap_or(Policy::DEFAULT_MAX_KEY_CANDIDATES);
+    let candidates: Vec<(usize, &Member)> = imported
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.is_candidate(case.alg, case.header_kid))
+        .map(|(i, m)| (i, *m))
+        .collect();
+    // ADR 0029 §4: none, or more than the bound, before any signature.
+    if candidates.is_empty() || candidates.len() > limit {
+        return Err(Error::NoMatchingKey);
+    }
+    // ADR 0029 §4: in set order, the first that verifies wins.
+    if let Some((i, _)) = candidates
+        .iter()
+        .find(|(_, m)| m.material.same(case.signer))
+    {
+        return Ok(*i);
+    }
+    // Every candidate failed: ADR 0026 §3 ranking, InvalidSignature >
+    // InvalidKey (a too-short HMAC key, RFC 7518 §3.2).
+    if candidates
+        .iter()
+        .any(|(_, m)| m.material != Material::ShortOct)
+    {
+        Err(Error::InvalidSignature)
+    } else {
+        Err(Error::InvalidKey("hmac key too short"))
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(500))]
+
+    /// ADR 0029 §2, §4: `jwt::verify` against a JWK Set of up to ten
+    /// members succeeds iff the model's filter admits a key of the
+    /// signer's material within `max_key_candidates`, and reports that
+    /// member's index and `kid`; otherwise it fails with the model's
+    /// `NoMatchingKey`, `InvalidSignature` or `InvalidKey`.
+    ///
+    /// Which members a set keeps is ADR 0029 §3 and 0001-T07's rule
+    /// (invalid members are skipped, RFC 7517 §5); the model takes it from
+    /// `Jwk::from_json` of each member and checks the set agrees.
+    #[test]
+    fn verify_with_a_set_matches_the_selection_model(case in selection_case()) {
+        let json = format!(
+            r#"{{"keys":[{}]}}"#,
+            case.members.iter().map(Member::json).collect::<Vec<_>>().join(",")
+        );
+        let set = JwkSet::from_json(json.as_bytes()).expect("a set without RSA private keys");
+        let imported: Vec<&Member> = case
+            .members
+            .iter()
+            .filter(|m| Jwk::from_json(m.json().as_bytes()).is_ok())
+            .collect();
+        prop_assert_eq!(set.len(), imported.len(), "{}", json);
+        prop_assert_eq!(set.skipped(), case.members.len() - imported.len());
+
+        let mut claims = Claims::new();
+        claims.sub = Some("selection".into());
+        claims.exp = NumericDate::from_secs(2_000_000_000);
+        let alg = SigningAlg::from(case.alg);
+        let token = jwt::sign(
+            &claims,
+            &IssueOptions::new(alg.clone()),
+            &case.signer.signing_key(case.header_kid),
+        )
+        .expect("issued");
+
+        let clock = FixedClock(1_900_000_000);
+        let mut policy = Policy::new(&clock, &ALLOWED).unwrap();
+        if let Some(limit) = case.limit {
+            policy = policy.max_key_candidates(limit);
+        }
+        let got = jwt::verify(&token, Keys::Set(&set), &policy);
+        let want = model_selection(&imported, &case);
+        match (&want, &got) {
+            (Ok(index), Ok(v)) => {
+                prop_assert_eq!(v.key_index, Some(*index), "{}", json);
+                prop_assert_eq!(v.kid.as_deref(), imported[*index].kid);
+                prop_assert_eq!(&v.alg, &alg);
+                prop_assert_eq!(&v.claims, &claims);
+            }
+            (Err(want), Err(got)) => prop_assert_eq!(want.code(), got.code(), "{}", json),
+            _ => prop_assert!(false, "want {:?}, got {:?}\nset {}\ncase {:?}", want, got.map(|v| v.key_index), json, case),
         }
     }
 }
