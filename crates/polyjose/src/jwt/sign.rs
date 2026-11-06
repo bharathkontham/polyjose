@@ -107,6 +107,13 @@ impl IssueOptions {
 
     /// Sets `typ` to `t`, an explicit type such as `secevent+jwt`
     /// (RFC 7515 §4.1.9, RFC 8725 §3.11).
+    ///
+    /// `t` is written as given. `""` and [`JWT`] (the default) give no
+    /// explicit typing: they do not tell this kind of JWT apart from any
+    /// other, so they do not prevent the cross-JWT confusion RFC 8725
+    /// §3.11 and §3.12 describe (draft-ietf-oauth-rfc8725bis §3.11). Use a
+    /// media type specific to the application, as `access_token` does
+    /// with `at+jwt` (RFC 9068 §2.1).
     pub fn typ(mut self, t: &str) -> Self {
         self.typ = Some(t.to_owned());
         self
