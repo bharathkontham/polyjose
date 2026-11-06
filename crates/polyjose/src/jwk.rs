@@ -763,10 +763,6 @@ impl OkpKey {
     }
 
     /// The private key `d`, if present (RFC 8037 §2).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the EdDSA signing and ECDH-ES features")
-    )]
     pub(crate) fn d(&self) -> Option<&[u8]> {
         self.d.as_deref().map(Vec::as_slice)
     }
