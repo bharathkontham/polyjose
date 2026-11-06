@@ -4662,21 +4662,66 @@ fn members_deep<'a>(
 ///   `e`, `k`; RFC 7518 §6, RFC 8037 §2) of a `jwk` object is canonical, so
 ///   a binding's base64url decoder reads the key the vector means.
 fn binding_ready(text: &str) -> Result<(), String> {
-    for token in number_tokens(text) {
-        let plain = token
-            .strip_prefix('-')
-            .unwrap_or(token)
-            .bytes()
-            .all(|b| b.is_ascii_digit())
-            && !token.is_empty()
-            && token != "-";
-        let small = token
+    binding_ready_with(text, Numbers::Count)
+}
+
+/// Which numbers a binding-ready vector may contain.
+#[derive(Debug, Clone, Copy)]
+enum Numbers {
+    /// `jws.*`, `jwe.*`, `keys.*`: plain integers of magnitude at most
+    /// 2^32 − 1 (ADR 0030 `u32`).
+    Count,
+    /// `jwt.*`: plain integers within ±(2^53 − 1), the NumericDate and
+    /// clock range (RFC 7493 §2.2; ADR 0027 §2, ADR 0028 §1), and
+    /// non-integral decimals (`1300819380.5`, a fractional NumericDate,
+    /// RFC 7519 §2) of magnitude within it. Every binding's JSON reads
+    /// these exactly: JavaScript's numbers are doubles, which hold every
+    /// integer of that range. An integral value is written as a plain
+    /// integer (never `1.0` or `1e3`), so a binding reads `now` and every
+    /// other integer member as an integer.
+    Safe,
+}
+
+/// Whether the number token `token` (as written) is one `numbers` allows.
+fn allowed_number(token: &str, numbers: Numbers) -> bool {
+    let unsigned = token.strip_prefix('-').unwrap_or(token);
+    let (int, frac) = match unsigned.split_once('.') {
+        Some((int, frac)) => (int, Some(frac)),
+        None => (unsigned, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(int) || frac.is_some_and(|f| !digits(f)) {
+        return false; // an exponent, or not a number at all
+    }
+    match (numbers, frac) {
+        (Numbers::Count, None) => token
             .parse::<i64>()
-            .is_ok_and(|n| n.unsigned_abs() <= COUNT_MAX);
-        if !plain || !small {
-            return Err(format!(
-                "number {token} is not a plain integer of magnitude at most {COUNT_MAX}"
-            ));
+            .is_ok_and(|n| n.unsigned_abs() <= COUNT_MAX),
+        (Numbers::Count, Some(_)) => false,
+        (Numbers::Safe, None) => token
+            .parse::<i64>()
+            .is_ok_and(|n| n.unsigned_abs() <= SECONDS_MAX.unsigned_abs()),
+        // Compared as the double every binding reads: within range, and
+        // not integral (an integral value is written as an integer).
+        (Numbers::Safe, Some(_)) => token
+            .parse::<f64>()
+            .is_ok_and(|v| v.is_finite() && v.abs() <= SECONDS_MAX as f64 && v.fract() != 0.0),
+    }
+}
+
+/// [`binding_ready`] with the number rule `numbers`.
+fn binding_ready_with(text: &str, numbers: Numbers) -> Result<(), String> {
+    for token in number_tokens(text) {
+        if !allowed_number(token, numbers) {
+            return Err(match numbers {
+                Numbers::Count => format!(
+                    "number {token} is not a plain integer of magnitude at most {COUNT_MAX}"
+                ),
+                Numbers::Safe => format!(
+                    "number {token} is not a plain integer, or a non-integral decimal, \
+                     of magnitude at most {SECONDS_MAX}"
+                ),
+            });
         }
     }
     let value =
@@ -6275,5 +6320,101 @@ fn jwt_issue_mismatches_fail() {
     ];
     for (what, json, needle) in cases {
         fails_naming_source(&format!("failing ({what}).json"), &json, needle);
+    }
+}
+
+/// The JWT vectors the binding-readiness rule covers: everything under
+/// `jwt/`, and any `jwt.*` vector elsewhere.
+fn needs_jwt_binding_readiness(relative: &Path, text: &str) -> bool {
+    let jwt_dir = relative
+        .components()
+        .next()
+        .is_some_and(|c| c.as_os_str() == "jwt");
+    let jwt_operation = parse_vector_file(text.as_bytes()).is_ok_and(|v| {
+        v.get("operation")
+            .and_then(Value::as_str)
+            .is_some_and(|op| op.starts_with("jwt."))
+    });
+    jwt_dir || jwt_operation
+}
+
+/// Criterion 4: every JWT vector is binding-ready (see
+/// [`binding_ready_with`] and [`Numbers::Safe`]): no integer outside
+/// ±(2^53 − 1) in the vector JSON itself. Out-of-range values under test
+/// live inside base64url token payloads, never in the JSON.
+#[test]
+fn jwt_vectors_are_binding_ready() {
+    let dir = conformance_dir().join("vectors");
+    let (mut files, mut failures) = (Vec::new(), Vec::new());
+    collect(&dir, &mut files, &mut failures);
+    let mut checked = 0;
+    for path in files {
+        let relative = path.strip_prefix(&dir).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        if !needs_jwt_binding_readiness(relative, &text) {
+            continue;
+        }
+        checked += 1;
+        if let Err(problem) = binding_ready_with(&text, Numbers::Safe) {
+            failures.push(format!("{}: {problem}", relative.display()));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "not binding-ready:\n  {}",
+        failures.join("\n  ")
+    );
+    assert!(checked >= 12, "only {checked} JWT vector files found");
+}
+
+/// The JWT readiness rule accepts every number a binding reads exactly,
+/// and nothing else; the vector selection is `jwt/` and `jwt.*`.
+#[test]
+fn jwt_binding_readiness_check_works() {
+    for ok in [
+        r#"{"now":1300819320,"exp":-100,"n":0}"#,
+        r#"{"now":9007199254740991,"then":-9007199254740991}"#,
+        // A fractional NumericDate (RFC 7519 §2) in expected claims.
+        r#"{"claims":{"exp":1300819380.5,"nbf":-0.25}}"#,
+        r#"{"typ":null,"ok":true,"s":"9007199254740993 inside a string"}"#,
+    ] {
+        assert_eq!(binding_ready_with(ok, Numbers::Safe), Ok(()), "{ok}");
+    }
+    for (bad, needle) in [
+        (r#"{"now":9007199254740992}"#, "9007199254740992"),
+        (r#"{"now":-9007199254740992}"#, "-9007199254740992"),
+        (
+            r#"{"a":[{"exp":18446744073709551616}]}"#,
+            "18446744073709551616",
+        ),
+        // An integral value is written as a plain integer.
+        (r#"{"now":1300819320.0}"#, "1300819320.0"),
+        (r#"{"exp":1e3}"#, "1e3"),
+        (r#"{"exp":1.5e3}"#, "1.5e3"),
+        (r#"{"exp":9007199254740991.5}"#, "9007199254740991.5"),
+        (r#"{"input":{"bytes_hex":"00"}}"#, "/input/bytes_hex"),
+        (r#"{"payload_b64u":"Zh"}"#, "/payload_b64u"),
+    ] {
+        let problem = binding_ready_with(bad, Numbers::Safe).unwrap_err();
+        assert!(problem.contains(needle), "{bad}: {problem}");
+    }
+    // The jws/keys rule stays as strict as before.
+    assert!(binding_ready_with(r#"{"now":1300819320}"#, Numbers::Count).is_ok());
+    assert!(binding_ready_with(r#"{"now":4294967296}"#, Numbers::Count).is_err());
+    assert!(binding_ready_with(r#"{"exp":0.5}"#, Numbers::Count).is_err());
+    let validate = r#"{"operation":"jwt.validate"}"#;
+    let other = r#"{"operation":"b64url.encode"}"#;
+    for (path, text, covered) in [
+        ("jwt/rfc7519/a.json", other, true),
+        ("jwt/a.json", other, true),
+        ("elsewhere/a.json", validate, true),
+        ("jwt-extra/a.json", other, false),
+        ("jws-rfc7515/jwt/a.json", other, false),
+    ] {
+        assert_eq!(
+            needs_jwt_binding_readiness(Path::new(path), text),
+            covered,
+            "{path}"
+        );
     }
 }
