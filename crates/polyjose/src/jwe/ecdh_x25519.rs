@@ -207,6 +207,40 @@ mod tests {
     }
 
     #[test]
+    fn generate_matches_the_keys_generator_on_the_same_bytes() {
+        // F08 (ADR 0050, code review #1): one crate-wide X25519 generation
+        // path. The same injected 32 bytes give the same key through JWE's
+        // ephemeral `generate` and `keys::generate_okp`: d is the drawn
+        // bytes (RFC 7748 §6.1, RFC 8037 §2) and x = X25519(d, 9). The RFC
+        // 8037 A.6 secret and 00 01 02 … are checked; both consume exactly
+        // 32 bytes (the `jwe::random` draw order).
+        use crate::keys::generate::generate_okp;
+        use crate::rng::CryptoRngAdapter;
+        let counting: [u8; 32] = core::array::from_fn(|i| i as u8);
+        for bytes in [hex32(ALICE_PRIVATE), counting] {
+            let mut jwe_rng = FixedRng::new([bytes, [0xEE; 32]].concat());
+            let (secret, public) = generate(&mut jwe_rng).unwrap();
+            assert_eq!(jwe_rng.remaining(), 32);
+
+            let mut keys_rng = FixedRng::new([bytes, [0xEE; 32]].concat());
+            let jwk = generate_okp(
+                OkpCurve::X25519,
+                &mut CryptoRngAdapter::fixed(&mut keys_rng),
+            )
+            .unwrap();
+            assert_eq!(keys_rng.remaining(), 32);
+
+            let KeyMaterial::Okp(key) = jwk.material() else {
+                panic!("an OKP key")
+            };
+            assert_eq!(key.crv(), OkpCurve::X25519);
+            assert_eq!(key.d(), Some(&secret.to_bytes()[..]));
+            assert_eq!(key.x(), &public.to_bytes()[..]);
+            assert_eq!(secret.to_bytes(), bytes);
+        }
+    }
+
+    #[test]
     fn generate_fails_closed_without_randomness() {
         // ADR 0005: a source that cannot supply 32 bytes is an error, never
         // a weak key.
