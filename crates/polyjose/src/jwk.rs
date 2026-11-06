@@ -919,62 +919,68 @@ impl Jwk {
     /// the same member values. The object may contain private key members;
     /// like every [`Object`] it wipes its strings when dropped.
     pub fn to_object(&self) -> Object {
-        let mut o = Object::new();
-        o.insert("kty", self.key_type().as_str());
+        // Each name below is written at most once, and `other` holds only
+        // names that are neither common members nor this key type's members
+        // (see `from_object`), so the names are unique and need no
+        // per-member duplicate check, which would be O(n²) in `other`.
+        let mut o = Vec::with_capacity(COMMON_MEMBERS.len() + 4 + self.other.len());
+        o.push(member("kty", self.key_type().as_str()));
         match &self.material {
             KeyMaterial::Oct(key) => {
-                o.insert("k", b64url_encode(&key.k));
+                o.push(member("k", b64url_encode(&key.k)));
             }
             KeyMaterial::Rsa(key) => {
-                o.insert("n", b64url_encode(&key.n));
-                o.insert("e", b64url_encode(&key.e));
+                o.push(member("n", b64url_encode(&key.n)));
+                o.push(member("e", b64url_encode(&key.e)));
             }
             KeyMaterial::Ec(key) => {
-                o.insert("crv", key.crv.as_str());
-                o.insert("x", b64url_encode(&key.x));
-                o.insert("y", b64url_encode(&key.y));
+                o.push(member("crv", key.crv.as_str()));
+                o.push(member("x", b64url_encode(&key.x)));
+                o.push(member("y", b64url_encode(&key.y)));
                 if let Some(d) = &key.d {
-                    o.insert("d", b64url_encode(d));
+                    o.push(member("d", b64url_encode(d)));
                 }
             }
             KeyMaterial::Okp(key) => {
-                o.insert("crv", key.crv.as_str());
-                o.insert("x", b64url_encode(&key.x));
+                o.push(member("crv", key.crv.as_str()));
+                o.push(member("x", b64url_encode(&key.x)));
                 if let Some(d) = &key.d {
-                    o.insert("d", b64url_encode(d));
+                    o.push(member("d", b64url_encode(d)));
                 }
             }
         }
         if let Some(v) = &self.key_use {
-            o.insert("use", v.as_str());
+            o.push(member("use", v.as_str()));
         }
         if let Some(ops) = &self.key_ops {
             let ops: Vec<Value> = ops.iter().map(|op| Value::from(op.as_str())).collect();
-            o.insert("key_ops", ops);
+            o.push(member("key_ops", ops));
         }
         if let Some(v) = &self.alg {
-            o.insert("alg", v.as_str());
+            o.push(member("alg", v.as_str()));
         }
         if let Some(v) = &self.kid {
-            o.insert("kid", v.as_str());
+            o.push(member("kid", v.as_str()));
         }
         if let Some(v) = &self.x5u {
-            o.insert("x5u", v.as_str());
+            o.push(member("x5u", v.as_str()));
         }
         if let Some(certs) = &self.x5c {
             let certs: Vec<Value> = certs.iter().map(|c| Value::from(c.as_str())).collect();
-            o.insert("x5c", certs);
+            o.push(member("x5c", certs));
         }
         if let Some(v) = &self.x5t {
-            o.insert("x5t", v.as_str());
+            o.push(member("x5t", v.as_str()));
         }
         if let Some(v) = &self.x5t_s256 {
-            o.insert("x5t#S256", v.as_str());
+            o.push(member("x5t#S256", v.as_str()));
         }
-        for (name, value) in &self.other {
-            o.insert(name, value.clone());
-        }
-        o
+        o.extend(
+            self.other
+                .iter()
+                .map(|(name, value)| member(name, value.clone())),
+        );
+        Object::from_unique_members(o)
     }
 
     /// The key as compact JSON (see [`Jwk::to_object`] for the member
