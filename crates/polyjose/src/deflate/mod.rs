@@ -64,6 +64,12 @@ const REPEAT_OVERRUN: &str = "deflate: code lengths overrun HLIT + HDIST";
 /// A literal/length code without end-of-block symbol 256 (RFC 1951 §3.2.5,
 /// §3.2.7).
 const MISSING_END_OF_BLOCK: &str = "deflate: missing end-of-block code";
+/// A literal/length code with a single one-bit code, which can only be
+/// end-of-block: incomplete, and RFC 1951 §3.2.7 makes the one-code
+/// exception for the distance code only (research.md §2.7). zlib-derived
+/// decoders accept it; it has its own detail so the differential tests can
+/// name this one deliberate divergence exactly.
+const SINGLE_LENGTH_CODE: &str = "deflate: literal/length code with a single code";
 /// The output would exceed the caller's cap (ADR 0017 §1).
 const OUTPUT_LIMIT: &str = "deflate: output exceeds the limit";
 /// The output buffer could not be allocated.

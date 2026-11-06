@@ -449,6 +449,53 @@ fn rejects_incomplete_codes() {
     assert_eq!(err(&input), INCOMPLETE_CODE, "distance code");
 }
 
+/// A literal/length code whose only code is end-of-block, of length 1:
+/// incomplete, and RFC 1951 §3.2.7's one-code exception covers the distance
+/// code only (research.md §2.7). zlib-style decoders accept it; we do not.
+#[test]
+fn rejects_single_literal_length_code() {
+    let instructions = [
+        Cl::Zeros11(138),
+        Cl::Zeros11(118), // 0..=255
+        Cl::Len(1),       // 256
+        Cl::Len(1),       // distance 0
+    ];
+    let input = stream(|w| {
+        header(w, true, 0b10);
+        dynamic_header(w, 257, 1, &cl_lengths(), &instructions);
+        w.code(0, 1);
+    });
+    assert_eq!(err(&input), SINGLE_LENGTH_CODE);
+    // The same with end-of-block of length 2 is an ordinary incomplete code.
+    let instructions = [Cl::Zeros11(138), Cl::Zeros11(118), Cl::Len(2), Cl::Len(1)];
+    let input = stream(|w| {
+        header(w, true, 0b10);
+        dynamic_header(w, 257, 1, &cl_lengths(), &instructions);
+        w.code(0, 2);
+    });
+    assert_eq!(err(&input), INCOMPLETE_CODE);
+}
+
+/// RFC 1951 §3.2.5's table gives symbol 284 the range 227–257, but its five
+/// extra bits can also spell 258. Like zlib and miniz_oxide (checked as a
+/// black box), the decoder accepts it as length 258; 258 is a valid length,
+/// so nothing unsafe follows, and no structural rule of research.md §2.7
+/// covers it.
+#[test]
+fn accepts_symbol_284_with_extra_31_as_258() {
+    let input = stream(|w| {
+        header(w, true, 0b01);
+        fixed(w, u32::from(b'q'));
+        fixed(w, 284);
+        w.bits(31, 5);
+        fixed_distance(w, 0);
+        fixed(w, 256);
+    });
+    let out = inflate(&input, CAP).unwrap();
+    assert_eq!(out.len(), 259);
+    assert!(out.iter().all(|&b| b == b'q'));
+}
+
 /// RFC 1951 §3.2.7: "One distance code of zero bits means that there are no
 /// distance codes used at all (the data is all literals)": accepted, and a
 /// length symbol in such a block is an error.

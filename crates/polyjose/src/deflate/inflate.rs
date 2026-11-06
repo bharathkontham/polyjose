@@ -15,7 +15,8 @@ use super::huffman::{Huffman, Kind, MAX_BITS};
 use super::{
     DISTANCE_TOO_FAR, INVALID_CODE, INVALID_DISTANCE_SYMBOL, INVALID_LENGTH_SYMBOL,
     MISSING_END_OF_BLOCK, OUTPUT_ALLOCATION, OUTPUT_LIMIT, REPEAT_OVERRUN, REPEAT_WITHOUT_PREVIOUS,
-    RESERVED_BLOCK_TYPE, STORED_LENGTH_MISMATCH, TOO_MANY_DISTANCE_CODES, TOO_MANY_LENGTH_CODES,
+    RESERVED_BLOCK_TYPE, SINGLE_LENGTH_CODE, STORED_LENGTH_MISMATCH, TOO_MANY_DISTANCE_CODES,
+    TOO_MANY_LENGTH_CODES,
 };
 use crate::{Error, Result};
 
@@ -235,6 +236,13 @@ fn dynamic_tables(reader: &mut BitReader<'_>) -> Result<(Huffman, Huffman)> {
 
     if lengths[usize::from(END_OF_BLOCK)] == 0 {
         return Err(Error::InvalidFormat(MISSING_END_OF_BLOCK));
+    }
+    // Incomplete, so `Huffman::new` would reject it too; named separately
+    // (see `SINGLE_LENGTH_CODE`).
+    if lengths[usize::from(END_OF_BLOCK)] == 1
+        && lengths[..hlit].iter().filter(|&&l| l != 0).count() == 1
+    {
+        return Err(Error::InvalidFormat(SINGLE_LENGTH_CODE));
     }
     let literals = Huffman::new(&lengths[..hlit], Kind::Complete)?;
     let distances = Huffman::new(&lengths[hlit..total], Kind::Distance)?;
