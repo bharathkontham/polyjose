@@ -2,7 +2,8 @@
 //! claim kept as a [`Value`] (ADR 0027 §1).
 
 use crate::error::{Error, Result};
-use crate::json::{Object, Value};
+use crate::json::{Object, Value, parse};
+use zeroize::Zeroizing;
 
 use super::NumericDate;
 
@@ -104,18 +105,99 @@ impl Claims {
     /// step 10), directly, without a second base64url decoding (reported
     /// erratum 8225; ADR 0027 §1).
     ///
-    /// **Not implemented yet** (feature 0004 T03): returns
-    /// [`Error::UnsupportedAlgorithm`].
+    /// The octets are parsed with polyjose's own JSON and its default
+    /// [`Limits`](crate::json::Limits) (ADR 0016), which reject duplicate
+    /// member names (RFC 7519 §4, RFC 7493 §2.3). Then:
+    ///
+    /// - `iss`, `sub` and `jti` must be strings (RFC 7519 §4.1.1, §4.1.2,
+    ///   §4.1.7);
+    /// - `aud` must be a string or an array of strings, and keeps the form
+    ///   it was received in (RFC 7519 §4.1.3);
+    /// - `exp`, `nbf` and `iat` must be NumericDates (RFC 7519 §2,
+    ///   §4.1.4–§4.1.6; ADR 0027 §2, see [`NumericDate`]);
+    /// - every other member is kept as a [`Value`], in order (RFC 7519
+    ///   §4.2–§4.3).
+    ///
+    /// The registered claims are checked in the order `iss, sub, aud, exp,
+    /// nbf, iat, jti`, whatever their order in the input, so the first
+    /// wrong one in that order decides the error (ADR 0027 §9 J3).
+    ///
+    /// **Secrets** (ADR 0049 §4): the payload may be secret, so no
+    /// unwiped copy of it is made. The parser borrows `bytes`, every string
+    /// it builds is wiped on drop, and every error path drops them that way.
+    /// On success the buffers of the `iss`, `sub`, `aud` and `jti` strings
+    /// are moved, not copied, into their `String` fields, which are not
+    /// wiped on drop; the other claims stay [`Value`]s.
+    ///
+    /// ```
+    /// use polyjose::{json::Value, jwt::Claims, Error};
+    ///
+    /// // RFC 7519 §3.1, line breaks included.
+    /// let claims = Claims::from_json(
+    ///     b"{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}",
+    /// )?;
+    /// assert_eq!(claims.iss.as_deref(), Some("joe"));
+    /// assert_eq!(claims.exp.and_then(|d| d.as_secs()), Some(1300819380));
+    /// assert_eq!(claims.get("http://example.com/is_root"), Some(&Value::Bool(true)));
+    ///
+    /// // A NumericDate is a number (RFC 7519 §4.1.4).
+    /// assert_eq!(Claims::from_json(br#"{"exp":"1300819380"}"#), Err(Error::InvalidClaim("exp")));
+    /// // Duplicate claim names are rejected (RFC 7519 §4).
+    /// assert!(matches!(Claims::from_json(br#"{"exp":1,"exp":2}"#), Err(Error::InvalidJson(_))));
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
     ///
     /// # Errors
     ///
     /// [`Error::InvalidJson`] if the octets are not UTF-8, not one JSON
     /// object, or repeat a member name (RFC 7519 §4, §7.2 step 10);
     /// [`Error::InvalidClaim`]`(name)` if a registered claim has the wrong
-    /// type, `null` included (ADR 0027 §1–§2).
+    /// type, `null` included (ADR 0027 §1–§2). Neither echoes a claim
+    /// value.
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
-        let _ = bytes;
-        Err(Error::UnsupportedAlgorithm)
+        let object = parse(bytes)?.into_object().ok_or(NOT_AN_OBJECT)?;
+
+        // Split the members, moving them, into the registered slots and
+        // the other claims. The parser has rejected duplicate names, so no
+        // slot is filled twice and the other names are unique.
+        let mut slots: [Option<Value>; 7] = Default::default();
+        let mut other = Vec::with_capacity(object.len());
+        for (name, value) in object {
+            match REGISTERED_CLAIMS
+                .iter()
+                .zip(slots.iter_mut())
+                .find(|(claim, _)| **claim == name.as_str())
+            {
+                Some((_, slot)) => *slot = Some(value),
+                None => other.push((name, value)),
+            }
+        }
+        let [iss, sub, aud, exp, nbf, iat, jti] = slots;
+
+        // Every check runs before any string leaves its wiping buffer.
+        let iss = string_claim(iss, "iss")?;
+        let sub = string_claim(sub, "sub")?;
+        let aud = audience_claim(aud)?;
+        let exp = date_claim(exp.as_ref(), "exp")?;
+        let nbf = date_claim(nbf.as_ref(), "nbf")?;
+        let iat = date_claim(iat.as_ref(), "iat")?;
+        let jti = string_claim(jti, "jti")?;
+
+        Ok(Claims {
+            iss: iss.map(unwrap_string),
+            sub: sub.map(unwrap_string),
+            aud: aud.map(|aud| match aud {
+                ParsedAudience::One(one) => Audience::One(unwrap_string(one)),
+                ParsedAudience::Many(many) => {
+                    Audience::Many(many.into_iter().map(unwrap_string).collect())
+                }
+            }),
+            exp,
+            nbf,
+            iat,
+            jti: jti.map(unwrap_string),
+            other: Object::from_unique_members(other),
+        })
     }
 
     /// Serializes the Claims Set as compact JSON (RFC 7519 §7.1 step 1):
@@ -168,6 +250,77 @@ impl Claims {
 /// error details.
 fn registered(name: &str) -> Option<&'static str> {
     REGISTERED_CLAIMS.into_iter().find(|claim| *claim == name)
+}
+
+/// A Claims Set payload that parsed as JSON but is not an object
+/// (RFC 7519 §7.2 step 10: the octets must be "a UTF-8-encoded
+/// representation of a completely valid JSON object").
+const NOT_AN_OBJECT: Error = Error::InvalidJson("JWT Claims Set is not a JSON object");
+
+/// An `aud` claim that has passed its type check, its strings still in
+/// their wiping buffers.
+enum ParsedAudience {
+    One(Zeroizing<String>),
+    Many(Vec<Zeroizing<String>>),
+}
+
+/// The StringOrURI or string claim `claim` (RFC 7519 §4.1.1, §4.1.2,
+/// §4.1.7): absent, or a JSON string.
+///
+/// # Errors
+///
+/// [`Error::InvalidClaim`]`(claim)` for any other JSON type, `null`
+/// included (ADR 0027 §1).
+fn string_claim(value: Option<Value>, claim: &'static str) -> Result<Option<Zeroizing<String>>> {
+    match value {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(Error::InvalidClaim(claim)),
+    }
+}
+
+/// The `aud` claim (RFC 7519 §4.1.3): absent, a string, or an array of
+/// strings, possibly empty (ADR 0027 §4).
+///
+/// # Errors
+///
+/// [`Error::InvalidClaim`]`("aud")` for any other JSON type, `null`
+/// included, or an array with an element that is not a string
+/// (ADR 0027 §4).
+fn audience_claim(value: Option<Value>) -> Result<Option<ParsedAudience>> {
+    match value {
+        None => Ok(None),
+        Some(Value::String(one)) => Ok(Some(ParsedAudience::One(one))),
+        Some(Value::Array(items)) => items
+            .into_iter()
+            .map(|item| match item {
+                Value::String(s) => Ok(s),
+                _ => Err(Error::InvalidClaim("aud")),
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|many| Some(ParsedAudience::Many(many))),
+        Some(_) => Err(Error::InvalidClaim("aud")),
+    }
+}
+
+/// The NumericDate claim `claim` (RFC 7519 §2, §4.1.4–§4.1.6): absent, or
+/// a value [`NumericDate::from_json`] accepts (ADR 0027 §2).
+///
+/// # Errors
+///
+/// [`Error::InvalidClaim`]`(claim)` as [`NumericDate::from_json`] returns
+/// it.
+fn date_claim(value: Option<&Value>, claim: &'static str) -> Result<Option<NumericDate>> {
+    value
+        .map(|value| NumericDate::from_json(value, claim))
+        .transpose()
+}
+
+/// Moves the string out of its wiping buffer without copying it: the
+/// buffer becomes the returned `String`'s, and the empty `Zeroizing` left
+/// behind has nothing to wipe.
+fn unwrap_string(mut s: Zeroizing<String>) -> String {
+    core::mem::take(&mut *s)
 }
 
 #[cfg(test)]
