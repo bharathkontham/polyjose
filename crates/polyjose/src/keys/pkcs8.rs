@@ -687,4 +687,288 @@ mod tests {
             }
         }
     }
+
+    /// Secret hygiene of every failure path: errors are a static detail or
+    /// `UnsupportedAlgorithm`, never input bytes (ADR 0018 §4; the T02
+    /// contract), checked with marker-filled keys.
+    mod hygiene {
+        use std::collections::BTreeSet;
+
+        use super::super::super::der::{self, fixtures};
+        use super::super::super::{oid, spki};
+        use super::*;
+
+        /// The marker octet in every key position. It would show up in a
+        /// leaked `Debug` as `165`, or in hex as `a5`.
+        const M: u8 = 0xA5;
+
+        fn leaks(text: &str) -> bool {
+            let lower = text.to_ascii_lowercase();
+            lower.contains("a5") || lower.contains("165") || text.contains(char::from(M))
+        }
+
+        /// `SEQUENCE { parts }` with a correct short- or long-form length.
+        fn seq(parts: &[&[u8]]) -> Vec<u8> {
+            tlv(0x30, &parts.concat())
+        }
+
+        fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
+            let mut out = vec![tag];
+            match contents.len() {
+                len @ 0..=0x7F => out.push(u8::try_from(len).unwrap()),
+                len => out.extend_from_slice(&[0x81, u8::try_from(len).unwrap()]),
+            }
+            out.extend_from_slice(contents);
+            out
+        }
+
+        /// An Ed25519 PKCS#8 key whose CurvePrivateKey is all marker.
+        fn ed(version: &[u8], alg: &[u8], private_key: &[u8], tail: &[u8]) -> Vec<u8> {
+            seq(&[version, alg, private_key, tail])
+        }
+
+        fn key() -> Vec<u8> {
+            tlv(0x04, &tlv(0x04, &[M; 32]))
+        }
+
+        const V0: &[u8] = &[0x02, 0x01, 0x00];
+
+        /// The inputs that reach each `InvalidKey` detail through
+        /// `pkcs8::decode` (`P`) or `spki::decode` (`S`).
+        fn cases() -> Vec<(char, Vec<u8>, &'static str)> {
+            let good = ed(V0, oid::ALG_ED25519, &key(), &[]);
+            let with = |i: usize, b: u8| {
+                let mut v = good.clone();
+                v[i] = b;
+                v
+            };
+            let spki_with = |alg: &[u8], bits: &[u8]| seq(&[alg, bits]);
+            let ed448_params = |params: &[u8]| seq(&[oid::OID_ED448, params]);
+            let mut deep = vec![0x05, 0x00];
+            for _ in 0..=der::MAX_DEPTH {
+                deep = seq(&[&deep]);
+            }
+            let attribute = |value: &[u8]| seq(&[&[0x06, 0x01, 0x2A][..], &tlv(0x31, value)]);
+            let unsorted = tlv(
+                0xA0,
+                &[attribute(&[0x04, 0x01, M]), attribute(&[0x04, 0x01, 0x01])].concat(),
+            );
+            let public = tlv(0x81, &[&[0x00][..], &[M; 32]].concat());
+            vec![
+                ('P', vec![M; der::MAX_INPUT_LEN + 1], "DER input too large"),
+                ('P', vec![0x30], "DER truncated"),
+                ('P', with(0, 0x3F), "DER high-tag-number form"),
+                ('P', with(1, 0x80), "DER indefinite length"),
+                (
+                    'P',
+                    [&[0x30, 0x81, 0x2E][..], &good[2..]].concat(),
+                    "DER length not minimal",
+                ),
+                (
+                    'P',
+                    [&[0x30, 0x85][..], &good[2..]].concat(),
+                    "DER length too long",
+                ),
+                ('P', with(1, 0x2F), "DER length exceeds input"),
+                ('P', [&good[..], &[M]].concat(), "DER trailing data"),
+                ('P', with(12, 0x02), "DER unexpected tag"),
+                (
+                    'P',
+                    ed(&[0x02, 0x00], oid::ALG_ED25519, &key(), &[]),
+                    "DER INTEGER empty",
+                ),
+                (
+                    'P',
+                    ed(&[0x02, 0x02, 0x00, 0x00], oid::ALG_ED25519, &key(), &[]),
+                    "DER INTEGER not minimal",
+                ),
+                (
+                    'P',
+                    ed(&[0x02, 0x01, M], oid::ALG_ED25519, &key(), &[]),
+                    "DER INTEGER negative",
+                ),
+                (
+                    'P',
+                    ed(&[0x02, 0x02, 0x01, M], oid::ALG_ED25519, &key(), &[]),
+                    "DER INTEGER out of range",
+                ),
+                ('P', with(12, 0x24), "DER constructed string"),
+                (
+                    'P',
+                    ed(&[0x02, 0x01, 0x02], oid::ALG_ED25519, &key(), &[]),
+                    "PKCS#8 version is not v1 or v2",
+                ),
+                (
+                    'P',
+                    ed(V0, oid::ALG_ED25519, &key(), &public),
+                    "PKCS#8 version does not match the publicKey",
+                ),
+                (
+                    'P',
+                    ed(V0, oid::ALG_ED25519, &key(), &unsorted),
+                    "DER SET OF not sorted",
+                ),
+                (
+                    'P',
+                    ed(
+                        V0,
+                        &[0x30, 0x06, 0x06, 0x04, 0x2B, 0x80, 0x65, 0x70],
+                        &key(),
+                        &[],
+                    ),
+                    "DER OBJECT IDENTIFIER malformed",
+                ),
+                (
+                    'P',
+                    ed(V0, &seq(&[oid::OID_ED25519, &[0x05, 0x00]]), &key(), &[]),
+                    "AlgorithmIdentifier parameters do not match the algorithm",
+                ),
+                (
+                    'S',
+                    spki_with(oid::ALG_X25519, &[0x03, 0x00]),
+                    "DER BIT STRING empty",
+                ),
+                (
+                    'S',
+                    spki_with(
+                        oid::ALG_X25519,
+                        &tlv(0x03, &[&[0x01][..], &[M; 32]].concat()),
+                    ),
+                    "DER BIT STRING has unused bits",
+                ),
+                (
+                    'S',
+                    spki_with(&ed448_params(&[0x05, 0x01, M]), &[0x03, 0x01, 0x00]),
+                    "DER NULL not empty",
+                ),
+                (
+                    'S',
+                    spki_with(&ed448_params(&deep), &[0x03, 0x01, 0x00]),
+                    "DER nesting too deep",
+                ),
+                (
+                    'S',
+                    spki_with(&ed448_params(&[0x00, 0x00]), &[0x03, 0x01, 0x00]),
+                    "DER end-of-contents",
+                ),
+                (
+                    'S',
+                    spki_with(&ed448_params(&[0x01, 0x01, M]), &[0x03, 0x01, 0x00]),
+                    "DER BOOLEAN not canonical",
+                ),
+                (
+                    'S',
+                    spki_with(&ed448_params(&[0x03, 0x02, 0x01, M]), &[0x03, 0x01, 0x00]),
+                    "DER BIT STRING malformed",
+                ),
+            ]
+        }
+
+        /// Only the writer can fail with these, which its own tests cover.
+        const WRITER_ONLY: [&str; 2] = ["DER output too large", "DER output length mismatch"];
+
+        /// Every `InvalidKey("...")` literal in the non-test part of `source`.
+        fn details(source: &str) -> Vec<String> {
+            let code = source.split("\n#[cfg(test)]").next().unwrap();
+            code.split("InvalidKey(")
+                .skip(1)
+                .filter_map(|rest| {
+                    let rest = rest.trim_start().strip_prefix('"')?;
+                    Some(rest[..rest.find('"').unwrap()].to_owned())
+                })
+                .collect()
+        }
+
+        fn error_of(which: char, input: &[u8]) -> Error {
+            match which {
+                'P' => decode(input).map(|_| ()).unwrap_err(),
+                _ => spki::decode(input).map(|_| ()).unwrap_err(),
+            }
+        }
+
+        #[test]
+        fn every_failure_path_reports_a_static_detail_without_key_bytes() {
+            let mut seen = BTreeSet::new();
+            for (which, input, expected) in cases() {
+                let error = error_of(which, &input);
+                assert_eq!(error, Error::InvalidKey(expected), "{expected}");
+                for text in [
+                    format!("{error}"),
+                    format!("{error:?}"),
+                    format!("{error:#?}"),
+                ] {
+                    assert!(!leaks(&text), "{text}");
+                }
+                seen.insert(expected.to_owned());
+            }
+            let all: BTreeSet<String> = [
+                include_str!("der.rs"),
+                include_str!("pkcs8.rs"),
+                include_str!("spki.rs"),
+            ]
+            .into_iter()
+            .flat_map(details)
+            .collect();
+            assert!(all.len() > 20, "{all:?}");
+            let expected: BTreeSet<String> = all
+                .iter()
+                .filter(|d| !WRITER_ONLY.contains(&d.as_str()))
+                .cloned()
+                .collect();
+            assert_eq!(seen, expected, "a decoder failure path has no marker case");
+        }
+
+        #[test]
+        fn unsupported_inputs_report_nothing_but_the_code() {
+            // Ed448, an encrypted key and an RSA private key, marker-filled.
+            for input in [
+                ed(V0, &seq(&[oid::OID_ED448]), &key(), &[]),
+                seq(&[&seq(&[&[0x06, 0x01, M][..]]), &tlv(0x04, &[M; 48])]),
+                ed(V0, oid::ALG_RSA_ENCRYPTION, &tlv(0x04, &[M; 64]), &[]),
+            ] {
+                let error = decode(&input).map(|_| ()).unwrap_err();
+                assert_eq!(error, Error::UnsupportedAlgorithm);
+                assert!(!leaks(&format!("{error:?} {error}")));
+            }
+        }
+
+        #[test]
+        fn every_committed_rejection_reports_a_known_static_detail() {
+            let all: BTreeSet<String> = [
+                include_str!("der.rs"),
+                include_str!("pkcs8.rs"),
+                include_str!("spki.rs"),
+            ]
+            .into_iter()
+            .flat_map(details)
+            .collect();
+            let mut inputs: Vec<Vec<u8>> = fixtures::negatives()
+                .iter()
+                .filter(|n| n.file.ends_with(".der"))
+                .map(|n| fixtures::load("negative", &n.file))
+                .collect();
+            inputs.extend(
+                // The legacy `Proc-Type: 4,ENCRYPTED` PEMs (RFC 1421 headers)
+                // are a PEM-level rejection with no DER to give here.
+                fixtures::files("openssl", |n| {
+                    n.starts_with("reject-") && !n.contains("legacy-encrypted")
+                })
+                .iter()
+                .map(|f| fixtures::load("openssl", f)),
+            );
+            for input in inputs {
+                for which in ['P', 'S'] {
+                    let result = match which {
+                        'P' => decode(&input).map(|_| ()),
+                        _ => spki::decode(&input).map(|_| ()),
+                    };
+                    match result {
+                        Ok(()) | Err(Error::UnsupportedAlgorithm) => {}
+                        Err(Error::InvalidKey(detail)) => assert!(all.contains(detail), "{detail}"),
+                        Err(other) => panic!("unexpected error {other:?}"),
+                    }
+                }
+            }
+        }
+    }
 }
