@@ -87,13 +87,13 @@ hkdf
 
 # group: eddsa
 # EdDSA over Ed25519 (RFC 8037 §3.1): ed25519-dalek, the RustCrypto ed25519 signature type, and the
-# curve25519-dalek arithmetic under them (ADR 0016 §1). x25519-dalek is X25519 (RFC 7748) for JWE
-# ECDH-ES with OKP keys (RFC 8037 §3.2), on the same curve25519-dalek. fiat-crypto (formally verified
-# field arithmetic, ADR 0025) is compiled only when the builder selects the `fiat` backend of
-# curve25519-dalek or p384 with a --cfg.
+# curve25519-dalek arithmetic under them (ADR 0016 §1). X25519 (RFC 7748; the OKP `X25519` curve of
+# RFC 8037 §2, used by ECDH-ES, RFC 8037 §3.2): x25519-dalek, on the same curve25519-dalek.
+# fiat-crypto (formally verified field arithmetic, ADR 0025) is compiled only when the builder
+# selects the `fiat` backend of curve25519-dalek or p384 with a --cfg.
 ed25519-dalek
-x25519-dalek
 ed25519
+x25519-dalek
 curve25519-dalek
 fiat-crypto
 
