@@ -1,0 +1,22 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "Ed25519 (RFC 9864 §2.2) compact verify of the node:crypto JWS over header {\"alg\":\"Ed25519\"} with the RFC 8037 A.2 public key and allow-list [\"Ed25519\"]",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFZDI1NTE5In0.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.UxhIYLHGg39NVCLpQAVD_UcfOmnGSCzLFZoXYkLiIbFccmOb_qObsgjzLKsfJw-4NlccUgvYrEHrRbNV0HcZAQ",
+    "key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    },
+    "allowed_algs": [
+      "Ed25519"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc",
+    "alg": "Ed25519",
+    "signature_index": 0
+  }
+}

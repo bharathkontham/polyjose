@@ -1,0 +1,23 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "ES256K (RFC 8812 §3.2) compact verify of a node:crypto signature whose S is in the low form (S <= n/2), with the generator's fixed secp256k1 public key",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFUzI1NksifQ.RXhhbXBsZSBvZiBFUzI1Nksgc2lnbmluZw.fMahu1RdLUtMRHUYFcglISE8p0vLly6w26el4lzrcvJesxGiwlPLrcYQDWzn1qQ4uBb4b1UkuR-UtTaL6ATnTw",
+    "key": {
+      "kty": "EC",
+      "crv": "secp256k1",
+      "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+      "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g"
+    },
+    "allowed_algs": [
+      "ES256K"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "RXhhbXBsZSBvZiBFUzI1Nksgc2lnbmluZw",
+    "alg": "ES256K",
+    "signature_index": 0
+  }
+}
