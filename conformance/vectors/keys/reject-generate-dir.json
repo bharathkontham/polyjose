@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"dir\": a dir key is the content encryption key of its enc (RFC 7518 §4.5), so its size is not known from dir.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "dir"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

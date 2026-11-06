@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §4.7",
+  "description": "Key generation for an algorithm: an A128GCMKW key is a 128-bit AES key (RFC 7518 §4.7); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A128GCMKW"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A128GCMKW",
+      "k_octets": 16
+    }
+  }
+}

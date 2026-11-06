@@ -1,0 +1,18 @@
+{
+  "source": "RFC 8410 §10.3",
+  "description": "DER import of the RFC 8410 §10.3 Ed25519 PKCS#8 v1 key; x is derived from d (RFC 8032 §5.1.5) and equals the §10.1 key.",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp-K06_nwoy_HU--CXqI9EdVhC",
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+      "d": "1O5y2_kTWErVttjx92n4rTr-fCjL8dT74Jeoj0R1WEI"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §3.2",
+  "description": "Key generation for an algorithm: an HS512 key is 64 octets, the size of the SHA-512 output (RFC 7518 §3.2); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "HS512"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "HS512",
+      "k_octets": 64
+    }
+  }
+}

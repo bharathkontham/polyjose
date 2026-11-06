@@ -1,0 +1,18 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "DER import of a P-521 public key as SPKI (RFC 5480 §2); expected JWK from openssl pkey -text.",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQB1hAONSlcR-kOWIE-tKxYAoYriflOYGOeCJLSOXjMVNjgmjyHvVPBW8o_0V1sgKZ6dyqtq-R4tK0zSUOlEDavmxcAAqXfXT7C7ESnfERZNwx33EOuBJKRgjcTln4VkFF3tHq3vygur7QaMFvLQtgoP0j2iUsvE55w_lljU720NxedDPM",
+    "format": "spki"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AdYQDjUpXEfpDliBPrSsWAKGK4n5TmBjngiS0jl4zFTY4Jo8h71TwVvKP9FdbICmencqravkeLStM0lDpRA2r5sX",
+      "y": "AAKl310-wuxEp3xEWTcMd9xDrgSSkYI3E5Z-FZBRd7R6t78oLq-0GjBby0LYKD9I9olLLxOecP5ZY1O9tDcXnQzz"
+    }
+  }
+}

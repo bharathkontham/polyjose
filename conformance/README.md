@@ -46,6 +46,9 @@ All five top-level members are required and no others are allowed. Every object 
 | `jws.verify` | `jws`, `key`, `allowed_algs`, and optionally `detached_payload_b64u`, `max_input_len`, `max_signatures` ([below](#jwsverify)) | `payload_b64u`, `alg`, `signature_index` | yes |
 | `keys.import_pem` | `pem` (any string) ([below](#keysimport_pem)) | `jwk` (a JSON object) | yes |
 | `keys.export_pem` | `jwk` (a JSON object), `format` (`"pkcs8"`, `"sec1"`, `"spki"` or `"pkcs1"`) ([below](#keysexport_pem)) | `pem` (exact text) | yes |
+| `keys.import_der` | `der_b64u`, `format` (as `keys.export_pem`) ([below](#keysimport_der)) | `jwk` (a JSON object) | yes |
+| `keys.export_der` | `jwk` (a JSON object), `format` (as `keys.export_pem`) ([below](#keysexport_der)) | `der_b64u` (exact) | yes |
+| `keys.generate_for` | `alg` (any string) ([below](#keysgenerate_for)) | `shape` (the key without its random material) | yes |
 | `jwe.encrypt`, `jwe.decrypt`, `jwt.validate` | reserved | reserved | |
 
 A reserved operation's input and output members are defined by the feature that implements it, which adds them to `schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails.
@@ -53,7 +56,7 @@ A reserved operation's input and output members are defined by the feature that 
 ### How bytes are written
 
 - **Codec operations (`b64url.*`, `jwk.thumbprint`): lowercase hex** (`bytes_hex`: two digits per octet, `""` for none), never base64url, so the base64url codec is never checked against itself.
-- **`keys.*` operations: PEM text and JWK objects**, never raw octets. A PEM block is a JSON string with `\n` line endings; JWK members are canonical base64url as RFC 7518 §6 and RFC 8037 §2 define them.
+- **`keys.*` operations: PEM text, JWK objects and DER as canonical base64url** (`der_b64u`), never hex. A PEM block is a JSON string with `\n` line endings; JWK members are canonical base64url as RFC 7518 §6 and RFC 8037 §2 define them. A runner decodes `der_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome.
 - **`jws.*` operations: canonical base64url** (members ending in `_b64u`). This is deliberate: the codec is no longer under test there (it has its own vectors), and every JWS field is natively base64url (RFC 7515 §2), so the RFC's values are copied as printed. A runner decodes `payload_b64u` and `detached_payload_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome. `protected_b64u` is passed to the library as text, unchanged.
 
 ## `jws.sign`
@@ -134,6 +137,40 @@ Imports `jwk` with the library's JWK import, then exports it as PEM in `format` 
 
 The checks run in that order: `oct`, then a key type the format cannot hold, then a public key in a private-key format. Only the key material is exported; `kid`, `use`, `alg` and the other JWK members are dropped.
 
+## `keys.import_der`
+
+Imports DER with the library's DER key import in the structure `format` names (ADR 0018 §3). There is no format sniffing (ADR 0007): DER of another structure fails, so an SPKI offered as `pkcs8` is `InvalidKey`. `format` selects the structure as the PEM label does for `keys.import_pem`: `pkcs8` (RFC 5958 §2), `sec1` (RFC 5915 §3), `spki` (RFC 5280 §4.1.2.7), `pkcs1` (RFC 8017 App. A.1.1). The expectations and error codes are those of `keys.import_pem`, compared the same way, and an `oct` result fails the vector whatever it expects. Only the PEM-level faults (armor, labels, explanatory text) have no DER counterpart.
+
+## `keys.export_der`
+
+`keys.export_pem` without the armor: imports `jwk` with the library's JWK import (whose error is the vector's outcome), then exports it as DER in `format` (ADR 0018 §3). Expect `{ "ok": true, "der_b64u": <octets> }`, the exact DER in OpenSSL 4's layout as canonical base64url, compared as a string; or a failure, by the format matrix of `keys.export_pem`, with its check order.
+
+## `keys.generate_for`
+
+Generates a private key for `alg` with the library's `generate_for` (ADR 0018 §5; ADR 0030 `jwk_generate_for_alg`). `alg` is a JWS `alg`, a JWE `alg` or a JWE `enc` name. RFC 7518 §7.1 registers all three in one registry whose names are unique and case-sensitive, so a runner resolves the name in whichever of the three it belongs to, and passes a name none of them knows to the library as unknown. It never normalizes case or picks a substitute.
+
+A generated key is random, so there is no exact output. A success vector expects only the key's **shape**:
+
+| `shape` member | Meaning |
+|---|---|
+| `kty` | `"EC"`, `"OKP"` or `"oct"` |
+| `crv` | EC and OKP only: the curve, for example `"P-256"` or `"Ed25519"` |
+| `alg` | The `alg` member the key is bound to (RFC 7517 §4.4): the requested name |
+| `k_octets` | `oct` only: the length of `k` in octets |
+
+The runner builds the generated key's shape and compares it with `shape` as a JSON value. A member the key has and the vector omits fails, so an EC vector must name `crv` and an `oct` vector `k_octets`. Before that the runner checks what a shape can't say, and any failure there fails the vector:
+
+- the key is private;
+- its members are exactly those RFC 7518 §6.2.1–§6.2.2 (EC: `kty`, `crv`, `x`, `y`, `d`), RFC 8037 §2 (OKP: `kty`, `crv`, `x`, `d`) or RFC 7518 §6.4.1 (`oct`: `kty`, `k`) define, plus `alg`;
+- it imports back with the library's JWK import to the same JWK.
+
+The expected shapes are the RFC sizes and curves per algorithm: HMAC keys the size of the hash output (RFC 7518 §3.2), AES key wrap and AES-GCM keys their AES key size (§4.4, §4.7, §5.3), AES-CBC-HMAC keys both halves (§5.2.3–§5.2.5), ECDSA keys their curve (§3.4, RFC 8812 §3.2) and EdDSA keys Ed25519 (RFC 8037 §3.1, ADR 0006).
+
+The failures are:
+
+- `InvalidKey` for `ECDH-ES` and `ECDH-ES+A*KW`. They work on several curves (RFC 7518 §4.6), so the request lacks a curve, and polyjose never picks one. A binding must not substitute a default;
+- `UnsupportedAlgorithm` for the RSA algorithms (ADR 0021), `dir` (its key size depends on `enc`, RFC 7518 §4.5), `PBES2-*` (passwords aren't generated), `none`, and any unknown or wrongly cased name.
+
 ## Binding readiness
 
 Every vector under `jws-*/`, `third_party/**/jws/` and `keys/`, and every `jws.*` or `keys.*` vector anywhere, must be readable by every binding's own JSON parser unchanged. The Rust runner's `jws_and_keys_vectors_are_binding_ready` test checks it:
@@ -154,10 +191,29 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 
 The Rust runner also checks `schema.json` against its own tables (`schema_and_runner_agree`), so the schema and the runner can't drift apart.
 
+## Binding runners
+
+Which operation families each platform's runner runs today. The rules above apply to every runner that exists. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
+
+| Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jws.*` | `keys.*` |
+|---|---|---|---|
+| Rust | `crates/polyjose/tests/conformance.rs` | runs | runs |
+| WASM | none yet (0006, over the 0013 surface) | no runner yet (0006) | not yet bound (0006–0009) |
+| Node | none yet (0007, over the 0013 surface) | no runner yet (0007) | not yet bound (0006–0009) |
+| Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) |
+| Swift | none yet (0009, over the 0013 surface) | no runner yet (0009) | not yet bound (0006–0009) |
+
+When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row. ADR 0034's parity check then compares its results with the Rust reference run.
+
 ## Writing vectors
 
 - Name files after what they check, grouped by operation: `vectors/b64url/encode-rfc4648-10-foo.json`, `vectors/jwk-thumbprint/reject-oct-k-padded.json`.
-- Key vectors live in `keys/`: `import-*` and `export-*` for successes, `reject-*` for failures. Their expected JWKs and PEM texts are the committed key fixtures (`crates/polyjose/tests/data/keys/`: OpenSSL 4.1.0 output and the RFC golden files), never polyjose output; `source` names the RFC, or OpenSSL for a generated key. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them (`python3 -I`); edit the script, not the files. **Until features 0006–0009 bind the keys API, test reports list WASM, Node, Kotlin and Swift as `SKIPPED (API not yet bound)` for them; each binding's runner implements `keys.*` when it binds the API, and the never-skip rule above then applies.**
+- Key vectors live in `keys/`. Successes are `import-*`, `import-der-*`, `export-*`, `export-der-*` and `generate-*`; failures are `reject-*`. Their expected values never come from polyjose:
+  - JWKs, PEM texts and DER are the committed key fixtures (`crates/polyjose/tests/data/keys/`: OpenSSL 4.1.0 output and the RFC golden files). The DER is each PEM fixture's body.
+  - `generate-*` shapes are the RFC sizes and curves.
+  - The RSA modulus-bound keys are built by the generator, which also writes their JWK.
+
+  `source` names the RFC, OpenSSL for a generated key, or `polyjose` for a rule the description cites. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them all (`python3 -I`); edit the script, not the files. **Until features 0006–0009 bind the keys API, test reports list WASM, Node, Kotlin and Swift as `SKIPPED (API not yet bound)` for them (see [Binding runners](#binding-runners)). Each binding's runner implements `keys.*` when it binds the API, and the never-skip rule above then applies.**
 - JWS vectors are grouped by origin: `jws-rfc7515/` (RFC 7515 Appendix A and F; `source` "RFC 7515 App. A.x" or "RFC 7515 App. F"), `jws-rfc7797/`, `jws-rfc8037/`, `jws-oracle/` (generated independently of polyjose; `source` names the tool and its versions), `jws-negative/` (`source` names the RFC section, CVE or ADR enforced), and `third_party/rfc7520/jws/` (the RFC 7520 §4 cookbook).
 - Check every expected value against the RFC text yourself. If the RFC doesn't print the value, derive it independently of polyjose (for example with Python's `hashlib` over the hand-built input) and say so in `description`.
 - **Deterministic algorithms** (HMAC, EdDSA) also have `sign` vectors with an exact expected output. **Randomized ones** (ECDSA, JWE) are checked by round trip (`verify_with`) plus a `verify`/`decrypt` vector of the RFC's published output. RS\*/PS\* are verify-only (ADR 0021): only `verify` vectors, and `sign` vectors that expect `UnsupportedAlgorithm`.

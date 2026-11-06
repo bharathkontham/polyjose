@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"Ed448\": Ed448 is not supported (ADR 0006).",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "Ed448"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

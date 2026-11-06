@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "polyjose conformance vector",
-  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* operations give octets as canonical base64url (members ending in _b64u), the form JWS fields natively have; the codec is not under test there. The keys.* operations give keys as PEM text and JWK objects, never raw octets.",
+  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* operations give octets as canonical base64url (members ending in _b64u), the form JWS fields natively have; the codec is not under test there. The keys.* operations give keys as PEM text, JWK objects and DER as canonical base64url (der_b64u), never hex.",
   "type": "object",
   "required": ["source", "description", "operation", "input", "expect"],
   "additionalProperties": false,
@@ -23,6 +23,9 @@
         "jws.verify",
         "keys.import_pem",
         "keys.export_pem",
+        "keys.import_der",
+        "keys.export_der",
+        "keys.generate_for",
         "jwe.encrypt",
         "jwe.decrypt",
         "jwt.validate"
@@ -151,6 +154,57 @@
           "expect": {
             "oneOf": [
               { "$ref": "#/$defs/keys_export_pem_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.import_der" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_import_der_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/keys_import_der_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.export_der" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_export_der_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/keys_export_der_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.generate_for" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_generate_for_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/keys_generate_for_ok" },
               { "$ref": "#/$defs/failure" }
             ]
           }
@@ -450,6 +504,83 @@
       "properties": {
         "ok": { "const": true },
         "pem": { "type": "string" }
+      }
+    },
+    "keys_import_der_input": {
+      "description": "Import DER in the structure format names, with the library's DER key import (ADR 0018 §3); there is no format sniffing (ADR 0007), and DER of another structure fails. The runner decodes der_b64u (canonical base64url); a value that does not decode canonically is a broken vector, never an outcome.",
+      "type": "object",
+      "required": ["der_b64u", "format"],
+      "additionalProperties": false,
+      "properties": {
+        "der_b64u": { "$ref": "#/$defs/base64url" },
+        "format": {
+          "description": "pkcs8 (RFC 5958 §2), sec1 (RFC 5915 §3), spki (RFC 5280 §4.1.2.7) or pkcs1 (RFC 8017 App. A.1.1, RSA public keys).",
+          "enum": ["pkcs8", "sec1", "spki", "pkcs1"]
+        }
+      }
+    },
+    "keys_import_der_ok": {
+      "description": "The imported key as a JWK (RFC 7517 §4), compared as a JSON value: member order is ignored (RFC 8259 §4), every string must match exactly. An imported key never has kty oct and carries no alg.",
+      "type": "object",
+      "required": ["ok", "jwk"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "jwk": { "type": "object" }
+      }
+    },
+    "keys_export_der_input": {
+      "description": "Export a JWK as DER in format (ADR 0018 §3), with the format matrix of keys.export_pem. The runner imports jwk with the library's JWK import first; an import error is the vector's outcome.",
+      "type": "object",
+      "required": ["jwk", "format"],
+      "additionalProperties": false,
+      "properties": {
+        "jwk": { "type": "object" },
+        "format": {
+          "description": "pkcs8 (RFC 5958 §2), sec1 (RFC 5915 §3), spki (RFC 5280 §4.1.2.7) or pkcs1 (RFC 8017 App. A.1.1, RSA public keys).",
+          "enum": ["pkcs8", "sec1", "spki", "pkcs1"]
+        }
+      }
+    },
+    "keys_export_der_ok": {
+      "description": "The exact DER, in OpenSSL 4's layout (ADR 0018 §3), as canonical base64url; compared as a string.",
+      "type": "object",
+      "required": ["ok", "der_b64u"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "der_b64u": { "$ref": "#/$defs/base64url" }
+      }
+    },
+    "keys_generate_for_input": {
+      "description": "Generate a private key for an algorithm with the library's generate_for (ADR 0018 §5) from the OS CSPRNG. alg is a JWS alg, a JWE alg or a JWE enc name, resolved in the one registry of RFC 7518 §7.1 (names unique and case-sensitive); any string, since unknown names are under test.",
+      "type": "object",
+      "required": ["alg"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "type": "string" }
+      }
+    },
+    "keys_generated_shape": {
+      "description": "What a generated key is, without its random material: kty, crv (EC and OKP only), the alg the key is bound to (RFC 7517 §4.4) and the length of k in octets (oct only). Compared as a JSON value, so a member the generated key has and the shape omits fails too.",
+      "type": "object",
+      "required": ["kty", "alg"],
+      "additionalProperties": false,
+      "properties": {
+        "kty": { "enum": ["EC", "OKP", "oct"] },
+        "crv": { "type": "string" },
+        "alg": { "type": "string" },
+        "k_octets": { "$ref": "#/$defs/count" }
+      }
+    },
+    "keys_generate_for_ok": {
+      "description": "Generated keys are random, so only their shape is expected. The runner also checks that the key is private, has exactly the members RFC 7518 §6.2.1-§6.2.2 (EC), RFC 8037 §2 (OKP) or RFC 7518 §6.4.1 (oct) define plus alg, and imports back unchanged; any failure there fails the vector.",
+      "type": "object",
+      "required": ["ok", "shape"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "shape": { "$ref": "#/$defs/keys_generated_shape" }
       }
     }
   }

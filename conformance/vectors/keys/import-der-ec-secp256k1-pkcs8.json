@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7468 §10",
+  "description": "DER import of RFC 7468 Figure 12, a secp256k1 PKCS#8 whose inner ECPrivateKey omits [0] (RFC 5915 erratum 5008).",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MIGEAgEAMBAGByqGSM49AgEGBSuBBAAKBG0wawIBAQQgVcB_UNPxalR9zDYAjQIfjojUDiQuGnSJrFEEzZPT_92hRANCAASc7UJtgnF_abqWM60T3XNJEzBv5ez9TdwKH0M6xpM2q-53wmsN_eYLdgtjgBd3DBmHtPilCkiFICXyaA8z9LkJ",
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "secp256k1",
+      "x": "nO1CbYJxf2m6ljOtE91zSRMwb-Xs_U3cCh9DOsaTNqs",
+      "y": "7nfCaw395gt2C2OAF3cMGYe0-KUKSIUgJfJoDzP0uQk",
+      "d": "VcB_UNPxalR9zDYAjQIfjojUDiQuGnSJrFEEzZPT_90"
+    }
+  }
+}

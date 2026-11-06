@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §4.4",
+  "description": "Key generation for an algorithm: an A192KW key is a 192-bit AES key (RFC 7518 §4.4); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A192KW"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A192KW",
+      "k_octets": 24
+    }
+  }
+}
