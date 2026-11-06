@@ -2594,6 +2594,204 @@ fn jws_sign_mismatches_fail() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Binding readiness: the WASM, Node, Kotlin and Swift runners (features
+// 0006-0009) must read the jws.* vectors with their platform JSON parsers,
+// unchanged (ADR 0034).
+// ---------------------------------------------------------------------------
+
+/// The number tokens of a JSON text, as written (outside strings).
+fn number_tokens(text: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let (mut in_string, mut escaped, mut start) = (false, false, None);
+    for (i, c) in text.char_indices() {
+        if in_string {
+            match (escaped, c) {
+                (true, _) => escaped = false,
+                (false, '\\') => escaped = true,
+                (false, '"') => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        // A number starts with '-' or a digit (RFC 8259 §6); `true` and
+        // `false` hold an `e` but never start one.
+        let begins = c.is_ascii_digit() || c == '-';
+        let continues = begins || matches!(c, '+' | '.' | 'e' | 'E');
+        match (start, begins, continues) {
+            (None, true, _) => start = Some(i),
+            (Some(s), _, false) => {
+                tokens.push(&text[s..i]);
+                start = None;
+            }
+            _ => {}
+        }
+        in_string = c == '"';
+    }
+    if let Some(s) = start {
+        tokens.push(&text[s..]);
+    }
+    tokens
+}
+
+/// Every member of `value`, at any depth, with its JSON pointer.
+fn members_deep<'a>(
+    value: &'a Value,
+    pointer: String,
+    out: &mut Vec<(String, &'a str, &'a Value)>,
+) {
+    if let Some(object) = value.as_object() {
+        for (name, member) in object {
+            let at = format!("{pointer}/{name}");
+            out.push((at.clone(), name, member));
+            members_deep(member, at, out);
+        }
+    } else if let Some(items) = value.as_array() {
+        for (i, item) in items.iter().enumerate() {
+            members_deep(item, format!("{pointer}/{i}"), out);
+        }
+    }
+}
+
+/// Whether a vector file uses only what every binding's JSON parser reads
+/// exactly:
+///
+/// - every number is written as a plain integer (no fraction or exponent,
+///   which JavaScript, Kotlin and Swift parsers may read as a double) of
+///   magnitude at most 2^32 - 1, so no binding needs a 64-bit-only type
+///   (ADR 0030 `u32`);
+/// - octets are base64url text (`*_b64u`), never raw bytes or `*_hex`, and
+///   every one the runner decodes is canonical (`protected_b64u` is passed
+///   to the library as text, so it may be anything the schema allows).
+fn binding_ready(text: &str) -> Result<(), String> {
+    for token in number_tokens(text) {
+        let plain = token
+            .strip_prefix('-')
+            .unwrap_or(token)
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+            && !token.is_empty()
+            && token != "-";
+        let small = token
+            .parse::<i64>()
+            .is_ok_and(|n| n.unsigned_abs() <= COUNT_MAX);
+        if !plain || !small {
+            return Err(format!(
+                "number {token} is not a plain integer of magnitude at most {COUNT_MAX}"
+            ));
+        }
+    }
+    let value = json::parse(text.as_bytes()).map_err(|e| format!("not JSON ({})", e.code()))?;
+    let mut members = Vec::new();
+    members_deep(&value, String::new(), &mut members);
+    for (pointer, name, member) in members {
+        if name.ends_with("_hex") {
+            return Err(format!(
+                "{pointer}: raw bytes; jws.* vectors write octets as *_b64u"
+            ));
+        }
+        if name.ends_with("_b64u") && name != "protected_b64u" {
+            let canonical = member
+                .as_str()
+                .is_some_and(|s| b64url_decode(s).is_ok_and(|b| b64url_encode(&b) == s));
+            if !canonical {
+                return Err(format!("{pointer}: not canonical base64url"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The vectors the binding-readiness rule covers: everything under a
+/// `jws-*` directory or a `third_party/**/jws/` directory, and any jws.*
+/// vector elsewhere.
+fn is_jws_vector(relative: &Path, text: &str) -> bool {
+    let parts: Vec<String> = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let jws_dir = parts.first().is_some_and(|first| first.starts_with("jws-"));
+    let third_party_jws = parts.first().is_some_and(|first| first == "third_party")
+        && parts[..parts.len() - 1].iter().any(|part| part == "jws");
+    let jws_operation = json::parse(text.as_bytes()).is_ok_and(|v| {
+        v.get("operation")
+            .and_then(Value::as_str)
+            .is_some_and(|op| op.starts_with("jws."))
+    });
+    jws_dir || third_party_jws || jws_operation
+}
+
+/// Every JWS vector is binding-ready (see [`binding_ready`]).
+#[test]
+fn jws_vectors_are_binding_ready() {
+    let dir = conformance_dir().join("vectors");
+    let (mut files, mut failures) = (Vec::new(), Vec::new());
+    collect(&dir, &mut files, &mut failures);
+    let mut checked = 0;
+    for path in files {
+        let relative = path.strip_prefix(&dir).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        if !is_jws_vector(relative, &text) {
+            continue;
+        }
+        checked += 1;
+        if let Err(problem) = binding_ready(&text) {
+            failures.push(format!("{}: {problem}", relative.display()));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "not binding-ready:\n  {}",
+        failures.join("\n  ")
+    );
+    assert!(checked >= 19, "only {checked} JWS vector files found");
+}
+
+/// The readiness check rejects what a binding could misread, and nothing
+/// else; the vector selection matches the documented directories.
+#[test]
+fn binding_readiness_check_works() {
+    for ok in [
+        r#"{"a":0,"b":16,"c":-1,"d":4294967295,"e":[1,2]}"#,
+        r#"{"s":"1.5e3 inside a string","t":"a\"1.0\\","n":7}"#,
+        r#"{"payload_b64u":"Zm9v","protected_b64u":"Zh","x":{"detached_payload_b64u":""}}"#,
+        r#"{"detached":false,"ok":true,"v":null,"n":12}"#,
+    ] {
+        assert_eq!(binding_ready(ok), Ok(()), "{ok}");
+    }
+    for (bad, needle) in [
+        (r#"{"n":1.0}"#, "1.0"),
+        (r#"{"n":1e3}"#, "1e3"),
+        (r#"{"n":0.5}"#, "0.5"),
+        (r#"{"n":-0.0}"#, "-0.0"),
+        (r#"{"n":4294967296}"#, "4294967296"),
+        (r#"{"n":-4294967296}"#, "-4294967296"),
+        (r#"{"a":[{"n":9007199254740993}]}"#, "9007199254740993"),
+        (r#"{"input":{"bytes_hex":"00"}}"#, "/input/bytes_hex"),
+        (r#"{"payload_b64u":"Zh"}"#, "/payload_b64u"),
+        (
+            r#"{"x":[{"detached_payload_b64u":"Zg=="}]}"#,
+            "/x/0/detached_payload_b64u",
+        ),
+    ] {
+        let problem = binding_ready(bad).unwrap_err();
+        assert!(problem.contains(needle), "{bad}: {problem}");
+    }
+    let verify = r#"{"operation":"jws.verify"}"#;
+    let other = r#"{"operation":"b64url.encode"}"#;
+    for (path, text, covered) in [
+        ("jws-rfc7515/a.json", other, true),
+        ("jws-negative/deep/a.json", other, true),
+        ("third_party/rfc7520/jws/a.json", other, true),
+        ("third_party/rfc7520/jwe/a.json", other, false),
+        ("third_party/jws.json", other, false),
+        ("b64url/a.json", other, false),
+        ("binding-surface/a.json", verify, true),
+    ] {
+        assert_eq!(is_jws_vector(Path::new(path), text), covered, "{path}");
+    }
+}
+
 /// A temporary directory, removed on drop.
 struct TempDir(PathBuf);
 
