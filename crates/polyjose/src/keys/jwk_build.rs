@@ -137,10 +137,6 @@ pub(crate) fn rsa_public_jwk(n: &[u8], e: &[u8], alg: Option<&str>) -> Result<Jw
 /// [`Error::KeyAlgorithmMismatch`](crate::Error::KeyAlgorithmMismatch) for an
 /// `alg` that does not take an `oct` key; whatever [`Jwk::from_object`]
 /// returns.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by key generation (generate.rs)")
-)]
 pub(crate) fn oct_jwk(k: &[u8], alg: Option<&str>) -> Result<Jwk> {
     let mut object = Object::new();
     object.insert("kty", "oct");
