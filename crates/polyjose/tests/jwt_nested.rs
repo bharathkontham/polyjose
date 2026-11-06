@@ -26,10 +26,11 @@ mod common;
 use polyjose::Error;
 use polyjose::header::Header;
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
-use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient};
+use polyjose::jwe::{DecryptPolicy, Encryptor, JsonForm, Recipient};
 use polyjose::jwk::{EcCurve, Jwk, OkpCurve};
+use polyjose::jws::{ProtectedHeader, SignOptions, sign_compact};
 use polyjose::jwt::{
-    self, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy, VerifiedNestedJwt,
+    self, Audience, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy, VerifiedNestedJwt,
 };
 use polyjose::keys::{KeySpec, generate};
 use polyjose::util::{b64url_decode, b64url_encode};
@@ -59,6 +60,7 @@ const NOW: i64 = EXP - 60;
 const LATE: i64 = EXP + 60;
 
 const ISSUER: &str = "https://issuer.example";
+const AUDIENCE: &str = "https://api.example";
 
 const SIGNING: [SigningAlg; 2] = [SigningAlg::ES256, SigningAlg::EdDSA];
 
@@ -116,6 +118,13 @@ fn signed(claims: &Claims, alg: SigningAlg, key: &Jwk) -> String {
 /// An ES256 inner JWT over [`claims`].
 fn inner_es256() -> String {
     signed(&claims(), SigningAlg::ES256, &es256_key())
+}
+
+/// `jws::sign_compact` over `payload` with the protected header given as
+/// JSON text (signed as written, RFC 7515 §5.1 step 5).
+fn sign_raw(header_json: &str, payload: &[u8], key: &Jwk) -> String {
+    let protected = ProtectedHeader::from_encoded(&b64url_encode(header_json.as_bytes())).unwrap();
+    sign_compact(&protected, payload, key, &SignOptions::new()).unwrap()
 }
 
 /// An encryptor for one recipient, with `protected` as its extra
@@ -383,4 +392,396 @@ fn an_inner_alg_none_is_algorithm_not_allowed() {
         open(&nest(&inner)),
         Err(Error::AlgorithmNotAllowed)
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Shape and typing (ADR 0027 §6–§7)
+// ---------------------------------------------------------------------------
+
+/// RFC 7519 §5.2: the outer `cty` "MUST be present" and be `JWT`.
+/// Without it the JWE is an encrypt-only JWT (not supported in 0.1.0),
+/// with another value it is not a nested JWT: `InvalidHeader` either way.
+#[test]
+fn an_outer_cty_other_than_jwt_is_invalid_header() {
+    let inner = inner_es256();
+    for protected in [
+        r#"{}"#,
+        r#"{"cty":"JOSE"}"#,
+        r#"{"cty":"at+jwt"}"#,
+        r#"{"cty":"JWT "}"#,
+        r#"{"cty":"text/JWT"}"#,
+    ] {
+        let token = nest_raw(&inner, protected);
+        assert!(
+            matches!(open(&token), Err(Error::InvalidHeader(_))),
+            "{protected}"
+        );
+    }
+    // The claims as the plaintext: an encrypt-only JWT.
+    let encrypt_only = nest_raw(&claims().to_json(), r#"{}"#);
+    assert!(matches!(open(&encrypt_only), Err(Error::InvalidHeader(_))));
+}
+
+/// RFC 7515 §4.1.10 (ADR 0027 §5, §7): `cty` compares as a media type, so
+/// `jwt` and `application/JWT` are `JWT`.
+#[test]
+fn an_outer_cty_compares_as_a_media_type() {
+    let inner = inner_es256();
+    for cty in ["JWT", "jwt", "application/JWT", "Application/jwt"] {
+        let token = nest_raw(&inner, &format!(r#"{{"cty":"{cty}"}}"#));
+        let v = open(&token).unwrap_or_else(|e| panic!("{cty}: {e}"));
+        assert_eq!(v.outer_header.cty.as_deref(), Some(cty));
+    }
+}
+
+/// ADR 0027 §7, depth 1: an inner plaintext that is a JWE (five parts) is
+/// `InvalidFormat`, as is one that is no JWS at all.
+#[test]
+fn an_inner_jwe_is_invalid_format() {
+    let doubly_nested = nest(&nest(&inner_es256()));
+    assert!(matches!(open(&doubly_nested), Err(Error::InvalidFormat(_))));
+    for plaintext in ["", "a.b", "a.b.c.d", "{\"iss\":\"x\"}"] {
+        assert!(
+            matches!(open(&nest(plaintext)), Err(Error::InvalidFormat(_))),
+            "{plaintext:?}"
+        );
+    }
+}
+
+/// ADR 0027 §5, §7: an inner JWS whose own `cty` is `JWT` would nest a
+/// JWS in a JWS (depth 2), which is not supported: `InvalidHeader`.
+#[test]
+fn an_inner_jws_with_cty_jwt_is_invalid_header() {
+    let payload = claims().to_json();
+    for cty in ["JWT", "jwt", "application/jwt"] {
+        let inner = sign_raw(
+            &format!(r#"{{"alg":"ES256","cty":"{cty}"}}"#),
+            payload.as_bytes(),
+            &es256_key(),
+        );
+        assert!(
+            matches!(open(&nest(&inner)), Err(Error::InvalidHeader(_))),
+            "{cty}"
+        );
+    }
+}
+
+/// ADR 0027 §7: signed and nested JWTs have separate entry points. A
+/// three-part signed JWT given to `decrypt_nested` is `InvalidFormat`, and
+/// a nested JWT given to `jwt::verify` is `InvalidFormat`.
+#[test]
+fn signed_and_nested_jwts_have_separate_entry_points() {
+    let inner = inner_es256();
+    assert!(matches!(open(&inner), Err(Error::InvalidFormat(_))));
+    let clock = FixedClock(NOW);
+    let policy = Policy::new(&clock, &SIGNING).unwrap();
+    let key = public(&es256_key());
+    assert!(matches!(
+        jwt::verify(&nest(&inner), Keys::One(&key), &policy),
+        Err(Error::InvalidFormat(_))
+    ));
+}
+
+/// The seven claims RFC 9068 §2.2 requires of a JWT access token.
+fn access_token_claims() -> Claims {
+    let mut c = claims();
+    c.aud = Some(Audience::One(AUDIENCE.into()));
+    c.insert("client_id", "s6BhdRkqt3").unwrap();
+    c.iat = NumericDate::from_secs(EXP - 1_000);
+    c.jti = Some("dbe39bf3a3ba4238a513f51d6e1691c4".into());
+    c
+}
+
+/// RFC 8725 §3.11: explicit typing applies to the inner JWT; the outer
+/// `typ`, if present, must satisfy the same `typ` policy (ADR 0027 §7).
+/// Under `Policy::access_token` (RFC 9068 §4), an inner `typ: at+jwt`
+/// with no outer `typ` passes, an outer `secevent+jwt` (or `JWT`) does
+/// not, and an untyped inner token does not either.
+#[test]
+fn explicit_typing_is_checked_on_the_inner_jws() {
+    let key = es256_key();
+    let at = jwt::sign(
+        &access_token_claims(),
+        &IssueOptions::new(SigningAlg::ES256).access_token(),
+        &key,
+    )
+    .unwrap();
+    let generic = signed(&access_token_claims(), SigningAlg::ES256, &key);
+    let clock = FixedClock(NOW);
+    let policy = Policy::access_token(&clock, &SIGNING, &[ISSUER], &[AUDIENCE]).unwrap();
+    let verifier = public(&key);
+    let run = |token: &str| {
+        jwt::decrypt_nested(
+            token,
+            &jwk(KEK),
+            &decrypt_policy(),
+            Keys::One(&verifier),
+            &policy,
+        )
+    };
+    let v = run(&nest(&at)).unwrap();
+    assert_eq!(v.inner.header.typ.as_deref(), Some("at+jwt"));
+    assert_eq!(v.outer_header.typ, None);
+    assert_eq!(
+        code(run(&nest_raw(&at, r#"{"cty":"JWT","typ":"at+jwt"}"#))),
+        "ok"
+    );
+    for outer in [
+        r#"{"cty":"JWT","typ":"secevent+jwt"}"#,
+        r#"{"cty":"JWT","typ":"JWT"}"#,
+    ] {
+        assert!(
+            matches!(run(&nest_raw(&at, outer)), Err(Error::InvalidHeader(_))),
+            "{outer}"
+        );
+    }
+    // The outer typ does not stand in for the inner one.
+    assert!(matches!(
+        run(&nest_raw(&generic, r#"{"cty":"JWT","typ":"at+jwt"}"#)),
+        Err(Error::InvalidHeader(_))
+    ));
+}
+
+/// ADR 0027 §7 under the default `typ` mode: an outer `typ` must be absent
+/// or `JWT`, like the inner one.
+#[test]
+fn the_default_typ_mode_applies_to_the_outer_typ() {
+    let inner = inner_es256();
+    for ok in [
+        r#"{"cty":"JWT","typ":"JWT"}"#,
+        r#"{"cty":"JWT","typ":"jwt"}"#,
+    ] {
+        assert_eq!(code(open(&nest_raw(&inner, ok))), "ok", "{ok}");
+    }
+    let token = nest_raw(&inner, r#"{"cty":"JWT","typ":"secevent+jwt"}"#);
+    assert!(matches!(open(&token), Err(Error::InvalidHeader(_))));
+}
+
+// ---------------------------------------------------------------------------
+// Replicated claims (RFC 7519 §5.3)
+// ---------------------------------------------------------------------------
+
+/// `inner` encrypted with `cty: JWT` and `members` added to the outer
+/// protected header, as replicated claims.
+fn nest_with(inner: &str, members: &str) -> String {
+    nest_raw(inner, &format!(r#"{{"cty":"JWT",{members}}}"#))
+}
+
+/// RFC 7519 §5.3: replicated `iss`, `sub` and `aud` must be identical to
+/// the inner claims (ADR 0027 §7: JSON-equal).
+#[test]
+fn replicated_claims_equal_to_the_inner_ones_pass() {
+    let mut c = claims();
+    c.aud = Some(Audience::One("a".into()));
+    let inner = signed(&c, SigningAlg::ES256, &es256_key());
+    let clock = FixedClock(NOW);
+    let policy = Policy::new(&clock, &SIGNING).unwrap().audience("a");
+    let key = public(&es256_key());
+    let run = |token: &str| {
+        jwt::decrypt_nested(
+            token,
+            &jwk(KEK),
+            &decrypt_policy(),
+            Keys::One(&key),
+            &policy,
+        )
+    };
+    for members in [
+        format!(r#""iss":"{ISSUER}""#),
+        r#""sub":"alice""#.to_owned(),
+        r#""aud":"a""#.to_owned(),
+        format!(r#""iss":"{ISSUER}","sub":"alice","aud":"a""#),
+    ] {
+        let v = run(&nest_with(&inner, &members)).unwrap_or_else(|e| panic!("{members}: {e}"));
+        assert!(v.outer_header.contains(members.split('"').nth(1).unwrap()));
+    }
+    // A Many audience matches the same array.
+    let mut many = claims();
+    many.aud = Some(Audience::Many(vec!["a".into(), "b".into()]));
+    let inner = signed(&many, SigningAlg::ES256, &es256_key());
+    assert_eq!(code(run(&nest_with(&inner, r#""aud":["a","b"]"#))), "ok");
+}
+
+/// RFC 7519 §5.3: a replicated claim that differs is `InvalidClaim`. The
+/// form matters (ADR 0027 §7: JSON equality): an outer `aud: ["a"]` does
+/// not equal an inner `aud: "a"`, and an outer claim the inner Claims Set
+/// lacks is a mismatch too.
+#[test]
+fn replicated_claims_that_differ_are_invalid_claim() {
+    let mut c = claims();
+    c.aud = Some(Audience::One("a".into()));
+    let inner = signed(&c, SigningAlg::ES256, &es256_key());
+    let clock = FixedClock(NOW);
+    let policy = Policy::new(&clock, &SIGNING).unwrap().audience("a");
+    let key = public(&es256_key());
+    let run = |token: &str| {
+        jwt::decrypt_nested(
+            token,
+            &jwk(KEK),
+            &decrypt_policy(),
+            Keys::One(&key),
+            &policy,
+        )
+    };
+    let cases = [
+        (r#""iss":"https://evil.example""#, "iss"),
+        (r#""iss":"HTTPS://ISSUER.EXAMPLE""#, "iss"),
+        (r#""sub":"mallory""#, "sub"),
+        (r#""aud":["a"]"#, "aud"),
+        (r#""aud":"b""#, "aud"),
+        (r#""aud":1"#, "aud"),
+    ];
+    for (members, name) in cases {
+        assert_eq!(
+            run(&nest_with(&inner, members)),
+            Err(Error::InvalidClaim(name)),
+            "{members}"
+        );
+    }
+    // The inner token has no `jti`; a replicated `jti` is not checked.
+    assert_eq!(code(run(&nest_with(&inner, r#""jti":"x""#))), "ok");
+    // An outer `sub` with no inner `sub`.
+    let mut no_sub = c.clone();
+    no_sub.sub = None;
+    let inner = signed(&no_sub, SigningAlg::ES256, &es256_key());
+    assert_eq!(
+        run(&nest_with(&inner, r#""sub":"alice""#)),
+        Err(Error::InvalidClaim("sub"))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Precedence (ADR 0027 §9)
+// ---------------------------------------------------------------------------
+
+/// ADR 0027 §9: the JWE errors come first, then N1, then the inner steps,
+/// then N2.
+#[test]
+fn the_layers_fail_in_the_adr_0027_order() {
+    let other = generate(KeySpec::Ec(EcCurve::P256)).unwrap();
+    let bad_signature = signed(&claims(), SigningAlg::ES256, &other);
+    // Outer tampered and inner signature invalid: the JWE decides.
+    assert_eq!(
+        open(&flip_tag(&nest(&bad_signature))),
+        Err(Error::DecryptionFailed)
+    );
+    // Outer cty missing and inner expired: N1 decides.
+    let no_cty = nest_raw(&inner_es256(), r#"{}"#);
+    assert!(matches!(
+        open_at(&no_cty, LATE),
+        Err(Error::InvalidHeader(_))
+    ));
+    // Outer cty missing and inner signature invalid: N1 decides.
+    assert!(matches!(
+        open(&nest_raw(&bad_signature, r#"{}"#)),
+        Err(Error::InvalidHeader(_))
+    ));
+    // A replicated claim that differs and the inner expired: the inner
+    // claims (J5) come before N2.
+    let mismatch = nest_with(&inner_es256(), r#""iss":"https://evil.example""#);
+    assert_eq!(open_at(&mismatch, LATE), Err(Error::TokenExpired));
+    assert_eq!(open_at(&mismatch, NOW), Err(Error::InvalidClaim("iss")));
+    // A replicated claim that differs and the inner signature invalid:
+    // the signature (step 9) comes first.
+    let mismatch = nest_with(&bad_signature, r#""iss":"https://evil.example""#);
+    assert_eq!(code(open(&mismatch)), "InvalidSignature");
+    // The outer enc not allowed and the outer cty missing: the JWE
+    // contract runs before N1.
+    let only_a256gcm = DecryptPolicy::new(&[A::A128KW], &[E::A256GCM]).unwrap();
+    let clock = FixedClock(NOW);
+    let policy = Policy::new(&clock, &SIGNING).unwrap();
+    let key = public(&es256_key());
+    assert!(matches!(
+        jwt::decrypt_nested(&no_cty, &jwk(KEK), &only_a256gcm, Keys::One(&key), &policy),
+        Err(Error::AlgorithmNotAllowed)
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Compact only; the outer typing from the protected header (ADR 0050 §3)
+// ---------------------------------------------------------------------------
+
+/// ADR 0027 §6, ADR 0050 §3: a JWE JSON Serialization, flattened or
+/// general, is `InvalidFormat`, even a valid one whose `cty: JWT` is
+/// protected, and one whose `cty: JWT` is only in the shared unprotected
+/// header (where anyone could have put it).
+#[test]
+fn a_json_jwe_is_invalid_format() {
+    let inner = inner_es256();
+    let recipient = || Recipient::new(A::A128KW, &jwk(KEK));
+    let protected_cty = || encryptor(E::A128GCM, recipient(), header(r#"{"cty":"JWT"}"#));
+    let unprotected_cty = || {
+        Encryptor::new(E::A128GCM)
+            .recipient(recipient())
+            .shared_unprotected_header(header(r#"{"cty":"JWT"}"#))
+    };
+    for form in [JsonForm::Flattened, JsonForm::General] {
+        for e in [protected_cty(), unprotected_cty()] {
+            let jwe = e.encrypt_json(inner.as_bytes(), form).unwrap();
+            assert!(
+                matches!(open(&jwe), Err(Error::InvalidFormat(_))),
+                "{form:?} {jwe}"
+            );
+            // With surrounding JSON whitespace too.
+            let spaced = format!("\r\n {jwe}");
+            assert!(matches!(open(&spaced), Err(Error::InvalidFormat(_))));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Secrets (ADR 0049 §4)
+// ---------------------------------------------------------------------------
+
+/// ADR 0049 §4, ADR 0027 §7: no part of the decrypted inner token is in
+/// the result's `Debug` or in any error. The marker is a claim value, so
+/// it reaches the output only if the inner token or its payload leaks
+/// (`Claims`' `Debug` redacts strings).
+#[test]
+fn the_inner_token_never_appears_in_debug_or_errors() {
+    const MARKER: &str = "MARKER-7c1f2b9e-secret-claim-value";
+    let mut c = claims();
+    c.insert("secret", MARKER).unwrap();
+    let inner = signed(&c, SigningAlg::ES256, &es256_key());
+    let payload_b64 = inner.split('.').nth(1).unwrap().to_owned();
+    let signature_b64 = inner.split('.').nth(2).unwrap().to_owned();
+    let leaks = |text: &str| {
+        text.contains(MARKER)
+            || text.contains(&inner)
+            || text.contains(&payload_b64)
+            || text.contains(&signature_b64)
+    };
+
+    let v = open(&nest(&inner)).unwrap();
+    assert_eq!(
+        v.inner.claims.get("secret").and_then(|m| m.as_str()),
+        Some(MARKER)
+    );
+    let debug = format!("{v:?} {v:#?}");
+    assert!(!leaks(&debug), "{debug}");
+
+    let other = generate(KeySpec::Ec(EcCurve::P256)).unwrap();
+    let errors = [
+        // N2
+        open(&nest_with(&inner, r#""iss":"https://evil.example""#)),
+        // J5
+        open_at(&nest(&inner), LATE),
+        // step 9
+        open(&nest(&signed(&c, SigningAlg::ES256, &other))),
+        // J1
+        open(&nest(&sign_raw(
+            r#"{"alg":"ES256","cty":"JWT"}"#,
+            c.to_json().as_bytes(),
+            &es256_key(),
+        ))),
+        // N1
+        open(&nest_raw(&inner, r#"{}"#)),
+        // The JWE
+        open(&flip_tag(&nest(&inner))),
+    ];
+    for r in errors {
+        let e = r.unwrap_err();
+        let text = format!("{e} {e:?} {}", e.code());
+        assert!(!leaks(&text), "{text}");
+    }
 }
