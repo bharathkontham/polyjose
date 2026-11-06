@@ -16,13 +16,13 @@
 //! It is a unit-test module, not an integration test, because the loader
 //! (`crate::test_support::wycheproof`) is `cfg(test)` only.
 
-use crate::Result;
 use crate::json::Object;
 use crate::jwa::SigningAlg;
 use crate::jwk::{EcCurve, Jwk, KeyAlg, KeyMaterial};
 use crate::test_support::wycheproof::{self, Deviation, Expected, Group, Outcome, Suite, Test};
+use crate::{Error, Result};
 
-use super::{Verified, VerifyOptions, verify_compact, verify_json};
+use super::{ProtectedHeader, Verified, VerifyOptions, verify_compact, verify_json};
 
 /// The vendored suite.
 const SUITE: &str = "json_web_signature";
@@ -330,4 +330,71 @@ fn json_serialization_case_through_verify_json() {
     assert_eq!(verified.alg, SigningAlg::HS256);
     assert_eq!(verified.signature_index, 0);
     assert!(verified.unprotected.unwrap().contains("unknown"));
+}
+
+#[test]
+fn private_jwks_are_refused_for_rsa_and_verify_like_the_public_ones() {
+    // ADR 0021 §2: an RSA private JWK fails to import with
+    // UnsupportedAlgorithm. An EC or oct private JWK verifies every test
+    // exactly as the group's verification JWK does (RFC 7517 §4.3: a
+    // private key may verify; `key_ops`, when present, decides).
+    let suite = wycheproof::load(SUITE);
+    let (mut rsa, mut others) = (0, 0);
+    for group in &suite.groups {
+        let keys = group.jws_keys.as_ref().unwrap();
+        let private = Jwk::from_json(keys.private.as_bytes());
+        let public = verification_key(group);
+        if let KeyMaterial::Rsa(_) = public.material() {
+            assert_eq!(private.map(drop), Err(Error::UnsupportedAlgorithm));
+            rsa += 1;
+            continue;
+        }
+        let private = private.unwrap();
+        let allowed = [group_alg(&public)];
+        let opts = VerifyOptions::new(&allowed).unwrap();
+        for test in &group.tests {
+            let with_private = verify_compact(test.jws(), &private, &opts).map(|v| v.payload);
+            let with_public = verify_compact(test.jws(), &public, &opts).map(|v| v.payload);
+            assert_eq!(with_private, with_public, "tcId {}", test.tc_id);
+        }
+        others += 1;
+    }
+    assert_eq!((rsa, others), (13, 10));
+}
+
+#[test]
+fn allowing_the_header_alg_still_fails_key_binding() {
+    // RFC 8725 §2.1, §3.1, ADR 0026 §2 step 8: the allow-list is not the
+    // only guard. Where the header alg is not the group's, allowing exactly
+    // the header's alg moves the failure to key binding: an EC key never
+    // verifies HS256 (tcId 31), a PS512 key never RS*, PS256 or PS384
+    // (332-340), and the RFC 7520 key labelled PS256 never PS384 (346,
+    // 350). `none`, in any case, can never be allowed (341-344).
+    let suite = wycheproof::load(SUITE);
+    let header_alg = |test: &Test| {
+        let protected = test.jws().split('.').next().unwrap();
+        let header = ProtectedHeader::from_encoded(protected).unwrap();
+        SigningAlg::from(header.header().alg.as_deref().unwrap())
+    };
+    for id in [31, 332, 334, 336, 338, 340, 346, 350] {
+        let (group, test) = find(&suite, id);
+        let key = verification_key(group);
+        let alg = header_alg(test);
+        assert_ne!(alg, group_alg(&key), "tcId {id}");
+        let allowed = [alg];
+        let result = verify_compact(test.jws(), &key, &VerifyOptions::new(&allowed).unwrap());
+        assert_eq!(
+            result.map(drop),
+            Err(Error::KeyAlgorithmMismatch),
+            "tcId {id}"
+        );
+    }
+    for id in 341..=344 {
+        let alg = header_alg(find(&suite, id).1);
+        assert_eq!(
+            VerifyOptions::new(&[alg]).map(drop),
+            Err(Error::AlgorithmNotAllowed),
+            "tcId {id}"
+        );
+    }
 }
