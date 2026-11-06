@@ -109,7 +109,6 @@ pub(crate) fn to_pkcs1(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
 mod tests {
     use super::super::der::fixtures;
     use super::super::pem;
-    use super::super::spki;
     use super::super::types::{AlgId, Label};
     use super::*;
     use crate::jwk::KeyMaterial;
@@ -269,6 +268,74 @@ mod tests {
             );
             let jwk = import(&der, spki).unwrap();
             assert_same_key(&jwk, &jwk_fixture(dir, &expected), &file);
+        }
+    }
+
+    fn is_invalid<T>(result: &Result<T>) -> bool {
+        matches!(result, Err(Error::InvalidKey(_)))
+    }
+
+    /// The `InvalidKey` detail of `result`.
+    fn detail<T>(result: Result<T>) -> &'static str {
+        match result {
+            Err(Error::InvalidKey(detail)) => detail,
+            Err(other) => panic!("expected InvalidKey, got {other:?}"),
+            Ok(_) => panic!("expected InvalidKey, got a key"),
+        }
+    }
+
+    #[test]
+    fn malformed_rsa_public_key_vectors_are_invalid() {
+        // N60 rsaEncryption without NULL (RFC 3279 §2.3.1), N61 negative
+        // and N62 non-minimal modulus (X.690 §8.3.2, §8.3.3), N66 an EC
+        // point where the RSAPublicKey belongs (RFC 3279 §2.3.1): the
+        // encoding. N63 e = 1 (RFC 8017 §3.1) and N64 a 1024-bit modulus
+        // (RFC 7518 §3.3, §4.2, ADR 0007): the JWK validation.
+        for id in ["N60", "N61", "N62", "N66"] {
+            assert!(is_invalid(&import_spki(&fixtures::negative(id))), "{id}");
+        }
+        assert_eq!(
+            detail(import_spki(&fixtures::negative("N63"))),
+            "RSA exponent must be odd and greater than 1"
+        );
+        assert_eq!(
+            detail(import_spki(&fixtures::negative("N64"))),
+            "RSA modulus is shorter than 2048 bits"
+        );
+        // N65: a third INTEGER after modulus and publicExponent (RFC 8017
+        // App. A.1.1).
+        assert!(is_invalid(&from_pkcs1(&fixtures::negative("N65"))));
+    }
+
+    #[test]
+    fn rsa1024_public_keys_are_refused_by_the_jwk_validation() {
+        // RFC 7518 §3.3, §4.2 and ADR 0007: at least 2048 bits, enforced by
+        // Jwk::from_object (0001 T05), through both PEM decoders.
+        for (file, spki) in [
+            ("reject-rsa1024-spki.pem", true),
+            ("reject-rsa1024-pkcs1-pub.pem", false),
+        ] {
+            let oracle = fixtures::load("openssl", file);
+            let (_, ours) = pem::decode(&pem_text("openssl", file)).unwrap();
+            assert_eq!(&ours[..], &oracle[..], "{file}");
+            assert_eq!(
+                detail(import(&ours, spki)),
+                "RSA modulus is shorter than 2048 bits",
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_spki_refuses_a_key_of_another_type() {
+        for file in ["ec-p256-spki.der", "ed25519-spki.pem", "x25519-spki.pem"] {
+            let der = fixtures::load("openssl", file);
+            let parts = spki::decode(&der).unwrap();
+            assert_eq!(
+                detail(from_spki(parts)),
+                "the key is not an RSA key",
+                "{file}"
+            );
         }
     }
 }
