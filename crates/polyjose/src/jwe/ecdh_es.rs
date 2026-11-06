@@ -28,12 +28,14 @@
 //! 3. `epk` must be present (RFC 7518 §4.6.1.1: "MUST be present");
 //! 4. it must hold no private key member (RFC 7518 §4.6.1.1: "MUST contain
 //!    only public key parameters");
-//! 5. it must import as a JWK ([`Jwk::from_object`]: exact coordinate
+//! 5. its raw `kty` and `crv` must be those of the recipient's key
+//!    (RFC 7518 §4.6: the agreement is on the recipient's curve; this
+//!    stops the invalid-curve attacks of research.md §4.2). This is
+//!    checked on the JSON object, before import, so a wrong-family or
+//!    wrong-curve `epk` is never decoded as a point (ADR 0050);
+//! 6. it must import as a JWK ([`Jwk::from_object`]: exact coordinate
 //!    lengths, EC points on their curve and not the identity; ADR 0041 §4,
-//!    SP 800-56A r3 §5.6.2.3.4 partial public-key validation);
-//! 6. its `kty` and `crv` must be those of the recipient's key (RFC 7518
-//!    §4.6: the agreement is on the recipient's curve; this stops the
-//!    invalid-curve attacks of research.md §4.2).
+//!    SP 800-56A r3 §5.6.2.3.4 partial public-key validation).
 //!
 //! Only then does the agreement run. For X25519 the one remaining check is
 //! the all-zero shared secret (RFC 7748 §6.1, `ecdh_x25519::agree`); X25519
