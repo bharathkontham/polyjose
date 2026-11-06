@@ -582,4 +582,114 @@ mod tests {
         assert_eq!(claims("{}"), Ok(Claims::new()));
         assert_eq!(claims(" \r\n{ }\t"), Ok(Claims::new()));
     }
+
+    #[test]
+    fn rfc7519_section_3_1_claims_serialize_compactly() {
+        // RFC 7519 §7.1 step 1; ADR 0027 §1.
+        let c = Claims::from_json(RFC7519_3_1_CLAIMS).unwrap();
+        assert_eq!(
+            c.to_json(),
+            r#"{"iss":"joe","exp":1300819380,"http://example.com/is_root":true}"#
+        );
+    }
+
+    #[test]
+    fn registered_claims_come_first_in_the_fixed_order() {
+        // ADR 0027 §1: iss, sub, aud, exp, nbf, iat, jti, then the other
+        // claims in insertion order, whatever order the fields were set in.
+        let mut c = Claims::new();
+        c.insert("z", Value::Null).unwrap();
+        c.jti = Some("j".into());
+        c.iat = NumericDate::from_secs(3);
+        c.insert("a", Value::from("x")).unwrap();
+        c.nbf = NumericDate::from_secs(2);
+        c.exp = NumericDate::from_secs(1);
+        c.aud = Some(Audience::One("au".into()));
+        c.sub = Some("s".into());
+        c.iss = Some("i".into());
+        assert_eq!(
+            c.to_json(),
+            r#"{"iss":"i","sub":"s","aud":"au","exp":1,"nbf":2,"iat":3,"jti":"j","z":null,"a":"x"}"#
+        );
+        // The same order from a parsed Claims Set whose input order differs.
+        let parsed = claims(
+            r#"{"m":1,"jti":"j","iat":3,"nbf":2,"exp":1,"aud":"au","sub":"s","iss":"i","b":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.to_json(),
+            r#"{"iss":"i","sub":"s","aud":"au","exp":1,"nbf":2,"iat":3,"jti":"j","m":1,"b":[]}"#
+        );
+        assert_eq!(Claims::new().to_json(), "{}");
+    }
+
+    #[test]
+    fn audience_keeps_its_form_and_dates_their_value() {
+        // RFC 7519 §4.1.3 (form kept); ADR 0027 §1 (integral dates have no
+        // fraction), §2 (fractions and negatives kept).
+        let json = |c: &Claims| c.to_json();
+        let mut c = Claims::new();
+        c.aud = Some(Audience::One("a".into()));
+        assert_eq!(json(&c), r#"{"aud":"a"}"#);
+        c.aud = Some(Audience::Many(vec!["a".into()]));
+        assert_eq!(json(&c), r#"{"aud":["a"]}"#);
+        c.aud = Some(Audience::Many(vec!["b".into(), "a".into()]));
+        assert_eq!(json(&c), r#"{"aud":["b","a"]}"#);
+        c.aud = Some(Audience::Many(Vec::new()));
+        assert_eq!(json(&c), r#"{"aud":[]}"#);
+        for (input, output) in [
+            (r#"{"exp":1e3}"#, r#"{"exp":1000}"#),
+            (r#"{"exp":1300819380.0}"#, r#"{"exp":1300819380}"#),
+            (r#"{"nbf":1300819380.25}"#, r#"{"nbf":1300819380.25}"#),
+            (r#"{"iat":-5}"#, r#"{"iat":-5}"#),
+            (r#"{"iat":-0}"#, r#"{"iat":0}"#),
+            (r#"{"exp":9007199254740991}"#, r#"{"exp":9007199254740991}"#),
+        ] {
+            assert_eq!(json(&claims(input).unwrap()), output, "{input}");
+        }
+    }
+
+    #[test]
+    fn strings_are_escaped_minimally() {
+        // RFC 8259 §7, through the crate's writer.
+        let mut c = Claims::new();
+        c.iss = Some("a\"b\\c\n\u{1}é/".into());
+        c.insert("k\"ey", Value::from("v\t")).unwrap();
+        assert_eq!(
+            c.to_json(),
+            "{\"iss\":\"a\\\"b\\\\c\\n\\u0001\u{e9}/\",\"k\\\"ey\":\"v\\t\"}"
+        );
+    }
+
+    #[test]
+    fn parse_of_serialize_is_the_identity() {
+        // ADR 0027 §1: from_json(to_json(c)) == c.
+        let mut built = Claims::new();
+        built.iss = Some("https://issuer.example".into());
+        built.sub = Some(String::new());
+        built.aud = Some(Audience::Many(vec!["x".into(), "y".into()]));
+        built.exp = NumericDate::from_f64(1_300_819_380.5);
+        built.nbf = NumericDate::from_secs(-1);
+        built.iat = NumericDate::from_secs(0);
+        built.jti = Some("\u{1f600}\u{0}".into());
+        built
+            .insert("nested", Value::from(vec![Value::Null, Value::from("s")]))
+            .unwrap();
+        let mut table = vec![Claims::new(), built];
+        for json in [
+            r#"{"iss":"joe","exp":1300819380,"http://example.com/is_root":true}"#,
+            r#"{"aud":"one"}"#,
+            r#"{"aud":[]}"#,
+            r#"{"x":{"b":[1,2.5,{"c":null}],"a":"é"},"exp":1e3,"y":false}"#,
+            r#"{"jti":"😀","sub":"\"","iat":1300819380.25}"#,
+        ] {
+            table.push(claims(json).unwrap());
+        }
+        for c in table {
+            let text = c.to_json();
+            assert_eq!(claims(&text).as_ref(), Ok(&c), "{text}");
+            // Serializing is deterministic: a second round gives the same text.
+            assert_eq!(claims(&text).unwrap().to_json(), text);
+        }
+    }
 }
