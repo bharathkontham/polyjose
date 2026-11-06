@@ -23,6 +23,7 @@ mod api;
 mod der;
 mod ec;
 pub(crate) mod generate;
+mod oid;
 mod okp;
 #[cfg(test)]
 mod oracle_tests;
