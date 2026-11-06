@@ -51,10 +51,13 @@ jobs:
       # stay defined in one place. That file lists every binding target (WASM, Android, iOS,
       # macOS), so this step downloads their standard libraries too. It costs some setup time
       # but keeps CI and local builds on the same toolchain.
+      # llvm-tools gives the toolchain's own llvm-nm and llvm-ar, which scripts/check-rsa-symbols.sh
+      # needs to read polyjose's objects for every target it builds (GNU nm cannot read wasm32).
       - name: Install toolchain (rust-toolchain.toml)
         id: toolchain
         run: |
           rustup toolchain install
+          rustup component add llvm-tools
           rustup show
           cargo --version
 
@@ -124,6 +127,14 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/check-deps.sh
 
+      # The ADR 0021 guard on compiled output (ADR 0049 §1), as in `scripts/test-all.sh rust`, after
+      # the text scan above: builds polyjose (all features) and each binding (host, and the WASM
+      # binding for wasm32), and fails on any RSA private-key, signing or decryption symbol in their
+      # own object code, however the source spelled it. The RUSTSEC-2023-0071 ignore depends on it.
+      - name: RSA public-key only (compiled symbols)
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/check-rsa-symbols.sh
+
       # Enforces ADR 0005: nothing that builds a binding can turn on polyjose's deterministic test
       # RNG, whether through a binding feature (optional ones too), workspace feature unification,
       # or a cfg in rustflags.
@@ -156,11 +167,12 @@ jobs:
           if [ "$found" -eq 0 ]; then echo "::error::no negative tests found (scripts/tests/*/*.sh)"; exit 1; fi
           exit "$failed"
 
-  # Keeps the published `rust-version` honest (ADR 0024): polyjose must build on its MSRV, not
-  # only on the pinned toolchain. One Linux job is enough, because the core has no OS-specific
-  # code, and a separate job keeps the second toolchain (and its build artifacts) out of the
-  # matrix jobs and their cache. `cargo +<version>` bypasses rust-toolchain.toml on purpose, and
-  # the job has no rust-cache step, since that would query (and so install) the pinned toolchain.
+  # Keeps the published `rust-version` honest (ADR 0024 as amended: 1.89 since 0003 Gate 1):
+  # polyjose must build on its MSRV, not only on the pinned toolchain. One Linux job is enough,
+  # because the core has no OS-specific code, and a separate job keeps the second toolchain (and
+  # its build artifacts) out of the matrix jobs and their cache. `cargo +<version>` bypasses
+  # rust-toolchain.toml on purpose, and the job has no rust-cache step, since that would query (and
+  # so install) the pinned toolchain.
   msrv:
     name: msrv
     runs-on: ubuntu-latest

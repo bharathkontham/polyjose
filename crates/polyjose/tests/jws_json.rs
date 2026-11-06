@@ -1,8 +1,10 @@
 //! T05 (tester): the JWS JSON Serialization through the public API only
 //! (RFC 7515 §7.2, App. F; RFC 7797 §3, §5.3; ADR 0026 §1-§3, §7;
-//! ADR 0041 §1). Every case fails before the signature check (step 9) or
-//! only asserts "not this error", so it stays valid while the algorithm
-//! families (T06-T09) are stubs and after they land.
+//! ADR 0041 §1). Each rejected case asserts its exact error code, most of
+//! them from a step before the signature check (step 9). Each accepted case
+//! carries a real HS256 signature and asserts the verified `alg`,
+//! `signature_index` and payload, with the all-zero tag of the same shape
+//! failing as `InvalidSignature` (F06).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
@@ -10,7 +12,8 @@ use polyjose::header::Header;
 use polyjose::jwa::SigningAlg;
 use polyjose::jwk::Jwk;
 use polyjose::jws::{
-    ProtectedHeader, SignOptions, Signer, VerifyOptions, sign_flattened, sign_general, verify_json,
+    ProtectedHeader, SignOptions, Signer, Verified, VerifyOptions, sign_flattened, sign_general,
+    verify_json,
 };
 
 const MARKER_K: &str = "TUFSS0VSc2VjcmV0TUFSS0VSc2VjcmV0TUFSS0VSc2VjcmV0MTI";
@@ -50,6 +53,50 @@ const F: &str = r#"{"alg":"HS256","b64":false,"crit":["b64"]}"#;
 
 fn sigobj(protected: &str) -> String {
     format!(r#"{{"protected":"{}","signature":"{S}"}}"#, p(protected))
+}
+
+/// The JWS Payload whose base64url is the `"AA"` used throughout.
+const AA: &[u8] = &[0];
+
+/// A real HS256 signature with `key()` over `payload` (RFC 7515 §5.1,
+/// RFC 7518 §3.2), base64url. With `Some(json)` the protected header is
+/// exactly `p(json)`; with `None` the header is an unprotected
+/// `{"alg":"HS256"}` only and the signing input starts with an empty
+/// string (RFC 7515 §5.1 step 6). Taken from a detached `sign_flattened`,
+/// whose signing input is the same as attached (RFC 7515 Appendix F), so
+/// the caller can place it in any hand-built JSON shape.
+fn real_sig(protected: Option<&str>, payload: &[u8]) -> String {
+    let k = key();
+    let signer = match protected {
+        Some(json) => Signer::new(&k).protected(ProtectedHeader::from_encoded(&p(json)).unwrap()),
+        None => {
+            let mut h = Header::new();
+            h.alg = Some("HS256".into());
+            Signer::new(&k).unprotected(h)
+        }
+    };
+    let jws = sign_flattened(&signer, payload, &SignOptions::new().detached(true)).unwrap();
+    let (_, rest) = jws.split_once(r#""signature":""#).unwrap();
+    rest.split('"').next().unwrap().to_owned()
+}
+
+/// [`sigobj`] with a real signature over `payload` instead of the zero tag.
+fn real(protected: &str, payload: &[u8]) -> String {
+    format!(
+        r#"{{"protected":"{}","signature":"{}"}}"#,
+        p(protected),
+        real_sig(Some(protected), payload)
+    )
+}
+
+/// `jws` verifies under `o` (RFC 7515 §5.2, §7.2) as HS256 with `payload`,
+/// by the signature at `index` (ADR 0026 §3: the first that verifies).
+fn assert_verifies(jws: &str, o: &VerifyOptions<'_>, payload: &[u8], index: usize) -> Verified {
+    let v = verify_json(jws, &key(), o).unwrap_or_else(|e| panic!("{}: {jws}", e.code()));
+    assert_eq!(v.alg, SigningAlg::HS256, "{jws}");
+    assert_eq!(v.signature_index, index, "{jws}");
+    assert_eq!(*v.payload, payload, "{jws}");
+    v
 }
 
 fn general(payload: &str, entries: &[String]) -> String {
@@ -136,46 +183,58 @@ fn json_syntax_and_duplicates_are_invalid_json() {
 #[test]
 fn limits() {
     let e = sigobj(HS);
-    let two = general("AA", &[e.clone(), e.clone()]);
-    assert_ne!(code(&two, &opts().max_signatures(2)), "InvalidFormat");
+    let r = real(HS, AA);
+    // the zero tag first, a real one second: index 1 verifies (ADR 0026 §3)
+    let two = general("AA", &[e.clone(), r.clone()]);
+    assert_verifies(&two, &opts().max_signatures(2), AA, 1);
     assert_eq!(code(&two, &opts().max_signatures(1)), "InvalidFormat");
+    let zeros = general("AA", &[e.clone(), e.clone()]);
+    assert_eq!(code(&zeros, &opts().max_signatures(2)), "InvalidSignature");
     // flattened is one signature whatever max_signatures says (documented)
     let flat = format!(
-        r#"{{"payload":"AA","protected":"{}","signature":"{S}"}}"#,
-        p(HS)
+        r#"{{"payload":"AA","protected":"{}","signature":"{}"}}"#,
+        p(HS),
+        real_sig(Some(HS), AA)
     );
-    assert_ne!(code(&flat, &opts().max_signatures(1)), "InvalidFormat");
+    assert_verifies(&flat, &opts().max_signatures(1), AA, 0);
     let n = flat.len();
-    assert_ne!(code(&flat, &opts().max_input_len(n)), "InvalidFormat");
+    assert_verifies(&flat, &opts().max_input_len(n), AA, 0);
     assert_eq!(code(&flat, &opts().max_input_len(n - 1)), "InvalidFormat");
     // a configured limit above the 1 MiB JSON default holds
     let big = "a".repeat((1 << 20) + 10);
     let flat = format!(
-        r#"{{"payload":"AA","x":"{big}","protected":"{}","signature":"{S}"}}"#,
-        p(HS)
+        r#"{{"payload":"AA","x":"{big}","protected":"{}","signature":"{}"}}"#,
+        p(HS),
+        real_sig(Some(HS), AA)
     );
     assert_eq!(code(&flat, &opts()), "InvalidFormat");
-    assert_ne!(code(&flat, &opts().max_input_len(2 << 20)), "InvalidFormat");
+    assert_verifies(&flat, &opts().max_input_len(2 << 20), AA, 0);
     // the default max_signatures is 16
     let many = general("AA", &vec![e.clone(); 17]);
     assert_eq!(code(&many, &opts()), "InvalidFormat");
-    let ok16 = general("AA", &vec![e; 16]);
-    assert_ne!(code(&ok16, &opts()), "InvalidFormat");
+    let mut sixteen = vec![e.clone(); 15];
+    sixteen.push(r);
+    assert_verifies(&general("AA", &sixteen), &opts(), AA, 15);
+    let zeros16 = general("AA", &vec![e; 16]);
+    assert_eq!(code(&zeros16, &opts()), "InvalidSignature");
 }
 
 #[test]
 fn unknown_members_are_ignored() {
-    let flat = format!(
-        r#"{{"payload":"AA","x":{{"y":[1,2]}},"protected":"{}","z":1,"signature":"{S}"}}"#,
-        p(HS)
-    );
-    assert_ne!(code(&flat, &opts()), "InvalidFormat");
-    assert_ne!(code(&flat, &opts()), "InvalidJson");
+    let shape = |sig: &str| {
+        format!(
+            r#"{{"payload":"AA","x":{{"y":[1,2]}},"protected":"{}","z":1,"signature":"{sig}"}}"#,
+            p(HS)
+        )
+    };
+    assert_verifies(&shape(&real_sig(Some(HS), AA)), &opts(), AA, 0);
+    // with the zero tag only step 9 fails: x and z were ignored
+    assert_eq!(code(&shape(S), &opts()), "InvalidSignature");
 }
 
 #[test]
 fn header_rules_across_objects() {
-    let sig = |prot: Option<&str>, hdr: Option<&str>| {
+    let sig = |prot: Option<&str>, hdr: Option<&str>, signature: &str| {
         let mut m = Vec::new();
         if let Some(x) = prot {
             m.push(format!(r#""protected":"{}""#, p(x)));
@@ -183,7 +242,7 @@ fn header_rules_across_objects() {
         if let Some(x) = hdr {
             m.push(format!(r#""header":{x}"#));
         }
-        m.push(format!(r#""signature":"{S}""#));
+        m.push(format!(r#""signature":"{signature}""#));
         format!(r#"{{"payload":"AA",{}}}"#, m.join(","))
     };
     for (prot, hdr) in [
@@ -201,15 +260,17 @@ fn header_rules_across_objects() {
         (Some(r#"{"alg":5}"#), None),                    // type
         (Some(HS), Some(r#"{"kid":5}"#)),                // type in header
     ] {
-        let want = match (prot, hdr) {
-            (None, Some(_)) => "ok-not-header", // alg may live in the unprotected header
-            _ => "InvalidHeader",
-        };
-        let c = code(&sig(prot, hdr), &opts());
-        if want == "InvalidHeader" {
-            assert_eq!(c, "InvalidHeader", "{prot:?} {hdr:?}");
+        let c = code(&sig(prot, hdr, S), &opts());
+        if let (None, Some(_)) = (prot, hdr) {
+            // alg may live in the unprotected header (RFC 7515 §7.2.1): the
+            // zero tag fails only at step 9 and a real signature, over an
+            // empty protected part (RFC 7515 §5.1), verifies.
+            assert_eq!(c, "InvalidSignature", "{prot:?} {hdr:?}");
+            let v = assert_verifies(&sig(prot, hdr, &real_sig(None, AA)), &opts(), AA, 0);
+            assert_eq!(v.protected, None);
+            assert_eq!(v.unprotected.and_then(|h| h.alg).as_deref(), Some("HS256"));
         } else {
-            assert_ne!(c, "InvalidHeader", "{prot:?} {hdr:?}");
+            assert_eq!(c, "InvalidHeader", "{prot:?} {hdr:?}");
         }
     }
     // an unprotected-only alg of "none" is never accepted
@@ -226,11 +287,12 @@ fn b64_mixed_across_signatures_rejects_the_whole_jws() {
     let jws = general("AA", &[f, t]);
     assert_eq!(code(&jws, &opts()), "InvalidHeader");
     // explicit b64:true with b64 absent is still the same encoding
-    let tt = sigobj(r#"{"alg":"HS256","b64":true,"crit":["b64"]}"#);
-    assert_ne!(
-        code(&general("AA", &[sigobj(HS), tt]), &opts()),
-        "InvalidHeader"
-    );
+    // (zero tag first, so index 1 proves the b64:true entry verified)
+    let tt = r#"{"alg":"HS256","b64":true,"crit":["b64"]}"#;
+    let jws = general("AA", &[sigobj(HS), real(tt, AA)]);
+    assert_verifies(&jws, &opts(), AA, 1);
+    let zeros = general("AA", &[sigobj(HS), sigobj(tt)]);
+    assert_eq!(code(&zeros, &opts()), "InvalidSignature");
 }
 
 #[test]
@@ -290,10 +352,14 @@ fn processing_order() {
 #[test]
 fn b64_false_payload_is_not_base64_checked_and_unprotected_b64_does_not_choose() {
     let f = sigobj(F);
-    // payload is a free string under b64:false
-    assert_ne!(
+    // payload is a free string under b64:false (RFC 7797 §5.3): the
+    // octets are the payload; the zero tag fails only at step 9
+    let raw = b"a=+/ x.y";
+    let jws = general("a=+/ x.y", &[real(F, raw)]);
+    assert_verifies(&jws, &opts(), raw, 0);
+    assert_eq!(
         code(&general("a=+/ x.y", std::slice::from_ref(&f)), &opts()),
-        "InvalidBase64"
+        "InvalidSignature"
     );
     // b64:false disagreement beats a bad payload encoding
     let t = sigobj(HS);
@@ -317,23 +383,37 @@ fn detached_rules() {
         p(HS)
     );
     let no_payload = format!(r#"{{"protected":"{}","signature":"{S}"}}"#, p(HS));
+    let detached = |prot: &str, payload: &[u8]| {
+        format!(
+            r#"{{"protected":"{}","signature":"{}"}}"#,
+            p(prot),
+            real_sig(Some(prot), payload)
+        )
+    };
     let d = opts().detached_payload(b"abc");
     assert_eq!(code(&flat, &d), "InvalidFormat");
     assert_eq!(code(&no_payload, &opts()), "InvalidFormat");
-    assert_ne!(code(&no_payload, &d), "InvalidFormat");
+    assert_eq!(code(&no_payload, &d), "InvalidSignature");
+    let abc = detached(HS, b"abc");
+    assert_verifies(&abc, &d, b"abc", 0);
     let empty = opts().detached_payload(b"");
     assert_eq!(code(&flat, &empty), "InvalidFormat");
-    assert_ne!(code(&no_payload, &empty), "InvalidFormat");
+    assert_eq!(code(&no_payload, &empty), "InvalidSignature");
+    assert_verifies(&detached(HS, b""), &empty, b"", 0);
+    // a signature over "abc" is not one over the empty detached payload
+    assert_eq!(code(&abc, &empty), "InvalidSignature");
     // detached general
     let g = format!(r#"{{"signatures":[{}]}}"#, sigobj(HS));
-    assert_ne!(code(&g, &d), "InvalidFormat");
+    assert_eq!(code(&g, &d), "InvalidSignature");
+    assert_eq!(code(&g, &opts()), "InvalidFormat");
+    let g = format!(r#"{{"signatures":[{},{}]}}"#, sigobj(HS), real(HS, b"abc"));
+    assert_verifies(&g, &d, b"abc", 1);
     assert_eq!(code(&g, &opts()), "InvalidFormat");
     // detached bytes need not be UTF-8 (b64:false verify)
+    let raw = [0xff, 0xfe];
     let f = format!(r#"{{"protected":"{}","signature":"{S}"}}"#, p(F));
-    assert_ne!(
-        code(&f, &opts().detached_payload(&[0xff, 0xfe])),
-        "InvalidFormat"
-    );
+    assert_eq!(code(&f, &opts().detached_payload(&raw)), "InvalidSignature");
+    assert_verifies(&detached(F, &raw), &opts().detached_payload(&raw), &raw, 0);
 }
 
 #[test]
@@ -410,9 +490,11 @@ fn sign_public_api_error_rows() {
             .code(),
         "InvalidHeader"
     );
-    // b64:false, non-UTF-8 payload -> InvalidFormat (attached only)
+    // b64:false, non-UTF-8 payload -> InvalidFormat (attached only: it
+    // cannot be a JSON string, RFC 7797 §5.3)
     let s = Signer::new(&k).protected(f);
-    let e = sign_flattened(&s, &[0xff, 0xfe], &SignOptions::new());
-    // may be UnsupportedAlgorithm while HMAC is a stub only if checked before; assert not Ok
-    assert!(e.is_err());
+    assert_eq!(
+        sign_flattened(&s, &[0xff, 0xfe], &SignOptions::new()).map_err(|e| e.code()),
+        Err("InvalidFormat")
+    );
 }
