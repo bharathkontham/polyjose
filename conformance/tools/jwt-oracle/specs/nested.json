@@ -1,0 +1,1149 @@
+{
+  "comment": [
+    "Regeneration (feature 0004 T13). The runner reads one vector per file (ADR 0045, id <path>#0), so each entry's 'file' member names its output under conformance/vectors/jwt/nested/; it is not a vector member and is dropped when splitting.",
+    "1. node conformance/tools/jwt-oracle/gen.mjs conformance/tools/jwt-oracle/specs/nested.json <tmp>/nested.json",
+    "2. node -e 'const fs=require(\"fs\");const o=JSON.parse(fs.readFileSync(process.argv[1]));for(const v of o.vectors){const f=v.file;delete v.file;fs.writeFileSync(\"conformance/vectors/jwt/nested/\"+f,JSON.stringify(v,null,2)+\"\\n\")}' <tmp>/nested.json",
+    "Every JWE (the CEK, IV and ECDH ephemeral key) and every ES256 signature is randomized, so a re-run rewrites every token with different, equally valid bytes: regenerate only on purpose. The two jwt.issue entries build no token and pass through with their key names resolved.",
+    "Expected verdicts are written by hand here (the oracle never decides them). The RFC 7520 §6 and RFC 7519 App. A vectors are not from this spec: see conformance/vectors/jwt/rfc7520-nested/README.md."
+  ],
+  "vectors": [
+    {
+      "file": "es256-dir-a256gcm.json",
+      "source": "RFC 7519 §5.2, §7.2, §11.2; RFC 7518 §4.5",
+      "description": "Nested JWT, sign-then-encrypt: an ES256 inner JWS in a dir + A256GCM compact JWE (cty JWT) under a 256-bit oct key, with separate JWE and JWS allow-lists (RFC 8725 §3.3): valid, with the exact inner claims and the inner alg (ADR 0027 §7)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-32"
+          },
+          "allowed_algs": [
+            "dir"
+          ],
+          "allowed_enc": [
+            "A256GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "iat": 1300819200,
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "dir",
+        "enc": "A256GCM",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "es256-a128kw-a128gcm.json",
+      "source": "RFC 7519 §5.2, §7.2, §11.2; RFC 7518 §4.4",
+      "description": "Nested JWT: an ES256 inner JWS in an A128KW + A128GCM compact JWE (cty JWT): valid, with the exact inner claims (ADR 0027 §7)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "iat": 1300819200,
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "es256-ecdh-es-a128kw-p256.json",
+      "source": "RFC 7519 §5.2, §7.2, §11.2; RFC 7518 §4.6",
+      "description": "Nested JWT: an ES256 inner JWS in an ECDH-ES+A128KW (P-256) + A128GCM compact JWE (cty JWT), decrypted with the recipient's P-256 private key: valid, with the exact inner claims (ADR 0027 §7)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "p256-ecdh"
+          },
+          "allowed_algs": [
+            "ECDH-ES+A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "iat": 1300819200,
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "ECDH-ES+A128KW",
+        "enc": "A128GCM",
+        "key": "p256-ecdh"
+      }
+    },
+    {
+      "file": "outer-cty-lowercase.json",
+      "source": "RFC 7519 §5.2; RFC 7515 §4.1.10",
+      "description": "Outer cty \"jwt\" in lower case: cty is a media type compared case-insensitively (RFC 7515 §4.1.10, ADR 0027 §5), so it equals JWT and the nested JWT is valid (ADR 0027 §7)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "iat": 1300819200,
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "header": {
+          "cty": "jwt"
+        }
+      }
+    },
+    {
+      "file": "outer-iss-replicated-equal.json",
+      "source": "RFC 7519 §5.3",
+      "description": "The outer JWE protected header replicates iss with the same value as the inner Claims Set (RFC 7519 §5.3): valid (ADR 0027 §7)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "iat": 1300819200,
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "header": {
+          "iss": "https://issuer.example"
+        }
+      }
+    },
+    {
+      "file": "inner-at-jwt-access-token.json",
+      "source": "RFC 9068 §2.1, §4; RFC 8725 §3.11",
+      "description": "Explicit typing on the inner JWT (RFC 8725 §3.11: the typ MUST be in the inner JWT): inner typ at+jwt with every RFC 9068 §2.2 claim, validated with profile access_token, issuer and audience, outer JWE without typ: valid (ADR 0027 §5, §7)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "profile": "access_token",
+          "issuer": [
+            "https://issuer.example"
+          ],
+          "audience": [
+            "https://api.example"
+          ]
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "aud": "https://api.example",
+          "exp": 1300819380,
+          "iat": 1300819200,
+          "jti": "at-1",
+          "client_id": "client-1"
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"aud\":\"https://api.example\",\"exp\":1300819380,\"iat\":1300819200,\"jti\":\"at-1\",\"client_id\":\"client-1\"}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "inner-jwks-key-index.json",
+      "source": "RFC 7519 §7.2; RFC 7517 §5",
+      "description": "Nested JWT whose inner ES256 JWS (kid b) is verified from a JWK Set [kid a, kid b]: valid, key_index 1 (ADR 0029 §2-§4, ADR 0027 §7)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "iat": 1300819200,
+          "exp": 1300819380
+        },
+        "alg": "ES256",
+        "key_index": 1
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "b"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256-kid-b"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "issue-es256-ecdh-es-a128kw.json",
+      "source": "RFC 7519 §5.2, §7.1, §11.2",
+      "description": "jwt.issue with encrypt: ES256 sign, then ECDH-ES+A128KW (P-256) + A128GCM encrypt to the recipient's public key; the library adds cty JWT (RFC 7519 §5.2). The runner checks five compact parts and validates the token with the recipient's private key and the signer's public key, getting the issued claims back (ADR 0027 §7). The token is polyjose's own and randomized, so there is no exact expectation; the oracle only resolved the key names",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "iat": 1300819200,
+          "exp": 1300819380
+        },
+        "alg": "ES256",
+        "key": {
+          "$key": "p256"
+        },
+        "encrypt": {
+          "alg": "ECDH-ES+A128KW",
+          "enc": "A128GCM",
+          "key": {
+            "$public": "p256-ecdh"
+          }
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "ES256"
+          ],
+          "key": {
+            "$public": "p256"
+          },
+          "decrypt": {
+            "key": {
+              "$key": "p256-ecdh"
+            },
+            "allowed_algs": [
+              "ECDH-ES+A128KW"
+            ],
+            "allowed_enc": [
+              "A128GCM"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "file": "issue-es256-rsa-oaep-256-encrypt-only.json",
+      "source": "RFC 7519 §5.2, §7.1, §11.2; RFC 7518 §4.3",
+      "description": "jwt.issue with encrypt to an RSA public key (the RFC 7515 A.2 key, n and e only): ES256 sign, then RSA-OAEP-256 + A256GCM, which is a public-key operation polyjose supports (ADR 0021, ADR 0022). Encrypt-only: polyjose has no RSA private-key decryption (ADR 0021), so there is no validate and the round trip is skipped; the runner checks only that the result is a five-part compact JWE (conformance/README.md jwt.issue)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "alice",
+          "iat": 1300819200,
+          "exp": 1300819380
+        },
+        "alg": "ES256",
+        "key": {
+          "$key": "p256"
+        },
+        "encrypt": {
+          "alg": "RSA-OAEP-256",
+          "enc": "A256GCM",
+          "key": {
+            "$public": "rsa-2048-rfc7515-a2"
+          }
+        }
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "file": "inner-signed-by-key-outside-jwks.json",
+      "source": "RFC 7515 §5.2; RFC 8725 §3.3",
+      "description": "Inner JWS signed by a P-256 key outside the jwks (the oracle's p256-attacker), then correctly encrypted: the outer layer decrypts, the inner signature fails against the set's only key, InvalidSignature (ADR 0027 §9 step 9, RFC 8725 §3.3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256"
+            }
+          ]
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256-attacker"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "inner-signature-bit-flipped.json",
+      "source": "RFC 7515 §5.2",
+      "description": "Inner ES256 JWS with the low bit of its last signature octet flipped, then correctly encrypted: InvalidSignature (ADR 0027 §9 step 9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256",
+        "corrupt_signature": true
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "inner-expired.json",
+      "source": "RFC 7519 §4.1.4",
+      "description": "Inner exp 1300819200 at now 1300819320: exp ≤ now − 60 s default leeway, TokenExpired (ADR 0027 §3, §9 J5), after the outer layer decrypts and the inner signature verifies",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "TokenExpired"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819200}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "outer-tag-tampered.json",
+      "source": "RFC 7516 §5.2 step 11",
+      "description": "Outer JWE authentication tag with its low bit flipped: DecryptionFailed (0003 JWE error contract, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "DecryptionFailed"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "corrupt": "tag"
+      }
+    },
+    {
+      "file": "outer-ciphertext-tampered.json",
+      "source": "RFC 7516 §5.2 step 11",
+      "description": "Outer JWE ciphertext with the low bit of its last octet flipped: DecryptionFailed (0003 JWE error contract, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "DecryptionFailed"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "corrupt": "ciphertext"
+      }
+    },
+    {
+      "file": "outer-cty-absent-encrypt-only.json",
+      "source": "RFC 7519 §5.2",
+      "description": "Encrypt-only JWT: the Claims Set encrypted directly (A128KW + A128GCM), no cty. The nested API requires outer cty JWT (RFC 7519 §5.2), so InvalidHeader (ADR 0027 §7: encrypt-only JWTs are rejected in 0.1.0; §9 N1)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidHeader"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "header": {
+          "cty": null
+        },
+        "plaintext": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}"
+      }
+    },
+    {
+      "file": "outer-cty-absent-around-jws.json",
+      "source": "RFC 7519 §5.2",
+      "description": "A valid ES256 JWS encrypted without cty: InvalidHeader before the inner token is looked at (ADR 0027 §7, §9 N1)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidHeader"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "header": {
+          "cty": null
+        }
+      }
+    },
+    {
+      "file": "inner-is-jwe.json",
+      "source": "RFC 7519 §7.2 step 8",
+      "description": "Depth 2: the outer JWE (cty JWT) decrypts to another compact JWE, not a JWS. Nesting is depth 1 (ADR 0027 §7), so InvalidFormat",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidFormat"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": [
+        {
+          "alg": "A128KW",
+          "enc": "A128GCM",
+          "key": "oct-16"
+        },
+        {
+          "alg": "A128KW",
+          "enc": "A128GCM",
+          "key": "oct-16"
+        }
+      ]
+    },
+    {
+      "file": "inner-alg-none.json",
+      "source": "RFC 7519 §6.1; RFC 8725 §3.2",
+      "description": "Inner Unsecured JWT (alg none, empty signature) in a valid JWE: AlgorithmNotAllowed, never accepted (ADR 0007, ADR 0027 §6, §9 step 7)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      },
+      "jws": {
+        "header": {
+          "alg": "none",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "outer-enc-not-allowed.json",
+      "source": "RFC 8725 §3.1",
+      "description": "Outer enc A128GCM with decrypt allowed_enc [A256GCM]: AlgorithmNotAllowed (0003 JWE error contract, RFC 8725 §3.1)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A256GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "outer-alg-not-allowed.json",
+      "source": "RFC 8725 §3.1",
+      "description": "Outer alg A128KW with decrypt allowed_algs [A256KW]: AlgorithmNotAllowed (0003 JWE error contract, RFC 8725 §3.1)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A256KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "outer-iss-replicated-differs.json",
+      "source": "RFC 7519 §5.3",
+      "description": "The outer JWE protected header replicates iss as https://other.example, the inner iss is https://issuer.example: InvalidClaim (RFC 7519 §5.3 SHOULD verify identical; ADR 0027 §7, §9 N2)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "header": {
+          "iss": "https://other.example"
+        }
+      }
+    },
+    {
+      "file": "precedence-outer-tampered-inner-signature-invalid.json",
+      "source": "RFC 7516 §5.2 step 11; RFC 7515 §5.2",
+      "description": "Precedence: the outer tag is tampered and the inner signature is invalid too. The JWE layer runs first, so DecryptionFailed, never InvalidSignature (ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "DecryptionFailed"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256",
+        "corrupt_signature": true
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "corrupt": "tag"
+      }
+    },
+    {
+      "file": "flattened-cty-only-in-shared-unprotected.json",
+      "source": "RFC 7519 §1, §7.2 step 1; RFC 7516 §7.2.2",
+      "description": "A flattened JWE JSON serialization whose cty JWT sits only in the shared unprotected member (not integrity-protected, ADR 0050 §3): InvalidFormat, because JWTs are compact only (ADR 0027 §6)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidFormat"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "serialization": "flattened",
+        "header": {
+          "cty": null
+        },
+        "unprotected": {
+          "cty": "JWT"
+        }
+      }
+    },
+    {
+      "file": "flattened-cty-protected.json",
+      "source": "RFC 7519 §1, §7.2 step 1; RFC 7516 §7.2.2",
+      "description": "The same nested JWT as a flattened JWE JSON serialization with cty JWT in the protected header: still InvalidFormat, so the refusal is the serialization, not the cty location (ADR 0027 §6)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "decrypt": {
+          "key": {
+            "$key": "oct-16"
+          },
+          "allowed_algs": [
+            "A128KW"
+          ],
+          "allowed_enc": [
+            "A128GCM"
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidFormat"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"alice\",\"iat\":1300819200,\"exp\":1300819380}",
+        "key": "p256"
+      },
+      "jwe": {
+        "alg": "A128KW",
+        "enc": "A128GCM",
+        "key": "oct-16",
+        "serialization": "flattened"
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "source": "RFC 7519 §5.2, §7.2, §11.2; RFC 7518 §4.5; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Nested JWT, sign-then-encrypt: an ES256 inner JWS in a dir + A256GCM compact JWE (cty JWT) under a 256-bit oct key, with separate JWE and JWS allow-lists (RFC 8725 §3.3): valid, with the exact inner claims and the inner alg (ADR 0027 §7)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwiY3R5IjoiSldUIn0..DOvBsq3iKGIhUAvz.Xe4-yVGc-SsiKIQKWKgGdS4MMCZtGQGH9TBuGymN1vXneJ8yo2u1TdaLo2via7tVGhfeFZYj_K_T4arJcb-qFU0CMOVpYo9bXol1OmsUK7ChcAGluaYw7BGanmcOOsPGbjwAeYjHdgmYGjaKCMZ468ZJl_2NvXDn_Fqw7bp9qqJhS4Dd7z1DquK5AmINzjMDh42OP52pj49JIdfNkokymGVPKBU-FsRtXecsX_CfAGnGZ9FzISNrbFJ6hUGLTbFQVsY6EMbXUnfxHPeRyDa5PCDSoKcAKbyYjq08foQ7LeOdGIqdyzij.0Xr2kRre7pCp0p2JNxCRWA",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+      },
+      "allowed_algs": [
+        "dir"
+      ],
+      "allowed_enc": [
+        "A256GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "alice",
+      "iat": 1300819200,
+      "exp": 1300819380
+    },
+    "alg": "ES256"
+  }
+}

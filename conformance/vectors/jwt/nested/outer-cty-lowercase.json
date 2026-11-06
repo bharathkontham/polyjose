@@ -1,0 +1,40 @@
+{
+  "source": "RFC 7519 §5.2; RFC 7515 §4.1.10; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Outer cty \"jwt\" in lower case: cty is a media type compared case-insensitively (RFC 7515 §4.1.10, ADR 0027 §5), so it equals JWT and the nested JWT is valid (ADR 0027 §7)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5Ijoiand0In0.o_6l2nMBLvTkV5VqxDbLYKzV4CmJTgEv.r_XLktLh10sDO_zG.fBLUnSQD4WPKtNR4AjR8CxLT2d-ZzY1XS9dLcVbQMR26_lp-7eBZU-9N5aWduIDmPDrS8cpYjc9CaZWe06V83u1ngkt85ca_yxp_KiS-WE1FZEFPyfNKsXNpVB_TZS_rLcH2bxVj_p8ckyTTnv9nXGNcpYZYnM9iNBQ7nDtMz8aEi8jWzJEKw-60CGt8GuR87QQViUN6oCCbn2Ff23QqQTMAu_SawhuxjMKCDeA9kEs3tK3ORsfXQN_C3J1ej_g6e5aiI6tenzDRwvtITamcRXdC02pOmJJ44N8QUuTitq58igOoqU_k.jvWDkQbbVGWwou-zbGFBeA",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "alice",
+      "iat": 1300819200,
+      "exp": 1300819380
+    },
+    "alg": "ES256"
+  }
+}

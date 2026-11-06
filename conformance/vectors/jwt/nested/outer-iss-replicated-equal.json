@@ -1,0 +1,40 @@
+{
+  "source": "RFC 7519 §5.3; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The outer JWE protected header replicates iss with the same value as the inner Claims Set (RFC 7519 §5.3): valid (ADR 0027 §7)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIiwiaXNzIjoiaHR0cHM6Ly9pc3N1ZXIuZXhhbXBsZSJ9.moo9XjCvNzN9th6hsPAQylQDoQjXaN5j.RbLwEU9D-4IqAkfj.k0yTsD2ws4cPZ5rlFWx916fNn7IeKTHLAiK8IbFKtDdHdPepHWT-eXLxNyFPmHEkEyOxT0YOgbCGaSGB1uw5oHiNQ5PjpRaNCWy9Nzp-lvwvbiHywQ8j6wZoUilwFLcinmRVj0rf4CdcIaNDANF5zwnkUzdAJhJlGYLQXKkXPohZ2HI3JTs9RmtjTPL9DjoINVZ9j55LfGXrLZhe0m-hOpSWQB7nDoeUyJSyi1HGcBKy1QEJqJ-6U5ghqZwgJ2X0tsmVapJ4hJG6HwNPAMGDUK9uuINqi1ZIeKKpj30XJbZ8MCh_8rf_.h7Dz60we4arrhiVqA9a8Yg",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "alice",
+      "iat": 1300819200,
+      "exp": 1300819380
+    },
+    "alg": "ES256"
+  }
+}
