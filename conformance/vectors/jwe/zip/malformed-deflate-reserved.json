@@ -1,0 +1,25 @@
+{
+  "source": "polyjose",
+  "description": "ADR 0017 §1, RFC 7516 §11.4: an authenticated dir + A128GCM zip JWE whose plaintext is BTYPE 11, reserved (RFC 1951 §3.2.3) is DecryptionFailed, the same unit error as a bad tag",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIiwiemlwIjoiREVGIn0..BwcHBwcHBwcHBwcH.Sg.ZJRBW8PV7t2QpNrriOTuxw",
+    "key": {
+      "kty": "oct",
+      "k": "WlpaWlpaWlpaWlpaWlpaWg"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  },
+  "features": [
+    "deflate"
+  ]
+}

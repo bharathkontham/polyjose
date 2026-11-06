@@ -1,0 +1,25 @@
+{
+  "source": "polyjose",
+  "description": "ADR 0017, CVE-2024-28180 class: an authenticated 1,015-byte DEFLATE stream that would inflate to 1,032,001 bytes (length 258 and distance 1 as one-bit codes) is DecryptionFailed under the default 250,000-byte bound",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIiwiemlwIjoiREVGIn0..BwcHBwcHBwcHBwcH.oLe-cEbG2T5aW_2UyjNbW_8HrK9R5ATWvx08EG61Bmk6OL6DBzaBjA73eF949SpKUz_MyHWjDckLnhN10LasAAsPB__HChRlpY_PiM5XIvFG7UdTuo0V-SfAllXljp-NF2uB7M4mFhHIRluutiY_wFYkt2EqW8u49mOj3LN0Ha0p1Yi7355nAMLCiy_YwhcLza1t31ibyspIn7EaAl1rOpPyjTDAr4G0uJh1wFX-6VsnkaNK4k5p76E_Xx90CmOWyo0UNSwMWrjR6wn_PLUK_6rqrUOG8DHRDnJZWU1Yf8px2CPdqfbqbdDulM6OkTq9e_cu8iaGoHOhMZ-pms-znEF2Ch0QtbqSOJ7bjx16SH-d0EpGaIPNb1cQ1e7Qhuoi2UWmd6H0NdlIYGjJvG6RLCF1nQ95eV6JQi_oJqmAcTFOHw8MvLU5GpEbdPfP-3iT7lGNJQ4SkK0YvJREbJ__V1jFA5P_oWutEZdIbZlZPhliH-TfFAHB0WUVK7f8HXPO4NduTLqXoFGD9aY6kF7ZDlQwLus_6-gQMAbVOqQnT5R35_WfqxOPf3v4oICpfm5s9jdgNMTv-7-EwIERBtUJJqfJGdSI6RmCER8f24p6c9kKBnQIr-WupiRKSauMi6wLz_-Y2hX-nLQtequu6SXaazWo11FMdK20IZAJIAPW34dJZrqKgtbH1evxydEcwkCHDceN1z3OqQjDjp0EKNnxUoxaXLWRKuweOWai-Z-S0StHjHx8aC5hZbUjdAS014qk7TrA6mF30gXlTGB5DW74iQvpouXry-NS6hDA_QgrhbJVulWvHbMIVzRlSXbJ6bg03iux2wXjaVNBxulqDNDL8Ryme0J88hmuACq_vFo_I8IvV7-WYgQIQVH_-MkoB1ygUsE-DkWY7pvbNG0LGm3Ct-UpF5euv4ti2zQQJo6dHttct0fxPWBM-YcxH1j8XHJfQ9vkfEv3VNW1mpwx458SjCVw233jEM5gc5Nr9NcwOEzCtonGDyYtPl3ba7fqOtOB-WIrMqPhbXmMIjYZGsi6wnV45dZ42KReK2GViLB9oX0RVXzZAUkAWWNPkYynHfdVdrr6YpnYlJ7hQAR_6tvrhMi8bxajV2XRuM36I6TsWPPzvcsp1dooOOabIHcb_KCkVyJxL7oaSTcg59A__UWsVjAJXUj7fYPXTzQ7YHTgC29LcyzAG3fH0V3RXS6DJhOKBnFP6633r2n76lQpltqZu4cpuY1fS5kH8vWxW3hyOkdC6cqsbTPW4bMz6ZH9c5VxfU3LmpyL2fcwpfvPD4Ay2727A6kuP32_B3aC-skOK1fhp35f7DW4Z08ROsfY_CGz3kdAFgLcqA.W8ztYgX_1D5nHK_5UuQlug",
+    "key": {
+      "kty": "oct",
+      "k": "WlpaWlpaWlpaWlpaWlpaWg"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  },
+  "features": [
+    "deflate"
+  ]
+}

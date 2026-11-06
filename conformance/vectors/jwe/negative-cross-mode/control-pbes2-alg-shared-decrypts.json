@@ -1,0 +1,35 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1 positive control, RFC 7516 §7.2.1, RFC 7518 §4.8: a flattened PBES2-HS256+A128KW + A128GCM JWE (p2c 1000) with enc protected and alg, p2s and p2c in the shared unprotected header decrypts with the password as an oct key, [PBES2-HS256+A128KW, dir] allowed (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8))",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4R0NNIn0",
+      "unprotected": {
+        "alg": "PBES2-HS256+A128KW",
+        "p2s": "p67fyWvzEfYIInPfY4kmgQ",
+        "p2c": 1000
+      },
+      "encrypted_key": "PNz7W7zdwfdAx_GtnC-hsSdirUCIC6Jr",
+      "iv": "JBL9YYietgvEJdwy",
+      "ciphertext": "Dyj1oqNy6YXyGXqJOqHQKKEAzrZI7ql6Ki1prEjq_EpRDiQzfrlM",
+      "tag": "8x57bZ2w8sc244_iuUKyDw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "cGFzc3dvcmQtZm9yLWYwNg"
+    },
+    "allowed_algs": [
+      "PBES2-HS256+A128KW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "Y3Jvc3MtbW9kZSBjb25mdXNpb24gbXVzdCBuZXZlciBkZWNyeXB0",
+    "recipient": 0
+  }
+}

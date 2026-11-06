@@ -180,8 +180,16 @@ pub enum Error {
     /// `protected`); a payload that is present or absent against the
     /// detached-content mode (RFC 7515 Appendix F); a `b64: false` payload
     /// that the serialization cannot carry (RFC 7797 §5.2, §5.3); or an
-    /// input over the size or signature-count limits. JWE reuses it for its
-    /// own serialization shapes.
+    /// input over the size or signature-count limits.
+    ///
+    /// For JWE (RFC 7516 §5.2 step 1, §7.1, §7.2): a compact JWE without
+    /// exactly five dot-separated parts (§7.1, §5.2 step 1); a JSON JWE
+    /// that is not an object of the §7.2.1/§7.2.2 shape (for example a
+    /// missing `ciphertext`, an empty `recipients` array, a flattened JWE
+    /// with `recipients`, or a member of the wrong JSON type); an input over
+    /// the size or recipient-count limits; and, on encrypt, a request the
+    /// chosen serialization cannot carry (compact with more or fewer than
+    /// one recipient, with AAD or with an unprotected header, §7.1).
     ///
     /// JSON syntax errors stay [`Error::InvalidJson`] and base64url errors
     /// stay [`Error::InvalidBase64`]. The detail names the rule, never the

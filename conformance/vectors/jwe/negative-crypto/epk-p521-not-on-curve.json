@@ -1,0 +1,25 @@
+{
+  "source": "polyjose",
+  "description": "RFC 8725 §3.4, RFC 7518 §4.6.1.1: a P-521 \"epk\" that is not on the curve (Wycheproof ecdh_secp521r1_webcrypto tcId 649, \"public point not on curve\") is DecryptionFailed with the P-521 recipient key (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8), independently of polyjose)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00iLCJlcGsiOnsia3R5IjoiRUMiLCJjcnYiOiJQLTUyMSIsIngiOiJBTUtrT3NOMEt3bmdCc0xmeWNOa1JOZm1tZlZucHo5blRPSlhNd3N4TGRlb29FLS1rdEhackx6R1gyR0VjUnJhV19PZmJoSGd5OTZZOFdRTkNaNjVEZnpuIiwieSI6IkFZQXRkMVhDX2pHQWhJMUtjTEZ3Q1c3R1RycVp0SGk2ZjJfQktiQldZbm00NGF0NVl2cVJMOFN1VTdVZ0tnTlNCaGVFUGNZLVhMWDVWdXhfRkZQUWhsX2gifX0.TzqLQI4lAi1bAw1eAuoKaShMU9osmSSgoAEVvhn7aM4cyG_SdcOBxg.yPizQk8hCE5mCwPc.dp8Unqo0_YVef9z8RQzJzZfI1We2DukN3NacWaU-WQnYABRH5kQiR9zIJs_7fAwxz3IJh7gOpJpv4QtUM683bQykbgRA5oZEG8O9GGhimSLFrpi8q7-ZG67WXA.bz5zvVyW1dktPGjkizHeFg",
+    "key": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AQgPCmwvTq-Kc6aJTUqEzAqdCSpbj6m1ZXWVTcjKC9yNaLL7Rj0d2EZQHSwDueBw_bNg7gJIkyvZPBeUagxxCsWq",
+      "y": "AYL3pbw7G2TiJtgJQEt7lozdY0iXK7EPyxyGOv-aeS6ykLtI7-kuS4ShWjI-6POOzLMWb-uxleEvlPEKb1D7IISw",
+      "d": "AJEhLbh3NK7njT9yn0hgDie98hTZGPZhVjjrtzU18RiqXFDbcRavq1bAgS92NDHSdlJY2tXh14UUGVhN-76ImmzZ"
+    },
+    "allowed_algs": [
+      "ECDH-ES+A256KW"
+    ],
+    "allowed_enc": [
+      "A256GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

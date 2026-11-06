@@ -66,10 +66,11 @@ sha2 = { version = "=0.11.1", default-features = false, features = ["zeroize"] }
 hmac = { version = "=0.13.0", default-features = false, features = ["zeroize"] }
 # ECDSA (RFC 7518 §3.4, RFC 8812 §3.2) and on-curve checks at JWK import (ADR 0041 §4). `ecdsa`
 # is the curve arithmetic, the ECDSA algorithm and the matching SHA-2 hash; nothing else (no `std`,
-# `pem`, `pkcs8`, `serde` or `precomputed-tables`).
-p256 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
-p384 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
-p521 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
+# `pem`, `pkcs8`, `serde` or `precomputed-tables`). `ecdh` (P-256/384/521 only) adds the
+# Diffie-Hellman of JWE ECDH-ES (RFC 7518 §4.6) on the same arithmetic.
+p256 = { version = "=0.14.0", default-features = false, features = ["ecdsa", "ecdh"] }
+p384 = { version = "=0.14.0", default-features = false, features = ["ecdsa", "ecdh"] }
+p521 = { version = "=0.14.0", default-features = false, features = ["ecdsa", "ecdh"] }
 k256 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
 # EdDSA over Ed25519 (RFC 8037 §3.1). `zeroize` wipes the signing key on drop; `fast` (precomputed
 # tables) stays off. Its curve25519-dalek brings the guarded build-time groups of ADR 0025/0042.
@@ -89,4 +90,22 @@ rsa = { version = "=0.10.0-rc.20", default-features = false }
 # stays off, as for ed25519-dalek. It reuses ed25519-dalek's curve25519-dalek, so it adds only itself
 # to the tree.
 x25519-dalek = { version = "=3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
-# Still to come with their features: aes-gcm 0.11, aes-kw 0.3, cbc 0.2, pbkdf2 0.13 (feature 0003).
+# JWE primitives (feature 0003, ADR 0002), exact pins (ADR 0019 §4), default features off
+# (ADR 0016 §3).
+# AES (FIPS 197), the block cipher under AES-GCM, AES Key Wrap and AES-CBC. 0.9.4 is the latest and
+# needs Rust 1.89 (ADR 0024, raised at 0003 Gate 1). `zeroize` wipes the key schedules on drop.
+aes = { version = "=0.9.4", default-features = false, features = ["zeroize"] }
+# AES-GCM for A128/192/256GCM (RFC 7518 §5.3) and A*GCMKW (RFC 7518 §4.7). `aes` is the cipher;
+# `zeroize` wipes the GHASH key. No `alloc`, `getrandom` or `rand_core`: polyjose draws IVs itself
+# (ADR 0005) and uses the detached in-place API.
+aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "zeroize"] }
+# AES Key Wrap (RFC 3394) for A128/192/256KW (RFC 7518 §4.4), and the wrapping step of PBES2 and
+# ECDH-ES+A*KW. No `oid`.
+aes-kw = { version = "=0.3.1", default-features = false, features = ["zeroize"] }
+# AES-CBC with PKCS#7 padding for A128CBC-HS256/A192CBC-HS384/A256CBC-HS512 (RFC 7518 §5.2).
+cbc = { version = "=0.2.1", default-features = false, features = ["block-padding", "alloc", "zeroize"] }
+# PBKDF2 (RFC 8018 §5.2) for PBES2 (RFC 7518 §4.8), over the pinned hmac and sha2. Only `hmac`: no
+# password-hash, MCF/PHC or `kdf` support.
+pbkdf2 = { version = "=0.13.0", default-features = false, features = ["hmac"] }
+# Dev-only: the differential oracle for polyjose's own DEFLATE codec (ADR 0017); never shipped.
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }

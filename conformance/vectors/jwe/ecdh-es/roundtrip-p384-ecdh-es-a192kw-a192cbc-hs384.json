@@ -1,0 +1,44 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.1/§5.2: a compact ECDH-ES+A192KW + A192CBC-HS384 encryption to a P-384 public key on the OS CSPRNG (RFC 7518 §4.6, a fresh ephemeral key) decrypts with the private key to the plaintext",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A192CBC-HS384",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "ECDH-ES+A192KW",
+        "key": {
+          "kty": "EC",
+          "kid": "peregrin.took@tuckborough.example",
+          "use": "enc",
+          "crv": "P-384",
+          "x": "YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2",
+          "y": "A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP"
+        },
+        "apu_b64u": "cHJvZHVjZXI"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "decrypt_with": {
+      "key": {
+        "kty": "EC",
+        "kid": "peregrin.took@tuckborough.example",
+        "use": "enc",
+        "crv": "P-384",
+        "x": "YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2",
+        "y": "A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP",
+        "d": "iTx2pk7wW-GqJkHcEkFQb2EFyYcO7RugmaW3mRrQVAOUiPommT0IdnYK2xDlZh-j"
+      },
+      "allowed_algs": [
+        "ECDH-ES+A192KW"
+      ],
+      "allowed_enc": [
+        "A192CBC-HS384"
+      ]
+    }
+  }
+}

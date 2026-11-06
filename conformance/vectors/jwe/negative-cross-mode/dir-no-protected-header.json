@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1, RFC 7518 §4.5: an honest dir + A128GCM JWE with alg and enc only in the shared unprotected header and no protected header (content AAD \"\"), built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8); it would decrypt, but a direct mode needs alg and enc protected: InvalidHeader",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "unprotected": {
+        "alg": "dir",
+        "enc": "A128GCM"
+      },
+      "iv": "cg4gak1ok5MkDhBf",
+      "ciphertext": "kbXXRkfQJoVUOb99YK-Yww",
+      "tag": "Zkerl5MxxOenLBmWbJqhRw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.2 step 3, plan.md lead refinement 15: a protected header that is JSON but not an object (base64url of [\"enc\"]): InvalidJson",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "WyJlbmMiXQ",
+      "unprotected": {
+        "jku": "https://server.example.com/keys.jwks"
+      },
+      "header": {
+        "alg": "A128KW",
+        "kid": "7"
+      },
+      "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ",
+      "iv": "AxY8DCtDaGlsbGljb3RoZQ",
+      "ciphertext": "KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY",
+      "tag": "Mz-VPPyU4RlcuYv1IwIvzw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

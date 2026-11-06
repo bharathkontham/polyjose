@@ -1,0 +1,24 @@
+{
+  "source": "ADR 0050 §2",
+  "description": "ADR 0050 §2: p2s_len is capped at 256 octets; polyjose refuses to encrypt with a 257-octet p2s, before any draw or derivation (InvalidKey)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "eA",
+    "recipients": [
+      {
+        "alg": "PBES2-HS256+A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "SHVudGVyMiwgYnV0IGxvbmdlcg"
+        },
+        "p2s_len": 257
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

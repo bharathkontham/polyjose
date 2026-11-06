@@ -1,0 +1,36 @@
+{
+  "source": "RFC 7520 §5.12",
+  "description": "The RFC 7520 §5.12 flattened JSON JWE (no protected header; alg, kid and enc in the shared unprotected header, so the AAD is empty (RFC 7516 §5.1 step 14)) decrypts with the §5.12 key to the Figure 72 plaintext (generated from the ietf-jose cookbook). No jwe.encrypt vector reproduces it: polyjose's encryptor always puts alg in the protected header of a flattened JWE and in the recipient's header of a general one, never in the shared unprotected header (documented omission for 0.1.0, plan.md lead refinement 15; jwe_json.rs shows the output differs only in where alg sits), and it always protects enc, which §5.12 leaves unprotected",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "unprotected": {
+        "alg": "A128KW",
+        "kid": "81b20965-8332-43d9-a468-82160ad91ac8",
+        "enc": "A128GCM"
+      },
+      "encrypted_key": "244YHfO_W7RMpQW81UjQrZcq5LSyqiPv",
+      "iv": "YihBoVOGsR1l7jCD",
+      "ciphertext": "qtPIMMaOBRgASL10dNQhOa7Gqrk7Eal1vwht7R4TT1uq-arsVCPaIeFwQfzrSS6oEUWbBtxEasE0vC6r7sphyVziMCVJEuRJyoAHFSP3eqQPb4Ic1SDSqyXjw_L3svybhHYUGyQuTmUQEDjgjJfBOifwHIsDsRPeBz1NomqeifVPq5GTCWFo5k_MNIQURR2Wj0AHC2k7JZfu2iWjUHLF8ExFZLZ4nlmsvJu_mvifMYiikfNfsZAudISOa6O73yPZtL04k_1FI7WDfrb2w7OqKLWDXzlpcxohPVOLQwpA3mFNRKdY-bQz4Z4KX9lfz1cne31N4-8BKmojpw-OdQjKdLOGkC445Fb_K1tlDQXw2sBF",
+      "tag": "e2m0Vm7JvjK2VpCKXS-kyg"
+    },
+    "key": {
+      "kty": "oct",
+      "kid": "81b20965-8332-43d9-a468-82160ad91ac8",
+      "use": "enc",
+      "alg": "A128KW",
+      "k": "GZy6sIZ6wl9NJOKB-jnmVQ"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "WW91IGNhbiB0cnVzdCB1cyB0byBzdGljayB3aXRoIHlvdSB0aHJvdWdoIHRoaWNrIGFuZCB0aGlu4oCTdG8gdGhlIGJpdHRlciBlbmQuIEFuZCB5b3UgY2FuIHRydXN0IHVzIHRvIGtlZXAgYW55IHNlY3JldCBvZiB5b3Vyc-KAk2Nsb3NlciB0aGFuIHlvdSBrZWVwIGl0IHlvdXJzZWxmLiBCdXQgeW91IGNhbm5vdCB0cnVzdCB1cyB0byBsZXQgeW91IGZhY2UgdHJvdWJsZSBhbG9uZSwgYW5kIGdvIG9mZiB3aXRob3V0IGEgd29yZC4gV2UgYXJlIHlvdXIgZnJpZW5kcywgRnJvZG8u",
+    "recipient": 0
+  }
+}

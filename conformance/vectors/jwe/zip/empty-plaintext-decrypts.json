@@ -1,0 +1,26 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.2 step 17: a dir + A128GCM zip JWE of the empty plaintext decrypts under the default bound",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIiwiemlwIjoiREVGIn0..CuYmD7Hdl1PtqHld.kZo.FVC6Np98AL5969s27SKzHQ",
+    "key": {
+      "kty": "oct",
+      "k": "WlpaWlpaWlpaWlpaWlpaWg"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "",
+    "recipient": 0
+  },
+  "features": [
+    "deflate"
+  ]
+}

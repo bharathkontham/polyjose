@@ -1,0 +1,33 @@
+{
+  "source": "polyjose",
+  "description": "RFC 8725 §2.5/§3.4 (invalid-curve attack, CVE-2017-16007): an \"epk\" on y^2 = x^3 - 3x + b' over the P-256 field, b' != b, is DecryptionFailed",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTEyOEdDTSIsImVwayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImF4ZlI4dUVzUWtmNHZPYmxZNlJBOG5jRGZZRXQ2ek9nOUtFNVJkaVl3cFkiLCJ5IjoiVC1OQzR2NGFmNXVPNS10S2ZBLWVGaXZPTTFkck1WN095N1pBYURlX1VmWSJ9fQ..NTU1NTU1NTU1NTU1.zY_FwXYs6OPUNKjHQ21YsPM8K83HmQ.GVZsLVJ4SmGr_eXqKC809w",
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+      "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck",
+      "d": "VEmDZpDXXK8p8N0Cndsxs924q6nS1RXFASRl6BfUqdw"
+    },
+    "allowed_algs": [
+      "ECDH-ES",
+      "ECDH-ES+A128KW",
+      "ECDH-ES+A192KW",
+      "ECDH-ES+A256KW"
+    ],
+    "allowed_enc": [
+      "A128GCM",
+      "A192GCM",
+      "A256GCM",
+      "A128CBC-HS256",
+      "A192CBC-HS384",
+      "A256CBC-HS512"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

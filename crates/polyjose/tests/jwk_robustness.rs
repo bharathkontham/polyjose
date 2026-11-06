@@ -216,13 +216,18 @@ fn valid_key() -> impl Strategy<Value = Object> {
     )
         .prop_map(|(crv, private, bytes)| {
             // An Ed25519 `x` must be a valid public key (ADR 0041 §4), so it
-            // is derived from `d`; any 32 octets are an X25519 key.
-            let x = if crv == "Ed25519" {
-                ed25519_dalek::SigningKey::from_bytes(&bytes)
+            // is derived from `d`. Any 32 octets are an X25519 public key
+            // (RFC 7748 §5), but a private one's `x` must be X25519(d, 9)
+            // (RFC 7748 §6.1, ADR 0043 §3).
+            let x = match (crv, private) {
+                ("Ed25519", _) => ed25519_dalek::SigningKey::from_bytes(&bytes)
                     .verifying_key()
-                    .to_bytes()
-            } else {
-                bytes
+                    .to_bytes(),
+                (_, true) => {
+                    let secret = x25519_dalek::StaticSecret::from(bytes);
+                    x25519_dalek::PublicKey::from(&secret).to_bytes()
+                }
+                (_, false) => bytes,
             };
             let mut o = Object::new();
             o.insert("kty", "OKP");

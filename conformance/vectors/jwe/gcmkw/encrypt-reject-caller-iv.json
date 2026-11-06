@@ -1,0 +1,26 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.7.1.1: a caller-supplied iv in the protected header of an A128GCMKW encryption is InvalidHeader (polyjose draws the key-wrap IV itself)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "eA",
+    "recipients": [
+      {
+        "alg": "A128GCMKW",
+        "key": {
+          "kty": "oct",
+          "k": "3RGxUyWuVlaq7WDLBmrmWw"
+        }
+      }
+    ],
+    "protected": {
+      "iv": "AAAAAAAAAAAAAAAA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

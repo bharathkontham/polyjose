@@ -1,0 +1,26 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §7.1: a compact JWE cannot carry a per-recipient header: InvalidFormat",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "eA",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "AQEBAQEBAQEBAQEBAQEBAQ"
+        },
+        "header": {
+          "kid": "a"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

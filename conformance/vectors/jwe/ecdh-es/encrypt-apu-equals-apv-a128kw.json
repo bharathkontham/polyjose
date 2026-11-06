@@ -1,0 +1,27 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.6.2 (\"The \"apu\" and \"apv\" values MUST be distinct, when used\"): encrypting ECDH-ES+A128KW with apu equal to apv is InvalidFormat",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "ECDH-ES+A128KW",
+        "key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+          "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck"
+        },
+        "apu_b64u": "c2FtZQ",
+        "apv_b64u": "c2FtZQ"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

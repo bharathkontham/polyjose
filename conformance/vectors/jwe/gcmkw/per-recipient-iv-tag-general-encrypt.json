@@ -1,0 +1,50 @@
+{
+  "source": "RFC 7518 §4.7.1",
+  "description": "Encrypting to the RFC 7520 §5.7 key in the general form with kid in the per-recipient header and the §5.7 random values as the drawn bytes (CEK, then the 96-bit key-wrap IV, then the content IV) reproduces per-recipient-iv-tag-general-decrypt exactly: polyjose puts alg, iv and tag in the recipient's header and only enc in the protected header (RFC 7516 §7.2.1; expected value built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8) from the RFC 7520 §5.7 key, CEK, IVs and plaintext, independently of polyjose)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "general",
+    "enc": "A128CBC-HS256",
+    "plaintext_b64u": "WW91IGNhbiB0cnVzdCB1cyB0byBzdGljayB3aXRoIHlvdSB0aHJvdWdoIHRoaWNrIGFuZCB0aGlu4oCTdG8gdGhlIGJpdHRlciBlbmQuIEFuZCB5b3UgY2FuIHRydXN0IHVzIHRvIGtlZXAgYW55IHNlY3JldCBvZiB5b3Vyc-KAk2Nsb3NlciB0aGFuIHlvdSBrZWVwIGl0IHlvdXJzZWxmLiBCdXQgeW91IGNhbm5vdCB0cnVzdCB1cyB0byBsZXQgeW91IGZhY2UgdHJvdWJsZSBhbG9uZSwgYW5kIGdvIG9mZiB3aXRob3V0IGEgd29yZC4gV2UgYXJlIHlvdXIgZnJpZW5kcywgRnJvZG8u",
+    "recipients": [
+      {
+        "alg": "A256GCMKW",
+        "key": {
+          "kty": "oct",
+          "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d",
+          "use": "enc",
+          "alg": "A256GCMKW",
+          "k": "qC57l_uxcm7Nm3K-ct4GFjx8tM1U8CZ0NLBvdQstiS8"
+        },
+        "header": {
+          "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d"
+        }
+      }
+    ],
+    "protected_b64u": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+    "rng_b64u": "UWxARpat23nL9ReIj4WG3D1ee9I4r-Mv5QLuFXdy_rEqRhPQZf_aMeV-o3-DPo2PIQU2b--bwaPoXCgV"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+      "recipients": [
+        {
+          "header": {
+            "alg": "A256GCMKW",
+            "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d",
+            "iv": "KkYT0GX_2jHlfqN_",
+            "tag": "kfPduVQ3T3H6vnewt--ksw"
+          },
+          "encrypted_key": "lJf3HbOApxMEBkCMOoTnnABxs_CvTWUmZQ2ElLvYNok"
+        }
+      ],
+      "iv": "gz6NjyEFNm_vm8Gj6FwoFQ",
+      "ciphertext": "Jf5p9-ZhJlJy_IQ_byKFmI0Ro7w7G1QiaZpI8OaiVgD8EqoDZHyFKFBupS8iaEeVIgMqWmsuJKuoVgzR3YfzoMd3GxEm3VxNhzWyWtZKX0gxKdy6HgLvqoGNbZCzLjqcpDiF8q2_62EVAbr2uSc2oaxFmFuIQHLcqAHxy51449xkjZ7ewzZaGV3eFqhpco8o4DijXaG5_7kp3h2cajRfDgymuxUbWgLqaeNQaJtvJmSMFuEOSAzw9Hdeb6yhdTynCRmu-kqtO5Dec4lT2OMZKpnxc_F1_4yDJFcqb5CiDSmA-psB2k0JtjxAj4UPI61oONK7zzFIu4gBfjJCndsZfdvG7h8wGjV98QhrKEnR7xKZ3KCr0_qR1B-gxpNk3xWU",
+      "tag": "elP-fcqN4v_xkbkFfcafsA"
+    }
+  },
+  "features": [
+    "fixed-rng"
+  ]
+}

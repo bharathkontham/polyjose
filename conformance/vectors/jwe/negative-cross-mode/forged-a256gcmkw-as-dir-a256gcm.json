@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1, RFC 7518 §4.7.1: the same relabel for A256GCMKW and A256GCM under an alg-less 32-octet key, [A256GCMKW, dir] allowed; the triple opens to the wrapped CEK under the empty AAD (Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)): InvalidHeader",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "unprotected": {
+        "alg": "dir",
+        "enc": "A256GCM"
+      },
+      "iv": "0w2iGyusIqSZ-LyA",
+      "ciphertext": "BwyGSs9uTrwmboYwNcH0EYoanzMs6YaLRw8EqzZ5wuY",
+      "tag": "bO40fJH5_wXe1jxty4v_lA"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "zkvmWinvgrwSmk5vwUspAnVGNsXXlqYyn5eb7F62N7E"
+    },
+    "allowed_algs": [
+      "A256GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A256GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

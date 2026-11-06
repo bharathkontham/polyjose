@@ -1,0 +1,26 @@
+{
+  "source": "Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)",
+  "description": "RFC 7518 §4.7, §5.3: a compact A256GCMKW + A256GCM JWE built with OpenSSL under the RFC 7520 §5.7 key decrypts to its plaintext",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJBMjU2R0NNS1ciLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiMThlYzA4ZTEtYmZhOS00ZDk1LWIyMDUtMmI0ZGQxZDQzMjFkIiwiaXYiOiJ1b2hSQXJOcTU3YUptODc3IiwidGFnIjoiMktIWjI1QWlrYzBQTDRybVpJZUdTdyJ9.ajorbraMlC-u7bLOlXYoNoJCoTn75fii7PryJY8H844.fNLVSDnmna4_O9aS.NS0sBMGOc4J2sG33VdEYl-ali_7ER8ZZI7Ea1_gmhGTN5YklsmkzF2jMvQ.JF-0qrV2xZk6cHa3yHZFFQ",
+    "key": {
+      "kty": "oct",
+      "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d",
+      "use": "enc",
+      "alg": "A256GCMKW",
+      "k": "qC57l_uxcm7Nm3K-ct4GFjx8tM1U8CZ0NLBvdQstiS8"
+    },
+    "allowed_algs": [
+      "A256GCMKW"
+    ],
+    "allowed_enc": [
+      "A256GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "QW5vdGhlciB0b2tlbiB1bmRlciB0aGUgUkZDIDc1MjAgwqc1Ljcga2V5Lg",
+    "recipient": 0
+  }
+}

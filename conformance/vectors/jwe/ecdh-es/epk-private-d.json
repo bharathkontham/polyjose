@@ -1,0 +1,33 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.6.1.1: an \"epk\" carrying the private member d (\"MUST contain only public key parameters\") is DecryptionFailed",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTEyOEdDTSIsImVwayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImdJMEdBSUxCZHU3VDUzYWtyRm1NeUdjc0YzbjVkTzdNbXdOQkhLVzVTVjAiLCJ5IjoiU0xXX3hTZmZ6bFBXckhFVkkzMERITV80ZWdWd3QzTlFxZVVEN25NRnBwcyIsImQiOiIwX054YVJQVU1Rb0FKdDUwR3o4WWlUcjhnUlR3eUVhQ3VtZC1NVG9UbUlvIn19..NTU1NTU1NTU1NTU1.zY_FwXYs6OPUNKjHQ21YsPM8K83HmQ.GVZsLVJ4SmGr_eXqKC809w",
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+      "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck",
+      "d": "VEmDZpDXXK8p8N0Cndsxs924q6nS1RXFASRl6BfUqdw"
+    },
+    "allowed_algs": [
+      "ECDH-ES",
+      "ECDH-ES+A128KW",
+      "ECDH-ES+A192KW",
+      "ECDH-ES+A256KW"
+    ],
+    "allowed_enc": [
+      "A128GCM",
+      "A192GCM",
+      "A256GCM",
+      "A128CBC-HS256",
+      "A192CBC-HS384",
+      "A256CBC-HS512"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

@@ -45,12 +45,16 @@ for p in "${platforms[@]}"; do
       if have cargo; then run rust bash -c 'cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
       else record rust "SKIPPED (cargo missing)"; fi
       # The workspace run above uses default features; this one also covers polyjose's
-      # off-by-default test-vector feature (ADR 0005), as CI does.
+      # off-by-default features, the test-vector source (ADR 0005) and JWE `deflate` (ADR 0017),
+      # as CI does.
       if have cargo; then run rust-all-features bash -c 'cargo clippy -p polyjose --all-targets --all-features -- -D warnings && cargo test -p polyjose --all-features'
       else record rust-all-features "SKIPPED (cargo missing)"; fi
       # The core and the WASM binding build for the browser target, as in CI.
       if have cargo; then run wasm32-build cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm
       else record wasm32-build "SKIPPED (cargo missing)"; fi
+      # Again with JWE `zip: DEF`, polyjose's own DEFLATE codec (ADR 0017), which is off by default.
+      if have cargo; then run wasm32-build-deflate cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm --features polyjose/deflate
+      else record wasm32-build-deflate "SKIPPED (cargo missing)"; fi
       # polyjose builds on its MSRV, the workspace rust-version (1.89 since 0003 Gate 1, ADR 0024
       # as amended). CI always runs this; locally it needs that toolchain installed, and is never
       # auto-installed here.
@@ -83,6 +87,11 @@ for p in "${platforms[@]}"; do
       elif ! has_wasm_suite; then record wasm "SKIPPED (no wasm test suite yet: no wasm-bindgen-test dev-dependency in bindings/wasm/Cargo.toml)"
       else run wasm bash -c 'cd bindings/wasm && wasm-pack test --node && wasm-pack test --headless --chrome'; fi ;;
     node)
+      # The independent RSA-OAEP-256 oracle (feature 0003 T11, ADR 0021): Node's built-in crypto
+      # alone (no npm packages) checks every RSA-OAEP-256 conformance vector against its test-only
+      # private key, which no Rust code reads. It needs only node, not the binding's toolchain.
+      if have node; then run rsa-oaep-oracle node conformance/tools/rsa-oaep-oracle.mjs
+      else record rsa-oaep-oracle "SKIPPED (node missing)"; fi
       # `npm pkg get` prints {} for a missing key; an unreadable package.json is not skipped, so it FAILs.
       if ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"
       elif [ ! -f bindings/node/package-lock.json ]; then record node "SKIPPED (no node test suite yet: bindings/node/package-lock.json missing)"

@@ -1,0 +1,36 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.8.1.1-§4.8.1.2: the smallest parameters polyjose encrypts with, p2c 1000 and an 8-octet p2s, round-trip",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128CBC-HS256",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "PBES2-HS256+A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "SHVudGVyMiwgYnV0IGxvbmdlcg"
+        },
+        "p2c": 1000,
+        "p2s_len": 8
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "decrypt_with": {
+      "key": {
+        "kty": "oct",
+        "k": "SHVudGVyMiwgYnV0IGxvbmdlcg"
+      },
+      "allowed_algs": [
+        "PBES2-HS256+A128KW"
+      ],
+      "allowed_enc": [
+        "A128CBC-HS256"
+      ]
+    }
+  }
+}

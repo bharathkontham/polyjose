@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "An X25519 private key whose d (RFC 7748 §6.1 Alice's private key 77076d0a…1db92c2a) does not derive its x (RFC 7748 §6.1 Bob's public key de9edb7d…6f882b4f, itself a valid key) is rejected at import (ADR 0043 §3, amending ADR 0041 §4; RFC 8037 §2, RFC 7748 §6.1: the public key is X25519(d, 9)). Derived independently of polyjose with the RFC 7748 §5 Montgomery ladder in pure Python: Alice's d derives hSDwCYkw…qqbTmo, not this x",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "d": "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo",
+      "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

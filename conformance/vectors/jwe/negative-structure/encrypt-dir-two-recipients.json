@@ -1,0 +1,30 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.1 steps 5-6: dir makes the shared key the CEK, so a general JWE cannot have a second recipient: InvalidFormat",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "general",
+    "enc": "A128GCM",
+    "plaintext_b64u": "eA",
+    "recipients": [
+      {
+        "alg": "dir",
+        "key": {
+          "kty": "oct",
+          "k": "AQEBAQEBAQEBAQEBAQEBAQ"
+        }
+      },
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "AQEBAQEBAQEBAQEBAQEBAQ"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

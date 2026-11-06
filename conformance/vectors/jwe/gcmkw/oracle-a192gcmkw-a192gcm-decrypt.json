@@ -1,0 +1,23 @@
+{
+  "source": "Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)",
+  "description": "RFC 7518 §4.7, §5.3: a compact A192GCMKW + A192GCM JWE built with OpenSSL (key-wrap IV and tag in the protected header) decrypts to its plaintext",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJBMTkyR0NNS1ciLCJlbmMiOiJBMTkyR0NNIiwiaXYiOiJXUTFqQjNSX0xyR3MtdWE3IiwidGFnIjoiM1UwQXdqRUpqdVlwSmVHaVRKR3BndyJ9.HKEUfiUUtLCT3fqXsqpo_nYAl-wIn0_H.eQ-MA0QjtS7rWWVJ.WwO2DA8s-7mSvyJgpZwJgVygerWG5EhzM_ZzXUC1nP24iHGWS_muFw6RvwZ31J4uQ8tMIYkNzX85KCZJeA.6GMFuB3Tls7bJlh0xnlcgQ",
+    "key": {
+      "kty": "oct",
+      "k": "dj7I4ww9q41HfHTgdcuIxoaaP8US4674"
+    },
+    "allowed_algs": [
+      "A192GCMKW"
+    ],
+    "allowed_enc": [
+      "A192GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "QTE5MkdDTUtXIGludGVyb3A6IGJ1aWx0IHdpdGggT3BlblNTTCwgZGVjcnlwdGVkIGJ5IHBvbHlqb3NlLg",
+    "recipient": 0
+  }
+}

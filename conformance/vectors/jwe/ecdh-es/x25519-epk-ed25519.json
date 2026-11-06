@@ -1,0 +1,32 @@
+{
+  "source": "polyjose",
+  "description": "RFC 8037 §3.2: an Ed25519 \"epk\" (\"MUST NOT be used for ECDH-ES\") for an X25519 recipient key is DecryptionFailed",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTEyOEdDTSIsImVwayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IjExcVlBWUt4Q3JmVlNfN1R5V1FIT2c3aGN2UGFwaU1scndJYWFQY0hVUm8ifX0..MTExMTExMTExMTEx.DdzrrOZ0fUVfrNjUO1WDBJyGMmxvhA.cfFkWSlUdv8uyHUcfU61Cw",
+    "key": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+      "d": "XasIfmJKikt54X-Lg4AO5m87sSkmGLb9HC-LJ_-I4Os"
+    },
+    "allowed_algs": [
+      "ECDH-ES",
+      "ECDH-ES+A128KW",
+      "ECDH-ES+A192KW",
+      "ECDH-ES+A256KW"
+    ],
+    "allowed_enc": [
+      "A128GCM",
+      "A192GCM",
+      "A256GCM",
+      "A128CBC-HS256",
+      "A192CBC-HS384",
+      "A256CBC-HS512"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

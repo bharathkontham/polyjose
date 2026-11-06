@@ -1,0 +1,27 @@
+{
+  "source": "polyjose",
+  "description": "ADR 0017 §1: a dir + A128GCM zip JWE whose plaintext inflates to 64 bytes decrypts under max_decompressed_len 64; the bound is inclusive",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIiwiemlwIjoiREVGIn0..-DvNy_Fib-ayrRPu.6TTBcyq-TkJdoLXIxlAV8Kkbj-s.9ThWqLsAjj3NdS1tPc728g",
+    "key": {
+      "kty": "oct",
+      "k": "WlpaWlpaWlpaWlpaWlpaWg"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ],
+    "max_decompressed_len": 64
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg",
+    "recipient": 0
+  },
+  "features": [
+    "deflate"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.1 steps 2-8, §7.2.1: one CEK wrapped for A128KW, A256KW and A192KW recipients (RFC 7518 §4.4) in a general JWE with A256GCM on the OS CSPRNG has three recipients and decrypts with the A192KW key",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "general",
+    "enc": "A256GCM",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "EREREREREREREREREREREQ"
+        }
+      },
+      {
+        "alg": "A256KW",
+        "key": {
+          "kty": "oct",
+          "k": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      },
+      {
+        "alg": "A192KW",
+        "key": {
+          "kty": "oct",
+          "k": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "decrypt_with": {
+      "key": {
+        "kty": "oct",
+        "k": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi"
+      },
+      "allowed_algs": [
+        "A128KW",
+        "A192KW",
+        "A256KW"
+      ],
+      "allowed_enc": [
+        "A256GCM"
+      ]
+    }
+  }
+}

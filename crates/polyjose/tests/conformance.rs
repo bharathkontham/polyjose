@@ -17,6 +17,8 @@
 //!   conformance/README.md: JWK import, then headers or options, then the
 //!   call, the first error being the outcome; and the round trip of a
 //!   randomized signature (`verify_with`);
+//! - for `jwe.encrypt` and `jwe.decrypt` (RFC 7516), the same step order,
+//!   and the round trip of a randomized encryption (`decrypt_with`);
 //! - for `keys.import_pem` and `keys.export_pem` (ADR 0018 §3), the PEM
 //!   import gives the expected JWK, and the export, after the JWK import,
 //!   gives the exact PEM text;
@@ -26,7 +28,10 @@
 //! - for `keys.generate_for` (ADR 0018 §5), `alg` is resolved in the one
 //!   RFC 7518 §7.1 registry, and a generated key, being random, is compared
 //!   by its shape, after the runner checks it is private, has exactly the
-//!   RFC members plus `alg`, and imports back unchanged.
+//!   RFC members plus `alg`, and imports back unchanged;
+//! - a vector whose optional top-level `features` names a cargo feature
+//!   this build does not enable is reported **SKIPPED**, with the feature
+//!   names; it is never counted as passing.
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
@@ -47,6 +52,7 @@ use polyjose::Error;
 use polyjose::header::Header;
 use polyjose::json::{self, Number, Object, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
+use polyjose::jwe::{self, DecryptPolicy, Encryptor, JsonForm, Recipient};
 use polyjose::jwk::Jwk;
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
 use polyjose::keys::{JoseAlg, KeyFormat, generate_for};
@@ -54,6 +60,49 @@ use polyjose::util::{b64url_decode, b64url_encode};
 
 /// Top-level members of a vector; all required (schema `required`).
 const TOP_LEVEL: &[&str] = &["source", "description", "operation", "input", "expect"];
+
+/// The optional top-level members, after [`TOP_LEVEL`] in the schema's
+/// `properties`.
+const TOP_LEVEL_OPTIONAL: &[&str] = &["features"];
+
+/// The names a vector's top-level `features` may list, each with the cargo
+/// feature of `polyjose` it stands for. A vector needing one this build
+/// does not enable is SKIPPED, naming the cargo feature, never passed.
+///
+/// The test RNG feature is written `fixed-rng` in vector files:
+/// `scripts/check-test-vectors-off.sh` allows its cargo name only in
+/// `crates/polyjose`, the script and Markdown, so that no file outside the
+/// core can switch it on (ADR 0005), and vector JSON is not exempt.
+const FEATURES: &[(&str, &str)] = &[
+    ("deflate", "deflate"),
+    ("fixed-rng", "insecure-test-vectors"),
+];
+
+/// The cargo feature a [`FEATURES`] name stands for.
+fn cargo_feature(name: &str) -> &'static str {
+    FEATURES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, cargo)| *cargo)
+        .expect("a validated features name")
+}
+
+/// The [`FEATURES`] names whose cargo feature this build enables.
+fn enabled_features() -> Vec<&'static str> {
+    let mut enabled = Vec::new();
+    if cfg!(feature = "deflate") {
+        enabled.push("deflate");
+    }
+    if cfg!(feature = "insecure-test-vectors") {
+        enabled.push("fixed-rng");
+    }
+    enabled
+}
+
+/// The vector-file names of [`FEATURES`], in schema order.
+fn feature_names() -> Vec<&'static str> {
+    FEATURES.iter().map(|(name, _)| *name).collect()
+}
 
 /// Every operation `schema.json` names, in schema order. Only those with an
 /// [`OpSpec`] have a defined input and expectation; the others are reserved
@@ -104,6 +153,10 @@ enum Kind {
     Jws,
     /// `{"$ref": "#/$defs/alg_list"}`: an array of strings
     AlgList,
+    /// `{"$ref": "#/$defs/jwe"}`: a string (compact) or an object (JSON)
+    Jwe,
+    /// `{"type": "array", "items": {"type": "string"}}`
+    StringList,
     /// `{"type": "boolean"}`
     Bool,
     /// `{"$ref": "#/$defs/<def>"}` of a closed object definition
@@ -121,8 +174,14 @@ impl Kind {
             Kind::Count => Some("count"),
             Kind::Jws => Some("jws"),
             Kind::AlgList => Some("alg_list"),
+            Kind::Jwe => Some("jwe"),
             Kind::Nested(shape) => Some(shape.def),
-            Kind::String | Kind::Object | Kind::Enum(_) | Kind::Bool | Kind::List(_) => None,
+            Kind::String
+            | Kind::Object
+            | Kind::Enum(_)
+            | Kind::Bool
+            | Kind::List(_)
+            | Kind::StringList => None,
         }
     }
 }
@@ -324,6 +383,101 @@ const JWS_SIGN_ROUND_TRIP: Shape = Shape {
     rules: &[],
 };
 
+// ---------------------------------------------------------------------------
+// jwe.* shapes (RFC 7516). Kept apart from the jws.* ones so later edits to
+// either merge mechanically.
+// ---------------------------------------------------------------------------
+
+/// One recipient of a `jwe.encrypt` vector (RFC 7516 §5.1 steps 1-8): its
+/// `alg`, its key, its Per-Recipient Unprotected Header (§7.2.1, JSON only)
+/// and the key management options of RFC 7518 §4.6.1.2-§4.6.1.3 (`apu`,
+/// `apv`) and §4.8.1.1-§4.8.1.2 (`p2s` length, `p2c`).
+const JWE_RECIPIENT: Shape = Shape {
+    def: "jwe_recipient",
+    members: &[
+        req("alg", Kind::String),
+        req("key", Kind::Object),
+        opt("header", Kind::Object),
+        opt("apu_b64u", Kind::Base64url),
+        opt("apv_b64u", Kind::Base64url),
+        opt("p2c", Kind::Count),
+        opt("p2s_len", Kind::Count),
+    ],
+    rules: &[],
+};
+// RFC 7516 §5.1 through `Encryptor::encrypt_compact` (§7.1),
+// `encrypt_json` (§7.2), or, with `rng_b64u` or `protected_b64u`,
+// `encrypt_reproducible` (feature `insecure-test-vectors`).
+const JWE_ENCRYPT_INPUT: Shape = Shape {
+    def: "jwe_encrypt_input",
+    members: &[
+        req(
+            "serialization",
+            Kind::Enum(&["compact", "flattened", "general"]),
+        ),
+        req("enc", Kind::String),
+        req("plaintext_b64u", Kind::Base64url),
+        req("recipients", Kind::List(&JWE_RECIPIENT)),
+        opt("protected", Kind::Object),
+        opt("protected_b64u", Kind::Base64url),
+        opt("unprotected", Kind::Object),
+        opt("aad_b64u", Kind::Base64url),
+        opt("compress", Kind::Bool),
+        opt("rng_b64u", Kind::Base64url),
+    ],
+    rules: &[],
+};
+/// A reproducible encryption's exact output: a string for compact, an
+/// object for JSON, compared as JSON values (member order ignored,
+/// RFC 8259 §4).
+const JWE_ENCRYPT_EXACT: Shape = Shape {
+    def: "jwe_encrypt_exact",
+    members: &[req("jwe", Kind::Jwe)],
+    rules: &[],
+};
+const JWE_DECRYPT_WITH: Shape = Shape {
+    def: "jwe_decrypt_with",
+    members: &[
+        req("key", Kind::Object),
+        req("allowed_algs", Kind::AlgList),
+        req("allowed_enc", Kind::AlgList),
+    ],
+    rules: &[],
+};
+/// A randomized encryption: the runner decrypts its own output with
+/// `decrypt_with` and checks the plaintext, instead of comparing bytes.
+const JWE_ENCRYPT_ROUND_TRIP: Shape = Shape {
+    def: "jwe_encrypt_roundtrip",
+    members: &[req("decrypt_with", Kind::Nested(&JWE_DECRYPT_WITH))],
+    rules: &[],
+};
+// RFC 7516 §5.2 through `jwe::decrypt_compact` (a string `jwe`, §7.1) or
+// `jwe::decrypt_json` (an object, §7.2), with a `DecryptPolicy` (RFC 8725
+// §3.1, ADR 0007, ADR 0023, ADR 0017, ADR 0026 §7).
+const JWE_DECRYPT_INPUT: Shape = Shape {
+    def: "jwe_decrypt_input",
+    members: &[
+        req("jwe", Kind::Jwe),
+        req("key", Kind::Object),
+        req("allowed_algs", Kind::AlgList),
+        req("allowed_enc", Kind::AlgList),
+        opt("understood_crit", Kind::StringList),
+        opt("max_input_len", Kind::Count),
+        opt("max_recipients", Kind::Count),
+        opt("max_pbes2_count", Kind::Count),
+        opt("max_decompressed_len", Kind::Count),
+    ],
+    rules: &[],
+};
+const JWE_DECRYPT_OK: Shape = Shape {
+    def: "jwe_decrypt_ok",
+    members: &[
+        req("plaintext_b64u", Kind::Base64url),
+        req("recipient", Kind::Count),
+    ],
+    rules: &[],
+};
+
 // ADR 0018 §3 PEM import through `Jwk::from_pem`: the label selects the
 // structure (RFC 7468 §2), the key type comes from the DER.
 const KEYS_IMPORT_PEM_INPUT: Shape = Shape {
@@ -456,6 +610,18 @@ const SPECS: &[OpSpec] = &[
         can_fail: true,
     },
     OpSpec {
+        name: "jwe.encrypt",
+        input: &JWE_ENCRYPT_INPUT,
+        ok: &[&JWE_ENCRYPT_EXACT, &JWE_ENCRYPT_ROUND_TRIP],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "jwe.decrypt",
+        input: &JWE_DECRYPT_INPUT,
+        ok: &[&JWE_DECRYPT_OK],
+        can_fail: true,
+    },
+    OpSpec {
         name: "keys.import_pem",
         input: &KEYS_IMPORT_PEM_INPUT,
         ok: &[&KEYS_IMPORT_PEM_OK],
@@ -506,6 +672,8 @@ struct Vector {
     operation: String,
     input: Object,
     expect: Expect,
+    /// The cargo features it needs (top-level `features`), deduplicated.
+    features: Vec<&'static str>,
 }
 
 /// A schema violation: the JSON pointer and what is wrong there.
@@ -578,9 +746,10 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
         Kind::Enum(values) => value.as_str().is_some_and(|s| values.contains(&s)),
         Kind::Count => is_count(value),
         Kind::Jws => value.as_str().is_some() || value.as_object().is_some(),
-        Kind::AlgList => value
+        Kind::AlgList | Kind::StringList => value
             .as_array()
             .is_some_and(|items| items.iter().all(|item| item.as_str().is_some())),
+        Kind::Jwe => value.as_str().is_some() || value.as_object().is_some(),
         Kind::Bool => value.as_bool().is_some(),
         // Matched above when the value has the right type.
         Kind::Nested(_) | Kind::List(_) => false,
@@ -596,7 +765,8 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
             Kind::Enum(values) => format!("one of {values:?}"),
             Kind::Count => format!("an integer from 0 to {COUNT_MAX}"),
             Kind::Jws => "a string (compact) or an object (JSON serialization)".to_owned(),
-            Kind::AlgList => "an array of strings".to_owned(),
+            Kind::AlgList | Kind::StringList => "an array of strings".to_owned(),
+            Kind::Jwe => "a string (compact) or an object (JSON serialization)".to_owned(),
             Kind::Bool => "a boolean".to_owned(),
             Kind::Nested(shape) => format!("an object ({})", shape.def),
             Kind::List(shape) => format!("a non-empty array of objects ({})", shape.def),
@@ -714,7 +884,20 @@ fn validate(value: &Value) -> Result<Vector, String> {
     let root = value
         .as_object()
         .ok_or_else(|| violation("", "a vector file must hold one JSON object"))?;
-    exact_members(root, TOP_LEVEL, "")?;
+    for (name, _) in root {
+        if !TOP_LEVEL.contains(&name) && !TOP_LEVEL_OPTIONAL.contains(&name) {
+            return Err(violation(
+                &format!("/{name}"),
+                "unknown member (additionalProperties is false)",
+            ));
+        }
+    }
+    for name in TOP_LEVEL {
+        if !root.contains(name) {
+            return Err(violation(&format!("/{name}"), "required member is missing"));
+        }
+    }
+    let features = vector_features(root)?;
     for name in ["source", "description"] {
         let text = root.get(name).and_then(Value::as_str);
         if !text.is_some_and(is_text) {
@@ -776,11 +959,68 @@ fn validate(value: &Value) -> Result<Vector, String> {
             }
         }
     };
+    if operation == "jwe.encrypt" && spec(operation).is_some() {
+        check_jwe_encrypt_features(input, &features)?;
+    }
     Ok(Vector {
         operation: operation.to_owned(),
         input: input.clone(),
         expect,
+        features,
     })
+}
+
+/// The top-level `features`: an array of [`FEATURES`] names, each at most
+/// once (schema: `uniqueItems`).
+fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
+    let Some(value) = root.get("features") else {
+        return Ok(Vec::new());
+    };
+    let items = value
+        .as_array()
+        .ok_or_else(|| violation("/features", "must be an array"))?;
+    let mut features = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        let feature = item
+            .as_str()
+            .and_then(|s| FEATURES.iter().map(|(name, _)| name).find(|f| **f == s))
+            .ok_or_else(|| {
+                violation(
+                    &format!("/features/{i}"),
+                    format!("must be one of {:?}", feature_names()),
+                )
+            })?;
+        if features.contains(feature) {
+            return Err(violation(
+                &format!("/features/{i}"),
+                "listed twice (uniqueItems)",
+            ));
+        }
+        features.push(*feature);
+    }
+    Ok(features)
+}
+
+/// A `jwe.encrypt` vector declares the features its inputs need, so it is
+/// SKIPPED, never failed or silently weakened, where they are off:
+/// `rng_b64u` and `protected_b64u` need `fixed-rng` (cargo feature
+/// `insecure-test-vectors`)
+/// (`Encryptor::encrypt_reproducible`, ADR 0041 §3), `compress` needs
+/// `deflate` (ADR 0017).
+fn check_jwe_encrypt_features(input: &Object, features: &[&str]) -> Result<(), String> {
+    for (member, feature) in [
+        ("rng_b64u", "fixed-rng"),
+        ("protected_b64u", "fixed-rng"),
+        ("compress", "deflate"),
+    ] {
+        if input.contains(member) && !features.contains(&feature) {
+            return Err(violation(
+                "/features",
+                format!("`input/{member}` needs \"{feature}\" listed in `features`"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn hex_decode(s: &str) -> Vec<u8> {
@@ -1056,6 +1296,316 @@ fn run_jws_verify(input: &Object, out: &mut Object) -> Result<Result<(), Error>,
     Ok(Ok(()))
 }
 
+// ---------------------------------------------------------------------------
+// jwe.* handlers (RFC 7516), kept apart from the jws.* ones.
+// ---------------------------------------------------------------------------
+
+/// A list member (`allowed_algs`, `allowed_enc`, `understood_crit`) as
+/// strings, in order.
+fn input_names<'a>(object: &'a Object, name: &str) -> Vec<&'a str> {
+    object
+        .get(name)
+        .and_then(Value::as_array)
+        .expect("validated")
+        .iter()
+        .map(|v| v.as_str().expect("validated"))
+        .collect()
+}
+
+/// A `DecryptPolicy` from `allowed_algs` and `allowed_enc`, mapped name by
+/// name (an unknown or unimplemented name is kept, and fails later as
+/// `UnsupportedAlgorithm`), with the optional limits of `object`.
+fn jwe_policy(object: &Object) -> Result<DecryptPolicy, Error> {
+    let algs: Vec<KeyMgmtAlg> = input_names(object, "allowed_algs")
+        .into_iter()
+        .map(KeyMgmtAlg::from)
+        .collect();
+    let encs: Vec<ContentEncAlg> = input_names(object, "allowed_enc")
+        .into_iter()
+        .map(ContentEncAlg::from)
+        .collect();
+    let mut policy = DecryptPolicy::new(&algs, &encs)?;
+    if object.contains("understood_crit") {
+        policy = policy.understood_crit(&input_names(object, "understood_crit"));
+    }
+    if let Some(n) = input_count(object, "max_input_len") {
+        policy = policy.max_input_len(n);
+    }
+    if let Some(n) = input_count(object, "max_recipients") {
+        policy = policy.max_recipients(n);
+    }
+    if let Some(n) = input_count(object, "max_pbes2_count") {
+        policy = policy.max_pbes2_count(u32::try_from(n).expect("validated: a u32"));
+    }
+    if let Some(n) = input_count(object, "max_decompressed_len") {
+        policy = policy.max_decompressed_len(n);
+    }
+    Ok(policy)
+}
+
+/// Decrypts `jwe` (a compact string, or a JSON JWE object passed as its
+/// text) with `key` under `policy`.
+fn jwe_decrypt(jwe: &Value, key: &Jwk, policy: &DecryptPolicy) -> polyjose::Result<jwe::Decrypted> {
+    match jwe.as_str() {
+        Some(compact) => jwe::decrypt_compact(compact, key, policy),
+        None => jwe::decrypt_json(&jwe.to_json(), key, policy),
+    }
+}
+
+/// `encrypt_reproducible` with the vector's injected bytes. Every byte must
+/// be drawn: a leftover means the draw order (`jwe::random`) differs from
+/// the vector's.
+#[cfg(feature = "insecure-test-vectors")]
+fn jwe_encrypt_reproducible(
+    encryptor: &Encryptor,
+    plaintext: &[u8],
+    form: jwe::Serialization,
+    rng_bytes: Vec<u8>,
+    protected_b64u: Option<&str>,
+) -> Result<Result<String, Error>, String> {
+    let mut rng = polyjose::insecure_test_vectors::FixedRng::new(rng_bytes);
+    let result = encryptor.encrypt_reproducible(plaintext, form, &mut rng, protected_b64u);
+    if result.is_ok() && rng.remaining() != 0 {
+        return Err(format!(
+            "`rng_b64u` has {} byte(s) the encryption did not draw",
+            rng.remaining()
+        ));
+    }
+    Ok(result)
+}
+
+/// Never reached: such a vector declares `insecure-test-vectors` and is
+/// SKIPPED in this build.
+#[cfg(not(feature = "insecure-test-vectors"))]
+fn jwe_encrypt_reproducible(
+    _encryptor: &Encryptor,
+    _plaintext: &[u8],
+    _form: jwe::Serialization,
+    _rng_bytes: Vec<u8>,
+    _protected_b64u: Option<&str>,
+) -> Result<Result<String, Error>, String> {
+    unreachable!(
+        "a vector with rng_b64u or protected_b64u is skipped without insecure-test-vectors"
+    )
+}
+
+/// `Encryptor::compress` (RFC 7516 §4.1.3, feature `deflate`).
+#[cfg(feature = "deflate")]
+fn jwe_compress(encryptor: Encryptor) -> Encryptor {
+    encryptor.compress()
+}
+
+/// Never reached: such a vector declares `deflate` and is SKIPPED in this
+/// build.
+#[cfg(not(feature = "deflate"))]
+fn jwe_compress(_encryptor: Encryptor) -> Encryptor {
+    unreachable!("a vector with compress is skipped without deflate")
+}
+
+/// The recipients of a `jwe.encrypt` vector, in order: for each, import
+/// `key`, then parse `header`. The first error is the outcome.
+fn jwe_recipients(input: &Object) -> Result<Result<Vec<Recipient>, Error>, String> {
+    let items = input
+        .get("recipients")
+        .and_then(Value::as_array)
+        .expect("validated");
+    let mut recipients = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.as_object().expect("validated");
+        let key = match Jwk::from_object(input_object(item, "key")) {
+            Ok(key) => key,
+            Err(e) => return Ok(Err(e)),
+        };
+        let mut recipient = Recipient::new(KeyMgmtAlg::from(input_str(item, "alg")), &key);
+        if let Some(header) = item.get("header") {
+            match Header::from_json(header.to_json().as_bytes()) {
+                Ok(header) => recipient = recipient.header(header),
+                Err(e) => return Ok(Err(e)),
+            }
+        }
+        if item.contains("apu_b64u") {
+            recipient = recipient.apu(input_bytes(item, "apu_b64u")?);
+        }
+        if item.contains("apv_b64u") {
+            recipient = recipient.apv(input_bytes(item, "apv_b64u")?);
+        }
+        if let Some(n) = input_count(item, "p2c") {
+            recipient = recipient.p2c(u32::try_from(n).expect("validated: a u32"));
+        }
+        if let Some(n) = input_count(item, "p2s_len") {
+            recipient = recipient.p2s_len(n);
+        }
+        recipients.push(recipient);
+    }
+    Ok(Ok(recipients))
+}
+
+/// `jwe.encrypt` (RFC 7516 §5.1). The steps run in the order
+/// conformance/README.md fixes: the recipients ([`jwe_recipients`]), then
+/// `protected`, then `unprotected`, then the call; the first error is the
+/// outcome. With `rng_b64u` or `protected_b64u` the call is
+/// `encrypt_reproducible` (feature `insecure-test-vectors`); otherwise
+/// `encrypt_compact` or `encrypt_json`, on the OS CSPRNG. An exact
+/// expectation gets the output as `jwe` (a string for compact; JSON parsed,
+/// so compared as a JSON value); a round trip is checked here
+/// ([`check_jwe_round_trip`]) and echoed back on success.
+fn run_jwe_encrypt(
+    input: &Object,
+    expect: &Expect,
+    out: &mut Object,
+) -> Result<Result<(), Error>, String> {
+    let serialization = input_str(input, "serialization");
+    let plaintext = input_bytes(input, "plaintext_b64u")?;
+    let recipients = match jwe_recipients(input)? {
+        Ok(recipients) => recipients,
+        Err(e) => return Ok(Err(e)),
+    };
+    let count = recipients.len();
+    let mut encryptor = Encryptor::new(ContentEncAlg::from(input_str(input, "enc")));
+    for (member, shared) in [("protected", false), ("unprotected", true)] {
+        let Some(header) = input.get(member) else {
+            continue;
+        };
+        let header = match Header::from_json(header.to_json().as_bytes()) {
+            Ok(header) => header,
+            Err(e) => return Ok(Err(e)),
+        };
+        encryptor = if shared {
+            encryptor.shared_unprotected_header(header)
+        } else {
+            encryptor.protected_header(header)
+        };
+    }
+    if input.contains("aad_b64u") {
+        encryptor = encryptor.aad(input_bytes(input, "aad_b64u")?);
+    }
+    if input.get("compress").and_then(Value::as_bool) == Some(true) {
+        encryptor = jwe_compress(encryptor);
+    }
+    for recipient in recipients {
+        encryptor = encryptor.recipient(recipient);
+    }
+    let form = match serialization {
+        "compact" => jwe::Serialization::Compact,
+        "flattened" => jwe::Serialization::Json(JsonForm::Flattened),
+        _ => jwe::Serialization::Json(JsonForm::General),
+    };
+    let encrypted = if input.contains("rng_b64u") || input.contains("protected_b64u") {
+        let rng_bytes = match input.get("rng_b64u") {
+            Some(_) => input_bytes(input, "rng_b64u")?,
+            None => Vec::new(),
+        };
+        let protected_b64u = input.get("protected_b64u").and_then(Value::as_str);
+        jwe_encrypt_reproducible(&encryptor, &plaintext, form, rng_bytes, protected_b64u)?
+    } else {
+        match form {
+            jwe::Serialization::Compact => encryptor.encrypt_compact(&plaintext),
+            jwe::Serialization::Json(json_form) => encryptor.encrypt_json(&plaintext, json_form),
+        }
+    };
+    let text = match encrypted {
+        Ok(text) => text,
+        Err(e) => return Ok(Err(e)),
+    };
+    let jwe = if serialization == "compact" {
+        Value::from(text.as_str())
+    } else {
+        json::parse(text.as_bytes())
+            .map_err(|e| format!("the encrypted JSON JWE does not parse: {}", e.code()))?
+    };
+    let decrypt_with = match expect {
+        Expect::Ok(want) => want.get("decrypt_with").and_then(Value::as_object),
+        Expect::Err(_) => None,
+    };
+    match decrypt_with {
+        Some(decrypt_with) => {
+            check_jwe_round_trip(serialization, &jwe, &plaintext, count, decrypt_with)?;
+            out.insert("decrypt_with", decrypt_with.clone());
+        }
+        None => {
+            out.insert("jwe", jwe);
+        }
+    }
+    Ok(Ok(()))
+}
+
+/// Checks a randomized encryption by round trip: the output has the shape
+/// of the requested serialization (five compact parts, RFC 7516 §7.1;
+/// `ciphertext` without `recipients` for flattened, §7.2.2; one
+/// `recipients` entry per recipient for general, §7.2.1), decrypts with
+/// `decrypt_with`, and yields the plaintext. Any failure is the vector's.
+fn check_jwe_round_trip(
+    serialization: &str,
+    jwe: &Value,
+    plaintext: &[u8],
+    recipients: usize,
+    decrypt_with: &Object,
+) -> Result<(), String> {
+    let shape_ok = match serialization {
+        "compact" => jwe.as_str().is_some_and(|t| t.split('.').count() == 5),
+        "flattened" => jwe.get("ciphertext").is_some() && jwe.get("recipients").is_none(),
+        _ => jwe
+            .get("recipients")
+            .and_then(Value::as_array)
+            .is_some_and(|all| all.len() == recipients),
+    };
+    if !shape_ok {
+        return Err(format!(
+            "round trip: the output is not a {serialization} JWE with {recipients} recipient(s)"
+        ));
+    }
+    let key = Jwk::from_object(input_object(decrypt_with, "key")).map_err(|e| {
+        format!(
+            "round trip: decrypt_with.key does not import ({})",
+            e.code()
+        )
+    })?;
+    let policy = jwe_policy(decrypt_with).map_err(|e| {
+        format!(
+            "round trip: decrypt_with's lists are refused ({})",
+            e.code()
+        )
+    })?;
+    let decrypted = jwe_decrypt(jwe, &key, &policy).map_err(|e| {
+        format!(
+            "round trip: the encrypted JWE does not decrypt with decrypt_with ({})",
+            e.code()
+        )
+    })?;
+    if decrypted.plaintext() != plaintext {
+        return Err("round trip: the decrypted plaintext is not the encrypted one".to_owned());
+    }
+    Ok(())
+}
+
+/// `jwe.decrypt` (RFC 7516 §5.2). The steps run in the order
+/// conformance/README.md fixes for every runner, and the first error is
+/// the outcome: import `key` (RFC 7517), build the policy from
+/// `allowed_algs`, `allowed_enc` and the optional members, then decrypt.
+/// A string `jwe` goes to `decrypt_compact` (RFC 7516 §7.1); an object
+/// goes, as its JSON text, to `decrypt_json` (§7.2).
+fn run_jwe_decrypt(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let key = match Jwk::from_object(input_object(input, "key")) {
+        Ok(key) => key,
+        Err(e) => return Ok(Err(e)),
+    };
+    let policy = match jwe_policy(input) {
+        Ok(policy) => policy,
+        Err(e) => return Ok(Err(e)),
+    };
+    let decrypted = match jwe_decrypt(input.get("jwe").expect("validated"), &key, &policy) {
+        Ok(decrypted) => decrypted,
+        Err(e) => return Ok(Err(e)),
+    };
+    let index = u64::try_from(decrypted.recipient()).expect("an index fits u64");
+    out.insert("plaintext_b64u", b64url_encode(decrypted.plaintext()));
+    out.insert(
+        "recipient",
+        Number::from_u64(index).expect("an index is a safe integer"),
+    );
+    Ok(Ok(()))
+}
+
 /// The library format a validated `format` member names.
 fn input_format(input: &Object) -> KeyFormat {
     let name = input_str(input, "format");
@@ -1256,6 +1806,16 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
                 return Ok(Err(e));
             }
         }
+        "jwe.encrypt" => {
+            if let Err(e) = run_jwe_encrypt(input, &vector.expect, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "jwe.decrypt" => {
+            if let Err(e) = run_jwe_decrypt(input, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
         "keys.import_pem" => {
             if let Err(e) = run_keys_import_pem(input, &mut out)? {
                 return Ok(Err(e));
@@ -1318,12 +1878,18 @@ fn compare(expect: &Expect, outcome: &Result<Object, Error>) -> Result<(), Strin
     }
 }
 
-/// A vector that passed.
+/// A vector that did not fail.
 #[derive(Debug)]
-struct Passed {
-    operation: String,
-    /// Whether it expects a failure (`"ok": false`).
-    negative: bool,
+enum Passed {
+    /// It ran and met its expectation.
+    Ran {
+        operation: String,
+        /// Whether it expects a failure (`"ok": false`).
+        negative: bool,
+    },
+    /// It needs these features, which this build does not enable; it was
+    /// validated but not run, and never counts as passing.
+    Skipped { features: Vec<&'static str> },
 }
 
 /// Parses a vector file. Vector files are trusted test data, so they get a
@@ -1337,18 +1903,33 @@ fn parse_vector_file(bytes: &[u8]) -> polyjose::Result<Value> {
 }
 
 /// Checks one vector file: parse, validate, run, compare. Returns what
-/// passed, or a failure message naming the file and the `source`.
+/// passed (or was skipped for a missing feature), or a failure message
+/// naming the file and the `source`.
 fn check_vector(name: &str, bytes: &[u8]) -> Result<Passed, String> {
+    check_vector_with(name, bytes, &enabled_features())
+}
+
+/// [`check_vector`] with `enabled` as the build's features.
+fn check_vector_with(name: &str, bytes: &[u8], enabled: &[&str]) -> Result<Passed, String> {
     let value = parse_vector_file(bytes)
         .map_err(|e| format!("{name}: not a valid JSON text ({e}); see conformance/schema.json"))?;
     let source = usable_source(&value).unwrap_or_else(|| "<missing>".to_owned());
     let fail = |problem: String| format!("{name} (source: {source}): {problem}");
     let vector = validate(&value).map_err(fail)?;
+    let missing: Vec<&'static str> = vector
+        .features
+        .iter()
+        .copied()
+        .filter(|f| !enabled.contains(f))
+        .collect();
+    if !missing.is_empty() {
+        return Ok(Passed::Skipped { features: missing });
+    }
     let outcome = catch_unwind(AssertUnwindSafe(|| execute(&vector)))
         .map_err(|_| fail("panicked while running".to_owned()))?
         .map_err(fail)?;
     compare(&vector.expect, &outcome).map_err(fail)?;
-    Ok(Passed {
+    Ok(Passed::Ran {
         negative: matches!(vector.expect, Expect::Err(_)),
         operation: vector.operation,
     })
@@ -1362,6 +1943,8 @@ struct Report {
     passed: BTreeMap<String, usize>,
     /// Passing failure (`"ok": false`) vectors per operation.
     passed_negative: BTreeMap<String, usize>,
+    /// `SKIPPED (needs feature ...)` lines, one per skipped vector file.
+    skipped: Vec<String>,
     failures: Vec<String>,
 }
 
@@ -1397,6 +1980,11 @@ fn collect(dir: &Path, files: &mut Vec<PathBuf>, failures: &mut Vec<String>) {
 }
 
 fn run_dir(dir: &Path) -> Report {
+    run_dir_with(dir, &enabled_features())
+}
+
+/// [`run_dir`] with `enabled` as the build's features.
+fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
     let mut report = Report::default();
     let mut files = Vec::new();
     collect(dir, &mut files, &mut report.failures);
@@ -1415,17 +2003,25 @@ fn run_dir(dir: &Path) -> Report {
             .to_string();
         let result = std::fs::read(&path)
             .map_err(|e| format!("{name}: cannot read: {e}"))
-            .and_then(|bytes| check_vector(&name, &bytes));
+            .and_then(|bytes| check_vector_with(&name, &bytes, enabled));
         match result {
-            Ok(passed) => {
-                if passed.negative {
-                    *report
-                        .passed_negative
-                        .entry(passed.operation.clone())
-                        .or_default() += 1;
+            Ok(Passed::Ran {
+                operation,
+                negative,
+            }) => {
+                if negative {
+                    *report.passed_negative.entry(operation.clone()).or_default() += 1;
                 }
-                *report.passed.entry(passed.operation).or_default() += 1;
+                *report.passed.entry(operation).or_default() += 1;
             }
+            Ok(Passed::Skipped { features }) => report.skipped.push(format!(
+                "{name}: SKIPPED (needs feature {})",
+                features
+                    .iter()
+                    .map(|f| format!("`{}`", cargo_feature(f)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
             Err(msg) => report.failures.push(msg),
         }
     }
@@ -1447,9 +2043,20 @@ fn conformance_vectors() {
         report.files,
         report.failures.join("\n  ")
     );
+    let passed: usize = report.passed.values().sum();
     eprintln!(
-        "conformance: {} vectors passed {:?}",
-        report.files, report.passed
+        "conformance: {passed} of {} vectors passed {:?}; {} skipped",
+        report.files,
+        report.passed,
+        report.skipped.len()
+    );
+    for line in &report.skipped {
+        eprintln!("  {line}");
+    }
+    assert_eq!(
+        passed + report.skipped.len(),
+        report.files,
+        "every vector file either passes or is skipped for a named feature"
     );
 }
 
@@ -1516,9 +2123,16 @@ fn schema_kind(kind: Kind) -> Value {
         return parse(&format!(r##"{{"$ref":"#/$defs/{def}"}}"##));
     }
     match kind {
-        Kind::Hex | Kind::Base64url | Kind::Count | Kind::Jws | Kind::AlgList | Kind::Nested(_) => {
+        Kind::Hex
+        | Kind::Base64url
+        | Kind::Count
+        | Kind::Jws
+        | Kind::AlgList
+        | Kind::Jwe
+        | Kind::Nested(_) => {
             unreachable!("a $ref kind")
         }
+        Kind::StringList => parse(r#"{"type":"array","items":{"type":"string"}}"#),
         Kind::Bool => parse(r#"{"type":"boolean"}"#),
         Kind::List(shape) => parse(&format!(
             r##"{{"type":"array","minItems":1,"items":{{"$ref":"#/$defs/{}"}}}}"##,
@@ -1652,7 +2266,26 @@ fn schema_and_runner_agree() {
         Some(false)
     );
     assert_eq!(strings(at(&schema, &["required"])), TOP_LEVEL);
-    assert_eq!(member_names(at(&schema, &["properties"])), TOP_LEVEL);
+    let mut properties = TOP_LEVEL.to_vec();
+    properties.extend(TOP_LEVEL_OPTIONAL);
+    assert_eq!(member_names(at(&schema, &["properties"])), properties);
+    let mut features = Object::new();
+    features.insert(
+        "enum",
+        feature_names()
+            .into_iter()
+            .map(Value::from)
+            .collect::<Vec<_>>(),
+    );
+    let mut expected = parse(r#"{"type":"array","uniqueItems":true}"#)
+        .into_object()
+        .unwrap();
+    expected.insert("items", features);
+    assert_eq!(
+        annotated(at(&schema, &["properties", "features"])),
+        Value::from(expected),
+        "features"
+    );
     for name in ["source", "description"] {
         let property = annotated(at(&schema, &["properties", name]));
         assert_eq!(property, parse(r##"{"$ref":"#/$defs/text"}"##));
@@ -1718,6 +2351,10 @@ fn schema_and_runner_agree() {
     assert_eq!(
         annotated(at(defs, &["alg_list"])),
         parse(r#"{"type":"array","items":{"type":"string"}}"#)
+    );
+    assert_eq!(
+        annotated(at(defs, &["jwe"])),
+        parse(r#"{"type":["string","object"]}"#)
     );
 
     let rules = at(&schema, &["allOf"]).as_array().unwrap();
@@ -2207,10 +2844,10 @@ fn unknown_operation_fails() {
 /// implement fails the run too; it is never skipped.
 #[test]
 fn reserved_but_unimplemented_operations_fail() {
-    for op in ["jwe.encrypt", "jwe.decrypt", "jwt.validate"] {
-        let json = vector(op, r#"{"token":"a.b.c"}"#, r#"{"ok":true}"#);
-        fails_naming_source("reserved-op.json", &json, "not implemented");
-    }
+    // jwe.encrypt and jwe.decrypt were reserved until 0003 T09 implemented
+    // them; jwt.validate still is.
+    let json = vector("jwt.validate", r#"{"token":"a.b.c"}"#, r#"{"ok":true}"#);
+    fails_naming_source("reserved-op.json", &json, "not implemented");
 }
 
 /// Criterion 2: every way of breaking the schema fails the run, and the
@@ -3570,4 +4207,450 @@ fn run_dir_fails_when_there_is_nothing_to_run() {
     let missing = empty.0.join("does-not-exist");
     let report = run_dir(&missing);
     assert!(!report.failures.is_empty(), "{report:?}");
+}
+
+// ---------------------------------------------------------------------------
+// jwe.* self-tests and the `features` member (0003 T09), on RFC 7516 A.3
+// (the vector files under conformance/vectors/jwe/ cite it).
+// ---------------------------------------------------------------------------
+
+/// RFC 7516 A.3.3 key and A.3.7 compact JWE.
+const JWE_A3_KEY: &str = r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#;
+const JWE_A3: &str = "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0.6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ.AxY8DCtDaGlsbGljb3RoZQ.KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY.U0m_YmjN04DJvceFICbCVQ";
+/// "Live long and prosper." (RFC 7516 A.3).
+const JWE_A3_PLAINTEXT_B64U: &str = "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg";
+const JWE_A3_POLICY: &str = r#""allowed_algs":["A128KW"],"allowed_enc":["A128CBC-HS256"]"#;
+
+fn jwe_decrypt_input(jwe: &str, key: &str, extra: &str) -> String {
+    format!(r#"{{"jwe":"{jwe}","key":{key},{JWE_A3_POLICY}{extra}}}"#)
+}
+
+fn jwe_encrypt_input(serialization: &str, recipients: &str, extra: &str) -> String {
+    format!(
+        r#"{{"serialization":"{serialization}","enc":"A128CBC-HS256","plaintext_b64u":"{JWE_A3_PLAINTEXT_B64U}","recipients":{recipients}{extra}}}"#
+    )
+}
+
+fn jwe_a3_recipient() -> String {
+    format!(r#"[{{"alg":"A128KW","key":{JWE_A3_KEY}}}]"#)
+}
+
+fn jwe_decrypt_with() -> String {
+    format!(r#"{{"ok":true,"decrypt_with":{{"key":{JWE_A3_KEY},{JWE_A3_POLICY}}}}}"#)
+}
+
+fn with_features(vector: &str, features: &str) -> String {
+    vector.replacen(
+        r#""operation""#,
+        &format!(r#""features":{features},"operation""#),
+        1,
+    )
+}
+
+/// Every `jwe.*` input form runs: decrypt success and failure (from the
+/// key import, the policy and the library), and encrypt round trips and
+/// refusals.
+#[test]
+fn jwe_vectors_pass() {
+    let decrypted =
+        format!(r#"{{"ok":true,"plaintext_b64u":"{JWE_A3_PLAINTEXT_B64U}","recipient":0}}"#);
+    let cases = [
+        vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+            &decrypted,
+        ),
+        vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(
+                JWE_A3,
+                JWE_A3_KEY,
+                r#","understood_crit":["x"],"max_input_len":1000,"max_recipients":1,"max_pbes2_count":1000,"max_decompressed_len":0"#,
+            ),
+            &decrypted,
+        ),
+        vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, r#","max_input_len":10"#),
+            r#"{"ok":false,"error":"InvalidFormat"}"#,
+        ),
+        vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(JWE_A3, r#"{"kty":"oct","k":"Zg=="}"#, ""),
+            r#"{"ok":false,"error":"InvalidBase64"}"#,
+        ),
+        vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, "").replace(r#"["A128KW"]"#, "[]"),
+            r#"{"ok":false,"error":"AlgorithmNotAllowed"}"#,
+        ),
+        vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, "").replace(r#""jwe":"eyJ"#, r#""jwe":"x.eyJ"#),
+            r#"{"ok":false,"error":"InvalidFormat"}"#,
+        ),
+        vector(
+            "jwe.encrypt",
+            &jwe_encrypt_input("compact", &jwe_a3_recipient(), ""),
+            &jwe_decrypt_with(),
+        ),
+        vector(
+            "jwe.encrypt",
+            &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","aad_b64u":"YQ""#),
+            r#"{"ok":false,"error":"InvalidFormat"}"#,
+        ),
+        vector(
+            "jwe.encrypt",
+            &jwe_encrypt_input(
+                "compact",
+                r#"[{"alg":"A128KW","key":{"kty":"oct","k":"Zg=="}}]"#,
+                "",
+            ),
+            r#"{"ok":false,"error":"InvalidBase64"}"#,
+        ),
+        vector(
+            "jwe.encrypt",
+            &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","protected":{"kid":7}"#),
+            r#"{"ok":false,"error":"InvalidHeader"}"#,
+        ),
+    ];
+    assert_passes(&cases);
+}
+
+/// A `jwe.*` vector that breaks the schema fails the run.
+#[test]
+fn jwe_schema_violations_fail() {
+    let ok = r#"{"ok":true,"plaintext_b64u":"","recipient":0}"#;
+    let input = jwe_decrypt_input(JWE_A3, JWE_A3_KEY, "");
+    let encrypt = jwe_encrypt_input("compact", &jwe_a3_recipient(), "");
+    let cases: Vec<(&str, String, &str)> = vec![
+        (
+            "decrypt without allowed_enc",
+            vector(
+                "jwe.decrypt",
+                &input.replace(r#","allowed_enc":["A128CBC-HS256"]"#, ""),
+                ok,
+            ),
+            "/input/allowed_enc: required member is missing",
+        ),
+        (
+            "decrypt with an unknown member",
+            vector(
+                "jwe.decrypt",
+                &input.replace(r#""jwe""#, r#""token":1,"jwe""#),
+                ok,
+            ),
+            "/input/token: unknown member",
+        ),
+        (
+            "decrypt jwe of the wrong type",
+            vector(
+                "jwe.decrypt",
+                &input.replace(&format!(r#""{JWE_A3}""#), "7"),
+                ok,
+            ),
+            "/input/jwe: must be a string (compact) or an object",
+        ),
+        (
+            "decrypt understood_crit not strings",
+            vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, r#","understood_crit":[1]"#),
+                ok,
+            ),
+            "/input/understood_crit: must be an array of strings",
+        ),
+        (
+            "decrypt ok without recipient",
+            vector("jwe.decrypt", &input, r#"{"ok":true,"plaintext_b64u":""}"#),
+            "/expect/recipient: required member is missing",
+        ),
+        (
+            "encrypt recipient with an unknown member",
+            vector(
+                "jwe.encrypt",
+                &jwe_encrypt_input(
+                    "compact",
+                    &format!(r#"[{{"alg":"A128KW","key":{JWE_A3_KEY},"kid":"a"}}]"#),
+                    "",
+                ),
+                &jwe_decrypt_with(),
+            ),
+            "/input/recipients/0/kid: unknown member",
+        ),
+        (
+            "encrypt with no recipients",
+            vector(
+                "jwe.encrypt",
+                &jwe_encrypt_input("compact", "[]", ""),
+                &jwe_decrypt_with(),
+            ),
+            "/input/recipients: must be a non-empty array",
+        ),
+        (
+            "encrypt with an unknown serialization",
+            vector(
+                "jwe.encrypt",
+                &jwe_encrypt_input("json", &jwe_a3_recipient(), ""),
+                &jwe_decrypt_with(),
+            ),
+            "/input/serialization: must be one of",
+        ),
+        (
+            "encrypt expecting both forms",
+            vector(
+                "jwe.encrypt",
+                &encrypt,
+                &format!(
+                    r#"{{"ok":true,"jwe":"a","decrypt_with":{{"key":{JWE_A3_KEY},{JWE_A3_POLICY}}}}}"#
+                ),
+            ),
+            "matches none of the success forms",
+        ),
+        (
+            "rng_b64u without its feature",
+            vector(
+                "jwe.encrypt",
+                &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","rng_b64u":"AA""#),
+                r#"{"ok":true,"jwe":"x"}"#,
+            ),
+            "needs \"fixed-rng\" listed in `features`",
+        ),
+        (
+            "protected_b64u with only another feature",
+            with_features(
+                &vector(
+                    "jwe.encrypt",
+                    &jwe_encrypt_input(
+                        "compact",
+                        &jwe_a3_recipient(),
+                        r#","protected_b64u":"e30""#,
+                    ),
+                    r#"{"ok":true,"jwe":"x"}"#,
+                ),
+                r#"["deflate"]"#,
+            ),
+            "needs \"fixed-rng\"",
+        ),
+        (
+            "compress without its feature",
+            vector(
+                "jwe.encrypt",
+                &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","compress":true"#),
+                &jwe_decrypt_with(),
+            ),
+            "needs \"deflate\" listed in `features`",
+        ),
+        (
+            "an unknown feature",
+            with_features(&vector("jwe.decrypt", &input, ok), r#"["sha1"]"#),
+            "/features/0: must be one of",
+        ),
+        (
+            "a feature listed twice",
+            with_features(
+                &vector("jwe.decrypt", &input, ok),
+                r#"["deflate","deflate"]"#,
+            ),
+            "/features/1: listed twice",
+        ),
+        (
+            "features not an array",
+            with_features(&vector("jwe.decrypt", &input, ok), r#""deflate""#),
+            "/features: must be an array",
+        ),
+    ];
+    for (what, json, needle) in &cases {
+        fails_naming_source(&format!("schema ({what}).json"), json, needle);
+    }
+}
+
+/// A `jwe.*` vector the library does not meet fails, naming the file and
+/// the source; so does a round trip whose decryption fails.
+#[test]
+fn jwe_mismatches_fail() {
+    let other_key = r#"{"kty":"oct","k":"BwcHBwcHBwcHBwcHBwcHBw"}"#;
+    let cases = [
+        (
+            "wrong plaintext",
+            vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+                r#"{"ok":true,"plaintext_b64u":"AA","recipient":0}"#,
+            ),
+            "`plaintext_b64u`: expected",
+        ),
+        (
+            "wrong error",
+            vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, other_key, ""),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            "expected error InvalidKey, got error DecryptionFailed",
+        ),
+        (
+            "round trip with the wrong key",
+            vector(
+                "jwe.encrypt",
+                &jwe_encrypt_input("compact", &jwe_a3_recipient(), ""),
+                &format!(r#"{{"ok":true,"decrypt_with":{{"key":{other_key},{JWE_A3_POLICY}}}}}"#),
+            ),
+            "does not decrypt with decrypt_with (DecryptionFailed)",
+        ),
+        (
+            "round trip with a key that does not import",
+            vector(
+                "jwe.encrypt",
+                &jwe_encrypt_input("compact", &jwe_a3_recipient(), ""),
+                &format!(
+                    r#"{{"ok":true,"decrypt_with":{{"key":{{"kty":"oct"}},{JWE_A3_POLICY}}}}}"#
+                ),
+            ),
+            "decrypt_with.key does not import",
+        ),
+        (
+            "an exact expectation of a randomized encryption",
+            vector(
+                "jwe.encrypt",
+                &jwe_encrypt_input("compact", &jwe_a3_recipient(), ""),
+                &format!(r#"{{"ok":true,"jwe":"{JWE_A3}"}}"#),
+            ),
+            "`jwe`: expected",
+        ),
+    ];
+    for (what, json, needle) in &cases {
+        fails_naming_source(&format!("failing ({what}).json"), json, needle);
+    }
+}
+
+/// The reproducible path (feature `insecure-test-vectors`): the A.3 output
+/// exactly, and every injected byte must be drawn, so a vector pins the
+/// draw order (CEK, recipients, IV).
+#[cfg(feature = "insecure-test-vectors")]
+#[test]
+fn jwe_reproducible_vectors_pin_the_draw_order() {
+    // A.3.2 CEK then A.3.4 IV.
+    let rng = "BNMfxVSd_P4LZJ36P6pqzmt81C1vawnbyLEA8I-cLM8DFjwMK0NoaWxsaWNvdGhl";
+    let protected = JWE_A3.split('.').next().unwrap();
+    let exact = format!(r#"{{"ok":true,"jwe":"{JWE_A3}"}}"#);
+    let input = |rng: &str| {
+        jwe_encrypt_input(
+            "compact",
+            &jwe_a3_recipient(),
+            &format!(r#","protected_b64u":"{protected}","rng_b64u":"{rng}""#),
+        )
+    };
+    let features = r#"["fixed-rng"]"#;
+    assert_passes(&[with_features(
+        &vector("jwe.encrypt", &input(rng), &exact),
+        features,
+    )]);
+    fails_naming_source(
+        "leftover.json",
+        &with_features(
+            &vector("jwe.encrypt", &input(&format!("{rng}AAAA")), &exact),
+            features,
+        ),
+        "byte(s) the encryption did not draw",
+    );
+    // IV before CEK: another output.
+    let swapped = "AxY8DCtDaGlsbGljb3RoZQTTH8VUnfz-C2Sd-j-qas5rfNQtb2sJ28ixAPCPnCzP";
+    fails_naming_source(
+        "swapped.json",
+        &with_features(&vector("jwe.encrypt", &input(swapped), &exact), features),
+        "`jwe`: expected",
+    );
+}
+
+/// A vector needing a feature the build lacks is reported SKIPPED with the
+/// feature's name, is never counted as passing, and is still validated.
+#[test]
+fn vectors_needing_a_disabled_feature_are_skipped_by_name() {
+    let needs = with_features(
+        &vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+        ),
+        r#"["deflate","fixed-rng"]"#,
+    );
+    // Its expectation is wrong, but with the features off it does not run.
+    match check_vector_with("needs.json", needs.as_bytes(), &[]) {
+        Ok(Passed::Skipped { features }) => {
+            assert_eq!(features, ["deflate", "fixed-rng"])
+        }
+        other => panic!("expected SKIPPED, got {other:?}"),
+    }
+    match check_vector_with("needs.json", needs.as_bytes(), &["fixed-rng"]) {
+        Ok(Passed::Skipped { features }) => assert_eq!(features, ["deflate"]),
+        other => panic!("expected SKIPPED, got {other:?}"),
+    }
+    // With the features on, it runs, and fails.
+    assert!(check_vector_with("needs.json", needs.as_bytes(), &feature_names()).is_err());
+    // A schema-invalid vector fails even when it would be skipped.
+    let invalid = needs.replace(r#""allowed_enc""#, r#""allowed_encs""#);
+    assert!(check_vector_with("invalid.json", invalid.as_bytes(), &[]).is_err());
+
+    let dir = TempDir::new("skip");
+    dir.write("a/needs.json", &needs);
+    dir.write(
+        "a/runs.json",
+        &vector(
+            "b64url.encode",
+            r#"{"bytes_hex":"66"}"#,
+            r#"{"ok":true,"b64u":"Zg"}"#,
+        ),
+    );
+    let report = run_dir_with(&dir.0, &[]);
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(report.files, 2);
+    assert_eq!(report.passed.values().sum::<usize>(), 1, "{report:?}");
+    assert_eq!(report.passed.get("jwe.decrypt"), None, "{report:?}");
+    assert_eq!(
+        report.skipped,
+        ["a/needs.json: SKIPPED (needs feature `deflate`, `insecure-test-vectors`)"]
+    );
+    assert_eq!(
+        enabled_features().len(),
+        usize::from(cfg!(feature = "deflate"))
+            + usize::from(cfg!(feature = "insecure-test-vectors"))
+    );
+}
+
+/// Every JWE vector is binding-ready (see [`binding_ready`]): the bindings
+/// run the `jwe.*` vectors too (features 0006-0009), except those needing
+/// `insecure-test-vectors`, which no binding enables (ADR 0005).
+#[test]
+fn jwe_vectors_are_binding_ready() {
+    let dir = conformance_dir().join("vectors");
+    let (mut files, mut failures) = (Vec::new(), Vec::new());
+    collect(&dir, &mut files, &mut failures);
+    let mut checked = 0;
+    for path in files {
+        let relative = path.strip_prefix(&dir).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let is_jwe = relative
+            .components()
+            .next()
+            .is_some_and(|c| c.as_os_str() == "jwe")
+            || json::parse(text.as_bytes()).is_ok_and(|v| {
+                v.get("operation")
+                    .and_then(Value::as_str)
+                    .is_some_and(|op| op.starts_with("jwe."))
+            });
+        if !is_jwe {
+            continue;
+        }
+        checked += 1;
+        if let Err(problem) = binding_ready(&text) {
+            failures.push(format!("{}: {problem}", relative.display()));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "not binding-ready:\n  {}",
+        failures.join("\n  ")
+    );
+    assert!(checked >= 60, "only {checked} JWE vector files found");
 }
