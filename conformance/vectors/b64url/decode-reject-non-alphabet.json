@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A character outside the alphabet is rejected (RFC 4648 §3.3)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "Zm9v*"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "source": "polyjose",
+  "description": "\"k\" with non-zero pad bits is a second spelling of the RFC 7517 A.3 key and is rejected (RFC 4648 §3.5, RFC 7638 §7)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUh"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

@@ -12,10 +12,25 @@ categories = ["cryptography", "authentication", "wasm"]
 [lints]
 workspace = true
 
+[features]
+default = []
+# INSECURE. NEVER enable in production or in a binding (ADR 0005). Exposes
+# `polyjose::insecure_test_vectors`, a deterministic byte source used only to reproduce published test
+# vectors (RFC 7520 JWE outputs). scripts/check-test-vectors-off.sh fails the build if any binding
+# can enable it.
+insecure-test-vectors = []
+
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-base64ct.workspace = true
 zeroize.workspace = true
 subtle.workspace = true
+getrandom.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+# Differential-test oracle for util's own base64url codec (ADR 0016 §5); never shipped.
+base64ct.workspace = true
+# Test oracles for the json module's differential tests (ADR 0016 §5). float_roundtrip makes
+# serde_json's double parsing correctly rounded, like core's str::parse::<f64>.
+serde.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }

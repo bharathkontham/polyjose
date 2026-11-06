@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "The RFC 8037 A.6 X25519 public key with \"alg\": \"ECDH-ES+A128KW\" imports (RFC 7518 §4.6, RFC 8037 §3.2); the expected value is not printed in an RFC and was derived independently (Python hashlib over the RFC 7638 §3 input)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+      "alg": "ECDH-ES+A128KW"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "giQqigT_IKcuzHl0FVJ3k5ts3_TWNAxvsC08UZsfcM8",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:giQqigT_IKcuzHl0FVJ3k5ts3_TWNAxvsC08UZsfcM8"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source": "RFC 4648 §10",
+  "description": "\"Zm9v\" decodes to \"foo\" (RFC 4648 §10 vector, unpadded per RFC 7515 §2)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "Zm9v"
+  },
+  "expect": {
+    "ok": true,
+    "bytes_hex": "666f6f"
+  }
+}

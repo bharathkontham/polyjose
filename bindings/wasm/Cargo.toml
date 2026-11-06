@@ -11,3 +11,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 polyjose.workspace = true
 wasm-bindgen = "0.2.130"
+# Selects getrandom's `crypto.getRandomValues` backend for polyjose's OS CSPRNG (ADR 0005). Per the
+# getrandom 0.4.3 docs (https://docs.rs/getrandom/0.4.3/#webassembly-support), `wasm_js` is a crate
+# feature that libraries must not enable; the exception is a crate that already depends on
+# wasm-bindgen unconditionally, which this binding does. Not used directly: it only adds the feature.
+getrandom = { workspace = true, features = ["wasm_js"] }

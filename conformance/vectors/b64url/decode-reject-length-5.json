@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Length 1 mod 4 cannot encode whole octets (RFC 4648 §4)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "Zm9vY"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

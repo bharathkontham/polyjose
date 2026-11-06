@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "The RFC 7517 A.3 HMAC key value with the content encryption \"alg\": \"A256GCM\" (a dir CEK, RFC 7518 §4.5, §5.3) imports; the expected value is not printed in an RFC and was derived independently (Python hashlib over the RFC 7638 §3 input)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
+      "alg": "A256GCM"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "y_x3gCJnL6oKGBBIXScabduwxTVy2Wd2bzRVEUbdUzc",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:y_x3gCJnL6oKGBBIXScabduwxTVy2Wd2bzRVEUbdUzc"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "The RFC 8037 A.2 Ed25519 public key with \"alg\": \"ES256\": ES256 needs an EC P-256 key (RFC 7518 §3.4), so the JWK alg names an algorithm its key cannot serve (RFC 7517 §4.4)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+      "alg": "ES256"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

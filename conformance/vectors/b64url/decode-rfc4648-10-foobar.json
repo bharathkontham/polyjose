@@ -1,0 +1,12 @@
+{
+  "source": "RFC 4648 §10",
+  "description": "\"Zm9vYmFy\" decodes to \"foobar\" (RFC 4648 §10 vector, unpadded per RFC 7515 §2)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "Zm9vYmFy"
+  },
+  "expect": {
+    "ok": true,
+    "bytes_hex": "666f6f626172"
+  }
+}

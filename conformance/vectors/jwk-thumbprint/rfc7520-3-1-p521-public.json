@@ -1,0 +1,21 @@
+{
+  "source": "RFC 7638 §3 over the RFC 7520 §3.1 key",
+  "description": "Thumbprint of the RFC 7520 §3.1 P-521 public key, whose 66-octet \"x\" starts with a zero octet (RFC 7518 §6.2.1.2); the expected value is not printed in an RFC and was derived independently (Python hashlib over the RFC 7638 §3 input)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "kid": "bilbo.baggins@hobbiton.example",
+      "use": "sig",
+      "crv": "P-521",
+      "x": "AHKZLLOsCOzz5cY97ewNUajB957y-C-U88c3v13nmGZx6sYl_oJXu9A5RkTKqjqvjyekWF-7ytDyRXYgCF5cj0Kt",
+      "y": "AdymlHvOiLxXkEhayXQnNCvDX4h9htZaCJN34kfmC6pV5OhQHiraVySsUdaQkAgDPrwQrJmbnX9cwlGfP-HqHZR1"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "dHri3SADZkrush5HU_50AoRhcKFryN-PI6jPBtPL55M",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:dHri3SADZkrush5HU_50AoRhcKFryN-PI6jPBtPL55M"
+  }
+}

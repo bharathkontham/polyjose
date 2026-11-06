@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Non-zero pad bits: \"QR\" would decode like \"QQ\"; only the canonical encoding is accepted (RFC 4648 §3.5)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "QR"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

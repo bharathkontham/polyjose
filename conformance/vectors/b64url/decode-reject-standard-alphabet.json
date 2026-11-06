@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "\"+\" and \"/\" belong to the base64 alphabet (RFC 4648 §4), not base64url (RFC 4648 §5)",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "+/8"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}
