@@ -6,37 +6,41 @@
 //! [`FAMILIES`]; tests call the twins with a fake table (see `jws/alg.rs`,
 //! "The test seam").
 //!
-//! # Verification, step by step (ADR 0026 §2, §3)
+//! # Verification, step by step (ADR 0048, ADR 0026 §3)
 //!
-//! [`verify_json`] owns steps 1–3 and the parsing part of step 4; the rest
-//! is the shared chain of `process.rs`. Each step runs over **every**
+//! The steps are ADR 0048's (see the [module table](crate::jws)).
+//! [`verify_json`] owns steps 1–4; steps 5 and 6 are the shared chain of
+//! `process.rs`. Each step runs over **every**
 //! signature before the next step starts, so a JWS that is wrong in
 //! several places fails identically whatever the order of its signatures:
 //!
-//! 1. the input length, then (once parsed) the signature count
+//! 1. the input length → `InvalidFormat`; JSON syntax and duplicate
+//!    members anywhere in the document → `InvalidJson`; the RFC 7515
+//!    §7.2.1/§7.2.2 shape and, once known, the signature count
 //!    → `InvalidFormat`;
-//! 2. the RFC 7515 §7.2.1/§7.2.2 shape → `InvalidFormat`; JSON syntax and
-//!    duplicate members anywhere in the document → `InvalidJson`;
-//! 3. base64url of each `protected` and `signature` (RFC 7515 §5.2 steps
-//!    2, 7) → `InvalidBase64`;
-//! 4. in this order, each over every signature:
+//! 2. and 3., in this order, each over every signature:
+//!    - base64url of each `protected` and `signature` (RFC 7515 §5.2
+//!      steps 2, 7) → `InvalidBase64`;
 //!    - each protected header is a JSON object (RFC 7515 §5.2 step 3;
 //!      duplicates included, ADR 0041 §1) → `InvalidJson`;
-//!    - every registered parameter of both headers has its type
-//!      (`Header::from_object`) → `InvalidHeader`;
-//!    - the payload, base64url-decoded unless the protected headers' `b64`
-//!      is `false` (RFC 7515 §5.2 step 6, RFC 7797 §3) → `InvalidBase64`.
-//!      It waits until here because only the headers say whether it is
-//!      encoded, and runs before the structure rules, as in `compact.rs`
-//!      (lead ruling on ADR 0026 §2 steps 3–4). If the protected headers
-//!      disagree on `b64` there is no single encoding, so this is skipped
-//!      and the disagreement below decides;
-//!    - each signature's header structure (`JoseHeader::new`, RFC 7515
-//!      §5.2 step 4, §4.1.11), then `b64` agreement across signatures
-//!      (`common_b64`, RFC 7797 §3) → `InvalidHeader`;
-//! 5. to 9. per signature, in array order, until one verifies
-//!    (`verify_signature`, RFC 7515 §5.2 step 8); if none does, the
-//!    furthest-progressed error (`furthest`, ADR 0026 §3).
+//!    - every registered parameter of the protected **and** the
+//!      unprotected header has its type, and `crit` its syntax
+//!      (`Header::from_object`, RFC 7515 §4.1.11; ADR 0049 §3 for the
+//!      unprotected one) → `InvalidHeader`;
+//! 4. the payload, base64url-decoded unless the protected headers' `b64`
+//!    is `false` (RFC 7515 §5.2 step 6, RFC 7797 §3) → `InvalidBase64`.
+//!    It waits until here because only the headers say whether it is
+//!    encoded, and runs before the structure rules, as in `compact.rs`
+//!    (ADR 0048). If the protected headers disagree on `b64` there is no
+//!    single encoding, so this is skipped and step 5's disagreement check
+//!    decides;
+//! 5. each signature's header structure (`JoseHeader::new`, RFC 7515
+//!    §5.2 step 4, §4.1.11), then `b64` agreement across signatures
+//!    (`common_b64`, RFC 7797 §3) → `InvalidHeader`;
+//! 6. per signature, in array order, until one verifies
+//!    (`verify_signature`: ADR 0026 §2 steps 5–9, RFC 7515 §5.2 step 8);
+//!    if none does, the furthest-progressed error (`furthest`,
+//!    ADR 0026 §3).
 
 use zeroize::Zeroizing;
 
@@ -259,11 +263,13 @@ fn sign_all<'s>(
 /// RFC 7515 §5.2 leaves the multiple-signature policy to the application;
 /// polyjose's is ADR 0026 §3:
 ///
-/// - Steps 1–4 (shape, base64url, header structure) run over **every**
-///   signature first, and all signatures must agree on `b64`. Any failure
-///   rejects the whole JWS.
-/// - Steps 5–9 then run per signature, in array order, and stop at the
-///   first that verifies. [`Verified::signature_index`] says which.
+/// - Steps 1–5 of ADR 0048 (shape and limits, base64url, header
+///   decoding, payload, header structure) run over **every** signature
+///   first, and all signatures must agree on `b64`. Any failure rejects
+///   the whole JWS.
+/// - Step 6 (ADR 0026 §2 steps 5–9) then runs per signature, in array
+///   order, and stops at the first that verifies.
+///   [`Verified::signature_index`] says which.
 /// - If none verifies, the error is that of the signature that got
 ///   furthest: [`Error::InvalidSignature`] > [`Error::InvalidKey`] >
 ///   [`Error::KeyAlgorithmMismatch`] > [`Error::AlgorithmNotAllowed`] >
@@ -284,8 +290,9 @@ fn sign_all<'s>(
 ///   object); `payload` present or absent against the detached mode.
 /// - [`Error::InvalidJson`]: JSON syntax, or a duplicate member anywhere,
 ///   including inside a header (ADR 0041 §1).
-/// - [`Error::InvalidBase64`], [`Error::InvalidHeader`], then the per-signature
-///   errors ranked as above (ADR 0026 §2, §3).
+/// - [`Error::InvalidBase64`], [`Error::InvalidHeader`], in the order of
+///   ADR 0048 (see the [module docs](crate::jws)), then the per-signature
+///   errors ranked as above (ADR 0026 §3).
 pub fn verify_json(jws: &str, key: &Jwk, opts: &VerifyOptions<'_>) -> Result<Verified> {
     verify_json_with(&FAMILIES, jws, key, opts)
 }
@@ -297,13 +304,14 @@ pub(crate) fn verify_json_with(
     key: &Jwk,
     opts: &VerifyOptions<'_>,
 ) -> Result<Verified> {
-    // Steps 1-2.
+    // Step 1 (ADR 0048).
     let Parsed {
         payload,
         signatures,
     } = parse(jws, opts)?;
 
-    // Step 3 (RFC 7515 §5.2 steps 2 and 7), every signature.
+    // Steps 2 and 3, base64url (RFC 7515 §5.2 steps 7 and 2), every
+    // signature.
     let decoded = signatures
         .iter()
         .map(|raw| {
@@ -316,15 +324,16 @@ pub(crate) fn verify_json_with(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Step 4, I-JSON (RFC 7515 §5.2 step 3; duplicates are InvalidJson,
+    // Step 3, I-JSON (RFC 7515 §5.2 step 3; duplicates are InvalidJson,
     // ADR 0041 §1), every protected header.
     let protected_objects = decoded
         .iter()
         .map(|(protected, _)| protected.as_ref().map(|p| protected_object(p)).transpose())
         .collect::<Result<Vec<_>>>()?;
 
-    // Step 4, parameter types (Header::from_object → InvalidHeader), every
-    // header of every signature.
+    // Step 3, parameter types and `crit` syntax (Header::from_object →
+    // InvalidHeader), every header of every signature: the unprotected
+    // one too (ADR 0049 §3).
     let mut typed = Vec::with_capacity(signatures.len());
     let mut signed = Vec::with_capacity(signatures.len());
     for ((raw, protected), (_, signature)) in
@@ -336,7 +345,7 @@ pub(crate) fn verify_json_with(
         signed.push((raw.protected, signature));
     }
 
-    // Step 3 for the payload (RFC 7515 §5.2 step 6): whether it is
+    // Step 4, the payload (RFC 7515 §5.2 step 6): whether it is
     // base64url at all is the protected headers' `b64` (RFC 7797 §3), so it
     // runs now, before the structure rules, as in compact.rs. If the
     // protected headers disagree there is no one encoding to check; the
@@ -352,7 +361,7 @@ pub(crate) fn verify_json_with(
         _ => None,
     };
 
-    // Step 4, header structure (RFC 7515 §5.2 step 4), every signature,
+    // Step 5, header structure (RFC 7515 §5.2 step 4), every signature,
     // then `b64` agreement across them (RFC 7797 §3, ADR 0026 §3).
     let headers = typed
         .into_iter()
@@ -367,8 +376,8 @@ pub(crate) fn verify_json_with(
         return Err(Error::InvalidHeader("b64 differs between signatures"));
     };
 
-    // Steps 5-9, per signature in array order, first success wins
-    // (ADR 0026 §3).
+    // Step 6 (ADR 0026 §2 steps 5-9), per signature in array order, first
+    // success wins (ADR 0026 §3).
     let mut errors = Vec::with_capacity(headers.len());
     for (signature_index, (header, (protected_b64, signature))) in
         headers.into_iter().zip(signed).enumerate()
@@ -388,12 +397,12 @@ pub(crate) fn verify_json_with(
             Err(e) => errors.push(e),
         }
     }
-    // Step 2 guarantees at least one signature, so `furthest` is `Some`;
+    // Step 1 guarantees at least one signature, so `furthest` is `Some`;
     // fail closed regardless.
     Err(furthest(errors).unwrap_or(Error::InvalidSignature))
 }
 
-/// A JSON JWS after steps 1–2: its payload and its signature objects.
+/// A JSON JWS after step 1: its payload and its signature objects.
 struct Parsed<'a> {
     payload: Payload<'a>,
     signatures: Vec<RawSignature>,
@@ -408,7 +417,7 @@ enum Payload<'a> {
     Detached(&'a [u8]),
 }
 
-/// The JWS Payload after step 3, with its form in the signing input
+/// The JWS Payload after step 4, with its form in the signing input
 /// (RFC 7515 §5.1 step 5, RFC 7797 §3). Everything here may be secret, so
 /// it is wiped on drop (ADR 0049 §4).
 struct Content<'a> {
@@ -485,7 +494,7 @@ impl<'a> Content<'a> {
     }
 }
 
-/// One signature object's members after step 2 (RFC 7515 §7.2.1).
+/// One signature object's members after step 1 (RFC 7515 §7.2.1).
 struct RawSignature {
     /// `protected`, still encoded: the signing input uses it verbatim
     /// (RFC 7515 §5.2 step 8). Never the empty string.
@@ -496,17 +505,19 @@ struct RawSignature {
     signature: String,
 }
 
-/// Steps 1 and 2 of ADR 0026 §2: the size limits and the RFC 7515 §7.2
-/// shape. Unknown members are ignored at every level (RFC 7515 §7.2.1).
+/// Step 1 of ADR 0048 (steps 1 and 2 of ADR 0026 §2): the size limits
+/// and the RFC 7515 §7.2 shape. Unknown members are ignored at every level
+/// (RFC 7515 §7.2.1).
 fn parse<'a>(jws: &str, opts: &VerifyOptions<'a>) -> Result<Parsed<'a>> {
-    // Step 1, before parsing (ADR 0026 §7). The JSON layer's own input
-    // limit follows the caller's, so a larger configured limit holds.
+    // The input length, before parsing (ADR 0026 §7). The JSON layer's
+    // own input limit follows the caller's, so a larger configured limit
+    // holds.
     if jws.len() > opts.max_input_len {
         return Err(Error::InvalidFormat("JWS is longer than max_input_len"));
     }
     let mut limits = Limits::DEFAULT;
     limits.max_input_len = opts.max_input_len;
-    // Step 2: JSON syntax and duplicate members, anywhere in the document
+    // JSON syntax and duplicate members, anywhere in the document
     // (RFC 7515 §5.2 step 4, RFC 7493 §2.3) → InvalidJson.
     let mut top = json::parse_with_limits(jws.as_bytes(), &limits)?
         .into_object()
@@ -541,7 +552,7 @@ fn parse<'a>(jws: &str, opts: &VerifyOptions<'a>) -> Result<Parsed<'a>> {
             if entries.is_empty() {
                 return Err(Error::InvalidFormat("signatures must not be empty"));
             }
-            // Step 1's signature-count limit (ADR 0026 §7), once known.
+            // The signature-count limit (ADR 0026 §7), once known.
             if entries.len() > opts.max_signatures {
                 return Err(Error::InvalidFormat("more signatures than max_signatures"));
             }
@@ -1077,10 +1088,11 @@ mod tests {
 
     #[test]
     fn payload_base64_runs_after_header_parsing_before_header_structure() {
-        // Lead ruling on ADR 0026 §2 steps 3-4, as in compact.rs: the
-        // payload's encoding depends on `b64`, so it is decoded once every
-        // protected header has parsed (and its parameters have their
-        // types), and before the structure rules.
+        // ADR 0048 steps 3-5, as in compact.rs: the payload's encoding
+        // depends on `b64`, so it is decoded (step 4) once every header has
+        // parsed and its parameters have their types (step 3; the
+        // unprotected header's too, ADR 0049 §3), and before the structure
+        // rules (step 5).
         let bad_payload = |entries: &[String]| {
             general(entries).replacen(
                 &format!(r#""payload":"{PAYLOAD_B64}""#),
