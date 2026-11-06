@@ -56,7 +56,18 @@ impl<'a> From<&'a JwkSet> for Keys<'a> {
 
 /// A verified, validated signed JWT (RFC 7519 §7.2).
 ///
-/// `Debug` prints no key material: the claims and the header only.
+/// `Debug` prints no key material and no claim value (workspace secrets
+/// rule, ADR 0049 §4). It holds no key, and prints:
+///
+/// - the claims through [`Claims`]' redacting `Debug`: `iss`, `sub`, `jti`
+///   and each `aud` value as `"<redacted>"`, the NumericDates in full,
+///   the other claims' names and structure with every string redacted
+///   (see [`Claims`#debug]);
+/// - the header through [`Header`]'s `Debug`: its typed parameters (`alg`,
+///   `kid`, `typ`, …) in full, its JSON objects redacted (see
+///   [`Header`#debug]);
+/// - [`alg`](Self::alg), [`key_index`](Self::key_index) and
+///   [`kid`](Self::kid) in full.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct VerifiedJwt {
