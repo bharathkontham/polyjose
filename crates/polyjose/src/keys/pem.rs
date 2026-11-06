@@ -6,6 +6,9 @@
 //! OpenSSL's `EC PRIVATE KEY` (RFC 5915 §4), `RSA PUBLIC KEY` and
 //! `RSA PRIVATE KEY` (RFC 9500 §2.1).
 //!
+//! Input longer than [`MAX_INPUT_LEN`] (about 96 KiB, derived from the
+//! 64 KiB DER cap) is refused first, before any allocation or parse.
+//!
 //! The decoder classifies the label from the BEGIN line before it reads the
 //! body (ADR 0018 §2). A label that names no key structure, `ENCRYPTED
 //! PRIVATE KEY` (ADR 0018 §4) and `RSA PRIVATE KEY` (ADR 0021) fail at once
@@ -110,6 +113,12 @@ pub(crate) const MAX_INPUT_LEN: usize = MAX_BODY_CHARS
 ///
 /// # Errors
 ///
+/// In this order:
+///
+/// - [`Error::InvalidKey`]`("PEM input too large")` for `text` longer than
+///   [`MAX_INPUT_LEN`] octets. This is checked first, before any allocation
+///   or parse, so an oversize input gives this error whatever its label,
+///   including the unsupported ones below, or its content.
 /// - [`Error::UnsupportedAlgorithm`], checked from the BEGIN line before
 ///   the body is read, so whatever the body holds, for a well-formed label
 ///   that names no supported structure (ADR 0018 §2, §4):
