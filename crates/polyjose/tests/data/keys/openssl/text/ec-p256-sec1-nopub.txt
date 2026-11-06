@@ -1,0 +1,12 @@
+Private-Key: (256 bit field, 128 bit security level)
+priv:
+    1c:46:63:ef:39:b5:0b:cb:e2:48:43:c3:70:be:1f:f8:
+    db:f0:be:6b:b0:20:c9:af:88:50:ee:f8:8a:4d:cc:6c
+pub:
+    04:e3:fb:56:f6:be:ba:53:5e:7c:a1:be:f0:bf:9a:3c:
+    96:32:ab:d0:5f:79:18:a8:f9:19:e6:4b:dd:a9:27:34:
+    f9:c4:30:f5:fb:29:7d:bb:39:6c:68:66:ca:c1:84:c1:
+    49:93:09:5a:25:24:5f:1a:ae:23:49:bb:7e:dc:e9:62:
+    75
+ASN1 OID: prime256v1
+NIST CURVE: P-256

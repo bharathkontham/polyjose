@@ -54,3 +54,10 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 # Black-box differential oracle for the own DEFLATE codec of the `deflate` feature (ADR 0017,
 # ADR 0016 §5); never shipped.
 miniz_oxide.workspace = true
+# Oracles for the keys module's owned DER/PEM codecs (ADR 0016 §5, ADR 0018 §1); never shipped.
+der.workspace = true
+spki.workspace = true
+pkcs8.workspace = true
+sec1.workspace = true
+pkcs1.workspace = true
+pem-rfc7468.workspace = true
