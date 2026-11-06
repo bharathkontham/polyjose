@@ -26,6 +26,18 @@ use crate::{Error, Result};
 /// allow-lists: the header alone is never trusted. The limits bound the work
 /// an attacker-chosen JWE can cause before it fails.
 ///
+/// **Pin every JWE key** (ADR 0050 §3, RFC 8725 §3.1). The policy's lists
+/// say which algorithms the caller accepts at all; the key's JWK `alg`
+/// (RFC 7517 §4.4), and `use` (§4.2) or `key_ops` (§4.3), say which one
+/// *this key* may serve, and polyjose enforces them on decrypt. A key
+/// without `alg`, symmetric keys above all, may be tried under every `alg`
+/// and `enc` the policy allows, which is what cross-mode attacks rely on
+/// (ADR 0050 context). So keep the allow-lists to what you use, and give
+/// each key its `alg` (for a `dir` key, `"dir"` or its `enc` value, RFC
+/// 7518 §4.5), plus `"use":"enc"` or `key_ops` (`["decrypt"]` for `dir`,
+/// `["unwrapKey"]` for key wrapping and encryption, `["deriveKey"]` for
+/// ECDH-ES).
+///
 /// ```
 /// use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
 /// use polyjose::jwe::DecryptPolicy;

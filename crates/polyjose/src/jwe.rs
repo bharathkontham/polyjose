@@ -38,6 +38,12 @@
 //! - **Key binding.** The key must be of the family the `alg` needs, and
 //!   its JWK `alg`, `use` and `key_ops` must allow the operation
 //!   (RFC 7517 §4.2–§4.4).
+//! - **Pin every JWE key** (ADR 0050 §3, RFC 8725 §3.1). Give each key a
+//!   JWK `alg`, and `use` (`enc`) or `key_ops`, so it can serve only the
+//!   one mode it is for. A key without `alg`, symmetric keys above all, is
+//!   tried under every `alg` and `enc` the [`DecryptPolicy`] allows, which
+//!   is what cross-mode key confusion relies on; keep the allow-lists to
+//!   what you use.
 //! - **One decryption error.** Every failure after key management starts
 //!   is [`Error::DecryptionFailed`], with no detail (RFC 7516 §11.4–§11.5).
 //! - **Bounded work.** [`DecryptPolicy`] bounds the input size, the
