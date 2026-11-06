@@ -35,7 +35,70 @@ pub(crate) fn validate_claims(c: &Claims, p: &Policy<'_>) -> Result<()> {
     check_exp(c, p, &mut now)?;
     check_nbf(c, p, &mut now)?;
     check_iat(c, p, &mut now)?;
-    Ok(())
+    check_iss(c, p)?;
+    check_sub(c, p)?;
+    check_aud(c, p)
+}
+
+/// J8: with accepted issuers configured, `iss` equals one of them. Exact,
+/// case-sensitive comparison with no normalization (RFC 7519 §2, §4.1.1,
+/// §7.3); RFC 8725 §3.8, RFC 9068 §4; ADR 0027 §4. Without accepted
+/// issuers, `iss` is not checked.
+///
+/// # Errors
+///
+/// [`Error::InvalidClaim`]`("iss")` if `iss` is missing or not accepted.
+fn check_iss(c: &Claims, p: &Policy<'_>) -> Result<()> {
+    let accepted = p.accepted_issuers();
+    if accepted.is_empty() {
+        return Ok(());
+    }
+    match &c.iss {
+        Some(iss) if accepted.contains(iss) => Ok(()),
+        _ => Err(Error::InvalidClaim("iss")),
+    }
+}
+
+/// J9: with an expected subject configured, `sub` equals it exactly
+/// (RFC 7519 §2, §4.1.2, §7.3; ADR 0027 §4).
+///
+/// # Errors
+///
+/// [`Error::InvalidClaim`]`("sub")` if `sub` is missing or different.
+fn check_sub(c: &Claims, p: &Policy<'_>) -> Result<()> {
+    match p.expected_subject() {
+        Some(expected) if c.sub.as_deref() != Some(expected) => Err(Error::InvalidClaim("sub")),
+        _ => Ok(()),
+    }
+}
+
+/// J10: the audience (RFC 7519 §4.1.3; RFC 8725 §3.9; ADR 0027 §4).
+///
+/// - With accepted audiences configured, `aud` is required and at least
+///   one of its values equals one of them exactly (case-sensitive,
+///   RFC 7519 §7.3). An empty array matches nothing.
+/// - With none configured, a token that carries `aud` (an empty array
+///   included) is rejected: "If the principal processing the claim does
+///   not identify itself with a value in the "aud" claim when this claim
+///   is present, then the JWT MUST be rejected" (RFC 7519 §4.1.3). Only
+///   the explicit [`ignore_audience`](Policy::ignore_audience) opt-out
+///   accepts it.
+///
+/// # Errors
+///
+/// [`Error::InvalidClaim`]`("aud")`.
+fn check_aud(c: &Claims, p: &Policy<'_>) -> Result<()> {
+    let accepted = p.accepted_audiences();
+    let ok = match &c.aud {
+        _ if accepted.is_empty() => c.aud.is_none() || p.ignores_audience(),
+        Some(aud) => aud.values().iter().any(|value| accepted.contains(value)),
+        None => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::InvalidClaim("aud"))
+    }
 }
 
 /// The current time, read from the policy's clock on first use and then
@@ -584,5 +647,178 @@ mod tests {
         );
         let p = p.allow_missing_exp();
         assert_eq!(validate_claims(&Claims::new(), &p), Ok(()));
+    }
+
+    fn many(values: &[&str]) -> Option<Audience> {
+        Some(Audience::Many(
+            values.iter().map(|v| (*v).to_owned()).collect(),
+        ))
+    }
+
+    fn one(value: &str) -> Option<Audience> {
+        Some(Audience::One(value.to_owned()))
+    }
+
+    #[test]
+    fn iss_must_equal_an_accepted_issuer_exactly() {
+        // RFC 7519 §4.1.1, §7.3 (case-sensitive, no normalization);
+        // RFC 8725 §3.8; ADR 0027 §4. No time claim: the clock is unread.
+        let p = untimed()
+            .allow_missing_exp()
+            .issuers(&["https://a", "https://b"]);
+        for (iss, expected) in [
+            (Some("https://b"), Ok(())),
+            (Some("https://a"), Ok(())),
+            (Some("https://B"), Err(Error::InvalidClaim("iss"))),
+            (Some("https://b/"), Err(Error::InvalidClaim("iss"))),
+            (Some("https://c"), Err(Error::InvalidClaim("iss"))),
+            (Some(""), Err(Error::InvalidClaim("iss"))),
+            (None, Err(Error::InvalidClaim("iss"))),
+        ] {
+            let mut c = Claims::new();
+            c.iss = iss.map(str::to_owned);
+            assert_eq!(validate_claims(&c, &p), expected, "{iss:?}");
+        }
+        // No accepted issuer: `iss` is not checked.
+        let p = untimed().allow_missing_exp();
+        for iss in [Some("https://anyone"), None] {
+            let mut c = Claims::new();
+            c.iss = iss.map(str::to_owned);
+            assert_eq!(validate_claims(&c, &p), Ok(()), "{iss:?}");
+        }
+    }
+
+    #[test]
+    fn sub_must_equal_the_expected_subject_exactly() {
+        // RFC 7519 §4.1.2, §7.3; ADR 0027 §4.
+        let p = untimed().allow_missing_exp().subject("alice");
+        for (sub, expected) in [
+            (Some("alice"), Ok(())),
+            (Some("Alice"), Err(Error::InvalidClaim("sub"))),
+            (Some("alice "), Err(Error::InvalidClaim("sub"))),
+            (None, Err(Error::InvalidClaim("sub"))),
+        ] {
+            let mut c = Claims::new();
+            c.sub = sub.map(str::to_owned);
+            assert_eq!(validate_claims(&c, &p), expected, "{sub:?}");
+        }
+        let mut c = Claims::new();
+        c.sub = Some("bob".into());
+        assert_eq!(validate_claims(&c, &untimed().allow_missing_exp()), Ok(()));
+    }
+
+    #[test]
+    fn aud_must_contain_an_accepted_audience() {
+        // RFC 7519 §4.1.3: string or array, any-of, case-sensitive; an
+        // empty array matches nothing (ADR 0027 §4).
+        const BAD: Result<()> = Err(Error::InvalidClaim("aud"));
+        let api = untimed().allow_missing_exp().audience("api");
+        let api_web = untimed().allow_missing_exp().audiences(&["api", "web"]);
+        for (p, aud, expected) in [
+            (&api, one("api"), Ok(())),
+            (&api, many(&["x", "api"]), Ok(())),
+            (&api, many(&["api"]), Ok(())),
+            (&api, many(&["x"]), BAD),
+            (&api, many(&[]), BAD),
+            (&api, None, BAD),
+            (&api, one("API"), BAD),
+            (&api, one("x"), BAD),
+            (&api, many(&["API", "ap"]), BAD),
+            (&api_web, many(&["web"]), Ok(())),
+            (&api_web, one("web"), Ok(())),
+            (&api_web, many(&["x", "y"]), BAD),
+        ] {
+            let mut c = Claims::new();
+            c.aud = aud.clone();
+            assert_eq!(validate_claims(&c, p), expected, "{aud:?}");
+        }
+    }
+
+    #[test]
+    fn aud_without_a_configured_audience() {
+        // RFC 7519 §4.1.3: "the JWT MUST be rejected" when the recipient
+        // does not identify itself with a present `aud`, unless the caller
+        // explicitly opts out (ADR 0027 §4, RFC 8725 §3.9).
+        let strict = untimed().allow_missing_exp();
+        let ignoring = untimed().allow_missing_exp().ignore_audience();
+        for (aud, strict_expected) in [
+            (None, Ok(())),
+            (one("api"), Err(Error::InvalidClaim("aud"))),
+            (many(&[]), Err(Error::InvalidClaim("aud"))),
+            (many(&["api", "web"]), Err(Error::InvalidClaim("aud"))),
+        ] {
+            let mut c = Claims::new();
+            c.aud = aud.clone();
+            assert_eq!(validate_claims(&c, &strict), strict_expected, "{aud:?}");
+            assert_eq!(validate_claims(&c, &ignoring), Ok(()), "{aud:?}");
+        }
+        // `ignore_audience` has no effect once an audience is configured.
+        let configured = untimed()
+            .allow_missing_exp()
+            .ignore_audience()
+            .audience("api");
+        for aud in [one("x"), many(&[]), None] {
+            let mut c = Claims::new();
+            c.aud = aud.clone();
+            assert_eq!(
+                validate_claims(&c, &configured),
+                Err(Error::InvalidClaim("aud")),
+                "{aud:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn access_token_policy_requires_the_rfc_9068_claims() {
+        // RFC 9068 §2.2: iss, exp, aud, sub, client_id, iat, jti REQUIRED;
+        // §4: iss and aud checked.
+        let now = 1_300_819_380;
+        let clock = FixedClock(now);
+        let p = Policy::access_token(&clock, ES256, &["https://as"], &["https://rs"]).unwrap();
+        let mut c = Claims::new();
+        c.iss = Some("https://as".into());
+        c.exp = date(now + 300);
+        c.aud = one("https://rs");
+        c.sub = Some("5ba552d67".into());
+        c.iat = date(now - 10);
+        c.insert("client_id", "s6BhdRkqt3").unwrap();
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("jti")));
+        c.jti = Some("dbe39bf3a3ba4238a513f51d6e1691c4".into());
+        assert_eq!(validate_claims(&c, &p), Ok(()));
+        // Each of the seven missing in turn is InvalidClaim.
+        for name in ["iss", "exp", "aud", "sub", "iat", "jti"] {
+            let mut missing = c.clone();
+            match name {
+                "iss" => missing.iss = None,
+                "exp" => missing.exp = None,
+                "aud" => missing.aud = None,
+                "sub" => missing.sub = None,
+                "iat" => missing.iat = None,
+                _ => missing.jti = None,
+            }
+            assert_eq!(
+                validate_claims(&missing, &p),
+                Err(Error::InvalidClaim(name)),
+                "{name}"
+            );
+        }
+        let mut without_client = Claims::new();
+        without_client.iss = c.iss.clone();
+        without_client.exp = c.exp;
+        without_client.aud = c.aud.clone();
+        without_client.sub = c.sub.clone();
+        without_client.iat = c.iat;
+        without_client.jti = c.jti.clone();
+        assert_eq!(
+            validate_claims(&without_client, &p),
+            Err(Error::InvalidClaim("client_id"))
+        );
+        // The issuer and audience are checked, not only present.
+        let mut wrong = c.clone();
+        wrong.iss = Some("https://other".into());
+        assert_eq!(validate_claims(&wrong, &p), Err(Error::InvalidClaim("iss")));
+        let mut wrong = c;
+        wrong.aud = one("https://other");
+        assert_eq!(validate_claims(&wrong, &p), Err(Error::InvalidClaim("aud")));
     }
 }
