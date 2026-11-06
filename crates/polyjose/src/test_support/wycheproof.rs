@@ -1,4 +1,67 @@
 //! Loader for the vendored Wycheproof vectors (ADR 0008 layer 1).
+//!
+//! The vectors live in `tests/third_party/wycheproof/`, pinned to
+//! C2SP/wycheproof `d17cc89f` with their Apache-2.0 license; the README there
+//! has the provenance and a SHA-256 per file. [`load`] checks a file against
+//! that table before parsing it, so a test never runs on altered data.
+//!
+//! # Shape
+//!
+//! [`load`]`(name)` returns a [`Suite`] → [`Group`]s → [`Test`]s:
+//!
+//! - [`Test`]: `tc_id`, `comment`, `flags`, the expected `result`
+//!   ([`Expected`]: valid, invalid or acceptable) and the hex-decoded
+//!   [`Input`], read with [`Test::signature`] (`msg`, `sig`), [`Test::mac`]
+//!   (`key`, `msg`, `tag`) or [`Test::jws`].
+//! - [`Group`]: the parameters (`key_size`, `tag_size`, `sha`, `mgf_sha`,
+//!   `salt_len`), the file's `keyJwk`/`publicKeyJwk` as JSON text
+//!   ([`Group::key_jwk`]), the raw key ([`PublicKey`]: `modulus` and
+//!   `publicExponent`, `wx`/`wy`, or `pk`), and for the JOSE-level file the
+//!   `private`/`public` JWKs ([`JwsKeys`]). [`Group::verification_jwk`]
+//!   gives the key to verify with, rebuilding a JWK from the raw key where
+//!   the file has none ([`PublicKey::to_jwk`]).
+//!
+//! # Use in a family test (T06–T09)
+//!
+//! ```ignore
+//! use crate::jwk::Jwk;
+//! use crate::test_support::wycheproof::{self, Deviation, Outcome};
+//!
+//! /// Where polyjose differs from Wycheproof's `result`, and why.
+//! const ED25519: &[Deviation] = &[Deviation::tests(
+//!     &[152, 153],
+//!     Outcome::Reject,
+//!     "ADR 0026 §6: small-order public keys are rejected",
+//! )];
+//!
+//! #[test]
+//! fn wycheproof_ed25519() {
+//!     let suite = wycheproof::load("ed25519");
+//!     wycheproof::assert_conforms(&suite, ED25519, |group, test| {
+//!         let (msg, sig) = test.signature();
+//!         let key = Jwk::from_json(group.verification_jwk().as_bytes());
+//!         Outcome::of(&key.and_then(|key| verify(&key, msg, sig)))
+//!     });
+//! }
+//! ```
+//!
+//! [`assert_conforms`] fails on every unexplained deviation; [`Deviation`]
+//! lists the rules. [`names`]`("rsa_pss_")` lists the vendored suites with a
+//! prefix.
+//!
+//! # Scope
+//!
+//! Test builds only: the inner `#![cfg(test)]` and the `#[cfg(test)]`
+//! declarations keep it out of every other build (`cargo build -p polyjose`
+//! compiles none of it). The integration tests in `crates/polyjose/tests/`
+//! (such as T11's `jws_wycheproof.rs`) link the library built *without*
+//! `cfg(test)`, so they cannot see this module at all. A test that needs it
+//! must be a unit test inside `src/`. The module refers to nothing else in
+//! the crate (it uses only std, serde, serde_json, sha2 and base64ct), so
+//! it can be moved somewhere shared if an integration test ever needs it.
+//!
+//! The data is untrusted input: it is parsed, never executed, and the
+//! parser fails closed on anything outside the schema.
 #![cfg(test)]
 
 use base64ct::{Base64UrlUnpadded, Encoding};
