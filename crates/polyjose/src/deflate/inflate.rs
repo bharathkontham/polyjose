@@ -10,9 +10,8 @@
 //!
 //! The buffer grows geometrically (doubling, clipped to `max_output`). A
 //! growth step copies into a fresh buffer and then zeroizes and frees the
-//! old one, so for the duration of that copy both are live: never more
-//! than twice `max_output` in total, and only once the output has already
-//! reached half the new capacity.
+//! old one, so for the duration of that copy both are live (the old one
+//! smaller than the new): under twice `max_output` in total.
 
 use zeroize::Zeroizing;
 
