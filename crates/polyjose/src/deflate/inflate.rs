@@ -24,11 +24,12 @@
 //!
 //! The trade-off: memory now follows the output instead of the cap, at the
 //! price of copies and a transient peak.
-//! - At rest the buffer is at most twice the output length.
+//! - Until the first growth step the buffer is the up-front reservation;
+//!   once grown, it is at most twice the output length at rest.
 //! - During a growth step the old buffer (full, about the output length)
-//!   and the new one (twice that) are both live: a peak of under 3× the
-//!   output length once the step's write lands, i.e. 1.5× the new
-//!   capacity, and always under 2 × `max_output`.
+//!   and the new one (up to twice that) are both live: a peak of under 3×
+//!   the output length once the step's write lands, and under twice the
+//!   new capacity, so always under 2 × `max_output`.
 //! - Each byte is copied O(1) times on average (doubling).
 //!
 //! Without growth the up-front reservation would have to be `limit`
