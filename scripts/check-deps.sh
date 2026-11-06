@@ -26,7 +26,8 @@
 #      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
 #  12. a workspace member depends on the `rsa` package under another name (`package = "rsa"`),
 #      which would hide its use from check 9.
-#  Checks 9-12 are the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
+#  Checks 9-12 are, with scripts/check-rsa-symbols.sh (the same rule read from the compiled object
+#  code, ADR 0049 §1), the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
 #  them means removing that ignore.
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
@@ -470,8 +471,16 @@ for dep in pkgs[0]["dependencies"]:
 #      (verification uses the typed `pkcs1v15::VerifyingKey` / `pss::VerifyingKey`), and
 #      `Pkcs1v15Encrypt` (RSA1_5, ADR 0021);
 #    - anywhere: `use rsa;`, `use rsa as …`, `pub use rsa…` and `extern crate rsa`, which would let
-#      other files name rsa items without writing `rsa::`;
-#    - in a file that names the rsa crate (`rsa::` not preceded by a path, `use rsa…`): the word
+#      other files name rsa items without writing `rsa::`, and the same inside any use tree
+#      (`use {rsa as r};`, `pub(crate) use {rsa::pkcs1v15};`, `use r#rsa as r;`; ADR 0049 §1);
+#    - anywhere: `#[path …]` (also inside `cfg_attr`) and `include!`, which can load code from a
+#      file outside the scanned roots (ADR 0049 §1); include_str!/include_bytes! stay allowed;
+#    - in jws/rsa.rs and jwe/rsa_oaep.rs (or their mod.rs forms): any out-of-line child module
+#      (`mod x;`), and any file in jws/rsa/ or jwe/rsa_oaep/. A child module reaches the parent's
+#      private `use rsa::{pkcs1v15, ..}` as `super::pkcs1v15` without naming rsa (ADR 0049 §1).
+#      Inline modules (`#[cfg(test)] mod tests { .. }`) are allowed: their text is the file's;
+#    - in a file that names the rsa crate (`rsa::` not preceded by a path, `use rsa…`, or an `rsa`
+#      token anywhere in a use tree, e.g. `use super::{hmac, rsa};`): the word
 #      `SigningKey` (e.g. `rsa::pkcs1v15::SigningKey`), the word `Decryptor` (`rsa::traits::
 #      Decryptor`) and any `decrypt(`/`decrypt_blinded(` call (e.g. an `Oaep` decryption). These
 #      words are legitimate elsewhere (`p256::ecdsa::SigningKey`, `cbc::Decryptor`), so RSA code
@@ -483,12 +492,15 @@ for dep in pkgs[0]["dependencies"]:
 #    collapsed to one space and the spaces next to `::` removed: one with the comments kept and
 #    one with each comment replaced by a space. A view only adds findings; a finding that only a
 #    view sees is reported with the line where the match starts.
-#    Residual risk, outside any text scan: names built by macros or `include!`.
+#    Residual risk, outside any text scan: names built by macros (`k!(rsa)`). This scan is the fast
+#    first layer; scripts/check-rsa-symbols.sh reads the compiled objects of polyjose and the
+#    bindings, where no spelling of a path can hide it (ADR 0049 §1).
 check_rsa_public_only() {
   python3 -I -c '
 import bisect, os, re, sys
 roots = sys.argv[1:]
 word = lambda w: re.compile(r"(?<![A-Za-z0-9_])" + w + r"(?![A-Za-z0-9_])")
+USE_TREE = r"[A-Za-z0-9_:{},*#\s]"
 ANYWHERE = [
     (word("RsaPrivateKey"), "RsaPrivateKey: RSA private keys are not supported (ADR 0021)"),
     (word("BlindedSigningKey"), "BlindedSigningKey: RSA signing is not supported (ADR 0021)"),
@@ -499,12 +511,37 @@ ANYWHERE = [
     (word("Pkcs1v15Encrypt"), "Pkcs1v15Encrypt: RSA1_5 is not supported (ADR 0021)"),
     (re.compile(r"(?<![A-Za-z0-9_])use\s+(::\s*)?rsa\s*(;|as(?![A-Za-z0-9_]))"),
      "use rsa / use rsa as: aliasing the rsa crate hides it from this check"),
+    # A use tree is the text from `use` to its `;` when that text holds only path characters, so
+    # `{`, `}`, `,`, `*`, `as`, `self` and raw identifiers (`r#rsa`) are all inside it.
+    (re.compile(r"(?<![A-Za-z0-9_])use\s+" + USE_TREE + r"*?(?<![A-Za-z0-9_])rsa\s+as(?![A-Za-z0-9_])" + USE_TREE + r"*;"),
+     "rsa as ... in a use tree: aliasing the rsa crate hides it from this check (ADR 0049 §1)"),
     (re.compile(r"(?<![A-Za-z0-9_])pub(\s*\([^)]*\))?\s+use\s+(::\s*)?rsa(?![A-Za-z0-9_])"),
      "pub use rsa: re-exporting rsa hides it from this check"),
-    (re.compile(r"(?<![A-Za-z0-9_])extern\s+crate\s+rsa(?![A-Za-z0-9_])"),
+    (re.compile(r"(?<![A-Za-z0-9_])pub(\s*\([^)]*\))?\s+use\s+" + USE_TREE + r"*?(?<![A-Za-z0-9_])rsa(?![A-Za-z0-9_])" + USE_TREE + r"*;"),
+     "pub use rsa: re-exporting rsa hides it from this check"),
+    (re.compile(r"(?<![A-Za-z0-9_])extern\s+crate\s+(r#)?rsa(?![A-Za-z0-9_])"),
      "extern crate rsa: aliasing the rsa crate hides it from this check"),
+    # A module file named by #[path] (also through cfg_attr), or code pulled in by include!, can
+    # sit outside the scanned roots (ADR 0049 §1). include_str!/include_bytes! read data, not code.
+    (re.compile(r"#\s*!?\s*\[\s*(path(?![A-Za-z0-9_])|cfg_attr(?![A-Za-z0-9_])[^\]]*(?<![A-Za-z0-9_])path\s*=)"),
+     "#[path]: a module file named by #[path] can sit outside the scanned roots (ADR 0049 §1)"),
+    (re.compile(r"(?<![A-Za-z0-9_])include\s*!"),
+     "include!: code included from another file can sit outside the scanned roots (ADR 0049 §1)"),
 ]
-NAMES_RSA = re.compile(r"(?<![A-Za-z0-9_:])rsa\s*::|(?<![A-Za-z0-9_])::\s*rsa\s*::|(?<![A-Za-z0-9_])use\s+(::\s*)?rsa(?![A-Za-z0-9_])")
+NAMES_RSA = re.compile(r"(?<![A-Za-z0-9_:])rsa\s*::|(?<![A-Za-z0-9_])::\s*rsa\s*::|(?<![A-Za-z0-9_])use\s+(::\s*)?rsa(?![A-Za-z0-9_])"
+                       r"|(?<![A-Za-z0-9_])use\s+" + USE_TREE + r"*?(?<![A-Za-z0-9_])rsa(?![A-Za-z0-9_])" + USE_TREE + r"*;")
+# The files that hold RSA code, and the directories their child module files would live in. An
+# out-of-line child module (`mod x;`) reaches the private `use rsa::{pkcs1v15, ..}` as
+# `super::pkcs1v15` in a file that never names rsa, so these files may only have inline modules
+# (`mod x { .. }`, e.g. `#[cfg(test)] mod tests`), whose text this check sees as part of the file.
+RSA_FILES = {"crates/polyjose/src/jws/rsa.rs", "crates/polyjose/src/jws/rsa/mod.rs",
+             "crates/polyjose/src/jwe/rsa_oaep.rs", "crates/polyjose/src/jwe/rsa_oaep/mod.rs"}
+RSA_CHILD_DIRS = ("crates/polyjose/src/jws/rsa/", "crates/polyjose/src/jwe/rsa_oaep/")
+IN_RSA_MODULE_FILE = [
+    (re.compile(r"(?<![A-Za-z0-9_])mod\s+((r#)?[A-Za-z_][A-Za-z0-9_]*)\s*;"),
+     lambda m: "mod %s;: an out-of-line child module of an RSA file can use its private rsa imports"
+               " through super:: (ADR 0049 §1); use an inline mod %s { .. }" % (m.group(1), m.group(1))),
+]
 IN_RSA_FILE = [
     (word("SigningKey"), "SigningKey in a file that uses the rsa crate: RSA signing is not supported (ADR 0021)"),
     (word("Decryptor"), "Decryptor in a file that uses the rsa crate: RSA decryption is not supported (ADR 0021)"),
@@ -585,25 +622,35 @@ for root in roots:
                 text = f.read()
             lines = text.split("\n")
             views = [flatten((ch, k) for k, ch in enumerate(text)), flatten(strip_comments(text))]
+            rel = path.replace(os.sep, "/")
             rules = list(ANYWHERE)
             if any(NAMES_RSA.search(line) for line in lines) or any(NAMES_RSA.search(v) for v, _ in views):
                 rules += IN_RSA_FILE
+            if rel in RSA_FILES:
+                rules += IN_RSA_MODULE_FILE
             reported = set()
+            if rel.startswith(RSA_CHILD_DIRS) and rel not in RSA_FILES:
+                print("%s:1: a child module file of an RSA file (ADR 0049 §1): RSA code stays in"
+                      " jws/rsa.rs and jwe/rsa_oaep.rs, with inline modules only" % path)
+                found += 1
+            # The reason of a rule is a string, or a function of the match (to name what matched).
+            explain = lambda why, m: why(m) if callable(why) else why
             for number, line in enumerate(lines, 1):
                 for pattern, why in rules:
-                    if pattern.search(line):
-                        print("%s:%d: %s" % (path, number, why))
+                    m = pattern.search(line)
+                    if m:
+                        print("%s:%d: %s" % (path, number, explain(why, m)))
                         found += 1
-                        reported.add((number, why))
+                        reported.add((number, explain(why, m)))
             line_starts = [0] + [k + 1 for k, ch in enumerate(text) if ch == "\n"]
             for view, offsets in views:
                 for pattern, why in rules:
                     for m in pattern.finditer(view):
                         number = bisect.bisect_right(line_starts, offsets[m.start()])
-                        if (number, why) not in reported:
-                            print("%s:%d: %s (path split across lines, by whitespace or by a comment)" % (path, number, why))
+                        if (number, explain(why, m)) not in reported:
+                            print("%s:%d: %s (path split across lines, by whitespace or by a comment)" % (path, number, explain(why, m)))
                             found += 1
-                            reported.add((number, why))
+                            reported.add((number, explain(why, m)))
 for root in roots:
     if not os.path.isdir(root):
         sys.exit("%s is not a directory" % root)
