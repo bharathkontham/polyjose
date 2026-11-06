@@ -1,11 +1,13 @@
 //! Claims validation against the policy: steps J4–J10 of ADR 0027 §9
 //! (RFC 7519 §4.1.1–§4.1.6; RFC 8725 §3.8–§3.9; RFC 9068 §2.2, §4).
 
+use core::cmp::Ordering;
+
 use crate::error::{Error, Result};
 
 use super::claims::REGISTERED_CLAIMS;
 use super::typ::ACCESS_TOKEN_REQUIRED_CLAIMS;
-use super::{Claims, Policy};
+use super::{Claims, NumericDate, Policy};
 
 /// The [`Error::InvalidClaim`] detail for a missing claim whose name the
 /// caller chose and that is not one polyjose knows: the detail is a
@@ -29,7 +31,114 @@ const OTHER_REQUIRED_CLAIM: &str = "required";
 /// (ADR 0028).
 pub(crate) fn validate_claims(c: &Claims, p: &Policy<'_>) -> Result<()> {
     check_presence(c, p)?;
+    let mut now = Now::new(p);
+    check_exp(c, p, &mut now)?;
+    check_nbf(c, p, &mut now)?;
+    check_iat(c, p, &mut now)?;
     Ok(())
+}
+
+/// The current time, read from the policy's clock on first use and then
+/// reused: at most one read per validation, and none when no time check
+/// runs (ADR 0028).
+struct Now<'p, 'a> {
+    policy: &'p Policy<'a>,
+    secs: Option<i64>,
+}
+
+impl<'p, 'a> Now<'p, 'a> {
+    fn new(policy: &'p Policy<'a>) -> Self {
+        Self { policy, secs: None }
+    }
+
+    /// Whole seconds since the epoch, within ±(2^53 − 1).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidClaim`]`("clock")`, or the clock's own error
+    /// (ADR 0028 §1).
+    fn get(&mut self) -> Result<i64> {
+        match self.secs {
+            Some(secs) => Ok(secs),
+            None => {
+                let secs = self.policy.now()?;
+                self.secs = Some(secs);
+                Ok(secs)
+            }
+        }
+    }
+}
+
+/// J5: a present `exp` has not passed. RFC 7519 §4.1.4: "the current
+/// date/time MUST be before the expiration date/time", with "some small
+/// leeway"; rejected iff `exp ≤ now − leeway` (ADR 0027 §3). Presence is
+/// J4's job.
+///
+/// # Errors
+///
+/// [`Error::TokenExpired`], or a clock error.
+fn check_exp(c: &Claims, p: &Policy<'_>, now: &mut Now<'_, '_>) -> Result<()> {
+    match &c.exp {
+        Some(exp) if exp.is_expired(now.get()?, p.leeway_secs()) => Err(Error::TokenExpired),
+        _ => Ok(()),
+    }
+}
+
+/// J6: a present `nbf` has been reached. RFC 7519 §4.1.5: "the current
+/// date/time MUST be after or equal to the not-before date/time", with
+/// "some small leeway"; rejected iff `nbf > now + leeway` (ADR 0027 §3).
+///
+/// # Errors
+///
+/// [`Error::TokenNotYetValid`], or a clock error.
+fn check_nbf(c: &Claims, p: &Policy<'_>, now: &mut Now<'_, '_>) -> Result<()> {
+    match &c.nbf {
+        Some(nbf) if nbf.is_not_yet_valid(now.get()?, p.leeway_secs()) => {
+            Err(Error::TokenNotYetValid)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// J7: with a maximum age set, `iat` lies within
+/// `[now − max_age − leeway, now + leeway]` (ADR 0027 §3). RFC 7519
+/// §4.1.6 "can be used to determine the age of the JWT" but sets no rule
+/// of its own, so without a maximum age `iat` is not time-checked and a
+/// future `iat` is accepted (reported erratum 7720).
+///
+/// # Errors
+///
+/// [`Error::InvalidClaim`]`("iat")`, or a clock error.
+fn check_iat(c: &Claims, p: &Policy<'_>, now: &mut Now<'_, '_>) -> Result<()> {
+    let Some(max_age) = p.max_age_secs() else {
+        return Ok(());
+    };
+    // J4 made `iat` required with a maximum age; checked again so this
+    // step never depends on that.
+    let iat = c.iat.as_ref().ok_or(Error::InvalidClaim("iat"))?;
+    if iat_outside_window(iat, now.get()?, max_age, p.leeway_secs()) {
+        return Err(Error::InvalidClaim("iat"));
+    }
+    Ok(())
+}
+
+/// Whether `iat` was issued in the future (`iat > now + leeway`) or too
+/// long ago (`iat < now − max_age − leeway`), ADR 0027 §3.
+///
+/// Exact for every `i64` `now` and `u32` setting, with no overflow: the
+/// bounds are computed with saturating `i64` arithmetic and compared
+/// without rounding by [`NumericDate::cmp_secs`]. A bound that saturates
+/// lies beyond `i64`'s range, so beyond every NumericDate (at most
+/// 2^53 − 1 in magnitude), and the saturated value orders the same way
+/// against every NumericDate. Both bounds move in one direction only, so
+/// saturating twice clamps the same way as once.
+fn iat_outside_window(iat: &NumericDate, now: i64, max_age: u32, leeway: u32) -> bool {
+    let leeway = i64::from(leeway);
+    let latest = now.saturating_add(leeway);
+    let earliest = now
+        .saturating_sub(i64::from(max_age))
+        .saturating_sub(leeway);
+    iat.cmp_secs(latest) == Ordering::Greater || iat.cmp_secs(earliest) == Ordering::Less
 }
 
 /// J4 (ADR 0027 §9): every required claim is present, with any value.
@@ -98,7 +207,9 @@ fn detail(name: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json::Number;
+    use core::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    use crate::json::{MAX_SAFE_INTEGER, Number};
     use crate::json::{Object, Value};
     use crate::jwa::SigningAlg;
     use crate::jwt::{Audience, Clock, FixedClock, NumericDate};
@@ -260,5 +371,218 @@ mod tests {
             validate_claims(&Claims::new(), &p),
             Err(Error::InvalidClaim("exp"))
         );
+    }
+
+    /// A policy over `clock` with `leeway` seconds of skew.
+    fn timed(clock: &FixedClock, leeway: u32) -> Policy<'_> {
+        Policy::new(clock, ES256).unwrap().leeway(leeway).unwrap()
+    }
+
+    /// A clock that counts its reads.
+    struct CountingClock(i64, AtomicUsize);
+
+    impl Clock for CountingClock {
+        fn now(&self) -> Result<i64> {
+            self.1.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(self.0)
+        }
+    }
+
+    #[test]
+    fn exp_boundaries_of_adr_0027_section_3() {
+        // RFC 7519 §4.1.4: rejected iff exp ≤ now − leeway (ADR 0027 §3).
+        for (exp, leeway, now, expected) in [
+            (1000.0, 60, 1059, Ok(())),
+            (1000.0, 60, 1060, Err(Error::TokenExpired)),
+            (1000.0, 0, 999, Ok(())),
+            (1000.0, 0, 1000, Err(Error::TokenExpired)),
+            (1000.5, 0, 1000, Ok(())),
+            (1000.5, 0, 1001, Err(Error::TokenExpired)),
+            // A negative date is simply in the past (ADR 0027 §2).
+            (-1.0, 0, 0, Err(Error::TokenExpired)),
+            (-1.0, 60, 0, Ok(())),
+            (-61.0, 60, 0, Err(Error::TokenExpired)),
+        ] {
+            let clock = FixedClock(now);
+            let mut c = Claims::new();
+            c.exp = NumericDate::from_f64(exp);
+            assert_eq!(
+                validate_claims(&c, &timed(&clock, leeway)),
+                expected,
+                "exp {exp}, leeway {leeway}, now {now}"
+            );
+        }
+    }
+
+    #[test]
+    fn nbf_boundaries_of_adr_0027_section_3() {
+        // RFC 7519 §4.1.5: rejected iff nbf > now + leeway (ADR 0027 §3).
+        for (nbf, leeway, now, expected) in [
+            (Some(1000.0), 60, 940, Ok(())),
+            (Some(1000.0), 60, 939, Err(Error::TokenNotYetValid)),
+            (Some(1000.0), 0, 1000, Ok(())),
+            (Some(1000.0), 0, 999, Err(Error::TokenNotYetValid)),
+            (Some(1000.5), 0, 1000, Err(Error::TokenNotYetValid)),
+            (Some(1000.5), 0, 1001, Ok(())),
+            (Some(-100.0), 60, 0, Ok(())),
+            (Some(-100.0), 0, -100, Ok(())),
+            (None, 0, 0, Ok(())),
+        ] {
+            let clock = FixedClock(now);
+            let mut c = Claims::new();
+            c.nbf = nbf.and_then(NumericDate::from_f64);
+            let p = timed(&clock, leeway).allow_missing_exp();
+            assert_eq!(
+                validate_claims(&c, &p),
+                expected,
+                "nbf {nbf:?}, leeway {leeway}, now {now}"
+            );
+        }
+    }
+
+    #[test]
+    fn future_iat_is_accepted_without_max_age() {
+        // Reported erratum 7720 on RFC 7519 §4.1.6 (ADR 0027 §3).
+        let now = 1_300_819_380;
+        let clock = FixedClock(now);
+        let mut c = Claims::new();
+        c.exp = date(now + 7200);
+        c.iat = date(now + 3600);
+        assert_eq!(validate_claims(&c, &timed(&clock, 60)), Ok(()));
+        assert_eq!(validate_claims(&c, &timed(&clock, 0)), Ok(()));
+    }
+
+    #[test]
+    fn iat_window_with_max_age() {
+        // ADR 0027 §3: rejected iff iat > now + leeway or
+        // iat < now − max_age − leeway (RFC 7519 §4.1.6).
+        let now = 1_300_819_380;
+        let clock = FixedClock(now);
+        let p = timed(&clock, 60).max_age(300);
+        let mut c = Claims::new();
+        c.exp = date(now + 7200);
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("iat")));
+        for (offset, expected) in [
+            (61.0, Err(Error::InvalidClaim("iat"))),
+            (60.5, Err(Error::InvalidClaim("iat"))),
+            (60.0, Ok(())),
+            (0.0, Ok(())),
+            (-360.0, Ok(())),
+            (-360.5, Err(Error::InvalidClaim("iat"))),
+            (-361.0, Err(Error::InvalidClaim("iat"))),
+        ] {
+            c.iat = NumericDate::from_f64(now as f64 + offset);
+            assert_eq!(validate_claims(&c, &p), expected, "iat now{offset:+}");
+        }
+    }
+
+    #[test]
+    fn iat_window_is_exact_for_any_now_and_bound() {
+        // No overflow, no panic and no rounding for every i64 time and u32
+        // setting (ADR 0027 §3). The policy's clock is bounded to
+        // ±(2^53 − 1), but the arithmetic does not rely on it.
+        let max = NumericDate::from_secs(MAX_SAFE_INTEGER).unwrap();
+        let min = NumericDate::from_secs(-MAX_SAFE_INTEGER).unwrap();
+        let half = NumericDate::from_f64(0.5).unwrap();
+        for (iat, now, max_age, leeway, outside) in [
+            // i64 extremes: now ± max_age ± leeway leaves the i64 range.
+            (max, i64::MAX, u32::MAX, u32::MAX, true),
+            (min, i64::MAX, u32::MAX, u32::MAX, true),
+            (max, i64::MAX, 0, u32::MAX, true),
+            (max, i64::MIN, u32::MAX, u32::MAX, true),
+            (min, i64::MIN, u32::MAX, u32::MAX, true),
+            (min, i64::MIN + 1, 0, 0, true),
+            // Exact at the edges of the NumericDate range, where
+            // now ± leeway is beyond 2^53 and not exact as a double.
+            (max, MAX_SAFE_INTEGER, 0, 0, false),
+            (max, MAX_SAFE_INTEGER - 1, 0, 0, true),
+            (max, MAX_SAFE_INTEGER + 1, 0, 0, true),
+            (max, MAX_SAFE_INTEGER + 1, 1, 0, false),
+            (max, MAX_SAFE_INTEGER + 600, 0, 600, false),
+            (max, MAX_SAFE_INTEGER + 601, 0, 600, true),
+            (min, -MAX_SAFE_INTEGER, 0, 0, false),
+            (min, -MAX_SAFE_INTEGER + 1, 0, 0, true),
+            (min, -MAX_SAFE_INTEGER - 1, 0, 0, true),
+            (min, -MAX_SAFE_INTEGER - 1, 0, 1, false),
+            // Fractions lie strictly between their integers.
+            (half, 0, 0, 0, true),
+            (half, 1, 0, 0, true),
+            (half, 1, 1, 0, false),
+            (half, 0, 0, 1, false),
+        ] {
+            assert_eq!(
+                iat_outside_window(&iat, now, max_age, leeway),
+                outside,
+                "iat {}, now {now}, max_age {max_age}, leeway {leeway}",
+                iat.as_f64()
+            );
+        }
+    }
+
+    #[test]
+    fn the_clock_is_read_once_and_only_for_a_time_check() {
+        // ADR 0028: no read without a time check (PanicClock above), and
+        // one read however many checks run.
+        let clock = CountingClock(1000, AtomicUsize::new(0));
+        let p = Policy::new(&clock, ES256).unwrap().max_age(300);
+        let mut c = Claims::new();
+        c.exp = date(2000);
+        c.nbf = date(900);
+        c.iat = date(950);
+        assert_eq!(validate_claims(&c, &p), Ok(()));
+        assert_eq!(clock.1.load(AtomicOrdering::Relaxed), 1);
+
+        // Each time claim alone needs one read.
+        for claim in ["exp", "nbf", "iat"] {
+            let clock = CountingClock(1000, AtomicUsize::new(0));
+            let p = Policy::new(&clock, ES256).unwrap().allow_missing_exp();
+            let mut c = Claims::new();
+            let p = match claim {
+                "exp" => {
+                    c.exp = date(2000);
+                    p
+                }
+                "nbf" => {
+                    c.nbf = date(900);
+                    p
+                }
+                _ => {
+                    c.iat = date(950);
+                    p.max_age(300)
+                }
+            };
+            assert_eq!(validate_claims(&c, &p), Ok(()), "{claim}");
+            assert_eq!(clock.1.load(AtomicOrdering::Relaxed), 1, "{claim}");
+        }
+    }
+
+    #[test]
+    fn a_clock_out_of_range_fails_the_first_time_check() {
+        // ADR 0028 §1: InvalidClaim("clock"), never a panic.
+        let clock = FixedClock(MAX_SAFE_INTEGER + 1);
+        let p = Policy::new(&clock, ES256).unwrap();
+        let mut c = Claims::new();
+        c.exp = date(1000);
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("clock")));
+
+        let p = Policy::new(&clock, ES256).unwrap().allow_missing_exp();
+        let mut c = Claims::new();
+        c.nbf = date(1000);
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("clock")));
+
+        let p = p.max_age(300);
+        let mut c = Claims::new();
+        c.iat = date(1000);
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("clock")));
+
+        // Presence (J4) runs first; without a time check the clock is not
+        // read at all.
+        let p = Policy::new(&clock, ES256).unwrap();
+        assert_eq!(
+            validate_claims(&Claims::new(), &p),
+            Err(Error::InvalidClaim("exp"))
+        );
+        let p = p.allow_missing_exp();
+        assert_eq!(validate_claims(&Claims::new(), &p), Ok(()));
     }
 }
