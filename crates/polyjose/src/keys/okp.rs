@@ -640,4 +640,152 @@ mod tests {
         assert_eq!(okp(&x25519).crv(), OkpCurve::X25519);
         assert_eq!(okp(&x25519).x(), key.as_slice());
     }
+
+    /// `der` with its one RFC 8410 §3 AlgorithmIdentifier template `from`
+    /// replaced by `to` (both 7 octets, so no length changes).
+    fn relabel(der: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+        assert_eq!(from.len(), to.len());
+        let at = der
+            .windows(from.len())
+            .position(|window| window == from)
+            .expect("the template is in the DER");
+        let mut out = der.to_vec();
+        out[at..at + to.len()].copy_from_slice(to);
+        out
+    }
+
+    /// RFC 8410 §3: the AlgorithmIdentifier alone decides `crv`. The same
+    /// 32 private octets relabelled from id-Ed25519 to id-X25519 (or back)
+    /// import as the other curve, with `x` derived by that curve's
+    /// primitive (RFC 8032 §5.1.5, RFC 7748 §6.1); a key is never accepted
+    /// under the curve it is not labelled with. A v2 Ed25519 key relabelled
+    /// X25519 fails, since its Ed25519 publicKey is not X25519(d, 9).
+    #[test]
+    fn swapped_algorithm_identifiers_change_crv_and_x() {
+        use crate::keys::oid::{ALG_ED25519, ALG_X25519};
+        let cases = [
+            (
+                "rfc8037-a1-ed25519-pkcs8.der",
+                OkpCurve::Ed25519,
+                ALG_ED25519,
+                ALG_X25519,
+            ),
+            (
+                "rfc8037-a6-x25519-pkcs8.der",
+                OkpCurve::X25519,
+                ALG_X25519,
+                ALG_ED25519,
+            ),
+        ];
+        for (name, crv, from, to) in cases {
+            let der = fixtures::load("rfc", name);
+            let original = import_pkcs8(&der).unwrap();
+            assert_eq!(okp(&original).crv(), crv, "{name}");
+            let swapped = import_pkcs8(&relabel(&der, from, to)).unwrap();
+            let (original, swapped) = (okp(&original), okp(&swapped));
+            assert_ne!(swapped.crv(), crv, "{name}");
+            assert_eq!(swapped.d(), original.d(), "{name}");
+            assert_ne!(swapped.x(), original.x(), "{name}");
+            let d: &[u8; KEY_LEN] = swapped.d().unwrap().try_into().unwrap();
+            let expected = match swapped.crv() {
+                OkpCurve::Ed25519 => ed25519_public(d),
+                OkpCurve::X25519 => x25519_public(d),
+            };
+            assert_eq!(swapped.x(), expected, "{name}");
+        }
+
+        let v2 = fixtures::load("rfc", "rfc8410-10.3-ed25519-pkcs8-v2-attr-pub.pem");
+        assert_eq!(
+            import_pkcs8(&relabel(&v2, ALG_ED25519, ALG_X25519)).unwrap_err(),
+            Error::InvalidKey("X25519 PKCS#8 publicKey does not match the private key")
+        );
+
+        // SPKI: the same octets under the other label are read as that
+        // curve's key. Ed25519's A.2 key is a valid X25519 key (any 32
+        // octets are, RFC 7748 §5); Alice's X25519 key (RFC 7748 §6.1) is
+        // no valid Ed25519 point (RFC 8032 §5.1.3), so it is rejected.
+        let ed = fixtures::load("rfc", "rfc8037-a2-ed25519-spki.der");
+        let as_x25519 = import_spki(&relabel(&ed, ALG_ED25519, ALG_X25519)).unwrap();
+        assert_eq!(okp(&as_x25519).crv(), OkpCurve::X25519);
+        let x = fixtures::load("rfc", "rfc8037-a6-x25519-spki.der");
+        assert_eq!(
+            import_spki(&relabel(&x, ALG_X25519, ALG_ED25519)).unwrap_err(),
+            Error::InvalidKey("Ed25519 public key is invalid")
+        );
+    }
+
+    /// The private key is read only into a `Zeroizing<[u8; 32]>`.
+    #[test]
+    fn the_private_key_is_held_in_a_zeroizing_array() {
+        let der = fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der");
+        let parts = pkcs8::decode(&der).unwrap();
+        let d: Zeroizing<[u8; KEY_LEN]> = curve_private_key(parts.private_key).unwrap();
+        assert_eq!(d.as_slice(), &parts.private_key[2..]);
+    }
+
+    /// Errors carry no key bytes (ADR 0007, ADR 0018 §4): a marker used as
+    /// the private and public key of rejected containers appears in no
+    /// error's `Display` or `Debug`, in any encoding.
+    #[test]
+    fn errors_carry_no_key_bytes() {
+        use crate::keys::oid::ALG_ED25519;
+        const MARKER: &[u8; KEY_LEN] = b"POLYJOSE-MARKER-0123456789-ABCDE";
+        let ed25519_other = okp(&jwk_fixture("rfc", "rfc8037-a2-ed25519-spki.jwk.json"))
+            .x()
+            .to_vec();
+        let curve_private_key = |key: &[u8]| {
+            let mut out = vec![0x04, u8::try_from(key.len()).unwrap()];
+            out.extend_from_slice(key);
+            out
+        };
+        let pkcs8_of = |alg, private: &[u8], public: Option<&[u8]>| {
+            let private_key = curve_private_key(private);
+            pkcs8::encode(&Pkcs8Parts {
+                version: u8::from(public.is_some()),
+                alg,
+                private_key: &private_key,
+                public_key: public,
+            })
+            .unwrap()
+        };
+        let spki_of = |key: &[u8]| {
+            spki::encode(&SpkiParts {
+                alg: AlgId::Ed25519,
+                subject_public_key: key,
+            })
+            .unwrap()
+        };
+        let mut long = MARKER.to_vec();
+        long.push(b'!');
+        let errors = [
+            import_pkcs8(&pkcs8_of(AlgId::X25519, MARKER, Some(MARKER))).unwrap_err(),
+            import_pkcs8(&pkcs8_of(AlgId::Ed25519, MARKER, Some(&ed25519_other))).unwrap_err(),
+            import_pkcs8(&pkcs8_of(AlgId::Ed25519, MARKER, Some(MARKER))).unwrap_err(),
+            import_pkcs8(&pkcs8_of(AlgId::Ed25519, &MARKER[..31], None)).unwrap_err(),
+            import_pkcs8(&pkcs8_of(AlgId::X25519, MARKER, Some(&long))).unwrap_err(),
+            import_spki(&spki_of(MARKER)).unwrap_err(),
+            import_spki(&spki_of(&long)).unwrap_err(),
+            import_pkcs8(&relabel(
+                &pkcs8_of(AlgId::Ed25519, MARKER, None),
+                ALG_ED25519,
+                &[0x30, 0x05, 0x06, 0x03, 0x2B, 0x65, 0x71],
+            ))
+            .unwrap_err(),
+        ];
+        let hex = |bytes: &[u8]| -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() };
+        let forbidden = [
+            "MARKER".to_owned(),
+            hex(&MARKER[..8]),
+            hex(&MARKER[..8]).to_uppercase(),
+            crate::util::b64url_encode(&MARKER[..9]),
+            format!("{:?}", &MARKER[..4]),
+        ];
+        for err in errors {
+            for text in [format!("{err}"), format!("{err:?}")] {
+                for needle in &forbidden {
+                    assert!(!text.contains(needle.as_str()), "{text} contains {needle}");
+                }
+            }
+        }
+    }
 }
