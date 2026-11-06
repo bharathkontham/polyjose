@@ -1,0 +1,38 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.1 step 11: a compressed compact A128KW + A128GCM encryption of the Figure 72 plaintext carries zip DEF in the protected header and decrypts to the plaintext (byte-exact compression is not required, RFC 7520 erratum 7680)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "WW91IGNhbiB0cnVzdCB1cyB0byBzdGljayB3aXRoIHlvdSB0aHJvdWdoIHRoaWNrIGFuZCB0aGlu4oCTdG8gdGhlIGJpdHRlciBlbmQuIEFuZCB5b3UgY2FuIHRydXN0IHVzIHRvIGtlZXAgYW55IHNlY3JldCBvZiB5b3Vyc-KAk2Nsb3NlciB0aGFuIHlvdSBrZWVwIGl0IHlvdXJzZWxmLiBCdXQgeW91IGNhbm5vdCB0cnVzdCB1cyB0byBsZXQgeW91IGZhY2UgdHJvdWJsZSBhbG9uZSwgYW5kIGdvIG9mZiB3aXRob3V0IGEgd29yZC4gV2UgYXJlIHlvdXIgZnJpZW5kcywgRnJvZG8u",
+    "compress": true,
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "GZy6sIZ6wl9NJOKB-jnmVQ"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "decrypt_with": {
+      "key": {
+        "kty": "oct",
+        "k": "GZy6sIZ6wl9NJOKB-jnmVQ"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "features": [
+    "deflate"
+  ]
+}

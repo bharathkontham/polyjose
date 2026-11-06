@@ -1,0 +1,26 @@
+{
+  "source": "polyjose",
+  "description": "ADR 0017 §3: max_decompressed_len 0 rejects every zip JWE, even one whose plaintext is empty and inflates to 0 bytes",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIiwiemlwIjoiREVGIn0..CuYmD7Hdl1PtqHld.kZo.FVC6Np98AL5969s27SKzHQ",
+    "key": {
+      "kty": "oct",
+      "k": "WlpaWlpaWlpaWlpaWlpaWg"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ],
+    "max_decompressed_len": 0
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  },
+  "features": [
+    "deflate"
+  ]
+}
