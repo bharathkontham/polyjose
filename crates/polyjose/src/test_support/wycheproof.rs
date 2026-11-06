@@ -557,6 +557,250 @@ pub(crate) fn load(name: &str) -> Suite {
     parse(name, schema, algorithm, text).unwrap_or_else(|e| panic!("{file}: {e}"))
 }
 
+/// What polyjose did with a test's input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// The signature, MAC or JWS verified.
+    Accept,
+    /// It was rejected (with any error).
+    Reject,
+}
+
+impl Outcome {
+    /// [`Outcome::Accept`] for `Ok`, [`Outcome::Reject`] for `Err`.
+    pub(crate) fn of<T, E>(result: &Result<T, E>) -> Outcome {
+        if result.is_ok() {
+            Outcome::Accept
+        } else {
+            Outcome::Reject
+        }
+    }
+
+    /// The outcome Wycheproof requires for `expected`, if it requires one.
+    fn required_by(expected: Expected) -> Option<Outcome> {
+        match expected {
+            Expected::Valid => Some(Outcome::Accept),
+            Expected::Invalid => Some(Outcome::Reject),
+            Expected::Acceptable => None,
+        }
+    }
+}
+
+/// One entry of a family's deviation list: tests of one suite where
+/// polyjose's outcome is not the one Wycheproof's `result` requires, or
+/// where the `result` is `acceptable` and polyjose picks a side.
+///
+/// Write the list as a `const` (the RNG state scan in `rng.rs` bans
+/// `static` items):
+///
+/// ```ignore
+/// const HMAC_SHA256: &[Deviation] = &[Deviation::range(
+///     30,
+///     58,
+///     Outcome::Reject,
+///     "RFC 7518 §3.2: a JWS HMAC tag is never truncated",
+/// )];
+/// ```
+///
+/// [`check`] enforces the rules:
+///
+/// - the reason cites an RFC or ADR (`"RFC 7518 §3.2: ..."`,
+///   `"ADR 0026 §6: ..."`);
+/// - every listed `tcId` exists in the suite, and is listed once;
+/// - an entry changes something: listing a `valid` test as `Accept` or an
+///   `invalid` one as `Reject` is redundant and fails;
+/// - an `invalid` test is never listed as `Accept`: accepting it would be a
+///   security bug, not a policy;
+/// - every `acceptable` test is listed, so polyjose's choice is recorded.
+pub(crate) struct Deviation {
+    tests: DeviationTests,
+    outcome: Outcome,
+    reason: &'static str,
+}
+
+enum DeviationTests {
+    Ids(&'static [u32]),
+    /// `first..=last`.
+    Range(u32, u32),
+}
+
+impl Deviation {
+    /// The tests `tc_ids` have `outcome`, for `reason`.
+    pub(crate) const fn tests(
+        tc_ids: &'static [u32],
+        outcome: Outcome,
+        reason: &'static str,
+    ) -> Deviation {
+        Deviation {
+            tests: DeviationTests::Ids(tc_ids),
+            outcome,
+            reason,
+        }
+    }
+
+    /// The tests `first..=last` have `outcome`, for `reason`. Every `tcId`
+    /// in the range must exist (Wycheproof numbers a file's tests 1..=n, and
+    /// a group's tests are consecutive).
+    pub(crate) const fn range(
+        first: u32,
+        last: u32,
+        outcome: Outcome,
+        reason: &'static str,
+    ) -> Deviation {
+        Deviation {
+            tests: DeviationTests::Range(first, last),
+            outcome,
+            reason,
+        }
+    }
+
+    fn tc_ids(&self) -> Vec<u32> {
+        match self.tests {
+            DeviationTests::Ids(ids) => ids.to_vec(),
+            DeviationTests::Range(first, last) => (first..=last).collect(),
+        }
+    }
+}
+
+/// Whether `reason` cites an RFC or ADR by number (`RFC 7518`, `ADR 0026`).
+fn cites_rfc_or_adr(reason: &str) -> bool {
+    ["RFC ", "ADR "].iter().any(|tag| {
+        reason
+            .match_indices(tag)
+            .any(|(at, _)| reason[at + tag.len()..].starts_with(|c: char| c.is_ascii_digit()))
+    })
+}
+
+/// Counts from a [`check`] that passed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Summary {
+    /// Tests run.
+    pub(crate) tests: usize,
+    /// Tests polyjose accepted.
+    pub(crate) accepted: usize,
+    /// Tests polyjose rejected.
+    pub(crate) rejected: usize,
+    /// Tests whose outcome came from the deviation list.
+    pub(crate) deviations: usize,
+}
+
+/// Runs every test of `suite` through `run` and compares what polyjose did
+/// with what Wycheproof requires, adjusted by `deviations` (see
+/// [`Deviation`] for the rules).
+///
+/// `run` gets each test with its group and returns polyjose's
+/// [`Outcome`] (usually `Outcome::of(&result)`); it may also assert the
+/// error kind. Every test runs; the result lists every failure, each naming
+/// the file, `tcId`, comment, flags and both outcomes.
+pub(crate) fn check(
+    suite: &Suite,
+    deviations: &[Deviation],
+    mut run: impl FnMut(&Group, &Test) -> Outcome,
+) -> Result<Summary, Vec<String>> {
+    let name = &suite.name;
+    let mut failures = Vec::new();
+    let mut listed: BTreeMap<u32, &Deviation> = BTreeMap::new();
+    for deviation in deviations {
+        if !cites_rfc_or_adr(deviation.reason) {
+            failures.push(format!(
+                "{name}: deviation reason cites no RFC or ADR: {:?}",
+                deviation.reason
+            ));
+        }
+        let ids = deviation.tc_ids();
+        if ids.is_empty() {
+            failures.push(format!(
+                "{name}: deviation lists no tests: {:?}",
+                deviation.reason
+            ));
+        }
+        for id in ids {
+            if listed.insert(id, deviation).is_some() {
+                failures.push(format!("{name}: tcId {id} is in the deviation list twice"));
+            }
+        }
+    }
+    let mut summary = Summary {
+        tests: 0,
+        accepted: 0,
+        rejected: 0,
+        deviations: 0,
+    };
+    let mut seen = BTreeSet::new();
+    for (group, test) in suite.tests() {
+        seen.insert(test.tc_id);
+        let observed = run(group, test);
+        summary.tests += 1;
+        match observed {
+            Outcome::Accept => summary.accepted += 1,
+            Outcome::Reject => summary.rejected += 1,
+        }
+        let what = format!(
+            "{name}: tcId {} ({:?}, flags {:?}, result {:?})",
+            test.tc_id, test.comment, test.flags, test.result
+        );
+        let required = Outcome::required_by(test.result);
+        let Some(deviation) = listed.get(&test.tc_id) else {
+            match required {
+                Some(required) if required == observed => {}
+                Some(required) => failures.push(format!(
+                    "{what}: unexplained deviation: expected {required:?}, polyjose did {observed:?}"
+                )),
+                None => failures.push(format!(
+                    "{what}: acceptable test not in the deviation list (polyjose did {observed:?})"
+                )),
+            }
+            continue;
+        };
+        summary.deviations += 1;
+        if required == Some(deviation.outcome) {
+            failures.push(format!(
+                "{what}: redundant deviation: {:?} is what Wycheproof requires",
+                deviation.outcome
+            ));
+        }
+        if test.result == Expected::Invalid && deviation.outcome == Outcome::Accept {
+            failures.push(format!(
+                "{what}: an invalid test can never be listed as Accept"
+            ));
+        }
+        if deviation.outcome != observed {
+            failures.push(format!(
+                "{what}: deviation list says {:?} ({}), polyjose did {observed:?}",
+                deviation.outcome, deviation.reason
+            ));
+        }
+    }
+    for id in listed.keys().filter(|id| !seen.contains(id)) {
+        failures.push(format!(
+            "{name}: deviation lists tcId {id}, which is not in the suite"
+        ));
+    }
+    if failures.is_empty() {
+        Ok(summary)
+    } else {
+        Err(failures)
+    }
+}
+
+/// [`check`], panicking with every failure if any test deviates without
+/// an explanation or the deviation list is wrong. Returns the counts.
+pub(crate) fn assert_conforms(
+    suite: &Suite,
+    deviations: &[Deviation],
+    run: impl FnMut(&Group, &Test) -> Outcome,
+) -> Summary {
+    match check(suite, deviations, run) {
+        Ok(summary) => summary,
+        Err(failures) => panic!(
+            "{} Wycheproof failure(s) in {}:\n{}",
+            failures.len(),
+            suite.name,
+            failures.join("\n")
+        ),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawSuite {
@@ -1419,5 +1663,225 @@ mod tests {
         let rsa = jwk_value(rsa.to_jwk().ok().as_deref());
         assert_eq!(rsa["n"], "wQ");
         assert_eq!(rsa["e"], "AQAB");
+    }
+
+    /// tcId 1 valid, 2 invalid, 3 acceptable, 4 valid.
+    fn four_tests() -> Suite {
+        let tests = [
+            (1, "valid"),
+            (2, "invalid"),
+            (3, "acceptable"),
+            (4, "valid"),
+        ]
+        .map(|(id, result)| {
+            GOOD_TEST
+                .replace(r#""tcId":1"#, &format!(r#""tcId":{id}"#))
+                .replace(r#""valid""#, &format!("{result:?}"))
+        })
+        .join(",");
+        parse_mac(&mac_file(4, "", &tests)).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// A verifier that accepts exactly the tcIds in `accepts`.
+    fn accepting(accepts: &[u32]) -> impl FnMut(&Group, &Test) -> Outcome + '_ {
+        move |_, test| {
+            if accepts.contains(&test.tc_id) {
+                Outcome::Accept
+            } else {
+                Outcome::Reject
+            }
+        }
+    }
+
+    const REASON: &str = "ADR 0026 §6: test policy";
+
+    fn failures(deviations: &[Deviation], accepts: &[u32]) -> String {
+        check(&four_tests(), deviations, accepting(accepts))
+            .err()
+            .unwrap_or_default()
+            .join("\n")
+    }
+
+    #[test]
+    fn check_passes_when_every_deviation_is_listed() {
+        let deviations = [Deviation::tests(&[3], Outcome::Reject, REASON)];
+        let summary = check(&four_tests(), &deviations, accepting(&[1, 4]));
+        let expected = Summary {
+            tests: 4,
+            accepted: 2,
+            rejected: 2,
+            deviations: 1,
+        };
+        assert_eq!(summary, Ok(expected));
+        // A policy that rejects a valid test, listed by range (3..=4).
+        let deviations = [Deviation::range(3, 4, Outcome::Reject, "RFC 7518 §3.2: x")];
+        let summary = check(&four_tests(), &deviations, accepting(&[1]));
+        assert_eq!(summary.map(|s| s.deviations), Ok(2));
+        // An acceptable test may be listed as accepted.
+        let deviations = [Deviation::tests(&[3], Outcome::Accept, REASON)];
+        assert!(check(&four_tests(), &deviations, accepting(&[1, 3, 4])).is_ok());
+    }
+
+    #[test]
+    fn check_fails_on_unexplained_deviations() {
+        let listed = [Deviation::tests(&[3], Outcome::Reject, REASON)];
+        let cases: [(&[Deviation], &[u32], &str); 5] = [
+            (
+                &[],
+                &[1, 4],
+                "tcId 3 (\"\", flags [\"Pseudorandom\"], result Acceptable): acceptable test not in the deviation list (polyjose did Reject)",
+            ),
+            (&listed, &[1], "tcId 4"),
+            (&listed, &[1, 2, 4], "tcId 2"),
+            (
+                &listed,
+                &[1, 3, 4],
+                "deviation list says Reject (ADR 0026 §6: test policy), polyjose did Accept",
+            ),
+            (&[], &[1, 2, 3, 4], "expected Reject, polyjose did Accept"),
+        ];
+        for (deviations, accepts, needle) in cases {
+            let failures = failures(deviations, accepts);
+            assert!(failures.contains(needle), "{needle:?} not in:\n{failures}");
+            assert!(failures.starts_with("hmac_sha256: tcId"), "{failures}");
+        }
+        assert!(failures(&listed, &[1, 4]).is_empty());
+        assert!(failures(&listed, &[1]).contains("unexplained deviation: expected Accept"));
+    }
+
+    #[test]
+    fn check_fails_on_a_bad_deviation_list() {
+        let ok = &[1, 4];
+        let cases: [(Vec<Deviation>, &[u32], &str); 7] = [
+            (
+                vec![Deviation::tests(&[3], Outcome::Reject, "policy")],
+                ok,
+                "cites no RFC or ADR",
+            ),
+            (
+                vec![Deviation::tests(&[3], Outcome::Reject, "see RFC x")],
+                ok,
+                "cites no RFC or ADR",
+            ),
+            (
+                vec![Deviation::tests(&[], Outcome::Reject, REASON)],
+                ok,
+                "lists no tests",
+            ),
+            (
+                vec![Deviation::range(3, 2, Outcome::Reject, REASON)],
+                ok,
+                "lists no tests",
+            ),
+            (
+                vec![
+                    Deviation::tests(&[3], Outcome::Reject, REASON),
+                    Deviation::range(3, 3, Outcome::Reject, REASON),
+                ],
+                ok,
+                "tcId 3 is in the deviation list twice",
+            ),
+            (
+                vec![Deviation::range(3, 5, Outcome::Reject, REASON)],
+                &[1],
+                "deviation lists tcId 5, which is not in the suite",
+            ),
+            (
+                vec![
+                    Deviation::tests(&[3], Outcome::Reject, REASON),
+                    Deviation::tests(&[1], Outcome::Accept, REASON),
+                ],
+                ok,
+                "redundant deviation",
+            ),
+        ];
+        for (deviations, accepts, needle) in cases {
+            let failures = failures(&deviations, accepts);
+            assert!(failures.contains(needle), "{needle:?} not in:\n{failures}");
+        }
+        let deviations = [
+            Deviation::tests(&[3], Outcome::Reject, REASON),
+            Deviation::tests(&[2], Outcome::Accept, REASON),
+        ];
+        let failures = failures(&deviations, &[1, 2, 4]);
+        assert!(
+            failures.contains("an invalid test can never be listed as Accept"),
+            "{failures}"
+        );
+    }
+
+    #[test]
+    fn citations_need_a_number() {
+        assert!(cites_rfc_or_adr("RFC 7518 §3.2: truncated"));
+        assert!(cites_rfc_or_adr("rejected (ADR 0026 §6)"));
+        assert!(!cites_rfc_or_adr("RFC: missing number"));
+        assert!(!cites_rfc_or_adr("ADR"));
+        assert!(!cites_rfc_or_adr("rfc 7518"));
+    }
+
+    #[test]
+    fn assert_conforms_panics_with_every_failure() {
+        let suite = four_tests();
+        let summary = assert_conforms(
+            &suite,
+            &[Deviation::tests(&[3], Outcome::Accept, REASON)],
+            accepting(&[1, 3, 4]),
+        );
+        assert_eq!((summary.accepted, summary.rejected), (3, 1));
+        let panicked = std::panic::catch_unwind(|| assert_conforms(&suite, &[], accepting(&[2])));
+        let message = panicked
+            .err()
+            .and_then(|e| e.downcast::<String>().ok())
+            .map(|m| *m)
+            .unwrap_or_default();
+        assert!(
+            message.starts_with("4 Wycheproof failure(s) in hmac_sha256:"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn outcome_of_a_result() {
+        assert_eq!(Outcome::of(&Ok::<(), ()>(())), Outcome::Accept);
+        assert_eq!(Outcome::of(&Err::<(), ()>(())), Outcome::Reject);
+    }
+
+    /// A verifier that follows `result` exactly passes every real suite once
+    /// the `acceptable` tests are listed; this runs the whole path on the
+    /// vendored files.
+    #[test]
+    fn check_runs_every_vendored_suite() {
+        for name in names("") {
+            let suite = load(name);
+            let acceptable: Vec<u32> = suite
+                .tests()
+                .filter(|(_, t)| t.result == Expected::Acceptable)
+                .map(|(_, t)| t.tc_id)
+                .collect();
+            let follow = |_: &Group, t: &Test| match t.result {
+                Expected::Valid => Outcome::Accept,
+                _ => Outcome::Reject,
+            };
+            // Until its acceptable tests are listed, a suite fails once per test.
+            let failures = check(&suite, &[], follow).err().unwrap_or_default();
+            assert_eq!(failures.len(), acceptable.len(), "{name}");
+            // A family lists them as a const; a test may leak a runtime list.
+            let listed: &'static [u32] = Vec::leak(acceptable.clone());
+            let deviations = [Deviation::tests(listed, Outcome::Reject, REASON)];
+            let deviations = if acceptable.is_empty() {
+                &[][..]
+            } else {
+                &deviations[..]
+            };
+            let summary = assert_conforms(&suite, deviations, follow);
+            assert_eq!(summary.tests, suite.tests().count(), "{name}");
+            assert_eq!(summary.deviations, acceptable.len(), "{name}");
+            let valid = suite
+                .tests()
+                .filter(|(_, t)| t.result == Expected::Valid)
+                .count();
+            assert_eq!(summary.accepted, valid, "{name}");
+            assert_eq!(summary.rejected, summary.tests - valid, "{name}");
+        }
     }
 }
