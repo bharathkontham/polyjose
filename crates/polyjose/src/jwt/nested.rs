@@ -66,8 +66,8 @@ pub struct VerifiedNestedJwt {
 ///   `application/JWT`) is rewritten to `JWT`; any other `cty` is
 ///   refused (ADR 0027 §7). `encryptor` itself is not changed.
 /// - **No compression**: RFC 8725 §3.6 says compression before
-///   encryption "SHOULD NOT" be done (the compressed length leaks the
-///   plaintext). An `encryptor` built with [`Encryptor::compress`], or
+///   encryption "SHOULD NOT" be done (compressed data "often reveals
+///   information about the plaintext"). An `encryptor` built with [`Encryptor::compress`], or
 ///   whose protected header sets `zip` (RFC 7516 §4.1.3), is refused in
 ///   every build, with or without the `deflate` feature (ADR 0017).
 ///   [`decrypt_nested`] still accepts a compressed nested JWT.
@@ -80,8 +80,9 @@ pub struct VerifiedNestedJwt {
 ///
 /// # Errors
 ///
-/// The checks run in this order, before anything is encrypted or drawn
-/// from the random source, and the first failure decides the error:
+/// The checks run in this order and the first failure decides the error.
+/// Steps 1–4 run before anything is encrypted or drawn from the random
+/// source:
 ///
 /// 1. **Shape**: [`Error::InvalidFormat`] if `signed_jwt` is not a
 ///    three-part compact JWS, its signature part is empty, or its
