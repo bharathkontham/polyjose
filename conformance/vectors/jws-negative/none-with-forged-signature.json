@@ -1,0 +1,19 @@
+{
+  "source": "RFC 8725 §3.1",
+  "description": "A {\"alg\":\"none\"} JWS carrying a non-empty forged signature (the HS256 MAC of its signing input, HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key) is refused, never treated as HS256 or as an Unsecured JWS (RFC 7518 §3.6; ADR 0026 §2 step 7)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJub25lIn0.UGF5bG9hZA.Etp6ZFABoud4oCvgMDst63ilLXzugiU2q5e1G4X4G7M",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}

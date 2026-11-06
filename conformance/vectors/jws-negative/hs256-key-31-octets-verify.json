@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7518 §3.2",
+  "description": "An HS256 JWS whose MAC (Python hmac) is correct under a 31-octet key (the first 31 octets of the RFC 7515 A.1 key), verified with that key: an HMAC key shorter than the hash output is rejected on verify (ADR 0026 §2 step 8)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiJ9.UGF5bG9hZA.baWoLLrn3ibrYy889li-r7wXmhceGSK-5gZhwL1giGU",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLg"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

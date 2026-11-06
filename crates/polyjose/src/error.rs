@@ -54,6 +54,11 @@ pub enum Error {
     ///
     /// Raised when decoding any base64url-encoded JOSE component
     /// (RFC 7515 §5.2 steps 2, 6 and 7; RFC 7516 §5.2) or JWK member.
+    ///
+    /// In JWS verification the payload's base64url (skipped for
+    /// `b64: false`, RFC 7797 §3) is checked after the protected header is
+    /// decoded and before the whole-header checks (ADR 0048, clarifying
+    /// ADR 0026 §2).
     InvalidBase64,
 
     /// Input is not a valid JSON object of the expected shape.
@@ -78,6 +83,13 @@ pub enum Error {
     /// A member name that occurs twice **inside one** header object is not
     /// this error: the JSON layer rejects it first, as
     /// [`Error::InvalidJson`] (ADR 0041 §1, amending ADR 0026 §2 step 4).
+    ///
+    /// In JWS verification (ADR 0026 §2 as clarified by ADR 0048), the
+    /// per-parameter type checks and the `crit` syntax checks run while the
+    /// protected header is decoded, so before the payload's base64url is
+    /// checked. The whole-header checks (`crit` naming an absent parameter,
+    /// a missing `alg`, overlapping protected and unprotected headers,
+    /// `b64` placement) run after it.
     InvalidHeader(&'static str),
 
     /// The `alg` or `enc` value does not name an algorithm polyjose

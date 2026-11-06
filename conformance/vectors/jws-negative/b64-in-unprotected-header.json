@@ -1,0 +1,26 @@
+{
+  "source": "RFC 7797 §3",
+  "description": "A flattened JWS with protected header {\"alg\":\"HS256\"} and b64 false in the unprotected header; the payload \"test\" is canonical base64url that re-encodes to itself, so the MAC (Python hmac, A.1 key) is correct whether b64 is read as false or true: b64 must be in the protected header (ADR 0026 §2 step 4)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "test",
+      "protected": "eyJhbGciOiJIUzI1NiJ9",
+      "header": {
+        "b64": false
+      },
+      "signature": "H9zJ_U9Gw5ILVHWVkyHUm2DYEEjN6bYdZFlipGnTiO4"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}
