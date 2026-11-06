@@ -13,7 +13,7 @@
 //! # Secrets
 //!
 //! The private members (`d`, `k`) are encoded with
-//! [`b64url_encode`](crate::util::b64url_encode), which is constant-time in
+//! [`b64url_encode`], which is constant-time in
 //! its input and allocates its output once at the exact length, and that
 //! `String` moves straight into the `Zeroizing<String>` of a
 //! [`Value::String`]. No other copy is made. The object, and every string in
