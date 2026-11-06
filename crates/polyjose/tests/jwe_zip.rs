@@ -138,8 +138,8 @@ mod without_deflate {
         }
         // A key-wrapping mode too, and without `compress` the same request
         // encrypts.
-        let wrapped = Encryptor::new(E::A128GCM)
-            .recipient(Recipient::new(A::A128KW, &oct(&DIR_KEY)));
+        let wrapped =
+            Encryptor::new(E::A128GCM).recipient(Recipient::new(A::A128KW, &oct(&DIR_KEY)));
         assert_eq!(
             code(wrapped.clone().compress().encrypt_compact(b"x")),
             "UnsupportedAlgorithm"
