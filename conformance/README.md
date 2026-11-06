@@ -34,7 +34,7 @@ The five members below are required, `features` is optional, and no others are a
 | `operation` | One of the operations below. |
 | `input` | The operation's input. |
 | `expect` | `{ "ok": true, ...outputs }`, or `{ "ok": false, "error": <code> }` where `<code>` is one of the stable error codes (`Error::CODES` in `crates/polyjose/src/error.rs`). |
-| `features` | Optional. The polyjose cargo features the vector needs, each at most once: `"insecure-test-vectors"` (ADR 0041 §3) or `"deflate"` (ADR 0017). See [Features](#features). |
+| `features` | Optional. The polyjose cargo features the vector needs, each at most once: `"fixed-rng"` (the cargo feature `insecure-test-vectors`, ADR 0041 §3) or `"deflate"` (ADR 0017). See [Features](#features). |
 
 ## Operations
 
@@ -116,13 +116,13 @@ Encrypts `plaintext_b64u` (RFC 7516 §5.1) in one serialization.
 | `plaintext_b64u` | The plaintext octets. |
 | `recipients` | One or more recipients, in output order. Each is `{ "alg", "key", "header"?, "apu_b64u"?, "apv_b64u"?, "p2c"?, "p2s_len"? }`: the key management `alg`, the recipient's JWK (a public key, or the `oct` key of `dir`, A\*KW, A\*GCMKW or the PBES2 password), its Per-Recipient Unprotected Header (§7.2.1, JSON only), the ECDH-ES `apu`/`apv` octets (RFC 7518 §4.6.1.2–§4.6.1.3), and the PBES2 iteration count and salt length (§4.8.1.1–§4.8.1.2; library defaults when absent). |
 | `protected` | Extra JWE Protected Header parameters (`typ`, `cty`, `kid`, …). polyjose sets `alg`, `enc`, `zip` and the key management parameters itself, and refuses them here (`InvalidHeader`). For compact and flattened output, `alg` and the key management parameters go in the protected header; for general, in each recipient's header (as RFC 7520 §5.13). |
-| `protected_b64u` | The exact encoded protected header to reproduce. Used verbatim for the AAD and the output only if it decodes to a header JSON-equal to the one polyjose builds (member order aside), otherwise `InvalidFormat`. Needs `"insecure-test-vectors"`. |
+| `protected_b64u` | The exact encoded protected header to reproduce. Used verbatim for the AAD and the output only if it decodes to a header JSON-equal to the one polyjose builds (member order aside), otherwise `InvalidFormat`. Needs `"fixed-rng"`. |
 | `unprotected` | The JWE Shared Unprotected Header (§7.2.1), JSON only. |
 | `aad_b64u` | The JWE AAD octets (§7.2.1), JSON only. |
 | `compress` | `true` compresses with `zip: "DEF"` (§4.1.3). Needs `"deflate"`. |
-| `rng_b64u` | The octets the encryption draws instead of the OS CSPRNG, in the documented order: the CEK (when the `alg` needs a random one), then each recipient's key management values in order (ECDH ephemeral key, PBES2 salt, AES-GCM key wrap IV), then the content IV. Every octet must be drawn; a leftover fails the vector, so the vector pins the order. Needs `"insecure-test-vectors"`. |
+| `rng_b64u` | The octets the encryption draws instead of the OS CSPRNG, in the documented order: the CEK (when the `alg` needs a random one), then each recipient's key management values in order (ECDH ephemeral key, PBES2 salt, AES-GCM key wrap IV), then the content IV. Every octet must be drawn; a leftover fails the vector, so the vector pins the order. Needs `"fixed-rng"`. |
 
-The runner calls the library's reproducible encryption when `rng_b64u` or `protected_b64u` is present (both need `"insecure-test-vectors"`, and a vector using them without listing it is schema-invalid), and its ordinary encrypt on the OS CSPRNG otherwise.
+The runner calls the library's reproducible encryption when `rng_b64u` or `protected_b64u` is present (both need `"fixed-rng"`, and a vector using them without listing it is schema-invalid), and its ordinary encrypt on the OS CSPRNG otherwise.
 
 Expect one of:
 
@@ -154,13 +154,20 @@ Expect `{ "ok": true, "plaintext_b64u", "recipient" }`: the plaintext and the in
 
 ## Features
 
-A vector may need a cargo feature of polyjose: `"insecure-test-vectors"` for a byte-exact `jwe.encrypt` (`rng_b64u`, `protected_b64u`), `"deflate"` for `zip` (`compress`, and the `zip` decrypt vectors). A runner whose build does not enable every listed feature:
+A vector may need a cargo feature of polyjose, written in `features` as:
+
+| Name in a vector | Cargo feature | Needed by |
+|---|---|---|
+| `"fixed-rng"` | `insecure-test-vectors` (ADR 0041 §3) | a byte-exact `jwe.encrypt` (`rng_b64u`, `protected_b64u`) |
+| `"deflate"` | `deflate` (ADR 0017) | `zip` (`compress`, and the `zip` decrypt vectors) |
+
+The test RNG's cargo name may appear only in `crates/polyjose`, `scripts/check-test-vectors-off.sh` and Markdown (that script fails the build otherwise, so no build file can switch it on, ADR 0005); vector files therefore use `"fixed-rng"`. A runner whose build does not enable every listed feature:
 
 - still validates the vector against the schema, and fails it if invalid;
-- does not run it, and reports it **SKIPPED with the missing feature names** (the Rust runner prints ``<file>: SKIPPED (needs feature `insecure-test-vectors`)``);
+- does not run it, and reports it **SKIPPED with the missing feature names** (the Rust runner prints the cargo name: ``<file>: SKIPPED (needs feature `insecure-test-vectors`)``);
 - never counts it as passing.
 
-The bindings never enable `insecure-test-vectors` (ADR 0005), so its vectors are Rust-only; every RFC output they reproduce also has a `jwe.decrypt` vector that every platform runs.
+The bindings never enable `insecure-test-vectors` (ADR 0005), so `fixed-rng` vectors are Rust-only; every RFC output they reproduce also has a `jwe.decrypt` vector that every platform runs.
 
 ## Binding readiness
 

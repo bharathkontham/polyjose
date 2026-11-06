@@ -54,21 +54,43 @@ const TOP_LEVEL: &[&str] = &["source", "description", "operation", "input", "exp
 /// `properties`.
 const TOP_LEVEL_OPTIONAL: &[&str] = &["features"];
 
-/// The cargo features of `polyjose` a vector may require (top-level
-/// `features`). A vector needing one this build does not enable is SKIPPED
-/// with its name, never passed.
-const FEATURES: &[&str] = &["deflate", "insecure-test-vectors"];
+/// The names a vector's top-level `features` may list, each with the cargo
+/// feature of `polyjose` it stands for. A vector needing one this build
+/// does not enable is SKIPPED, naming the cargo feature, never passed.
+///
+/// The test RNG feature is written `fixed-rng` in vector files:
+/// `scripts/check-test-vectors-off.sh` allows its cargo name only in
+/// `crates/polyjose`, the script and Markdown, so that no file outside the
+/// core can switch it on (ADR 0005), and vector JSON is not exempt.
+const FEATURES: &[(&str, &str)] = &[
+    ("deflate", "deflate"),
+    ("fixed-rng", "insecure-test-vectors"),
+];
 
-/// The [`FEATURES`] this build enables.
+/// The cargo feature a [`FEATURES`] name stands for.
+fn cargo_feature(name: &str) -> &'static str {
+    FEATURES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, cargo)| *cargo)
+        .expect("a validated features name")
+}
+
+/// The [`FEATURES`] names whose cargo feature this build enables.
 fn enabled_features() -> Vec<&'static str> {
     let mut enabled = Vec::new();
     if cfg!(feature = "deflate") {
         enabled.push("deflate");
     }
     if cfg!(feature = "insecure-test-vectors") {
-        enabled.push("insecure-test-vectors");
+        enabled.push("fixed-rng");
     }
     enabled
+}
+
+/// The vector-file names of [`FEATURES`], in schema order.
+fn feature_names() -> Vec<&'static str> {
+    FEATURES.iter().map(|(name, _)| *name).collect()
 }
 
 /// Every operation `schema.json` names, in schema order. Only those with an
@@ -816,11 +838,11 @@ fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
     for (i, item) in items.iter().enumerate() {
         let feature = item
             .as_str()
-            .and_then(|s| FEATURES.iter().find(|f| **f == s))
+            .and_then(|s| FEATURES.iter().map(|(name, _)| name).find(|f| **f == s))
             .ok_or_else(|| {
                 violation(
                     &format!("/features/{i}"),
-                    format!("must be one of {FEATURES:?}"),
+                    format!("must be one of {:?}", feature_names()),
                 )
             })?;
         if features.contains(feature) {
@@ -836,13 +858,14 @@ fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
 
 /// A `jwe.encrypt` vector declares the features its inputs need, so it is
 /// SKIPPED, never failed or silently weakened, where they are off:
-/// `rng_b64u` and `protected_b64u` need `insecure-test-vectors`
+/// `rng_b64u` and `protected_b64u` need `fixed-rng` (cargo feature
+/// `insecure-test-vectors`)
 /// (`Encryptor::encrypt_reproducible`, ADR 0041 §3), `compress` needs
 /// `deflate` (ADR 0017).
 fn check_jwe_encrypt_features(input: &Object, features: &[&str]) -> Result<(), String> {
     for (member, feature) in [
-        ("rng_b64u", "insecure-test-vectors"),
-        ("protected_b64u", "insecure-test-vectors"),
+        ("rng_b64u", "fixed-rng"),
+        ("protected_b64u", "fixed-rng"),
         ("compress", "deflate"),
     ] {
         if input.contains(member) && !features.contains(&feature) {
@@ -1657,7 +1680,7 @@ fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
                 "{name}: SKIPPED (needs feature {})",
                 features
                     .iter()
-                    .map(|f| format!("`{f}`"))
+                    .map(|f| format!("`{}`", cargo_feature(f)))
                     .collect::<Vec<_>>()
                     .join(", ")
             )),
@@ -1911,7 +1934,10 @@ fn schema_and_runner_agree() {
     let mut features = Object::new();
     features.insert(
         "enum",
-        FEATURES.iter().map(|f| Value::from(*f)).collect::<Vec<_>>(),
+        feature_names()
+            .into_iter()
+            .map(Value::from)
+            .collect::<Vec<_>>(),
     );
     let mut expected = parse(r#"{"type":"array","uniqueItems":true}"#)
         .into_object()
@@ -3697,7 +3723,7 @@ fn jwe_schema_violations_fail() {
                 &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","rng_b64u":"AA""#),
                 r#"{"ok":true,"jwe":"x"}"#,
             ),
-            "needs \"insecure-test-vectors\" listed in `features`",
+            "needs \"fixed-rng\" listed in `features`",
         ),
         (
             "protected_b64u with only another feature",
@@ -3713,7 +3739,7 @@ fn jwe_schema_violations_fail() {
                 ),
                 r#"["deflate"]"#,
             ),
-            "needs \"insecure-test-vectors\"",
+            "needs \"fixed-rng\"",
         ),
         (
             "compress without its feature",
@@ -3824,7 +3850,7 @@ fn jwe_reproducible_vectors_pin_the_draw_order() {
             &format!(r#","protected_b64u":"{protected}","rng_b64u":"{rng}""#),
         )
     };
-    let features = r#"["insecure-test-vectors"]"#;
+    let features = r#"["fixed-rng"]"#;
     assert_passes(&[with_features(
         &vector("jwe.encrypt", &input(rng), &exact),
         features,
@@ -3856,21 +3882,21 @@ fn vectors_needing_a_disabled_feature_are_skipped_by_name() {
             &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
             r#"{"ok":false,"error":"InvalidKey"}"#,
         ),
-        r#"["deflate","insecure-test-vectors"]"#,
+        r#"["deflate","fixed-rng"]"#,
     );
     // Its expectation is wrong, but with the features off it does not run.
     match check_vector_with("needs.json", needs.as_bytes(), &[]) {
         Ok(Passed::Skipped { features }) => {
-            assert_eq!(features, ["deflate", "insecure-test-vectors"])
+            assert_eq!(features, ["deflate", "fixed-rng"])
         }
         other => panic!("expected SKIPPED, got {other:?}"),
     }
-    match check_vector_with("needs.json", needs.as_bytes(), &["insecure-test-vectors"]) {
+    match check_vector_with("needs.json", needs.as_bytes(), &["fixed-rng"]) {
         Ok(Passed::Skipped { features }) => assert_eq!(features, ["deflate"]),
         other => panic!("expected SKIPPED, got {other:?}"),
     }
     // With the features on, it runs, and fails.
-    assert!(check_vector_with("needs.json", needs.as_bytes(), FEATURES).is_err());
+    assert!(check_vector_with("needs.json", needs.as_bytes(), &feature_names()).is_err());
     // A schema-invalid vector fails even when it would be skipped.
     let invalid = needs.replace(r#""allowed_enc""#, r#""allowed_encs""#);
     assert!(check_vector_with("invalid.json", invalid.as_bytes(), &[]).is_err());

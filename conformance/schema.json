@@ -39,10 +39,10 @@
       }
     },
     "features": {
-      "description": "Optional. The polyjose cargo features the vector needs: insecure-test-vectors for jwe.encrypt with rng_b64u or protected_b64u (ADR 0041 §3), deflate for zip (ADR 0017). A runner whose build lacks one reports the vector SKIPPED, naming the features, and never counts it as passing. The bindings never enable insecure-test-vectors (ADR 0005), so such vectors are Rust-only.",
+      "description": "Optional. The polyjose cargo features the vector needs: fixed-rng (the test-vector RNG feature of ADR 0041 §3; conformance/README.md gives its cargo name) for jwe.encrypt with rng_b64u or protected_b64u, deflate for zip (ADR 0017). A runner whose build lacks one reports the vector SKIPPED, naming the features, and never counts it as passing. No binding enables the test-vector RNG (ADR 0005), so fixed-rng vectors are Rust-only.",
       "type": "array",
       "uniqueItems": true,
-      "items": { "enum": ["deflate", "insecure-test-vectors"] }
+      "items": { "enum": ["deflate", "fixed-rng"] }
     }
   },
   "allOf": [
@@ -456,7 +456,7 @@
       }
     },
     "jwe_encrypt_input": {
-      "description": "Encrypt a plaintext (RFC 7516 §5.1) in one serialization to one recipient (compact, flattened) or several (general, in order). The runner builds the recipients, then parses protected, then unprotected; the first error is the outcome. With rng_b64u or protected_b64u it calls the library's reproducible encryption (feature insecure-test-vectors, which the vector must list in features).",
+      "description": "Encrypt a plaintext (RFC 7516 §5.1) in one serialization to one recipient (compact, flattened) or several (general, in order). The runner builds the recipients, then parses protected, then unprotected; the first error is the outcome. With rng_b64u or protected_b64u it calls the library's reproducible encryption (feature fixed-rng, which the vector must list in features).",
       "type": "object",
       "required": ["serialization", "enc", "plaintext_b64u", "recipients"],
       "additionalProperties": false,
@@ -483,7 +483,7 @@
           "type": "object"
         },
         "protected_b64u": {
-          "description": "The exact encoded JWE Protected Header to reproduce (feature insecure-test-vectors): used verbatim for the AAD and the output only if it decodes to a header JSON-equal to the one polyjose builds, else InvalidFormat.",
+          "description": "The exact encoded JWE Protected Header to reproduce (feature fixed-rng): used verbatim for the AAD and the output only if it decodes to a header JSON-equal to the one polyjose builds, else InvalidFormat.",
           "$ref": "#/$defs/base64url"
         },
         "unprotected": {
@@ -499,7 +499,7 @@
           "type": "boolean"
         },
         "rng_b64u": {
-          "description": "The octets the encryption draws, in the documented order (CEK, then each recipient's key management, then the content IV; feature insecure-test-vectors). Every octet must be drawn.",
+          "description": "The octets the encryption draws, in the documented order (CEK, then each recipient's key management, then the content IV; feature fixed-rng). Every octet must be drawn.",
           "$ref": "#/$defs/base64url"
         }
       }

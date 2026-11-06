@@ -23,6 +23,6 @@
     "error": "InvalidFormat"
   },
   "features": [
-    "insecure-test-vectors"
+    "fixed-rng"
   ]
 }
