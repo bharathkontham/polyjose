@@ -362,6 +362,37 @@ mod tests {
     }
 
     #[test]
+    fn ec_reproduces_published_keys_from_their_scalar() {
+        // Each curve crate samples d as big-endian field bytes (SEC 1 v2
+        // §2.3.7), so a FixedRng holding a published d yields exactly that
+        // key, and generation derives the published public point.
+        for crv in EC_CURVES {
+            let published = published_ec_key(crv);
+            let (jwk, left) = ec_from_bytes(crv, &ec_d(&published));
+            let jwk = jwk.unwrap();
+            assert_eq!(left, 0);
+            assert_eq!(*jwk.to_json(), *published.to_json(), "{crv:?}");
+        }
+    }
+
+    #[test]
+    fn ec_rejection_samples_zero_and_out_of_range_scalars() {
+        // SEC 1 v2 §3.2.1: d ∈ [1, n − 1]. NonZeroScalar redraws on 0
+        // (research.md §6), and the curve's scalar sampler redraws on
+        // values ≥ n (all-0xFF is above every order here).
+        for crv in EC_CURVES {
+            let published = published_ec_key(crv);
+            let d = ec_d(&published);
+            let mut bytes = vec![0u8; ec_len(crv)];
+            bytes.extend(vec![0xFFu8; ec_len(crv)]);
+            bytes.extend(&d);
+            let (jwk, left) = ec_from_bytes(crv, &bytes);
+            assert_eq!(left, 0, "{crv:?}: both rejected draws were consumed");
+            assert_eq!(ec_d(&jwk.unwrap()), d, "{crv:?}");
+        }
+    }
+
+    #[test]
     fn ec_secret_is_the_d_of_generate_ec() {
         // One EC sampling path: generate_ec is generate_ec_secret plus the
         // JWK, so the same FixedRng bytes give the same scalar.
