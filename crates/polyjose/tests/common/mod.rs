@@ -7,7 +7,10 @@
 //! polyjose and of RustCrypto (Python big-integer arithmetic over the
 //! published SEC 2 / FIPS 186-5 curve parameters, checking n·G = identity).
 //! Not every test file uses every item.
-#![allow(dead_code, reason = "a shared fixture module; each test crate uses a subset")]
+#![allow(
+    dead_code,
+    reason = "a shared fixture module; each test crate uses a subset"
+)]
 
 /// One EC key pair, base64url of the fixed-length big-endian octets.
 pub struct EcKeyPair {
