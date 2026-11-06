@@ -6418,3 +6418,33 @@ fn jwt_binding_readiness_check_works() {
         );
     }
 }
+
+/// Criterion 2 (ADR 0028 §4): the runner's only clock is the `FixedClock`
+/// it builds from `now`. `jwt_policy` takes a `&FixedClock`, so the types
+/// already keep any other clock out of the library call; this scan of the
+/// runner's own source keeps a later edit from reading the wall clock
+/// another way. The names are assembled at run time so this test does not
+/// match itself.
+#[test]
+fn jwt_runner_never_reads_the_wall_clock() {
+    let source = include_str!("conformance.rs");
+    let forbidden = [
+        ["System", "Clock"].concat(),
+        ["System", "Time"].concat(),
+        ["Instant", "::"].concat(),
+        ["UNIX", "_EPOCH"].concat(),
+    ];
+    for name in &forbidden {
+        assert!(!source.contains(name.as_str()), "the runner names {name}");
+    }
+    let fixed = ["FixedClock", "(now)"].concat();
+    assert_eq!(
+        source.matches(fixed.as_str()).count(),
+        1,
+        "one clock, from `now`"
+    );
+    // And `now` decides: the RFC 7519 §3.1 JWT expired in 2011, so it is
+    // valid only because the runner's clock is `now`.
+    let valid = vector("jwt.validate", &jwt_hs256(""), &jwt_validated("HS256", ""));
+    assert!(check_vector("clock.json", valid.as_bytes()).is_ok());
+}
