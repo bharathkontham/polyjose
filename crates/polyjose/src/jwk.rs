@@ -123,7 +123,9 @@
 //! [permits]: crate::jwk::Jwk::permits
 //! [other_params]: crate::jwk::Jwk::other_params
 
+use core::cmp::Ordering;
 use core::fmt;
+use std::collections::BTreeSet;
 
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -1476,24 +1478,44 @@ fn parse_key_ops(object: &Object) -> Result<Option<Vec<KeyOp>>> {
     };
     let items = value.as_array().ok_or(Error::InvalidKey(NOT_STRINGS))?;
     let mut ops: Vec<KeyOp> = Vec::with_capacity(items.len());
+    // The values seen so far, borrowed from `items` (nothing is copied). A
+    // set keeps the duplicate check O(n log n) on untrusted input, where a
+    // scan of `ops` per value would be O(n²).
+    let mut seen = BTreeSet::new();
     for item in items {
-        let op = KeyOp::from(item.as_str().ok_or(Error::InvalidKey(NOT_STRINGS))?);
+        let name = item.as_str().ok_or(Error::InvalidKey(NOT_STRINGS))?;
         // RFC 7517 §4.3: "Duplicate key operation values MUST NOT be
         // present in the array." Values compare as exact strings.
-        if ops.iter().any(|seen| {
-            #[cfg(test)]
-            key_op_comparisons::tick();
-            *seen == op
-        }) {
+        if !seen.insert(KeyOpName(name)) {
             return Err(Error::InvalidKey("key_ops must not contain duplicates"));
         }
-        ops.push(op);
+        ops.push(KeyOp::from(name));
     }
     Ok(Some(ops))
 }
 
+/// A `key_ops` value in the duplicate check: ordered as an exact,
+/// case-sensitive string (RFC 7517 §4.3). A type of its own only so that
+/// test builds can count its comparisons.
+#[derive(PartialEq, Eq)]
+struct KeyOpName<'a>(&'a str);
+
+impl Ord for KeyOpName<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        #[cfg(test)]
+        key_op_comparisons::tick();
+        self.0.cmp(other.0)
+    }
+}
+
+impl PartialOrd for KeyOpName<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Test-only, per-thread count of the value comparisons the `key_ops`
-/// duplicate check makes, so a regression test can bound its work on
+/// duplicate check makes ([`KeyOpName`]'s ordering), so a regression test can bound its work on
 /// untrusted input deterministically, without wall-clock timing. Not
 /// compiled into non-test builds.
 #[cfg(test)]
