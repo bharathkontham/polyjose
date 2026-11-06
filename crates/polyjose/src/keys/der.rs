@@ -7,13 +7,6 @@
 //! INTEGERs (§8.3.2), primitive strings only (§10.2), minimal OID
 //! subidentifiers (§8.19.2), low-tag-number form only (§8.1.2.4) and no data
 //! after the outermost element (§8.1.1). BER is rejected (ADR 0018 §2).
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the DER engine is used by pkcs8.rs and spki.rs, and later by the key mappers"
-    )
-)]
 
 use zeroize::Zeroizing;
 
@@ -31,6 +24,13 @@ pub(crate) const BIT_STRING: u8 = 0x03;
 /// UNIVERSAL 4, primitive: OCTET STRING (X.690 §8.7, §10.2).
 pub(crate) const OCTET_STRING: u8 = 0x04;
 /// UNIVERSAL 5: NULL (X.690 §8.8).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "a NULL is only read inside the rsaEncryption template so far"
+    )
+)]
 pub(crate) const NULL: u8 = 0x05;
 /// UNIVERSAL 6: OBJECT IDENTIFIER (X.690 §8.19).
 pub(crate) const OID: u8 = 0x06;
@@ -43,6 +43,13 @@ pub(crate) const SET: u8 = 0x31;
 pub(crate) const CONTEXT_0: u8 = 0xA0;
 /// Context-specific `[1]`, constructed: an EXPLICIT `[1]` (RFC 5915 §3
 /// publicKey).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the SEC1 ECPrivateKey [1] publicKey reader (T06) uses it"
+    )
+)]
 pub(crate) const CONTEXT_1: u8 = 0xA1;
 /// Context-specific `[1]`, primitive: an IMPLICIT `[1]` BIT STRING
 /// (RFC 5958 §2 publicKey, an IMPLICIT TAGS module).
@@ -248,6 +255,13 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a NULL (X.690 §8.8), whose contents must be empty (§8.8.2).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "a NULL is only read inside the rsaEncryption template so far"
+        )
+    )]
     pub(crate) fn null(&mut self) -> Result<()> {
         if self.expect(NULL)?.contents.is_empty() {
             Ok(())
