@@ -633,9 +633,9 @@ pub(crate) const RSA_MODULUS_BITS: RangeInclusive<usize> = 2048..=8192;
 /// member is rejected with [`Error::UnsupportedAlgorithm`] (ADR 0021).
 ///
 /// Validation is structural: `n` and `e` are minimal Base64urlUInt values
-/// (RFC 7518 §2), `n` is odd (RFC 8017 §3.1) and 2048..=8192 bits
-/// ([`RSA_MODULUS_BITS`]: RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8), and
-/// `e` is odd with 3 ≤ e < n (RFC 8017 §3.1).
+/// (RFC 7518 §2), `n` is odd (RFC 8017 §3.1) and 2048 to 8192 bits
+/// (RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8), and `e` is odd with
+/// 3 ≤ e < n (RFC 8017 §3.1).
 #[derive(Clone)]
 pub struct RsaPublicKey {
     n: Vec<u8>,
