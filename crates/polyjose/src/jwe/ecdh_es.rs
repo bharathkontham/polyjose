@@ -764,6 +764,186 @@ mod tests {
         }
     }
 
+    /// A P-256 point on y² = x³ − 3x + b′ with b′ ≠ b: the P-256 generator's
+    /// x with y + 1, so the point lies on another curve over the same
+    /// field (the invalid-curve attack, CVE-2017-16007, research.md §4.2).
+    const INVALID_CURVE_EPK: &str = r#"{"kty":"EC","crv":"P-256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfY"}"#;
+    /// A low-order point of the quadratic twist of P-256 (Sanso 2017; the x
+    /// of Wycheproof `ecdh_secp256r1_ecpoint` tcId 350, "public key is a low
+    /// order point on twist"), written as (x, y) with −y² = x³ − 3x + b.
+    /// x³ − 3x + b is a non-residue mod p, so no y puts it on P-256.
+    const TWIST_EPK: &str = r#"{"kty":"EC","crv":"P-256","x":"793jsyhyqe_887lMv3Oqezn5aD7OkSG5hSFn9OPaYJs","y":"6rahtGMUwhn3AU4EFtzM7Ice2VkxZ8AgMIZQw-EQ6Uo"}"#;
+    /// The secp256k1 generator (SEC 2 §2.4.1): on its own curve, not P-256.
+    const SECP256K1_EPK: &str = r#"{"kty":"EC","crv":"secp256k1","x":"eb5mfvncu6xVoGKVzocLBwKb_NstzijZWfKBWxb4F5g","y":"SDradyajxGVdpPv8DhEIqP0XtEimhVQZnEfQj_sQ1Lg"}"#;
+
+    /// The Appendix C header with `epk` replaced (or removed for `None`).
+    fn app_c_header_with(epk: Option<&str>) -> Header {
+        match epk {
+            Some(epk) => header(&format!(
+                r#"{{"alg":"ECDH-ES","enc":"A128GCM","epk":{epk}}}"#
+            )),
+            None => header(r#"{"alg":"ECDH-ES","enc":"A128GCM"}"#),
+        }
+    }
+
+    #[test]
+    fn invalid_nist_epk_fails_before_any_agreement() {
+        // RFC 8725 §3.4, RFC 7518 §4.6.1.1, ADR 0041 §4: each invalid epk is
+        // DecryptionFailed, and `ecdh_nist::agree` never runs.
+        let bob = bind(
+            &jwk(app_c::BOB),
+            &A::EcdhEs,
+            &E::A128GCM,
+            Direction::Decrypt,
+        );
+        let alice = object(app_c::ALICE_EPK);
+        let with = |name: &str, value: &str| {
+            let mut epk = alice.clone();
+            epk.insert(name, value);
+            Value::from(epk).to_json()
+        };
+        let cases: Vec<(&str, Option<String>)> = vec![
+            ("missing", None),
+            ("private d", Some(with("d", app_c::ALICE_D))),
+            ("private k", Some(with("k", "AAAA"))),
+            ("kty OKP", Some(r#"{"kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"}"#.to_owned())),
+            ("kty oct", Some(r#"{"kty":"oct"}"#.to_owned())),
+            ("crv P-384", Some(P384_EPK.to_owned())),
+            ("crv secp256k1", Some(SECP256K1_EPK.to_owned())),
+            ("crv label only", Some(with("crv", "P-384"))),
+            ("x 31 octets", Some(with("x", "gI0GAILBdu7T53akrFmMyGcsF3n5dO7MmwNBHKW5SQ"))),
+            ("y 33 octets", Some(with("y", "SLW_xSffzlPWrHEVI30DHM_4egVwt3NQqeUD7nMFppsA"))),
+            ("y missing", Some(r#"{"kty":"EC","crv":"P-256","x":"gI0GAILBdu7T53akrFmMyGcsF3n5dO7MmwNBHKW5SV0"}"#.to_owned())),
+            ("off-curve", Some(with("y", "SLW_xSffzlPWrHEVI30DHM_4egVwt3NQqeUD7nMFppo"))),
+            // The identity has no affine coordinates; (0, 0) is how an
+            // attacker would spell it (b ≠ 0, so it is off the curve).
+            ("identity (0, 0)", Some(format!(r#"{{"kty":"EC","crv":"P-256","x":"{zero}","y":"{zero}"}}"#, zero = "A".repeat(43)))),
+            ("invalid curve", Some(INVALID_CURVE_EPK.to_owned())),
+            ("twist point", Some(TWIST_EPK.to_owned())),
+            ("x not base64url", Some(with("x", "gI0GAILBdu7T53akrFmMyGcsF3n5dO7MmwNBHKW5SV0="))),
+        ];
+        for (what, epk) in &cases {
+            let header = app_c_header_with(epk.as_deref());
+            let (result, ticks) =
+                ecdh_agreements::count(|| decrypt(&A::EcdhEs, &bob, &E::A128GCM, &header, &[]));
+            assert_eq!(result, Err(Error::DecryptionFailed), "{what}");
+            assert_eq!(ticks, 0, "{what}: the agreement ran");
+            // The same for the key-wrapping variant.
+            let kw = bind(
+                &jwk(app_c::BOB),
+                &A::EcdhEsA128KW,
+                &E::A128GCM,
+                Direction::Decrypt,
+            );
+            let (result, ticks) = ecdh_agreements::count(|| {
+                decrypt(&A::EcdhEsA128KW, &kw, &E::A128GCM, &header, &[0xA6; 24])
+            });
+            assert_eq!(result, Err(Error::DecryptionFailed), "{what} (KW)");
+            assert_eq!(ticks, 0, "{what} (KW): the agreement ran");
+        }
+        // The valid epk with a non-empty encrypted key under direct ECDH-ES
+        // (RFC 7516 §5.2 step 10) fails before the agreement too.
+        let header = app_c_header_with(Some(app_c::ALICE_EPK));
+        let (result, ticks) =
+            ecdh_agreements::count(|| decrypt(&A::EcdhEs, &bob, &E::A128GCM, &header, &[0]));
+        assert_eq!((result, ticks), (Err(Error::DecryptionFailed), 0));
+        // And the valid epk itself reaches exactly one agreement.
+        let (result, ticks) =
+            ecdh_agreements::count(|| decrypt(&A::EcdhEs, &bob, &E::A128GCM, &header, &[]));
+        assert!(result.is_ok());
+        assert_eq!(ticks, 1);
+    }
+
+    #[test]
+    fn an_epk_on_the_wrong_curve_fails_for_every_recipient_curve() {
+        // RFC 7518 §4.6: the agreement is on the recipient's curve; a P-256
+        // epk is refused by P-384, P-521 and X25519 keys, and an X25519 epk
+        // by every NIST key, with no agreement.
+        let x25519_epk =
+            r#"{"kty":"OKP","crv":"X25519","x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"}"#;
+        for key in recipients().iter().skip(1) {
+            let secret = bind(key, &A::EcdhEs, &E::A128GCM, Direction::Decrypt);
+            let epk = if matches!(secret, RecipientKey::X25519Secret(_)) {
+                app_c::ALICE_EPK
+            } else {
+                x25519_epk
+            };
+            for epk in [epk, app_c::ALICE_EPK] {
+                if matches!(secret, RecipientKey::X25519Secret(_)) == (epk == x25519_epk) {
+                    continue;
+                }
+                let header = app_c_header_with(Some(epk));
+                let (result, ticks) = ecdh_agreements::count(|| {
+                    decrypt(&A::EcdhEs, &secret, &E::A128GCM, &header, &[])
+                });
+                assert_eq!((result, ticks), (Err(Error::DecryptionFailed), 0), "{epk}");
+            }
+        }
+    }
+
+    #[test]
+    fn low_order_x25519_epk_fails_after_its_one_agreement() {
+        // RFC 7748 §6.1, ADR 0043 §2: a low-order u gives the all-zero Z,
+        // which `ecdh_x25519::agree` rejects after computing it (so the
+        // counter is 1, not 0); the error is DecryptionFailed.
+        let bob = jwk(X25519_BOB);
+        for alg in &ALGS {
+            let secret = bind(&bob, alg, &E::A128GCM, Direction::Decrypt);
+            let ek: &[u8] = if *alg == A::EcdhEs { &[] } else { &[0xA6; 24] };
+            for u in [
+                // Wycheproof x25519 LowOrderPublic points: 0, 1, and the
+                // point of order 8.
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "0100000000000000000000000000000000000000000000000000000000000000",
+                "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+            ] {
+                let epk = format!(
+                    r#"{{"kty":"OKP","crv":"X25519","x":"{}"}}"#,
+                    b64url_encode(&hex(u))
+                );
+                let header = app_c_header_with(Some(&epk));
+                let (result, ticks) =
+                    ecdh_agreements::count(|| decrypt(alg, &secret, &E::A128GCM, &header, ek));
+                assert_eq!(result, Err(Error::DecryptionFailed), "{alg} {u}");
+                assert_eq!(ticks, 1, "{alg} {u}");
+            }
+            // A private member or a wrong length fails before the agreement.
+            for epk in [
+                r#"{"kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08","d":"XasIfmJKikt54X-Lg4AO5m87sSkmGLb9HC-LJ_-I4Os"}"#,
+                r#"{"kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK0"}"#,
+                r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#,
+            ] {
+                let header = app_c_header_with(Some(epk));
+                let (result, ticks) =
+                    ecdh_agreements::count(|| decrypt(alg, &secret, &E::A128GCM, &header, ek));
+                assert_eq!(
+                    (result, ticks),
+                    (Err(Error::DecryptionFailed), 0),
+                    "{alg} {epk}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn x25519_encrypt_to_a_low_order_recipient_key_is_invalid_key() {
+        // RFC 7748 §6.1: the all-zero Z is refused on encrypt too; the
+        // caller's key is unusable (plan.md error contract).
+        let low = jwk(
+            r#"{"kty":"OKP","crv":"X25519","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
+        );
+        let public = bind(&low, &A::EcdhEs, &E::A128GCM, Direction::Encrypt);
+        let result = encrypt_key(
+            &A::EcdhEs,
+            &public,
+            &E::A128GCM,
+            None,
+            &RecipientOptions::default(),
+            &mut OsRandom,
+        );
+        assert!(matches!(result, Err(Error::InvalidKey(_))));
+    }
+
     #[test]
     fn a_wrong_key_or_a_cek_of_the_wrong_length_fails() {
         // RFC 3394 §2.2.3: another recipient's key fails the unwrap
