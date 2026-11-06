@@ -857,7 +857,7 @@ fn check_round_trip(
             e.code()
         )
     })?;
-    if verified.payload != payload {
+    if *verified.payload != payload {
         return Err("round trip: the verified payload is not the signed one".to_owned());
     }
     Ok(())

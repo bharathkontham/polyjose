@@ -48,7 +48,7 @@ use crate::util::{b64url_decode, b64url_encode};
 
 use super::alg::{FAMILIES, Families};
 use super::process::{
-    JoseHeader, common_b64, furthest, prepare_sign, signing_input, verify_signature,
+    JoseHeader, common_b64, furthest, prepare_sign, signing_input_from_part, verify_signature,
 };
 use super::{ProtectedHeader, SignOptions, Signer, Verified, VerifyOptions};
 
@@ -217,18 +217,23 @@ fn sign_all<'s>(
     // RFC 7797 §5.3: with `b64: false` the payload member is the payload
     // itself, a JSON string, so it must be UTF-8. Detached content is not
     // carried (RFC 7515 Appendix F), so any octets will do.
-    let payload_member = match (opts.detached, b64) {
-        (true, _) => None,
-        (false, true) => Some(Value::from(b64url_encode(payload))),
-        (false, false) => Some(Value::from(core::str::from_utf8(payload).map_err(
-            |_| Error::InvalidFormat("a b64:false payload must be UTF-8 in the JSON Serialization"),
-        )?)),
+    let unencoded = if !opts.detached && !b64 {
+        Some(core::str::from_utf8(payload).map_err(|_| {
+            Error::InvalidFormat("a b64:false payload must be UTF-8 in the JSON Serialization")
+        })?)
+    } else {
+        None
     };
+    // The payload as every signing input carries it (RFC 7515 §5.1 step 5,
+    // RFC 7797 §3): BASE64URL(JWS Payload), encoded once for all signers
+    // and wiped on drop (ADR 0049 §4), or the octets themselves.
+    let encoded = b64.then(|| Zeroizing::new(b64url_encode(payload)));
+    let payload_part = encoded.as_ref().map_or(payload, |e| e.as_bytes());
     // RFC 7515 §5.1 steps 5-7, signer by signer.
     let mut entries = Vec::with_capacity(signers.len());
     for ((signer, ready), header) in signers.iter().zip(&ready).zip(unprotected_members) {
         let protected = signer.protected.as_ref().map(ProtectedHeader::encoded);
-        let input = signing_input(protected.unwrap_or(""), payload, b64);
+        let input = signing_input_from_part(protected.unwrap_or(""), payload_part);
         let signature = b64url_encode(&ready.sign(families, &input)?);
         entries.push(SignedEntry {
             protected,
@@ -236,6 +241,14 @@ fn sign_all<'s>(
             signature,
         });
     }
+    // The `payload` member (RFC 7515 §7.2.1), reusing the encoding; a
+    // `Value` string is wiped on drop too.
+    let payload_member = match (opts.detached, encoded, unencoded) {
+        (true, _, _) => None,
+        (false, Some(encoded), _) => Some(Value::String(encoded)),
+        // `b64: false` and attached: `unencoded` was set, and checked, above.
+        (false, None, text) => Some(Value::from(text.unwrap_or_default())),
+    };
     Ok((payload_member, entries))
 }
 
@@ -332,12 +345,10 @@ pub(crate) fn verify_json_with(
         .iter()
         .map(|(protected, _)| protected.as_ref().and_then(|h| h.b64) != Some(false))
         .collect();
-    let payload = match encodings.split_first() {
-        Some((&b64, rest)) if rest.iter().all(|&other| other == b64) => Some(match payload {
-            Payload::Attached(text) if b64 => b64url_decode(&text)?,
-            Payload::Attached(text) => text.as_bytes().to_vec(),
-            Payload::Detached(octets) => octets.to_vec(),
-        }),
+    let content = match encodings.split_first() {
+        Some((&b64, rest)) if rest.iter().all(|&other| other == b64) => {
+            Some(Content::new(payload, b64)?)
+        }
         _ => None,
     };
 
@@ -350,9 +361,9 @@ pub(crate) fn verify_json_with(
     let b64 = common_b64(&headers)?;
     // `JoseHeader::new` keeps `b64` out of unprotected headers, so each
     // union's `b64` is its protected header's, and `common_b64` passing
-    // means `encodings` agreed and the payload was decoded. Fail closed
-    // regardless.
-    let Some(payload) = payload else {
+    // means `encodings` agreed and the payload was decoded with that same
+    // `b64`. Fail closed regardless.
+    let Some(content) = content.filter(|c| c.encoded.is_some() == b64) else {
         return Err(Error::InvalidHeader("b64 differs between signatures"));
     };
 
@@ -362,7 +373,7 @@ pub(crate) fn verify_json_with(
     for (signature_index, (header, (protected_b64, signature))) in
         headers.into_iter().zip(signed).enumerate()
     {
-        let input = signing_input(protected_b64.as_deref().unwrap_or(""), &payload, b64);
+        let input = signing_input_from_part(protected_b64.as_deref().unwrap_or(""), content.part());
         match verify_signature(families, &header, key, opts, &input, &signature) {
             Ok(alg) => {
                 let (protected, unprotected) = header.into_parts();
@@ -370,7 +381,7 @@ pub(crate) fn verify_json_with(
                     alg,
                     protected,
                     unprotected,
-                    payload,
+                    payload: content.into_payload(),
                     signature_index,
                 });
             }
@@ -395,6 +406,83 @@ enum Payload<'a> {
     Attached(Zeroizing<String>),
     /// [`VerifyOptions::detached_payload`] (RFC 7515 Appendix F).
     Detached(&'a [u8]),
+}
+
+/// The JWS Payload after step 3, with its form in the signing input
+/// (RFC 7515 §5.1 step 5, RFC 7797 §3). Everything here may be secret, so
+/// it is wiped on drop (ADR 0049 §4).
+struct Content<'a> {
+    /// The JWS Payload octets.
+    octets: Octets<'a>,
+    /// BASE64URL(JWS Payload) when `b64` is true: the received `payload`
+    /// member, or the detached content encoded once. `None` when `b64` is
+    /// false, where the signing input carries the octets themselves.
+    encoded: Option<Zeroizing<String>>,
+}
+
+/// Where the JWS Payload octets live.
+enum Octets<'a> {
+    /// Decoded from, or moved out of, the `payload` member.
+    Owned(Zeroizing<Vec<u8>>),
+    /// [`VerifyOptions::detached_payload`], copied only once verified.
+    Detached(&'a [u8]),
+}
+
+impl<'a> Content<'a> {
+    /// Step 3 for the payload (RFC 7515 §5.2 step 6): base64url-decodes an
+    /// attached payload when `b64` is true, else takes its text as the
+    /// octets (RFC 7797 §3, §5.3).
+    ///
+    /// The received text is kept as BASE64URL(JWS Payload) rather than
+    /// re-encoded: [`b64url_decode`] accepts only the canonical encoding
+    /// (RFC 4648 §3.5), so the two are the same.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidBase64`] if `b64` is true and the `payload` member
+    /// is not strict base64url (RFC 7515 §2).
+    fn new(payload: Payload<'a>, b64: bool) -> Result<Self> {
+        Ok(match payload {
+            Payload::Attached(text) if b64 => Self {
+                octets: Octets::Owned(Zeroizing::new(b64url_decode(&text)?)),
+                encoded: Some(text),
+            },
+            // The string's buffer becomes the octets, without a copy.
+            Payload::Attached(mut text) => Self {
+                octets: Octets::Owned(Zeroizing::new(core::mem::take(&mut *text).into_bytes())),
+                encoded: None,
+            },
+            Payload::Detached(octets) => Self {
+                octets: Octets::Detached(octets),
+                encoded: b64.then(|| Zeroizing::new(b64url_encode(octets))),
+            },
+        })
+    }
+
+    /// The payload as the signing input carries it: BASE64URL(JWS Payload)
+    /// or, with `b64: false`, the octets (RFC 7515 §5.1 step 5, RFC 7797 §3).
+    fn part(&self) -> &[u8] {
+        match &self.encoded {
+            Some(encoded) => encoded.as_bytes(),
+            None => self.octets(),
+        }
+    }
+
+    /// The JWS Payload octets.
+    fn octets(&self) -> &[u8] {
+        match &self.octets {
+            Octets::Owned(octets) => octets,
+            Octets::Detached(octets) => octets,
+        }
+    }
+
+    /// The JWS Payload for [`Verified::payload`], copying detached content.
+    fn into_payload(self) -> Zeroizing<Vec<u8>> {
+        match self.octets {
+            Octets::Owned(octets) => octets,
+            Octets::Detached(octets) => Zeroizing::new(octets.to_vec()),
+        }
+    }
 }
 
 /// One signature object's members after step 2 (RFC 7515 §7.2.1).
@@ -633,7 +721,7 @@ mod tests {
         for jws in [flattened(&m), general(std::slice::from_ref(&m))] {
             let v = verify(&jws).unwrap();
             assert_eq!(v.alg, SigningAlg::HS256);
-            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(*v.payload, PAYLOAD);
             assert_eq!(v.signature_index, 0);
             assert_eq!(v.protected, Some(hs256()));
             assert_eq!(v.unprotected, Some(kid("k1")));
@@ -765,7 +853,7 @@ mod tests {
         let gen_ =
             format!(r#"{{"x":1,"payload":"{PAYLOAD_B64}","signatures":[{{"x":"y",{m}}}],"z":[]}}"#);
         for jws in [flat, gen_] {
-            assert_eq!(verify(&jws).unwrap().payload, PAYLOAD, "{jws}");
+            assert_eq!(*verify(&jws).unwrap().payload, PAYLOAD, "{jws}");
         }
     }
 
@@ -853,7 +941,7 @@ mod tests {
                 v.unprotected.as_ref().and_then(|h| h.kid.as_deref()),
                 Some("k")
             );
-            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(*v.payload, PAYLOAD);
         }
         // Signed as if the protected header were "e30" ({}): not the same.
         let wrong = members_signed(
@@ -960,11 +1048,11 @@ mod tests {
             r#"{{"payload":"a \"quoted\" $.02\n","protected":"{p}","signature":"{signature}"}}"#
         );
         let v = verify(&jws).unwrap();
-        assert_eq!(v.payload, payload.as_bytes());
+        assert_eq!(*v.payload, payload.as_bytes());
         // Not base64url-decoded: "JC4wMg" stays six octets.
         let s = sig(SigningAlg::HS256, &p, PAYLOAD_B64);
         let jws = format!(r#"{{"payload":"{PAYLOAD_B64}","protected":"{p}","signature":"{s}"}}"#);
-        assert_eq!(verify(&jws).unwrap().payload, PAYLOAD_B64.as_bytes());
+        assert_eq!(*verify(&jws).unwrap().payload, PAYLOAD_B64.as_bytes());
     }
 
     #[test]
@@ -1056,6 +1144,33 @@ mod tests {
         assert_eq!(code(verify(&flattened(&misplaced))), "InvalidHeader");
     }
 
+    #[test]
+    fn content_signs_the_received_payload_text() {
+        // RFC 7515 §5.2 step 8 over BASE64URL(JWS Payload): the received
+        // member, not a re-encoding; RFC 7797 §3 for the octets; the
+        // detached content encoded once (RFC 7515 Appendix F).
+        let text = || Payload::Attached(Zeroizing::new(PAYLOAD_B64.to_owned()));
+        let encoded = Content::new(text(), true).unwrap();
+        assert_eq!(encoded.part(), PAYLOAD_B64.as_bytes());
+        assert_eq!(*encoded.into_payload(), PAYLOAD);
+        let unencoded = Content::new(text(), false).unwrap();
+        assert_eq!(unencoded.part(), PAYLOAD_B64.as_bytes());
+        assert_eq!(*unencoded.into_payload(), PAYLOAD_B64.as_bytes());
+        let detached = Content::new(Payload::Detached(PAYLOAD), true).unwrap();
+        assert_eq!(detached.part(), PAYLOAD_B64.as_bytes());
+        assert_eq!(*detached.into_payload(), PAYLOAD);
+        let raw = Content::new(Payload::Detached(PAYLOAD), false).unwrap();
+        assert_eq!(raw.part(), PAYLOAD);
+        // Only the canonical encoding is accepted (RFC 4648 §3.5), so the
+        // received text is the one encoding of the payload: "QR" is not
+        // read as 0x41.
+        let qr = Payload::Attached(Zeroizing::new("QR".to_owned()));
+        assert_eq!(
+            Content::new(qr, true).map(|_| ()),
+            Err(Error::InvalidBase64)
+        );
+    }
+
     // ---- Detached content (RFC 7515 Appendix F) ----
 
     #[test]
@@ -1073,7 +1188,7 @@ mod tests {
         for jws in [&detached, &general_detached] {
             assert_eq!(code(verify_opts(jws, &opts)), "InvalidFormat");
             let v = verify_opts(jws, &opts.detached_payload(PAYLOAD)).unwrap();
-            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(*v.payload, PAYLOAD);
         }
         // The signature covers the detached payload.
         assert_eq!(
@@ -1088,7 +1203,7 @@ mod tests {
         let s = b64url_encode(&fake_signature(&SigningAlg::HS256, &input));
         let jws = format!(r#"{{"protected":"{p}","signature":"{s}"}}"#);
         let v = verify_opts(&jws, &opts.detached_payload(&raw)).unwrap();
-        assert_eq!(v.payload, raw);
+        assert_eq!(*v.payload, raw);
     }
 
     // ---- Multiple signatures (ADR 0026 §3) ----
@@ -1301,7 +1416,7 @@ mod tests {
             jws,
             format!(r#"{{"payload":"{PAYLOAD_B64}","protected":"{a1}","signature":"{s}"}}"#)
         );
-        assert_eq!(verify(&jws).unwrap().payload, PAYLOAD);
+        assert_eq!(*verify(&jws).unwrap().payload, PAYLOAD);
     }
 
     #[test]
@@ -1334,7 +1449,7 @@ mod tests {
             let v = verify_allowing(&jws, std::slice::from_ref(&alg)).unwrap();
             assert_eq!(v.signature_index, index);
             assert_eq!(v.alg, alg);
-            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(*v.payload, PAYLOAD);
             assert_eq!(v.protected.is_some(), index != 1);
             assert_eq!(v.unprotected.is_some(), index != 0);
         }
@@ -1373,7 +1488,7 @@ mod tests {
         );
         let opts = VerifyOptions::new(HS256).unwrap().detached_payload(PAYLOAD);
         for jws in [flat, gen_] {
-            assert_eq!(verify_opts(&jws, &opts).unwrap().payload, PAYLOAD);
+            assert_eq!(*verify_opts(&jws, &opts).unwrap().payload, PAYLOAD);
         }
     }
 
@@ -1400,7 +1515,7 @@ mod tests {
         )
         .unwrap();
         for jws in [flat, gen_] {
-            assert_eq!(verify(&jws).unwrap().payload, payload.as_bytes());
+            assert_eq!(*verify(&jws).unwrap().payload, payload.as_bytes());
         }
 
         // Octets that are not UTF-8 cannot be a JSON string.
@@ -1422,11 +1537,11 @@ mod tests {
         let detached = SignOptions::new().detached(true);
         let jws = sign_flattened_with(&FAKE, &signer, &raw, &detached).unwrap();
         let opts = VerifyOptions::new(HS256).unwrap().detached_payload(&raw);
-        assert_eq!(verify_opts(&jws, &opts).unwrap().payload, raw);
+        assert_eq!(*verify_opts(&jws, &opts).unwrap().payload, raw);
         // b64 true: any octets, base64url-encoded.
         let plain = Signer::new(&k).protected(protected(P_HS256));
         let jws = sign_flattened_with(&FAKE, &plain, &raw, &attached()).unwrap();
-        assert_eq!(verify(&jws).unwrap().payload, raw);
+        assert_eq!(*verify(&jws).unwrap().payload, raw);
     }
 
     #[test]
