@@ -524,7 +524,7 @@ fn an_ec_key_of_the_wrong_curve_is_rejected_for_the_alg() {
 }
 
 #[test]
-fn rs_and_ps_with_a_private_looking_or_ec_key_are_still_unsupported() {
+fn rs_and_ps_with_an_ec_okp_or_rsa_key_are_unsupported() {
     // The algorithm check is first for every key kind.
     for key in [jwk(P256), ed25519(), jwk(RS_PUBLIC)] {
         for alg in [SigningAlg::RS256, SigningAlg::PS256] {
