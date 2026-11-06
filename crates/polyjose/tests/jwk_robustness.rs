@@ -138,10 +138,18 @@ fn use_everything(jwk: &Jwk) {
     }
 }
 
+/// The exact codes `Jwk::from_object` documents (jwk.rs "Error codes" and
+/// its `# Errors`): `UnsupportedAlgorithm` (ADR 0018 Q3; ADRs 0021, 0022),
+/// `InvalidKey` and `InvalidBase64` for a malformed key, and
+/// `KeyAlgorithmMismatch` for a well-formed key whose known `alg` its
+/// family cannot serve (RFC 7517 §4.4, RFC 8725 §3.1).
 fn is_import_error(e: &Error) -> bool {
     matches!(
         e,
-        Error::InvalidKey(_) | Error::InvalidBase64 | Error::UnsupportedAlgorithm
+        Error::InvalidKey(_)
+            | Error::InvalidBase64
+            | Error::UnsupportedAlgorithm
+            | Error::KeyAlgorithmMismatch
     )
 }
 
