@@ -15,12 +15,17 @@
 #   6.   OAEP decryption (`oaep::DecryptingKey` through `rsa::traits::Decryptor`);
 #   7.   PSS signing (`pss::SigningKey`);
 #   8.   a generic polyjose function that only a binding instantiates, so the RSA code is in the
-#        binding's objects and not polyjose's.
+#        binding's objects and not polyjose's;
+#   9.   a `#[cfg(not(debug_assertions))]` public function (macro spelling), which only the
+#        release configuration compiles.
+# (An uncalled `#[inline] pub fn` and an uninstantiated generic `pub fn` are never codegened in
+# polyjose, so they have no symbol to find: the text scan's macro rule catches those, rsa-guard.sh.)
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
-# so a pass cannot come from scanning nothing): the unchanged tree (rsa::RsaPublicKey and the
-# typed pkcs1v15/pss VerifyingKey), and a tree whose own modules are named like the forbidden
-# items outside the rsa crate (a `cbc::Decryptor` as in feature 0003's A*CBC-HS*, and
-# polyjose::jws::rsa::{traits::Decryptor, private_key::RsaPrivateKey}).
+# so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
+# release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
+# whose own modules are named like the forbidden items outside the rsa crate (a `cbc::Decryptor`
+# as in feature 0003's A*CBC-HS*, and polyjose::jws::rsa::{traits::Decryptor,
+# private_key::RsaPrivateKey}).
 # Usage: scripts/tests/check-deps/rsa-symbols.sh
 set -euo pipefail
 export LC_ALL=C
@@ -148,6 +153,25 @@ pub fn evil(key: rsa::RsaPrivateKey, msg: &[u8]) -> Vec<u8> {
     rsa::pss::SigningKey::<sha2::Sha256>::new(key).sign_with_rng(&mut rng, msg).to_vec()
 }'
 expect_fail "pss::SigningKey" "rsa::pss::signing_key::SigningKey<sha2::Sha256>" "$sym_fail"
+
+# 9. Code that only a release build compiles (`cfg(not(debug_assertions))`, the F01 tester's
+#    finding (c)), with the macro spelling the text scan's macro rule catches (rsa-guard.sh). The
+#    dev-profile configurations never compile it, so this case runs the release one alone: the
+#    release pass catches it on its own.
+only=polyjose-all-features-release
+new_case release-only
+append_to "$lib_rs" 'macro_rules! k { ($c:ident) => { $c::pkcs1v15::SigningKey::<sha2::Sha256> } }
+/// Test only.
+#[doc(hidden)]
+#[cfg(not(debug_assertions))]
+pub fn evil(msg: &[u8]) -> Vec<u8> {
+    use p256::ecdsa::signature::{SignatureEncoding, Signer as _};
+    let mut rng = p256::elliptic_curve::rand_core::UnwrapErr(crate::rng::CryptoRngAdapter::os());
+    let key = <k!(rsa)>::random(&mut rng, 2048).unwrap();
+    key.sign(msg).to_vec()
+}'
+expect_fail "#[cfg(not(debug_assertions))] pub fn with <k!(rsa)>::random, release configuration" \
+  "$pkcs1_sign" "$sym_fail in the objects of polyjose \\(polyjose --all-features --release \\(host\\)\\)"
 
 only=""
 
