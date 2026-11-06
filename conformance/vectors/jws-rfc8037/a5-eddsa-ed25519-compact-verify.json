@@ -1,0 +1,22 @@
+{
+  "source": "RFC 8037 App. A.5",
+  "description": "EdDSA compact verify of the A.4 JWS with the public part of the A.1 key (A.2); the payload is \"Example of Ed25519 signing\" with a lowercase \"s\", as the base64url in A.4 and A.5 decodes, although the A.5 prose prints \"Example of Ed25519 Signing\" (a capitalisation slip in the text; the encoded value is authoritative)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg",
+    "key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    },
+    "allowed_algs": [
+      "EdDSA"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc",
+    "alg": "EdDSA",
+    "signature_index": 0
+  }
+}
