@@ -10,7 +10,22 @@
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
 )]
+mod concat_kdf;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
 mod content;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod ecdh_nist;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod ecdh_x25519;
 #[allow(
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
@@ -21,6 +36,11 @@ mod enc_cbc_hmac;
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
 )]
 mod enc_gcm;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod key;
 #[allow(
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
