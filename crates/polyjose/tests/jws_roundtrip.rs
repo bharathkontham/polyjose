@@ -563,6 +563,37 @@ proptest! {
         let result = case.verify(&tampered, key, &allowed, &detached);
         prop_assert!(result.is_err(), "{part:?} changed, still verified: {tampered}");
     }
+
+    /// RFC 8725 §3.1, ADR 0026 §2 step 7: with an allow-list holding none of
+    /// the JWS's algorithms, every signer's key fails with
+    /// AlgorithmNotAllowed, before any key or signature is looked at.
+    #[test]
+    fn an_alg_outside_the_allow_list_is_not_allowed(
+        case in signable_case(),
+        mask in prop::collection::vec(any::<bool>(), SigningAlg::KNOWN.len()),
+    ) {
+        let others: Vec<SigningAlg> = SigningAlg::KNOWN
+            .iter()
+            .filter(|alg| **alg != SigningAlg::None)
+            .filter(|alg| case.signers.iter().all(|s| s.alg != **alg))
+            .cloned()
+            .collect();
+        let mut allowed: Vec<SigningAlg> = others
+            .iter()
+            .zip(&mask)
+            .filter(|(_, keep)| **keep)
+            .map(|(alg, _)| alg.clone())
+            .collect();
+        if allowed.is_empty() {
+            allowed.push(others[0].clone());
+        }
+        let keys = case.keys();
+        let jws = case.sign(&keys).unwrap();
+        for key in &keys {
+            let result = case.verify(&jws, &key.verify, &allowed, &case.payload);
+            prop_assert_eq!(result.map(drop).map_err(|e| e.code()), Err("AlgorithmNotAllowed"));
+        }
+    }
 }
 
 #[test]
