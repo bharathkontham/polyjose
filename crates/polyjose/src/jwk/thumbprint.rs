@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use super::Jwk;
+use crate::json::Object;
 use crate::util::b64url_encode;
 
 /// The RFC 9278 §3 URI prefix, `urn:ietf:params:oauth:jwk-thumbprint`,
@@ -107,8 +108,20 @@ impl Jwk {
     /// For an `oct` key the input contains the secret `k`
     /// (RFC 7638 §3.2), so the buffer is wiped on drop.
     fn canonical_input(&self) -> Zeroizing<String> {
-        Zeroizing::new(self.thumbprint_members().to_json())
+        canonical_json(self.thumbprint_members())
     }
+}
+
+/// Serializes `members` in the RFC 7638 §3.3 order: sorted
+/// lexicographically by the Unicode code points of the member names.
+///
+/// [`Jwk::thumbprint_members`] already inserts the members in that order;
+/// sorting here makes the hash input's order independent of it.
+/// [`Object::sort_members`] sorts by code point, and sorts in place, so a
+/// secret `k` is never copied; the returned buffer is wiped on drop.
+fn canonical_json(mut members: Object) -> Zeroizing<String> {
+    members.sort_members();
+    Zeroizing::new(members.to_json())
 }
 
 #[cfg(test)]
@@ -291,6 +304,33 @@ mod tests {
         assert_eq!(
             jwk(RFC7517_OCT_AES).canonical_input().as_str(),
             r#"{"k":"GawgguFyGrWKav7AX4VKUg","kty":"oct"}"#
+        );
+    }
+
+    #[test]
+    fn canonical_json_orders_members_by_code_point() {
+        // RFC 7638 §3.3: the hash input is ordered by member name, whatever
+        // order the members arrive in. Here they arrive reversed.
+        let mut members = json::Object::new();
+        members.insert("n", "nnn");
+        members.insert("kty", "RSA");
+        members.insert("e", "AQAB");
+        assert_eq!(
+            canonical_json(members).as_str(),
+            r#"{"e":"AQAB","kty":"RSA","n":"nnn"}"#
+        );
+
+        // §3.3 orders by Unicode code point: uppercase before lowercase,
+        // and U+E000 before U+10000. UTF-16 code unit order would put
+        // U+10000 (surrogates D800 DC00) first.
+        let mut members = json::Object::new();
+        members.insert("\u{10000}", "1");
+        members.insert("\u{E000}", "2");
+        members.insert("a", "3");
+        members.insert("Z", "4");
+        assert_eq!(
+            canonical_json(members).as_str(),
+            "{\"Z\":\"4\",\"a\":\"3\",\"\u{E000}\":\"2\",\"\u{10000}\":\"1\"}"
         );
     }
 
