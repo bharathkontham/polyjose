@@ -145,13 +145,6 @@ impl<'a> CryptoRngAdapter<'a> {
     /// explicitly to reproduce published vectors (ADR 0005, ADR 0041 §3).
     /// It exists only in polyjose's own tests and with the
     /// `insecure-test-vectors` feature.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used by the RFC 7520 JWE vector tests of feature 0003"
-        )
-    )]
     pub(crate) fn fixed(rng: &'a mut insecure_test_vectors::FixedRng) -> Self {
         CryptoRngAdapter(Source::Fixed(rng))
     }
