@@ -372,7 +372,7 @@ fn rejects_repeat_overrun() {
         dynamic_header(w, 257, 1, &cl_lengths(), &repeat);
     });
     assert_eq!(err(&input), REPEAT_OVERRUN);
-    // Code 18 overrunning by a lot.
+    // Code 18 overrunning: 138 + 110 = 248, then 11 more of 258.
     let input = stream(|w| {
         header(w, true, 0b10);
         dynamic_header(
@@ -380,7 +380,7 @@ fn rejects_repeat_overrun() {
             257,
             1,
             &cl_lengths(),
-            &[Cl::Zeros11(138), Cl::Zeros11(120), Cl::Zeros11(11)],
+            &[Cl::Zeros11(138), Cl::Zeros11(110), Cl::Zeros11(11)],
         );
     });
     assert_eq!(err(&input), REPEAT_OVERRUN);
