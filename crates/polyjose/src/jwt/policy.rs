@@ -282,6 +282,11 @@ impl<'a> Policy<'a> {
 
     /// Requires `typ` to be present and equal to `typ` as a media type
     /// ([`TypMode::Exact`]; RFC 8725 §3.11, RFC 7515 §4.1.9).
+    ///
+    /// Pass a specific type such as `secevent+jwt`. `expect_typ("")` and
+    /// `expect_typ("JWT")` give no explicit typing: they do not tell one
+    /// kind of JWT from another (RFC 8725 §3.11; draft-ietf-oauth-rfc8725bis
+    /// §3.11: `JWT` "does not constitute effective explicit typing").
     pub fn expect_typ(mut self, typ: &str) -> Self {
         self.typ = TypMode::Exact(typ.to_owned());
         self
