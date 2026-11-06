@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "polyjose conformance vector",
-  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test are given in lowercase hex, never base64url, so the codec is not checked against itself.",
+  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* operations give octets as canonical base64url (members ending in _b64u), the form JWS fields natively have; the codec is not under test there.",
   "type": "object",
   "required": ["source", "description", "operation", "input", "expect"],
   "additionalProperties": false,
@@ -85,6 +85,23 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "jws.verify" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/jws_verify_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/jws_verify_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -102,6 +119,21 @@
       "description": "Characters of the base64url alphabet (RFC 4648 §5), no padding.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]*$"
+    },
+    "count": {
+      "description": "A non-negative integer that an unsigned 32-bit integer holds (ADR 0030 u32), so every binding reads it natively and exactly.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "jws": {
+      "description": "A JWS: a string in the Compact Serialization (RFC 7515 §7.1), or an object in the flattened or general JWS JSON Serialization (RFC 7515 §7.2), which a runner passes to the library as its JSON text. Otherwise unconstrained: malformed JWSs are under test.",
+      "type": ["string", "object"]
+    },
+    "alg_list": {
+      "description": "An algorithm allow-list (RFC 8725 §3.1) of JWS \"alg\" names, passed to the library as given. An empty list, \"none\" or an unknown name is refused by the library with AlgorithmNotAllowed, which vectors may test.",
+      "type": "array",
+      "items": { "type": "string" }
     },
     "error_code": {
       "description": "A stable error code (crates/polyjose/src/error.rs, Error::CODES).",
@@ -189,6 +221,44 @@
         "ok": { "const": true },
         "thumbprint": { "$ref": "#/$defs/base64url" },
         "thumbprint_uri": { "type": "string" }
+      }
+    },
+    "jws_verify_input": {
+      "description": "Verify a JWS (RFC 7515 §5.2) with one key and an allow-list (RFC 8725 §3.1), under the processing order of ADR 0026 §2. The runner imports key, then builds the options, then verifies; the first error is the outcome.",
+      "type": "object",
+      "required": ["jws", "key", "allowed_algs"],
+      "additionalProperties": false,
+      "properties": {
+        "jws": { "$ref": "#/$defs/jws" },
+        "key": {
+          "description": "A JWK (RFC 7517 §4) as a JSON object, imported with the library's JWK import. Unconstrained: an import error is the vector's outcome.",
+          "type": "object"
+        },
+        "allowed_algs": { "$ref": "#/$defs/alg_list" },
+        "detached_payload_b64u": {
+          "description": "The detached payload (RFC 7515 Appendix F); the JWS then carries none.",
+          "$ref": "#/$defs/base64url"
+        },
+        "max_input_len": {
+          "description": "The largest serialized JWS accepted, in octets (ADR 0026 §7); the library default when absent.",
+          "$ref": "#/$defs/count"
+        },
+        "max_signatures": {
+          "description": "The most signatures a general JSON JWS may have (ADR 0026 §7); the library default when absent.",
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "jws_verify_ok": {
+      "description": "The verified JWS: its payload, the alg of the signature that verified, and that signature's index (0 for compact and flattened; the first that verifies, in array order, for general, ADR 0026 §3).",
+      "type": "object",
+      "required": ["ok", "payload_b64u", "alg", "signature_index"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "payload_b64u": { "$ref": "#/$defs/base64url" },
+        "alg": { "type": "string" },
+        "signature_index": { "$ref": "#/$defs/count" }
       }
     }
   }

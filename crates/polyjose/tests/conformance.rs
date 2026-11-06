@@ -27,8 +27,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 use polyjose::Error;
-use polyjose::json::{self, Object, Value};
+use polyjose::json::{self, Number, Object, Value};
+use polyjose::jwa::SigningAlg;
 use polyjose::jwk::Jwk;
+use polyjose::jws::{self, VerifyOptions};
 use polyjose::util::{b64url_decode, b64url_encode};
 
 /// Top-level members of a vector; all required (schema `required`).
@@ -54,6 +56,9 @@ const HEX_PATTERN: &str = "^([0-9a-f]{2})*$";
 const BASE64URL_PATTERN: &str = "^[A-Za-z0-9_-]*$";
 /// `$defs/text/pattern`: at least one non-whitespace character.
 const TEXT_PATTERN: &str = "\\S";
+/// `$defs/count/maximum`: an unsigned 32-bit integer (ADR 0030 `u32`), so
+/// every binding holds a count natively and exactly.
+const COUNT_MAX: u64 = u32::MAX as u64;
 
 /// What a member's value must be. Each kind maps to one schema spelling
 /// (see `schema_kind`).
@@ -69,6 +74,26 @@ enum Kind {
     Object,
     /// `{"enum": [...]}` of strings
     Enum(&'static [&'static str]),
+    /// `{"$ref": "#/$defs/count"}`: an integer in `0..=COUNT_MAX`
+    Count,
+    /// `{"$ref": "#/$defs/jws"}`: a string (compact) or an object (JSON)
+    Jws,
+    /// `{"$ref": "#/$defs/alg_list"}`: an array of strings
+    AlgList,
+}
+
+impl Kind {
+    /// The shared `$defs` entry a `$ref` kind points at.
+    fn def(self) -> Option<&'static str> {
+        match self {
+            Kind::Hex => Some("hex"),
+            Kind::Base64url => Some("base64url"),
+            Kind::Count => Some("count"),
+            Kind::Jws => Some("jws"),
+            Kind::AlgList => Some("alg_list"),
+            Kind::String | Kind::Object | Kind::Enum(_) => None,
+        }
+    }
 }
 
 /// One member of a [`Shape`].
@@ -86,6 +111,15 @@ const fn req(name: &'static str, kind: Kind) -> Member {
         name,
         kind,
         required: true,
+    }
+}
+
+/// An optional member.
+const fn opt(name: &'static str, kind: Kind) -> Member {
+    Member {
+        name,
+        kind,
+        required: false,
     }
 }
 
@@ -144,6 +178,29 @@ const JWK_THUMBPRINT_OK: Shape = Shape {
     ],
 };
 
+// RFC 7515 §5.2 validation through `jws::verify_compact` (a string `jws`,
+// RFC 7515 §7.1) or `jws::verify_json` (an object, §7.2), with the
+// options of ADR 0026: allow-list, detached payload (Appendix F), limits.
+const JWS_VERIFY_INPUT: Shape = Shape {
+    def: "jws_verify_input",
+    members: &[
+        req("jws", Kind::Jws),
+        req("key", Kind::Object),
+        req("allowed_algs", Kind::AlgList),
+        opt("detached_payload_b64u", Kind::Base64url),
+        opt("max_input_len", Kind::Count),
+        opt("max_signatures", Kind::Count),
+    ],
+};
+const JWS_VERIFY_OK: Shape = Shape {
+    def: "jws_verify_ok",
+    members: &[
+        req("payload_b64u", Kind::Base64url),
+        req("alg", Kind::String),
+        req("signature_index", Kind::Count),
+    ],
+};
+
 /// The operations this runner implements.
 const SPECS: &[OpSpec] = &[
     OpSpec {
@@ -162,6 +219,12 @@ const SPECS: &[OpSpec] = &[
         name: "jwk.thumbprint",
         input: &JWK_THUMBPRINT_INPUT,
         ok: &[&JWK_THUMBPRINT_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "jws.verify",
+        input: &JWS_VERIFY_INPUT,
+        ok: &[&JWS_VERIFY_OK],
         can_fail: true,
     },
 ];
@@ -205,6 +268,11 @@ fn is_base64url_alphabet(s: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// `$defs/count`: `{"type": "integer", "minimum": 0, "maximum": COUNT_MAX}`.
+fn is_count(value: &Value) -> bool {
+    value.as_u64().is_some_and(|n| n <= COUNT_MAX)
+}
+
 /// Checks that `object` has exactly the `allowed` members, all of which are
 /// required.
 fn exact_members(object: &Object, allowed: &[&str], pointer: &str) -> Result<(), String> {
@@ -234,6 +302,11 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
         Kind::Hex => value.as_str().is_some_and(is_hex),
         Kind::Base64url => value.as_str().is_some_and(is_base64url_alphabet),
         Kind::Enum(values) => value.as_str().is_some_and(|s| values.contains(&s)),
+        Kind::Count => is_count(value),
+        Kind::Jws => value.as_str().is_some() || value.as_object().is_some(),
+        Kind::AlgList => value
+            .as_array()
+            .is_some_and(|items| items.iter().all(|item| item.as_str().is_some())),
     };
     if ok {
         Ok(())
@@ -244,6 +317,9 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
             Kind::Hex => format!("a string matching {HEX_PATTERN}"),
             Kind::Base64url => format!("a string matching {BASE64URL_PATTERN}"),
             Kind::Enum(values) => format!("one of {values:?}"),
+            Kind::Count => format!("an integer from 0 to {COUNT_MAX}"),
+            Kind::Jws => "a string (compact) or an object (JSON serialization)".to_owned(),
+            Kind::AlgList => "an array of strings".to_owned(),
         };
         Err(violation(pointer, format!("must be {wanted}")))
     }
@@ -401,6 +477,94 @@ fn input_str<'a>(input: &'a Object, name: &str) -> &'a str {
     input.get(name).and_then(Value::as_str).expect("validated")
 }
 
+fn input_object<'a>(object: &'a Object, name: &str) -> &'a Object {
+    object
+        .get(name)
+        .and_then(Value::as_object)
+        .expect("validated")
+}
+
+/// A `*_b64u` member's octets. The runner decodes them to hand them to the
+/// library, so a value that does not decode is a broken vector, never an
+/// outcome (the codec has its own `b64url.*` vectors).
+fn input_bytes(object: &Object, name: &str) -> Result<Vec<u8>, String> {
+    let text = object.get(name).and_then(Value::as_str).expect("validated");
+    b64url_decode(text).map_err(|e| {
+        format!(
+            "`{name}` is not canonical base64url ({}); the runner must decode it",
+            e.code()
+        )
+    })
+}
+
+/// An optional `$defs/count` member, as a `usize`.
+fn input_count(object: &Object, name: &str) -> Option<usize> {
+    object
+        .get(name)
+        .and_then(Value::as_u64)
+        .map(|n| usize::try_from(n).expect("validated: at most u32::MAX"))
+}
+
+/// `allowed_algs`, mapped name by name: an unknown name becomes
+/// `SigningAlg::Unknown`, which `VerifyOptions::new` refuses.
+fn input_algs(object: &Object) -> Vec<SigningAlg> {
+    object
+        .get("allowed_algs")
+        .and_then(Value::as_array)
+        .expect("validated")
+        .iter()
+        .map(|alg| SigningAlg::from(alg.as_str().expect("validated")))
+        .collect()
+}
+
+/// `jws.verify` (RFC 7515 §5.2). The steps run in the order
+/// conformance/README.md fixes for every runner, and the first error is
+/// the outcome: import `key` (RFC 7517), build the options from
+/// `allowed_algs` and the optional members, then verify. A string `jws`
+/// goes to `verify_compact` (RFC 7515 §7.1); an object goes, as its JSON
+/// text, to `verify_json` (§7.2).
+fn run_jws_verify(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let key = match Jwk::from_object(input_object(input, "key")) {
+        Ok(key) => key,
+        Err(e) => return Ok(Err(e)),
+    };
+    let algs = input_algs(input);
+    let detached = match input.get("detached_payload_b64u") {
+        Some(_) => Some(input_bytes(input, "detached_payload_b64u")?),
+        None => None,
+    };
+    let mut opts = match VerifyOptions::new(&algs) {
+        Ok(opts) => opts,
+        Err(e) => return Ok(Err(e)),
+    };
+    if let Some(payload) = &detached {
+        opts = opts.detached_payload(payload);
+    }
+    if let Some(n) = input_count(input, "max_input_len") {
+        opts = opts.max_input_len(n);
+    }
+    if let Some(n) = input_count(input, "max_signatures") {
+        opts = opts.max_signatures(n);
+    }
+    let jws = input.get("jws").expect("validated");
+    let result = match jws.as_str() {
+        Some(compact) => jws::verify_compact(compact, &key, &opts),
+        None => jws::verify_json(&jws.to_json(), &key, &opts),
+    };
+    let verified = match result {
+        Ok(verified) => verified,
+        Err(e) => return Ok(Err(e)),
+    };
+    let index = u64::try_from(verified.signature_index).expect("an index fits u64");
+    out.insert("payload_b64u", b64url_encode(&verified.payload));
+    out.insert("alg", verified.alg.as_str());
+    out.insert(
+        "signature_index",
+        Number::from_u64(index).expect("an index is a safe integer"),
+    );
+    Ok(Ok(()))
+}
+
 /// Runs the operation through the public API: the success outputs, or the
 /// library's error.
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
@@ -431,6 +595,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
                     out.insert("thumbprint_uri", key.thumbprint_uri_sha256());
                 }
                 Err(e) => return Ok(Err(e)),
+            }
+        }
+        "jws.verify" => {
+            if let Err(e) = run_jws_verify(input, &mut out)? {
+                return Ok(Err(e));
             }
         }
         other => {
@@ -654,9 +823,13 @@ fn annotated(value: &Value) -> Value {
 
 /// How `kind` is spelled in the schema.
 fn schema_kind(kind: Kind) -> Value {
+    if let Some(def) = kind.def() {
+        return parse(&format!(r##"{{"$ref":"#/$defs/{def}"}}"##));
+    }
     match kind {
-        Kind::Hex => parse(r##"{"$ref":"#/$defs/hex"}"##),
-        Kind::Base64url => parse(r##"{"$ref":"#/$defs/base64url"}"##),
+        Kind::Hex | Kind::Base64url | Kind::Count | Kind::Jws | Kind::AlgList => {
+            unreachable!("a $ref kind")
+        }
         Kind::String => parse(r#"{"type":"string"}"#),
         Kind::Object => parse(r#"{"type":"object"}"#),
         Kind::Enum(values) => {
@@ -715,6 +888,7 @@ fn check_def(defs: &Value, shape: &Shape, ok: bool, used: &mut Vec<String>) {
     assert_eq!(strings(at(def, &["required"])), required, "{name}");
     assert_eq!(member_names(at(def, &["properties"])), names, "{name}");
     for member in shape.members {
+        used.extend(member.kind.def().map(str::to_owned));
         let property = at(def, &["properties", member.name]);
         assert_eq!(
             annotated(property),
@@ -809,7 +983,21 @@ fn schema_and_runner_agree() {
                 "properties":{"ok":{"const":false},"error":{"$ref":"#/$defs/error_code"}}}"##
         )
     );
-    used.extend(["hex", "base64url", "error_code"].map(str::to_owned));
+    used.extend(["error_code"].map(str::to_owned));
+    assert_eq!(
+        annotated(at(defs, &["count"])),
+        parse(&format!(
+            r#"{{"type":"integer","minimum":0,"maximum":{COUNT_MAX}}}"#
+        ))
+    );
+    assert_eq!(
+        annotated(at(defs, &["jws"])),
+        parse(r#"{"type":["string","object"]}"#)
+    );
+    assert_eq!(
+        annotated(at(defs, &["alg_list"])),
+        parse(r#"{"type":"array","items":{"type":"string"}}"#)
+    );
 
     let rules = at(&schema, &["allOf"]).as_array().unwrap();
     assert_eq!(
@@ -902,6 +1090,20 @@ fn hand_written_checks_match_the_patterns() {
     ] {
         assert_eq!(is_text(s), ok, "{s:?}");
     }
+    // {"type": "integer", "minimum": 0, "maximum": 4294967295}
+    for (json, ok) in [
+        ("0", true),
+        ("16", true),
+        ("4294967295", true),
+        ("1.0", true), // JSON Schema: an integer value is an integer
+        ("4294967296", false),
+        ("-1", false),
+        ("1.5", false),
+        ("\"1\"", false),
+        ("null", false),
+    ] {
+        assert_eq!(is_count(&parse(json)), ok, "{json}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -977,13 +1179,7 @@ fn unknown_operation_fails() {
 /// implement fails the run too; it is never skipped.
 #[test]
 fn reserved_but_unimplemented_operations_fail() {
-    for op in [
-        "jws.sign",
-        "jws.verify",
-        "jwe.encrypt",
-        "jwe.decrypt",
-        "jwt.validate",
-    ] {
+    for op in ["jws.sign", "jwe.encrypt", "jwe.decrypt", "jwt.validate"] {
         let json = vector(op, r#"{"token":"a.b.c"}"#, r#"{"ok":true}"#);
         fails_naming_source("reserved-op.json", &json, "not implemented");
     }
@@ -1267,6 +1463,363 @@ fn failing_vectors_fail_naming_their_source() {
     for (what, json, needle) in cases {
         let name = format!("failing ({what}).json");
         fails_naming_source(&name, &json, needle);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// jws.* self-tests, on RFC 7515 Appendix A values (the vector files under
+// conformance/vectors/jws-rfc7515/ cite them).
+// ---------------------------------------------------------------------------
+
+/// RFC 7515 A.1 HMAC key.
+const A1_KEY: &str = r#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#;
+/// RFC 7515 A.1 protected header `{"typ":"JWT",\r\n "alg":"HS256"}`.
+const A1_PROTECTED: &str = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9";
+/// RFC 7515 A.1 payload (also A.2, A.3, A.5, A.6, A.7).
+const PAYLOAD: &str = "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ";
+/// RFC 7515 A.1 HS256 signature.
+const A1_SIGNATURE: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+/// RFC 7515 A.3 P-256 key, public and private.
+const A3_PUBLIC: &str = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}"#;
+/// RFC 7515 A.3 protected header `{"alg":"ES256"}` and signature.
+const A3_PROTECTED: &str = "eyJhbGciOiJFUzI1NiJ9";
+const A3_SIGNATURE: &str =
+    "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q";
+/// RFC 7515 A.5 unsecured JWS.
+const A5_JWS: &str = "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.";
+/// An RSA private JWK, which JWK import refuses (ADR 0021).
+const RSA_PRIVATE: &str = r#"{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB"}"#;
+
+fn a1_compact() -> String {
+    format!("{A1_PROTECTED}.{PAYLOAD}.{A1_SIGNATURE}")
+}
+
+/// RFC 7515 A.7, the flattened JSON Serialization.
+fn a7_flattened() -> String {
+    format!(
+        r#"{{"payload":"{PAYLOAD}","protected":"{A3_PROTECTED}","header":{{"kid":"e9bc097a-ce51-4036-9562-d2ade882db0d"}},"signature":"{A3_SIGNATURE}"}}"#
+    )
+}
+
+/// A general JSON JWS whose signatures are A.1's (HS256) and A.3's (ES256).
+fn general_hs256_es256() -> String {
+    format!(
+        r#"{{"payload":"{PAYLOAD}","signatures":[{{"protected":"{A1_PROTECTED}","signature":"{A1_SIGNATURE}"}},{{"protected":"{A3_PROTECTED}","signature":"{A3_SIGNATURE}"}}]}}"#
+    )
+}
+
+fn verify_input(jws: &str, key: &str, algs: &str, extra: &str) -> String {
+    format!(r#"{{"jws":{jws},"key":{key},"allowed_algs":{algs}{extra}}}"#)
+}
+
+fn verified(alg: &str, index: u32) -> String {
+    format!(r#"{{"ok":true,"payload_b64u":"{PAYLOAD}","alg":"{alg}","signature_index":{index}}}"#)
+}
+
+fn quoted(s: &str) -> String {
+    format!("\"{s}\"")
+}
+
+fn assert_passes(cases: &[String]) {
+    for json in cases {
+        let result = check_vector("ok.json", json.as_bytes());
+        assert!(result.is_ok(), "{result:?}\n  for {json}");
+    }
+}
+
+/// Every `jws.verify` input form runs: compact, flattened and general,
+/// detached, limits, and errors from JWK import and the allow-list.
+#[test]
+fn jws_verify_vectors_pass() {
+    let a1 = quoted(&a1_compact());
+    let detached = quoted(&format!("{A1_PROTECTED}..{A1_SIGNATURE}"));
+    let fails = |code: &str| format!(r#"{{"ok":false,"error":"{code}"}}"#);
+    assert_passes(&[
+        vector(
+            "jws.verify",
+            &verify_input(&a1, A1_KEY, r#"["HS256"]"#, ""),
+            &verified("HS256", 0),
+        ),
+        vector(
+            "jws.verify",
+            &verify_input(&a7_flattened(), A3_PUBLIC, r#"["ES256"]"#, ""),
+            &verified("ES256", 0),
+        ),
+        // The first signature that verifies with the key wins (ADR 0026 §3).
+        vector(
+            "jws.verify",
+            &verify_input(
+                &general_hs256_es256(),
+                A3_PUBLIC,
+                r#"["HS256","ES256"]"#,
+                "",
+            ),
+            &verified("ES256", 1),
+        ),
+        vector(
+            "jws.verify",
+            &verify_input(
+                &detached,
+                A1_KEY,
+                r#"["HS256"]"#,
+                &format!(r#","detached_payload_b64u":"{PAYLOAD}""#),
+            ),
+            &verified("HS256", 0),
+        ),
+        vector(
+            "jws.verify",
+            &verify_input(&quoted(A5_JWS), A1_KEY, r#"["HS256"]"#, ""),
+            &fails("AlgorithmNotAllowed"),
+        ),
+        // The allow-list is refused before anything is verified.
+        vector(
+            "jws.verify",
+            &verify_input(&a1, A1_KEY, "[]", ""),
+            &fails("AlgorithmNotAllowed"),
+        ),
+        vector(
+            "jws.verify",
+            &verify_input(&a1, A1_KEY, r#"["none"]"#, ""),
+            &fails("AlgorithmNotAllowed"),
+        ),
+        // A JWK import error is the vector's outcome.
+        vector(
+            "jws.verify",
+            &verify_input(&a1, RSA_PRIVATE, r#"["RS256"]"#, ""),
+            &fails("UnsupportedAlgorithm"),
+        ),
+        vector(
+            "jws.verify",
+            &verify_input(&a1, A1_KEY, r#"["HS256"]"#, r#","max_input_len":10"#),
+            &fails("InvalidFormat"),
+        ),
+        vector(
+            "jws.verify",
+            &verify_input(
+                &general_hs256_es256(),
+                A3_PUBLIC,
+                r#"["HS256","ES256"]"#,
+                r#","max_signatures":1"#,
+            ),
+            &fails("InvalidFormat"),
+        ),
+        vector(
+            "jws.verify",
+            &verify_input(
+                &general_hs256_es256(),
+                A3_PUBLIC,
+                r#"["HS256","ES256"]"#,
+                r#","max_signatures":2,"max_input_len":4294967295"#,
+            ),
+            &verified("ES256", 1),
+        ),
+    ]);
+}
+
+/// A `jws.verify` vector that breaks the schema fails the run.
+#[test]
+fn jws_verify_schema_violations_fail() {
+    let a1 = quoted(&a1_compact());
+    let input = |extra: &str| verify_input(&a1, A1_KEY, r#"["HS256"]"#, extra);
+    let ok = verified("HS256", 0);
+    let cases: Vec<(&str, String, &str)> = vec![
+        (
+            "misspelled member",
+            vector(
+                "jws.verify",
+                &format!(r#"{{"jws":{a1},"key":{A1_KEY},"allowed_alg":["HS256"]}}"#),
+                &ok,
+            ),
+            "/input/allowed_alg: unknown member",
+        ),
+        (
+            "missing allowed_algs",
+            vector(
+                "jws.verify",
+                &format!(r#"{{"jws":{a1},"key":{A1_KEY}}}"#),
+                &ok,
+            ),
+            "/input/allowed_algs: required member is missing",
+        ),
+        (
+            "jws a number",
+            vector(
+                "jws.verify",
+                &verify_input("7", A1_KEY, r#"["HS256"]"#, ""),
+                &ok,
+            ),
+            "/input/jws",
+        ),
+        (
+            "jws an array",
+            vector(
+                "jws.verify",
+                &verify_input(&format!("[{a1}]"), A1_KEY, r#"["HS256"]"#, ""),
+                &ok,
+            ),
+            "/input/jws",
+        ),
+        (
+            "key a string",
+            vector(
+                "jws.verify",
+                &verify_input(&a1, &quoted("k"), r#"["HS256"]"#, ""),
+                &ok,
+            ),
+            "/input/key",
+        ),
+        (
+            "allowed_algs a string",
+            vector(
+                "jws.verify",
+                &verify_input(&a1, A1_KEY, r#""HS256""#, ""),
+                &ok,
+            ),
+            "/input/allowed_algs",
+        ),
+        (
+            "allowed_algs with a number",
+            vector(
+                "jws.verify",
+                &verify_input(&a1, A1_KEY, r#"["HS256",256]"#, ""),
+                &ok,
+            ),
+            "/input/allowed_algs",
+        ),
+        (
+            "negative max_signatures",
+            vector("jws.verify", &input(r#","max_signatures":-1"#), &ok),
+            "/input/max_signatures",
+        ),
+        (
+            "fractional max_signatures",
+            vector("jws.verify", &input(r#","max_signatures":1.5"#), &ok),
+            "/input/max_signatures",
+        ),
+        (
+            "max_input_len above u32",
+            vector("jws.verify", &input(r#","max_input_len":4294967296"#), &ok),
+            "/input/max_input_len",
+        ),
+        (
+            "max_input_len a string",
+            vector("jws.verify", &input(r#","max_input_len":"10""#), &ok),
+            "/input/max_input_len",
+        ),
+        (
+            "padded detached payload",
+            vector(
+                "jws.verify",
+                &input(r#","detached_payload_b64u":"Zg==""#),
+                &ok,
+            ),
+            "/input/detached_payload_b64u",
+        ),
+        (
+            "success without signature_index",
+            vector(
+                "jws.verify",
+                &input(""),
+                &format!(r#"{{"ok":true,"payload_b64u":"{PAYLOAD}","alg":"HS256"}}"#),
+            ),
+            "/expect/signature_index: required member is missing",
+        ),
+        (
+            "signature_index a string",
+            vector(
+                "jws.verify",
+                &input(""),
+                &ok.replace(r#""signature_index":0"#, r#""signature_index":"0""#),
+            ),
+            "/expect/signature_index",
+        ),
+        (
+            "success with a sign output",
+            vector(
+                "jws.verify",
+                &input(""),
+                &ok.replace(r#""ok":true"#, &format!(r#""ok":true,"jws":{a1}"#)),
+            ),
+            "/expect/jws: unknown member",
+        ),
+        (
+            "failure with an output member",
+            vector(
+                "jws.verify",
+                &input(""),
+                r#"{"ok":false,"error":"InvalidSignature","alg":"HS256"}"#,
+            ),
+            "/expect/alg: unknown member",
+        ),
+    ];
+    for (what, json, needle) in cases {
+        fails_naming_source(&format!("invalid ({what}).json"), &json, needle);
+    }
+}
+
+/// A `jws.verify` vector the library does not meet fails, naming the file
+/// and the source.
+#[test]
+fn jws_verify_mismatches_fail() {
+    let a1 = quoted(&a1_compact());
+    let input = verify_input(&a1, A1_KEY, r#"["HS256"]"#, "");
+    let cases = [
+        (
+            "wrong signature_index",
+            vector("jws.verify", &input, &verified("HS256", 1)),
+            "signature_index",
+        ),
+        (
+            "wrong alg",
+            vector("jws.verify", &input, &verified("HS384", 0)),
+            "HS384",
+        ),
+        (
+            "wrong payload",
+            vector(
+                "jws.verify",
+                &input,
+                &verified("HS256", 0).replace(PAYLOAD, "UGF5bG9hZA"),
+            ),
+            "payload_b64u",
+        ),
+        (
+            "tampered signature",
+            vector(
+                "jws.verify",
+                &input.replace(A1_SIGNATURE, &A1_SIGNATURE.replace('d', "e")),
+                &verified("HS256", 0),
+            ),
+            "InvalidSignature",
+        ),
+        (
+            "expected an error, got success",
+            vector(
+                "jws.verify",
+                &input,
+                r#"{"ok":false,"error":"InvalidSignature"}"#,
+            ),
+            "succeeded",
+        ),
+        // The runner decodes bytes it passes to the library; a value that
+        // does not decode is the vector's fault, never an outcome.
+        (
+            "detached payload that does not decode",
+            vector(
+                "jws.verify",
+                &verify_input(
+                    &quoted(&format!("{A1_PROTECTED}..{A1_SIGNATURE}")),
+                    A1_KEY,
+                    r#"["HS256"]"#,
+                    r#","detached_payload_b64u":"Zh""#,
+                ),
+                r#"{"ok":false,"error":"InvalidBase64"}"#,
+            ),
+            "detached_payload_b64u",
+        ),
+    ];
+    for (what, json, needle) in cases {
+        fails_naming_source(&format!("failing ({what}).json"), &json, needle);
     }
 }
 
