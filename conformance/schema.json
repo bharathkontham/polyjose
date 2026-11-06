@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "polyjose conformance vector",
-  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* operations give octets as canonical base64url (members ending in _b64u), the form JWS fields natively have; the codec is not under test there.",
+  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. A vector may list in \"features\" the polyjose cargo features it needs; a runner where one is not enabled reports the vector SKIPPED with the feature names, and never counts it as passing. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* and jwe.* operations give octets as canonical base64url (members ending in _b64u), the form JOSE fields natively have; the codec is not under test there.",
   "type": "object",
   "required": ["source", "description", "operation", "input", "expect"],
   "additionalProperties": false,
@@ -37,6 +37,12 @@
           "type": "boolean"
         }
       }
+    },
+    "features": {
+      "description": "Optional. The polyjose cargo features the vector needs: insecure-test-vectors for jwe.encrypt with rng_b64u or protected_b64u (ADR 0041 §3), deflate for zip (ADR 0017). A runner whose build lacks one reports the vector SKIPPED, naming the features, and never counts it as passing. The bindings never enable insecure-test-vectors (ADR 0005), so such vectors are Rust-only.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["deflate", "insecure-test-vectors"] }
     }
   },
   "allOf": [
@@ -120,6 +126,41 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "jwe.encrypt" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/jwe_encrypt_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/jwe_encrypt_exact" },
+              { "$ref": "#/$defs/jwe_encrypt_roundtrip" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "jwe.decrypt" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/jwe_decrypt_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/jwe_decrypt_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -144,12 +185,16 @@
       "minimum": 0,
       "maximum": 4294967295
     },
+    "jwe": {
+      "description": "A JWE: a string in the Compact Serialization (RFC 7516 §7.1), or an object in the flattened or general JWE JSON Serialization (RFC 7516 §7.2), which a runner passes to the library as its JSON text. Otherwise unconstrained: malformed JWEs are under test.",
+      "type": ["string", "object"]
+    },
     "jws": {
       "description": "A JWS: a string in the Compact Serialization (RFC 7515 §7.1), or an object in the flattened or general JWS JSON Serialization (RFC 7515 §7.2), which a runner passes to the library as its JSON text. Otherwise unconstrained: malformed JWSs are under test.",
       "type": ["string", "object"]
     },
     "alg_list": {
-      "description": "An algorithm allow-list (RFC 8725 §3.1) of JWS \"alg\" names, passed to the library as given. An empty list, \"none\" or an unknown name is refused by the library with AlgorithmNotAllowed, which vectors may test.",
+      "description": "An algorithm allow-list (RFC 8725 §3.1) of names, passed to the library as given: JWS \"alg\" names for jws.*, JWE \"alg\" or \"enc\" names for jwe.*. For jws.*, an empty list, \"none\" or an unknown name is refused by the library with AlgorithmNotAllowed; for jwe.*, an empty list is AlgorithmNotAllowed, and an unknown or unimplemented name may be listed but never decrypts (UnsupportedAlgorithm, the support check comes first). Vectors may test all of these.",
       "type": "array",
       "items": { "type": "string" }
     },
@@ -372,6 +417,169 @@
         "payload_b64u": { "$ref": "#/$defs/base64url" },
         "alg": { "type": "string" },
         "signature_index": { "$ref": "#/$defs/count" }
+      }
+    },
+    "jwe_recipient": {
+      "description": "One recipient to encrypt to (RFC 7516 §5.1 steps 1-8). The runner imports key, then parses header; the first error is the outcome.",
+      "type": "object",
+      "required": ["alg", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "description": "The JWE \"alg\" (RFC 7516 §4.1.1), passed as given; an unimplemented one is the library's UnsupportedAlgorithm.",
+          "type": "string"
+        },
+        "key": {
+          "description": "The recipient's JWK (RFC 7517 §4) as a JSON object: a public key, or the oct key of dir, A*KW, A*GCMKW or the PBES2 password. Unconstrained: an import error is the vector's outcome.",
+          "type": "object"
+        },
+        "header": {
+          "description": "The JWE Per-Recipient Unprotected Header (RFC 7516 §7.2.1) as a JSON object (JSON serializations only). Unconstrained: header errors are under test.",
+          "type": "object"
+        },
+        "apu_b64u": {
+          "description": "ECDH-ES Agreement PartyUInfo octets (RFC 7518 §4.6.1.2).",
+          "$ref": "#/$defs/base64url"
+        },
+        "apv_b64u": {
+          "description": "ECDH-ES Agreement PartyVInfo octets (RFC 7518 §4.6.1.3).",
+          "$ref": "#/$defs/base64url"
+        },
+        "p2c": {
+          "description": "The PBES2 iteration count (RFC 7518 §4.8.1.2); the library default (10,000, ADR 0023) when absent.",
+          "$ref": "#/$defs/count"
+        },
+        "p2s_len": {
+          "description": "The length of the random PBES2 salt input, in octets (RFC 7518 §4.8.1.1); the library default (16) when absent.",
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "jwe_encrypt_input": {
+      "description": "Encrypt a plaintext (RFC 7516 §5.1) in one serialization to one recipient (compact, flattened) or several (general, in order). The runner builds the recipients, then parses protected, then unprotected; the first error is the outcome. With rng_b64u or protected_b64u it calls the library's reproducible encryption (feature insecure-test-vectors, which the vector must list in features).",
+      "type": "object",
+      "required": ["serialization", "enc", "plaintext_b64u", "recipients"],
+      "additionalProperties": false,
+      "properties": {
+        "serialization": {
+          "description": "compact (RFC 7516 §7.1), flattened (§7.2.2) or general (§7.2.1).",
+          "enum": ["compact", "flattened", "general"]
+        },
+        "enc": {
+          "description": "The JWE \"enc\" (RFC 7516 §4.1.2), passed as given.",
+          "type": "string"
+        },
+        "plaintext_b64u": {
+          "description": "The plaintext octets, canonical base64url.",
+          "$ref": "#/$defs/base64url"
+        },
+        "recipients": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/jwe_recipient" }
+        },
+        "protected": {
+          "description": "Extra JWE Protected Header parameters (typ, cty, kid, ...) as a JSON object; polyjose sets alg, enc, zip and the key management parameters itself and refuses them here (InvalidHeader).",
+          "type": "object"
+        },
+        "protected_b64u": {
+          "description": "The exact encoded JWE Protected Header to reproduce (feature insecure-test-vectors): used verbatim for the AAD and the output only if it decodes to a header JSON-equal to the one polyjose builds, else InvalidFormat.",
+          "$ref": "#/$defs/base64url"
+        },
+        "unprotected": {
+          "description": "The JWE Shared Unprotected Header (RFC 7516 §7.2.1) as a JSON object (JSON serializations only).",
+          "type": "object"
+        },
+        "aad_b64u": {
+          "description": "The JWE AAD octets (RFC 7516 §7.2.1; JSON serializations only).",
+          "$ref": "#/$defs/base64url"
+        },
+        "compress": {
+          "description": "Compress with zip DEF (RFC 7516 §4.1.3; feature deflate, which the vector must list in features).",
+          "type": "boolean"
+        },
+        "rng_b64u": {
+          "description": "The octets the encryption draws, in the documented order (CEK, then each recipient's key management, then the content IV; feature insecure-test-vectors). Every octet must be drawn.",
+          "$ref": "#/$defs/base64url"
+        }
+      }
+    },
+    "jwe_encrypt_exact": {
+      "description": "A reproducible encryption's exact output (rng_b64u given): a compact JWE is compared as a string; a JSON JWE is compared as a JSON value, so member order does not matter (RFC 8259 §4) but every octet of every string does.",
+      "type": "object",
+      "required": ["ok", "jwe"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "jwe": { "$ref": "#/$defs/jwe" }
+      }
+    },
+    "jwe_decrypt_with": {
+      "description": "The key and allow-lists a runner decrypts its own randomized output with.",
+      "type": "object",
+      "required": ["key", "allowed_algs", "allowed_enc"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "object" },
+        "allowed_algs": { "$ref": "#/$defs/alg_list" },
+        "allowed_enc": { "$ref": "#/$defs/alg_list" }
+      }
+    },
+    "jwe_encrypt_roundtrip": {
+      "description": "A randomized encryption (OS CSPRNG): the runner checks that its output has the requested serialization's shape, decrypts it with decrypt_with, and checks the plaintext equals plaintext_b64u. Any failure there fails the vector.",
+      "type": "object",
+      "required": ["ok", "decrypt_with"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "decrypt_with": { "$ref": "#/$defs/jwe_decrypt_with" }
+      }
+    },
+    "jwe_decrypt_input": {
+      "description": "Decrypt a JWE (RFC 7516 §5.2) with one key and the allow-lists (RFC 8725 §3.1), under the plan's error order (ADR 0026 §2 applied to JWE). The runner imports key, then builds the policy, then decrypts; the first error is the outcome.",
+      "type": "object",
+      "required": ["jwe", "key", "allowed_algs", "allowed_enc"],
+      "additionalProperties": false,
+      "properties": {
+        "jwe": { "$ref": "#/$defs/jwe" },
+        "key": {
+          "description": "A JWK (RFC 7517 §4) as a JSON object, imported with the library's JWK import. Unconstrained: an import error is the vector's outcome.",
+          "type": "object"
+        },
+        "allowed_algs": { "$ref": "#/$defs/alg_list" },
+        "allowed_enc": { "$ref": "#/$defs/alg_list" },
+        "understood_crit": {
+          "description": "The crit extension names the caller understands (RFC 7516 §4.1.13); none when absent.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "max_input_len": {
+          "description": "The largest serialized JWE accepted, in octets (ADR 0026 §7); the library default (1 MiB) when absent.",
+          "$ref": "#/$defs/count"
+        },
+        "max_recipients": {
+          "description": "The most recipients a JSON JWE may have (ADR 0026 §7); the library default (16) when absent.",
+          "$ref": "#/$defs/count"
+        },
+        "max_pbes2_count": {
+          "description": "The largest PBES2 p2c accepted (ADR 0023); the library default (10,000) when absent.",
+          "$ref": "#/$defs/count"
+        },
+        "max_decompressed_len": {
+          "description": "The largest inflated plaintext (ADR 0017); the library default (250,000) when absent.",
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "jwe_decrypt_ok": {
+      "description": "The decrypted JWE: its plaintext, and the index of the recipient that decrypted (0 for compact and flattened; the first that decrypts, in array order, for general).",
+      "type": "object",
+      "required": ["ok", "plaintext_b64u", "recipient"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "plaintext_b64u": { "$ref": "#/$defs/base64url" },
+        "recipient": { "$ref": "#/$defs/count" }
       }
     }
   }

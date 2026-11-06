@@ -1,0 +1,22 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.2 step 3: a protected header that is valid JSON but not an object is InvalidHeader (plan.md error contract, steps 3-4)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "WyJBMTI4S1ciLCJBMTI4Q0JDLUhTMjU2Il0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AxY8DCtDaGlsbGljb3RoZQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAA",
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §4.1.13, §5.2 step 5: crit naming an extension the policy does not understand is UnknownCritical",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwiY3JpdCI6WyJ4LWV4dCJdLCJ4LWV4dCI6dHJ1ZX0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AxY8DCtDaGlsbGljb3RoZQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAA",
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnknownCritical"
+  }
+}

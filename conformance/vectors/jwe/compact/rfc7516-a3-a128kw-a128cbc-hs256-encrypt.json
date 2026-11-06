@@ -1,0 +1,28 @@
+{
+  "source": "RFC 7516 App. A.3",
+  "description": "Encrypting with the A.3.2 CEK and A.3.4 IV as the drawn bytes (CEK, then IV) and the A.3.1 protected header reproduces the A.3.7 compact JWE exactly",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128CBC-HS256",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "GawgguFyGrWKav7AX4VKUg"
+        }
+      }
+    ],
+    "protected_b64u": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+    "rng_b64u": "BNMfxVSd_P4LZJ36P6pqzmt81C1vawnbyLEA8I-cLM8DFjwMK0NoaWxsaWNvdGhl"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0.6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ.AxY8DCtDaGlsbGljb3RoZQ.KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY.U0m_YmjN04DJvceFICbCVQ"
+  },
+  "features": [
+    "insecure-test-vectors"
+  ]
+}

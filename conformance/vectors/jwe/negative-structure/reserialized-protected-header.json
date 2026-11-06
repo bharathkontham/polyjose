@@ -1,0 +1,22 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.2 steps 14-15: the same JWE with its protected header re-serialized (equal JSON, other octets) fails the tag: DecryptionFailed",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJlbmMiOiJBMTI4R0NNIiwia2lkIjoidDA5IiwiYWxnIjoiZGlyIn0..WlpaWlpaWlpaWlpa.12LlXklK7bP-KY59qpPYVAzMFnLa-w.WgZmD7T-ESaehPF8BKfIeg",
+    "key": {
+      "kty": "oct",
+      "k": "XctOhJAkA-pD9Lh7ZgW_2A"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

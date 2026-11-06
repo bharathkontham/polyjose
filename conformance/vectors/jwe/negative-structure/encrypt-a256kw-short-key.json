@@ -1,0 +1,23 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.4: A256KW needs a 256-bit key; a 128-bit one is InvalidKey",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "eA",
+    "recipients": [
+      {
+        "alg": "A256KW",
+        "key": {
+          "kty": "oct",
+          "k": "AQEBAQEBAQEBAQEBAQEBAQ"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

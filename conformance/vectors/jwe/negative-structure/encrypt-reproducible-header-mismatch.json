@@ -1,0 +1,28 @@
+{
+  "source": "polyjose",
+  "description": "plan.md interface contract: the reproducible hook refuses protected-header octets that are not JSON-equal to the header polyjose builds (here another enc): InvalidFormat",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128CBC-HS256",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "GawgguFyGrWKav7AX4VKUg"
+        }
+      }
+    ],
+    "protected_b64u": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIn0",
+    "rng_b64u": "BNMfxVSd_P4LZJ36P6pqzmt81C1vawnbyLEA8I-cLM8DFjwMK0NoaWxsaWNvdGhl"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  },
+  "features": [
+    "insecure-test-vectors"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §4.1.13: the same crit, understood by the policy, passes step 5, and the forged tag then fails: DecryptionFailed",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwiY3JpdCI6WyJ4LWV4dCJdLCJ4LWV4dCI6dHJ1ZX0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AxY8DCtDaGlsbGljb3RoZQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAA",
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ],
+    "understood_crit": [
+      "x-ext"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}
