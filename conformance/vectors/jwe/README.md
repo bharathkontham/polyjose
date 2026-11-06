@@ -83,6 +83,7 @@ For these, tests show that the same `FixedRng` draws give the RFC's encrypted ke
 Other outputs without an exact encrypt vector, for the reasons given:
 
 - **RFC 7520 §5.9** (`zip`): DEFLATE output is not unique (erratum 7680), so `zip/roundtrip-a128kw-a128gcm-def.json` checks a round trip instead.
+- **`compress` without `deflate`**: encrypting with `compress` in a build without the `deflate` feature is `UnsupportedAlgorithm` (ADR 0030 §4, ADR 0017 §5). A vector cannot express it: `features` only lists what a build needs, never a feature it must lack, and an `input/compress` vector must list `"deflate"`. `crates/polyjose/tests/jwe_zip.rs` (`without_deflate`) covers it instead, in every serialization; the `deflate` round trip stays in `zip/`.
 - **RFC 7520 §5.1, §5.2 and RFC 7516 App. A.1, A.2, A.4** (RSA1_5, RSA-OAEP): not implemented (ADRs 0021, 0022); the decrypt vectors expect `UnsupportedAlgorithm` (A.4 decrypts through its A128KW recipient). **RFC 7520 §5.13** is reproduced without its RSA1_5 recipient.
 
 Not yet covered by a vector: the JSON forms of RFC 7520 §5.3, §5.4 and §5.5 (their compact forms are in `pbes2/` and `ecdh-es/`), and §5.7 in the general form (flattened and compact are covered).
