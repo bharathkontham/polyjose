@@ -3,6 +3,22 @@
 //! compressed points) and PKCS#8, whose privateKey holds an RFC 5915
 //! ECPrivateKey (RFC 5915 §1; without `[0]`, per erratum 5008).
 //!
+//! # Crate-internal API (for the facade, T08)
+//!
+//! | Function | Input | Output |
+//! |---|---|---|
+//! | [`from_pkcs8`] | `Pkcs8Parts` from `pkcs8::decode`, `alg` = `AlgId::Ec(_)` | private JWK |
+//! | [`from_sec1`] | DER of a standalone `EC PRIVATE KEY` | private JWK |
+//! | [`from_spki`] | `SpkiParts` from `spki::decode`, `alg` = `AlgId::Ec(_)` | public JWK |
+//! | [`to_pkcs8`] | private [`EcKey`] | PKCS#8 v1 DER, inner `[1]`, no `[0]` |
+//! | [`to_sec1`] | private [`EcKey`] | SEC1 DER with `[0]` and `[1]` |
+//! | [`to_spki`] | any [`EcKey`] | SPKI DER, uncompressed point |
+//!
+//! The export forms are those of ADR 0018 §3, in OpenSSL 4's byte layout.
+//! The facade dispatches on the classified algorithm, so a non-EC `AlgId`
+//! is refused as `InvalidKey`, and exporting a public key in a private
+//! form is `InvalidKey` too. Imported JWKs carry no `alg` member.
+//!
 //! # Validation
 //!
 //! Points and scalars are decoded and checked only by the curve crates
