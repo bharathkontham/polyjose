@@ -37,7 +37,7 @@
 //! The serialization layers never call a family directly. They take a
 //! [`Families`] table and call it after key binding; the public functions
 //! pass [`FAMILIES`], the real dispatch. A `#[cfg(test)]` module can pass
-//! its own table instead (for example [`fake::FAKE`]) to test the
+//! its own table instead (for example the `#[cfg(test)]` `fake::FAKE`) to test the
 //! serialization and the processing order without any real algorithm.
 //! Key binding is not part of the table, so it is never substituted.
 

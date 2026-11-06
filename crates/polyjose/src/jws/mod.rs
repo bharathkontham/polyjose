@@ -80,6 +80,27 @@
 //! assert_eq!(verified.alg, SigningAlg::HS256);
 //! # Ok::<(), polyjose::Error>(())
 //! ```
+//!
+//! [`Error::AlgorithmNotAllowed`]: crate::error::Error::AlgorithmNotAllowed
+//! [`Error::InvalidFormat`]: crate::error::Error::InvalidFormat
+//! [`Error::InvalidHeader`]: crate::error::Error::InvalidHeader
+//! [`Error::InvalidJson`]: crate::error::Error::InvalidJson
+//! [`Error::InvalidKey`]: crate::error::Error::InvalidKey
+//! [`Error::InvalidSignature`]: crate::error::Error::InvalidSignature
+//! [`Error::KeyAlgorithmMismatch`]: crate::error::Error::KeyAlgorithmMismatch
+//! [`Error::UnknownCritical`]: crate::error::Error::UnknownCritical
+//! [`Error::UnsupportedAlgorithm`]: crate::error::Error::UnsupportedAlgorithm
+//! [`SignOptions::detached`]: crate::jws::SignOptions::detached
+//! [`Verified`]: crate::jws::Verified
+//! [`VerifyOptions`]: crate::jws::VerifyOptions
+//! [`VerifyOptions::detached_payload`]: crate::jws::VerifyOptions::detached_payload
+//! [`VerifyOptions::max_input_len`]: crate::jws::VerifyOptions::max_input_len
+//! [`VerifyOptions::max_signatures`]: crate::jws::VerifyOptions::max_signatures
+//! [`sign_compact`]: crate::jws::sign_compact
+//! [`sign_flattened`]: crate::jws::sign_flattened
+//! [`sign_general`]: crate::jws::sign_general
+//! [`verify_compact`]: crate::jws::verify_compact
+//! [`verify_json`]: crate::jws::verify_json
 
 use core::fmt;
 
