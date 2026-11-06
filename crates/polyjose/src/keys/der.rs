@@ -54,18 +54,87 @@ pub(crate) struct Reader<'a> {
 impl<'a> Reader<'a> {
     /// A reader over `input`, which must be at most [`MAX_INPUT_LEN`] octets.
     pub(crate) fn new(input: &'a [u8]) -> Result<Self> {
-        let _ = input;
-        Err(Error::InvalidKey("DER reader not implemented"))
+        if input.len() > MAX_INPUT_LEN {
+            return Err(Error::InvalidKey("DER input too large"));
+        }
+        Ok(Reader { rest: input })
     }
 
-    /// Reads one element of any tag, checking only its framing.
+    /// Whether every octet has been read.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rest.is_empty()
+    }
+
+    /// The identifier octet of the next element, without reading it.
+    pub(crate) fn peek_tag(&self) -> Option<u8> {
+        self.rest.first().copied()
+    }
+
+    /// Reads one element of any tag, checking only its framing:
+    ///
+    /// - The identifier is in low-tag-number form (X.690 §8.1.2.2): tag
+    ///   number 31 starts the high-tag-number form of §8.1.2.4, which no key
+    ///   structure uses.
+    /// - The length is definite (§8.1.3.6 indefinite form is BER only,
+    ///   §10.1) and in the fewest octets (§10.1): the short form for 0–127
+    ///   (§8.1.3.4), otherwise a long form (§8.1.3.5) without leading zero
+    ///   octets, of at most four octets.
+    /// - The contents are present in full (§8.1.3, §8.1.4).
     pub(crate) fn element(&mut self) -> Result<Element<'a>> {
-        Err(Error::InvalidKey("DER reader not implemented"))
+        let input = self.rest;
+        let (&tag, after_tag) = input
+            .split_first()
+            .ok_or(Error::InvalidKey("DER truncated"))?;
+        if tag & 0x1F == 0x1F {
+            return Err(Error::InvalidKey("DER high-tag-number form"));
+        }
+        let (&first, mut after_len) = after_tag
+            .split_first()
+            .ok_or(Error::InvalidKey("DER truncated"))?;
+        let len = match first {
+            0x00..=0x7F => usize::from(first),
+            0x80 => return Err(Error::InvalidKey("DER indefinite length")),
+            0x81..=0x84 => {
+                let count = usize::from(first & 0x7F);
+                let (octets, rest) = after_len
+                    .split_at_checked(count)
+                    .ok_or(Error::InvalidKey("DER truncated"))?;
+                // The fewest octets (§10.1): no leading zero, and the long
+                // form only for lengths the short form cannot hold.
+                if octets.first() == Some(&0) {
+                    return Err(Error::InvalidKey("DER length not minimal"));
+                }
+                let len = octets
+                    .iter()
+                    .fold(0usize, |acc, &octet| (acc << 8) | usize::from(octet));
+                if len < 0x80 {
+                    return Err(Error::InvalidKey("DER length not minimal"));
+                }
+                after_len = rest;
+                len
+            }
+            _ => return Err(Error::InvalidKey("DER length too long")),
+        };
+        let header = input.len() - after_len.len();
+        let (contents, rest) = after_len
+            .split_at_checked(len)
+            .ok_or(Error::InvalidKey("DER length exceeds input"))?;
+        self.rest = rest;
+        Ok(Element {
+            tag,
+            encoding: &input[..header + len],
+            contents,
+        })
     }
 
-    /// Fails unless every octet has been read.
+    /// Fails unless every octet has been read: no data may follow the last
+    /// element (X.690 §8.1.1; RFC 5958 §2, RFC 5280 §4.1).
     pub(crate) fn finish(self) -> Result<()> {
-        Err(Error::InvalidKey("DER reader not implemented"))
+        if self.rest.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::InvalidKey("DER trailing data"))
+        }
     }
 }
 
