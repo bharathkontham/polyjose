@@ -247,14 +247,17 @@ fn jwk_set_skips_mismatched_private_members() {
 }
 
 #[test]
-fn x25519_private_keys_are_not_yet_checked_for_consistency() {
-    // ADR 0043 §3 also covers X25519 (`d` → `x`, RFC 7748 §6.1), but the
-    // 0002 tree has no X25519 primitive to derive `x` with; feature 0003
-    // adds the check when x25519-dalek lands (lead and orchestrator,
-    // 2026-11-06). Until then a mismatched X25519 pair imports: RFC 7748
-    // §6.1 Alice's private key with Bob's public key.
+fn x25519_private_keys_whose_d_does_not_derive_x_are_rejected() {
+    // ADR 0043 §3 also covers X25519: `x` must be X25519(`d`, 9)
+    // (RFC 7748 §6.1; RFC 8037 §2). Feature 0003 adds the check with
+    // x25519-dalek (0003 T17, which flipped this test from the 0002
+    // "not yet checked" pin). RFC 7748 §6.1 Alice's private key with Bob's
+    // public key; `tests/jwk_x25519_consistency.rs` has the full matrix.
     let alice_d = "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo";
     let bob_x = "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08";
     let json = format!(r#"{{"kty":"OKP","crv":"X25519","x":"{bob_x}","d":"{alice_d}"}}"#);
-    assert!(import(&json).is_ok());
+    assert_eq!(
+        import(&json).err(),
+        Some(Error::InvalidKey("X25519 private key d does not match x"))
+    );
 }
