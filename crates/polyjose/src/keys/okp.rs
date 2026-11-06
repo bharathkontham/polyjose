@@ -1,6 +1,20 @@
 //! Ed25519 and X25519 keys (RFC 8037 §2) to and from PKCS#8 and SPKI
 //! (RFC 8410 §3, §4, §7): parameters absent, and the private key as a
 //! CurvePrivateKey OCTET STRING inside the PKCS#8 privateKey.
+//!
+//! The PEM/DER facade (T08) decodes the container with `pkcs8::decode` or
+//! `spki::decode` (T02), dispatches on its classified [`AlgId`], and calls:
+//!
+//! - [`from_pkcs8`]: PKCS#8 v1, or v2 with a publicKey, to a private JWK;
+//! - [`from_spki`]: SPKI to a public JWK;
+//! - [`to_pkcs8`]: a private key to PKCS#8 v1 without publicKey;
+//! - [`to_spki`]: any key's public half to SPKI.
+//!
+//! Exports always use the RFC 8410 §10.1/§10.3 (v1) layouts that OpenSSL 4
+//! emits (ADR 0018 §3), so a round trip of an OpenSSL or RFC key is
+//! byte-identical. Every JWK is built by [`jwk_build::okp_jwk`] and so
+//! validated by [`Jwk::from_object`] (ADR 0041 §4, ADR 0043). The private
+//! key is held only in zeroizing buffers, and no error carries key octets.
 
 use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
@@ -40,12 +54,11 @@ fn alg_id(crv: OkpCurve) -> AlgId {
 /// the only version exported (ADR 0018 §3).
 const PKCS8_V1: u8 = 0;
 
-/// Reads `CurvePrivateKey ::= OCTET STRING` (RFC 8410 §7), the whole
-/// contents of the PKCS#8 privateKey OCTET STRING, so the key is
-/// `04 20 ‖ 32 octets` inside `04 22`. RFC 8410 §7: "the private key is
-/// wrapped in an OCTET STRING"; its value is the 32-octet Ed25519 seed
-/// (RFC 8032 §5.1.5) or X25519 scalar (RFC 7748 §5), stored as is, never
-/// clamped.
+/// Reads `CurvePrivateKey ::= OCTET STRING` (RFC 8410 §7), which must be
+/// the whole contents of the PKCS#8 privateKey OCTET STRING, so the key is
+/// `04 20 ‖ 32 octets` inside `04 22` (RFC 8410 §10.3). Its value is the
+/// 32-octet Ed25519 seed (RFC 8032 §5.1.5) or X25519 scalar (RFC 7748 §5),
+/// kept as is: it is not clamped, matching the JWK `d` (RFC 8037 §2).
 ///
 /// The key is copied only into the returned [`Zeroizing`] array; the
 /// caller's buffer is zeroizing too (T02 contract).
@@ -61,7 +74,7 @@ fn curve_private_key(private_key: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     Ok(d)
 }
 
-/// The Ed25519 public key of the seed `d`: A = [s]B from SHA-512(`d`)
+/// The Ed25519 public key of the seed `d`: `A = [s]B` from SHA-512(`d`)
 /// (RFC 8032 §5.1.5), computed by ed25519-dalek. The `SigningKey` is wiped
 /// on drop (its `zeroize` feature).
 fn ed25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
@@ -71,9 +84,9 @@ fn ed25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
 }
 
 /// The X25519 public key of the scalar `d`: X25519(`d`, 9) (RFC 7748 §6.1;
-/// x25519-dalek clamps the scalar as RFC 7748 §5 requires). The
-/// `StaticSecret` the scalar is moved into is wiped on drop (its `zeroize`
-/// feature).
+/// x25519-dalek clamps the scalar as RFC 7748 §5 requires).
+/// `StaticSecret` is built only from a `[u8; 32]` by value; that copy is
+/// moved into it, and it is wiped on drop (its `zeroize` feature).
 fn x25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
     let secret = x25519_dalek::StaticSecret::from(*d);
     x25519_dalek::PublicKey::from(&secret).to_bytes()
@@ -172,9 +185,9 @@ pub(crate) fn to_pkcs8(key: &OkpKey) -> Result<Zeroizing<Vec<u8>>> {
 /// JWK (RFC 8037 §2) with `crv` from the AlgorithmIdentifier and `x` the
 /// subjectPublicKey.
 ///
-/// RFC 8410 §4: "The public key value is the BIT STRING
-/// subjectPublicKey", the raw key of RFC 8032 §5.1.5 (Ed25519) or RFC 7748
-/// §5 (X25519), 32 octets. The JWK is built through
+/// RFC 8410 §4: the subjectPublicKey BIT STRING holds the public key
+/// octets as they are, the raw key of RFC 8032 §5.1.5 (Ed25519) or
+/// RFC 7748 §5 (X25519), 32 octets. The JWK is built through
 /// [`jwk_build::okp_jwk`], so an Ed25519 key must also decode canonically,
 /// not be of small order and have no torsion component (RFC 8032 §5.1.3;
 /// ADR 0041 §4, ADR 0043 §1).
