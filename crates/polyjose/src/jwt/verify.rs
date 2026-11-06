@@ -33,6 +33,41 @@ use super::{Claims, Policy};
 /// secrets, and verify a remote set's tokens with asymmetric algorithms
 /// only (RFC 8725 §3.1).
 ///
+/// **With several keys, pass a set.** [`Keys::One`] doesn't compare the
+/// header `kid` (ADR 0029 §1). Don't pick "the" key yourself from the
+/// header's `kid`, which is not yet verified: pass the keys as a
+/// [`JwkSet`] in [`Keys::Set`]. Its candidate filter compares `kid`
+/// exactly, checks each member's family, JWK `alg`, `use` and `key_ops`,
+/// and bounds the work per token (ADR 0029 §2, §4).
+///
+/// ```
+/// use polyjose::Error;
+/// use polyjose::jwa::SigningAlg;
+/// use polyjose::jwk::{Jwk, JwkSet};
+/// use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy};
+///
+/// // The application's own HMAC secret (RFC 7515 Appendix A.1.1), signed
+/// // under one `kid` and held under another.
+/// const K: &str = "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow";
+/// let signer = Jwk::from_json(format!(r#"{{"kty":"oct","kid":"someone-else","k":"{K}"}}"#).as_bytes())?;
+/// let mine = Jwk::from_json(format!(r#"{{"kty":"oct","kid":"k1","k":"{K}"}}"#).as_bytes())?;
+/// let set = JwkSet::from_json(format!(r#"{{"keys":[{{"kty":"oct","kid":"k1","k":"{K}"}}]}}"#).as_bytes())?;
+///
+/// let mut claims = Claims::new();
+/// claims.exp = NumericDate::from_secs(1_300_819_380);
+/// let token = jwt::sign(&claims, &IssueOptions::new(SigningAlg::HS256), &signer)?;
+///
+/// let clock = FixedClock(1_300_819_320);
+/// let algs = [SigningAlg::HS256];
+/// let policy = Policy::new(&clock, &algs)?;
+/// // One key: the header's `kid: "someone-else"` is not compared.
+/// assert!(jwt::verify(&token, Keys::One(&mine), &policy).is_ok());
+/// // A set: no member has that `kid`.
+/// let by_set = jwt::verify(&token, Keys::Set(&set), &policy);
+/// assert_eq!(by_set.unwrap_err(), Error::NoMatchingKey);
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+///
 /// ```
 /// use polyjose::jwk::Jwk;
 /// use polyjose::jwt::Keys;
@@ -46,7 +81,10 @@ use super::{Claims, Policy};
 #[non_exhaustive]
 pub enum Keys<'a> {
     /// A single key. ADR 0026 §2 step 8 binds it to the header `alg`; its
-    /// `kid` is not compared (ADR 0029 §1).
+    /// `kid` is not compared (ADR 0029 §1), so a token whose header names
+    /// another `kid` is still checked against this key. Callers with
+    /// several keys should pass them as [`Keys::Set`] rather than choose
+    /// one by the header's unverified `kid`.
     One(&'a Jwk),
     /// A JWK Set (RFC 7517 §5): candidates are selected by `alg`, `use`,
     /// `key_ops` and `kid`, and tried in set order (ADR 0029 §2–§4).
