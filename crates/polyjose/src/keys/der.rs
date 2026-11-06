@@ -1210,6 +1210,60 @@ mod tests {
     }
 
     #[test]
+    fn pkcs8_attributes_are_ordered_by_whole_encoding_not_by_tag() {
+        // `Attributes ::= SET OF Attribute` (RFC 5958 §2) is ordered by
+        // X.690 §11.6. Every Attribute is a SEQUENCE (0x30), so a tag
+        // order (X.690 §10.3, X.680 §8.6) would accept both orders; the
+        // octet comparison does not. The shorter attribute sorts first by
+        // its length octet (0x0A < 0x0B) although its OID is the larger.
+        let short = wrap(
+            0x30,
+            &[
+                &[0x06, 0x03, 0x55, 0x04, 0x0A][..],
+                &wrap(0x31, &[0x0C, 0x01, 0x61]),
+            ]
+            .concat(),
+        );
+        let long = wrap(
+            0x30,
+            &[
+                &[0x06, 0x03, 0x55, 0x04, 0x03][..],
+                &wrap(0x31, &[0x0C, 0x02, 0x61, 0x62]),
+            ]
+            .concat(),
+        );
+        check_well_formed(&[&short[..], &long].concat(), true).unwrap();
+        assert_eq!(
+            invalid(check_well_formed(&[&long[..], &short].concat(), true)),
+            "DER SET OF not sorted"
+        );
+    }
+
+    #[test]
+    fn nested_sets_are_checked_as_set_of_even_where_tag_order_disagrees() {
+        // The identifier octet is class (bits 8-7), P/C (bit 6), number
+        // (bits 5-1) (X.690 §8.1.2.2, §8.1.2.5), so as octets [1]
+        // primitive (0x81) sorts before [0] constructed (0xA0), while the
+        // tag order of a SET (§10.3, X.680 §8.6: class, then number) puts
+        // [0] first. A SET and a SET OF share UNIVERSAL 17, and without a
+        // schema every nested SET is checked as a SET OF (§11.6), here the
+        // attrValues of an Attribute (RFC 5958 §2, RFC 5280 §4.1.2.4).
+        let attribute = |values: &[u8]| {
+            wrap(
+                0x30,
+                &[&[0x06, 0x03, 0x55, 0x04, 0x03][..], &wrap(0x31, values)].concat(),
+            )
+        };
+        let octet_order = [0x81, 0x01, 0x00, 0xA0, 0x00];
+        let tag_order = [0xA0, 0x00, 0x81, 0x01, 0x00];
+        check_well_formed(&attribute(&octet_order), true).unwrap();
+        assert_eq!(
+            invalid(check_well_formed(&attribute(&tag_order), true)),
+            "DER SET OF not sorted"
+        );
+    }
+
+    #[test]
     fn deep_nesting_is_rejected_without_recursion() {
         // 2,000 nested SEQUENCEs fit in the 64 KiB cap; the walk keeps an
         // explicit stack of MAX_DEPTH levels and stops there.
