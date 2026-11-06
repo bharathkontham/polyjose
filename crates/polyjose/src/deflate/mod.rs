@@ -4,9 +4,9 @@
 //! RFC 1951 §3.2 (with errata 7764 and 8429: extra bits are read
 //! least-significant bit first):
 //!
-//! - [`inflate`] fails as soon as the output would exceed its cap, and
+//! - [`inflate()`] fails as soon as the output would exceed its cap, and
 //!   rejects every RFC 1951 §3.2 structural error;
-//! - [`deflate`] emits a valid RFC 1951 stream (stored and fixed-Huffman
+//! - [`deflate()`] emits a valid RFC 1951 stream (stored and fixed-Huffman
 //!   blocks, bounded LZ77).
 //!
 //! Both are total functions of their input (no panics, no `unsafe`), and the
@@ -14,15 +14,16 @@
 //! fuzz `inflate(&[u8], usize)` directly by re-exporting it from `lib.rs`
 //! under `#[cfg(fuzzing)]`.
 //!
-//! Errors are [`Error::InvalidFormat`] with a fixed detail naming the rule
+//! Errors are [`crate::Error::InvalidFormat`] with a fixed detail naming the rule
 //! (never the input). The JWE layer reports every one of them as
 //! `DecryptionFailed` (RFC 7516 §5.2 step 17, ADR 0017 §1).
 
 use zeroize::Zeroizing;
 
-use crate::{Error, Result};
+use crate::Result;
 
 mod bits;
+mod encode;
 mod huffman;
 mod inflate;
 #[cfg(test)]
@@ -88,7 +89,7 @@ const NO_DISTANCE_CODES: &str = "deflate: distance in a block with no distance c
 ///
 /// # Errors
 ///
-/// [`Error::InvalidFormat`] for a truncated stream or any RFC 1951 §3.2
+/// [`crate::Error::InvalidFormat`] for a truncated stream or any RFC 1951 §3.2
 /// structural error (reserved BTYPE, LEN/NLEN mismatch, a distance before
 /// the start of the output, symbols 286/287 or distances 30/31, HLIT above
 /// 286 or HDIST above 30, a bad code-length repeat, an over-subscribed or
@@ -99,12 +100,15 @@ pub(crate) fn inflate(input: &[u8], max_output: usize) -> Result<Zeroizing<Vec<u
     inflate::inflate_tracked(input, max_output, &mut peak)
 }
 
-/// Compresses `input` into a raw DEFLATE stream (RFC 1951 §3.2).
+/// Compresses `input` into a raw DEFLATE stream (RFC 1951 §3.2): stored
+/// (§3.2.4) and fixed-Huffman (§3.2.6) blocks, with greedy LZ77 over a
+/// bounded hash chain (ADR 0017 §2). The output is never larger than
+/// `input` stored, plus 6 bytes per 65,535-byte block and 1.
 ///
 /// # Errors
 ///
-/// None once implemented; the stub fails with
-/// [`Error::UnsupportedAlgorithm`].
-pub(crate) fn deflate(_input: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    Err(Error::UnsupportedAlgorithm)
+/// None: every input has a valid encoding. The `Result` keeps the shape
+/// `jwe::zip` was written against.
+pub(crate) fn deflate(input: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    Ok(encode::compress(input))
 }
