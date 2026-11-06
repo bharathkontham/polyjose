@@ -197,9 +197,10 @@ where
 /// Q = d·G for `secret` (SEC 1 v2 §3.2.1 step 2): the same point as
 /// elliptic-curve's `SecretKey::public_key`, without its unwiped scalar.
 ///
-/// **The crate's one EC public-key derivation from a `SecretKey`:** EC
-/// import ([`derive_public`]) and key generation
-/// (`generate::ec_jwk_from_secret`) both call it.
+/// EC import ([`derive_public`]) and key generation
+/// (`generate::ec_jwk_from_secret`) both derive Q through it. The JWK
+/// d·G consistency check in `jwk.rs` (ADR 0043 §3) still calls
+/// `SecretKey::public_key` directly, with its unwiped temporary.
 ///
 /// # Secrets (best-effort)
 ///
