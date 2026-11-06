@@ -616,3 +616,294 @@ fn positive_fixtures_decode_to_the_same_fields_in_the_oracles() {
     // the layout changes.
     assert_eq!(fixtures.len(), 75, "{fixtures:?}");
 }
+
+// ---------------------------------------------------------------------------
+// No laxer than the oracle
+// ---------------------------------------------------------------------------
+
+/// One entry of `negative/manifest.json`, with the fixture it mutates.
+struct NegativeEntry {
+    id: String,
+    file: String,
+    base: String,
+    expect: String,
+}
+
+fn negative_entries() -> Vec<NegativeEntry> {
+    let manifest = crate::json::parse(&raw("negative", "manifest.json")).unwrap();
+    let field = |entry: &crate::json::Value, name: &str| {
+        entry
+            .get(name)
+            .and_then(crate::json::Value::as_str)
+            .unwrap()
+            .to_owned()
+    };
+    manifest
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| NegativeEntry {
+            id: field(entry, "id"),
+            file: field(entry, "file"),
+            base: field(entry, "base"),
+            expect: field(entry, "expect"),
+        })
+        .collect()
+}
+
+/// The container a negative DER vector is, from the fixture it mutates.
+/// N67 turns the RFC 7517 RSA SPKI into a PKCS#8 with rsaEncryption.
+fn negative_kind(entry: &NegativeEntry) -> Kind {
+    if entry.id == "N67" {
+        Kind::Pkcs8
+    } else {
+        Kind::of_file(&entry.base)
+    }
+}
+
+/// Whether `result` is the error code a manifest `expect` names.
+fn has_code<T>(result: &Result<T>, expect: &str) -> bool {
+    matches!(
+        (result, expect),
+        (Err(Error::InvalidKey(_)), "InvalidKey")
+            | (Err(Error::UnsupportedAlgorithm), "UnsupportedAlgorithm")
+    )
+}
+
+/// The negative DER vectors the oracle of this file accepts, each a place
+/// where polyjose is deliberately stricter, with the reason. The oracle
+/// accepts what the formats crate parses and the primitive crates can
+/// decode; the rules below are polyjose policy on top (ADR 0018).
+const NEGATIVE_STRICTER_THAN_ORACLE: &[(&str, &str)] = &[
+    (
+        "N20",
+        "id-Ed25519 with NULL parameters: RFC 8410 §3 \"the parameters MUST be absent\"; \
+         AlgorithmIdentifiers match their template byte for byte (ADR 0018 §2, §4 step 3)",
+    ),
+    (
+        "N21",
+        "id-Ed448: not a JOSE curve, UnsupportedAlgorithm (ADR 0018 §4 step 1)",
+    ),
+    (
+        "N22",
+        "OID subidentifier with a leading 0x80 octet: X.690 §8.19.2 requires the fewest \
+         octets; const-oid 0.10 decodes it (ADR 0018 §2 minimal OID subidentifiers)",
+    ),
+    (
+        "N32",
+        "id-ecPublicKey without parameters: RFC 5480 §2.1.1 parameters \"MUST always be \
+         present\" as a namedCurve (ADR 0018 §4 step 3)",
+    ),
+    (
+        "N33",
+        "namedCurve secp224r1: not a JOSE curve, UnsupportedAlgorithm (ADR 0018 §4 step 2)",
+    ),
+    (
+        "N37",
+        "id-ecPublicKey with NULL (implicitCurve) parameters: RFC 5480 §2.1.1 \"MUST NOT be \
+         used in PKIX\" (ADR 0018 §4 step 3)",
+    ),
+    (
+        "N43",
+        "a 31-octet EC privateKey: RFC 5915 §3 fixes ceiling(log2(n)/8) octets and RFC 7518 \
+         §6.2.2.1 the full coordinate length; SecretKey::from_slice left-pads it \
+         (ADR 0018 §2 strict acceptance, §3 validation)",
+    ),
+    (
+        "N46",
+        "standalone EC PRIVATE KEY without [0]: RFC 5915 §3 \"MUST always include the \
+         parameters field\"; without it the curve is unknown (ADR 0018 §3 table)",
+    ),
+    (
+        "N50",
+        "inner ECPrivateKey [0] names another curve than the PKCS#8 AlgorithmIdentifier: \
+         RFC 5915 §1 and ADR 0018 §3 consistency (\"SEC1 [0] must equal the PKCS#8 \
+         AlgorithmIdentifier curve\")",
+    ),
+    (
+        "N52",
+        "inner ECPrivateKey [1] is another key's point: an embedded publicKey must be the \
+         one derived from the private key (ADR 0018 §3 consistency, ADR 0043 §3)",
+    ),
+    (
+        "N60",
+        "rsaEncryption without NULL parameters: RFC 3279 §2.3.1 \"MUST have ASN.1 type \
+         NULL\" (ADR 0018 §4 step 3)",
+    ),
+    (
+        "N63",
+        "publicExponent 1: RFC 8017 §3.1 needs an odd e with 3 <= e < n, checked by \
+         Jwk::from_object (ADR 0018 §3 validation); the oracle has no RSA primitive",
+    ),
+    (
+        "N64",
+        "a 1024-bit modulus: RFC 7518 §3.3 and §4.2 need at least 2048 bits (ADR 0007, \
+         ADR 0018 §3 validation); the oracle has no RSA primitive",
+    ),
+    (
+        "N67",
+        "PKCS#8 with rsaEncryption: no RSA private keys, UnsupportedAlgorithm before \
+         privateKey is opened (ADR 0021, ADR 0018 §4)",
+    ),
+];
+
+/// Every `negative/` DER vector (48, N01–N67) is rejected by polyjose's import
+/// path with its manifest error code; the ones the oracle accepts are
+/// exactly [`NEGATIVE_STRICTER_THAN_ORACLE`].
+#[test]
+fn negative_vectors_are_rejected_and_every_oracle_acceptance_is_listed() {
+    let mut oracle_accepts = Vec::new();
+    let mut count = 0;
+    for entry in negative_entries()
+        .iter()
+        .filter(|e| e.file.ends_with(".der"))
+    {
+        let der = raw("negative", &entry.file);
+        let kind = negative_kind(entry);
+        let ours = our_import(kind, &der);
+        assert!(
+            has_code(&ours, &entry.expect),
+            "{}: expected {}, got {:?}",
+            entry.id,
+            entry.expect,
+            ours.map(|_| "a key")
+        );
+        if let Ok(values) = oracle_key(kind, &der) {
+            oracle_accepts.push((entry.id.clone(), values.is_some()));
+        }
+        count += 1;
+    }
+    let listed: Vec<&str> = NEGATIVE_STRICTER_THAN_ORACLE
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    let accepted: Vec<&str> = oracle_accepts.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(accepted, listed, "{oracle_accepts:?}");
+    // N01–N12, N20–N27, N30–N38, N40–N47, N50–N52, N60–N67.
+    assert_eq!(count, 48);
+}
+
+/// polyjose's verdict on a `reject-*` fixture through the whole path: PEM
+/// (label classified from the BEGIN line, ADR 0018 §2), then the container
+/// the label names; a `.der` file goes straight to the container in its
+/// name.
+fn our_import_file(name: &str, bytes: &[u8]) -> Result<Jwk> {
+    if !name.ends_with(".pem") {
+        return our_import(Kind::of_file(name), bytes);
+    }
+    let text = core::str::from_utf8(bytes).map_err(|_| Error::InvalidKey("not UTF-8"))?;
+    let (label, der) = super::pem::decode(text)?;
+    let kind = Kind::of_label(label).ok_or(Error::UnsupportedAlgorithm)?;
+    our_import(kind, &der)
+}
+
+/// The oracle's verdict on the same file: `pem-rfc7468`, then the formats
+/// crate of the label. `Ok(false)` when the PEM decodes but its label names
+/// a structure without a key oracle here (`CERTIFICATE`, `ENCRYPTED
+/// PRIVATE KEY`, `RSA PRIVATE KEY`).
+fn oracle_file(name: &str, bytes: &[u8]) -> OracleResult<bool> {
+    if !name.ends_with(".pem") {
+        return oracle_key(Kind::of_file(name), bytes).map(|_| true);
+    }
+    let (label, der) = pem_rfc7468::decode_vec(bytes).map_err(oracle_err)?;
+    match Kind::of_label(Label::from_text(label)) {
+        Some(kind) => oracle_key(kind, &der).map(|_| true),
+        None => Ok(false),
+    }
+}
+
+// The reasons polyjose rejects what the oracle accepts in `reject-*`.
+const WHY_CURVE: &str = "a namedCurve outside the JOSE set (RFC 7518 §6.2.1.1, RFC 8812 §3.1): UnsupportedAlgorithm (ADR 0018 §4 step 2)";
+const WHY_CERT: &str = "a CERTIFICATE label names no key structure: refused from the BEGIN line, UnsupportedAlgorithm (ADR 0018 §2, §4); pem-rfc7468 decodes any label";
+const WHY_EXPLICIT: &str = "specifiedCurve parameters: RFC 5480 §2.1.1 \"MUST NOT be used in PKIX\", UnsupportedAlgorithm (ADR 0018 §4 step 2)";
+const WHY_ENC: &str = "ENCRYPTED PRIVATE KEY (RFC 5958 §3): encrypted PKCS#8 is unsupported, refused from the BEGIN line (ADR 0018 §2, §4)";
+const WHY_X448: &str =
+    "Ed448/X448 (RFC 8410 §3): not JOSE curves in 0.1.0, UnsupportedAlgorithm (ADR 0018 §4 step 1)";
+const WHY_RSA1024: &str = "a 1024-bit RSA modulus: RFC 7518 §3.3 and §4.2 need at least 2048 bits (ADR 0007, ADR 0018 §3 validation); the oracle has no RSA primitive";
+const WHY_RSAPRIV: &str =
+    "an RSA private key: unsupported, UnsupportedAlgorithm (ADR 0021, ADR 0018 §4)";
+const WHY_RSAPRIVPEM: &str = "RSA PRIVATE KEY: no RSA private keys, refused from the BEGIN line so the body is never decoded (ADR 0021, ADR 0018 §2)";
+const WHY_PSS: &str = "id-RSASSA-PSS (RFC 4055 §3.1): an unsupported key OID, UnsupportedAlgorithm (ADR 0018 §4 step 1)";
+
+/// The `reject-*` fixtures the oracle accepts, each a place where polyjose
+/// is deliberately stricter: whole classes of keys it does not support.
+const REJECT_FIXTURES_STRICTER_THAN_ORACLE: &[(&str, &str)] = &[
+    ("reject-ec-brainpoolp256r1-pkcs8.pem", WHY_CURVE),
+    ("reject-ec-brainpoolp256r1-spki.pem", WHY_CURVE),
+    ("reject-ec-p256-cert.pem", WHY_CERT),
+    ("reject-ec-p256-explicit-pkcs8.pem", WHY_EXPLICIT),
+    ("reject-ec-p256-explicit-spki.pem", WHY_EXPLICIT),
+    ("reject-ec-p256-pkcs8-encrypted.pem", WHY_ENC),
+    ("reject-ed25519-pkcs8-encrypted.pem", WHY_ENC),
+    ("reject-ed448-pkcs8.pem", WHY_X448),
+    ("reject-ed448-spki.pem", WHY_X448),
+    ("reject-rsa1024-pkcs1-pub.pem", WHY_RSA1024),
+    ("reject-rsa1024-private-pkcs8.pem", WHY_RSAPRIV),
+    ("reject-rsa1024-spki.pem", WHY_RSA1024),
+    ("reject-rsa2048-3prime-private-pkcs1.pem", WHY_RSAPRIVPEM),
+    ("reject-rsa2048-3prime-private-pkcs8.pem", WHY_RSAPRIV),
+    ("reject-rsa2048-pkcs8-encrypted.pem", WHY_ENC),
+    ("reject-rsa2048-private-pkcs1.pem", WHY_RSAPRIVPEM),
+    ("reject-rsa2048-private-pkcs8.der", WHY_RSAPRIV),
+    ("reject-rsa2048-private-pkcs8.pem", WHY_RSAPRIV),
+    ("reject-rsa3072-private-pkcs8.pem", WHY_RSAPRIV),
+    ("reject-rsa4096-private-pkcs8.pem", WHY_RSAPRIV),
+    ("reject-rsapss2048-private-pkcs8.pem", WHY_PSS),
+    ("reject-rsapss2048-spki.pem", WHY_PSS),
+    ("reject-x448-pkcs8.pem", WHY_X448),
+    (
+        "reject-rfc9500-testRSA1024-private-pkcs1.pem",
+        WHY_RSAPRIVPEM,
+    ),
+    (
+        "reject-rfc9500-testRSA2048-private-pkcs1.pem",
+        WHY_RSAPRIVPEM,
+    ),
+    (
+        "reject-rfc9500-testRSA4096-private-pkcs1.pem",
+        WHY_RSAPRIVPEM,
+    ),
+];
+
+/// Every `reject-*` fixture (OpenSSL and RFC) is rejected by polyjose with
+/// the error code its name implies; the ones the oracle accepts are exactly
+/// [`REJECT_FIXTURES_STRICTER_THAN_ORACLE`].
+#[test]
+fn reject_fixtures_are_rejected_and_every_oracle_acceptance_is_listed() {
+    let mut oracle_accepts = Vec::new();
+    let mut count = 0;
+    for dir in ["openssl", "rfc"] {
+        for name in fixtures::files(dir, |name| name.starts_with("reject-")) {
+            let bytes = raw(dir, &name);
+            let ours = our_import_file(&name, &bytes);
+            // A weak RSA key and broken PEM armor are malformed input;
+            // everything else, the RFC 8410 §10.2 certificate included (its
+            // label is refused before its 66-character lines are read), is
+            // a well-formed but unsupported key (ADR 0018 §2, §4; ADR 0021).
+            let expect = if name.contains("rsa1024-pkcs1-pub")
+                || name.contains("rsa1024-spki")
+                || name.contains("six-dash")
+            {
+                "InvalidKey"
+            } else {
+                "UnsupportedAlgorithm"
+            };
+            assert!(
+                has_code(&ours, expect),
+                "{dir}/{name}: expected {expect}, got {:?}",
+                ours.map(|_| "a key")
+            );
+            if let Ok(checked) = oracle_file(&name, &bytes) {
+                oracle_accepts.push((name.clone(), checked));
+            }
+            count += 1;
+        }
+    }
+    let listed: Vec<&str> = REJECT_FIXTURES_STRICTER_THAN_ORACLE
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    let accepted: Vec<&str> = oracle_accepts.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(accepted, listed, "{oracle_accepts:?}");
+    assert_eq!(count, 33);
+}
