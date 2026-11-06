@@ -1045,4 +1045,195 @@ mod tests {
             }
         }
     }
+
+    mod hygiene {
+        use std::collections::BTreeSet;
+
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// The marker octet in every secret position. A leak would show up
+        /// as `165` in a derived `Debug` or as `a5` in hex.
+        const M: u8 = 0xA5;
+
+        fn leaks(text: &str) -> bool {
+            let lower = text.to_ascii_lowercase();
+            lower.contains("a5") || lower.contains("165") || text.contains(char::from(M))
+        }
+
+        /// Every static detail the non-test code of `source` can return:
+        /// `InvalidKey("…")` literals and `const …: &str = "…"` details.
+        fn details(source: &str) -> Vec<String> {
+            let code = source.split("\n#[cfg(test)]").next().unwrap();
+            let literal = |rest: &str| {
+                let rest = rest.trim_start().strip_prefix('"')?;
+                Some(rest[..rest.find('"').unwrap()].to_owned())
+            };
+            let calls = code.split("InvalidKey(").skip(1).filter_map(literal);
+            let consts = code.split(": &str = ").skip(1).filter_map(literal);
+            calls.chain(consts).collect()
+        }
+
+        fn sec1_der(crv: Option<EcCurve>, d: &[u8], point: Option<&[u8]>) -> Zeroizing<Vec<u8>> {
+            sec1::encode(&EcPrivateKey {
+                private_key: d,
+                parameters: crv,
+                public_key: point,
+            })
+            .unwrap()
+        }
+
+        fn pkcs8_parts<'a>(inner: &'a [u8], outer: Option<&'a [u8]>) -> Pkcs8Parts<'a> {
+            Pkcs8Parts {
+                version: u8::from(outer.is_some()),
+                alg: AlgId::Ec(EcCurve::P256),
+                private_key: inner,
+                public_key: outer,
+            }
+        }
+
+        /// One failing call per detail, every secret position filled with
+        /// the marker.
+        fn cases() -> Vec<(Error, &'static str)> {
+            let p256 = Some(EcCurve::P256);
+            let d = [M; 32];
+            let other = from_sec1(&fixtures::load("rfc", "rfc9500-testECCP256-sec1.pem")).unwrap();
+            let other_point = uncompressed_point(ec_key(&other));
+            let a2 = from_sec1(&fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der")).unwrap();
+            let a2_point = uncompressed_point(ec_key(&a2));
+            let mut marker_point = vec![0x04];
+            marker_point.extend_from_slice(&[M; 64]);
+            let mut version_0 = sec1_der(p256, &d, None).to_vec();
+            assert_eq!(version_0[2..5], [0x02, 0x01, 0x01]);
+            version_0[4] = 0x00;
+            let mut null_params = sec1_der(p256, &d, None).to_vec();
+            let at = null_params.len() - 10;
+            null_params.splice(at.., [0x05, 0x00]);
+            null_params[at - 1] = 2;
+            null_params[1] -= 8;
+            let p384_inner = sec1_der(Some(EcCurve::P384), &d, None);
+            let both_inner = sec1_der(None, &d, Some(&a2_point));
+            let marker_inner = sec1_der(None, &d, None);
+            let point_spki = SpkiParts {
+                alg: AlgId::Ec(EcCurve::P256),
+                subject_public_key: &marker_point,
+            };
+            let ed25519 = SpkiParts {
+                alg: AlgId::Ed25519,
+                subject_public_key: &[M; 32],
+            };
+            let public = expected("openssl/expected", "ec-p256-spki.jwk.json");
+            let err = |result: Result<Jwk>| result.unwrap_err();
+            vec![
+                (err(from_sec1(&version_0)), "ECPrivateKey version is not 1"),
+                (
+                    err(from_sec1(&null_params)),
+                    "ECPrivateKey parameters are not a namedCurve",
+                ),
+                (
+                    err(from_sec1(&sec1_der(None, &d, None))),
+                    "EC PRIVATE KEY has no namedCurve parameters",
+                ),
+                (
+                    err(from_sec1(&sec1_der(p256, &d[..31], None))),
+                    PRIVATE_KEY_LENGTH,
+                ),
+                (
+                    err(from_sec1(&sec1_der(p256, &[0; 32], None))),
+                    SCALAR_INVALID,
+                ),
+                (
+                    err(from_sec1(&sec1_der(p256, &d, Some(&marker_point)))),
+                    POINT_INVALID,
+                ),
+                (
+                    err(from_sec1(&sec1_der(p256, &d, Some(&other_point)))),
+                    "EC private key d does not match x and y",
+                ),
+                (
+                    err(from_pkcs8(pkcs8_parts(&p384_inner, None))),
+                    "ECPrivateKey parameters disagree with the PKCS#8 algorithm",
+                ),
+                (
+                    err(from_pkcs8(pkcs8_parts(&both_inner, Some(&other_point)))),
+                    "PKCS#8 publicKey and ECPrivateKey publicKey differ",
+                ),
+                (
+                    err(from_pkcs8(pkcs8_parts(&marker_inner, Some(&marker_point)))),
+                    POINT_INVALID,
+                ),
+                (err(from_spki(point_spki)), POINT_INVALID),
+                (err(from_spki(ed25519)), "not an EC key"),
+                (to_sec1(ec_key(&public)).unwrap_err(), NOT_PRIVATE),
+                (to_pkcs8(ec_key(&public)).unwrap_err(), NOT_PRIVATE),
+            ]
+        }
+
+        #[test]
+        fn every_failure_path_reports_a_static_detail_without_key_bytes() {
+            let mut seen = BTreeSet::new();
+            for (error, detail) in cases() {
+                assert_eq!(error, Error::InvalidKey(detail), "{detail}");
+                for text in [
+                    format!("{error}"),
+                    format!("{error:?}"),
+                    format!("{error:#?}"),
+                ] {
+                    assert!(!leaks(&text), "{text}");
+                }
+                seen.insert(detail.to_owned());
+            }
+            let all: BTreeSet<String> = [include_str!("ec.rs"), include_str!("sec1.rs")]
+                .into_iter()
+                .flat_map(details)
+                .collect();
+            assert!(all.len() >= 10, "{all:?}");
+            let missing: Vec<_> = all.difference(&seen).collect();
+            assert!(missing.is_empty(), "no marker case for {missing:?}");
+        }
+
+        #[test]
+        fn imported_keys_keep_d_out_of_debug() {
+            // The JWK's own Debug redacts d (jwk.rs); the marker-free RFC
+            // key's d must not appear in it in any form.
+            let jwk = from_sec1(&fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der")).unwrap();
+            let d = crate::util::b64url_encode(ec_key(&jwk).d().unwrap());
+            let shown = format!("{jwk:?} {jwk:#?}");
+            assert!(!shown.contains(&d), "{shown}");
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+            /// Arbitrary input to every import path returns a result,
+            /// never panics, and fails only with the two key error codes.
+            #[test]
+            fn arbitrary_input_never_panics(input in proptest::collection::vec(any::<u8>(), 0..160)) {
+                let ok_or_key_error = |result: Result<Jwk>| matches!(
+                    result,
+                    Ok(_) | Err(Error::InvalidKey(_) | Error::UnsupportedAlgorithm)
+                );
+                prop_assert!(ok_or_key_error(from_sec1(&input)));
+                prop_assert!(ok_or_key_error(from_pkcs8(pkcs8_parts(&input, None))));
+                prop_assert!(ok_or_key_error(from_pkcs8(pkcs8_parts(&input, Some(&input)))));
+                for crv in [EcCurve::P256, EcCurve::P384, EcCurve::P521, EcCurve::Secp256k1] {
+                    let parts = SpkiParts { alg: AlgId::Ec(crv), subject_public_key: &input };
+                    prop_assert!(ok_or_key_error(from_spki(parts)));
+                }
+            }
+
+            /// Bit flips in a valid SEC1 key either still import to a
+            /// valid key or fail with a key error.
+            #[test]
+            fn mutated_sec1_never_panics(at in 0usize..121, bit in 0u8..8) {
+                let mut der = fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der");
+                der[at] ^= 1 << bit;
+                prop_assert!(matches!(
+                    from_sec1(&der),
+                    Ok(_) | Err(Error::InvalidKey(_) | Error::UnsupportedAlgorithm)
+                ));
+            }
+        }
+    }
 }
