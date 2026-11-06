@@ -136,6 +136,8 @@ mod json;
 )]
 mod process;
 mod rsa;
+#[cfg(test)]
+mod wycheproof_jose;
 
 pub use compact::{sign_compact, verify_compact};
 pub use json::{sign_flattened, sign_general, verify_json};
