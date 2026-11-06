@@ -36,11 +36,13 @@ use crate::error::{Error, Result};
 use crate::header::Header;
 use crate::json::{self, Limits, Object, Value};
 use crate::jwk::Jwk;
-use crate::util::b64url_decode;
+use crate::util::{b64url_decode, b64url_encode};
 
 use super::alg::{FAMILIES, Families};
-use super::process::{JoseHeader, common_b64, furthest, signing_input, verify_signature};
-use super::{SignOptions, Signer, Verified, VerifyOptions};
+use super::process::{
+    JoseHeader, common_b64, furthest, prepare_sign, signing_input, verify_signature,
+};
+use super::{ProtectedHeader, SignOptions, Signer, Verified, VerifyOptions};
 
 /// The members of one signature object (RFC 7515 §7.2.1), which the
 /// flattened syntax puts at the top level instead of `signatures`
@@ -74,8 +76,16 @@ pub(crate) fn sign_flattened_with(
     payload: &[u8],
     opts: &SignOptions,
 ) -> Result<String> {
-    let _ = (families.sign, families.verify, signer, payload, opts);
-    Err(Error::UnsupportedAlgorithm)
+    let (payload, mut signed) = sign_all(families, core::slice::from_ref(signer), payload, opts)?;
+    let mut jws = Object::new();
+    if let Some(payload) = payload {
+        jws.insert("payload", payload);
+    }
+    // One signer, one entry.
+    if let Some(entry) = signed.pop() {
+        entry.write_to(&mut jws);
+    }
+    Ok(jws.to_json())
 }
 
 /// Signs `payload` in the general JWS JSON Serialization
@@ -114,8 +124,111 @@ pub(crate) fn sign_general_with(
     payload: &[u8],
     opts: &SignOptions,
 ) -> Result<String> {
-    let _ = (families.sign, families.verify, signers, payload, opts);
-    Err(Error::UnsupportedAlgorithm)
+    let (payload, signed) = sign_all(families, signers, payload, opts)?;
+    let mut jws = Object::new();
+    if let Some(payload) = payload {
+        jws.insert("payload", payload);
+    }
+    let signatures: Vec<Value> = signed
+        .into_iter()
+        .map(|entry| {
+            let mut object = Object::new();
+            entry.write_to(&mut object);
+            Value::from(object)
+        })
+        .collect();
+    jws.insert("signatures", signatures);
+    Ok(jws.to_json())
+}
+
+/// One computed signature's members (RFC 7515 §7.2.1).
+struct SignedEntry<'s> {
+    /// `protected`: the encoding as made or given (RFC 7515 §5.1 step 3).
+    protected: Option<&'s str>,
+    /// `header`, absent when the JWS Unprotected Header is empty
+    /// (RFC 7515 §7.2.1: "MUST be absent").
+    header: Option<Object>,
+    /// `signature`: BASE64URL(JWS Signature) (RFC 7515 §5.1 step 7).
+    signature: String,
+}
+
+impl SignedEntry<'_> {
+    /// Appends the members in RFC 7515 §7.2.1 order: `protected`,
+    /// `header`, `signature`.
+    fn write_to(self, object: &mut Object) {
+        if let Some(protected) = self.protected {
+            object.insert("protected", protected);
+        }
+        if let Some(header) = self.header {
+            object.insert("header", header);
+        }
+        object.insert("signature", self.signature);
+    }
+}
+
+/// Computes every signature of a JSON JWS (RFC 7515 §5.1), returning the
+/// `payload` member (absent when detached) and one entry per signer.
+///
+/// Like verification, each step runs over every signer before the next:
+/// the header structure of every signer (ADR 0026 §2 step 4, RFC 7515
+/// §5.2 step 4) and `b64` agreement (RFC 7797 §3); then steps 5–8 per
+/// signer, in order (`prepare_sign`); then the payload rule of RFC 7797
+/// §5.3; then the signatures themselves.
+fn sign_all<'s>(
+    families: &Families,
+    signers: &'s [Signer<'_>],
+    payload: &[u8],
+    opts: &SignOptions,
+) -> Result<(Option<Value>, Vec<SignedEntry<'s>>)> {
+    if signers.is_empty() {
+        return Err(Error::InvalidFormat(
+            "a general JWS needs at least one signer",
+        ));
+    }
+    // Step 4 for every signer, then one `b64` for the whole JWS.
+    let mut headers = Vec::with_capacity(signers.len());
+    let mut unprotected_members = Vec::with_capacity(signers.len());
+    for signer in signers {
+        let members = signer
+            .unprotected
+            .as_ref()
+            .map(Header::to_object)
+            .transpose()?
+            .filter(|members| !members.is_empty());
+        let protected = signer.protected.as_ref().map(|p| p.header().clone());
+        headers.push(JoseHeader::new(protected, signer.unprotected.clone())?);
+        unprotected_members.push(members);
+    }
+    let b64 = common_b64(&headers)?;
+    // Steps 5-8, per signer.
+    let ready = headers
+        .iter()
+        .zip(signers)
+        .map(|(header, signer)| prepare_sign(header, signer.key))
+        .collect::<Result<Vec<_>>>()?;
+    // RFC 7797 §5.3: with `b64: false` the payload member is the payload
+    // itself, a JSON string, so it must be UTF-8. Detached content is not
+    // carried (RFC 7515 Appendix F), so any octets will do.
+    let payload_member = match (opts.detached, b64) {
+        (true, _) => None,
+        (false, true) => Some(Value::from(b64url_encode(payload))),
+        (false, false) => Some(Value::from(core::str::from_utf8(payload).map_err(
+            |_| Error::InvalidFormat("a b64:false payload must be UTF-8 in the JSON Serialization"),
+        )?)),
+    };
+    // RFC 7515 §5.1 steps 5-7, signer by signer.
+    let mut entries = Vec::with_capacity(signers.len());
+    for ((signer, ready), header) in signers.iter().zip(&ready).zip(unprotected_members) {
+        let protected = signer.protected.as_ref().map(ProtectedHeader::encoded);
+        let input = signing_input(protected.unwrap_or(""), payload, b64);
+        let signature = b64url_encode(&ready.sign(families, &input)?);
+        entries.push(SignedEntry {
+            protected,
+            header,
+            signature,
+        });
+    }
+    Ok((payload_member, entries))
 }
 
 /// Verifies a JWS in the JSON Serialization, flattened (RFC 7515 §7.2.2)
@@ -391,6 +504,7 @@ mod tests {
     use super::*;
     use crate::header::Header;
     use crate::jwa::SigningAlg;
+    use crate::jws::ProtectedHeader;
     use crate::jws::alg::fake::{FAKE, REJECTING, fake_signature};
     use crate::jws::alg::test_keys as keys;
     use crate::util::b64url_encode;
@@ -1024,6 +1138,330 @@ mod tests {
                 .unwrap_err()
                 .code(),
             "InvalidFormat"
+        );
+    }
+
+    // ---- Signing (RFC 7515 §5.1, §7.2) ----
+
+    fn protected(json: &str) -> ProtectedHeader {
+        ProtectedHeader::new(Header::from_json(json.as_bytes()).unwrap()).unwrap()
+    }
+
+    fn header(json: &str) -> Header {
+        Header::from_json(json.as_bytes()).unwrap()
+    }
+
+    fn sign_code(r: Result<String>) -> &'static str {
+        r.err().map_or("ok", |e| e.code())
+    }
+
+    fn attached() -> SignOptions {
+        SignOptions::new()
+    }
+
+    #[test]
+    fn sign_flattened_output_is_exact_and_verifies() {
+        // RFC 7515 §7.2.2: payload, protected, header, signature at the
+        // top level; compact, deterministic JSON.
+        let k = key();
+        let signer = Signer::new(&k)
+            .protected(protected(P_HS256))
+            .unprotected(kid("k1"));
+        let jws = sign_flattened_with(&FAKE, &signer, PAYLOAD, &attached()).unwrap();
+        let p = enc(P_HS256);
+        let s = sig(SigningAlg::HS256, &p, PAYLOAD_B64);
+        assert_eq!(
+            jws,
+            format!(
+                r#"{{"payload":"{PAYLOAD_B64}","protected":"{p}","header":{{"kid":"k1"}},"signature":"{s}"}}"#
+            )
+        );
+        assert_eq!(
+            sign_flattened_with(&FAKE, &signer, PAYLOAD, &attached()).unwrap(),
+            jws
+        );
+        let v = verify(&jws).unwrap();
+        assert_eq!((v.payload.as_slice(), v.signature_index), (PAYLOAD, 0));
+        assert_eq!(v.protected, Some(hs256()));
+        assert_eq!(v.unprotected, Some(kid("k1")));
+    }
+
+    #[test]
+    fn sign_flattened_keeps_the_protected_encoding() {
+        // RFC 7515 §5.1 step 3: the signature covers the encoded octets,
+        // here RFC 7515 A.1's header with its CRLF.
+        let a1 = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9";
+        let k = key();
+        let signer = Signer::new(&k).protected(ProtectedHeader::from_encoded(a1).unwrap());
+        let jws = sign_flattened_with(&FAKE, &signer, PAYLOAD, &attached()).unwrap();
+        let s = sig(SigningAlg::HS256, a1, PAYLOAD_B64);
+        assert_eq!(
+            jws,
+            format!(r#"{{"payload":"{PAYLOAD_B64}","protected":"{a1}","signature":"{s}"}}"#)
+        );
+        assert_eq!(verify(&jws).unwrap().payload, PAYLOAD);
+    }
+
+    #[test]
+    fn sign_general_mixes_header_kinds_and_round_trips() {
+        // RFC 7515 §7.2.1: `protected` only, `header` only, and both.
+        let k = key();
+        let signers = [
+            Signer::new(&k).protected(protected(P_HS256)),
+            Signer::new(&k).unprotected(header(r#"{"alg":"HS384","kid":"u"}"#)),
+            Signer::new(&k)
+                .protected(protected(r#"{"alg":"HS512"}"#))
+                .unprotected(kid("b")),
+        ];
+        let jws = sign_general_with(&FAKE, &signers, PAYLOAD, &attached()).unwrap();
+        let p0 = enc(P_HS256);
+        let p2 = enc(r#"{"alg":"HS512"}"#);
+        let s0 = sig(SigningAlg::HS256, &p0, PAYLOAD_B64);
+        let s1 = sig(SigningAlg::HS384, "", PAYLOAD_B64);
+        let s2 = sig(SigningAlg::HS512, &p2, PAYLOAD_B64);
+        assert_eq!(
+            jws,
+            format!(
+                r#"{{"payload":"{PAYLOAD_B64}","signatures":[{{"protected":"{p0}","signature":"{s0}"}},{{"header":{{"alg":"HS384","kid":"u"}},"signature":"{s1}"}},{{"protected":"{p2}","header":{{"kid":"b"}},"signature":"{s2}"}}]}}"#
+            )
+        );
+        for (index, alg) in [SigningAlg::HS256, SigningAlg::HS384, SigningAlg::HS512]
+            .into_iter()
+            .enumerate()
+        {
+            let v = verify_allowing(&jws, std::slice::from_ref(&alg)).unwrap();
+            assert_eq!(v.signature_index, index);
+            assert_eq!(v.alg, alg);
+            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(v.protected.is_some(), index != 1);
+            assert_eq!(v.unprotected.is_some(), index != 0);
+        }
+    }
+
+    #[test]
+    fn empty_unprotected_header_is_omitted() {
+        // RFC 7515 §7.2.1: `header` MUST be absent when the JWS
+        // Unprotected Header is empty.
+        let k = key();
+        let signer = Signer::new(&k)
+            .protected(protected(P_HS256))
+            .unprotected(Header::new());
+        let flat = sign_flattened_with(&FAKE, &signer, PAYLOAD, &attached()).unwrap();
+        let gen_ = sign_general_with(&FAKE, &[signer], PAYLOAD, &attached()).unwrap();
+        for jws in [flat, gen_] {
+            assert!(!jws.contains("header"), "{jws}");
+            assert_eq!(verify(&jws).unwrap().unprotected, None);
+        }
+    }
+
+    #[test]
+    fn sign_detached_omits_the_payload_member() {
+        // RFC 7515 Appendix F: the signature still covers the payload.
+        let k = key();
+        let signer = Signer::new(&k).protected(protected(P_HS256));
+        let detached = SignOptions::new().detached(true);
+        let flat = sign_flattened_with(&FAKE, &signer, PAYLOAD, &detached).unwrap();
+        let p = enc(P_HS256);
+        let s = sig(SigningAlg::HS256, &p, PAYLOAD_B64);
+        assert_eq!(flat, format!(r#"{{"protected":"{p}","signature":"{s}"}}"#));
+        let gen_ = sign_general_with(&FAKE, &[signer], PAYLOAD, &detached).unwrap();
+        assert_eq!(
+            gen_,
+            format!(r#"{{"signatures":[{{"protected":"{p}","signature":"{s}"}}]}}"#)
+        );
+        let opts = VerifyOptions::new(HS256).unwrap().detached_payload(PAYLOAD);
+        for jws in [flat, gen_] {
+            assert_eq!(verify_opts(&jws, &opts).unwrap().payload, PAYLOAD);
+        }
+    }
+
+    #[test]
+    fn sign_b64_false_carries_the_payload_as_a_json_string() {
+        // RFC 7797 §5.3: the unencoded payload is a JSON string, escaped
+        // by the serializer; the signing input has its octets (§3).
+        let k = key();
+        let ph = protected(P_B64_FALSE);
+        let p = ph.encoded().to_owned();
+        let signer = Signer::new(&k).protected(ph);
+        let payload = "a \"quoted\" $.02\n";
+        let flat = sign_flattened_with(&FAKE, &signer, payload.as_bytes(), &attached()).unwrap();
+        let s = sig(SigningAlg::HS256, &p, payload);
+        assert_eq!(
+            flat,
+            format!(r#"{{"payload":"a \"quoted\" $.02\n","protected":"{p}","signature":"{s}"}}"#)
+        );
+        let gen_ = sign_general_with(
+            &FAKE,
+            &[signer.clone(), signer.clone()],
+            payload.as_bytes(),
+            &attached(),
+        )
+        .unwrap();
+        for jws in [flat, gen_] {
+            assert_eq!(verify(&jws).unwrap().payload, payload.as_bytes());
+        }
+
+        // Octets that are not UTF-8 cannot be a JSON string.
+        let raw = [b'a', 0xff];
+        assert_eq!(
+            sign_code(sign_flattened_with(&FAKE, &signer, &raw, &attached())),
+            "InvalidFormat"
+        );
+        assert_eq!(
+            sign_code(sign_general_with(
+                &FAKE,
+                std::slice::from_ref(&signer),
+                &raw,
+                &attached()
+            )),
+            "InvalidFormat"
+        );
+        // Detached, they are never carried, so any octets sign.
+        let detached = SignOptions::new().detached(true);
+        let jws = sign_flattened_with(&FAKE, &signer, &raw, &detached).unwrap();
+        let opts = VerifyOptions::new(HS256).unwrap().detached_payload(&raw);
+        assert_eq!(verify_opts(&jws, &opts).unwrap().payload, raw);
+        // b64 true: any octets, base64url-encoded.
+        let plain = Signer::new(&k).protected(protected(P_HS256));
+        let jws = sign_flattened_with(&FAKE, &plain, &raw, &attached()).unwrap();
+        assert_eq!(verify(&jws).unwrap().payload, raw);
+    }
+
+    #[test]
+    fn sign_general_with_no_signers_is_invalid_format() {
+        // RFC 7515 §7.2.1: `signatures` holds one or more objects.
+        assert_eq!(
+            sign_code(sign_general_with(&FAKE, &[], PAYLOAD, &attached())),
+            "InvalidFormat"
+        );
+    }
+
+    #[test]
+    fn sign_applies_the_header_and_key_rules() {
+        // ADR 0026 §2 steps 4-8 on sign, through process.rs.
+        let k = key();
+        let public = keys::p256("");
+        let short = keys::oct(16, "");
+        let p = |json| Some(protected(json));
+        let u = |json| Some(header(json));
+        let cases: [(Option<ProtectedHeader>, Option<Header>, &Jwk, &str); 11] = [
+            (
+                p(r#"{"alg":"HS256","kid":"a"}"#),
+                u(r#"{"kid":"b"}"#),
+                &k,
+                "InvalidHeader",
+            ),
+            (None, None, &k, "InvalidHeader"),
+            (None, u(r#"{"kid":"k"}"#), &k, "InvalidHeader"),
+            (
+                p(P_HS256),
+                u(r#"{"crit":["exp"],"exp":1}"#),
+                &k,
+                "InvalidHeader",
+            ),
+            (
+                p(r#"{"alg":"HS256","b64":false}"#),
+                None,
+                &k,
+                "InvalidHeader",
+            ),
+            (
+                p(r#"{"alg":"HS256","crit":["exp"],"exp":1}"#),
+                None,
+                &k,
+                "UnknownCritical",
+            ),
+            (p(r#"{"alg":"HS1"}"#), None, &k, "UnsupportedAlgorithm"),
+            (p(r#"{"alg":"none"}"#), None, &k, "AlgorithmNotAllowed"),
+            (None, u(r#"{"alg":"RS256"}"#), &k, "UnsupportedAlgorithm"),
+            (
+                p(r#"{"alg":"ES256"}"#),
+                None,
+                &public,
+                "KeyAlgorithmMismatch",
+            ),
+            (p(P_HS256), None, &short, "InvalidKey"),
+        ];
+        for (protected, unprotected, key, expected) in cases {
+            let mut signer = Signer::new(key);
+            signer.protected = protected;
+            signer.unprotected = unprotected;
+            assert_eq!(
+                sign_code(sign_flattened_with(&FAKE, &signer, PAYLOAD, &attached())),
+                expected,
+                "{signer:?}"
+            );
+            assert_eq!(
+                sign_code(sign_general_with(&FAKE, &[signer], PAYLOAD, &attached())),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn sign_general_checks_every_signer_step_by_step() {
+        let k = key();
+        let ok = Signer::new(&k).protected(protected(P_HS256));
+        let none = Signer::new(&k).protected(protected(r#"{"alg":"none"}"#));
+        let overlap = Signer::new(&k)
+            .protected(protected(P_HS256))
+            .unprotected(header(r#"{"alg":"HS256"}"#));
+        let unencoded = Signer::new(&k).protected(protected(P_B64_FALSE));
+        let unencoded_unknown = Signer::new(&k).protected(protected(
+            r#"{"alg":"HS256","b64":false,"crit":["b64","exp"],"exp":1}"#,
+        ));
+        let unknown =
+            Signer::new(&k).protected(protected(r#"{"alg":"HS256","crit":["exp"],"exp":1}"#));
+        let raw: &[u8] = &[0xff];
+        for (signers, payload, expected) in [
+            // Step 4 runs over every signer before steps 5-8.
+            (vec![none.clone(), overlap], PAYLOAD, "InvalidHeader"),
+            // RFC 7797 §3: one `b64` value for the whole JWS.
+            (
+                vec![ok.clone(), unencoded.clone()],
+                PAYLOAD,
+                "InvalidHeader",
+            ),
+            (
+                vec![unencoded.clone(), ok.clone()],
+                PAYLOAD,
+                "InvalidHeader",
+            ),
+            // Steps 5-8 per signer, in order.
+            (
+                vec![none.clone(), unknown.clone()],
+                PAYLOAD,
+                "AlgorithmNotAllowed",
+            ),
+            (vec![unknown, none], PAYLOAD, "UnknownCritical"),
+            // Then the payload rule (RFC 7797 §5.3).
+            (
+                vec![unencoded.clone(), unencoded_unknown],
+                raw,
+                "UnknownCritical",
+            ),
+            (vec![unencoded.clone(), unencoded], raw, "InvalidFormat"),
+            (vec![ok.clone(), ok], raw, "ok"),
+        ] {
+            assert_eq!(
+                sign_code(sign_general_with(&FAKE, &signers, payload, &attached())),
+                expected,
+                "{signers:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_sign_functions_check_headers_before_the_family() {
+        let k = key();
+        assert_eq!(
+            sign_code(sign_general(&[], PAYLOAD, &attached())),
+            "InvalidFormat"
+        );
+        let no_alg = Signer::new(&k).unprotected(kid("k"));
+        assert_eq!(
+            sign_code(sign_flattened(&no_alg, PAYLOAD, &attached())),
+            "InvalidHeader"
         );
     }
 }
