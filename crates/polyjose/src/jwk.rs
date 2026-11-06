@@ -205,12 +205,14 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 use crate::error::{Error, Result};
 use crate::json::{self, Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
-use crate::jwe::x25519_consistency::{X25519_PRIVATE_MISMATCH, x25519_private_matches};
 use crate::util::{b64url_decode, b64url_encode};
 
 mod set;
 mod thumbprint;
+pub(crate) mod x25519_consistency;
+
 pub use set::JwkSet;
+use x25519_consistency::{X25519_PRIVATE_MISMATCH, x25519_private_matches};
 
 /// The `kty` (key type) values polyjose supports (RFC 7517 §4.1,
 /// RFC 7518 §6.1, RFC 8037 §2).

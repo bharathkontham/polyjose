@@ -9,9 +9,10 @@
 //! rejects it with `InvalidKey`, as it does for Ed25519 and EC (ADR 0043
 //! §3, amending ADR 0041 §4).
 //!
-//! The helper lives here, next to the other x25519-dalek code of
-//! feature 0003; `jwk.rs` calls it once, from its `OKP` import
-//! validation.
+//! The helper is part of `jwk`, the module that imports keys: `jwk.rs`
+//! calls it once, from its `OKP` import validation. It sat under `jwe`
+//! (feature 0003) until the 0003 code review (#6), which moved it here so
+//! that `jwk` imports nothing from `jwe`. It stays crate-internal.
 //!
 //! Only consistency is checked. A public `x` with a torsion component or
 //! of low order stays valid (ADR 0043 §2, RFC 7748 §5), so nothing here

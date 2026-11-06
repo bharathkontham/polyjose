@@ -1216,7 +1216,7 @@ mod tests {
     /// never imports from `crate::jwe` (0003 code review #6).
     mod x25519_import_consistency {
         use super::*;
-        use crate::jwe::x25519_consistency::X25519_PRIVATE_MISMATCH;
+        use crate::jwk::x25519_consistency::X25519_PRIVATE_MISMATCH;
         use x25519_dalek::PublicKey;
 
         /// RFC 7748 §6.1, as printed (hex).
