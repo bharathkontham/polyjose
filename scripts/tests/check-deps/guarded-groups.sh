@@ -14,6 +14,12 @@
 #   - a crate already in the tree (`cfg-if`) added to the dalek-build group;
 #   - a member (`syn`) moved out of its guarded group into an unguarded one;
 #   - a member (`autocfg`) removed from deps-allowlist.txt while still in the tree (check 1 too).
+# Edge rule: dalek-build and num-traits-build crates are build-dependencies only (absent from
+# `cargo tree -e normal`), and dalek-proc-macro crates are reached only through a proc-macro (absent
+# from `-e normal,no-proc-macro`). The three direct dependencies above break it too, and:
+#   - libm made a num-traits-build member (in the copy's check-deps.sh too, so only this rule is
+#     left to catch it) and reached through num-traits' normal `libm` edge;
+#   - a direct dependency on `proc-macro2` (dalek-proc-macro).
 # The unchanged tree must pass. Usage: scripts/tests/check-deps/guarded-groups.sh
 set -euo pipefail
 export LC_ALL=C
@@ -23,6 +29,19 @@ export LC_ALL=C
 guard='is reached without going through'
 member='guarded group .*\(ADR 0049 §5'
 not_allowed='contains crates that deps-allowlist.txt does not allow'
+edge='is in cargo tree -e normal'
+
+# expect_also <description> <ERE>: the output of the last expect_fail also matches the ERE.
+expect_also() {
+  tests_run=$((tests_run + 1))
+  if grep -Eq -- "$2" "$scratch/out"; then
+    echo "ok   - $1"
+    grep -E -- "$2" "$scratch/out" | head -3 | sed 's/^/       /'
+  else
+    echo "FAIL - $1: wanted output matching /$2/"
+    tests_failed=$((tests_failed + 1))
+  fi
+}
 
 # credit_crate <crate>: a minimal CREDITS.md entry in the copy, so check 4 stays quiet.
 credit_crate() {
@@ -40,17 +59,23 @@ expect_pass "unchanged tree"
 new_case semver
 add_core_dependency 'semver = { version = "1", default-features = false }'
 expect_fail "direct core dependency on semver" \
-  "FAIL: semver \\(guarded group dalek-build\\) $guard curve25519-dalek .*: polyjose -> semver$" "$guard"
+  "FAIL: semver \\(guarded group dalek-build\\) $guard curve25519-dalek .*: polyjose -> semver$" "$guard|$edge"
+expect_also "direct core dependency on semver breaks the edge rule too" \
+  "FAIL: semver \\(guarded group dalek-build\\) $edge: .*: polyjose -> semver$"
 
 new_case syn
 add_core_dependency 'syn = { version = "2", default-features = false }'
 expect_fail "syn reached outside curve25519-dalek-derive" \
-  "FAIL: syn \\(guarded group dalek-proc-macro\\) $guard curve25519-dalek-derive .*: polyjose -> syn$" "$guard"
+  "FAIL: syn \\(guarded group dalek-proc-macro\\) $guard curve25519-dalek-derive .*: polyjose -> syn$" "$guard|$edge"
+expect_also "direct core dependency on syn breaks the edge rule too" \
+  "FAIL: syn \\(guarded group dalek-proc-macro\\) $edge,no-proc-macro: .*: polyjose -> syn$"
 
 new_case autocfg
 add_core_dependency 'autocfg = { version = "1", default-features = false }'
 expect_fail "autocfg reached outside num-traits" \
-  "FAIL: autocfg \\(guarded group num-traits-build\\) $guard num-traits .*: polyjose -> autocfg$" "$guard"
+  "FAIL: autocfg \\(guarded group num-traits-build\\) $guard num-traits .*: polyjose -> autocfg$" "$guard|$edge"
+expect_also "direct core dependency on autocfg breaks the edge rule too" \
+  "FAIL: autocfg \\(guarded group num-traits-build\\) $edge: .*: polyjose -> autocfg$"
 
 # --- Membership rule --------------------------------------------------------------------------------
 
@@ -81,5 +106,23 @@ replace_in CREDITS.md "### \`autocfg\`" '#### autocfg (removed by the test)'
 expect_fail "autocfg removed from deps-allowlist.txt while in the tree" \
   "FAIL: autocfg is a member of guarded group num-traits-build \\(scripts/check-deps.sh\\) and in the core's tree, but deps-allowlist.txt does not list it" \
   "$member|$not_allowed"
+
+# --- Edge rule ----------------------------------------------------------------------------------------
+
+# libm is only below num-traits, and a member of num-traits-build in the copy's script and allowlist,
+# so the path and membership rules pass it; num-traits' edge to it is a normal one.
+new_case libm-normal-edge
+add_core_dependency 'num-traits = { version = "0.2", default-features = false, features = ["libm"] }'
+replace_in deps-allowlist.txt $'\nautocfg\n' $'\nautocfg\nlibm\n'
+replace_in scripts/check-deps.sh $'\nnum-traits-build autocfg num-traits\n' \
+  $'\nnum-traits-build autocfg num-traits\nnum-traits-build libm num-traits\n'
+credit_crate libm
+expect_fail "build-only libm reached through a normal edge" \
+  "FAIL: libm \\(guarded group num-traits-build\\) $edge: .*: polyjose -> num-traits -> libm$" "$edge"
+
+new_case proc-macro2
+add_core_dependency 'proc-macro2 = { version = "1", default-features = false }'
+expect_fail "proc-macro2 reached outside a proc-macro" \
+  "FAIL: proc-macro2 \\(guarded group dalek-proc-macro\\) $edge,no-proc-macro: .*: polyjose -> proc-macro2$" "$guard|$edge"
 
 finish
