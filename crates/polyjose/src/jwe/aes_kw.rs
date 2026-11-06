@@ -55,6 +55,9 @@ pub(super) fn decrypt_key(
 /// An error for a KEK or CEK of a size outside those.
 pub(super) fn wrap(kek: &[u8], cek: &[u8]) -> Result<Vec<u8>> {
     let kw = Kw::new(kek).ok_or(Error::InvalidKey(KEK_SIZE))?;
+    if !is_key_data_len(cek.len()) {
+        return Err(Error::InvalidKey(CEK_SIZE));
+    }
     let mut out = vec![0; cek.len() + SEMIBLOCK];
     kw.wrap(cek, &mut out)
         .map_err(|_| Error::InvalidKey(CEK_SIZE))?;
@@ -74,6 +77,7 @@ pub(super) fn unwrap(kek: &[u8], wrapped: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let len = wrapped
         .len()
         .checked_sub(SEMIBLOCK)
+        .filter(|&len| is_key_data_len(len))
         .ok_or(Error::DecryptionFailed)?;
     let mut out = Zeroizing::new(vec![0; len]);
     // On an integrity failure aes-kw zeroes `out` before returning, and
@@ -86,6 +90,13 @@ pub(super) fn unwrap(kek: &[u8], wrapped: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
 /// The 64-bit semiblock of RFC 3394 §2: the unit of key data and the
 /// length of the integrity check register `A`.
 const SEMIBLOCK: usize = 8;
+
+/// Whether `len` bytes is key data RFC 3394 can wrap: n 64-bit blocks with
+/// n >= 2 (RFC 3394 §2, §2.2.1). aes-kw also accepts n = 0 and n = 1
+/// (research.md §3), so the bound is enforced here, before it runs.
+fn is_key_data_len(len: usize) -> bool {
+    len >= 2 * SEMIBLOCK && len.is_multiple_of(SEMIBLOCK)
+}
 
 /// The [`Error::InvalidKey`] detail for a KEK of the wrong size.
 const KEK_SIZE: &str = "AES Key Wrap needs a 16, 24 or 32 byte key";
@@ -233,5 +244,72 @@ mod tests {
             unwrap(&wrong_kek, &hex(ct)).map(|_| ()),
             Err(Error::DecryptionFailed)
         );
+    }
+
+    #[test]
+    fn wrap_rejects_a_kek_that_is_not_an_aes_key_size() {
+        // RFC 7518 §4.4: A128KW, A192KW and A256KW use 128, 192 and 256 bit
+        // keys; AES has no other key size (FIPS 197 §5).
+        let cek = hex(DATA_128);
+        for len in [0, 1, 8, 15, 17, 20, 23, 25, 31, 33, 48, 64] {
+            assert_eq!(
+                wrap(&vec![0x4B; len], &cek),
+                Err(Error::InvalidKey(KEK_SIZE)),
+                "KEK of {len} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn wrap_rejects_key_data_shorter_than_two_semiblocks_or_not_a_multiple_of_8() {
+        // RFC 3394 §2: the key data is n 64-bit blocks with n >= 2. aes-kw
+        // itself also wraps 0 and 8 bytes (research.md §3).
+        let kek = hex(KEK_128);
+        for len in [0, 1, 7, 8, 9, 15, 17, 20, 23, 33] {
+            assert_eq!(
+                wrap(&kek, &vec![0xC5; len]),
+                Err(Error::InvalidKey(CEK_SIZE)),
+                "key data of {len} bytes"
+            );
+        }
+        for len in [16, 24, 32, 40, 48, 64, 384] {
+            let wrapped = wrap(&kek, &vec![0xC5; len]).unwrap_or_else(|e| panic!("{len}: {e}"));
+            assert_eq!(wrapped.len(), len + 8, "key data of {len} bytes");
+        }
+    }
+
+    #[test]
+    fn unwrap_rejects_input_shorter_than_three_semiblocks_or_not_a_multiple_of_8() {
+        // RFC 3394 §2.2.2: the input is n + 1 64-bit blocks with n >= 2.
+        let kek = hex(KEK_128);
+        for len in [0, 1, 4, 7, 8, 15, 17, 20, 23, 25, 31] {
+            assert_eq!(
+                unwrap(&kek, &vec![0xA6; len]).map(|_| ()),
+                Err(Error::DecryptionFailed),
+                "wrapped input of {len} bytes"
+            );
+        }
+        // A genuine 16-byte wrapping of 8 bytes of key data, which aes-kw
+        // itself unwraps: still rejected.
+        let mut one_block = [0u8; 16];
+        let kw = KwAes128::new_from_slice(&kek).unwrap_or_else(|e| panic!("{e}"));
+        kw.wrap_key(&[0xC5; 8], &mut one_block)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            unwrap(&kek, &one_block).map(|_| ()),
+            Err(Error::DecryptionFailed)
+        );
+    }
+
+    #[test]
+    fn unwrap_rejects_a_kek_that_is_not_an_aes_key_size() {
+        let (_, _, _, ct) = RFC_3394[0];
+        for len in [0, 8, 15, 17, 33] {
+            assert_eq!(
+                unwrap(&vec![0x4B; len], &hex(ct)).map(|_| ()),
+                Err(Error::DecryptionFailed),
+                "KEK of {len} bytes"
+            );
+        }
     }
 }
