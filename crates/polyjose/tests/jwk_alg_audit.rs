@@ -114,17 +114,17 @@ fn literal_rfc_matrix_every_alg_on_every_kind() {
 
 #[test]
 fn escaped_alg_names_decode_before_the_check() {
-    // "RS256" is RS256; "RSA-OAEP" is RSA-OAEP; "RSA1_5" is RSA1_5.
+    // JSON escapes decode before the check: u0052 is R, u002d is '-', u005f is '_'.
     assert_eq!(
-        outcome("oct", r"RS256").err(),
+        outcome("oct", r"\u0052S256").err(),
         Some(Error::KeyAlgorithmMismatch)
     );
     assert_eq!(
-        outcome("oct", r"RSA-OAEP").err(),
+        outcome("oct", r"RSA\u002dOAEP").err(),
         Some(Error::UnsupportedAlgorithm)
     );
     assert_eq!(
-        outcome("RSA", r"RSA1_5").err(),
+        outcome("RSA", r"RSA1\u005f5").err(),
         Some(Error::UnsupportedAlgorithm)
     );
     // Non-string alg is structural.
@@ -147,13 +147,13 @@ fn set_rsa_private_wherever_placed_and_however_escaped() {
     let bad_alg = key("oct", r#","alg":"RS256""#);
     let privates = [
         // member name escaped
-        format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","d":"AQAB","alg":"RSA1_5"}}"#),
+        format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","\u0064":"AQAB","alg":"RSA1_5"}}"#),
         // private member first, before kty
-        format!(r#"{{"p":"AQAB","alg":"RS256","kty":"RSA","n":"{RSA_N}","e":"AQAB"}}"#),
+        format!(r#"{{"\u0070":"AQAB","alg":"RS256","kty":"RSA","n":"{RSA_N}","e":"AQAB"}}"#),
         // kty value escaped
-        format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","oth":[],"alg":"x"}}"#),
+        format!(r#"{{"kty":"\u0052SA","n":"{RSA_N}","e":"AQAB","oth":[],"alg":"x"}}"#),
         // kty name escaped
-        format!(r#"{{"kty":"RSA","qi":7}}"#),
+        r#"{"\u006bty":"RSA","qi":7}"#.to_owned(),
         // otherwise malformed RSA with a private member
         r#"{"kty":"RSA","dq":null,"n":1}"#.to_owned(),
     ];
