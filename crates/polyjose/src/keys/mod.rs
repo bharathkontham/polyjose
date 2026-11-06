@@ -18,6 +18,24 @@
 //! The key type always comes from a structural parse of the DER, never from
 //! the PEM label alone, and `oct` keys never cross PEM/DER in either
 //! direction (RFC 8725 §2.1, ADR 0018 §3).
+//!
+//! The module exports [`generate`], [`generate_for`], [`JoseAlg`],
+//! [`KeyFormat`] and [`KeySpec`]; import and export are methods on
+//! [`Jwk`](crate::jwk::Jwk). A glob import brings in all five:
+//!
+//! ```
+//! use polyjose::jwa::SigningAlg;
+//! use polyjose::jwk::Jwk;
+//! use polyjose::keys::*;
+//!
+//! let _: fn(KeySpec) -> polyjose::Result<Jwk> = generate;
+//! let key = generate_for(JoseAlg::from(SigningAlg::ES256))?;
+//! let der = key.to_der(KeyFormat::Pkcs8)?;
+//! // DER has no `alg`: the imported key is the same key, unbound.
+//! let imported = Jwk::from_der(&der, KeyFormat::Pkcs8)?;
+//! assert!(imported.alg().is_none());
+//! # Ok::<(), polyjose::Error>(())
+//! ```
 
 mod api;
 mod der;
