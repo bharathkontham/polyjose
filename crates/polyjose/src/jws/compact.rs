@@ -1369,6 +1369,77 @@ mod tests {
     }
 
     #[test]
+    fn precheck_holds_the_payload_wiped_or_borrowed() {
+        // ADR 0049 §4: a decoded payload and the signing input are
+        // `Zeroizing` inside the precheck; a b64:false or detached payload
+        // is borrowed from the caller, never copied before verification.
+        let opts = VerifyOptions::new(ALLOW_HS256).unwrap();
+        let jws = forge(&A::HS256, HS256, b"secret", false);
+        let pre = precheck_compact(&jws, &opts).unwrap();
+        let _: &Zeroizing<Vec<u8>> = &pre.signing_input;
+        match &pre.payload {
+            PrecheckedPayload::Decoded(decoded) => {
+                let decoded: &Zeroizing<Vec<u8>> = decoded;
+                assert_eq!(**decoded, b"secret");
+            }
+            PrecheckedPayload::Borrowed(_) => panic!("a b64 payload must be decoded"),
+        }
+        let unencoded = forge(&A::HS256, HS256_B64_FALSE, b"$02", false);
+        let pre = precheck_compact(&unencoded, &opts).unwrap();
+        let [_, part, _] = parts(&unencoded);
+        assert!(
+            matches!(pre.payload, PrecheckedPayload::Borrowed(b) if b == part.as_bytes()
+                && unencoded.as_bytes().as_ptr_range().contains(&b.as_ptr()))
+        );
+        let content = b"detached".to_vec();
+        let detached = forge(&A::HS256, HS256, &content, true);
+        let with_content = opts.detached_payload(&content);
+        let pre = precheck_compact(&detached, &with_content).unwrap();
+        assert!(
+            matches!(pre.payload, PrecheckedPayload::Borrowed(b) if core::ptr::eq(b, &content[..]))
+        );
+        // The copy into Verified is the only one, and it is wiped too.
+        let v = finish_compact(&FAKE, &pre, &hs_key()).unwrap();
+        let _: &Zeroizing<Vec<u8>> = &v.payload;
+        assert_eq!(*v.payload, content);
+    }
+
+    #[test]
+    fn precheck_debug_prints_no_payload_or_signature_bytes() {
+        // ADR 0049 §4, ADR 0007: lengths only; headers through Header's
+        // redacting Debug.
+        const MARKER: &[u8] = b"MARKERxyz-payload";
+        let opts = VerifyOptions::new(ALLOW_HS256).unwrap();
+        let attached = forge(&A::HS256, HS256, MARKER, false);
+        let unencoded = forge(&A::HS256, HS256_B64_FALSE, MARKER, false);
+        let detached = forge(&A::HS256, HS256, MARKER, true);
+        for (jws, opts) in [
+            (&attached, opts),
+            (&unencoded, opts),
+            (&detached, opts.detached_payload(MARKER)),
+        ] {
+            let pre = precheck_compact(jws, &opts).unwrap();
+            let text = format!("{pre:?}");
+            let [_, _, s] = parts(jws);
+            let signature = crate::util::b64url_decode(&s).unwrap();
+            for secret in [
+                "MARKER".to_owned(),
+                b64url_encode(MARKER),
+                format!("{MARKER:?}"),
+                s.clone(),
+                format!("{:?}", &signature[..4])
+                    .trim_end_matches(']')
+                    .to_owned(),
+            ] {
+                assert!(!text.contains(&secret), "{text} contains {secret}");
+            }
+            assert!(text.contains("payload_len: 17"), "{text}");
+            assert!(text.contains("signature_len: 32"), "{text}");
+            assert!(text.contains("HS256"), "{text}");
+        }
+    }
+
+    #[test]
     fn public_functions_use_the_real_families() {
         // Only outcomes decided before any family runs, so these hold
         // whatever T06-T09 implement.
