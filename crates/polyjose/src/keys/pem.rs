@@ -897,6 +897,11 @@ mod tests {
     /// text (a private key's encoding) and the decoded octets. Read back
     /// after the failure, both are all zeros. On success the base64 copy is
     /// wiped too and only the DER is kept.
+    ///
+    /// The read-back sees the buffers' live length only; that they never
+    /// reallocated (and so left no copy in freed memory) is checked by
+    /// `check_planned_capacity`. Neither can see by-value stack copies or
+    /// copies the caller makes of the input text.
     #[test]
     fn buffers_are_wiped_on_every_error_path() {
         let b = ED25519_BODY;

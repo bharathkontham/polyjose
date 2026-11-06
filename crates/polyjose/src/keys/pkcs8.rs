@@ -891,6 +891,20 @@ mod tests {
     /// Secret hygiene of every failure path: errors are a static detail or
     /// `UnsupportedAlgorithm`, never input bytes (ADR 0018 §4; the T02
     /// contract), checked with marker-filled keys.
+    ///
+    /// **What these tests cannot detect.** They read what is observable from
+    /// safe Rust: error values, `Debug`/`Display` text and buffers they own.
+    /// They cannot see:
+    ///
+    /// - by-value stack copies, such as a `[u8; N]` or `FieldBytes` moved or
+    ///   passed by value, or a spilled register, which leave no trace a test
+    ///   can read back after the frame is gone;
+    /// - copies made inside upstream crates (the curve and dalek crates'
+    ///   scalar, sampling and hashing temporaries), which polyjose cannot reach.
+    ///
+    /// Those copies are documented as best-effort where they arise
+    /// (`okp::x25519_public`, `okp::ed25519_public`, `ec::public_key`,
+    /// `generate::generate_ec_secret`), and reviewed, not tested.
     mod hygiene {
         use std::collections::BTreeSet;
 

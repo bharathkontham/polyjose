@@ -1149,6 +1149,25 @@ mod tests {
         }
     }
 
+    /// Secret hygiene of EC import and export: every failure path reports
+    /// a static detail or a bare code, never key octets, and an imported
+    /// key's `Debug` leaves out `d` (ADR 0007, ADR 0018 §4), checked with
+    /// marker-filled scalars and points. The scalar copy of the public-key
+    /// derivation is checked by `public_key_wipes_its_copy_of_the_scalar`.
+    ///
+    /// **What these tests cannot detect.** They read what is observable from
+    /// safe Rust: error values, `Debug`/`Display` text and buffers they own.
+    /// They cannot see:
+    ///
+    /// - by-value stack copies, such as a `[u8; N]` or `FieldBytes` moved or
+    ///   passed by value, or a spilled register, which leave no trace a test
+    ///   can read back after the frame is gone;
+    /// - copies made inside upstream crates (the curve and dalek crates'
+    ///   scalar, sampling and hashing temporaries), which polyjose cannot reach.
+    ///
+    /// Those copies are documented as best-effort where they arise
+    /// (`okp::x25519_public`, `okp::ed25519_public`, `ec::public_key`,
+    /// `generate::generate_ec_secret`), and reviewed, not tested.
     mod hygiene {
         use std::collections::BTreeSet;
 
