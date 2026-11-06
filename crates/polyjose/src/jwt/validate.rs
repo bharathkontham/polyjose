@@ -967,4 +967,134 @@ mod tests {
         c.exp = date(ORDER_NOW + 3600);
         assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("aud")));
     }
+
+    #[test]
+    fn extreme_clock_and_settings_never_overflow_or_panic() {
+        // ADR 0027 §3, ADR 0028 §1: at now = ±(2^53 − 1), with the largest
+        // leeway and max_age u32::MAX, each bound is exact.
+        for now in [MAX_SAFE_INTEGER, -MAX_SAFE_INTEGER] {
+            let clock = FixedClock(now);
+            let p = timed(&clock, Policy::MAX_LEEWAY).max_age(u32::MAX);
+            let mut c = Claims::new();
+            c.exp = date(MAX_SAFE_INTEGER);
+            c.nbf = date(-MAX_SAFE_INTEGER);
+            // The window is [now − u32::MAX − 600, now + 600]; the
+            // date range's own edges decide.
+            for (iat, expected) in [
+                (now, Ok(())),
+                (now + 600, Ok(())),
+                (now - i64::from(u32::MAX) - 600, Ok(())),
+                (now + 601, Err(Error::InvalidClaim("iat"))),
+                (
+                    now - i64::from(u32::MAX) - 601,
+                    Err(Error::InvalidClaim("iat")),
+                ),
+            ] {
+                c.iat = date(iat);
+                let expected = match (iat.abs() > MAX_SAFE_INTEGER, expected) {
+                    // Not a NumericDate: `date` gave None, so `iat` is absent.
+                    (true, _) => Err(Error::InvalidClaim("iat")),
+                    (false, e) => e,
+                };
+                let got = validate_claims(&c, &p);
+                assert_eq!(got, expected, "now {now}, iat {iat}");
+            }
+        }
+        // A fraction just beyond the leeway.
+        let clock = FixedClock(1_000_000);
+        let p = timed(&clock, 60).max_age(u32::MAX);
+        let mut c = Claims::new();
+        c.exp = date(2_000_000);
+        c.iat = NumericDate::from_f64(1_000_060.5);
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("iat")));
+        c.iat = NumericDate::from_f64(1_000_060.0);
+        assert_eq!(validate_claims(&c, &p), Ok(()));
+        // exp/nbf at the edges of the clock range.
+        let clock = FixedClock(MAX_SAFE_INTEGER);
+        let p = timed(&clock, 0);
+        let mut c = Claims::new();
+        c.exp = date(MAX_SAFE_INTEGER);
+        assert_eq!(validate_claims(&c, &p), Err(Error::TokenExpired));
+        let clock = FixedClock(-MAX_SAFE_INTEGER);
+        let p = timed(&clock, 0).allow_missing_exp();
+        let mut c = Claims::new();
+        c.nbf = date(-MAX_SAFE_INTEGER);
+        assert_eq!(validate_claims(&c, &p), Ok(()));
+        c.nbf = date(-MAX_SAFE_INTEGER + 1);
+        assert_eq!(validate_claims(&c, &p), Err(Error::TokenNotYetValid));
+        let clock = FixedClock(-MAX_SAFE_INTEGER - 1);
+        let p = timed(&clock, 0).allow_missing_exp();
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("clock")));
+    }
+
+    #[test]
+    fn duplicate_audiences_change_nothing() {
+        // RFC 7519 §4.1.3: any-of. Duplicates in the token or the policy
+        // neither help nor hurt.
+        let policy_twice = untimed()
+            .allow_missing_exp()
+            .audience("api")
+            .audience("api");
+        let policy_once = untimed().allow_missing_exp().audience("api");
+        for (aud, expected) in [
+            (many(&["api", "api"]), Ok(())),
+            (many(&["x", "x"]), Err(Error::InvalidClaim("aud"))),
+            (one("api"), Ok(())),
+            (one("x"), Err(Error::InvalidClaim("aud"))),
+        ] {
+            let mut c = Claims::new();
+            c.aud = aud.clone();
+            assert_eq!(validate_claims(&c, &policy_twice), expected, "{aud:?}");
+            assert_eq!(validate_claims(&c, &policy_once), expected, "{aud:?}");
+        }
+    }
+
+    #[test]
+    fn error_details_never_echo_claim_values_or_caller_names() {
+        // ADR 0027 §9: details name a claim, never a value.
+        let clock = FixedClock(ORDER_NOW);
+        let secret = "SECRET-VALUE-9f3a";
+        let mut c = Claims::new();
+        c.iss = Some(secret.into());
+        c.sub = Some(secret.into());
+        c.aud = one(secret);
+        c.exp = date(ORDER_NOW + 100);
+        c.insert("x-custom", secret).unwrap();
+        let policies = [
+            timed(&clock, 0).issuer("https://as"),
+            timed(&clock, 0).subject("alice"),
+            timed(&clock, 0).audience("api"),
+            timed(&clock, 0),
+            timed(&clock, 0).require("SECRET-NAME-77"),
+            timed(&clock, 0).require("jti"),
+        ];
+        let mut failed = 0;
+        for p in &policies {
+            if let Err(e) = validate_claims(&c, p) {
+                failed += 1;
+                for text in [format!("{e}"), format!("{e:?}")] {
+                    assert!(!text.contains("SECRET"), "{text}");
+                }
+            }
+        }
+        assert_eq!(failed, 6);
+        // Expired / not yet valid carry nothing at all.
+        c.exp = date(ORDER_NOW - 100);
+        let e = validate_claims(&c, &timed(&clock, 0)).unwrap_err();
+        assert_eq!(e, Error::TokenExpired);
+    }
+
+    #[test]
+    fn required_exp_wins_over_allow_missing_exp_in_either_order() {
+        // Recorded behaviour: an explicit require("exp") is not undone by
+        // allow_missing_exp (policy.rs docs), whichever is called first.
+        let a = untimed().require("exp").allow_missing_exp();
+        let b = untimed().allow_missing_exp().require("exp");
+        for p in [&a, &b] {
+            assert_eq!(
+                validate_claims(&Claims::new(), p),
+                Err(Error::InvalidClaim("exp"))
+            );
+        }
+    }
 }
