@@ -123,7 +123,9 @@
 //! [permits]: crate::jwk::Jwk::permits
 //! [other_params]: crate::jwk::Jwk::other_params
 
+use core::cmp::Ordering;
 use core::fmt;
+use std::collections::BTreeSet;
 
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -885,12 +887,17 @@ impl Jwk {
         let x5t_s256 =
             optional_str(object, "x5t#S256", "x5t#S256 must be a string")?.map(str::to_owned);
         let typed = type_members(kty);
-        let mut other = Object::new();
-        for (name, value) in object {
-            if !COMMON_MEMBERS.contains(&name) && !typed.contains(&name) {
-                other.insert(name, value.clone());
-            }
-        }
+        // RFC 7517 §4: members not understood "MUST be ignored"; polyjose
+        // keeps them. They are a subset of `object`'s members, whose names
+        // are unique, so they are wrapped as they are: inserting them one by
+        // one would re-check every name, O(n²) on untrusted input.
+        let other = Object::from_unique_members(
+            object
+                .iter()
+                .filter(|(name, _)| !COMMON_MEMBERS.contains(name) && !typed.contains(name))
+                .map(|(name, value)| member(name, value.clone()))
+                .collect(),
+        );
         Ok(Jwk {
             material,
             key_use,
@@ -914,62 +921,68 @@ impl Jwk {
     /// the same member values. The object may contain private key members;
     /// like every [`Object`] it wipes its strings when dropped.
     pub fn to_object(&self) -> Object {
-        let mut o = Object::new();
-        o.insert("kty", self.key_type().as_str());
+        // Each name below is written at most once, and `other` holds only
+        // names that are neither common members nor this key type's members
+        // (see `from_object`), so the names are unique and need no
+        // per-member duplicate check, which would be O(n²) in `other`.
+        let mut o = Vec::with_capacity(COMMON_MEMBERS.len() + 4 + self.other.len());
+        o.push(member("kty", self.key_type().as_str()));
         match &self.material {
             KeyMaterial::Oct(key) => {
-                o.insert("k", b64url_encode(&key.k));
+                o.push(member("k", b64url_encode(&key.k)));
             }
             KeyMaterial::Rsa(key) => {
-                o.insert("n", b64url_encode(&key.n));
-                o.insert("e", b64url_encode(&key.e));
+                o.push(member("n", b64url_encode(&key.n)));
+                o.push(member("e", b64url_encode(&key.e)));
             }
             KeyMaterial::Ec(key) => {
-                o.insert("crv", key.crv.as_str());
-                o.insert("x", b64url_encode(&key.x));
-                o.insert("y", b64url_encode(&key.y));
+                o.push(member("crv", key.crv.as_str()));
+                o.push(member("x", b64url_encode(&key.x)));
+                o.push(member("y", b64url_encode(&key.y)));
                 if let Some(d) = &key.d {
-                    o.insert("d", b64url_encode(d));
+                    o.push(member("d", b64url_encode(d)));
                 }
             }
             KeyMaterial::Okp(key) => {
-                o.insert("crv", key.crv.as_str());
-                o.insert("x", b64url_encode(&key.x));
+                o.push(member("crv", key.crv.as_str()));
+                o.push(member("x", b64url_encode(&key.x)));
                 if let Some(d) = &key.d {
-                    o.insert("d", b64url_encode(d));
+                    o.push(member("d", b64url_encode(d)));
                 }
             }
         }
         if let Some(v) = &self.key_use {
-            o.insert("use", v.as_str());
+            o.push(member("use", v.as_str()));
         }
         if let Some(ops) = &self.key_ops {
             let ops: Vec<Value> = ops.iter().map(|op| Value::from(op.as_str())).collect();
-            o.insert("key_ops", ops);
+            o.push(member("key_ops", ops));
         }
         if let Some(v) = &self.alg {
-            o.insert("alg", v.as_str());
+            o.push(member("alg", v.as_str()));
         }
         if let Some(v) = &self.kid {
-            o.insert("kid", v.as_str());
+            o.push(member("kid", v.as_str()));
         }
         if let Some(v) = &self.x5u {
-            o.insert("x5u", v.as_str());
+            o.push(member("x5u", v.as_str()));
         }
         if let Some(certs) = &self.x5c {
             let certs: Vec<Value> = certs.iter().map(|c| Value::from(c.as_str())).collect();
-            o.insert("x5c", certs);
+            o.push(member("x5c", certs));
         }
         if let Some(v) = &self.x5t {
-            o.insert("x5t", v.as_str());
+            o.push(member("x5t", v.as_str()));
         }
         if let Some(v) = &self.x5t_s256 {
-            o.insert("x5t#S256", v.as_str());
+            o.push(member("x5t#S256", v.as_str()));
         }
-        for (name, value) in &self.other {
-            o.insert(name, value.clone());
-        }
-        o
+        o.extend(
+            self.other
+                .iter()
+                .map(|(name, value)| member(name, value.clone())),
+        );
+        Object::from_unique_members(o)
     }
 
     /// The key as compact JSON (see [`Jwk::to_object`] for the member
@@ -1185,6 +1198,13 @@ impl fmt::Debug for MemberNames<'_> {
 /// Every secret in a `Jwk` (its key material and any unknown member) is
 /// wiped on drop.
 impl ZeroizeOnDrop for Jwk {}
+
+/// One JSON object member. The name is a [`Zeroizing<String>`] like every
+/// name an [`Object`] owns; a `String` value moves into the [`Value`]
+/// without a copy.
+fn member(name: &str, value: impl Into<Value>) -> (Zeroizing<String>, Value) {
+    (Zeroizing::new(name.to_owned()), value.into())
+}
 
 /// The member names a key type defines, besides `kty`.
 fn type_members(kty: KeyType) -> &'static [&'static str] {
@@ -1458,16 +1478,65 @@ fn parse_key_ops(object: &Object) -> Result<Option<Vec<KeyOp>>> {
     };
     let items = value.as_array().ok_or(Error::InvalidKey(NOT_STRINGS))?;
     let mut ops: Vec<KeyOp> = Vec::with_capacity(items.len());
+    // The values seen so far, borrowed from `items` (nothing is copied). A
+    // set keeps the duplicate check O(n log n) on untrusted input, where a
+    // scan of `ops` per value would be O(n²).
+    let mut seen = BTreeSet::new();
     for item in items {
-        let op = KeyOp::from(item.as_str().ok_or(Error::InvalidKey(NOT_STRINGS))?);
+        let name = item.as_str().ok_or(Error::InvalidKey(NOT_STRINGS))?;
         // RFC 7517 §4.3: "Duplicate key operation values MUST NOT be
         // present in the array." Values compare as exact strings.
-        if ops.contains(&op) {
+        if !seen.insert(KeyOpName(name)) {
             return Err(Error::InvalidKey("key_ops must not contain duplicates"));
         }
-        ops.push(op);
+        ops.push(KeyOp::from(name));
     }
     Ok(Some(ops))
+}
+
+/// A `key_ops` value in the duplicate check: ordered as an exact,
+/// case-sensitive string (RFC 7517 §4.3). A type of its own only so that
+/// test builds can count its comparisons.
+#[derive(PartialEq, Eq)]
+struct KeyOpName<'a>(&'a str);
+
+impl Ord for KeyOpName<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        #[cfg(test)]
+        key_op_comparisons::tick();
+        self.0.cmp(other.0)
+    }
+}
+
+impl PartialOrd for KeyOpName<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Test-only, per-thread count of the value comparisons the `key_ops`
+/// duplicate check makes ([`KeyOpName`]'s ordering), so a regression test can bound its work on
+/// untrusted input deterministically, without wall-clock timing. Not
+/// compiled into non-test builds.
+#[cfg(test)]
+mod key_op_comparisons {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of comparisons
+    /// made on this thread while it ran.
+    pub(super) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
 }
 
 /// `x5c` (RFC 7517 §4.7): an array of strings. The certificates are not
@@ -1812,6 +1881,120 @@ mod tests {
         for json in kept {
             assert!(!is_unsupported_key_kind(&object(json)), "{json}");
         }
+    }
+
+    #[test]
+    fn the_key_op_counter_sees_the_duplicate_check() {
+        let two = object(r#"{"kty":"oct","k":"AA","key_ops":["sign","verify"]}"#);
+        let (ops, count) = key_op_comparisons::count(|| parse_key_ops(&two));
+        assert_eq!(ops, Ok(Some(vec![KeyOp::Sign, KeyOp::Verify])));
+        assert!(count >= 1, "the second value is checked against the first");
+        let none = object(r#"{"kty":"oct","k":"AA"}"#);
+        assert_eq!(
+            key_op_comparisons::count(|| parse_key_ops(&none)),
+            (Ok(None), 0)
+        );
+    }
+
+    /// `c · n · ⌈log2 n⌉` with `c = 4`: the most work an O(n log n) import
+    /// path may do on `n` members or values. Quadratic code needs about
+    /// `n² / 2`, which for `n = 10 000` is about 90 times this.
+    fn n_log_n_bound(n: usize) -> u64 {
+        let n = n as u64;
+        4 * n * u64::from(u64::BITS - n.leading_zeros())
+    }
+
+    /// An `oct` JWK with `unknown` extra members `u0`, `u1`, ... (RFC 7517
+    /// §4: unknown members "MUST be ignored", so they are kept).
+    fn oct_with_unknown_members(unknown: usize) -> String {
+        let mut json = format!(r#"{{"kty":"oct","k":"{OCT_K}""#);
+        for i in 0..unknown {
+            json.push_str(&format!(r#","u{i}":{i}"#));
+        }
+        json.push('}');
+        json
+    }
+
+    /// An `oct` JWK whose `key_ops` holds `ops` (RFC 7517 §4.3).
+    fn oct_with_key_ops(ops: impl Iterator<Item = String>) -> String {
+        let ops: Vec<String> = ops.map(|op| format!(r#""{op}""#)).collect();
+        format!(
+            r#"{{"kty":"oct","k":"{OCT_K}","key_ops":[{}]}}"#,
+            ops.join(",")
+        )
+    }
+
+    /// DoS regression (0001 security review, F01): importing a JWK with the
+    /// most members the default `json::Limits` allow is not quadratic.
+    #[test]
+    fn import_with_10_000_members_is_n_log_n() {
+        const N: usize = 10_000;
+        let json = oct_with_unknown_members(N - 2);
+        let (jwk, count) = Object::count_name_comparisons(|| Jwk::from_json(json.as_bytes()));
+        let jwk = jwk.expect("a JWK with unknown members imports");
+        assert_eq!(jwk.other_params().len(), N - 2);
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+    }
+
+    /// DoS regression (F01): writing such a key back out is not quadratic,
+    /// and writes every member, in order.
+    #[test]
+    fn to_object_with_10_000_members_is_n_log_n() {
+        const N: usize = 10_000;
+        let json = oct_with_unknown_members(N - 2);
+        let jwk = parse(&json);
+        let (written, count) = Object::count_name_comparisons(|| jwk.to_object());
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+        assert_eq!(written.len(), N);
+        assert_eq!(written.to_json(), json);
+    }
+
+    /// RFC 7517 §4.3: values are checked in order, so the first problem
+    /// decides the error; they compare as exact, case-sensitive strings.
+    #[test]
+    fn key_ops_errors_follow_value_order() {
+        const DUPLICATES: Error = Error::InvalidKey("key_ops must not contain duplicates");
+        const NOT_STRINGS: Error = Error::InvalidKey("key_ops must be an array of strings");
+        let ops = |list: &str| parse_key_ops(&object(&format!(r#"{{"key_ops":{list}}}"#)));
+        assert_eq!(ops(r#"["sign","sign",5]"#), Err(DUPLICATES));
+        assert_eq!(ops(r#"["sign",5,"sign"]"#), Err(NOT_STRINGS));
+        assert_eq!(ops(r#"["x-op","verify","x-op"]"#), Err(DUPLICATES));
+        assert_eq!(
+            ops(r#"["sign","Sign","x-op","X-op"]"#),
+            Ok(Some(vec![
+                KeyOp::Sign,
+                KeyOp::Unknown("Sign".to_owned()),
+                KeyOp::Unknown("x-op".to_owned()),
+                KeyOp::Unknown("X-op".to_owned()),
+            ]))
+        );
+        assert_eq!(ops("[]"), Ok(Some(Vec::new())));
+    }
+
+    /// DoS regression (F01): the RFC 7517 §4.3 duplicate check on a
+    /// `key_ops` with the most values the default `json::Limits` allow.
+    #[test]
+    fn key_ops_duplicate_check_is_n_log_n() {
+        const N: usize = 10_000;
+        let distinct = oct_with_key_ops((0..N).map(|i| format!("op{i}")));
+        let (jwk, count) = key_op_comparisons::count(|| Jwk::from_json(distinct.as_bytes()));
+        let jwk = jwk.expect("distinct key_ops values import");
+        assert_eq!(jwk.key_ops().map(<[KeyOp]>::len), Some(N));
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+
+        // The duplicate is found however late it comes.
+        let late_duplicate = oct_with_key_ops(
+            (0..N - 1)
+                .map(|i| format!("op{i}"))
+                .chain(["op0".to_owned()]),
+        );
+        let (result, count) =
+            key_op_comparisons::count(|| Jwk::from_json(late_duplicate.as_bytes()));
+        assert_eq!(
+            result.err(),
+            Some(Error::InvalidKey("key_ops must not contain duplicates"))
+        );
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
     }
 
     #[test]

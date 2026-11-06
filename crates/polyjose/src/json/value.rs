@@ -193,7 +193,9 @@ impl From<Object> for Value {
 /// order, so the serializer reproduces it. Lookups are linear, which suits
 /// the small objects JOSE uses.
 ///
-/// Equality ignores member order (RFC 8259 §4: an object is unordered).
+/// Equality ignores member order (RFC 8259 §4: an object is unordered) and
+/// is O(n log n) in the member count, so comparing untrusted objects is not
+/// quadratic.
 #[derive(Debug, Clone, Default)]
 pub struct Object {
     members: Vec<(Zeroizing<String>, Value)>,
@@ -205,8 +207,19 @@ impl Object {
         Object::default()
     }
 
-    /// Wraps members whose names the caller has already checked are unique.
+    /// Wraps members whose names the caller has already checked are unique,
+    /// in their given order, in O(1).
+    ///
+    /// Unique names are what makes an `Object` safe to read: JOSE rejects
+    /// duplicate member names (RFC 7515 §5.2, RFC 7516 §5.2, RFC 7493 §2.3).
+    /// Callers pass names that are unique by construction, for example the
+    /// parser after its duplicate check, or a filtered subset of another
+    /// object's members. Debug builds (and so every test) verify it.
     pub(crate) fn from_unique_members(members: Vec<(Zeroizing<String>, Value)>) -> Object {
+        debug_assert!(
+            names_are_unique(&members),
+            "from_unique_members called with a duplicate member name"
+        );
         Object { members }
     }
 
@@ -227,7 +240,7 @@ impl Object {
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.members
             .iter()
-            .find_map(|(n, v)| (n.as_str() == name).then_some(v))
+            .find_map(|(n, v)| same_name(n, name).then_some(v))
     }
 
     /// Whether a member called `name` exists.
@@ -253,11 +266,7 @@ impl Object {
     pub fn insert(&mut self, name: impl Into<String>, value: impl Into<Value>) -> Option<Value> {
         let name = Zeroizing::new(name.into());
         let value = value.into();
-        match self
-            .members
-            .iter_mut()
-            .find(|(n, _)| n.as_str() == name.as_str())
-        {
+        match self.members.iter_mut().find(|(n, _)| same_name(n, &name)) {
             Some((_, slot)) => Some(core::mem::replace(slot, value)),
             None => {
                 self.members.push((name, value));
@@ -270,7 +279,7 @@ impl Object {
     /// their relative order. The removed name is wiped; the returned value
     /// wipes its strings when dropped.
     pub fn remove(&mut self, name: &str) -> Option<Value> {
-        let index = self.members.iter().position(|(n, _)| n.as_str() == name)?;
+        let index = self.members.iter().position(|(n, _)| same_name(n, name))?;
         Some(self.members.remove(index).1)
     }
 
@@ -281,7 +290,7 @@ impl Object {
     /// point order.
     pub fn sort_members(&mut self) {
         self.members
-            .sort_unstable_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+            .sort_unstable_by(|(a, _), (b, _)| cmp_names(a, b));
     }
 
     /// The members as `(name, value)` pairs, in order.
@@ -305,13 +314,103 @@ impl Zeroize for Object {
 impl ZeroizeOnDrop for Object {}
 
 impl PartialEq for Object {
-    /// Order-insensitive: same names, and equal values for each name.
+    /// Order-insensitive (RFC 8259 §4: an object is unordered): same names,
+    /// and equal values for each name.
+    ///
+    /// Objects may come from untrusted input, so this is O(n log n), not
+    /// O(n²): each side's members are sorted by name, as references (no
+    /// name or value is copied), and compared pairwise. Names are unique
+    /// within each object, so the sorted names match pairwise exactly when
+    /// both objects have the same set of names.
     fn eq(&self, other: &Object) -> bool {
         self.len() == other.len()
             && self
-                .members
-                .iter()
-                .all(|(name, value)| other.get(name) == Some(value))
+                .sorted_by_name()
+                .into_iter()
+                .zip(other.sorted_by_name())
+                .all(|((a_name, a_value), (b_name, b_value))| {
+                    same_name(a_name, b_name) && a_value == b_value
+                })
+    }
+}
+
+impl Object {
+    /// References to the members, ordered by name ([`cmp_names`]).
+    fn sorted_by_name(&self) -> Vec<&(Zeroizing<String>, Value)> {
+        let mut members: Vec<_> = self.members.iter().collect();
+        members.sort_unstable_by(|(a, _), (b, _)| cmp_names(a, b));
+        members
+    }
+}
+
+/// Whether no two members share a name: the precondition of
+/// [`Object::from_unique_members`], checked in debug builds. O(n log n), and
+/// deliberately not counted by the test-only comparison counter, so it does
+/// not change what regression tests measure.
+fn names_are_unique(members: &[(Zeroizing<String>, Value)]) -> bool {
+    let mut names: Vec<&str> = members.iter().map(|(n, _)| n.as_str()).collect();
+    names.sort_unstable();
+    names.windows(2).all(|w| w[0] != w[1])
+}
+
+/// Whether two member names are the same name: compared as unescaped
+/// strings, code point by code point (RFC 8259 §8.3).
+///
+/// Every name equality test an [`Object`] makes goes through here, so tests
+/// can count them (see [`Object::count_name_comparisons`]).
+#[inline]
+fn same_name(a: &str, b: &str) -> bool {
+    #[cfg(test)]
+    name_comparisons::tick();
+    a == b
+}
+
+/// Orders two member names by Unicode code point (RFC 8259 §8.3, RFC 7638
+/// §3.3): Rust orders `str` by UTF-8 bytes, which is code point order.
+///
+/// Every name ordering an [`Object`] makes goes through here, so tests can
+/// count them (see [`Object::count_name_comparisons`]).
+#[inline]
+fn cmp_names(a: &str, b: &str) -> core::cmp::Ordering {
+    #[cfg(test)]
+    name_comparisons::tick();
+    a.cmp(b)
+}
+
+/// Test-only, per-thread count of the member-name comparisons ([`same_name`]
+/// and [`cmp_names`]) objects make. It turns "this is O(n log n)" into a
+/// deterministic assertion without wall-clock timing, and is not compiled
+/// into non-test builds.
+#[cfg(test)]
+mod name_comparisons {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    pub(super) fn get() -> u64 {
+        COUNT.with(Cell::get)
+    }
+}
+
+#[cfg(test)]
+impl Object {
+    /// Runs `f` and returns its result together with the number of
+    /// member-name comparisons objects made on this thread while it ran.
+    ///
+    /// Used by regression tests that bound the work of untrusted-input
+    /// paths (JWK and JWK Set import) deterministically. Only comparisons
+    /// made by `Object` itself are counted, not those of the parser's
+    /// duplicate check.
+    pub(crate) fn count_name_comparisons<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = name_comparisons::get();
+        let result = f();
+        (result, name_comparisons::get() - before)
     }
 }
 
@@ -553,6 +652,109 @@ mod tests {
         let mut s = Value::from(String::from("k"));
         s.zeroize();
         assert!(s.is_null());
+    }
+
+    #[test]
+    fn the_comparison_counter_sees_every_name_comparison() {
+        let o = sample();
+        // A missing name is compared with all four members.
+        let (found, count) = Object::count_name_comparisons(|| o.get("missing").is_some());
+        assert!(!found);
+        assert_eq!(count, 4);
+        // Counts nest: the outer scope includes the inner one.
+        let ((_, inner), outer) =
+            Object::count_name_comparisons(|| Object::count_name_comparisons(|| o.contains("kty")));
+        assert_eq!((inner, outer), (1, 1));
+    }
+
+    #[test]
+    fn unique_member_names_are_checked_in_debug_builds() {
+        let member = |name: &str| (Zeroizing::new(name.to_owned()), Value::Null);
+        assert!(names_are_unique(&[]));
+        assert!(names_are_unique(&[member("a"), member("b"), member("A")]));
+        assert!(!names_are_unique(&[member("a"), member("b"), member("a")]));
+        let o = Object::from_unique_members(vec![member("b"), member("a")]);
+        let names: Vec<&str> = o.iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["b", "a"], "order is kept");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "duplicate member name")]
+    fn from_unique_members_rejects_duplicates_in_debug_builds() {
+        let member = |name: &str| (Zeroizing::new(name.to_owned()), Value::Null);
+        let _ = Object::from_unique_members(vec![member("a"), member("a")]);
+    }
+
+    #[test]
+    fn object_equality_pairs_values_by_name_at_every_level() {
+        let inner = |first: &str, second: &str| {
+            let mut o = Object::new();
+            o.insert(first, Value::from(first));
+            o.insert(second, Value::from(second));
+            Value::from(o)
+        };
+        let mut a = Object::new();
+        a.insert("x", int(1));
+        a.insert("y", int(2));
+        a.insert("nested", inner("p", "q"));
+        let mut b = Object::new();
+        b.insert("nested", inner("q", "p"));
+        b.insert("y", int(2));
+        b.insert("x", int(1));
+        assert_eq!(a, b);
+
+        // The same values under swapped names are a different object.
+        let mut swapped = b.clone();
+        swapped.insert("x", int(2));
+        swapped.insert("y", int(1));
+        assert_ne!(a, swapped);
+        assert_eq!(Object::new(), Object::new());
+        assert_ne!(a, Object::new());
+    }
+
+    /// `c · n · ⌈log2 n⌉` with `c = 4`: the most work an O(n log n) path
+    /// may do on `n` members. Quadratic code needs about `n² / 2`, which
+    /// for `n = 10 000` is about 90 times this.
+    fn n_log_n_bound(n: usize) -> u64 {
+        let n = n as u64;
+        4 * n * u64::from(u64::BITS - n.leading_zeros())
+    }
+
+    /// `n` members `m0`, `m1`, ... with values 0, 1, ..., in the order
+    /// `order` gives.
+    fn numbered_object(n: usize, order: impl Fn(usize) -> usize) -> Object {
+        Object::from_unique_members(
+            (0..n)
+                .map(order)
+                .map(|i| (Zeroizing::new(format!("m{i}")), int(i as i64)))
+                .collect(),
+        )
+    }
+
+    /// DoS regression (0001 security review, F01): equality of untrusted
+    /// objects must not be quadratic in their size. The second object holds
+    /// the same members in a scrambled order (7919 is prime, so `i ↦ 7919i
+    /// mod n` is a permutation of `0..n`).
+    #[test]
+    fn object_equality_is_n_log_n_in_the_member_count() {
+        const N: usize = 10_000;
+        let a = numbered_object(N, |i| i);
+        let b = numbered_object(N, |i| (i * 7919) % N);
+        let (equal, count) = Object::count_name_comparisons(|| a == b);
+        assert!(equal);
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+
+        let mut other_value = b.clone();
+        other_value.insert("m1234", int(-1));
+        let mut other_name = b.clone();
+        other_name.remove("m4321");
+        other_name.insert("x", int(4321));
+        for unequal in [&other_value, &other_name] {
+            let (equal, count) = Object::count_name_comparisons(|| a == *unequal);
+            assert!(!equal);
+            assert!(count <= n_log_n_bound(N), "{count} comparisons");
+        }
     }
 
     #[test]
