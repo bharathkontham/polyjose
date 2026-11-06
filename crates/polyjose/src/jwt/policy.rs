@@ -53,7 +53,7 @@ pub enum TypMode {
 /// | JWK Set candidates | at most 8 (ADR 0029 §4) | [`max_key_candidates`](Self::max_key_candidates) |
 ///
 /// The policy borrows its clock and allow-list, like
-/// [`VerifyOptions`](crate::jws::VerifyOptions) borrows its allow-list
+/// [`VerifyOptions`] borrows its allow-list
 /// (ADR 0028 §3). There is no `Default`: a policy without a clock or
 /// algorithms cannot exist (ADR 0028 §3, RFC 8725 §3.1).
 ///
@@ -141,7 +141,7 @@ impl<'a> Policy<'a> {
     /// - `iss` must equal one of `issuers` and `aud` contain one of
     ///   `audiences` (RFC 9068 §4);
     /// - every claim of
-    ///   [`ACCESS_TOKEN_REQUIRED_CLAIMS`](super::typ::ACCESS_TOKEN_REQUIRED_CLAIMS)
+    ///   [`ACCESS_TOKEN_REQUIRED_CLAIMS`]
     ///   must be present (RFC 9068 §2.2);
     /// - the signature is always verified, and `none` is never accepted
     ///   (RFC 9068 §2.1, §4).
