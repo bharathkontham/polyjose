@@ -106,6 +106,13 @@ pub struct VerifiedJwt {
 /// only, which the signature covers (ADR 0049 §2); a compact JWS has no
 /// other header (RFC 7515 §7.1).
 ///
+/// **Opaque to clients.** The error codes below are for logs and
+/// diagnostics. A server should answer the client with one opaque
+/// "invalid token" whatever the code (RFC 6750 §3.1 `invalid_token`), and
+/// not reveal which check failed: against a JWK Set, the code alone tells
+/// whether a `kid` exists (see
+/// [the error module](crate::error#codes-are-for-logs-not-for-clients)).
+///
 /// # Errors
 ///
 /// Every stable code of ADR 0027 §9: [`Error::InvalidFormat`],

@@ -325,6 +325,12 @@ fn check_inner_alg(encoded: &str) -> Result<()> {
 /// # Ok::<(), polyjose::Error>(())
 /// ```
 ///
+/// **Opaque to clients.** As with [`verify`](fn@super::verify), the error
+/// codes below are for logs and diagnostics. A server should answer the
+/// client with one opaque "invalid token" (RFC 6750 §3.1
+/// `invalid_token`), and not reveal which layer or check failed (see
+/// [the error module](crate::error#codes-are-for-logs-not-for-clients)).
+///
 /// # Errors
 ///
 /// First the JWE errors of [`decrypt_compact`]
