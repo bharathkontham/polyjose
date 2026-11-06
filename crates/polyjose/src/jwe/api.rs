@@ -37,11 +37,7 @@ use crate::{Error, Result};
 #[derive(Debug, Clone)]
 pub struct DecryptPolicy {
     // core.rs, keymgmt.rs and the families read these fields directly.
-    // The allow-lists are read by the pipeline (T09), which may not edit
-    // this file; remove the attributes once it lands.
-    #[allow(dead_code, reason = "read by jwe/core.rs (0003 T09)")]
     pub(super) allowed_algs: Vec<KeyMgmtAlg>,
-    #[allow(dead_code, reason = "read by jwe/core.rs (0003 T09)")]
     pub(super) allowed_enc: Vec<ContentEncAlg>,
     pub(super) max_pbes2_count: u32,
     pub(super) max_decompressed_len: usize,
@@ -263,11 +259,8 @@ pub enum Serialization {
 /// against `alg` when encrypting (RFC 8725 §3.1, ADR 0007).
 #[derive(Debug, Clone)]
 pub struct Recipient {
-    // core.rs reads these fields directly; the attributes go once it does
-    // (0003 T09).
-    #[allow(dead_code, reason = "read by jwe/core.rs (0003 T09)")]
+    // core.rs reads these fields directly.
     pub(super) alg: KeyMgmtAlg,
-    #[allow(dead_code, reason = "read by jwe/core.rs (0003 T09)")]
     pub(super) key: Jwk,
     pub(super) header: Option<Header>,
     pub(super) options: RecipientOptions,
@@ -345,15 +338,12 @@ impl Recipient {
 /// ```
 #[derive(Debug, Clone)]
 pub struct Encryptor {
-    // core.rs reads these fields directly; the attributes go once it does
-    // (0003 T09).
-    #[allow(dead_code, reason = "read by jwe/core.rs (0003 T09)")]
+    // core.rs reads these fields directly.
     pub(super) enc: ContentEncAlg,
     pub(super) protected: Option<Header>,
     pub(super) shared: Option<Header>,
     pub(super) aad: Option<Vec<u8>>,
     /// Set only with the `deflate` feature (RFC 7516 §4.1.3).
-    #[allow(dead_code, reason = "read by jwe/core.rs (0003 T09)")]
     pub(super) compress: bool,
     pub(super) recipients: Vec<Recipient>,
 }
@@ -631,16 +621,18 @@ mod tests {
     }
 
     #[test]
-    fn the_stubbed_pipeline_fails_closed() {
-        // Until T09 lands, every entry point returns an error and never a
-        // JWE or a plaintext.
+    fn compact_round_trips_through_the_public_entry_points() {
         let key = oct_key();
         let policy = policy();
         let e = Encryptor::new(ContentEncAlg::A128GCM)
             .recipient(Recipient::new(KeyMgmtAlg::A128KW, &key));
-        assert!(e.encrypt_compact(b"x").is_err());
-        assert!(e.encrypt_json(b"x", JsonForm::General).is_err());
+        let token = e.encrypt_compact(b"x").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(token.split('.').count(), 5);
+        let d = decrypt_compact(&token, &key, &policy).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((d.plaintext(), d.recipient()), (&b"x"[..], 0));
+        assert!(d.shared_header().is_none() && d.recipient_header().is_none());
+        assert!(d.aad().is_none());
+        assert_eq!(d.protected_header(), Some(d.header()));
         assert!(decrypt_compact("a.b.c.d.e", &key, &policy).is_err());
-        assert!(decrypt_json("{}", &key, &policy).is_err());
     }
 }
