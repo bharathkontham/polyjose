@@ -500,8 +500,8 @@ mod tests {
         let try_crypto_rng = ["Try", "Crypto", "Rng"].concat();
         // An impl header of `name` for some type: the word `impl` (also
         // `unsafe impl` or `impl<..>`) and `name for` as consecutive words,
-        // so `impl Foo for X` matches neither name and a path such as
-        // `rand_core::TryRng for` still matches.
+        // so `impl Foo for X` matches neither name and a path-qualified
+        // trait (`rand_core::` before the name) still matches.
         let implements = |line: &str, name: &str| {
             let words: Vec<&str> = line
                 .split(|c: char| !(c.is_alphanumeric() || c == '_'))
