@@ -153,9 +153,16 @@ fn nest_raw(plaintext: &str, protected: &str) -> String {
     kw(protected).encrypt_compact(plaintext.as_bytes()).unwrap()
 }
 
-/// `inner` as a nested JWT: A128KW + A128GCM with `cty: JWT`.
+/// `inner` as a nested JWT made by `jwt::encrypt_nested` with A128KW +
+/// A128GCM and no caller protected header.
 fn nest(inner: &str) -> String {
-    nest_raw(inner, r#"{"cty":"JWT"}"#)
+    jwt::encrypt_nested(inner, &kw("{}")).unwrap()
+}
+
+/// The protected header of compact JWE `token`, as sent.
+fn outer_header_of(token: &str) -> Header {
+    let first = token.split('.').next().unwrap();
+    Header::from_json(&b64url_decode(first).unwrap()).unwrap()
 }
 
 /// Every JWE algorithm these tests decrypt with, and every `enc`.
@@ -206,9 +213,10 @@ fn flip_tag(token: &str) -> String {
 // Decrypt-then-verify across the key management modes (RFC 7519 §7.2)
 // ---------------------------------------------------------------------------
 
-/// RFC 7519 §7.2 step 8, §11.2: an ES256 inner JWT encrypted with `dir`,
-/// A128KW, ECDH-ES+A128KW (P-256), ECDH-ES (X25519) and PBES2-HS256+A128KW
-/// decrypts, verifies and validates, and the result carries the inner
+/// RFC 7519 §7.1 step 5, §7.2 step 8, §11.2: an ES256 inner JWT nested by
+/// `encrypt_nested` with `dir`, A128KW, ECDH-ES+A128KW (P-256), ECDH-ES
+/// (X25519) and PBES2-HS256+A128KW is a compact JWE with `cty: JWT`, and
+/// it decrypts, verifies and validates; the result carries the inner
 /// verification, the outer protected header and the recipient index.
 #[test]
 fn every_outer_mode_decrypts_then_verifies() {
@@ -251,10 +259,10 @@ fn every_outer_mode_decrypts_then_verifies() {
     let verifier = public(&es256_key());
     let inner = inner_es256();
     for (recipient, enc, decrypt_key, alg) in cases {
-        let token = encryptor(enc.clone(), recipient, header(r#"{"cty":"JWT"}"#))
-            .encrypt_compact(inner.as_bytes())
-            .unwrap();
+        let e = Encryptor::new(enc.clone()).recipient(recipient);
+        let token = jwt::encrypt_nested(&inner, &e).unwrap_or_else(|e| panic!("{alg}: {e}"));
         assert_eq!(token.split('.').count(), 5, "{alg}");
+        assert_eq!(outer_header_of(&token).cty.as_deref(), Some("JWT"), "{alg}");
         let v = jwt::decrypt_nested(
             &token,
             decrypt_key,
@@ -273,21 +281,20 @@ fn every_outer_mode_decrypts_then_verifies() {
     }
 }
 
-/// ADR 0021: an EdDSA inner JWT encrypted to an RSA-OAEP-256 recipient
-/// (a public-key operation) is produced, but never decrypted: there is no
-/// RSA private-key operation, so the JWE layer answers
-/// `UnsupportedAlgorithm` even when the policy allows the `alg`.
+/// ADR 0021: an EdDSA inner JWT nested by `encrypt_nested` for an
+/// RSA-OAEP-256 recipient (a public-key operation) is produced, but never
+/// decrypted: there is no RSA private-key operation, so the JWE layer
+/// answers `UnsupportedAlgorithm` even when the policy allows the `alg`.
 #[test]
 fn rsa_oaep_256_encrypts_but_never_decrypts() {
     let rsa = jwk(RSA_PUBLIC);
     let inner = signed(&claims(), SigningAlg::EdDSA, &ed25519_key());
-    let token = encryptor(
-        E::A256GCM,
-        Recipient::new(A::RsaOaep256, &rsa),
-        header(r#"{"cty":"JWT"}"#),
-    )
-    .encrypt_compact(inner.as_bytes())
-    .unwrap();
+    let e = Encryptor::new(E::A256GCM).recipient(Recipient::new(A::RsaOaep256, &rsa));
+    let token = jwt::encrypt_nested(&inner, &e).unwrap();
+    assert_eq!(token.split('.').count(), 5);
+    let h = outer_header_of(&token);
+    assert_eq!(h.alg.as_deref(), Some("RSA-OAEP-256"));
+    assert_eq!(h.cty.as_deref(), Some("JWT"));
     let clock = FixedClock(NOW);
     let policy = Policy::new(&clock, &SIGNING).unwrap();
     let verifier = public(&ed25519_key());
@@ -438,11 +445,14 @@ fn an_outer_cty_compares_as_a_media_type() {
 /// `InvalidFormat`, as is one that is no JWS at all.
 #[test]
 fn an_inner_jwe_is_invalid_format() {
-    let doubly_nested = nest(&nest(&inner_es256()));
+    let doubly_nested = nest_raw(&nest(&inner_es256()), r#"{"cty":"JWT"}"#);
     assert!(matches!(open(&doubly_nested), Err(Error::InvalidFormat(_))));
     for plaintext in ["", "a.b", "a.b.c.d", "{\"iss\":\"x\"}"] {
         assert!(
-            matches!(open(&nest(plaintext)), Err(Error::InvalidFormat(_))),
+            matches!(
+                open(&nest_raw(plaintext, r#"{"cty":"JWT"}"#)),
+                Err(Error::InvalidFormat(_))
+            ),
             "{plaintext:?}"
         );
     }
