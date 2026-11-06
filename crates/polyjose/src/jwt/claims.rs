@@ -814,4 +814,212 @@ mod tests {
             }
         }
     }
+
+    // ---- tester probes (T03 verification) ----
+
+    #[test]
+    fn probe_escaped_duplicate_names_are_invalid_json() {
+        // RFC 7519 §4 / RFC 7493 §2.3: names compare after unescaping.
+        for input in [
+            r#"{"exp":1,"exp":2}"#,
+            r#"{"exp":1,"exp":2}"#,
+            r#"{"exp":1,"exp":2}"#,
+            r#"{"iss":"a","iss":"b"}"#,
+            r#"{"a\/b":1,"a/b":2}"#,
+            r#"{"😀":1,"😀":2}"#,
+        ] {
+            assert!(is_invalid_json(&claims(input)), "{input}");
+        }
+        // Escaped registered name is the registered claim, not a private one.
+        let c = claims(r#"{"iss":"joe"}"#).unwrap();
+        assert_eq!(c.iss.as_deref(), Some("joe"));
+        assert!(c.other_claims().is_empty());
+        assert_eq!(claims(r#"{"exp":"x"}"#), Err(Error::InvalidClaim("exp")));
+    }
+
+    #[test]
+    fn probe_rfc_payload_variants() {
+        // Leading/trailing JSON whitespace around the object is allowed.
+        let padded = b" \r\n\t{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true} \r\n";
+        let c = Claims::from_json(padded).unwrap();
+        assert_eq!(c.iss.as_deref(), Some("joe"));
+        assert_eq!(
+            c.to_json(),
+            r#"{"iss":"joe","exp":1300819380,"http://example.com/is_root":true}"#
+        );
+    }
+
+    #[test]
+    fn probe_number_edge_forms() {
+        let exp = |v: &str| claims(&format!(r#"{{"exp":{v}}}"#)).map(|c| c.exp);
+        for (v, want) in [
+            ("-0", 0.0),
+            ("1E3", 1000.0),
+            ("1.0", 1.0),
+            ("0.1", 0.1),
+            ("1300819380.25", 1_300_819_380.25),
+            ("9007199254740991", 9_007_199_254_740_991.0),
+            ("-9007199254740991", -9_007_199_254_740_991.0),
+            ("9007199254740991.0", 9_007_199_254_740_991.0),
+        ] {
+            let got = exp(v).unwrap_or_else(|e| panic!("{v}: {e:?}")).unwrap();
+            assert_eq!(got.as_f64(), want, "{v}");
+        }
+        for v in [
+            "9007199254740992",
+            "-9007199254740992",
+            "9007199254740993",
+            "9007199254740992.0",
+            "1e17",
+        ] {
+            assert_eq!(exp(v), Err(Error::InvalidClaim("exp")), "{v}");
+        }
+        // Not representable as a finite number at all: a JSON-level error.
+        assert!(is_invalid_json(&exp("1e400")), "1e400");
+        assert!(is_invalid_json(&exp("-1e400")), "-1e400");
+        // JSON grammar violations.
+        for v in ["+1", "01", ".5", "1.", "NaN", "Infinity", "0x10"] {
+            assert!(is_invalid_json(&exp(v)), "{v}");
+        }
+    }
+
+    #[test]
+    fn probe_integral_dates_serialize_without_fraction_and_round_trip() {
+        for (input, out) in [
+            (r#"{"exp":1E3}"#, r#"{"exp":1000}"#),
+            (r#"{"exp":1.0}"#, r#"{"exp":1}"#),
+            (r#"{"exp":1300819380.25}"#, r#"{"exp":1300819380.25}"#),
+            (r#"{"nbf":0.1}"#, r#"{"nbf":0.1}"#),
+            (r#"{"iat":-5}"#, r#"{"iat":-5}"#),
+            (
+                r#"{"exp":9007199254740991,"nbf":-9007199254740991}"#,
+                r#"{"exp":9007199254740991,"nbf":-9007199254740991}"#,
+            ),
+        ] {
+            let c = claims(input).unwrap();
+            let json = c.to_json();
+            assert_eq!(json, out, "{input}");
+            assert!(!json.contains(".0"), "{json}");
+            assert_eq!(Claims::from_json(json.as_bytes()).as_ref(), Ok(&c));
+        }
+        // -0 serializes without a sign or fraction.
+        let c = claims(r#"{"exp":-0}"#).unwrap();
+        assert_eq!(c.to_json(), r#"{"exp":0}"#);
+        assert_eq!(Claims::from_json(c.to_json().as_bytes()), Ok(c));
+    }
+
+    #[test]
+    fn probe_first_wrong_registered_claim_wins_in_every_input_order() {
+        // Wrong: sub, aud, exp, nbf, iat, jti (iss fine). Permute all input orders.
+        let bad: [(&str, &str); 6] = [
+            ("sub", "1"),
+            ("aud", "{}"),
+            ("exp", r#""x""#),
+            ("nbf", "null"),
+            ("iat", "[]"),
+            ("jti", "true"),
+        ];
+        let order = ["iss", "sub", "aud", "exp", "nbf", "iat", "jti"];
+        // For each suffix of the registered order, rotate and reverse input order.
+        for start in 0..bad.len() {
+            let mut members: Vec<(&str, &str)> = bad[start..].to_vec();
+            let expect = members[0].0;
+            assert!(order.contains(&expect));
+            for rot in 0..members.len() {
+                members.rotate_left(1);
+                let body = members
+                    .iter()
+                    .map(|(k, v)| format!(r#""{k}":{v}"#))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let json = format!("{{{body}}}");
+                assert_eq!(
+                    claims(&json),
+                    Err(Error::InvalidClaim(expect)),
+                    "{rot} {json}"
+                );
+                let mut rev = members.clone();
+                rev.reverse();
+                let body = rev
+                    .iter()
+                    .map(|(k, v)| format!(r#""{k}":{v}"#))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                assert_eq!(
+                    claims(&format!("{{{body}}}")),
+                    Err(Error::InvalidClaim(expect))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn probe_no_value_in_any_error_or_debug_with_marker() {
+        const M: &str = "ZQMARKERQZ";
+        let inputs = [
+            format!(r#"{{"iss":["{M}"]}}"#),
+            format!(r#"{{"sub":{{"{M}":"{M}"}}}}"#),
+            format!(r#"{{"aud":["{M}",1]}}"#),
+            format!(r#"{{"exp":"{M}"}}"#),
+            format!(r#"{{"{M}":1,"{M}":2}}"#),
+            format!(r#"{{"{M}":"{M}"}}x"#),
+            format!(r#"["{M}"]"#),
+            format!(r#"{{"jti":"{M}","exp":"{M}"}}"#),
+            format!("{{\"{M}\":\"\u{ff}\"}}"),
+        ];
+        for input in inputs {
+            let mut bytes = input.into_bytes();
+            if let Some(i) = bytes.windows(2).position(|w| w == [0xc3, 0xbf]) {
+                bytes[i] = 0xff; // invalid UTF-8 variant
+                bytes.remove(i + 1);
+            }
+            let err = Claims::from_json(&bytes).unwrap_err();
+            for t in [format!("{err}"), format!("{err:?}")] {
+                assert!(!t.contains(M), "{t}");
+            }
+        }
+        // Debug of parsed claims redacts private string values and names none of the marker in `other`.
+        let c = claims(&format!(r#"{{"p":"{M}","q":[{{"r":"{M}"}}]}}"#)).unwrap();
+        assert!(!format!("{c:?}").contains(M), "{c:?}");
+    }
+
+    #[test]
+    fn probe_nested_and_private_claims_roundtrip_in_order() {
+        let c = claims(r#"{"z":{"b":[1,{"c":null}],"a":"x"},"iss":"i","m":[],"a":0.5}"#).unwrap();
+        let names: Vec<&str> = c.other_claims().iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["z", "m", "a"]);
+        let json = c.to_json();
+        assert_eq!(
+            json,
+            r#"{"iss":"i","z":{"b":[1,{"c":null}],"a":"x"},"m":[],"a":0.5}"#
+        );
+        assert_eq!(Claims::from_json(json.as_bytes()), Ok(c));
+    }
+
+    mod probe_props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn from_json_never_panics_on_arbitrary_bytes(
+                bytes in proptest::collection::vec(any::<u8>(), 0..256)
+            ) {
+                if let Ok(c) = Claims::from_json(&bytes) {
+                    prop_assert_eq!(Claims::from_json(c.to_json().as_bytes()), Ok(c));
+                }
+            }
+
+            #[test]
+            fn from_json_never_panics_on_json_shaped_input(
+                s in r#"[{}\[\]",:a-z0-9.eE+\- \\u]{0,64}"#
+            ) {
+                let _ = Claims::from_json(s.as_bytes());
+                let wrapped = format!(r#"{{"exp":{s},"aud":{s},"iss":{s}}}"#);
+                let _ = Claims::from_json(wrapped.as_bytes());
+            }
+        }
+    }
 }
