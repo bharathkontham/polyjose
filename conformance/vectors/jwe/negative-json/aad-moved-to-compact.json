@@ -1,0 +1,25 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §7.1: the compact serialization has no JWE AAD, so the RFC 7520 §5.10 flattened JWE's parts as a compact JWE lose it and the tag fails (§5.2 step 15): DecryptionFailed",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJBMTI4S1ciLCJraWQiOiI4MWIyMDk2NS04MzMyLTQzZDktYTQ2OC04MjE2MGFkOTFhYzgiLCJlbmMiOiJBMTI4R0NNIn0.4YiiQ_ZzH76TaIkJmYfRFgOV9MIpnx4X.veCx9ece2orS7c_N.Z_3cbr0k3bVM6N3oSNmHz7Lyf3iPppGf3Pj17wNZqteJ0Ui8p74SchQP8xygM1oFRWCNzeIa6s6BcEtp8qEFiqTUEyiNkOWDNoF14T_4NFqF-p2Mx8zkbKxI7oPK8KNarFbyxIDvICNqBLba-v3uzXBdB89fzOI-Lv4PjOFAQGHrgv1rjXAmKbgkft9cB4WeyZw8MldbBhc-V_KWZslrsLNygon_JJWd_ek6LQn5NRehvApqf9ZrxB4aq3FXBxOxCys35PhCdaggy2kfUfl2OkwKnWUbgXVD1C6HxLIlqHhCwXDG59weHrRDQeHyMRoBljoV3X_bUTJDnKBFOod7nLz-cj48JMx3SnCZTpbQAkFV.vOaH_Rajnpy_3hOtqvZHRA",
+    "key": {
+      "kty": "oct",
+      "kid": "81b20965-8332-43d9-a468-82160ad91ac8",
+      "use": "enc",
+      "alg": "A128KW",
+      "k": "GZy6sIZ6wl9NJOKB-jnmVQ"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

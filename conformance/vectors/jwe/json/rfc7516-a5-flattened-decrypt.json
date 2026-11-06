@@ -1,0 +1,36 @@
+{
+  "source": "RFC 7516 App. A.5",
+  "description": "The RFC 7516 A.5 flattened JWE (alg and kid in the per-recipient header, jku in the shared unprotected header) decrypts with the A.3 A128KW key. No jwe.encrypt vector reproduces it: polyjose's encryptor always puts alg in the protected header of a flattened JWE and in the recipient's header of a general one, never in the per-recipient header of a flattened JWE (documented omission for 0.1.0, plan.md lead refinement 15; jwe_json.rs shows the output differs only in where alg sits)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+      "unprotected": {
+        "jku": "https://server.example.com/keys.jwks"
+      },
+      "header": {
+        "alg": "A128KW",
+        "kid": "7"
+      },
+      "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ",
+      "iv": "AxY8DCtDaGlsbGljb3RoZQ",
+      "ciphertext": "KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY",
+      "tag": "Mz-VPPyU4RlcuYv1IwIvzw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipient": 0
+  }
+}

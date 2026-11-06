@@ -1,0 +1,36 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §4.1.3: zip MUST occur only in the protected header (RFC 7516 A.5 with zip in the shared unprotected header): InvalidHeader",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+      "unprotected": {
+        "jku": "https://server.example.com/keys.jwks",
+        "zip": "DEF"
+      },
+      "header": {
+        "alg": "A128KW",
+        "kid": "7"
+      },
+      "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ",
+      "iv": "AxY8DCtDaGlsbGljb3RoZQ",
+      "ciphertext": "KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY",
+      "tag": "Mz-VPPyU4RlcuYv1IwIvzw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

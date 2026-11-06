@@ -1,0 +1,24 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §7.2.1: aad must be absent when the JWE AAD is empty, but an empty JWE AAD set by the caller is part of the AAD computation (§5.1 step 14), so the JSON output could not be decrypted and is refused: InvalidFormat",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "general",
+    "enc": "A128GCM",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "EREREREREREREREREREREQ"
+        }
+      }
+    ],
+    "aad_b64u": ""
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

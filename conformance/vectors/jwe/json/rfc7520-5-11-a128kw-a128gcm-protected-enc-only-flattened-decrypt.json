@@ -1,0 +1,36 @@
+{
+  "source": "RFC 7520 §5.11",
+  "description": "The RFC 7520 §5.11 flattened JSON JWE (only enc in the protected header; alg and kid in the shared unprotected header) decrypts with the §5.11 key to the Figure 72 plaintext (generated from the ietf-jose cookbook). No jwe.encrypt vector reproduces it: polyjose's encryptor always puts alg in the protected header of a flattened JWE and in the recipient's header of a general one, never in the shared unprotected header (documented omission for 0.1.0, plan.md lead refinement 15; jwe_json.rs shows the output differs only in where alg sits)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4R0NNIn0",
+      "unprotected": {
+        "alg": "A128KW",
+        "kid": "81b20965-8332-43d9-a468-82160ad91ac8"
+      },
+      "encrypted_key": "jJIcM9J-hbx3wnqhf5FlkEYos0sHsF0H",
+      "iv": "WgEJsDS9bkoXQ3nR",
+      "ciphertext": "lIbCyRmRJxnB2yLQOTqjCDKV3H30ossOw3uD9DPsqLL2DM3swKkjOwQyZtWsFLYMj5YeLht_StAn21tHmQJuuNt64T8D4t6C7kC9OCCJ1IHAolUv4MyOt80MoPb8fZYbNKqplzYJgIL58g8N2v46OgyG637d6uuKPwhAnTGm_zWhqc_srOvgiLkzyFXPq1hBAURbc3-8BqeRb48iR1-_5g5UjWVD3lgiLCN_P7AW8mIiFvUNXBPJK3nOWL4teUPS8yHLbWeL83olU4UAgL48x-8dDkH23JykibVSQju-f7e-1xreHWXzWLHs1NqBbre0dEwK3HX_xM0LjUz77Krppgegoutpf5qaKg3l-_xMINmf",
+      "tag": "fNYLqpUe84KD45lvDiaBAQ"
+    },
+    "key": {
+      "kty": "oct",
+      "kid": "81b20965-8332-43d9-a468-82160ad91ac8",
+      "use": "enc",
+      "alg": "A128KW",
+      "k": "GZy6sIZ6wl9NJOKB-jnmVQ"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "WW91IGNhbiB0cnVzdCB1cyB0byBzdGljayB3aXRoIHlvdSB0aHJvdWdoIHRoaWNrIGFuZCB0aGlu4oCTdG8gdGhlIGJpdHRlciBlbmQuIEFuZCB5b3UgY2FuIHRydXN0IHVzIHRvIGtlZXAgYW55IHNlY3JldCBvZiB5b3Vyc-KAk2Nsb3NlciB0aGFuIHlvdSBrZWVwIGl0IHlvdXJzZWxmLiBCdXQgeW91IGNhbm5vdCB0cnVzdCB1cyB0byBsZXQgeW91IGZhY2UgdHJvdWJsZSBhbG9uZSwgYW5kIGdvIG9mZiB3aXRob3V0IGEgd29yZC4gV2UgYXJlIHlvdXIgZnJpZW5kcywgRnJvZG8u",
+    "recipient": 0
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "source": "polyjose",
+  "description": "plan.md recipient selection: RFC 7516 A.4.7's A128KW recipient copied three times with alg RSA1_5 (unsupported), A192KW (allowed, but the 16-octet key cannot serve it) and A256KW (not allowed): with no candidate, AlgorithmNotAllowed ranks first",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+      "unprotected": {
+        "jku": "https://server.example.com/keys.jwks"
+      },
+      "recipients": [
+        {
+          "header": {
+            "alg": "RSA1_5",
+            "kid": "7"
+          },
+          "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ"
+        },
+        {
+          "header": {
+            "alg": "A192KW",
+            "kid": "7"
+          },
+          "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ"
+        },
+        {
+          "header": {
+            "alg": "A256KW",
+            "kid": "7"
+          },
+          "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ"
+        }
+      ],
+      "iv": "AxY8DCtDaGlsbGljb3RoZQ",
+      "ciphertext": "KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY",
+      "tag": "Mz-VPPyU4RlcuYv1IwIvzw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW",
+      "A192KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "source": "polyjose",
+  "description": "plan.md recipient selection: RFC 7516 A.4.7's A128KW recipient copied with alg A192KW (allowed, but the 16-octet key cannot serve it), RSA-OAEP-256 (not decrypted, ADR 0021) and A192KW: UnsupportedAlgorithm outranks KeyAlgorithmMismatch",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+      "unprotected": {
+        "jku": "https://server.example.com/keys.jwks"
+      },
+      "recipients": [
+        {
+          "header": {
+            "alg": "A192KW",
+            "kid": "7"
+          },
+          "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ"
+        },
+        {
+          "header": {
+            "alg": "RSA-OAEP-256",
+            "kid": "7"
+          },
+          "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ"
+        },
+        {
+          "header": {
+            "alg": "A192KW",
+            "kid": "7"
+          },
+          "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ"
+        }
+      ],
+      "iv": "AxY8DCtDaGlsbGljb3RoZQ",
+      "ciphertext": "KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY",
+      "tag": "Mz-VPPyU4RlcuYv1IwIvzw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW",
+      "A192KW",
+      "RSA-OAEP-256"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}
