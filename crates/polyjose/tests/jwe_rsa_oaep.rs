@@ -211,6 +211,26 @@ fn rsa_oaep_256_never_decrypts_not_even_polyjose_output() {
 }
 
 #[test]
+fn rsa_oaep_sha1_never_decrypts() {
+    // ADR 0022: RSA-OAEP (SHA-1) is unsupported on decrypt too, even with
+    // the alg on the allow-list. The protected header is swapped for
+    // {"alg":"RSA-OAEP","enc":"A128GCM"}; the rest is a real token.
+    let v = vectors().remove(0);
+    let rest = v.jwe.split_once('.').map(|(_, rest)| rest).unwrap_or("");
+    let header = polyjose::util::b64url_encode(br#"{"alg":"RSA-OAEP","enc":"A128GCM"}"#);
+    let policy = DecryptPolicy::new(&[A::from("RSA-OAEP")], ContentEncAlg::KNOWN)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        code(decrypt_compact(
+            &format!("{header}.{rest}"),
+            &jwk(&v.key),
+            &policy
+        )),
+        "UnsupportedAlgorithm"
+    );
+}
+
+#[test]
 fn rsa_oaep_and_rsa1_5_never_encrypt() {
     // ADR 0022 (RSA-OAEP uses SHA-1) and ADR 0021 (RSA1_5), to a key that
     // RSA-OAEP-256 accepts.
