@@ -46,6 +46,7 @@ All five top-level members are required and no others are allowed. Every object 
 | `jws.verify` | `jws`, `key`, `allowed_algs`, and optionally `detached_payload_b64u`, `max_input_len`, `max_signatures` ([below](#jwsverify)) | `payload_b64u`, `alg`, `signature_index` | yes |
 | `keys.import_pem` | `pem` (any string) ([below](#keysimport_pem)) | `jwk` (a JSON object) | yes |
 | `keys.export_pem` | `jwk` (a JSON object), `format` (`"pkcs8"`, `"sec1"`, `"spki"` or `"pkcs1"`) ([below](#keysexport_pem)) | `pem` (exact text) | yes |
+| `keys.import_der` | `der_b64u`, `format` (as `keys.export_pem`) ([below](#keysimport_der)) | `jwk` (a JSON object) | yes |
 | `jwe.encrypt`, `jwe.decrypt`, `jwt.validate` | reserved | reserved | |
 
 A reserved operation's input and output members are defined by the feature that implements it, which adds them to `schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails.
@@ -53,7 +54,7 @@ A reserved operation's input and output members are defined by the feature that 
 ### How bytes are written
 
 - **Codec operations (`b64url.*`, `jwk.thumbprint`): lowercase hex** (`bytes_hex`: two digits per octet, `""` for none), never base64url, so the base64url codec is never checked against itself.
-- **`keys.*` operations: PEM text and JWK objects**, never raw octets. A PEM block is a JSON string with `\n` line endings; JWK members are canonical base64url as RFC 7518 §6 and RFC 8037 §2 define them.
+- **`keys.*` operations: PEM text, JWK objects and DER as canonical base64url** (`der_b64u`), never hex. A PEM block is a JSON string with `\n` line endings; JWK members are canonical base64url as RFC 7518 §6 and RFC 8037 §2 define them. A runner decodes `der_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome.
 - **`jws.*` operations: canonical base64url** (members ending in `_b64u`). This is deliberate: the codec is no longer under test there (it has its own vectors), and every JWS field is natively base64url (RFC 7515 §2), so the RFC's values are copied as printed. A runner decodes `payload_b64u` and `detached_payload_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome. `protected_b64u` is passed to the library as text, unchanged.
 
 ## `jws.sign`
@@ -133,6 +134,10 @@ Imports `jwk` with the library's JWK import, then exports it as PEM in `format` 
 | `pkcs1` | — | RSA only; other types `UnsupportedAlgorithm` | `UnsupportedAlgorithm` |
 
 The checks run in that order: `oct`, then a key type the format cannot hold, then a public key in a private-key format. Only the key material is exported; `kid`, `use`, `alg` and the other JWK members are dropped.
+
+## `keys.import_der`
+
+Imports DER with the library's DER key import in the structure `format` names (ADR 0018 §3). There is no format sniffing (ADR 0007): DER of another structure fails, so an SPKI offered as `pkcs8` is `InvalidKey`. `format` selects the structure as the PEM label does for `keys.import_pem`: `pkcs8` (RFC 5958 §2), `sec1` (RFC 5915 §3), `spki` (RFC 5280 §4.1.2.7), `pkcs1` (RFC 8017 App. A.1.1). The expectations and error codes are those of `keys.import_pem`, compared the same way, and an `oct` result fails the vector whatever it expects. Only the PEM-level faults (armor, labels, explanatory text) have no DER counterpart.
 
 ## Binding readiness
 
