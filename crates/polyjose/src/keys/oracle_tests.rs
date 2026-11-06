@@ -2263,3 +2263,47 @@ fn no_error_or_debug_output_shows_private_key_octets() {
     // Not vacuous: the inputs reach many distinct error paths.
     assert!(details.len() >= 40, "{details:#?}");
 }
+
+/// RSA private keys are refused (ADR 0021), but the refusal must not echo
+/// them either: every `reject-*rsa*private*` fixture goes through the PEM
+/// and DER decoders and the importers, and no error or `Debug` output may
+/// show any 8-octet window (hex, decimal, ASCII, base64) of its DER past
+/// the first 40 octets (the framing and the public modulus header).
+#[test]
+fn rsa_private_key_octets_never_reach_an_error() {
+    use std::collections::BTreeSet;
+
+    let mut checked = 0;
+    for dir in ["openssl", "rfc"] {
+        let names = fixtures::files(dir, |name| {
+            name.starts_with("reject-") && name.contains("rsa") && name.contains("private")
+        });
+        for name in names {
+            let bytes = raw(dir, &name);
+            let der = if name.ends_with(".pem") {
+                ::pem_rfc7468::decode_vec(&bytes).unwrap().1
+            } else {
+                bytes.clone()
+            };
+            let mut out = BTreeSet::new();
+            if name.ends_with(".pem") {
+                render_pem(&bytes, &mut out);
+            }
+            render_der(&der, None, &mut out);
+            for n in (0..=der.len()).step_by(7) {
+                render_der(&der[..n], None, &mut out);
+            }
+            let forms = leak_forms(&der[40..]);
+            for text in &out {
+                for form in &forms {
+                    assert!(
+                        !text.contains(form.as_str()),
+                        "{name}: {text:?} shows {form:?}"
+                    );
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked >= 10, "only {checked} RSA private fixtures");
+}
