@@ -93,7 +93,7 @@ mod tests {
     use crate::header::Header;
     use crate::jwe::{DecryptPolicy, Encryptor};
     use crate::jwk::{Jwk, JwkSet};
-    use crate::jws::Verified;
+    use crate::jws::{CompactPrechecked, Verified};
 
     /// The signatures frozen by 0004 T01. Later tasks fill in the bodies
     /// only; changing a signature here is a contract change for every
@@ -109,8 +109,8 @@ mod tests {
         let _: fn(&Header, Option<&Header>, &Policy<'_>, typ::Layer) -> Result<()> =
             typ::check_jwt_header;
         let _: fn(&str, &str) -> bool = typ::media_type_eq;
-        let _: fn(&str, &JwkSet, &Policy<'_>) -> Result<(Verified, usize)> =
-            keyset::verify_with_set;
+        let _: fn(&CompactPrechecked<'_>, &JwkSet, &Policy<'_>) -> Result<(Verified, usize)> =
+            keyset::select_and_verify;
         let _: fn(&Claims, &Policy<'_>) -> Result<()> = validate::validate_claims;
         let _: fn(&[u8]) -> Result<Claims> = Claims::from_json;
         let _: fn(&Claims) -> String = Claims::to_json;
