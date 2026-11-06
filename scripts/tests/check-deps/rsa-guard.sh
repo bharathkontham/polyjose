@@ -4,11 +4,18 @@
 # make check-deps.sh fail with the guard's own message (and no other check's):
 #   - RSA private-key and signing types and an Oaep decryption in crates/polyjose/src, and the
 #     same in a binding (bindings/**);
+#   - the security audit's reproductions of ADR 0049 §1, as far as a text scan can see them: an rsa
+#     alias in a brace use tree (`use {rsa as r};`), `#[path]` (also through cfg_attr) and
+#     `include!` naming a file outside the scanned roots, and an out-of-line child module of
+#     jws/rsa.rs or jwe/rsa_oaep.rs (`mod child;`, or a file in jws/rsa/). The macro reproduction
+#     (`k!(rsa)`) is invisible to text; the compiled-symbol check catches all four
+#     (scripts/check-rsa-symbols.sh, tested by rsa-symbols.sh);
 #   - a sha1 dependency (also when sha1 is allowlisted and credited, so check 10 alone catches it);
 #   - an rsa feature.
 # Legitimate look-alikes must pass: an ECDSA SigningKey and a cbc Decryptor in files that do not
-# use the rsa crate, a child module named `rsa` reached as `self::rsa::`, and the typed RSA
-# VerifyingKey. The unchanged tree must pass.
+# use the rsa crate, a child module named `rsa` reached as `self::rsa::`, the typed RSA
+# VerifyingKey, and inline modules (`#[cfg(test)] mod tests { .. }`) in the RSA files. The
+# unchanged tree must pass.
 # Usage: scripts/tests/check-deps/rsa-guard.sh
 set -euo pipefail
 export LC_ALL=C
@@ -133,6 +140,97 @@ expect_fail "decrypt / newline / (Oaep...)" "crates/polyjose/src/jwe.rs:[0-9]+: 
 new_case split-binding
 append_to bindings/node/src/lib.rs $'pub fn s(k: rsa /* x */\n    :: pkcs1v15 :: SigningKey<Sha256>) {}'
 expect_fail "split rsa path in a binding" "bindings/node/src/lib.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+# --- Check 9, hardened (ADR 0049 §1): the four audit reproductions and their neighbours -----------
+# The compiled-symbol check (scripts/check-rsa-symbols.sh, tested by rsa-symbols.sh) is what these
+# cannot get past; the text scan is the fast first layer and must catch every one it can see.
+hmac=crates/polyjose/src/jws/hmac.rs
+rsa_rs=crates/polyjose/src/jws/rsa.rs
+oaep_rs=crates/polyjose/src/jwe/rsa_oaep.rs
+sign_body='pub(crate) fn evil(msg: &[u8]) -> Vec<u8> {
+    let k = r::pkcs1v15::SigningKey::<sha2::Sha256>::random(&mut rng(), 2048).unwrap();
+    k.sign(msg).to_vec()
+}'
+
+# Audit reproduction 1: a brace use tree hides the crate name from `use rsa as`.
+new_case brace-alias
+append_to "$hmac" "#[allow(unused_imports)] use {rsa as r};
+$sign_body"
+expect_fail "use {rsa as r}; r::pkcs1v15::SigningKey" "$hmac:[0-9]+: rsa as ... in a use tree" "$src_fail"
+
+new_case brace-alias-only
+append_to "$hmac" 'use ::{rsa as r};'
+expect_fail "use ::{rsa as r} on its own" "$hmac:[0-9]+: rsa as ... in a use tree" "$src_fail"
+
+new_case brace-nested-signing-key
+append_to "$hmac" $'use {self::x, rsa::{\n    pkcs1v15 as p}};\ntype K = p::SigningKey<Sha256>;'
+expect_fail "use {.., rsa::{pkcs1v15 as p}}; p::SigningKey" "$hmac:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case brace-reexport
+append_to crates/polyjose/src/jws/mod.rs 'pub(crate) use {rsa::pkcs1v15};'
+expect_fail "pub(crate) use {rsa::pkcs1v15}" "crates/polyjose/src/jws/mod.rs:[0-9]+: pub use rsa" "$src_fail"
+
+new_case raw-ident-alias
+append_to "$hmac" 'use r#rsa as r;'
+expect_fail "use r#rsa as r" "$hmac:[0-9]+: rsa as ... in a use tree" "$src_fail"
+
+# Audit reproduction 2: #[path] loads a file from outside the scanned roots.
+new_case path-attribute
+append_to crates/polyjose/tests/fixtures/helper.rs "use rsa as r;
+$sign_body"
+append_to "$hmac" '#[path = "../../tests/fixtures/helper.rs"] #[allow(dead_code)] mod helper;'
+expect_fail "#[path = \"../../tests/fixtures/helper.rs\"] mod helper" "$hmac:[0-9]+: #\\[path\\]" "$src_fail"
+
+new_case path-attribute-split
+append_to "$hmac" $'#\n  [ path\n  = "../../tests/fixtures/helper.rs" ] mod helper;'
+expect_fail "# / [ path / = ...] over several lines" "$hmac:[0-9]+: #\\[path\\]" "$src_fail"
+
+new_case path-cfg-attr
+append_to "$hmac" '#[cfg_attr(all(), path = "../../tests/fixtures/helper.rs")] mod helper;'
+expect_fail "#[cfg_attr(all(), path = ...)]" "$hmac:[0-9]+: #\\[path\\]" "$src_fail"
+
+new_case path-attribute-binding
+append_to bindings/wasm/src/lib.rs '#[path = "../../../outside.rs"] mod outside;'
+expect_fail "#[path] in a binding" "bindings/wasm/src/lib.rs:[0-9]+: #\\[path\\]" "$src_fail"
+
+new_case include-macro
+append_to "$hmac" 'include!("../../tests/fixtures/helper.rs");'
+expect_fail "include!(a file outside src/)" "$hmac:[0-9]+: include!" "$src_fail"
+
+# Audit reproduction 4: an out-of-line child of jws/rsa.rs reaches the parent's private
+# `use rsa::{pkcs1v15, ..}` as `super::pkcs1v15`, in a file that never writes `rsa`.
+new_case child-path
+append_to "$rsa_rs" '#[path = "rsa_child.rs"] mod child;'
+append_to crates/polyjose/src/jws/rsa_child.rs 'use super::pkcs1v15 as p;
+pub(crate) fn evil(msg: &[u8]) -> Vec<u8> {
+    p::SigningKey::<sha2::Sha256>::random(&mut rng(), 2048).unwrap().sign(msg).to_vec()
+}'
+expect_fail "#[path = \"rsa_child.rs\"] mod child in jws/rsa.rs" "$rsa_rs:[0-9]+: (#\\[path\\]|mod child;)" "$src_fail"
+
+new_case child-module
+append_to "$rsa_rs" 'mod child;'
+append_to crates/polyjose/src/jws/rsa/child.rs 'use super::pkcs1v15 as p;'
+expect_fail "out-of-line mod child; in jws/rsa.rs" "$rsa_rs:[0-9]+: mod child;: an out-of-line child module of an RSA file" "$src_fail"
+
+new_case child-module-nested
+append_to "$rsa_rs" $'pub(crate) mod inline {\n    pub(crate) mod r#deep\n    ;\n}'
+expect_fail "out-of-line module inside an inline one in jws/rsa.rs" "$rsa_rs:[0-9]+: mod .*: an out-of-line child module of an RSA file" "$src_fail"
+
+new_case child-file
+append_to crates/polyjose/src/jws/rsa/helper.rs 'use super::pkcs1v15 as p;'
+expect_fail "a file in jws/rsa/ (a child module of jws/rsa.rs)" \
+  "crates/polyjose/src/jws/rsa/helper.rs:1: a child module file of an RSA file" "$src_fail"
+
+new_case child-module-oaep
+append_to "$oaep_rs" '//! RSA-OAEP-256 encryption only (RFC 7518 §4.3).
+mod child;'
+expect_fail "out-of-line mod child; in jwe/rsa_oaep.rs" "$oaep_rs:[0-9]+: mod child;: an out-of-line child module of an RSA file" "$src_fail"
+
+# Inline modules are allowed: the scan sees their text (as part of the RSA file).
+new_case inline-test-modules
+append_to "$rsa_rs" $'#[cfg(test)]\nmod more_tests {\n    use super::*;\n}'
+append_to "$oaep_rs" $'//! RSA-OAEP-256 encryption only (RFC 7518 §4.3).\n#[cfg(test)]\nmod tests {\n    use super::*;\n    mod inner {}\n}'
+expect_pass "inline #[cfg(test)] mod tests { } in jws/rsa.rs and jwe/rsa_oaep.rs"
 
 # Look-alikes that are not RSA private-key use.
 new_case look-alikes
