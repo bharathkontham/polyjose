@@ -109,8 +109,11 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.install-deny.outcome == 'success' }}
         run: cargo deny --locked --all-features check
 
-      # Enforces ADR 0016 (the core's runtime tree matches deps-allowlist.txt, with default features
-      # off) and ADR 0020 §5 (deps-allowlist.txt and CREDITS.md list the same crates).
+      # Enforces ADR 0016 (the core's tree matches deps-allowlist.txt, with default features off,
+      # and the guarded build-time groups of ADR 0025/0042 are reached only through their parent),
+      # ADR 0020 §5 (deps-allowlist.txt and CREDITS.md list the same crates) and the ADR 0021 guard
+      # that the RUSTSEC-2023-0071 ignore above depends on (no RSA private-key use, no rsa feature,
+      # no sha1).
       - name: dependency allowlist
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/check-deps.sh

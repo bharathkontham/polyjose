@@ -72,6 +72,15 @@ ed25519
 curve25519-dalek
 fiat-crypto
 
+# group: rsa
+# RSA public-key operations only (ADR 0021): RS*/PS* verification (RFC 7518 §3.3, §3.5) and, with
+# feature 0003, RSA-OAEP-256 encryption. Built with no features (scripts/check-deps.sh, check 11);
+# its private-key use is rejected by check 9. crypto-primes (prime generation and testing) is a
+# non-optional dependency of rsa; polyjose generates no RSA keys. rsa's other dependencies are
+# listed above (crypto-bigint, signature, sha2, digest, const-oid, ...).
+rsa
+crypto-primes
+
 # group: dalek-proc-macro
 # Guarded (ADR 0025, kept by ADR 0042 §1): curve25519-dalek's code generator for its SIMD backends,
 # a proc-macro that runs at compile time on x86_64 targets and links nothing into the artifact.

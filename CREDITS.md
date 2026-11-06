@@ -47,7 +47,7 @@ UniFFI) are not part of the core crate and are not listed here.
 - **License:** MIT OR Apache-2.0
 - **Used for:** the `Digest` and `Mac` traits that polyjose calls SHA-256 and HMAC through
   (re-exported by `sha2` and `hmac`).
-- **Audit status:** not in the ADR 0019 register; a dependency of `sha2` and `hmac`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `sha2`, `hmac` and `rsa`.
 
 ### `block-buffer`
 
@@ -117,9 +117,9 @@ UniFFI) are not part of the core crate and are not listed here.
 - **Upstream:** RustCrypto, [RustCrypto/formats](https://github.com/RustCrypto/formats)
   ([crates.io](https://crates.io/crates/const-oid))
 - **License:** Apache-2.0 OR MIT
-- **Used for:** not used directly. ASN.1 object identifiers of the hash algorithms, for `digest` and
-  `der`.
-- **Audit status:** not in the ADR 0019 register; a dependency of `digest` and `der`.
+- **Used for:** not used directly. ASN.1 object identifiers of the hash algorithms, for `digest`,
+  `der` and `rsa` (the PKCS#1 v1.5 DigestInfo prefixes).
+- **Audit status:** not in the ADR 0019 register; a dependency of `digest`, `der` and `rsa`.
 
 ## ECDSA
 
@@ -246,9 +246,9 @@ UniFFI) are not part of the core crate and are not listed here.
   ([crates.io](https://crates.io/crates/crypto-bigint))
 - **License:** Apache-2.0 OR MIT
 - **Used for:** not used directly. Constant-time big-integer arithmetic under the curve crates'
-  fields and scalars (and under `rsa`).
-- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`, `primefield` and
-  `rfc6979`.
+  fields and scalars and under `rsa`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`, `primefield`,
+  `rfc6979` and `rsa`.
 
 ### `cpubits`
 
@@ -301,8 +301,8 @@ UniFFI) are not part of the core crate and are not listed here.
   ([crates.io](https://crates.io/crates/signature))
 - **License:** Apache-2.0 OR MIT
 - **Used for:** the RustCrypto `Signer`, `Verifier` and `RandomizedSigner` traits that ECDSA and
-  EdDSA signing and verification go through (re-exported by the curve crates).
-- **Audit status:** not in the ADR 0019 register; a dependency of `ecdsa` and `ed25519`.
+  EdDSA signing and ECDSA, EdDSA and RSA verification go through (re-exported by the curve crates).
+- **Audit status:** not in the ADR 0019 register; a dependency of `ecdsa`, `ed25519` and `rsa`.
 
 ### `rand_core`
 
@@ -312,7 +312,34 @@ UniFFI) are not part of the core crate and are not listed here.
 - **Used for:** the `TryRng`/`TryCryptoRng` traits that hand the OS random source (`getrandom`) to
   hedged ECDSA signing (ADR 0005), reached through the primitives' re-export.
 - **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`, `crypto-bigint`,
-  `signature` and others.
+  `signature`, `rsa` and others.
+
+## RSA (public-key operations only)
+
+### `rsa`
+
+- **Upstream:** RustCrypto, [RustCrypto/RSA](https://github.com/RustCrypto/RSA)
+  ([crates.io](https://crates.io/crates/rsa))
+- **License:** MIT OR Apache-2.0
+- **Used for:** RSA **public-key operations only**: RS256/384/512 and PS256/384/512 signature
+  verification (RFC 7518 §3.3, §3.5) and RSA-OAEP-256 encryption (RFC 7518 §4.3). It is built with
+  no features. polyjose does not sign or decrypt with RSA, generate RSA keys or read RSA private
+  keys, because of the open advisory below; `scripts/check-deps.sh` rejects any such use
+  (ADR 0021).
+- **Audit status:** audited by Include Security in 2019 (one minor finding, per its README), before
+  RUSTSEC-2023-0071 (the "Marvin" timing leak in private-key operations), which has no patched
+  version and affects the release candidate polyjose pins (0.10.0-rc.20). The constant-time 0.10
+  rewrite has no public independent audit. Public-key operations handle no secret, so the advisory
+  does not apply to the way polyjose uses the crate.
+
+### `crypto-primes`
+
+- **Upstream:** Entropy, [entropyxyz/crypto-primes](https://github.com/entropyxyz/crypto-primes)
+  ([crates.io](https://crates.io/crates/crypto-primes))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used. Prime generation and primality testing for `rsa`'s key generation, a
+  non-optional dependency of `rsa`; polyjose generates no RSA keys.
+- **Audit status:** not in the ADR 0019 register; a dependency of `rsa`.
 
 ## EdDSA
 
