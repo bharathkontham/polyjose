@@ -1,10 +1,11 @@
-//! Unit tests for [`super::inflate`]: valid streams of each block type, one
+//! Unit tests for [`super::inflate()`]: valid streams of each block type, one
 //! test per RFC 1951 structural error (research.md §2.7), and the output
 //! cap. Streams are built bit by bit with the module's own writer, so each
 //! test names exactly the field it breaks.
 
 use super::bits::BitWriter;
 use super::*;
+use crate::Error;
 
 /// A generous cap for tests that are not about the cap.
 const CAP: usize = 1 << 20;
@@ -740,4 +741,78 @@ fn rfc7520_section_5_9_compressed_plaintext() {
     assert_eq!(&out[..], plaintext.as_bytes());
     assert!(plaintext.starts_with("You can trust us to stick with you"));
     assert!(plaintext.ends_with("We are your friends, Frodo."));
+}
+
+// ---- the encoder (ADR 0017 §2) ----
+
+/// The all-stored size bound `deflate` documents.
+fn stored_bound(len: usize) -> usize {
+    len + len.div_ceil(65_535).max(1) * 6 + 1
+}
+
+/// An empty input is one final fixed block holding only end-of-block
+/// (RFC 1951 §3.2.6: BFINAL 1, BTYPE 01, then the 7-bit code 0000000).
+#[test]
+fn deflate_empty_input() {
+    let out = deflate(b"").unwrap();
+    assert_eq!(&out[..], &[0x03, 0x00]);
+    assert!(inflate(&out, 0).unwrap().is_empty());
+}
+
+#[test]
+fn deflate_round_trips_through_inflate() {
+    let mut pseudo_random = Vec::with_capacity(200_000);
+    let mut x: u32 = 0x1234_5678;
+    for _ in 0..200_000 {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        pseudo_random.push(x as u8);
+    }
+    let inputs: Vec<Vec<u8>> = vec![
+        b"a".to_vec(),
+        b"abcabcabcabcabcabcabcabc".to_vec(),
+        vec![0; 100_000],
+        vec![0xFF; 65_535],
+        vec![7; 65_536],
+        pseudo_random.clone(),
+        pseudo_random.iter().map(|b| b % 4).collect(),
+        // Repeats at the 32,768-byte window edge (RFC 1951 §3.2.5).
+        [&pseudo_random[..32_768], &pseudo_random[..300]].concat(),
+        [&pseudo_random[..32_769], &pseudo_random[..300]].concat(),
+    ];
+    for input in &inputs {
+        let compressed = deflate(input).unwrap();
+        assert!(compressed.len() <= stored_bound(input.len()));
+        assert_eq!(&inflate(&compressed, input.len()).unwrap()[..], &input[..]);
+    }
+}
+
+/// Fixed Huffman plus LZ77 really compress: 64 KiB of repeated text comes
+/// out under half its size.
+#[test]
+fn deflate_compresses_repeated_text() {
+    let sentence = b"You can trust us to stick with you through thick and thin. ";
+    let input: Vec<u8> = sentence.iter().copied().cycle().take(64 * 1024).collect();
+    let out = deflate(&input).unwrap();
+    assert!(out.len() < input.len() / 2, "{} bytes", out.len());
+    assert_eq!(&inflate(&out, input.len()).unwrap()[..], &input[..]);
+}
+
+/// Incompressible data falls back to stored blocks, and the output buffer
+/// is allocated once at the bound, never grown (a reallocation would leave
+/// an unzeroized copy behind).
+#[test]
+fn deflate_output_never_exceeds_the_stored_bound() {
+    let mut input = Vec::with_capacity(150_000);
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    for _ in 0..150_000 {
+        x ^= x << 7;
+        x ^= x >> 9;
+        input.push((x >> 24) as u8);
+    }
+    let out = deflate(&input).unwrap();
+    assert!(out.len() <= stored_bound(input.len()));
+    assert!(out.capacity() <= stored_bound(input.len()));
+    assert_eq!(&inflate(&out, input.len()).unwrap()[..], &input[..]);
 }
