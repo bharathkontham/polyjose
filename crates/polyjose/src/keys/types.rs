@@ -143,10 +143,6 @@ pub(crate) enum Label {
     Other,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the PEM codec in pem.rs")
-)]
 impl Label {
     /// Each known label and its exact text. Labels are case-sensitive
     /// (RFC 7468 §2, erratum 4508).

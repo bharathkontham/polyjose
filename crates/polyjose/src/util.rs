@@ -335,10 +335,6 @@ const PAD: u8 = b'=';
 /// Length of the padded standard base64 encoding of `len` octets:
 /// 4·⌈len/3⌉ characters (RFC 4648 §4). It cannot overflow for the length
 /// of any slice, which is at most `isize::MAX`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
-)]
 pub(crate) fn b64_encoded_len(len: usize) -> usize {
     len / 3 * 4 + if len.is_multiple_of(3) { 0 } else { 4 }
 }
@@ -361,10 +357,6 @@ pub(crate) fn b64_encoded_len(len: usize) -> usize {
 /// base64url, with `+` and `/` for 62 and 63). The number of `=` characters
 /// depends only on `data.len() % 3`. Every character is ASCII, so
 /// `String::push` takes the same one-byte path for every input.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
-)]
 pub(crate) fn b64_encode_append(data: &[u8], out: &mut String) {
     encode_groups(data, STANDARD, out);
     for _ in 0..(3 - data.len() % 3) % 3 {

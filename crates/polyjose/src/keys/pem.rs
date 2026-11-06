@@ -21,7 +21,7 @@ use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::types::Label;
-use crate::util::b64_decode_into;
+use crate::util::{b64_decode_into, b64_encode_append, b64_encoded_len};
 use crate::{Error, Result};
 
 /// The pre-encapsulation boundary up to the label (RFC 7468 §3 `preeb`).
@@ -33,6 +33,9 @@ const DASHES: &[u8] = b"-----";
 /// The width of every base64 line but the last (RFC 7468 §2, §3
 /// `base64fullline`).
 const LINE_WIDTH: usize = 64;
+/// Octets per full line: 64 characters are 16 quanta of 3 octets
+/// (RFC 4648 §4), so every full line ends on a quantum and needs no `=`.
+const LINE_OCTETS: usize = LINE_WIDTH / 4 * 3;
 /// The RFC 1421 §4.6.1.1 header that starts an encrypted legacy block
 /// (`Proc-Type: 4,ENCRYPTED`, as OpenSSL writes it).
 const PROC_TYPE: &[u8] = b"Proc-Type:";
@@ -229,6 +232,61 @@ fn parse_label(text: &[u8]) -> Result<Label> {
     Ok(Label::from_text(text))
 }
 
+/// Encodes `der` as a strict RFC 7468 block with `label`, in the layout
+/// OpenSSL writes: 64-character base64 lines (RFC 7468 §2: generators
+/// "MUST wrap the base64-encoded lines so that each line consists of
+/// exactly 64 characters except for the final line"), LF line endings, the
+/// same label on the END line (§2), and a final LF.
+///
+/// The text is allocated once at its exact length and returned in a buffer
+/// that wipes on drop, since `der` may be a private key (§10).
+///
+/// # Errors
+///
+/// - [`Error::UnsupportedAlgorithm`] for [`Label::Other`], which has no text.
+/// - [`Error::InvalidKey`] for empty `der`: the strict grammar has at least
+///   one base64 quantum (§3 `strictbase64finl`).
+///
+/// # Constant time
+///
+/// The base64 comes from the constant-time standard codec in
+/// [`crate::util`]; everything else depends only on `der.len()` and the
+/// label.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "called by the PEM entry points in api.rs")
+)]
+pub(crate) fn encode(label: Label, der: &[u8]) -> Result<Zeroizing<String>> {
+    let text = label.as_str().ok_or(Error::UnsupportedAlgorithm)?;
+    if der.is_empty() {
+        return Err(Error::InvalidKey("PEM body cannot be empty"));
+    }
+    let lines = der.len().div_ceil(LINE_OCTETS);
+    let len = BEGIN.len()
+        + text.len()
+        + DASHES.len()
+        + 1
+        + b64_encoded_len(der.len())
+        + lines
+        + END.len()
+        + text.len()
+        + DASHES.len()
+        + 1;
+    let mut out = Zeroizing::new(String::with_capacity(len));
+    for part in ["-----BEGIN ", text, "-----\n"] {
+        out.push_str(part);
+    }
+    for chunk in der.chunks(LINE_OCTETS) {
+        b64_encode_append(chunk, &mut out);
+        out.push('\n');
+    }
+    for part in ["-----END ", text, "-----\n"] {
+        out.push_str(part);
+    }
+    debug_assert_eq!(out.len(), len);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -418,6 +476,86 @@ mod tests {
                 Label::RsaPrivate,
                 read_der("openssl", "reject-rsa2048-private-pkcs1.der")
             ))
+        );
+    }
+
+    // ---- encoder ------------------------------------------------------
+
+    /// The encoder output is byte-identical to OpenSSL's for the same DER
+    /// and label: 64-column lines, LF, final LF (RFC 7468 §2).
+    #[test]
+    fn encoder_matches_the_openssl_fixtures() {
+        let mut checked = 0;
+        for dir in ["openssl", "rfc"] {
+            for name in pem_files(dir)
+                .into_iter()
+                .filter(|n| !n.starts_with("reject-"))
+            {
+                let sibling = data_dir(dir).join(name.replace(".pem", ".der"));
+                if !sibling.exists() {
+                    continue;
+                }
+                let der = fs::read(sibling).unwrap();
+                let pem = encode(expected_label(&name), &der).unwrap();
+                assert_eq!(*pem, read_text(dir, &name), "{dir}/{name}");
+                checked += 1;
+            }
+        }
+        // The RSA PRIVATE KEY label too (the codec is label-agnostic).
+        let der = read_der("openssl", "reject-rsa2048-private-pkcs1.der");
+        let pem = encode(Label::RsaPrivate, &der).unwrap();
+        assert_eq!(
+            *pem,
+            read_text("openssl", "reject-rsa2048-private-pkcs1.pem")
+        );
+        checked += 1;
+        assert!(checked >= 29, "{checked}");
+    }
+
+    /// Lines are exactly 64 characters except the last (RFC 7468 §2), at
+    /// every length around the 48-octet line boundary, and the output is
+    /// allocated once at its exact length.
+    #[test]
+    fn encoder_wraps_at_64_and_sizes_exactly() {
+        for n in 1..=200usize {
+            let der: Vec<u8> = (0..n).map(|i| i as u8).collect();
+            let pem = encode(Label::PublicKey, &der).unwrap();
+            assert_eq!(pem.capacity(), pem.len(), "{n} octets: no reallocation");
+            let lines: Vec<&str> = pem.split_terminator('\n').collect();
+            assert_eq!(lines[0], "-----BEGIN PUBLIC KEY-----");
+            assert_eq!(*lines.last().unwrap(), "-----END PUBLIC KEY-----");
+            let body = &lines[1..lines.len() - 1];
+            assert_eq!(body.len(), n.div_ceil(48), "{n} octets");
+            for line in &body[..body.len() - 1] {
+                assert_eq!(line.len(), 64);
+            }
+            assert!((4..=64).contains(&body.last().unwrap().len()));
+            assert!(pem.ends_with("-----\n"));
+            assert_eq!(outcome(&pem), Ok((Label::PublicKey, der)));
+        }
+    }
+
+    /// No label text for `Other`, and no strict encoding of an empty body
+    /// (RFC 7468 §3 `strictbase64finl` has at least one quantum).
+    #[test]
+    fn encoder_rejects_other_and_empty_input() {
+        assert_eq!(
+            encode(Label::Other, &[1, 2, 3]).map(|_| ()),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        assert!(matches!(
+            encode(Label::PrivateKey, &[]),
+            Err(Error::InvalidKey(_))
+        ));
+    }
+
+    /// The encoder's return type wipes the PEM text on drop.
+    #[test]
+    fn encoder_returns_zeroizing_text() {
+        let pem: Result<Zeroizing<String>> = encode(Label::PrivateKey, &ed25519_der());
+        assert_eq!(
+            *pem.unwrap(),
+            read_text("rfc", "rfc8037-a1-ed25519-pkcs8.pem")
         );
     }
 
