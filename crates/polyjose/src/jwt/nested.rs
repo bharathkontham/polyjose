@@ -12,7 +12,7 @@ use crate::jwe::Decrypted;
 use crate::jwe::{DecryptPolicy, Encryptor, decrypt_compact};
 use crate::jwk::Jwk;
 
-use super::typ::{Layer, check_jwt_header};
+use super::typ::{JWT, Layer, check_jwt_header, media_type_eq};
 use super::verify::verify_inner;
 use super::{Audience, Claims, Keys, Policy, VerifiedJwt};
 
@@ -38,8 +38,20 @@ pub struct VerifiedNestedJwt {
 /// whose protected header carries `cty: "JWT"` (RFC 7519 §5.2, §7.1
 /// step 5): the sign-then-encrypt order of RFC 7519 §11.2.
 ///
-/// **Not implemented yet** (feature 0004 T09): returns
-/// [`Error::UnsupportedAlgorithm`].
+/// - `signed_jwt` must be shaped like a compact JWS (RFC 7515 §7.1):
+///   exactly three parts of base64url characters with a non-empty header
+///   part, not a JSON serialization (RFC 7519 §1, ADR 0027 §6–§7). Only
+///   the shape is checked; the signature is the receiver's to verify.
+/// - The JWE Protected Header is a **copy** of the one set on `encryptor`
+///   with [`Encryptor::protected_header`] (its other parameters, such as
+///   `typ` or `kid`, are kept) plus `cty: "JWT"`, spelled exactly as
+///   RFC 7519 §5.2 requires. A caller `cty` equal to `JWT` under the
+///   media-type comparison (RFC 7515 §4.1.10, so `jwt` or
+///   `application/JWT`) is rewritten to `JWT`; any other `cty` is
+///   refused (ADR 0027 §7). `encryptor` itself is not changed.
+/// - The output is the JWE Compact Serialization (RFC 7516 §7.1), so
+///   `encryptor` needs exactly one recipient and no unprotected header or
+///   AAD.
 ///
 /// # Errors
 ///
@@ -48,8 +60,44 @@ pub struct VerifiedNestedJwt {
 /// a `cty` other than `JWT`; and the errors of
 /// [`Encryptor::encrypt_compact`].
 pub fn encrypt_nested(signed_jwt: &str, encryptor: &Encryptor) -> Result<String> {
-    let _ = (signed_jwt, encryptor);
-    Err(Error::UnsupportedAlgorithm)
+    check_compact_jws_shape(signed_jwt)?;
+    // RFC 7519 §5.2, §7.1 step 5: the caller's header, copied, plus cty.
+    let mut protected = encryptor.protected().cloned().unwrap_or_default();
+    if protected
+        .cty
+        .as_deref()
+        .is_some_and(|cty| !media_type_eq(cty, JWT))
+    {
+        return Err(Error::InvalidHeader("cty"));
+    }
+    protected.cty = Some(JWT.into());
+    encryptor
+        .clone()
+        .protected_header(protected)
+        .encrypt_compact(signed_jwt.as_bytes())
+}
+
+/// Whether `token` is shaped like a JWS Compact Serialization (RFC 7515
+/// §7.1): three `.`-separated parts of base64url characters (RFC 7515 §2,
+/// no padding), the first (the protected header) non-empty. Nothing is
+/// decoded or copied, so a secret payload is not duplicated.
+///
+/// # Errors
+///
+/// [`Error::InvalidFormat`] for any other shape.
+fn check_compact_jws_shape(token: &str) -> Result<()> {
+    const NOT_A_JWS: Error = Error::InvalidFormat("a nested JWT encrypts a compact JWS");
+    let mut parts = token.split('.');
+    let (Some(header), Some(_), Some(_), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(NOT_A_JWS);
+    };
+    let base64url = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+    if header.is_empty() || !token.bytes().all(|b| b == b'.' || base64url(b)) {
+        return Err(NOT_A_JWS);
+    }
+    Ok(())
 }
 
 /// Decrypts the nested JWT `token` with `decrypt_key` under
@@ -299,6 +347,93 @@ mod tests {
     }
 
     const CLAIMS: &str = r#"{"iss":"joe","sub":"s","exp":1300819380}"#;
+
+    /// The protected header of compact JWE `token`, as sent.
+    fn outer_header_of(token: &str) -> Header {
+        let first = token.split('.').next().expect("a part");
+        let json = crate::util::b64url_decode(first).expect("base64url");
+        Header::from_json(&json).expect("header")
+    }
+
+    /// RFC 7519 §5.2, §7.1 step 5: `encrypt_nested` adds `cty: "JWT"`,
+    /// keeps the caller's other protected parameters, leaves the caller's
+    /// encryptor unchanged, and the result decrypts and verifies.
+    #[test]
+    fn encrypt_nested_adds_cty_jwt_to_a_copy() {
+        let jws = inner(CLAIMS);
+        for (caller, typ) in [
+            (None, None),
+            (
+                Some(r#"{"typ":"JWT","kid":"k1","x-tenant":"a"}"#),
+                Some("JWT"),
+            ),
+            (Some(r#"{"cty":"JWT"}"#), None),
+            (Some(r#"{"cty":"jwt"}"#), None),
+            (Some(r#"{"cty":"application/JWT"}"#), None),
+        ] {
+            let e = encryptor(caller.map(header));
+            let before = e.protected().cloned();
+            let token = encrypt_nested(&jws, &e).expect("nested JWT");
+            assert_eq!(
+                e.protected().cloned(),
+                before,
+                "{caller:?}: caller unchanged"
+            );
+            let h = outer_header_of(&token);
+            // RFC 7519 §5.2: "the value MUST be "JWT"", spelled exactly.
+            assert_eq!(h.cty.as_deref(), Some("JWT"), "{caller:?}");
+            assert_eq!(h.typ.as_deref(), typ, "{caller:?}");
+            if caller.is_some_and(|c| c.contains("kid")) {
+                assert_eq!(h.kid.as_deref(), Some("k1"));
+                assert!(h.other_params().contains("x-tenant"));
+            }
+            let v = run(&token).expect("round trip");
+            assert_eq!(v.outer_header, h, "{caller:?}");
+        }
+    }
+
+    /// ADR 0027 §7: a caller `cty` that is not `JWT` under the RFC 7515
+    /// §4.1.10 comparison is `InvalidHeader`, not silently overridden.
+    #[test]
+    fn encrypt_nested_refuses_a_different_caller_cty() {
+        let jws = inner(CLAIMS);
+        for cty in ["JOSE", "at+jwt", "JWT ", "text/JWT", "application/jose"] {
+            let e = encryptor(Some(header(&format!(r#"{{"cty":"{cty}"}}"#))));
+            assert!(
+                matches!(encrypt_nested(&jws, &e), Err(Error::InvalidHeader(_))),
+                "{cty:?}"
+            );
+        }
+    }
+
+    /// RFC 7515 §7.1, ADR 0027 §7: the input must be shaped like a compact
+    /// JWS: three parts of base64url characters, a non-empty header part,
+    /// and no JSON serialization. Checked before the `cty`.
+    #[test]
+    fn encrypt_nested_needs_a_three_part_compact_jws() {
+        let jws = inner(CLAIMS);
+        let jwe = encrypt_nested(&jws, &encryptor(None)).expect("nested JWT");
+        let bad_cty = encryptor(Some(header(r#"{"cty":"JOSE"}"#)));
+        for input in [
+            "",
+            "a",
+            "a.b",
+            "a.b.c.d",
+            jwe.as_str(),
+            ".b.c",
+            "a.b+.c",
+            "a.b.c=",
+            " a.b.c",
+            "{\"payload\":\"x.y.z\"}",
+        ] {
+            for e in [encryptor(None), bad_cty.clone()] {
+                assert!(
+                    matches!(encrypt_nested(input, &e), Err(Error::InvalidFormat(_))),
+                    "{input:?}"
+                );
+            }
+        }
+    }
 
     /// RFC 7519 §7.2 step 8: the happy path, with the outer protected
     /// header, the recipient index and the inner result.
