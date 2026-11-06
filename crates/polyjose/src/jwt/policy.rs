@@ -335,6 +335,39 @@ impl<'a> Policy<'a> {
     /// with [`Error::InvalidFormat`] before it is parsed (ADR 0026 §7).
     /// Default
     /// [`VerifyOptions::DEFAULT_MAX_INPUT_LEN`](crate::jws::VerifyOptions::DEFAULT_MAX_INPUT_LEN).
+    ///
+    /// **Raising it does not raise the JSON limits.** The JWS Protected
+    /// Header and the Claims Set are each parsed with
+    /// [`json::Limits::DEFAULT`](crate::json::Limits::DEFAULT), whatever
+    /// this setting: a nesting depth of 32, 1 MiB (1 048 576 bytes) of JSON,
+    /// and 10 000 members in one object or elements in one array
+    /// (RFC 8259 §9; ADR 0026 §7). A Claims Set over any of them fails with
+    /// [`Error::InvalidJson`], and only after its signature has been
+    /// verified (ADR 0027 §9 J3). So a token whose payload decodes to more
+    /// than 1 MiB is always rejected, and a limit above about 1.4 MB (the
+    /// base64url length of a 1 MiB payload) admits no larger Claims Set.
+    ///
+    /// ```
+    /// use polyjose::Error;
+    /// use polyjose::jwa::SigningAlg;
+    /// use polyjose::jwk::Jwk;
+    /// use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy};
+    ///
+    /// // RFC 7515 Appendix A.1.1's HMAC key.
+    /// let key = Jwk::from_json(br#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#)?;
+    /// let mut claims = Claims::new();
+    /// claims.exp = NumericDate::from_secs(1_300_819_380);
+    /// claims.insert("pad", "a".repeat(1024 * 1024))?;
+    /// let token = jwt::sign(&claims, &IssueOptions::new(SigningAlg::HS256), &key)?;
+    ///
+    /// let clock = FixedClock(1_300_819_320);
+    /// let algs = [SigningAlg::HS256];
+    /// let policy = Policy::new(&clock, &algs)?.max_input_len(4 * 1024 * 1024);
+    /// // The token is under 4 MiB and correctly signed, but its claims are over 1 MiB.
+    /// let result = jwt::verify(&token, Keys::One(&key), &policy);
+    /// assert!(matches!(result, Err(Error::InvalidJson(_))));
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
     pub fn max_input_len(mut self, n: usize) -> Self {
         self.jws = self.jws.max_input_len(n);
         self
