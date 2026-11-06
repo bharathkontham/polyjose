@@ -1,5 +1,9 @@
 //! JSON Web Encryption (RFC 7516).
 
+mod api;
+
+pub use api::DecryptPolicy;
+
 // The internal modules below are wired together by the JWE tasks of
 // feature 0003; until the pipeline (T09) calls them, most of their items
 // have no caller. `allow`, not `expect`: each task fills in its own file
