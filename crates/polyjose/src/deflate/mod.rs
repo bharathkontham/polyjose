@@ -24,6 +24,9 @@ use crate::{Error, Result};
 
 mod bits;
 mod huffman;
+mod inflate;
+#[cfg(test)]
+mod tests;
 
 /// The input ended inside a block (RFC 1951 §3.2.3: every stream ends with
 /// a block whose BFINAL bit is set).
@@ -37,6 +40,34 @@ const INCOMPLETE_CODE: &str = "deflate: incomplete Huffman code";
 /// A bit sequence that is no code of the table (the unused code of a single
 /// distance code, RFC 1951 §3.2.7), or a code length outside 0–15.
 const INVALID_CODE: &str = "deflate: invalid Huffman code";
+/// BTYPE 11 (RFC 1951 §3.2.3: "reserved (error)").
+const RESERVED_BLOCK_TYPE: &str = "deflate: reserved block type 11";
+/// A stored block whose NLEN is not the one's complement of LEN (RFC 1951
+/// §3.2.4).
+const STORED_LENGTH_MISMATCH: &str = "deflate: stored block NLEN is not the complement of LEN";
+/// A distance reaching before the start of the output (RFC 1951 §3.2.5).
+const DISTANCE_TOO_FAR: &str = "deflate: distance beyond the output so far";
+/// Literal/length symbol 286 or 287 (RFC 1951 §3.2.6: they "will never
+/// actually occur in the compressed data").
+const INVALID_LENGTH_SYMBOL: &str = "deflate: literal/length symbol 286 or 287";
+/// Distance symbol 30 or 31 (RFC 1951 §3.2.6).
+const INVALID_DISTANCE_SYMBOL: &str = "deflate: distance symbol 30 or 31";
+/// HLIT above 286: more literal/length codes than RFC 1951 §3.2.5 defines.
+const TOO_MANY_LENGTH_CODES: &str = "deflate: HLIT above 286";
+/// HDIST above 30: more distance codes than RFC 1951 §3.2.5 defines.
+const TOO_MANY_DISTANCE_CODES: &str = "deflate: HDIST above 30";
+/// Code-length symbol 16 with no previous length to repeat (RFC 1951
+/// §3.2.7).
+const REPEAT_WITHOUT_PREVIOUS: &str = "deflate: repeat code 16 with no previous length";
+/// Code lengths running past HLIT + HDIST (RFC 1951 §3.2.7).
+const REPEAT_OVERRUN: &str = "deflate: code lengths overrun HLIT + HDIST";
+/// A literal/length code without end-of-block symbol 256 (RFC 1951 §3.2.5,
+/// §3.2.7).
+const MISSING_END_OF_BLOCK: &str = "deflate: missing end-of-block code";
+/// The output would exceed the caller's cap (ADR 0017 §1).
+const OUTPUT_LIMIT: &str = "deflate: output exceeds the limit";
+/// The output buffer could not be allocated.
+const OUTPUT_ALLOCATION: &str = "deflate: output allocation failed";
 /// A length/distance pair in a block that declared no distance codes
 /// (RFC 1951 §3.2.7: "the data is all literals").
 const NO_DISTANCE_CODES: &str = "deflate: distance in a block with no distance codes";
