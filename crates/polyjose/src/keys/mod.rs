@@ -32,6 +32,9 @@ mod pkcs8;
 mod rsa;
 mod sec1;
 mod spki;
+mod types;
+
+pub use self::types::{JoseAlg, KeyFormat, KeySpec};
 
 /// The public generation API (`generate`, `generate_for`) is defined in
 /// `generate.rs` and re-exported here, so that module alone owns it.
