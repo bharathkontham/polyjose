@@ -857,6 +857,57 @@ mod tests {
     }
 
     #[test]
+    fn direct_modes_need_a_protected_alg_and_enc_in_step_4() {
+        // ADR 0050 §1: dir and ECDH-ES with `alg` or `enc` outside the
+        // protected header are InvalidHeader in step 4, so before step 5
+        // (crit), the support check, the allow-list and the key binding.
+        let key = oct(&[1; 16], "");
+        let mut parts = general(&[&key]);
+        set_alg(&mut parts, 0, "dir");
+        parts.recipients[0].encrypted_key.clear();
+        let not_allowed = policy(&[A::A128KW]);
+        let unbound = oct(&[1; 16], r#","alg":"A128KW""#);
+        assert_eq!(
+            code(decrypt(parts.clone(), &key, &not_allowed)),
+            "InvalidHeader"
+        );
+        assert_eq!(
+            code(decrypt(parts.clone(), &unbound, &policy(&[A::Dir]))),
+            "InvalidHeader"
+        );
+        let mut crit = parts.clone();
+        reprotect(&mut crit, r#"{"enc":"A128GCM","crit":["x-a"],"x-a":1}"#);
+        assert_eq!(
+            code(decrypt(crit, &key, &policy(&[A::Dir]))),
+            "InvalidHeader"
+        );
+        let mut unsupported_enc = parts.clone();
+        reprotect(&mut unsupported_enc, r#"{"enc":"A128CTR"}"#);
+        assert_eq!(
+            code(decrypt(unsupported_enc, &key, &policy(&[A::Dir]))),
+            "InvalidHeader"
+        );
+        set_alg(&mut parts, 0, "ECDH-ES");
+        assert_eq!(
+            code(decrypt(parts.clone(), &key, &policy(&[A::EcdhEs]))),
+            "InvalidHeader"
+        );
+
+        // `alg` protected but `enc` not: still refused.
+        let mut enc_unprotected = general(&[&key]);
+        rheader(&mut enc_unprotected, 0).alg = None;
+        rheader(&mut enc_unprotected, 0).enc = Some(ContentEncAlg::A128GCM);
+        reprotect(&mut enc_unprotected, r#"{"alg":"dir"}"#);
+        assert_eq!(
+            code(decrypt(enc_unprotected, &key, &policy(&[A::Dir]))),
+            "InvalidHeader"
+        );
+
+        // A non-direct alg may stay unprotected (RFC 7516 §7.2.1).
+        assert_eq!(code(decrypt(general(&[&key]), &key, &not_allowed)), "ok");
+    }
+
+    #[test]
     fn unsupported_enc_and_zip_fail_immediately() {
         let key = oct(&[1; 16], "");
         let p = policy(&[A::A128KW]);
