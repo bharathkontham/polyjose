@@ -23,6 +23,13 @@
 //! guarantee about the machine code, as for any pure-Rust implementation.
 //! `base64ct` serves only as a dev-dependency oracle in the differential
 //! tests (`tests/base64url_differential.rs`).
+//!
+//! The same codec also has a crate-internal standard-alphabet, padded
+//! variant (RFC 4648 §4, Table 1), for the base64 inside RFC 7468 PEM
+//! blocks (`keys/pem.rs`). It is one implementation with the alphabet as a
+//! public parameter, not a second copy, so private-key PEM bodies get the
+//! same constant-time treatment. JOSE values themselves are always
+//! base64url.
 use subtle::{Choice, ConstantTimeEq};
 use zeroize::Zeroizing;
 
