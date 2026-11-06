@@ -11,8 +11,12 @@
 //! - step 4's header structure: [`JoseHeader::new`] for one signature,
 //!   [`common_b64`] across signatures;
 //! - the JWS Signing Input: [`signing_input`];
-//! - steps 5–9 for verification: [`check_verify`] (5–8) and
-//!   [`verify_signature`] (5–9, calling the [`Families`] table);
+//! - steps 5–9 for verification: [`allowed_alg`] (5–7, no key),
+//!   [`verify_with_key`] (8–9 for one key, calling the [`Families`]
+//!   table), and [`verify_signature`] (5–9, the two in turn). A caller that
+//!   chooses keys from the protected header (ADR 0027 §9, ADR 0029 §1)
+//!   runs `allowed_alg` once and `verify_with_key` per candidate key;
+//!   `compact.rs` does so through `precheck_compact` and `finish_compact`;
 //! - steps 5–8 for signing: [`prepare_sign`], whose [`SignReady`] is the
 //!   only way to reach a family's `sign`;
 //! - the multiple-signature ranking of ADR 0026 §3: [`progress_rank`] and
@@ -248,8 +252,10 @@ fn understood_alg(header: &JoseHeader) -> Result<SigningAlg> {
     header.union.signing_alg()
 }
 
-/// Steps 5–8 of ADR 0026 §2 for one signature being verified, returning
-/// its `alg`.
+/// Steps 5–7 of ADR 0026 §2 for one signature being verified, returning
+/// its `alg`. No key is involved, so a caller that chooses keys from the
+/// header (ADR 0027 §9, ADR 0029 §1) runs this once, then
+/// [`verify_with_key`] per candidate.
 ///
 /// # Errors
 ///
@@ -260,24 +266,62 @@ fn understood_alg(header: &JoseHeader) -> Result<SigningAlg> {
 ///    (RFC 7515 §4.1.1).
 /// 7. [`Error::AlgorithmNotAllowed`]: `alg` is `none` or not in
 ///    `opts`'s allow-list (RFC 8725 §3.1; RFC 7515 §5.2, last paragraph).
-/// 8. [`Error::KeyAlgorithmMismatch`] / [`Error::InvalidKey`]: key binding
-///    ([`bind_key`]).
-pub(crate) fn check_verify(
-    header: &JoseHeader,
-    key: &Jwk,
-    opts: &VerifyOptions<'_>,
-) -> Result<SigningAlg> {
+pub(crate) fn allowed_alg(header: &JoseHeader, opts: &VerifyOptions<'_>) -> Result<SigningAlg> {
     let alg = understood_alg(header)?;
     // `VerifyOptions` cannot hold `none`; checked again regardless.
     if alg == SigningAlg::None || !opts.allowed_algs.contains(&alg) {
         return Err(Error::AlgorithmNotAllowed);
     }
+    Ok(alg)
+}
+
+/// Steps 5–8 of ADR 0026 §2 for one signature being verified:
+/// [`allowed_alg`], then key binding ([`bind_key`]), returning the `alg`.
+///
+/// # Errors
+///
+/// As [`allowed_alg`], then step 8, [`Error::KeyAlgorithmMismatch`] /
+/// [`Error::InvalidKey`].
+#[cfg(test)]
+pub(crate) fn check_verify(
+    header: &JoseHeader,
+    key: &Jwk,
+    opts: &VerifyOptions<'_>,
+) -> Result<SigningAlg> {
+    let alg = allowed_alg(header, opts)?;
     bind_key(&alg, key, Operation::Verify)?;
     Ok(alg)
 }
 
-/// Steps 5–9 of ADR 0026 §2 for one signature: [`check_verify`], then the
-/// signature check through `families` (RFC 7515 §5.2 step 8).
+/// Steps 8–9 of ADR 0026 §2 for one signature whose `alg` passed steps
+/// 5–7 ([`allowed_alg`]): key binding, then the signature check through
+/// `families` (RFC 7515 §5.2 step 8).
+///
+/// Nothing is computed with `key` before it is bound to `alg`, so a key of
+/// the wrong family, `use`, `key_ops` or `alg` never reaches a primitive.
+/// Callers trying several candidate keys call this once per key with the
+/// same `signing_input` and `signature`.
+///
+/// # Errors
+///
+/// In this order:
+/// 8. [`Error::KeyAlgorithmMismatch`] / [`Error::InvalidKey`]: key binding
+///    ([`bind_key`], RFC 7517 §4.2–§4.4, RFC 7518 §3.2, RFC 8725 §3.1).
+/// 9. [`Error::InvalidSignature`] (or [`Error::InvalidKey`] for a key only
+///    the primitive can reject) from the family.
+pub(crate) fn verify_with_key(
+    families: &Families,
+    alg: &SigningAlg,
+    key: &Jwk,
+    signing_input: &[u8],
+    signature: &[u8],
+) -> Result<()> {
+    bind_key(alg, key, Operation::Verify)?;
+    (families.verify)(alg, key, signing_input, signature)
+}
+
+/// Steps 5–9 of ADR 0026 §2 for one signature: [`allowed_alg`], then
+/// [`verify_with_key`] (RFC 7515 §5.2 step 8).
 ///
 /// `signing_input` is [`signing_input`] of this signature's encoded
 /// protected header and the payload; `signature` is the decoded JWS
@@ -285,9 +329,7 @@ pub(crate) fn check_verify(
 ///
 /// # Errors
 ///
-/// As [`check_verify`], then [`Error::InvalidSignature`] (or
-/// [`Error::InvalidKey`] for a key only the primitive can reject) from the
-/// family.
+/// As [`allowed_alg`], then as [`verify_with_key`].
 pub(crate) fn verify_signature(
     families: &Families,
     header: &JoseHeader,
@@ -296,8 +338,8 @@ pub(crate) fn verify_signature(
     signing_input: &[u8],
     signature: &[u8],
 ) -> Result<SigningAlg> {
-    let alg = check_verify(header, key, opts)?;
-    (families.verify)(&alg, key, signing_input, signature)?;
+    let alg = allowed_alg(header, opts)?;
+    verify_with_key(families, &alg, key, signing_input, signature)?;
     Ok(alg)
 }
 
@@ -705,6 +747,141 @@ mod tests {
             check_verify(&hj(r#"{"alg":"HS256"}"#), &hs, &opts(&[A::HS256])),
             Ok(A::HS256)
         );
+    }
+
+    /// Steps 5-7 for verification, as an error code: no key involved.
+    fn allowed_code(protected: &str, allowed: &[SigningAlg]) -> &'static str {
+        allowed_alg(&hj(protected), &opts(allowed)).map_or_else(|e| e.code(), |_| "ok")
+    }
+
+    #[test]
+    fn allowed_alg_runs_steps_5_to_7_without_a_key() {
+        // ADR 0026 §2 steps 5-7 (RFC 7515 §4.1.11, §4.1.1, §5.2 last
+        // paragraph; RFC 8725 §3.1), the part ADR 0027 §9 runs before
+        // choosing keys.
+        assert_eq!(
+            allowed_code(r#"{"alg":"HS256","crit":["x-a"],"x-a":1}"#, &[A::HS256]),
+            "UnknownCritical"
+        );
+        assert_eq!(
+            allowed_code(r#"{"alg":"HS1","crit":["x-a"],"x-a":1}"#, &[A::HS256]),
+            "UnknownCritical"
+        );
+        assert_eq!(
+            allowed_code(r#"{"alg":"HS1"}"#, &[A::HS256]),
+            "UnsupportedAlgorithm"
+        );
+        assert_eq!(
+            allowed_code(r#"{"alg":"HS384"}"#, &[A::HS256]),
+            "AlgorithmNotAllowed"
+        );
+        assert_eq!(
+            allowed_code(r#"{"alg":"none"}"#, &[A::HS256, A::ES256]),
+            "AlgorithmNotAllowed"
+        );
+        assert_eq!(
+            allowed_alg(
+                &hj(r#"{"alg":"ES256","b64":false,"crit":["b64"]}"#),
+                &opts(&[A::HS256, A::ES256])
+            ),
+            Ok(A::ES256)
+        );
+    }
+
+    #[test]
+    fn check_verify_is_allowed_alg_then_key_binding() {
+        // Steps 5-7 then step 8: the same code as before the split for
+        // every header and key, including the ones only step 8 rejects.
+        let headers = [
+            r#"{"alg":"HS256","crit":["x-a"],"x-a":1}"#,
+            r#"{"alg":"HS1"}"#,
+            r#"{"alg":"HS384"}"#,
+            r#"{"alg":"none"}"#,
+            r#"{"alg":"HS256"}"#,
+            r#"{"alg":"HS512"}"#,
+            r#"{"alg":"ES256"}"#,
+            r#"{"alg":"RS256"}"#,
+        ];
+        let keys = [
+            keys::oct(32, ""),
+            keys::oct(64, ""),
+            keys::p256(""),
+            keys::rsa(2048),
+            keys::oct(32, r#","alg":"HS512""#),
+        ];
+        let allowed = [A::HS256, A::HS512, A::ES256, A::RS256];
+        for header in headers {
+            for key in &keys {
+                let split = allowed_alg(&hj(header), &opts(&allowed))
+                    .and_then(|alg| bind_key(&alg, key, Operation::Verify).map(|()| alg));
+                assert_eq!(check_verify(&hj(header), key, &opts(&allowed)), split);
+            }
+        }
+    }
+
+    #[test]
+    fn verify_with_key_runs_steps_8_and_9() {
+        // ADR 0026 §2 step 8 (key binding) before step 9 (RFC 7515 §5.2
+        // step 8, the signature), for an `alg` that passed steps 5-7.
+        let input = signing_input("eyJhbGciOiJIUzI1NiJ9", b"$.02", true);
+        let sig = fake_signature(&A::HS256, &input);
+        let hs = keys::oct(32, "");
+        let check = |families: &Families, alg: &SigningAlg, key: &Jwk, sig: &[u8]| {
+            verify_with_key(families, alg, key, &input, sig)
+        };
+        assert_eq!(check(&FAKE, &A::HS256, &hs, &sig), Ok(()));
+        assert_eq!(
+            check(&FAKE, &A::HS256, &hs, &sig[1..]),
+            Err(Error::InvalidSignature)
+        );
+        assert_eq!(
+            check(&REJECTING, &A::HS256, &hs, &sig),
+            Err(Error::InvalidSignature)
+        );
+        // A valid signature never rescues a key that fails binding.
+        assert_eq!(
+            check(&FAKE, &A::HS256, &keys::rsa(2048), &sig),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        assert_eq!(
+            check(&FAKE, &A::HS256, &keys::oct(32, r#","use":"enc""#), &sig),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        // A weak key (RFC 7518 §3.2) is step 8 too.
+        assert_eq!(
+            check(&FAKE, &A::HS256, &keys::oct(31, ""), &sig).map_err(|e| e.code()),
+            Err("InvalidKey")
+        );
+    }
+
+    #[test]
+    fn verify_signature_is_allowed_alg_then_verify_with_key() {
+        // The composition json.rs relies on is unchanged by the split.
+        let input = signing_input("eyJhbGciOiJIUzI1NiJ9", b"p", true);
+        let good = fake_signature(&A::HS256, &input);
+        let allowed = [A::HS256, A::ES256];
+        for header in [
+            r#"{"alg":"HS256"}"#,
+            r#"{"alg":"HS384"}"#,
+            r#"{"alg":"none"}"#,
+            r#"{"alg":"ES256"}"#,
+            r#"{"alg":"HS256","crit":["x-a"],"x-a":1}"#,
+        ] {
+            for key in [keys::oct(32, ""), keys::oct(31, ""), keys::p256("")] {
+                for sig in [&good[..], b"x"] {
+                    let hdr = hj(header);
+                    let o = opts(&allowed);
+                    let split = allowed_alg(&hdr, &o).and_then(|alg| {
+                        verify_with_key(&FAKE, &alg, &key, &input, sig).map(|()| alg)
+                    });
+                    assert_eq!(
+                        verify_signature(&FAKE, &hdr, &key, &o, &input, sig),
+                        split,
+                        "{header}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
