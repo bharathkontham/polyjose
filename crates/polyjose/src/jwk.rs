@@ -44,9 +44,10 @@
 //! # What import checks
 //!
 //! Validation is structural, plus the curve checks the primitives provide
-//! (ADR 0041 §4, ADR 0007): EC points must be on their curve, EC private
-//! scalars in range, and Ed25519 public keys valid. The 8192-bit RSA
-//! ceiling is enforced where an RSA key is used (ADR 0026 §2 step 8).
+//! (ADR 0041 §4, ADR 0043, ADR 0007): EC points must be on their curve, EC
+//! private scalars in range, Ed25519 public keys valid, and a private key
+//! must be the key of its own public part. The 8192-bit RSA ceiling is
+//! enforced where an RSA key is used (ADR 0026 §2 step 8).
 //!
 //! - **`kty`** must be present and is case-sensitive (RFC 7517 §4.1).
 //!   `oct`, `RSA`, `EC` and `OKP` are supported.
@@ -57,12 +58,19 @@
 //!   curve, with reduced coordinates, other than the identity (SEC 1 v2
 //!   §3.2.2.1), and `d` must be in [1, n − 1] for the group order n
 //!   (SEC 1 v2 §3.2.1), both checked by the curve crate (ADR 0041 §4).
+//!   Last, `d` must be the private key of the point: d·G = (`x`, `y`)
+//!   (SEC 1 v2 §3.2.1; ADR 0043 §3).
 //! - **`OKP`** (RFC 8037 §2): `crv` is `Ed25519` or `X25519` (Ed448 and
 //!   X448 are out of scope, ADR 0006); `x`, and `d` if present, are 32
 //!   octets. An `Ed25519` `x` must decode canonically to a point
 //!   (RFC 8032 §5.1.3) that is not of small order (ADR 0026 §6,
-//!   ADR 0041 §4). An `X25519` `x` has no further check: every 32-octet
-//!   string is a valid u-coordinate (RFC 7748 §5).
+//!   ADR 0041 §4) and has no torsion component (ADR 0043 §1), and a `d`
+//!   must derive that `x` (RFC 8032 §5.1.5, RFC 8037 §2; ADR 0043 §3). An
+//!   `X25519` `x` has no further check: every 32-octet string is a valid
+//!   u-coordinate (RFC 7748 §5), and torsion is neutralised by clamping
+//!   (ADR 0043 §2). Whether an `X25519` `d` derives `x` (ADR 0043 §3) is not
+//!   checked yet: this release has no X25519 primitive, and feature 0003
+//!   adds the check together with X25519 key agreement.
 //! - **`RSA`**, public keys only (RFC 7518 §6.3.1, ADR 0021): `n` and `e`
 //!   are minimal Base64urlUInt values, non-empty with no leading zero octet
 //!   (RFC 7518 §2, §6.3.1.1); `n` is odd (RFC 8017 §3.1) and at least
@@ -119,8 +127,9 @@
 //! 2. For `RSA`, any private member (→ `UnsupportedAlgorithm`, ADR 0021),
 //!    before anything else is read.
 //! 3. Every structural check: the key-type members (for `EC`, the lengths
-//!    of `x`, `y` and `d` first, then the point, then the scalar; for `OKP`,
-//!    the lengths, then the `Ed25519` key), then `use`, `key_ops` (and their
+//!    of `x`, `y` and `d` first, then the point, then the scalar, then
+//!    whether `d` derives the point; for `OKP`, the lengths, then the
+//!    `Ed25519` `x`, then whether `d` derives it), then `use`, `key_ops` (and their
 //!    consistency), `alg`'s type, `kid`, `x5u`, `x5c`, `x5t`, `x5t#S256`
 //!    (→ `InvalidKey` or `InvalidBase64`).
 //! 4. The `alg` value: `RSA1_5`/`RSA-OAEP` (→ `UnsupportedAlgorithm`), then
@@ -142,9 +151,10 @@
 //!   (RFC 7517 §4.4, RFC 8725 §3.1).
 //! - [`InvalidKey`](crate::Error::InvalidKey): malformed. A missing or wrongly typed member,
 //!   a wrong length, a non-minimal or out-of-range RSA value, an EC point
-//!   off its curve, an EC `d` outside [1, n − 1], an invalid or small-order
-//!   Ed25519 key, an empty `k`, duplicate `key_ops`, or inconsistent
-//!   `use`/`key_ops`.
+//!   off its curve, an EC `d` outside [1, n − 1], an invalid, small-order
+//!   or mixed-order Ed25519 key, an EC or Ed25519 `d` that is not the
+//!   private key of the public part, an empty `k`, duplicate `key_ops`, or
+//!   inconsistent `use`/`key_ops`.
 //! - [`InvalidBase64`](crate::Error::InvalidBase64): a binary member is not canonical unpadded
 //!   base64url (the code RFC 7515 §2 decoding uses everywhere).
 //! - [`InvalidJson`](crate::Error::InvalidJson) ([`Jwk::from_json`][from_json] only): not one
@@ -657,8 +667,8 @@ impl fmt::Debug for RsaPublicKey {
 ///
 /// The curve is supported, every member has its exact length, the point is
 /// on the curve and is not the identity, and `d` is in [1, n − 1]
-/// (ADR 0007, ADR 0041 §4). Whether `d` belongs to (`x`, `y`) is not
-/// checked on import.
+/// (ADR 0007, ADR 0041 §4), and `d` is the private key of (`x`, `y`)
+/// (ADR 0043 §3).
 ///
 /// `d` is held in a buffer that is wiped on drop, and `Debug` prints
 /// `"<redacted>"` instead of it.
@@ -733,10 +743,12 @@ impl ZeroizeOnDrop for EcKey {}
 /// for a private key, `d`.
 ///
 /// The curve is supported and `x` and `d` have their exact length. An
-/// `Ed25519` `x` must also decode canonically and not be of small order
-/// (RFC 8032 §5.1.3, ADR 0026 §6, ADR 0041 §4); an `X25519` `x` can be any
-/// 32 octets (RFC 7748 §5). Whether `d` belongs to `x` is not checked on
-/// import.
+/// `Ed25519` `x` must also decode canonically, not be of small order and
+/// have no torsion component (RFC 8032 §5.1.3, ADR 0026 §6, ADR 0041 §4,
+/// ADR 0043 §1), and an `Ed25519` `d` must derive `x` (ADR 0043 §3). An
+/// `X25519` `x` can be any 32 octets (RFC 7748 §5); whether an `X25519` `d`
+/// derives `x` is not checked yet (ADR 0043 §3 is completed by feature
+/// 0003, which brings the X25519 primitive).
 ///
 /// `d` is held in a buffer that is wiped on drop, and `Debug` prints
 /// `"<redacted>"` instead of it.
@@ -1901,9 +1913,10 @@ fn parse_okp(object: &Object, crv: OkpCurve) -> Result<OkpKey> {
     // only: every 32-octet string is a valid u-coordinate (RFC 7748 §5
     // masks the top bit, and "Implementations MUST accept non-canonical
     // values and process them as if they had been reduced modulo the field
-    // prime"), so it has no decoding failure. A small-order input shows up
-    // as an all-zero shared secret, which ECDH-ES checks where it computes
-    // one (RFC 7748 §6.1, feature 0003).
+    // prime"), so it has no decoding failure. Torsion components are normal
+    // for X25519 and clamping neutralises them (ADR 0043 §2). A small-order
+    // input shows up as an all-zero shared secret, which ECDH-ES checks
+    // where it computes one (RFC 7748 §6.1, feature 0003).
     if crv == OkpCurve::Ed25519 && !ed25519_public_is_valid(&x) {
         return Err(Error::InvalidKey(ED25519_PUBLIC_INVALID));
     }
