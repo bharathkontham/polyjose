@@ -284,14 +284,13 @@ fn der_in_another_format_than_named_is_never_imported() {
     }
 }
 
-/// Pins today's code for SPKI DER passed as `KeyFormat::Pkcs8`:
-/// `UnsupportedAlgorithm`, because `pkcs8::decode` reads a leading inner
-/// SEQUENCE as an EncryptedPrivateKeyInfo (RFC 5958 §3), and an SPKI starts
-/// `SEQUENCE { SEQUENCE { … } }` too. It fails closed either way. A planned
-/// `pkcs8.rs` fix makes this `InvalidKey` (the SPKI is malformed as PKCS#8),
-/// and flips this test.
+/// SPKI DER passed as `KeyFormat::Pkcs8` is `InvalidKey`: an SPKI is
+/// `SEQUENCE { AlgorithmIdentifier, BIT STRING }` (RFC 5280 §4.1.2.7), which
+/// is malformed PKCS#8. Only the exact EncryptedPrivateKeyInfo shape,
+/// `SEQUENCE { AlgorithmIdentifier, OCTET STRING }` (RFC 5958 §3), is
+/// `UnsupportedAlgorithm` (ADR 0018 §4).
 #[test]
-fn spki_as_pkcs8_is_unsupported_algorithm_until_the_pkcs8_fix() {
+fn spki_as_pkcs8_is_invalid_key() {
     let mut checked = 0;
     for dir in ["openssl", "rfc"] {
         for file in files(dir)
@@ -300,10 +299,10 @@ fn spki_as_pkcs8_is_unsupported_algorithm_until_the_pkcs8_fix() {
             .filter(|f| named_format(f) == Some(KeyFormat::Spki))
         {
             let result = Jwk::from_der(&read(dir, &file), KeyFormat::Pkcs8);
-            assert_eq!(
-                result.as_ref().err(),
-                Some(&Error::UnsupportedAlgorithm),
-                "{dir}/{file}"
+            assert!(
+                matches!(result, Err(Error::InvalidKey(_))),
+                "{dir}/{file}: {:?}",
+                result.err()
             );
             checked += 1;
         }
