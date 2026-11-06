@@ -52,23 +52,26 @@ part of the core crate and are not listed here.
 - **License:** MIT OR Apache-2.0
 - **Used for:** not used directly. Common traits and types shared by the RustCrypto algorithm
   traits, here by `digest`.
-- **Audit status:** not in the ADR 0019 register; a dependency of `sha2`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `digest` (which `sha2` uses).
 
 ### `hybrid-array`
 
 - **Upstream:** RustCrypto, [RustCrypto/hybrid-array](https://github.com/RustCrypto/hybrid-array)
   ([crates.io](https://crates.io/crates/hybrid-array))
 - **License:** MIT OR Apache-2.0
-- **Used for:** the fixed-size array type of `sha2`'s blocks and outputs.
-- **Audit status:** not in the ADR 0019 register; a dependency of `sha2`.
+- **Used for:** not used directly. The fixed-size array type of `sha2`'s blocks and outputs, through
+  `block-buffer` and `crypto-common`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `block-buffer` and `crypto-common`
+  (both pulled in by `digest`).
 
 ### `typenum`
 
 - **Upstream:** [paholg/typenum](https://github.com/paholg/typenum)
   ([crates.io](https://crates.io/crates/typenum))
 - **License:** MIT OR Apache-2.0
-- **Used for:** not used directly. The type-level sizes behind `hybrid-array`.
-- **Audit status:** not in the ADR 0019 register; a dependency of `sha2`.
+- **Used for:** not used directly. The type-level sizes behind `hybrid-array` and `crypto-common`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `hybrid-array` and
+  `crypto-common`.
 
 ### `cpufeatures`
 
@@ -135,5 +138,6 @@ part of the core crate and are not listed here.
   ([crates.io](https://crates.io/crates/zeroize))
 - **License:** Apache-2.0 OR MIT
 - **Used for:** wiping key material and other secrets from memory when they are dropped
-  (`Zeroize`, `Zeroizing`). `sha2` also uses it to wipe its hash state.
+  (`Zeroize`, `Zeroizing`). `sha2` (through `digest`'s re-export), `digest` and `block-buffer` also
+  use it to wipe the hash state and buffered input.
 - **Audit status:** not in the ADR 0019 register.
