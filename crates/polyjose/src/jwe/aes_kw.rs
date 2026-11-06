@@ -150,6 +150,7 @@ impl Kw {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::wycheproof::{self, Deviation, Expected, Outcome};
 
     fn hex(s: &str) -> Vec<u8> {
         let s: String = s.split_whitespace().collect();
@@ -311,5 +312,41 @@ mod tests {
                 "KEK of {len} bytes"
             );
         }
+    }
+
+    /// Where polyjose's outcome differs from Wycheproof's `result`.
+    const AES_WRAP: &[Deviation] = &[Deviation::tests(
+        &[12, 54, 109],
+        Outcome::Reject,
+        "RFC 3394 §2: key data is at least two 64-bit blocks; a JWE CEK is at least 16 bytes \
+         (RFC 7518 §5.2.3, §5.3), so wrapping an 8 byte key is refused",
+    )];
+
+    #[test]
+    fn wycheproof_aes_wrap() {
+        let suite = wycheproof::load("aes_wrap");
+        let summary = wycheproof::assert_conforms(&suite, AES_WRAP, |_, test| {
+            let (kek, msg, ct) = test.key_wrap();
+            let unwrapped = unwrap(kek, ct);
+            if test.result == Expected::Invalid {
+                // ModifiedIv, InvalidWrappingSize, EmptyKey, ShortKey and
+                // WrongDataSize: the wrapped input itself must be refused.
+                assert_eq!(
+                    unwrapped.as_ref().map(|_| ()),
+                    Err(&Error::DecryptionFailed),
+                    "tcId {}: unwrap",
+                    test.tc_id
+                );
+            }
+            let wrapped = wrap(kek, msg);
+            if test.has_flag("WrongDataSize") || test.has_flag("EmptyKey") {
+                assert!(wrapped.is_err(), "tcId {}: wrap", test.tc_id);
+            }
+            let round_trips = matches!(&unwrapped, Ok(key) if key.as_slice() == msg)
+                && matches!(&wrapped, Ok(w) if w.as_slice() == ct);
+            Outcome::of(&if round_trips { Ok(()) } else { Err(()) })
+        });
+        assert_eq!(summary.tests, 165);
+        assert_eq!(summary.deviations, 3);
     }
 }
