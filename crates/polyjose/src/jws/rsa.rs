@@ -184,6 +184,8 @@ mod tests {
 
     use super::super::alg::{Operation, bind_key};
     use super::*;
+    use crate::header::Header;
+    use crate::jws::{self, ProtectedHeader, SignOptions, VerifyOptions};
     use crate::test_support::wycheproof::{
         self, Deviation, Group, Outcome, Schema, Suite, Summary,
     };
@@ -620,6 +622,102 @@ mod tests {
                 Err(Error::InvalidSignature),
                 "{} octets",
                 bad.len()
+            );
+        }
+    }
+
+    #[test]
+    fn sign_is_unsupported_for_every_rsa_alg_and_key() {
+        // ADR 0021: no RSA private-key operation, whatever the key.
+        use super::super::alg::test_keys as keys;
+        let input = RFC7515_A2_INPUT.as_bytes();
+        let all = [A::RS256, A::RS384, A::RS512, A::PS256, A::PS384, A::PS512];
+        let candidates = [
+            rsa_jwk(RFC7515_A2_N),
+            rsa_jwk(RFC7520_N),
+            keys::oct(64, ""),
+            keys::p256_private(""),
+            keys::ed25519_private(""),
+        ];
+        for alg in &all {
+            for key in &candidates {
+                assert_eq!(
+                    sign(alg, key, input),
+                    Err(Error::UnsupportedAlgorithm),
+                    "{alg}"
+                );
+            }
+        }
+        // And through the public API, with the RSA key's own alg.
+        let protected =
+            ProtectedHeader::new(Header::from_json(br#"{"alg":"RS256"}"#).unwrap()).unwrap();
+        assert_eq!(
+            jws::sign_compact(
+                &protected,
+                b"x",
+                &rsa_jwk(RFC7515_A2_N),
+                &SignOptions::new()
+            ),
+            Err(Error::UnsupportedAlgorithm)
+        );
+    }
+
+    /// The RFC 7520 §3.3 public key exactly as Figure 3 prints it, with
+    /// `kid` and `use`.
+    fn rfc7520_figure3() -> Jwk {
+        Jwk::from_json(
+            format!(
+                r#"{{"kty":"RSA","kid":"bilbo.baggins@hobbiton.example","use":"sig","n":"{RFC7520_N}","e":"AQAB"}}"#
+            )
+            .as_bytes(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn verify_compact_end_to_end() {
+        // RFC 7515 A.2.1 and RFC 7520 §4.1.3 (Figure 13) / §4.2.3
+        // (Figure 20) compact serializations, through jws::verify_compact
+        // (RFC 7515 §5.2).
+        let rfc7515 = format!("{RFC7515_A2_INPUT}.{RFC7515_A2_SIG}");
+        let rfc7520_4_1 = format!("{RFC7520_4_1_PROTECTED}.{RFC7520_PAYLOAD}.{RFC7520_4_1_SIG}");
+        let rfc7520_4_2 = format!("{RFC7520_4_2_PROTECTED}.{RFC7520_PAYLOAD}.{RFC7520_4_2_SIG}");
+        let figure7 = "It\u{2019}s a dangerous business, Frodo, going out your door. You step onto the road, and if you don't keep your feet, there\u{2019}s no knowing where you might be swept off to.";
+        let cases = [
+            (
+                &rfc7515,
+                rsa_jwk(RFC7515_A2_N),
+                A::RS256,
+                &b"{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}"[..],
+            ),
+            (&rfc7520_4_1, rfc7520_figure3(), A::RS256, figure7.as_bytes()),
+            (&rfc7520_4_2, rfc7520_figure3(), A::PS384, figure7.as_bytes()),
+        ];
+        let allowed = [A::RS256, A::PS384];
+        let opts = VerifyOptions::new(&allowed).unwrap();
+        for (jws, key, alg, payload) in &cases {
+            let verified = jws::verify_compact(jws, key, &opts).unwrap();
+            assert_eq!(verified.alg, *alg);
+            assert_eq!(verified.payload, *payload);
+            assert_eq!(verified.signature_index, 0);
+            // The last signature octet changed. 256 octets end on a
+            // character whose low 2 bits are padding and must be zero
+            // (RFC 4648 §3.5); `A` and `Q` both keep them zero, so the
+            // JWS stays canonical base64url and fails at the signature.
+            let mut tampered = (*jws).clone();
+            let last = tampered.pop().unwrap();
+            tampered.push(if last == 'A' { 'Q' } else { 'A' });
+            assert_eq!(
+                jws::verify_compact(&tampered, key, &opts),
+                Err(Error::InvalidSignature),
+                "{alg}"
+            );
+            // ADR 0026 §2 step 7: the allow-list decides, not the header.
+            let other = [A::ES256];
+            let strict = VerifyOptions::new(&other).unwrap();
+            assert_eq!(
+                jws::verify_compact(jws, key, &strict),
+                Err(Error::AlgorithmNotAllowed)
             );
         }
     }
