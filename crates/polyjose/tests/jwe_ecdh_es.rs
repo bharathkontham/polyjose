@@ -596,3 +596,167 @@ fn encrypt_needs_a_public_key_of_an_ecdh_family() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tester T13 (adversarial): points computed independently in Python
+// ---------------------------------------------------------------------------
+
+/// Per curve, `(label, x, y)` of epk coordinates that must all be refused (RFC 8725
+/// §3.4, SP 800-56A r3 §5.6.2.3.4). Computed with Python integers, never by the
+/// library under test:
+/// - `alias_x` and `x_eq_p`: a point of the curve whose x is written as x + p
+///   or p (a coordinate >= p, the same field element as x or 0);
+/// - `y_eq_p`: y = p;
+/// - `order2`, `order2b`: order-2 points (y = 0) of the curve y^2 = x^3 - 3x
+///   over the same field (b' = 0), a small-subgroup attack;
+/// - `other_b`: a point of y^2 = x^3 - 3x + b + 1 over the same field.
+const ADVERSARIAL_EPKS: &[(EcCurve, &str, &str, &str, &str)] = &[
+    (
+        EcCurve::P256,
+        "alias_x",
+        "P-256",
+        "_____wAAAAEAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAQ",
+        "RZJDuapYGAb-kTvOmYF63hHKUDxk2aPFM0FcCDJI-8w",
+    ),
+    (
+        EcCurve::P256,
+        "x_eq_p",
+        "P-256",
+        "_____wAAAAEAAAAAAAAAAAAAAAD_______________8",
+        "ZkhceA4vg9ckM71dhKBrtlQcKvMdrocXKL-FahdPk_Q",
+    ),
+    (
+        EcCurve::P256,
+        "order2",
+        "P-256",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ),
+    (
+        EcCurve::P256,
+        "other_b",
+        "P-256",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAc",
+        "iHUg-1_zc53z6OJxrLX362J7kNEyKryhc105u7PPWgs",
+    ),
+    (
+        EcCurve::P256,
+        "y_eq_p",
+        "P-256",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU",
+        "_____wAAAAEAAAAAAAAAAAAAAAD_______________8",
+    ),
+    (
+        EcCurve::P384,
+        "alias_x",
+        "P-384",
+        "__________________________________________7_____AAAAAAAAAAEAAAAJ",
+        "DOQKzMvAqs-L2vvY-i2idOzMtl0Ry3DhvpMEU8GZbTz7jGt8tqNWQjwO6ACQtDl9",
+    ),
+    (
+        EcCurve::P384,
+        "x_eq_p",
+        "P-384",
+        "__________________________________________7_____AAAAAAAAAAD_____",
+        "wwZhD7CuWhWc9FwGBp8ipsXrNkHGAtQt6ixLT3VVB5NAbYDSuRrVT5BIvUh68a3h",
+    ),
+    (
+        EcCurve::P384,
+        "order2",
+        "P-384",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ),
+    (
+        EcCurve::P384,
+        "other_b",
+        "P-384",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH",
+        "EQvFUNjPlHFk00zkQQt1n2yNFVonCl9efFOC2SwEdm6t-U6upyYEHHv6hPZTFn6X",
+    ),
+    (
+        EcCurve::P384,
+        "order2b",
+        "P-384",
+        "lWZaUytYEk44-CgHQe0X7r_MccHrRanDj8OX5c5lwGIeBvD71Ae_DIpxdjV60xNZ",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ),
+    (
+        EcCurve::P384,
+        "y_eq_p",
+        "P-384",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK",
+        "__________________________________________7_____AAAAAAAAAAD_____",
+    ),
+    (
+        EcCurve::P521,
+        "alias_x",
+        "P-521",
+        "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAF",
+        "AbzZSv4v7tRe6TBtcIbTyHZm11yiQYwpubGlfCxj8jLnv3kOjlbDY-WDuuKspKK5-Ak5AVofJnv4DxQKo-4mlzqg",
+    ),
+    (
+        EcCurve::P521,
+        "x_eq_p",
+        "P-521",
+        "Af______________________________________________________________________________________",
+        "AS3xNgFZSog-8tk15Eu5C_TWYZt05Sr3VS-XdpARwHGetDnPqyqI1A_lmivtH0NVcWmi0KLM0oDGB7krv1H_4LB4",
+    ),
+    (
+        EcCurve::P521,
+        "order2",
+        "P-521",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ),
+    (
+        EcCurve::P521,
+        "other_b",
+        "P-521",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH",
+        "AWdXJS7YfrPuKuy_MT_c0IW_8JXj5iL-2SfBrRGiotE5cVs9Vd999fRWAF1Tek_4P74xpezN1mYfaS-GheE9X4v4",
+    ),
+    (
+        EcCurve::P521,
+        "y_eq_p",
+        "P-521",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAG",
+        "Af______________________________________________________________________________________",
+    ),
+];
+
+#[test]
+fn adversarial_epks_are_decryption_failed_for_every_recipient_curve() {
+    // Each point above, sent to a recipient on its own curve and to recipients
+    // on every other curve and to X25519: always DecryptionFailed.
+    let keys: Vec<(EcCurve, Jwk)> = [EcCurve::P256, EcCurve::P384, EcCurve::P521]
+        .into_iter()
+        .map(|crv| {
+            (
+                crv,
+                generate(KeySpec::Ec(crv)).unwrap_or_else(|e| panic!("{e}")),
+            )
+        })
+        .collect();
+    let x25519 = generate(KeySpec::Okp(OkpCurve::X25519)).unwrap_or_else(|e| panic!("{e}"));
+    for (_, label, crv, x, y) in ADVERSARIAL_EPKS {
+        let epk = format!(r#"{{"kty":"EC","crv":"{crv}","x":"{x}","y":"{y}"}}"#);
+        for alg in &ALGS {
+            let header = format!(r#"{{"alg":"{alg}","enc":"A128GCM","epk":{epk}}}"#);
+            let ek: &[u8] = if *alg == A::EcdhEs { &[] } else { &[0xA6; 24] };
+            let token = forge(&header, ek);
+            for (_, key) in &keys {
+                assert_eq!(
+                    decrypt_compact(&token, key, &all_ecdh()).map(|_| ()),
+                    Err(Error::DecryptionFailed),
+                    "{label} {crv} {alg}"
+                );
+            }
+            assert_eq!(
+                decrypt_compact(&token, &x25519, &all_ecdh()).map(|_| ()),
+                Err(Error::DecryptionFailed),
+                "{label} {crv} {alg} x25519"
+            );
+        }
+    }
+}
