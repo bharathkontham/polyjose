@@ -1855,7 +1855,7 @@ fn scalar_in_range<C: Curve>(d: &[u8]) -> bool {
 ///   mixed-order key passes RFC 8032 §5.1.7 and `verify_strict`, but
 ///   implementations disagree on it and honest keys (RFC 8032 §5.1.5:
 ///   A = [s]B) never have one.
-fn ed25519_public_is_valid(x: &[u8]) -> bool {
+pub(crate) fn ed25519_public_is_valid(x: &[u8]) -> bool {
     let Ok(bytes) = <&[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]>::try_from(x) else {
         return false;
     };
