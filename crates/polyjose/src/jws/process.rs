@@ -149,6 +149,13 @@ impl JoseHeader {
     pub(crate) fn into_parts(self) -> (Option<Header>, Option<Header>) {
         (self.protected, self.unprotected)
     }
+
+    /// The JOSE Header, the union of both (RFC 7515 §5.2 step 4). In the
+    /// Compact Serialization this is exactly the JWS Protected Header
+    /// (RFC 7515 §7.1), which is how `compact.rs` takes it.
+    pub(crate) fn into_union(self) -> Header {
+        self.union
+    }
 }
 
 /// The union of two headers, which must not share a name
@@ -543,6 +550,19 @@ mod tests {
         let only_u = jose(None, Some(r#"{"alg":"HS256","kid":"k"}"#)).unwrap();
         assert_eq!(only_u.union(), &h(r#"{"alg":"HS256","kid":"k"}"#));
         assert!(only_u.protected().is_none());
+    }
+
+    #[test]
+    fn into_union_is_the_protected_header_for_compact() {
+        // RFC 7515 §7.1: with no unprotected header, the JOSE Header is the
+        // JWS Protected Header, equal to what `into_parts` returns.
+        let json = r#"{"alg":"HS256","typ":"JWT","kid":"k","b64":false,"crit":["b64"]}"#;
+        let compact = jose(Some(json), None).unwrap();
+        assert_eq!(compact.clone().into_union(), h(json));
+        assert_eq!(compact.into_parts(), (Some(h(json)), None));
+        // With both, it is the union (RFC 7515 §5.2 step 4).
+        let both = jose(Some(r#"{"alg":"HS256"}"#), Some(r#"{"kid":"k"}"#)).unwrap();
+        assert_eq!(both.into_union(), h(r#"{"alg":"HS256","kid":"k"}"#));
     }
 
     #[test]

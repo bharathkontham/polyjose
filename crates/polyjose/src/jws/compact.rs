@@ -33,16 +33,19 @@
 //! [`FAMILIES`]; tests call the twins with a fake table (see `jws/alg.rs`,
 //! "The test seam").
 
+use core::fmt;
+
 use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::header::Header;
+use crate::jwa::SigningAlg;
 use crate::jwk::Jwk;
 use crate::util::{b64url_decode, b64url_encode};
 
 use super::alg::{FAMILIES, Families};
 use super::process::{
-    JoseHeader, prepare_sign, signing_input, signing_input_from_part, verify_signature,
+    JoseHeader, allowed_alg, prepare_sign, signing_input, signing_input_from_part, verify_with_key,
 };
 use super::{ProtectedHeader, SignOptions, Verified, VerifyOptions};
 
@@ -178,13 +181,107 @@ pub fn verify_compact(jws: &str, key: &Jwk, opts: &VerifyOptions<'_>) -> Result<
     verify_compact_with(&FAMILIES, jws, key, opts)
 }
 
-/// [`verify_compact`] with the signature primitives taken from `families`.
+/// [`verify_compact`] with the signature primitives taken from `families`:
+/// [`precheck_compact`], then [`finish_compact`] with `key`.
 pub(crate) fn verify_compact_with(
     families: &Families,
     jws: &str,
     key: &Jwk,
     opts: &VerifyOptions<'_>,
 ) -> Result<Verified> {
+    let pre = precheck_compact(jws, opts)?;
+    finish_compact(families, &pre, key)
+}
+
+/// A compact JWS that passed ADR 0026 §2 steps 1–7, in the order ADR 0048
+/// clarifies, and is ready for steps 8–9 with one or more candidate keys
+/// ([`finish_compact`]). Only [`precheck_compact`] builds one.
+///
+/// It holds the parsed JWS Protected Header, the allowed `alg`, the JWS
+/// Signing Input over the received encodings (RFC 7515 §5.2 step 8), the
+/// decoded JWS Signature, and the payload: decoded and wiped on drop
+/// (ADR 0049 §4), or borrowed from the token (`b64: false`, RFC 7797 §3)
+/// or from the detached payload (RFC 7515 Appendix F). Nothing is parsed
+/// again when it is finished, however many times.
+///
+/// Its `Debug` prints the `alg`, the header through [`Header`]'s redacting
+/// `Debug`, and the payload and signature lengths, never their octets.
+pub(crate) struct CompactPrechecked<'t> {
+    alg: SigningAlg,
+    protected: Header,
+    signing_input: Zeroizing<Vec<u8>>,
+    signature: Vec<u8>,
+    payload: PrecheckedPayload<'t>,
+}
+
+/// The JWS Payload a [`CompactPrechecked`] holds until it verifies.
+enum PrecheckedPayload<'t> {
+    /// Base64url-decoded from the payload part (RFC 7515 §5.2 step 6); it
+    /// may be secret, so it is wiped on drop (ADR 0049 §4).
+    Decoded(Zeroizing<Vec<u8>>),
+    /// The payload octets as the caller holds them: the payload part when
+    /// `b64` is `false` (RFC 7797 §3), or the detached payload
+    /// (RFC 7515 Appendix F). Not copied before verification.
+    Borrowed(&'t [u8]),
+}
+
+impl PrecheckedPayload<'_> {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Decoded(decoded) => decoded,
+            Self::Borrowed(octets) => octets,
+        }
+    }
+}
+
+impl CompactPrechecked<'_> {
+    /// The JWS Protected Header, which is the whole JOSE Header in this
+    /// serialization (RFC 7515 §7.1). It has passed every header rule of
+    /// ADR 0026 §2 steps 3–5 (types, structure, `crit` understood), and
+    /// is read-only: the signature covers its received encoding, not this
+    /// value. `typ`, `cty`, `kid` and `crit` are read from here
+    /// (ADR 0049 §2).
+    pub(crate) fn header(&self) -> &Header {
+        &self.protected
+    }
+
+    /// The header's `alg`, known and in the caller's allow-list
+    /// (ADR 0026 §2 steps 6–7; RFC 8725 §3.1). Never `none`.
+    pub(crate) fn alg(&self) -> &SigningAlg {
+        &self.alg
+    }
+}
+
+impl fmt::Debug for CompactPrechecked<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompactPrechecked")
+            .field("alg", &self.alg)
+            .field("protected", &self.protected)
+            .field("payload_len", &self.payload.as_bytes().len())
+            .field("signature_len", &self.signature.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Runs ADR 0026 §2 steps 1–7 on a compact JWS (RFC 7515 §5.2 steps 1–7,
+/// §7.1), in the order ADR 0048 clarifies, without a key: everything
+/// [`verify_compact`] checks before key binding. The JWT layer reads the
+/// protected header and chooses candidate keys in between (ADR 0027 §9,
+/// ADR 0029 §1), then calls [`finish_compact`] per candidate.
+///
+/// No signature is computed or checked here, and no key is touched.
+///
+/// # Errors
+///
+/// Exactly [`verify_compact`]'s steps 1–6c, with the same codes:
+/// [`Error::InvalidFormat`], [`Error::InvalidBase64`],
+/// [`Error::InvalidJson`], [`Error::InvalidHeader`],
+/// [`Error::UnknownCritical`], [`Error::UnsupportedAlgorithm`],
+/// [`Error::AlgorithmNotAllowed`].
+pub(crate) fn precheck_compact<'t>(
+    jws: &'t str,
+    opts: &VerifyOptions<'t>,
+) -> Result<CompactPrechecked<'t>> {
     // Step 1 (ADR 0048; the limit is ADR 0026 §7): the serialized JWS
     // only, not a detached payload, before any parsing.
     if jws.len() > opts.max_input_len {
@@ -211,36 +308,66 @@ pub(crate) fn verify_compact_with(
     // it runs once that header has parsed, and before its structure rules.
     let b64 = protected.b64 != Some(false);
     // The decoded payload may be secret: wiped on drop (ADR 0049 §4).
-    let decoded = match opts.detached_payload {
-        None if b64 => Some(Zeroizing::new(b64url_decode(payload_part)?)),
-        _ => None,
+    // Otherwise it is the caller's octets, borrowed.
+    let payload = match opts.detached_payload {
+        Some(detached) => PrecheckedPayload::Borrowed(detached),
+        None if b64 => PrecheckedPayload::Decoded(Zeroizing::new(b64url_decode(payload_part)?)),
+        None => PrecheckedPayload::Borrowed(payload_part.as_bytes()),
     };
     // Step 5, header structure (RFC 7515 §5.2 step 4, §7.1: the protected
     // header is the whole JOSE Header).
     let header = JoseHeader::new(Some(protected), None)?;
-    // Step 6 (RFC 7515 §5.2 steps 5 and 8), over the received encoding.
-    // Attached, the payload part is already in its signing-input form,
-    // BASE64URL(JWS Payload) or the unencoded octets (RFC 7797 §3), and
-    // strict decoding makes the received text the only encoding of the
-    // payload, so it is used as received. Detached, it is computed from the
-    // supplied octets (RFC 7515 Appendix F).
-    let input = match opts.detached_payload {
+    // ADR 0026 §2 steps 5-7 (module table steps 6a-6c): crit understood,
+    // alg known, alg allowed. No key yet.
+    let alg = allowed_alg(&header, opts)?;
+    // The JWS Signing Input (RFC 7515 §5.2 steps 5 and 8), over the
+    // received encoding, built once for every candidate key. Attached, the
+    // payload part is already in its signing-input form, BASE64URL(JWS
+    // Payload) or the unencoded octets (RFC 7797 §3), and strict decoding
+    // makes the received text the only encoding of the payload, so it is
+    // used as received. Detached, it is computed from the supplied octets
+    // (RFC 7515 Appendix F).
+    let signing_input = match opts.detached_payload {
         Some(detached) => signing_input(protected_b64, detached, header.b64()),
         None => signing_input_from_part(protected_b64, payload_part.as_bytes()),
     };
-    let alg = verify_signature(families, &header, key, opts, &input, &signature)?;
-    let (protected, _) = header.into_parts();
-    // Only a verified payload is copied out.
-    let payload = match (decoded, opts.detached_payload) {
-        (Some(decoded), _) => decoded,
-        (None, Some(detached)) => Zeroizing::new(detached.to_vec()),
-        (None, None) => Zeroizing::new(payload_part.as_bytes().to_vec()),
-    };
-    Ok(Verified {
+    Ok(CompactPrechecked {
         alg,
-        protected,
-        unprotected: None,
+        // RFC 7515 §7.1: the JOSE Header is the protected header.
+        protected: header.into_union(),
+        signing_input,
+        signature,
         payload,
+    })
+}
+
+/// Runs ADR 0026 §2 steps 8–9 on a [`CompactPrechecked`] with `key`: key
+/// binding, then the signature check through `families` (RFC 7515 §5.2
+/// step 8). It may be called with several keys in turn on the same
+/// precheck; each call is independent.
+///
+/// Only when the signature verifies is the payload copied out, into
+/// [`Verified::payload`], which is wiped on drop (ADR 0049 §4). The
+/// result is the one [`verify_compact`] gives for the same token, options
+/// and key: [`Verified::signature_index`] is `0` and
+/// [`Verified::unprotected`] is `None`.
+///
+/// # Errors
+///
+/// [`verify_compact`]'s step 6d, [`Error::KeyAlgorithmMismatch`] or
+/// [`Error::InvalidKey`], then step 6e, [`Error::InvalidSignature`] (or
+/// [`Error::InvalidKey`] for a key only the primitive can reject).
+pub(crate) fn finish_compact(
+    families: &Families,
+    pre: &CompactPrechecked<'_>,
+    key: &Jwk,
+) -> Result<Verified> {
+    verify_with_key(families, pre.alg(), key, &pre.signing_input, &pre.signature)?;
+    Ok(Verified {
+        alg: pre.alg().clone(),
+        protected: Some(pre.header().clone()),
+        unprotected: None,
+        payload: Zeroizing::new(pre.payload.as_bytes().to_vec()),
         signature_index: 0,
     })
 }
