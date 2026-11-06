@@ -28,6 +28,11 @@
 //! - **Allow-lists.** Every decrypt takes a [`DecryptPolicy`], built from
 //!   non-empty lists of the `alg` and `enc` values the caller accepts. The
 //!   header alone is never trusted (RFC 8725 §3.1).
+//! - **Protected direct modes.** `dir` and ECDH-ES (direct) decrypt only
+//!   with `alg` and `enc` in the JWE Protected Header, so an A\*GCMKW key
+//!   wrap (AES-GCM over an empty AAD, RFC 7518 §4.7) can never be
+//!   relabelled as `dir` content (ADR 0050 §1). polyjose's encryptor
+//!   protects them in every serialization.
 //! - **Key binding.** The key must be of the family the `alg` needs, and
 //!   its JWK `alg`, `use` and `key_ops` must allow the operation
 //!   (RFC 7517 §4.2–§4.4).
@@ -45,7 +50,7 @@
 //! | 1 | not 5 compact parts; a JSON shape RFC 7516 §7.2 forbids | [`Error::InvalidFormat`] |
 //! | 1, 3 | JSON syntax, I-JSON, depth, size; duplicate members (ADR 0041 §1); a protected header that is valid JSON but not an object, as for JWS (ADR 0026 §2 step 4) | [`Error::InvalidJson`] |
 //! | 2 | a part or member that is not strict base64url | [`Error::InvalidBase64`] |
-//! | 3–4 | header parts not disjoint, `alg`/`enc` missing, `zip` outside the protected header, a registered parameter of the wrong type | [`Error::InvalidHeader`] |
+//! | 3–4 | header parts not disjoint, `alg`/`enc` missing, `zip` outside the protected header, `dir` or ECDH-ES without both `alg` and `enc` in the protected header (ADR 0050 §1), a registered parameter of the wrong type | [`Error::InvalidHeader`] |
 //! | 5 | `crit` names something not understood | [`Error::UnknownCritical`] |
 //! | support | `alg`, `enc` or `zip` not implemented (checked over every recipient first) | [`Error::UnsupportedAlgorithm`] |
 //! | allow-list | `alg` or `enc` not in the policy | [`Error::AlgorithmNotAllowed`] |

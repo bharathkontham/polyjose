@@ -22,7 +22,8 @@
 //! encrypt, the family returns its header parameters (`epk`, `iv`, `tag`,
 //! `p2s`, `p2c`, `apu`, `apv`) in `KeyOutput::header_params`; this file
 //! places them, next to `alg`, in the protected header (compact,
-//! flattened) or in the recipient's header (general JSON). On decrypt the
+//! flattened, and the direct modes in every form, ADR 0050 §1) or in the
+//! recipient's header (general JSON). On decrypt the
 //! family receives the recipient's JOSE Header (the union) and reads its
 //! parameters there; any error it returns becomes `DecryptionFailed`.
 //!
