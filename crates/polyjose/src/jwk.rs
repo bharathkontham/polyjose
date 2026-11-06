@@ -1516,28 +1516,10 @@ impl PartialOrd for KeyOpName<'_> {
 
 /// Test-only, per-thread count of the value comparisons the `key_ops`
 /// duplicate check makes ([`KeyOpName`]'s ordering), so a regression test can bound its work on
-/// untrusted input deterministically, without wall-clock timing. Not
-/// compiled into non-test builds.
+/// untrusted input deterministically, without wall-clock timing. It lives in
+/// the test-only `crate::test_counters` and is not compiled into non-test builds.
 #[cfg(test)]
-mod key_op_comparisons {
-    use core::cell::Cell;
-
-    std::thread_local! {
-        static COUNT: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub(super) fn tick() {
-        COUNT.with(|c| c.set(c.get().saturating_add(1)));
-    }
-
-    /// Runs `f` and returns its result with the number of comparisons
-    /// made on this thread while it ran.
-    pub(super) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
-        let before = COUNT.with(Cell::get);
-        let result = f();
-        (result, COUNT.with(Cell::get) - before)
-    }
-}
+use crate::test_counters::key_op_comparisons;
 
 /// `x5c` (RFC 7517 §4.7): an array of strings. The certificates are not
 /// decoded or validated (ADR 0006).
