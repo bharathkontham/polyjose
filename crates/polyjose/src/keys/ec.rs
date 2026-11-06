@@ -132,22 +132,33 @@ where
 ///
 /// - `d` must be ⌈log₂(n)/8⌉ octets (RFC 5915 §3), which for all four
 ///   curves is the coordinate length the JWK `d` needs (RFC 7518
-///   §6.2.2.1).
-/// - With an embedded point, the point is decoded by the curve crate
-///   ([`decode_point`]; it may be compressed) and passed with `d` to
+///   §6.2.2.1). This is checked first.
+/// - `embedded` then yields the embedded point, decoded by the curve crate
+///   ([`decode_point`]; it may be compressed). It is a closure so that the
+///   caller decodes each point once and a wrong length is still reported
+///   before a bad point. The point is passed with `d` to
 ///   `jwk_build::ec_jwk`, whose `Jwk::from_object` rejects a `d` out of
 ///   range or a point that is not d·G (ADR 0043 §3, ADR 0018 §3
 ///   consistency). The comparison is not repeated here.
 /// - Without one, the point is derived from `d` ([`derive_public`]).
-fn private_jwk(crv: EcCurve, d: &[u8], embedded: Option<&[u8]>) -> Result<Jwk> {
+fn private_jwk(
+    crv: EcCurve,
+    d: &[u8],
+    embedded: impl FnOnce() -> Result<Option<Coordinates>>,
+) -> Result<Jwk> {
     if d.len() != crv.coordinate_len() {
         return Err(Error::InvalidKey(PRIVATE_KEY_LENGTH));
     }
-    let point = match embedded {
-        Some(octets) => decode_point(crv, octets)?,
+    let point = match embedded()? {
+        Some(point) => point,
         None => derive_public(crv, d)?,
     };
     jwk_build::ec_jwk(crv, &point.x, &point.y, Some(d), None)
+}
+
+/// [`decode_point`] on the embedded point, if there is one.
+fn decode_embedded(crv: EcCurve, octets: Option<&[u8]>) -> Result<Option<Coordinates>> {
+    octets.map(|octets| decode_point(crv, octets)).transpose()
 }
 
 /// The public point Q = d·G of the scalar `d` on `crv` (SEC 1 v2 §3.2.1).
@@ -257,7 +268,9 @@ pub(crate) fn from_sec1(der: &[u8]) -> Result<Jwk> {
     let crv = key.parameters.ok_or(Error::InvalidKey(
         "EC PRIVATE KEY has no namedCurve parameters",
     ))?;
-    private_jwk(crv, key.private_key, key.public_key)
+    private_jwk(crv, key.private_key, || {
+        decode_embedded(crv, key.public_key)
+    })
 }
 
 /// Exports the private `key` as a DER SEC1 `EC PRIVATE KEY` (RFC 5915 §3)
@@ -308,7 +321,7 @@ pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
             "ECPrivateKey parameters disagree with the PKCS#8 algorithm",
         ));
     }
-    let embedded = match (parts.public_key, inner.public_key) {
+    match (parts.public_key, inner.public_key) {
         (Some(outer), Some(nested)) => {
             // Both are public values; compared as decoded points, so a
             // compressed and an uncompressed encoding of one point agree.
@@ -318,11 +331,12 @@ pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
                     "PKCS#8 publicKey and ECPrivateKey publicKey differ",
                 ));
             }
-            Some(outer)
+            private_jwk(crv, inner.private_key, || Ok(Some(a)))
         }
-        (outer, nested) => outer.or(nested),
-    };
-    private_jwk(crv, inner.private_key, embedded)
+        (outer, nested) => private_jwk(crv, inner.private_key, || {
+            decode_embedded(crv, outer.or(nested))
+        }),
+    }
 }
 
 /// Exports the private `key` as a DER PKCS#8 v1 PrivateKeyInfo (RFC 5958
