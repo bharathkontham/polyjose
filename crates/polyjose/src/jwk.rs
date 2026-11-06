@@ -1949,6 +1949,28 @@ mod tests {
         assert_eq!(written.to_json(), json);
     }
 
+    /// RFC 7517 §4.3: values are checked in order, so the first problem
+    /// decides the error; they compare as exact, case-sensitive strings.
+    #[test]
+    fn key_ops_errors_follow_value_order() {
+        const DUPLICATES: Error = Error::InvalidKey("key_ops must not contain duplicates");
+        const NOT_STRINGS: Error = Error::InvalidKey("key_ops must be an array of strings");
+        let ops = |list: &str| parse_key_ops(&object(&format!(r#"{{"key_ops":{list}}}"#)));
+        assert_eq!(ops(r#"["sign","sign",5]"#), Err(DUPLICATES));
+        assert_eq!(ops(r#"["sign",5,"sign"]"#), Err(NOT_STRINGS));
+        assert_eq!(ops(r#"["x-op","verify","x-op"]"#), Err(DUPLICATES));
+        assert_eq!(
+            ops(r#"["sign","Sign","x-op","X-op"]"#),
+            Ok(Some(vec![
+                KeyOp::Sign,
+                KeyOp::Unknown("Sign".to_owned()),
+                KeyOp::Unknown("x-op".to_owned()),
+                KeyOp::Unknown("X-op".to_owned()),
+            ]))
+        );
+        assert_eq!(ops("[]"), Ok(Some(Vec::new())));
+    }
+
     /// DoS regression (F01): the RFC 7517 §4.3 duplicate check on a
     /// `key_ops` with the most values the default `json::Limits` allow.
     #[test]
