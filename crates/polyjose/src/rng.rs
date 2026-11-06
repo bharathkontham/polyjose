@@ -75,7 +75,8 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 /// A `FixedRng` is a plain value that is reachable only as an explicit
 /// parameter a test passes in. It can never be installed as polyjose's random
 /// source: there is no global or thread-local RNG switch, and
-/// [`fill_random`] has no code path to it, even with the feature on.
+/// polyjose's OS source (`fill_random`) has no code path to it, even with
+/// the feature on.
 ///
 /// ```
 /// use polyjose::insecure_test_vectors::FixedRng;
