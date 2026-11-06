@@ -53,8 +53,9 @@ use polyjose::header::Header;
 use polyjose::json::{self, Number, Object, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use polyjose::jwe::{self, DecryptPolicy, Encryptor, JsonForm, Recipient};
-use polyjose::jwk::Jwk;
+use polyjose::jwk::{Jwk, JwkSet};
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
+use polyjose::jwt::{self, FixedClock, Keys, Policy, VerifiedJwt};
 use polyjose::keys::{JoseAlg, KeyFormat, generate_for};
 use polyjose::util::{b64url_decode, b64url_encode};
 
@@ -132,6 +133,10 @@ const TEXT_PATTERN: &str = "\\S";
 /// `$defs/count/maximum`: an unsigned 32-bit integer (ADR 0030 `u32`), so
 /// every binding holds a count natively and exactly.
 const COUNT_MAX: u64 = u32::MAX as u64;
+/// `$defs/seconds/maximum` (and, negated, `minimum`): 2^53 − 1, the
+/// NumericDate and clock range (RFC 7493 §2.2; ADR 0027 §2, ADR 0028 §1),
+/// which every binding holds exactly, JavaScript's numbers included.
+const SECONDS_MAX: i64 = 9_007_199_254_740_991;
 
 /// What a member's value must be. Each kind maps to one schema spelling
 /// (see `schema_kind`).
@@ -163,6 +168,10 @@ enum Kind {
     Nested(&'static Shape),
     /// `{"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/<def>"}}`
     List(&'static Shape),
+    /// `{"$ref": "#/$defs/seconds"}`: an integer in `-SECONDS_MAX..=SECONDS_MAX`
+    Seconds,
+    /// `{"type": ["string", "array"], "items": {"type": "string"}}`
+    StringOrList,
 }
 
 impl Kind {
@@ -176,12 +185,14 @@ impl Kind {
             Kind::AlgList => Some("alg_list"),
             Kind::Jwe => Some("jwe"),
             Kind::Nested(shape) => Some(shape.def),
+            Kind::Seconds => Some("seconds"),
             Kind::String
             | Kind::Object
             | Kind::Enum(_)
             | Kind::Bool
             | Kind::List(_)
-            | Kind::StringList => None,
+            | Kind::StringList
+            | Kind::StringOrList => None,
         }
     }
 }
@@ -230,6 +241,25 @@ struct Shape {
 enum Rule {
     /// The per-serialization signer limits of `jws_sign_input`.
     Signers(SignerRule),
+    /// Exactly one of these members is present. In the schema:
+    ///
+    /// ```json
+    /// {"oneOf": [{"required": ["key"]}, {"required": ["jwks"]}]}
+    /// ```
+    ExactlyOne(&'static [&'static str]),
+    /// `dependent` is required when `member` is `value`, and not allowed
+    /// otherwise. In the schema:
+    ///
+    /// ```json
+    /// {"if": {"properties": {"mode": {"const": "exact"}}},
+    ///  "then": {"required": ["value"]},
+    ///  "else": {"properties": {"value": false}}}
+    /// ```
+    OnlyWhen {
+        member: &'static str,
+        value: &'static str,
+        dependent: &'static str,
+    },
 }
 
 /// One `allOf` rule of `jws_sign_input`: when `serialization` is
@@ -585,6 +615,100 @@ const KEYS_GENERATE_FOR_OK: Shape = Shape {
     rules: &[],
 };
 
+// ---------------------------------------------------------------------------
+// jwt.* shapes (RFC 7519; ADR 0027, ADR 0028, ADR 0029). Platform-neutral:
+// every member is a JSON value each binding's own validate call takes as
+// is, with no Rust type in it.
+// ---------------------------------------------------------------------------
+
+/// How `typ` is checked (RFC 7515 §4.1.9, RFC 8725 §3.11–§3.12;
+/// ADR 0027 §5): `default` (absent or `JWT`), `exact` (`value` required),
+/// or `any` (no check). `value` is allowed with `exact` only.
+const JWT_TYP: Shape = Shape {
+    def: "jwt_typ",
+    members: &[
+        req("mode", Kind::Enum(&["default", "exact", "any"])),
+        opt("value", Kind::String),
+    ],
+    rules: &[Rule::OnlyWhen {
+        member: "mode",
+        value: "exact",
+        dependent: "value",
+    }],
+};
+/// The JWT validation policy (RFC 7519 §4.1, §7.2; RFC 8725 §3; ADR 0027
+/// §3–§5, ADR 0029 §4). Every member is optional; an absent member keeps
+/// the library default, which the runner never restates.
+const JWT_POLICY: Shape = Shape {
+    def: "jwt_policy",
+    members: &[
+        // RFC 7519 §4.1.1, RFC 8725 §3.8: one accepted issuer or a list.
+        opt("issuer", Kind::StringOrList),
+        // RFC 7519 §4.1.3, RFC 8725 §3.9.
+        opt("audience", Kind::StringList),
+        // RFC 7519 §4.1.2.
+        opt("subject", Kind::String),
+        // RFC 7519 §4.1.4-§4.1.5: whole seconds, at most 600 (ADR 0027 §3).
+        opt("leeway", Kind::Count),
+        // RFC 7519 §4.1.6: makes `iat` required (ADR 0027 §3).
+        opt("max_age", Kind::Count),
+        // RFC 7519 §4: required claim names (ADR 0027 §4).
+        opt("require", Kind::StringList),
+        // ADR 0007, ADR 0027 §3: the explicit opt-out of a required `exp`.
+        opt("allow_missing_exp", Kind::Bool),
+        // RFC 7519 §4.1.3, ADR 0027 §4: the explicit opt-out.
+        opt("ignore_audience", Kind::Bool),
+        opt("typ", Kind::Nested(&JWT_TYP)),
+        // RFC 9068 §4 (ADR 0027 §5).
+        opt("profile", Kind::Enum(&["access_token"])),
+        // ADR 0029 §4.
+        opt("max_key_candidates", Kind::Count),
+    ],
+    rules: &[],
+};
+/// The outer JWE layer of a nested JWT (RFC 7519 §5.2, §7.2 step 8;
+/// RFC 8725 §3.3; ADR 0027 §7): the caller's decryption key and both
+/// allow-lists, and the PBES2 bound (ADR 0023).
+const JWT_DECRYPT: Shape = Shape {
+    def: "jwt_decrypt",
+    members: &[
+        req("key", Kind::Object),
+        req("allowed_algs", Kind::AlgList),
+        req("allowed_enc", Kind::AlgList),
+        opt("max_pbes2_count", Kind::Count),
+    ],
+    rules: &[],
+};
+// RFC 7519 §7.2 through `jwt::verify`, or `jwt::decrypt_nested` with
+// `decrypt`: the time `now` as a FixedClock (ADR 0028 §4), the allow-list
+// (RFC 8725 §3.1), and exactly one key source (ADR 0029 §1).
+const JWT_VALIDATE_INPUT: Shape = Shape {
+    def: "jwt_validate_input",
+    members: &[
+        req("token", Kind::String),
+        req("now", Kind::Seconds),
+        req("allowed_algs", Kind::AlgList),
+        opt("key", Kind::Object),
+        opt("jwks", Kind::Object),
+        opt("policy", Kind::Nested(&JWT_POLICY)),
+        opt("decrypt", Kind::Nested(&JWT_DECRYPT)),
+    ],
+    rules: &[Rule::ExactlyOne(&["key", "jwks"])],
+};
+/// The validated JWT: its Claims Set (compared as a JSON value: member
+/// order ignored, numbers as doubles), the `alg` that verified, and, when
+/// verified through `jwks`, the index of the member that did (ADR 0029
+/// §4). `key_index` is present exactly when the input has `jwks`.
+const JWT_VALIDATE_OK: Shape = Shape {
+    def: "jwt_validate_ok",
+    members: &[
+        req("claims", Kind::Object),
+        req("alg", Kind::String),
+        opt("key_index", Kind::Count),
+    ],
+    rules: &[],
+};
+
 /// The operations this runner implements.
 const SPECS: &[OpSpec] = &[
     OpSpec {
@@ -659,6 +783,12 @@ const SPECS: &[OpSpec] = &[
         ok: &[&KEYS_GENERATE_FOR_OK],
         can_fail: true,
     },
+    OpSpec {
+        name: "jwt.validate",
+        input: &JWT_VALIDATE_INPUT,
+        ok: &[&JWT_VALIDATE_OK],
+        can_fail: true,
+    },
 ];
 
 fn spec(operation: &str) -> Option<&'static OpSpec> {
@@ -705,6 +835,12 @@ fn is_base64url_alphabet(s: &str) -> bool {
 /// `$defs/count`: `{"type": "integer", "minimum": 0, "maximum": COUNT_MAX}`.
 fn is_count(value: &Value) -> bool {
     value.as_u64().is_some_and(|n| n <= COUNT_MAX)
+}
+
+/// `$defs/seconds`: `{"type": "integer", "minimum": -SECONDS_MAX,
+/// "maximum": SECONDS_MAX}`.
+fn is_seconds(value: &Value) -> bool {
+    value.as_i64().is_some_and(|n| n.abs() <= SECONDS_MAX)
 }
 
 /// Checks that `object` has exactly the `allowed` members, all of which are
@@ -759,6 +895,13 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
             .is_some_and(|items| items.iter().all(|item| item.as_str().is_some())),
         Kind::Jwe => value.as_str().is_some() || value.as_object().is_some(),
         Kind::Bool => value.as_bool().is_some(),
+        Kind::Seconds => is_seconds(value),
+        Kind::StringOrList => {
+            value.as_str().is_some()
+                || value
+                    .as_array()
+                    .is_some_and(|items| items.iter().all(|item| item.as_str().is_some()))
+        }
         // Matched above when the value has the right type.
         Kind::Nested(_) | Kind::List(_) => false,
     };
@@ -776,6 +919,8 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
             Kind::AlgList | Kind::StringList => "an array of strings".to_owned(),
             Kind::Jwe => "a string (compact) or an object (JSON serialization)".to_owned(),
             Kind::Bool => "a boolean".to_owned(),
+            Kind::Seconds => format!("an integer from -{SECONDS_MAX} to {SECONDS_MAX}"),
+            Kind::StringOrList => "a string or an array of strings".to_owned(),
             Kind::Nested(shape) => format!("an object ({})", shape.def),
             Kind::List(shape) => format!("a non-empty array of objects ({})", shape.def),
         };
@@ -813,6 +958,47 @@ fn check_shape(object: &Object, shape: &Shape, ok: bool, pointer: &str) -> Resul
 fn check_rule(object: &Object, rule: &Rule, pointer: &str) -> Result<(), String> {
     match rule {
         Rule::Signers(rule) => check_signer_rule(object, rule, pointer),
+        Rule::ExactlyOne(names) => {
+            let present: Vec<&str> = names
+                .iter()
+                .copied()
+                .filter(|n| object.contains(n))
+                .collect();
+            if present.len() == 1 {
+                return Ok(());
+            }
+            let names = names
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(violation(
+                pointer,
+                format!(
+                    "needs exactly one of {names} (oneOf), has {}",
+                    present.len()
+                ),
+            ))
+        }
+        Rule::OnlyWhen {
+            member,
+            value,
+            dependent,
+        } => {
+            let selected = object.get(member).and_then(Value::as_str) == Some(*value);
+            let at = format!("{pointer}/{dependent}");
+            match (selected, object.contains(dependent)) {
+                (true, false) => Err(violation(
+                    &at,
+                    format!("required when `{member}` is \"{value}\""),
+                )),
+                (false, true) => Err(violation(
+                    &at,
+                    format!("allowed only when `{member}` is \"{value}\""),
+                )),
+                _ => Ok(()),
+            }
+        }
     }
 }
 
@@ -1779,6 +1965,221 @@ fn run_keys_generate_for(input: &Object, out: &mut Object) -> Result<Result<(), 
     Ok(Ok(()))
 }
 
+// ---------------------------------------------------------------------------
+// jwt.* handlers (RFC 7519), kept apart from the jws.* and jwe.* ones.
+// ---------------------------------------------------------------------------
+
+/// The verification keys of a `jwt.*` vector: `key` (one JWK) or `jwks`
+/// (a JWK Set, RFC 7517 §5; ADR 0029 §1). The schema allows exactly one.
+enum JwtKeys {
+    One(Box<Jwk>),
+    Set(Box<JwkSet>),
+}
+
+impl JwtKeys {
+    fn keys(&self) -> Keys<'_> {
+        match self {
+            JwtKeys::One(key) => Keys::One(key),
+            JwtKeys::Set(set) => Keys::Set(set),
+        }
+    }
+}
+
+/// Everything a JWT validation takes except the token, built from a
+/// `jwt.validate` input or a `jwt.issue` `validate` object.
+struct JwtValidation {
+    /// `now` (ADR 0028 §4): the only clock the runner ever builds, so
+    /// every platform gives the same verdict on every day.
+    clock: FixedClock,
+    algs: Vec<SigningAlg>,
+    keys: JwtKeys,
+    /// `decrypt`: the outer JWE layer's key and policy (ADR 0027 §7).
+    decrypt: Option<(Jwk, DecryptPolicy)>,
+    policy: Option<Object>,
+}
+
+/// Builds a [`JwtValidation`] in the order conformance/README.md fixes,
+/// the outer layer first: `decrypt.key` (RFC 7517), then `decrypt`'s
+/// allow-lists and bound, then `key` or `jwks` (RFC 7517 §4, §5). The first
+/// error is the vector's outcome, so a JWK or JWK Set import error is its
+/// result (for example ADR 0021's RSA private key, `UnsupportedAlgorithm`).
+fn jwt_validation(object: &Object) -> Result<JwtValidation, Error> {
+    let decrypt = match object.get("decrypt").and_then(Value::as_object) {
+        Some(decrypt) => {
+            let key = Jwk::from_object(input_object(decrypt, "key"))?;
+            Some((key, jwe_policy(decrypt)?))
+        }
+        None => None,
+    };
+    let keys = match object.get("jwks").and_then(Value::as_object) {
+        Some(set) => JwtKeys::Set(Box::new(JwkSet::from_object(set)?)),
+        None => JwtKeys::One(Box::new(Jwk::from_object(input_object(object, "key"))?)),
+    };
+    let now = object
+        .get("now")
+        .and_then(Value::as_i64)
+        .expect("validated");
+    Ok(JwtValidation {
+        clock: FixedClock(now),
+        algs: input_algs(object),
+        keys,
+        decrypt,
+        policy: object.get("policy").and_then(Value::as_object).cloned(),
+    })
+}
+
+/// A `policy` member's strings: one string, or an array of them.
+fn policy_names<'a>(policy: &'a Object, name: &str) -> Vec<&'a str> {
+    match policy.get(name) {
+        None => Vec::new(),
+        Some(value) => match value.as_str() {
+            Some(one) => vec![one],
+            None => input_names(policy, name),
+        },
+    }
+}
+
+/// The JWT [`Policy`] for `clock`, `algs` and the vector's `policy`
+/// (RFC 7519 §4.1, §7.2; RFC 8725 §3; ADR 0027 §3–§5, ADR 0029 §4). It
+/// takes a [`FixedClock`] and nothing else, so the runner can never hand
+/// the library a wall clock (ADR 0028 §4).
+///
+/// `profile: "access_token"` starts from `Policy::access_token` with the
+/// `issuer` and `audience` lists (RFC 9068 §4); otherwise from
+/// `Policy::new`, adding them. Each other member present calls its builder
+/// method once; an absent member keeps the library default. The library's
+/// refusals (an empty or `none` allow-list, a leeway over 600 s, an access
+/// token policy without issuer or audience) are the vector's outcome.
+///
+/// A `typ` of mode `default` with `profile` is a broken vector (the outer
+/// `Err`): the profile requires `at+jwt` (RFC 9068 §4), and no policy can
+/// mean both.
+fn jwt_policy<'a>(
+    clock: &'a FixedClock,
+    algs: &'a [SigningAlg],
+    policy: Option<&Object>,
+) -> Result<Result<Policy<'a>, Error>, String> {
+    let empty = Object::new();
+    let policy = policy.unwrap_or(&empty);
+    let issuers = policy_names(policy, "issuer");
+    let audiences = policy_names(policy, "audience");
+    let typ = policy.get("typ").and_then(Value::as_object);
+    let typ_mode = typ.map(|typ| input_str(typ, "mode"));
+    let profile = policy.contains("profile");
+    if profile && typ_mode == Some("default") {
+        return Err(
+            "`policy/typ/mode` \"default\" contradicts `policy/profile` \"access_token\", \
+             which requires typ at+jwt (RFC 9068 §4)"
+                .to_owned(),
+        );
+    }
+    let built = if profile {
+        Policy::access_token(clock, algs, &issuers, &audiences)
+    } else {
+        Policy::new(clock, algs).map(|p| p.issuers(&issuers).audiences(&audiences))
+    };
+    let mut built = match built {
+        Ok(built) => built,
+        Err(e) => return Ok(Err(e)),
+    };
+    if let Some(subject) = policy.get("subject").and_then(Value::as_str) {
+        built = built.subject(subject);
+    }
+    if let Some(secs) = input_count(policy, "leeway") {
+        match built.leeway(u32::try_from(secs).expect("validated: a u32")) {
+            Ok(with) => built = with,
+            Err(e) => return Ok(Err(e)),
+        }
+    }
+    if let Some(secs) = input_count(policy, "max_age") {
+        built = built.max_age(u32::try_from(secs).expect("validated: a u32"));
+    }
+    if policy.contains("require") {
+        for claim in input_names(policy, "require") {
+            built = built.require(claim);
+        }
+    }
+    if policy.get("allow_missing_exp").and_then(Value::as_bool) == Some(true) {
+        built = built.allow_missing_exp();
+    }
+    if policy.get("ignore_audience").and_then(Value::as_bool) == Some(true) {
+        built = built.ignore_audience();
+    }
+    match typ_mode {
+        Some("exact") => {
+            built = built.expect_typ(input_str(typ.expect("present"), "value"));
+        }
+        Some("any") => built = built.any_typ(),
+        // `default`, or absent: the library default (ADR 0027 §5).
+        _ => {}
+    }
+    if let Some(n) = input_count(policy, "max_key_candidates") {
+        built = built.max_key_candidates(n);
+    }
+    Ok(Ok(built))
+}
+
+/// Verifies `token` under `validation` and `policy`: `jwt::verify` for a
+/// signed JWT, or `jwt::decrypt_nested` when the vector has `decrypt`
+/// (RFC 7519 §7.2; ADR 0027 §7), whose inner JWT is the result.
+fn jwt_verify(
+    token: &str,
+    validation: &JwtValidation,
+    policy: &Policy<'_>,
+) -> polyjose::Result<VerifiedJwt> {
+    match &validation.decrypt {
+        Some((key, decrypt_policy)) => {
+            jwt::decrypt_nested(token, key, decrypt_policy, validation.keys.keys(), policy)
+                .map(|nested| nested.inner)
+        }
+        None => jwt::verify(token, validation.keys.keys(), policy),
+    }
+}
+
+/// The validated Claims Set as a JSON value (the library's own
+/// serialization, ADR 0027 §1, read back), for comparison as JSON.
+fn claims_value(verified: &VerifiedJwt) -> Result<Value, String> {
+    json::parse(verified.claims.to_json().as_bytes()).map_err(|e| {
+        format!(
+            "the validated claims do not serialize as JSON: {}",
+            e.code()
+        )
+    })
+}
+
+/// `jwt.validate` (RFC 7519 §7.2). The steps run in the order
+/// conformance/README.md fixes for every runner, and the first error is
+/// the outcome: build the inputs ([`jwt_validation`]), then the policy
+/// ([`jwt_policy`]), then validate.
+fn run_jwt_validate(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let validation = match jwt_validation(input) {
+        Ok(validation) => validation,
+        Err(e) => return Ok(Err(e)),
+    };
+    let policy = match jwt_policy(
+        &validation.clock,
+        &validation.algs,
+        validation.policy.as_ref(),
+    )? {
+        Ok(policy) => policy,
+        Err(e) => return Ok(Err(e)),
+    };
+    let verified = match jwt_verify(input_str(input, "token"), &validation, &policy) {
+        Ok(verified) => verified,
+        Err(e) => return Ok(Err(e)),
+    };
+    out.insert("claims", claims_value(&verified)?);
+    out.insert("alg", verified.alg.as_str());
+    if let Some(index) = verified.key_index {
+        let index = u64::try_from(index).expect("an index fits u64");
+        out.insert(
+            "key_index",
+            Number::from_u64(index).expect("an index is a safe integer"),
+        );
+    }
+    Ok(Ok(()))
+}
+
 /// Runs the operation through the public API: the success outputs, or the
 /// library's error.
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
@@ -1856,6 +2257,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
                 return Ok(Err(e));
             }
         }
+        "jwt.validate" => {
+            if let Err(e) = run_jwt_validate(input, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
         other => {
             return Err(format!(
                 "operation `{other}` is not implemented by the Rust runner; a vector is never skipped"
@@ -1865,7 +2271,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
     Ok(Ok(out))
 }
 
-/// Compares the outcome with the expectation.
+/// Compares the outcome with the expectation: on success the outputs must
+/// be exactly the expected members (an optional output, such as
+/// `jwt.validate`'s `key_index`, can't be left out unnoticed), each equal as
+/// a JSON value (RFC 8259: object member order ignored, numbers compared
+/// as doubles, RFC 7493 §2.2).
 fn compare(expect: &Expect, outcome: &Result<Object, Error>) -> Result<(), String> {
     match (expect, outcome) {
         (Expect::Ok(want), Ok(got)) => {
@@ -1876,6 +2286,14 @@ fn compare(expect: &Expect, outcome: &Result<Object, Error>) -> Result<(), Strin
                         "`{name}`: expected {}, got {}",
                         value.to_json(),
                         got_value.map_or("nothing".to_owned(), Value::to_json)
+                    ));
+                }
+            }
+            for (name, value) in got {
+                if !want.contains(name) {
+                    return Err(format!(
+                        "`{name}`: expected nothing, got {}",
+                        value.to_json()
                     ));
                 }
             }
@@ -2144,10 +2562,12 @@ fn schema_kind(kind: Kind) -> Value {
         | Kind::Jws
         | Kind::AlgList
         | Kind::Jwe
-        | Kind::Nested(_) => {
+        | Kind::Nested(_)
+        | Kind::Seconds => {
             unreachable!("a $ref kind")
         }
         Kind::StringList => parse(r#"{"type":"array","items":{"type":"string"}}"#),
+        Kind::StringOrList => parse(r#"{"type":["string","array"],"items":{"type":"string"}}"#),
         Kind::Bool => parse(r#"{"type":"boolean"}"#),
         Kind::List(shape) => parse(&format!(
             r##"{{"type":"array","minItems":1,"items":{{"$ref":"#/$defs/{}"}}}}"##,
@@ -2170,6 +2590,20 @@ fn schema_kind(kind: Kind) -> Value {
 fn schema_rule(rule: &Rule) -> Value {
     match rule {
         Rule::Signers(rule) => schema_signer_rule(rule),
+        Rule::ExactlyOne(names) => {
+            let alternatives: Vec<String> = names
+                .iter()
+                .map(|n| format!(r#"{{"required":["{n}"]}}"#))
+                .collect();
+            parse(&format!(r#"{{"oneOf":[{}]}}"#, alternatives.join(",")))
+        }
+        Rule::OnlyWhen {
+            member,
+            value,
+            dependent,
+        } => parse(&format!(
+            r#"{{"if":{{"properties":{{"{member}":{{"const":"{value}"}}}}}},"then":{{"required":["{dependent}"]}},"else":{{"properties":{{"{dependent}":false}}}}}}"#
+        )),
     }
 }
 
@@ -2367,6 +2801,12 @@ fn schema_and_runner_agree() {
         ))
     );
     assert_eq!(
+        annotated(at(defs, &["seconds"])),
+        parse(&format!(
+            r#"{{"type":"integer","minimum":-{SECONDS_MAX},"maximum":{SECONDS_MAX}}}"#
+        ))
+    );
+    assert_eq!(
         annotated(at(defs, &["jws"])),
         parse(r#"{"type":["string","object"]}"#)
     );
@@ -2483,6 +2923,23 @@ fn hand_written_checks_match_the_patterns() {
         ("null", false),
     ] {
         assert_eq!(is_count(&parse(json)), ok, "{json}");
+    }
+    // {"type": "integer", "minimum": -9007199254740991,
+    //  "maximum": 9007199254740991}
+    for (json, ok) in [
+        ("0", true),
+        ("-1", true),
+        ("1300819380", true),
+        ("9007199254740991", true),
+        ("-9007199254740991", true),
+        ("1.0", true),
+        ("9007199254740992", false),
+        ("-9007199254740992", false),
+        ("1.5", false),
+        ("\"1\"", false),
+        ("null", false),
+    ] {
+        assert_eq!(is_seconds(&parse(json)), ok, "{json}");
     }
 }
 
@@ -2866,10 +3323,18 @@ fn unknown_operation_fails() {
 /// implement fails the run too; it is never skipped.
 #[test]
 fn reserved_but_unimplemented_operations_fail() {
-    // jwe.encrypt and jwe.decrypt were reserved until 0003 T09 implemented
-    // them; jwt.validate still is.
-    let json = vector("jwt.validate", r#"{"token":"a.b.c"}"#, r#"{"ok":true}"#);
-    fails_naming_source("reserved-op.json", &json, "not implemented");
+    // jwe.* were reserved until 0003 T09 implemented them, jwt.validate
+    // until 0004 T10. With nothing reserved now, `validate` lets no such
+    // vector through, so the runner's fallback is driven directly.
+    let reserved = Vector {
+        operation: "jwt.reserved".to_owned(),
+        input: Object::new(),
+        expect: Expect::Ok(Object::new()),
+        features: Vec::new(),
+    };
+    let problem = execute(&reserved).unwrap_err();
+    assert!(problem.contains("not implemented"), "{problem}");
+    assert!(problem.contains("never skipped"), "{problem}");
 }
 
 /// Criterion 2: every way of breaking the schema fails the run, and the
@@ -4675,4 +5140,618 @@ fn jwe_vectors_are_binding_ready() {
         failures.join("\n  ")
     );
     assert!(checked >= 60, "only {checked} JWE vector files found");
+}
+
+// ---------------------------------------------------------------------------
+// jwt.* self-tests (0004 T10), on the RFC 7519 §3.1 JWT (= RFC 7515 A.1) and
+// the RFC 7515 A.3 ES256 JWS over the same claims. The vector files under
+// conformance/vectors/jwt/ cite them.
+// ---------------------------------------------------------------------------
+
+/// The RFC 7519 §3.1 Claims Set, as the library returns it.
+const JWT_CLAIMS: &str = r#"{"iss":"joe","exp":1300819380,"http://example.com/is_root":true}"#;
+/// RFC 7519 §3.1's `iat`-free example is valid 60 s before its `exp`.
+const JWT_NOW: &str = "1300819320";
+
+/// RFC 7515 A.3, an ES256 JWS (no `typ`) over the §3.1 claims.
+fn a3_compact() -> String {
+    format!("{A3_PROTECTED}.{PAYLOAD}.{A3_SIGNATURE}")
+}
+
+/// A `jwt.validate` input: `token`, `now` [`JWT_NOW`], `allowed_algs`, the
+/// key source `keys` (`"key":{...}` or `"jwks":{...}`) and `extra` members
+/// (each with a leading comma).
+fn jwt_validate_input(token: &str, algs: &str, keys: &str, extra: &str) -> String {
+    format!(
+        r#"{{"token":{},"now":{JWT_NOW},"allowed_algs":{algs},{keys}{extra}}}"#,
+        quoted(token)
+    )
+}
+
+/// The §3.1 JWT with its HS256 key and `extra` input members.
+fn jwt_hs256(extra: &str) -> String {
+    jwt_validate_input(
+        &a1_compact(),
+        r#"["HS256"]"#,
+        &format!(r#""key":{A1_KEY}"#),
+        extra,
+    )
+}
+
+/// A `jwt.validate` success with the §3.1 claims, `alg` and `extra`
+/// expectation members.
+fn jwt_validated(alg: &str, extra: &str) -> String {
+    format!(r#"{{"ok":true,"claims":{JWT_CLAIMS},"alg":"{alg}"{extra}}}"#)
+}
+
+fn failure(code: &str) -> String {
+    format!(r#"{{"ok":false,"error":"{code}"}}"#)
+}
+
+/// Every `jwt.validate` input form runs, through `key` and `jwks`, and
+/// every policy member reaches the library: each case below differs from
+/// the passing §3.1 one by that member alone, so its outcome proves it.
+#[test]
+fn jwt_validate_vectors_pass() {
+    let ok = jwt_validated("HS256", "");
+    let jwks = format!(r#""jwks":{{"keys":[{OTHER_P256},{A3_PUBLIC}]}}"#);
+    let cases = [
+        vector("jwt.validate", &jwt_hs256(""), &ok),
+        // Claims compare as JSON: member order and number spelling aside.
+        vector(
+            "jwt.validate",
+            &jwt_hs256(""),
+            r#"{"ok":true,"alg":"HS256","claims":{"http://example.com/is_root":true,"exp":1300819380.0,"iss":"joe"}}"#,
+        ),
+        // `now` is the only clock: at the expiry instant with no leeway the
+        // token is expired, and before it, it is not.
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"leeway":0}"#).replace(JWT_NOW, "1300819380"),
+            &failure("TokenExpired"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"leeway":0}"#).replace(JWT_NOW, "1300819379"),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256("").replace(JWT_NOW, "-9007199254740991"),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256("").replace(r#"["HS256"]"#, r#"["HS384"]"#),
+            &failure("AlgorithmNotAllowed"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256("").replace(r#"["HS256"]"#, "[]"),
+            &failure("AlgorithmNotAllowed"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256("").replace(r#"["HS256"]"#, r#"["none"]"#),
+            &failure("AlgorithmNotAllowed"),
+        ),
+        // issuer: a string or a list (RFC 7519 §4.1.1).
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"issuer":"joe"}"#),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"issuer":["bob","joe"]}"#),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"issuer":"bob"}"#),
+            &failure("InvalidClaim"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"issuer":[]}"#),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"audience":["joe"]}"#),
+            &failure("InvalidClaim"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"subject":"joe"}"#),
+            &failure("InvalidClaim"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"leeway":601}"#),
+            &failure("InvalidClaim"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"max_age":300}"#),
+            &failure("InvalidClaim"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"require":["iss","jti"]}"#),
+            &failure("InvalidClaim"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"require":[]}"#),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"allow_missing_exp":true,"ignore_audience":true}"#),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"allow_missing_exp":false,"ignore_audience":false}"#),
+            &ok,
+        ),
+        // typ: the §3.1 header says JWT (RFC 7519 §5.1).
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"typ":{"mode":"default"}}"#),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"typ":{"mode":"exact","value":"application/JWT"}}"#),
+            &ok,
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"typ":{"mode":"exact","value":"at+jwt"}}"#),
+            &failure("InvalidHeader"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"typ":{"mode":"any"}}"#),
+            &ok,
+        ),
+        // RFC 9068 §4: typ JWT is not at+jwt, checked before any claim.
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"profile":"access_token","issuer":"joe","audience":["api"]}"#),
+            &failure("InvalidHeader"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"profile":"access_token","audience":["api"]}"#),
+            &failure("InvalidClaim"),
+        ),
+        // profile, then a typ mode that overrides its at+jwt.
+        vector(
+            "jwt.validate",
+            &jwt_hs256(
+                r#","policy":{"profile":"access_token","issuer":"joe","audience":["api"],"typ":{"mode":"any"}}"#,
+            ),
+            &failure("InvalidClaim"),
+        ),
+        // jwks (ADR 0029): the kid-less A.3 token tries member 0, then
+        // verifies with member 1.
+        vector(
+            "jwt.validate",
+            &jwt_validate_input(&a3_compact(), r#"["ES256"]"#, &jwks, ""),
+            &jwt_validated("ES256", r#","key_index":1"#),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_validate_input(
+                &a3_compact(),
+                r#"["ES256"]"#,
+                &jwks,
+                r#","policy":{"max_key_candidates":1}"#,
+            ),
+            &failure("NoMatchingKey"),
+        ),
+        // A JWK or JWK Set import error is the outcome.
+        vector(
+            "jwt.validate",
+            &jwt_validate_input(
+                &a1_compact(),
+                r#"["HS256"]"#,
+                r#""key":{"kty":"oct","k":"Zg=="}"#,
+                "",
+            ),
+            &failure("InvalidBase64"),
+        ),
+        vector(
+            "jwt.validate",
+            &jwt_validate_input(&a1_compact(), r#"["HS256"]"#, r#""jwks":{"keys":"x"}"#, ""),
+            &failure("InvalidKey"),
+        ),
+        // An invalid member is skipped at import (RFC 7517 §5), so the set
+        // has no candidate left: NoMatchingKey (ADR 0029 §4).
+        vector(
+            "jwt.validate",
+            &jwt_validate_input(
+                &a1_compact(),
+                r#"["HS256"]"#,
+                r#""jwks":{"keys":[{"kty":"oct","k":"Zg=="}]}"#,
+                "",
+            ),
+            &failure("NoMatchingKey"),
+        ),
+    ];
+    assert_passes(&cases);
+}
+
+/// The step order of conformance/README.md: `decrypt.key`, then
+/// `decrypt`'s lists, then `key` or `jwks`, then the policy, the first
+/// error being the outcome. Each case breaks two steps with different
+/// codes and expects the earlier one, so none depends on the library's own
+/// JWE or JWT processing order.
+#[test]
+fn jwt_validate_runs_its_steps_in_order() {
+    let broken_set = r#""jwks":{"keys":"x"}"#; // InvalidKey
+    let decrypt = |key: &str, enc: &str| {
+        format!(r#","decrypt":{{"key":{key},"allowed_algs":["A128KW"],"allowed_enc":{enc}}}"#)
+    };
+    let cases = [
+        // decrypt.key (InvalidBase64) before jwks (InvalidKey).
+        vector(
+            "jwt.validate",
+            &jwt_validate_input(
+                &a1_compact(),
+                r#"["HS256"]"#,
+                broken_set,
+                &decrypt(r#"{"kty":"oct","k":"Zg=="}"#, r#"["A128GCM"]"#),
+            ),
+            &failure("InvalidBase64"),
+        ),
+        // decrypt.key (InvalidBase64) before decrypt's lists
+        // (AlgorithmNotAllowed).
+        vector(
+            "jwt.validate",
+            &jwt_hs256(&decrypt(r#"{"kty":"oct","k":"Zg=="}"#, "[]")),
+            &failure("InvalidBase64"),
+        ),
+        // decrypt's lists (AlgorithmNotAllowed) before jwks (InvalidKey).
+        vector(
+            "jwt.validate",
+            &jwt_validate_input(
+                &a1_compact(),
+                r#"["HS256"]"#,
+                broken_set,
+                &decrypt(JWE_A3_KEY, "[]"),
+            ),
+            &failure("AlgorithmNotAllowed"),
+        ),
+        // jwks (InvalidKey) before the policy (InvalidClaim, leeway).
+        vector(
+            "jwt.validate",
+            &jwt_validate_input(
+                &a1_compact(),
+                r#"["HS256"]"#,
+                broken_set,
+                r#","policy":{"leeway":601}"#,
+            ),
+            &failure("InvalidKey"),
+        ),
+        // The allow-list (AlgorithmNotAllowed) before the leeway
+        // (InvalidClaim): both are the policy's, built in that order.
+        vector(
+            "jwt.validate",
+            &jwt_hs256(r#","policy":{"leeway":601}"#).replace(r#"["HS256"]"#, "[]"),
+            &failure("AlgorithmNotAllowed"),
+        ),
+    ];
+    assert_passes(&cases);
+}
+
+/// The runner's strictness (criterion 2): a misspelled member, a missing
+/// `now`, both `key` and `jwks`, and every other way of breaking the
+/// `jwt.validate` schema fail the run, naming the member.
+#[test]
+fn jwt_validate_schema_violations_fail() {
+    let ok = jwt_validated("HS256", "");
+    let with_policy = |policy: &str| jwt_hs256(&format!(r#","policy":{policy}"#));
+    let decrypt = r#","decrypt":{"key":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"},"allowed_algs":["A128KW"],"allowed_enc":["A128GCM"]}"#;
+    let cases: &[(&str, String, &str)] = &[
+        (
+            "misspelled allowed_algs",
+            jwt_hs256("").replace(r#""allowed_algs""#, r#""allowed_alg""#),
+            "/input/allowed_alg: unknown member",
+        ),
+        (
+            "missing now",
+            jwt_hs256("").replace(&format!(r#""now":{JWT_NOW},"#), ""),
+            "/input/now: required member is missing",
+        ),
+        (
+            "missing token",
+            jwt_hs256("").replace(&format!(r#""token":"{}","#, a1_compact()), ""),
+            "/input/token: required member is missing",
+        ),
+        (
+            "missing allowed_algs",
+            jwt_hs256("").replace(r#""allowed_algs":["HS256"],"#, ""),
+            "/input/allowed_algs: required member is missing",
+        ),
+        (
+            "both key and jwks",
+            jwt_hs256(&format!(r#","jwks":{{"keys":[{A1_KEY}]}}"#)),
+            "/input: needs exactly one of `key`, `jwks` (oneOf), has 2",
+        ),
+        (
+            "neither key nor jwks",
+            jwt_validate_input(&a1_compact(), r#"["HS256"]"#, r#""policy":{}"#, ""),
+            "/input: needs exactly one of `key`, `jwks` (oneOf), has 0",
+        ),
+        (
+            "now as a string",
+            jwt_hs256("").replace(JWT_NOW, &quoted(JWT_NOW)),
+            "/input/now",
+        ),
+        (
+            "fractional now",
+            jwt_hs256("").replace(JWT_NOW, "1300819320.5"),
+            "/input/now",
+        ),
+        (
+            "now above 2^53 - 1",
+            jwt_hs256("").replace(JWT_NOW, "9007199254740992"),
+            "/input/now",
+        ),
+        (
+            "now below -(2^53 - 1)",
+            jwt_hs256("").replace(JWT_NOW, "-9007199254740992"),
+            "/input/now",
+        ),
+        (
+            "token not a string",
+            jwt_hs256("").replace(&quoted(&a1_compact()), "[]"),
+            "/input/token",
+        ),
+        (
+            "key not an object",
+            jwt_hs256("").replace(A1_KEY, &quoted("k")),
+            "/input/key",
+        ),
+        (
+            "jwks not an object",
+            jwt_validate_input(&a1_compact(), r#"["HS256"]"#, r#""jwks":[]"#, ""),
+            "/input/jwks",
+        ),
+        (
+            "misspelled policy member",
+            with_policy(r#"{"audiences":["joe"]}"#),
+            "/input/policy/audiences: unknown member",
+        ),
+        ("policy not an object", with_policy("[]"), "/input/policy"),
+        (
+            "issuer a number",
+            with_policy(r#"{"issuer":7}"#),
+            "/input/policy/issuer",
+        ),
+        (
+            "issuer list with a number",
+            with_policy(r#"{"issuer":["joe",7]}"#),
+            "/input/policy/issuer",
+        ),
+        (
+            "audience a string",
+            with_policy(r#"{"audience":"joe"}"#),
+            "/input/policy/audience",
+        ),
+        (
+            "negative leeway",
+            with_policy(r#"{"leeway":-1}"#),
+            "/input/policy/leeway",
+        ),
+        (
+            "max_age a string",
+            with_policy(r#"{"max_age":"300"}"#),
+            "/input/policy/max_age",
+        ),
+        (
+            "require a string",
+            with_policy(r#"{"require":"jti"}"#),
+            "/input/policy/require",
+        ),
+        (
+            "allow_missing_exp a string",
+            with_policy(r#"{"allow_missing_exp":"true"}"#),
+            "/input/policy/allow_missing_exp",
+        ),
+        (
+            "unknown profile",
+            with_policy(r#"{"profile":"id_token"}"#),
+            "/input/policy/profile",
+        ),
+        (
+            "typ a string",
+            with_policy(r#"{"typ":"JWT"}"#),
+            "/input/policy/typ",
+        ),
+        (
+            "unknown typ mode",
+            with_policy(r#"{"typ":{"mode":"strict"}}"#),
+            "/input/policy/typ/mode",
+        ),
+        (
+            "typ without a mode",
+            with_policy(r#"{"typ":{"value":"JWT"}}"#),
+            "/input/policy/typ/mode: required member is missing",
+        ),
+        (
+            "exact typ without a value",
+            with_policy(r#"{"typ":{"mode":"exact"}}"#),
+            "/input/policy/typ/value: required when `mode` is \"exact\"",
+        ),
+        (
+            "a value with typ mode any",
+            with_policy(r#"{"typ":{"mode":"any","value":"JWT"}}"#),
+            "/input/policy/typ/value: allowed only when `mode` is \"exact\"",
+        ),
+        (
+            "unknown typ member",
+            with_policy(r#"{"typ":{"mode":"any","strict":true}}"#),
+            "/input/policy/typ/strict: unknown member",
+        ),
+        (
+            "max_key_candidates negative",
+            with_policy(r#"{"max_key_candidates":-1}"#),
+            "/input/policy/max_key_candidates",
+        ),
+        (
+            "decrypt without allowed_enc",
+            jwt_hs256(&decrypt.replace(r#","allowed_enc":["A128GCM"]"#, "")),
+            "/input/decrypt/allowed_enc: required member is missing",
+        ),
+        (
+            "misspelled decrypt member",
+            jwt_hs256(&decrypt.replace(r#"["A128GCM"]}"#, r#"["A128GCM"],"max_p2c":1}"#)),
+            "/input/decrypt/max_p2c: unknown member",
+        ),
+        (
+            "decrypt key not an object",
+            jwt_hs256(&decrypt.replace(r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#, "\"k\"")),
+            "/input/decrypt/key",
+        ),
+    ];
+    for (what, input, needle) in cases {
+        let json = vector("jwt.validate", input, &ok);
+        fails_naming_source(&format!("invalid ({what}).json"), &json, needle);
+    }
+    let input = jwt_hs256("");
+    let expectations: &[(&str, String, &str)] = &[
+        (
+            "success without claims",
+            r#"{"ok":true,"alg":"HS256"}"#.to_owned(),
+            "/expect/claims: required member is missing",
+        ),
+        (
+            "success without alg",
+            format!(r#"{{"ok":true,"claims":{JWT_CLAIMS}}}"#),
+            "/expect/alg: required member is missing",
+        ),
+        (
+            "claims not an object",
+            r#"{"ok":true,"claims":[],"alg":"HS256"}"#.to_owned(),
+            "/expect/claims",
+        ),
+        (
+            "key_index a string",
+            jwt_validated("HS256", r#","key_index":"0""#),
+            "/expect/key_index",
+        ),
+        (
+            "unknown success member",
+            jwt_validated("HS256", r#","kid":"a""#),
+            "/expect/kid: unknown member",
+        ),
+        (
+            "failure with claims",
+            format!(r#"{{"ok":false,"error":"TokenExpired","claims":{JWT_CLAIMS}}}"#),
+            "/expect/claims: unknown member",
+        ),
+        ("unknown error code", failure("Expired"), "/expect/error"),
+    ];
+    for (what, expect, needle) in expectations {
+        let json = vector("jwt.validate", &input, expect);
+        fails_naming_source(&format!("invalid ({what}).json"), &json, needle);
+    }
+}
+
+/// A `jwt.validate` vector whose expectation the library does not meet
+/// fails, naming what differs; `key_index` is compared both ways.
+#[test]
+fn jwt_validate_mismatches_fail() {
+    let jwks = format!(r#""jwks":{{"keys":[{OTHER_P256},{A3_PUBLIC}]}}"#);
+    let via_set = jwt_validate_input(&a3_compact(), r#"["ES256"]"#, &jwks, "");
+    let cases = [
+        (
+            "wrong claims",
+            vector(
+                "jwt.validate",
+                &jwt_hs256(""),
+                &jwt_validated("HS256", "").replace("1300819380", "1300819381"),
+            ),
+            "`claims`: expected",
+        ),
+        (
+            "an extra claim",
+            vector(
+                "jwt.validate",
+                &jwt_hs256(""),
+                &jwt_validated("HS256", "").replace(r#""iss":"joe""#, r#""iss":"joe","sub":"x""#),
+            ),
+            "`claims`: expected",
+        ),
+        (
+            "wrong alg",
+            vector("jwt.validate", &jwt_hs256(""), &jwt_validated("HS384", "")),
+            "`alg`: expected \"HS384\"",
+        ),
+        (
+            "key_index left out for a jwks",
+            vector("jwt.validate", &via_set, &jwt_validated("ES256", "")),
+            "`key_index`: expected nothing, got 1",
+        ),
+        (
+            "wrong key_index",
+            vector(
+                "jwt.validate",
+                &via_set,
+                &jwt_validated("ES256", r#","key_index":0"#),
+            ),
+            "`key_index`: expected 0, got 1",
+        ),
+        (
+            "key_index for a single key",
+            vector(
+                "jwt.validate",
+                &jwt_hs256(""),
+                &jwt_validated("HS256", r#","key_index":0"#),
+            ),
+            "`key_index`: expected 0, got nothing",
+        ),
+        (
+            "expected success, but expired",
+            vector(
+                "jwt.validate",
+                &jwt_hs256("").replace(JWT_NOW, "1300819440"),
+                &jwt_validated("HS256", ""),
+            ),
+            "expected success, got error TokenExpired",
+        ),
+        (
+            "wrong error code",
+            vector(
+                "jwt.validate",
+                &jwt_hs256("").replace(JWT_NOW, "1300819440"),
+                &failure("InvalidClaim"),
+            ),
+            "expected error InvalidClaim, got error TokenExpired",
+        ),
+        (
+            "expected an error, but valid",
+            vector("jwt.validate", &jwt_hs256(""), &failure("TokenExpired")),
+            "succeeded",
+        ),
+        (
+            "profile with typ mode default",
+            vector(
+                "jwt.validate",
+                &jwt_hs256(
+                    r#","policy":{"profile":"access_token","issuer":"joe","audience":["a"],"typ":{"mode":"default"}}"#,
+                ),
+                &failure("InvalidHeader"),
+            ),
+            "contradicts `policy/profile`",
+        ),
+    ];
+    for (what, json, needle) in cases {
+        fails_naming_source(&format!("failing ({what}).json"), &json, needle);
+    }
 }
