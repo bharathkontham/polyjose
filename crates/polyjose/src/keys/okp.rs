@@ -2,9 +2,12 @@
 //! (RFC 8410 §3, §4, §7): parameters absent, and the private key as a
 //! CurvePrivateKey OCTET STRING inside the PKCS#8 privateKey.
 
+use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
+use super::der::{self, Reader, Writer};
 use super::jwk_build;
+use super::pkcs8;
 use super::spki;
 use super::types::{AlgId, Pkcs8Parts, SpkiParts};
 use crate::error::{Error, Result};
@@ -33,24 +36,135 @@ fn alg_id(crv: OkpCurve) -> AlgId {
     }
 }
 
-/// Imports a PKCS#8 Ed25519 or X25519 private key.
+/// `version` v1(0) of a OneAsymmetricKey without publicKey (RFC 5958 §2),
+/// the only version exported (ADR 0018 §3).
+const PKCS8_V1: u8 = 0;
+
+/// Reads `CurvePrivateKey ::= OCTET STRING` (RFC 8410 §7), the whole
+/// contents of the PKCS#8 privateKey OCTET STRING, so the key is
+/// `04 20 ‖ 32 octets` inside `04 22`. RFC 8410 §7: "the private key is
+/// wrapped in an OCTET STRING"; its value is the 32-octet Ed25519 seed
+/// (RFC 8032 §5.1.5) or X25519 scalar (RFC 7748 §5), stored as is, never
+/// clamped.
+///
+/// The key is copied only into the returned [`Zeroizing`] array; the
+/// caller's buffer is zeroizing too (T02 contract).
+fn curve_private_key(private_key: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
+    let mut reader = Reader::new(private_key)?;
+    let key = reader.octet_string()?;
+    reader.finish()?;
+    if key.len() != KEY_LEN {
+        return Err(Error::InvalidKey("CurvePrivateKey is not 32 octets"));
+    }
+    let mut d = Zeroizing::new([0u8; KEY_LEN]);
+    d.copy_from_slice(key);
+    Ok(d)
+}
+
+/// The Ed25519 public key of the seed `d`: A = [s]B from SHA-512(`d`)
+/// (RFC 8032 §5.1.5), computed by ed25519-dalek. The `SigningKey` is wiped
+/// on drop (its `zeroize` feature).
+fn ed25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
+    ed25519_dalek::SigningKey::from_bytes(d)
+        .verifying_key()
+        .to_bytes()
+}
+
+/// The X25519 public key of the scalar `d`: X25519(`d`, 9) (RFC 7748 §6.1;
+/// x25519-dalek clamps the scalar as RFC 7748 §5 requires). The
+/// `StaticSecret` the scalar is moved into is wiped on drop (its `zeroize`
+/// feature).
+fn x25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
+    let secret = x25519_dalek::StaticSecret::from(*d);
+    x25519_dalek::PublicKey::from(&secret).to_bytes()
+}
+
+/// Imports a PKCS#8 OneAsymmetricKey (RFC 5958 §2) that `pkcs8::decode`
+/// classified as id-Ed25519 or id-X25519 (RFC 8410 §3), as a private OKP
+/// JWK (RFC 8037 §2): `crv` from the privateKeyAlgorithm, `d` the
+/// CurvePrivateKey (RFC 8410 §7) and `x` its public key.
+///
+/// - **v1, no publicKey:** `x` is derived from `d`, by ed25519-dalek for
+///   Ed25519 (RFC 8032 §5.1.5) or x25519-dalek for X25519 (RFC 7748 §6.1).
+/// - **v2, with publicKey** (RFC 5958 §2; RFC 8410 §7, §10.3): the
+///   publicKey must be 32 octets and the public key of `d` (ADR 0018 §3,
+///   ADR 0043 §3).
+///   - Ed25519: the embedded key is passed as `x` together with `d` to
+///     [`jwk_build::okp_jwk`], whose [`Jwk::from_object`] rejects a `d` that
+///     does not derive `x`, in constant time (ADR 0043 §3), and an `x` with
+///     a torsion component (ADR 0043 §1). The derivation is not repeated
+///     here.
+///   - X25519: `jwk.rs` does not check that `d` derives `x` yet (feature
+///     0003 adds it with X25519 key agreement), so the derived key is
+///     compared with the embedded one here, with `subtle`'s constant-time
+///     equality since it is computed from the secret. That check becomes
+///     redundant, but harmless, once `jwk.rs` has it (ADR 0043 §3). The
+///     comparison is of the octets: an embedded key that is a non-canonical
+///     encoding of the derived u-coordinate (RFC 7748 §5) is rejected too.
+///
+/// Attributes have already been checked and are ignored (ADR 0018 §3); the
+/// JWK has no `alg` member.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] if the privateKey is not a 32-octet
+/// CurvePrivateKey, the publicKey is not 32 octets or not the public key
+/// of `d`, the key fails JWK validation, or `parts` is not an OKP key.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "called by the PEM/DER facade (T08)")
 )]
 pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
-    let _ = curve(parts.alg)?;
-    Err(Error::InvalidKey("not implemented"))
+    let crv = curve(parts.alg)?;
+    let d = curve_private_key(parts.private_key)?;
+    let embedded: Option<[u8; KEY_LEN]> = parts
+        .public_key
+        .map(|key| {
+            key.try_into()
+                .map_err(|_| Error::InvalidKey("PKCS#8 publicKey is not 32 octets"))
+        })
+        .transpose()?;
+    let x = match crv {
+        // Checked against `d` by `Jwk::from_object` (ADR 0043 §3).
+        OkpCurve::Ed25519 => embedded.unwrap_or_else(|| ed25519_public(&d)),
+        OkpCurve::X25519 => {
+            let derived = x25519_public(&d);
+            if embedded.is_some_and(|embedded| !bool::from(derived[..].ct_eq(&embedded[..]))) {
+                return Err(Error::InvalidKey(
+                    "X25519 PKCS#8 publicKey does not match the private key",
+                ));
+            }
+            derived
+        }
+    };
+    jwk_build::okp_jwk(crv, &x, Some(d.as_slice()), None)
 }
 
-/// Exports an Ed25519 or X25519 private key as PKCS#8 v1.
+/// Exports an Ed25519 or X25519 private key as a DER PKCS#8 v1
+/// PrivateKeyInfo without attributes or publicKey (RFC 5958 §2,
+/// RFC 8410 §7): `d` as the CurvePrivateKey OCTET STRING inside the
+/// privateKey OCTET STRING. That is the layout of RFC 8410 §10.3's first
+/// key and of OpenSSL 4 (ADR 0018 §3). Every buffer holding `d` is
+/// zeroizing.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`]`("private key required")` for a public key.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "called by the PEM/DER facade (T08)")
 )]
 pub(crate) fn to_pkcs8(key: &OkpKey) -> Result<Zeroizing<Vec<u8>>> {
-    let _ = key;
-    Err(Error::InvalidKey("not implemented"))
+    let d = key.d().ok_or(Error::InvalidKey("private key required"))?;
+    let mut writer = Writer::new(der::encoded_len(d.len()))?;
+    writer.element(der::OCTET_STRING, d)?;
+    let curve_private_key = writer.finish()?;
+    pkcs8::encode(&Pkcs8Parts {
+        version: PKCS8_V1,
+        alg: alg_id(key.crv()),
+        private_key: &curve_private_key,
+        public_key: None,
+    })
 }
 
 /// Imports a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7) that `spki::decode`
@@ -107,7 +221,6 @@ mod tests {
     use crate::jwk::KeyMaterial;
     use crate::keys::der::fixtures;
     use crate::keys::pem;
-    use crate::keys::pkcs8;
     use crate::keys::types::Label;
 
     /// The JWK of a committed `.jwk.json` fixture.
