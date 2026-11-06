@@ -233,8 +233,16 @@ fn processing_order_of_steps_1_to_4() {
     // missing crit is still InvalidHeader.
     let f = hdr(r#"{"alg":"HS256","b64":false}"#);
     assert_eq!(code(&format!("{f}.a=+/ x.{s}"), &opts()), "InvalidHeader");
+    // With crit, the part's octets are the payload (RFC 7797 §3, §5.2): a
+    // real tag verifies, the all-zero tag fails only at step 9.
     let fc = hdr(r#"{"alg":"HS256","b64":false,"crit":["b64"]}"#);
-    assert_ne!(code(&format!("{fc}.a=+/ x.{s}"), &opts()), "InvalidBase64");
+    let raw = sign_real(&fc, b"a=+/ x", false);
+    assert!(raw.starts_with(&format!("{fc}.a=+/ x.")), "{raw}");
+    assert_verifies(&raw, &opts(), b"a=+/ x");
+    assert_eq!(
+        code(&format!("{fc}.a=+/ x.{s}"), &opts()),
+        "InvalidSignature"
+    );
     // b64:true explicit: payload part is base64url again.
     let t = hdr(r#"{"alg":"HS256","b64":true,"crit":["b64"]}"#);
     assert_eq!(code(&format!("{t}.a=.{s}"), &opts()), "InvalidBase64");
@@ -293,14 +301,23 @@ fn protected(json: &str) -> ProtectedHeader {
     ProtectedHeader::new(h).unwrap()
 }
 
-fn sign_code(json: &str, payload: &[u8], detached: bool) -> &'static str {
+fn sign_header(json: &str, payload: &[u8], detached: bool) -> Result<String, &'static str> {
     sign_compact(
         &protected(json),
         payload,
         &key(),
         &SignOptions::new().detached(detached),
     )
-    .map_or_else(|e| e.code(), |_| "ok")
+    .map_err(|e| e.code())
+}
+
+fn sign_code(json: &str, payload: &[u8], detached: bool) -> &'static str {
+    sign_header(json, payload, detached).map_or_else(|c| c, |_| "ok")
+}
+
+/// The payload part of a compact JWS (RFC 7515 §7.1).
+fn payload_part(jws: &str) -> &str {
+    jws.split('.').nth(1).unwrap()
 }
 
 #[test]
@@ -331,15 +348,21 @@ fn sign_rules_before_the_family() {
     ] {
         assert_eq!(sign_code(f, bad, false), "InvalidFormat", "{bad:?}");
     }
-    // Boundaries 0x20 and 0x7e are allowed; empty is allowed.
+    // Boundaries 0x20 and 0x7e are allowed; empty is allowed. The payload
+    // part is the octets themselves (RFC 7797 §5.2) and the token verifies.
     for ok in [&b" "[..], b"~", b"", b"a b~"] {
-        assert_ne!(sign_code(f, ok, false), "InvalidFormat", "{ok:?}");
+        let jws = sign_header(f, ok, false).unwrap_or_else(|c| panic!("{c}: {ok:?}"));
+        assert_eq!(payload_part(&jws).as_bytes(), ok, "{jws}");
+        assert_verifies(&jws, &opts(), ok);
     }
-    // Detached b64:false accepts any octets.
-    assert_ne!(sign_code(f, b"a.b\n\xff\x00", true), "InvalidFormat");
-    // b64 true / absent: any payload is fine.
-    assert_ne!(
-        sign_code(r#"{"alg":"HS256"}"#, b"a.b\n\xff", false),
-        "InvalidFormat"
-    );
+    // Detached b64:false accepts any octets; the part is empty (Appendix F).
+    let any = b"a.b\n\xff\x00";
+    let jws = sign_header(f, any, true).unwrap_or_else(|c| panic!("{c}"));
+    assert_eq!(payload_part(&jws), "", "{jws}");
+    assert_verifies(&jws, &opts().detached_payload(any), any);
+    // b64 true / absent: any payload is fine, carried as base64url.
+    let any = b"a.b\n\xff";
+    let jws = sign_header(r#"{"alg":"HS256"}"#, any, false).unwrap_or_else(|c| panic!("{c}"));
+    assert_eq!(payload_part(&jws), b64(any), "{jws}");
+    assert_verifies(&jws, &opts(), any);
 }
