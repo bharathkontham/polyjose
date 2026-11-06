@@ -493,4 +493,81 @@ mod tests {
         let summary = wycheproof_hmac("hmac_sha512", SigningAlg::HS512, 512);
         assert_eq!(summary, WYCHEPROOF_HMAC_SUMMARY);
     }
+
+    /// The end-to-end path: the public compact API, through key binding,
+    /// into this family via the real dispatch (`alg::FAMILIES`).
+    mod end_to_end {
+        use super::*;
+        use crate::jws::{
+            ProtectedHeader, SignOptions, VerifyOptions, sign_compact, verify_compact,
+        };
+
+        const HS: &[SigningAlg] = &[SigningAlg::HS256, SigningAlg::HS384, SigningAlg::HS512];
+
+        #[test]
+        fn rfc7515_a1_compact_signs_and_verifies_through_the_public_api() {
+            // RFC 7515 A.1: the complete JWS Compact Serialization.
+            let protected = ProtectedHeader::from_encoded(A1_PROTECTED).unwrap();
+            let payload = b64url_decode(A1_PAYLOAD).unwrap();
+            let key = jwk(A1_KEY);
+            let jws = sign_compact(&protected, &payload, &key, &SignOptions::new()).unwrap();
+            assert_eq!(jws, format!("{A1_PROTECTED}.{A1_PAYLOAD}.{A1_SIGNATURE}"));
+
+            let opts = VerifyOptions::new(&[SigningAlg::HS256]).unwrap();
+            let verified = verify_compact(&jws, &key, &opts).unwrap();
+            assert_eq!(verified.alg, SigningAlg::HS256);
+            assert_eq!(verified.payload, payload);
+        }
+
+        #[test]
+        fn every_hs_alg_round_trips_and_rejects_a_changed_signature() {
+            let key = oct(&[0xaa; 131]);
+            let opts = VerifyOptions::new(HS).unwrap();
+            for alg in HS {
+                let header = b64url_encode(format!(r#"{{"alg":"{alg}"}}"#).as_bytes());
+                let protected = ProtectedHeader::from_encoded(&header).unwrap();
+                let jws = sign_compact(&protected, b"payload", &key, &SignOptions::new()).unwrap();
+                let verified = verify_compact(&jws, &key, &opts).unwrap();
+                assert_eq!(verified.alg, *alg);
+                assert_eq!(verified.payload, b"payload");
+
+                // RFC 7515 §5.2 step 8: any change to the signature fails.
+                let (head, sig) = jws.rsplit_once('.').unwrap();
+                let mut sig = b64url_decode(sig).unwrap();
+                sig[0] ^= 0x80;
+                let tampered = format!("{head}.{}", b64url_encode(&sig));
+                assert_eq!(
+                    verify_compact(&tampered, &key, &opts),
+                    Err(Error::InvalidSignature),
+                    "{alg}"
+                );
+                // A tag truncated by one octet (RFC 7518 §3.2).
+                let truncated = format!("{head}.{}", b64url_encode(&sig[1..]));
+                assert_eq!(
+                    verify_compact(&truncated, &key, &opts),
+                    Err(Error::InvalidSignature),
+                    "{alg}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_short_key_is_refused_by_the_public_api_both_ways() {
+            // RFC 7518 §3.2 via key binding (ADR 0026 §2 step 8).
+            let good = oct(&[0x11; 64]);
+            let short = oct(&[0x11; 47]);
+            let protected =
+                ProtectedHeader::from_encoded(&b64url_encode(br#"{"alg":"HS384"}"#)).unwrap();
+            assert_eq!(
+                sign_compact(&protected, b"p", &short, &SignOptions::new()).map_err(|e| e.code()),
+                Err("InvalidKey")
+            );
+            let jws = sign_compact(&protected, b"p", &good, &SignOptions::new()).unwrap();
+            let opts = VerifyOptions::new(HS).unwrap();
+            assert_eq!(
+                verify_compact(&jws, &short, &opts).map_err(|e| e.code()),
+                Err("InvalidKey")
+            );
+        }
+    }
 }
