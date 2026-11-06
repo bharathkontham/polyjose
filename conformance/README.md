@@ -48,6 +48,7 @@ All five top-level members are required and no others are allowed. Every object 
 | `keys.export_pem` | `jwk` (a JSON object), `format` (`"pkcs8"`, `"sec1"`, `"spki"` or `"pkcs1"`) ([below](#keysexport_pem)) | `pem` (exact text) | yes |
 | `keys.import_der` | `der_b64u`, `format` (as `keys.export_pem`) ([below](#keysimport_der)) | `jwk` (a JSON object) | yes |
 | `keys.export_der` | `jwk` (a JSON object), `format` (as `keys.export_pem`) ([below](#keysexport_der)) | `der_b64u` (exact) | yes |
+| `keys.generate_for` | `alg` (any string) ([below](#keysgenerate_for)) | `shape` (the key without its random material) | yes |
 | `jwe.encrypt`, `jwe.decrypt`, `jwt.validate` | reserved | reserved | |
 
 A reserved operation's input and output members are defined by the feature that implements it, which adds them to `schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails.
@@ -143,6 +144,32 @@ Imports DER with the library's DER key import in the structure `format` names (A
 ## `keys.export_der`
 
 `keys.export_pem` without the armor: imports `jwk` with the library's JWK import (whose error is the vector's outcome), then exports it as DER in `format` (ADR 0018 §3). Expect `{ "ok": true, "der_b64u": <octets> }`, the exact DER in OpenSSL 4's layout as canonical base64url, compared as a string; or a failure, by the format matrix of `keys.export_pem`, with its check order.
+
+## `keys.generate_for`
+
+Generates a private key for `alg` with the library's `generate_for` (ADR 0018 §5; ADR 0030 `jwk_generate_for_alg`). `alg` is a JWS `alg`, a JWE `alg` or a JWE `enc` name. RFC 7518 §7.1 registers all three in one registry whose names are unique and case-sensitive, so a runner resolves the name in whichever of the three it belongs to, and passes a name none of them knows to the library as unknown. It never normalizes case or picks a substitute.
+
+A generated key is random, so there is no exact output. A success vector expects only the key's **shape**:
+
+| `shape` member | Meaning |
+|---|---|
+| `kty` | `"EC"`, `"OKP"` or `"oct"` |
+| `crv` | EC and OKP only: the curve, for example `"P-256"` or `"Ed25519"` |
+| `alg` | The `alg` member the key is bound to (RFC 7517 §4.4): the requested name |
+| `k_octets` | `oct` only: the length of `k` in octets |
+
+The runner builds the generated key's shape and compares it with `shape` as a JSON value. A member the key has and the vector omits fails, so an EC vector must name `crv` and an `oct` vector `k_octets`. Before that the runner checks what a shape can't say, and any failure there fails the vector:
+
+- the key is private;
+- its members are exactly those RFC 7518 §6.2.1–§6.2.2 (EC: `kty`, `crv`, `x`, `y`, `d`), RFC 8037 §2 (OKP: `kty`, `crv`, `x`, `d`) or RFC 7518 §6.4.1 (`oct`: `kty`, `k`) define, plus `alg`;
+- it imports back with the library's JWK import to the same JWK.
+
+The expected shapes are the RFC sizes and curves per algorithm: HMAC keys the size of the hash output (RFC 7518 §3.2), AES key wrap and AES-GCM keys their AES key size (§4.4, §4.7, §5.3), AES-CBC-HMAC keys both halves (§5.2.3–§5.2.5), ECDSA keys their curve (§3.4, RFC 8812 §3.2) and EdDSA keys Ed25519 (RFC 8037 §3.1, ADR 0006).
+
+The failures are:
+
+- `InvalidKey` for `ECDH-ES` and `ECDH-ES+A*KW`. They work on several curves (RFC 7518 §4.6), so the request lacks a curve, and polyjose never picks one. A binding must not substitute a default;
+- `UnsupportedAlgorithm` for the RSA algorithms (ADR 0021), `dir` (its key size depends on `enc`, RFC 7518 §4.5), `PBES2-*` (passwords aren't generated), `none`, and any unknown or wrongly cased name.
 
 ## Binding readiness
 
