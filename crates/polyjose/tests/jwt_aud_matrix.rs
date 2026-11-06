@@ -3,6 +3,8 @@
 //! J10; RFC 7519 §4.1.3). The expected table is written from the ADR, so
 //! it holds before and after the F04 `check_aud` refactor.
 
+#![allow(clippy::unwrap_used)] // test code: a panic is a failed assertion
+
 use polyjose::Error;
 use polyjose::jwa::SigningAlg;
 use polyjose::jwk::Jwk;
@@ -50,7 +52,11 @@ fn run(a: A, configured: &[&str], ignore: bool) -> Result<(), Error> {
 fn no_audience_configured() {
     let bad = Err(Error::InvalidClaim("aud"));
     for ignore in [false, true] {
-        assert_eq!(run(A::Absent, &[], ignore), Ok(()), "absent ignore={ignore}");
+        assert_eq!(
+            run(A::Absent, &[], ignore),
+            Ok(()),
+            "absent ignore={ignore}"
+        );
         for a in [A::One("me"), A::OneOther, A::Many, A::Empty] {
             let want = if ignore { Ok(()) } else { bad.clone() };
             assert_eq!(run(a, &[], ignore), want, "{a:?} ignore={ignore}");
