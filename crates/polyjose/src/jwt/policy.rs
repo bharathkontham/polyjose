@@ -327,7 +327,9 @@ impl<'a> Policy<'a> {
         self.jws
     }
 
-    /// The allowed JWS algorithms, as given (RFC 8725 §3.1).
+    /// The allowed JWS algorithms, as given (RFC 8725 §3.1). Test-only:
+    /// the pipeline reads them through [`verify_options`](Self::verify_options).
+    #[cfg(test)]
     pub(crate) fn allowed_algs(&self) -> &'a [SigningAlg] {
         self.jws.allowed_algs()
     }
