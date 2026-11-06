@@ -836,16 +836,41 @@ fn a_json_jwe_is_invalid_format() {
 // Secrets (ADR 0049 §4)
 // ---------------------------------------------------------------------------
 
-/// ADR 0049 §4, ADR 0027 §7: no part of the decrypted inner token is in
-/// the result's `Debug` or in any error. The marker is a claim value, so
-/// it reaches the output only if the inner token or its payload leaks
-/// (`Claims`' `Debug` redacts strings).
+/// ADR 0049 §4, ADR 0027 §7: no claim string of the decrypted inner token
+/// is in the result's `Debug` or in any error. The marker is in every
+/// string claim: `iss`, `sub`, an `aud` element, `jti` (RFC 7519 §4.1)
+/// and a private claim. It reaches the output only if the inner token, its
+/// payload or a claim string leaks: `Claims`' `Debug` prints `iss`, `sub`,
+/// `jti` and each `aud` element as `"<redacted>"`, and the other claims
+/// through `Value`'s redacting `Debug`.
 #[test]
 fn the_inner_token_never_appears_in_debug_or_errors() {
     const MARKER: &str = "MARKER-7c1f2b9e-secret-claim-value";
     let mut c = claims();
+    c.iss = Some(format!("{MARKER}-iss"));
+    c.sub = Some(format!("{MARKER}-sub"));
+    c.aud = Some(Audience::Many(vec![
+        AUDIENCE.into(),
+        format!("{MARKER}-aud"),
+    ]));
+    c.jti = Some(format!("{MARKER}-jti"));
     c.insert("secret", MARKER).unwrap();
     let inner = signed(&c, SigningAlg::ES256, &es256_key());
+    // `open_at` with the policy accepting the token's audience, so every
+    // step runs (ADR 0027 §9 J6).
+    let key = public(&es256_key());
+    let open_at = |token: &str, now: i64| {
+        let clock = FixedClock(now);
+        let policy = Policy::new(&clock, &SIGNING).unwrap().audience(AUDIENCE);
+        jwt::decrypt_nested(
+            token,
+            &jwk(KEK),
+            &decrypt_policy(),
+            Keys::One(&key),
+            &policy,
+        )
+    };
+    let open = |token: &str| open_at(token, NOW);
     let payload_b64 = inner.split('.').nth(1).unwrap().to_owned();
     let signature_b64 = inner.split('.').nth(2).unwrap().to_owned();
     let leaks = |text: &str| {
@@ -856,11 +881,10 @@ fn the_inner_token_never_appears_in_debug_or_errors() {
     };
 
     let v = open(&nest(&inner)).unwrap();
-    assert_eq!(
-        v.inner.claims.get("secret").and_then(|m| m.as_str()),
-        Some(MARKER)
-    );
-    let debug = format!("{v:?} {v:#?}");
+    // Every marker made it into the result, so its absence from `Debug`
+    // is redaction, not a missing claim.
+    assert_eq!(v.inner.claims, c);
+    let debug = format!("{v:?} {v:#?} {:?}", v.inner);
     assert!(!leaks(&debug), "{debug}");
 
     let other = generate(KeySpec::Ec(EcCurve::P256)).unwrap();

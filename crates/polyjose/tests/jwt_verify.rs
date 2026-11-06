@@ -770,6 +770,43 @@ fn verified_jwt_debug_has_no_key_material() {
     assert!(debug.contains("VerifiedJwt"));
 }
 
+/// ADR 0049 §4, workspace secrets rule: `VerifiedJwt`'s `Debug` prints no
+/// claim string. The marker is in every string claim: `iss`, `sub`, an
+/// `aud` element, `jti` (RFC 7519 §4.1) and a private claim, so it reaches
+/// the output only if a claim string, the token or its payload leaks.
+#[test]
+fn verified_jwt_debug_has_no_claim_string() {
+    const MARKER: &str = "MARKER-3e8d5a17-secret-claim-value";
+    let mut c = Claims::new();
+    c.iss = Some(format!("{MARKER}-iss"));
+    c.sub = Some(format!("{MARKER}-sub"));
+    c.aud = Some(Audience::Many(vec![
+        format!("{MARKER}-aud"),
+        AUDIENCE.into(),
+    ]));
+    c.exp = NumericDate::from_secs(EXP);
+    c.jti = Some(format!("{MARKER}-jti"));
+    c.insert("secret", MARKER).unwrap();
+    let token = jwt::sign(&c, &IssueOptions::new(SigningAlg::HS256), &jwk(OCT_64)).unwrap();
+    let payload_b64 = token.split('.').nth(1).unwrap().to_owned();
+
+    let clock = FixedClock(EXP - 60);
+    let policy = Policy::new(&clock, &HS256).unwrap().audience(AUDIENCE);
+    let v = jwt::verify(&token, Keys::One(&jwk(OCT_64)), &policy).unwrap();
+    // Every marker made it into the result, so its absence from `Debug`
+    // is redaction, not a missing claim.
+    assert_eq!(v.claims, c);
+    for debug in [
+        format!("{v:?}"),
+        format!("{v:#?}"),
+        format!("{:?}", v.claims),
+    ] {
+        assert!(!debug.contains(MARKER), "{debug}");
+        assert!(!debug.contains(&token) && !debug.contains(&payload_b64));
+        assert!(debug.contains("<redacted>"), "{debug}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ES256 and EdDSA end to end
 // ---------------------------------------------------------------------------

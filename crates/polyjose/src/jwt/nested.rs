@@ -18,7 +18,14 @@ use super::{Audience, Claims, Keys, Policy, VerifiedJwt};
 
 /// A decrypted, verified and validated nested JWT (RFC 7519 §7.2).
 ///
-/// `Debug` prints no key material and none of the decrypted inner token.
+/// `Debug` prints no key material and no claim string of the decrypted
+/// inner token (workspace secrets rule, ADR 0049 §4): the inner claims
+/// print through [`Claims`]' redacting `Debug` (see [`Claims`#debug]),
+/// as in [`VerifiedJwt`]. The inner token's compact serialization, payload
+/// and signature are not held, so they never print. The inner and outer
+/// headers print through [`Header`]'s `Debug`: typed parameters such as
+/// `alg`, `kid` and `typ` in full, JSON objects redacted (see
+/// [`Header`#debug]).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct VerifiedNestedJwt {
@@ -146,7 +153,8 @@ fn check_compact_jws_shape(token: &str) -> Result<()> {
 /// **Secrecy** (ADR 0049 §4, ADR 0027 §7): the inner token stays in the
 /// decrypted plaintext's wiping buffer, is read in place, and is wiped
 /// when this function returns, on success and on every error. No error
-/// and no `Debug` output carries any of it.
+/// carries any of it, and the result's `Debug` prints no claim string:
+/// each prints as `"<redacted>"` (see [`VerifiedNestedJwt`]).
 ///
 /// # Errors
 ///

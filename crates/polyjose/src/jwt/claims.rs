@@ -1,6 +1,8 @@
 //! The JWT Claims Set (RFC 7519 §4): typed registered claims, every other
 //! claim kept as a [`Value`] (ADR 0027 §1).
 
+use core::fmt;
+
 use crate::error::{Error, Result};
 use crate::json::{Object, Value, parse};
 use zeroize::Zeroizing;
@@ -17,7 +19,17 @@ pub(crate) const REGISTERED_CLAIMS: [&str; 7] = ["iss", "sub", "aud", "exp", "nb
 /// "In the general case, the "aud" value is an array of case-sensitive
 /// strings", and with one audience it "MAY be a single case-sensitive
 /// string" (RFC 7519 §4.1.3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` prints the form and one `"<redacted>"` per value, never a
+/// value, like [`Value`]'s strings (see [`Claims`#debug]).
+///
+/// ```
+/// use polyjose::jwt::Audience;
+///
+/// let aud = Audience::Many(vec!["alice@example.com".into(), "api".into()]);
+/// assert_eq!(format!("{aud:?}"), r#"Many(["<redacted>", "<redacted>"])"#);
+/// ```
+#[derive(Clone, PartialEq, Eq)]
 pub enum Audience {
     /// A single string.
     One(String),
@@ -71,9 +83,44 @@ impl Audience {
 /// # Ok::<(), polyjose::Error>(())
 /// ```
 ///
-/// `Debug` prints the claim values; other claims print through [`Value`]'s
-/// `Debug`, which redacts strings.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// # Debug
+///
+/// `Debug` is polyjose's own and never prints a claim string, so a logged
+/// Claims Set (or the [`VerifiedJwt`](super::VerifiedJwt) or
+/// [`VerifiedNestedJwt`](super::VerifiedNestedJwt) holding it) cannot leak
+/// a claim (workspace secrets rule, ADR 0049 §4). A nested JWT is
+/// encrypted because its claims are confidential (RFC 7519 §11.2), and a
+/// `sub` is often personal data. It follows [`Value`]'s redacting `Debug`:
+///
+/// - `iss`, `sub` and `jti` print as `Some("<redacted>")` or `None`,
+///   whatever their content or length (RFC 7519 §4.1.1, §4.1.2, §4.1.7).
+/// - `aud` prints its form, [`One`](Audience::One) or
+///   [`Many`](Audience::Many), with one `"<redacted>"` per value, so the
+///   number of audiences shows and no value does (RFC 7519 §4.1.3).
+/// - `exp`, `nbf` and `iat` print in full: a NumericDate is a time, not a
+///   secret, and is what a reader needs to diagnose an expiry
+///   (RFC 7519 §4.1.4–§4.1.6).
+/// - The other claims print through [`Object`]'s `Debug`: claim names,
+///   `null`, booleans, numbers and structure show, and every string
+///   prints as `String("<redacted>")` (see [`Value`#debug]).
+///
+/// ```
+/// use polyjose::jwt::{Audience, Claims};
+///
+/// let mut claims = Claims::new();
+/// claims.sub = Some("alice@example.com".into());
+/// claims.aud = Some(Audience::One("https://api.example".into()));
+/// claims.insert("email", "alice@example.com")?;
+/// assert_eq!(
+///     format!("{claims:?}"),
+///     concat!(
+///         r#"Claims { iss: None, sub: Some("<redacted>"), aud: Some(One("<redacted>")), "#,
+///         r#"exp: None, nbf: None, iat: None, jti: None, other: {"email": String("<redacted>")} }"#,
+///     )
+/// );
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+#[derive(Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub struct Claims {
     /// `iss`, the issuer: a case-sensitive StringOrURI (RFC 7519 §4.1.1).
@@ -375,6 +422,54 @@ fn date_claim(value: Option<&Value>, claim: &'static str) -> Result<Option<Numer
     value
         .map(|value| NumericDate::from_json(value, claim))
         .transpose()
+}
+
+/// What `Debug` prints instead of a claim string: the placeholder
+/// [`Value`]'s `Debug` prints for a string.
+const REDACTED: &str = "<redacted>";
+
+/// Redacting: the form and one placeholder per value (see
+/// [`Claims`#debug]).
+impl fmt::Debug for Audience {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Audience::One(_) => f.debug_tuple("One").field(&REDACTED).finish(),
+            Audience::Many(auds) => f.debug_tuple("Many").field(&RedactedStrings(auds)).finish(),
+        }
+    }
+}
+
+/// The redacting `Debug` of a list of strings: one placeholder each.
+struct RedactedStrings<'a>(&'a [String]);
+
+impl fmt::Debug for RedactedStrings<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|_| REDACTED))
+            .finish()
+    }
+}
+
+/// Redacting: `iss`, `sub`, `jti` and `aud` print placeholders, the
+/// NumericDates print, other claims print through [`Object`]'s redacting
+/// `Debug` (see [`Claims`#debug]).
+impl fmt::Debug for Claims {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        /// `Some("<redacted>")` for a present string claim, else `None`.
+        fn redacted(claim: &Option<String>) -> Option<&'static str> {
+            claim.as_ref().map(|_| REDACTED)
+        }
+        f.debug_struct("Claims")
+            .field("iss", &redacted(&self.iss))
+            .field("sub", &redacted(&self.sub))
+            .field("aud", &self.aud)
+            .field("exp", &self.exp)
+            .field("nbf", &self.nbf)
+            .field("iat", &self.iat)
+            .field("jti", &redacted(&self.jti))
+            .field("other", &self.other)
+            .finish()
+    }
 }
 
 /// Moves the string out of its wiping buffer without copying it: the
@@ -754,32 +849,80 @@ mod tests {
         }
     }
 
+    /// Secret text for the `Debug` tests; a leak would contain it.
+    const MARKER: &str = "MARKER-f01-claim-value";
+
     #[test]
-    fn debug_shows_registered_values_and_redacts_other_strings() {
-        // Workspace secrets rule: other claims print through Value's
-        // redacting Debug; registered claim values are not secrets.
-        let c = claims(
-            r#"{"iss":"joe","exp":1300819380,"secret":"hunter2","list":["deep-secret"],"obj":{"k":"v-secret"},"n":7}"#,
-        )
+    fn debug_redacts_every_claim_string() {
+        // Workspace secrets rule, ADR 0049 §4: `iss`, `sub`, `aud` and `jti`
+        // (RFC 7519 §4.1.1–§4.1.3, §4.1.7) print redacted like `Value`'s
+        // strings; NumericDates and claim names print.
+        let mut c = Claims::new();
+        c.iss = Some(format!("{MARKER}-iss"));
+        c.sub = Some(format!("{MARKER}-sub"));
+        c.aud = Some(Audience::Many(vec![
+            format!("{MARKER}-aud-1"),
+            format!("{MARKER}-aud-2"),
+        ]));
+        c.exp = NumericDate::from_secs(1300819380);
+        c.nbf = NumericDate::from_secs(1300819000);
+        c.jti = Some(format!("{MARKER}-jti"));
+        c.insert("private", format!("{MARKER}-private")).unwrap();
+        c.insert("n", Value::Bool(true)).unwrap();
+        let (exp, nbf) = (format!("{:?}", c.exp), format!("{:?}", c.nbf));
+        assert_eq!(
+            format!("{c:?}"),
+            format!(
+                r#"Claims {{ iss: Some("<redacted>"), sub: Some("<redacted>"), aud: Some(Many(["<redacted>", "<redacted>"])), exp: {exp}, nbf: {nbf}, iat: None, jti: Some("<redacted>"), other: {{"private": String("<redacted>"), "n": Bool(true)}} }}"#
+            )
+        );
+        assert!(exp.contains("1300819380"), "{exp}");
+        let pretty = format!("{c:#?}");
+        assert!(!pretty.contains(MARKER), "{pretty}");
+        assert!(pretty.contains("    iss: Some(\n        \"<redacted>\",\n    ),"));
+        assert!(pretty.contains("\"private\": String("), "{pretty}");
+
+        // Absent claims print as `None`.
+        assert_eq!(
+            format!("{:?}", Claims::new()),
+            "Claims { iss: None, sub: None, aud: None, exp: None, nbf: None, iat: None, jti: None, other: {} }"
+        );
+
+        // Parsed claims too, whatever the claim strings hold.
+        let parsed = claims(&format!(
+            r#"{{"iss":"{MARKER}","sub":"{MARKER}","aud":"{MARKER}","jti":"{MARKER}","exp":1300819380,"secret":"{MARKER}","list":["{MARKER}"],"obj":{{"k":"{MARKER}"}}}}"#
+        ))
         .unwrap();
-        let debug = format!("{c:?}");
-        for shown in [
-            "\"joe\"",
-            "1300819380",
-            "\"secret\"",
-            "\"list\"",
-            "\"k\"",
-            "7",
-        ] {
-            assert!(debug.contains(shown), "{shown} missing from {debug}");
-        }
-        for hidden in ["hunter2", "deep-secret", "v-secret"] {
-            assert!(!debug.contains(hidden), "{hidden} leaked in {debug}");
+        for debug in [format!("{parsed:?}"), format!("{parsed:#?}")] {
+            assert!(!debug.contains(MARKER), "{debug}");
+            for shown in ["1300819380", "\"secret\"", "\"list\"", "\"k\"", "One("] {
+                assert!(debug.contains(shown), "{shown} missing from {debug}");
+            }
         }
         // Nothing of the input's layout (RFC 7519 §3.1 CRLF and spaces)
         // survives into the parsed value.
         let debug = format!("{:?}", Claims::from_json(RFC7519_3_1_CLAIMS).unwrap());
         assert!(!debug.contains('\r') && !debug.contains("\\r"), "{debug}");
+    }
+
+    #[test]
+    fn audience_debug_prints_its_form_and_count_but_no_value() {
+        // RFC 7519 §4.1.3: the form shows; each value is a placeholder.
+        let one = Audience::One(MARKER.into());
+        assert_eq!(format!("{one:?}"), r#"One("<redacted>")"#);
+        assert_eq!(format!("{one:#?}"), "One(\n    \"<redacted>\",\n)");
+        assert_eq!(format!("{:?}", Audience::Many(vec![])), "Many([])");
+        let many = Audience::Many(vec![MARKER.into(), String::new(), MARKER.repeat(9)]);
+        assert_eq!(
+            format!("{many:?}"),
+            r#"Many(["<redacted>", "<redacted>", "<redacted>"])"#
+        );
+        assert!(!format!("{many:#?}").contains(MARKER));
+        // The placeholder is the same whatever the length: no length leaks.
+        assert_eq!(
+            format!("{:?}", Audience::One(String::new())),
+            format!("{one:?}")
+        );
     }
 
     #[test]
