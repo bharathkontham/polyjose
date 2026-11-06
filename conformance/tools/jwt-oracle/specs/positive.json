@@ -645,6 +645,153 @@
           "exp": 1300819380
         }
       }
+    },
+    {
+      "file": "skew-exp-within-leeway-60.json",
+      "description": "exp E with leeway 60 at now E + 59: rejected iff exp <= now - leeway, so one second inside the leeway is accepted (RFC 7519 §4.1.4, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819439,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "leeway": 60
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "skew-nbf-at-leeway.json",
+      "description": "nbf N with the default 60 s leeway at now N - 60: rejected iff nbf > now + leeway, so nbf = now + leeway is accepted (RFC 7519 §4.1.5, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819340,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300823000,
+          "nbf": 1300819400
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300823000,
+          "nbf": 1300819400
+        }
+      }
+    },
+    {
+      "file": "skew-exp-leeway-0-one-second-before.json",
+      "description": "exp E with leeway 0 at now E - 1: the current time is before the expiration time, accepted (RFC 7519 §4.1.4 'MUST be before', ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819379,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "leeway": 0
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "skew-exp-leeway-600-cap.json",
+      "description": "leeway 600 (the cap, accepted when the policy is built) with exp E at now E + 599: accepted (RFC 7519 §4.1.4, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819979,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "leeway": 600
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
     }
   ]
 }
