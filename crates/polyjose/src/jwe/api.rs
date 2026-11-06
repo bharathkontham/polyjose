@@ -197,6 +197,16 @@ impl DecryptPolicy {
 /// The plaintext is wiped on drop and `Debug` never prints it. The header
 /// parts are returned as received, together with their union, the JOSE
 /// Header that was used (RFC 7516 §5.2 step 4).
+///
+/// **Only [`protected_header`](Self::protected_header) is
+/// integrity-protected** (RFC 7516 §5.1 steps 14–15: of the header parts,
+/// it alone is in the AAD).
+/// The shared and per-recipient unprotected headers, and therefore
+/// [`header`](Self::header), which merges them in, can be changed by anyone
+/// in transit without making decryption fail. Do not base security
+/// decisions, such as key selection, content typing or trust, on `kid`,
+/// `cty` or `jku` (or any other parameter) taken from them: read those from
+/// the protected header (ADR 0050 §3, the JWE counterpart of ADR 0049 §2).
 pub struct Decrypted {
     // core.rs builds this value.
     pub(super) plaintext: Zeroizing<Vec<u8>>,
@@ -229,18 +239,31 @@ impl Decrypted {
 
     /// The JWE Shared Unprotected Header (RFC 7516 §7.2.1 `unprotected`),
     /// JSON only.
+    ///
+    /// **Not integrity-protected** (RFC 7516 §7.2.1): do not base security
+    /// decisions on `kid`, `cty`, `jku` or any other parameter in it
+    /// (ADR 0050 §3).
     pub fn shared_header(&self) -> Option<&Header> {
         self.shared_header.as_ref()
     }
 
     /// The JWE Per-Recipient Unprotected Header (RFC 7516 §7.2.1 `header`)
     /// of the recipient that decrypted, JSON only.
+    ///
+    /// **Not integrity-protected** (RFC 7516 §7.2.1): do not base security
+    /// decisions on `kid`, `cty`, `jku` or any other parameter in it
+    /// (ADR 0050 §3).
     pub fn recipient_header(&self) -> Option<&Header> {
         self.recipient_header.as_ref()
     }
 
     /// The JOSE Header used: the union of the three parts above (RFC 7516
     /// §5.2 step 4).
+    ///
+    /// **Not integrity-protected as a whole**: any parameter may come from
+    /// an unprotected part, which anyone can change in transit. Do not base
+    /// security decisions on `kid`, `cty` or `jku` taken from it; use
+    /// [`protected_header`](Self::protected_header) (ADR 0050 §3).
     pub fn header(&self) -> &Header {
         &self.header
     }
@@ -319,7 +342,9 @@ impl Recipient {
     }
 
     /// This recipient's Per-Recipient Unprotected Header (RFC 7516 §7.2.1
-    /// `header`), JSON only. Replaces any earlier one.
+    /// `header`), JSON only. Replaces any earlier one. Not
+    /// integrity-protected: the receiver must not trust its contents
+    /// (ADR 0050 §3).
     #[must_use]
     pub fn header(mut self, header: Header) -> Self {
         self.header = Some(header);
@@ -415,7 +440,8 @@ impl Encryptor {
     }
 
     /// The JWE Shared Unprotected Header (RFC 7516 §7.2.1 `unprotected`),
-    /// JSON only.
+    /// JSON only. Not integrity-protected: the receiver must not trust its
+    /// contents (ADR 0050 §3).
     #[must_use]
     pub fn shared_unprotected_header(mut self, header: Header) -> Self {
         self.shared = Some(header);

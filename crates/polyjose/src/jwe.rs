@@ -44,6 +44,14 @@
 //!   tried under every `alg` and `enc` the [`DecryptPolicy`] allows, which
 //!   is what cross-mode key confusion relies on; keep the allow-lists to
 //!   what you use.
+//! - **Unprotected headers are attacker-controlled.** Only the JWE
+//!   Protected Header is integrity-protected (RFC 7516 §5.1 steps 14–15).
+//!   The shared and per-recipient unprotected headers (RFC 7516 §7.2.1),
+//!   and so [`Decrypted::header`], their union with it, can be changed in
+//!   transit without decryption failing. Do not base security decisions on
+//!   `kid`, `cty` or `jku` taken from them; read those from
+//!   [`Decrypted::protected_header`] (ADR 0050 §3, the counterpart of
+//!   ADR 0049 §2 for JWS).
 //! - **One decryption error.** Every failure after key management starts
 //!   is [`Error::DecryptionFailed`], with no detail (RFC 7516 §11.4–§11.5).
 //! - **Bounded work.** [`DecryptPolicy`] bounds the input size, the
@@ -76,6 +84,8 @@
 //! [`decrypt_compact`]: crate::jwe::decrypt_compact
 //! [`decrypt_json`]: crate::jwe::decrypt_json
 //! [`DecryptPolicy`]: crate::jwe::DecryptPolicy
+//! [`Decrypted::header`]: crate::jwe::Decrypted::header
+//! [`Decrypted::protected_header`]: crate::jwe::Decrypted::protected_header
 //! [`JsonForm::General`]: crate::jwe::JsonForm::General
 //! [`JsonForm::Flattened`]: crate::jwe::JsonForm::Flattened
 //! [`Error::UnsupportedAlgorithm`]: crate::Error::UnsupportedAlgorithm
