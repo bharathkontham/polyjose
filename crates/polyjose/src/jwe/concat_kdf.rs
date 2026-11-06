@@ -12,6 +12,11 @@ use crate::{Error, Result};
 /// (NIST SP 800-56A §5.8.1.1, `hashlen`).
 const HASH_LEN: usize = 32;
 
+/// The largest keydatalen `derive` accepts, in bits: the 64-octet key of
+/// direct ECDH-ES with A256CBC-HS512 (RFC 7518 §4.6.2, §5.2.5), the
+/// longest key JWE derives. It bounds the block loop at two iterations.
+pub(crate) const MAX_KEYDATALEN_BITS: u32 = 512;
+
 /// Derives `keydatalen_bits` bits from the shared secret `z` (RFC 7518
 /// §4.6.2):
 ///
@@ -36,6 +41,16 @@ pub(crate) fn derive(
     apv: &[u8],
     keydatalen_bits: u32,
 ) -> Result<Zeroizing<Vec<u8>>> {
+    // RFC 7518 §4.6.2: keydatalen is the number of bits of the key to
+    // derive. JWE keys are whole octets, so it is a positive multiple of 8,
+    // and no JWE algorithm needs more than MAX_KEYDATALEN_BITS. Rejecting
+    // anything else keeps the loop below bounded.
+    if keydatalen_bits == 0
+        || !keydatalen_bits.is_multiple_of(8)
+        || keydatalen_bits > MAX_KEYDATALEN_BITS
+    {
+        return Err(Error::UnsupportedAlgorithm);
+    }
     let keydatalen =
         usize::try_from(keydatalen_bits / 8).map_err(|_| Error::UnsupportedAlgorithm)?;
     let other_info = other_info(alg_id, apu, apv, keydatalen_bits)?;
@@ -286,5 +301,36 @@ mod tests {
         assert_eq!(k.as_slice(), reference(&z, "A128GCM", b"", b"", 128));
         assert_ne!(k, derive(&z, "A128GCM", b"Alice", b"", 128).unwrap());
         assert_ne!(k, derive(&z, "A128GCM", b"", b"Bob", 128).unwrap());
+    }
+
+    /// keydatalen must be a positive multiple of 8 bits and at most 512
+    /// (the largest key JWE derives: A256CBC-HS512, RFC 7518 §5.2.5), so
+    /// the block loop runs at most twice.
+    #[test]
+    fn derive_rejects_keydatalen_outside_the_allowed_range() {
+        let z = [1; 32];
+        for bits in [
+            0,
+            1,
+            7,
+            9,
+            127,
+            129,
+            511,
+            513,
+            520,
+            1024,
+            u32::MAX - 7,
+            u32::MAX,
+        ] {
+            assert_eq!(
+                derive(&z, "A128GCM", b"", b"", bits),
+                Err(Error::UnsupportedAlgorithm),
+                "{bits}"
+            );
+        }
+        assert_eq!(MAX_KEYDATALEN_BITS, 512);
+        assert!(derive(&z, "A128GCM", b"", b"", 8).is_ok());
+        assert!(derive(&z, "A128GCM", b"", b"", 512).is_ok());
     }
 }
