@@ -39,11 +39,10 @@ proptest = { version = "1.12", default-features = false, features = ["std"] }
 # enables `wasm_js` (bindings/wasm/Cargo.toml).
 getrandom = { version = "0.4.3", default-features = false }
 # SHA-256 (FIPS 180-4) for RFC 7638 JWK thumbprints: the core's first crypto primitive (ADR 0002).
-# Exact pin (ADR 0019 §4). 0.11.0, not 0.11.1: 0.11.1 needs Rust 1.88 and the workspace declares
-# rust-version 1.85 until feature 0002 T01 raises it (ADR 0024). Default features (`alloc`, `oid`)
-# off (ADR 0016): polyjose needs only the `Digest` API. `zeroize` wipes the hash state on drop, since
-# an `oct` thumbprint hashes the secret `k` (RFC 7638 §7).
-sha2 = { version = "=0.11.0", default-features = false, features = ["zeroize"] }
+# Exact pin (ADR 0019 §4) on the latest 0.11.x, which needs Rust 1.88 (ADR 0024). Default features
+# (`alloc`, `oid`) off (ADR 0016): polyjose needs only the `Digest` API. `zeroize` wipes the hash
+# state on drop, since an `oct` thumbprint hashes the secret `k` (RFC 7638 §7).
+sha2 = { version = "=0.11.1", default-features = false, features = ["zeroize"] }
 # Crypto: pure-Rust crates only (enforced by deny.toml) — added per algorithm as each feature lands:
 # hmac 0.13, p256/p384/p521/k256 0.14, ed25519-dalek 3, x25519-dalek 3,
 # aes-gcm 0.11, aes-kw 0.3, cbc 0.2, pbkdf2 0.13, rsa 0.10 rc (public-key operations only, ADR 0021).
