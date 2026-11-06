@@ -962,4 +962,87 @@ mod tests {
             );
         }
     }
+
+    mod round_trip {
+        use super::*;
+        use crate::keys::generate::generate_ec;
+        use crate::rng::CryptoRngAdapter;
+
+        /// Keys generated per curve (T06 acceptance criterion).
+        const KEYS_PER_CURVE: usize = 16;
+
+        #[test]
+        fn generated_keys_survive_every_form() {
+            // JWK → SEC1/PKCS#8/SPKI → JWK is the identity for T04's keys,
+            // and every import passed the typed-JWK validation (ADR 0041
+            // §4, ADR 0043 §3) because it went through Jwk::from_object.
+            for (name, crv) in CURVES {
+                for _ in 0..KEYS_PER_CURVE {
+                    let jwk = generate_ec(crv, &mut CryptoRngAdapter::os()).unwrap();
+                    let key = ec_key(&jwk);
+
+                    let sec1_der = to_sec1(key).unwrap();
+                    assert_same(&from_sec1(&sec1_der).unwrap(), &jwk, name);
+
+                    let pkcs8_der = to_pkcs8(key).unwrap();
+                    let parts = pkcs8::decode(&pkcs8_der).unwrap();
+                    assert_same(&from_pkcs8(parts).unwrap(), &jwk, name);
+
+                    let spki_der = to_spki(key).unwrap();
+                    let public = spki::decode(&spki_der).and_then(from_spki).unwrap();
+                    assert_same(&public, &jwk.to_public().unwrap(), name);
+                }
+            }
+        }
+
+        #[test]
+        fn exports_parse_with_the_rustcrypto_oracles() {
+            // Differential check of the three export forms against the
+            // `sec1`, `pkcs8` and `spki` crates (dev-dependency oracles,
+            // ADR 0016 §5, ADR 0018 §1).
+            for (name, crv) in CURVES {
+                let jwk = generate_ec(crv, &mut CryptoRngAdapter::os()).unwrap();
+                let key = ec_key(&jwk);
+                let point = uncompressed_point(key);
+                let named = |p: &::sec1::EcParameters| p.named_curve().map(|o| o.to_string());
+                let curve_oid = match crv {
+                    EcCurve::P256 => "1.2.840.10045.3.1.7",
+                    EcCurve::P384 => "1.3.132.0.34",
+                    EcCurve::P521 => "1.3.132.0.35",
+                    EcCurve::Secp256k1 => "1.3.132.0.10",
+                };
+
+                let sec1_der = to_sec1(key).unwrap();
+                let oracle = ::sec1::EcPrivateKey::try_from(sec1_der.as_slice()).unwrap();
+                assert_eq!(Some(oracle.private_key), key.d(), "{name}");
+                assert_eq!(oracle.public_key, Some(point.as_slice()), "{name}");
+                assert_eq!(
+                    oracle.parameters.as_ref().and_then(named).as_deref(),
+                    Some(curve_oid),
+                    "{name}"
+                );
+
+                let pkcs8_der = to_pkcs8(key).unwrap();
+                let info = ::pkcs8::PrivateKeyInfoRef::try_from(pkcs8_der.as_slice()).unwrap();
+                assert!(info.public_key.is_none(), "{name}: v1");
+                let inner = ::sec1::EcPrivateKey::try_from(info.private_key.as_bytes()).unwrap();
+                assert!(inner.parameters.is_none(), "{name}: no inner [0]");
+                assert_eq!(Some(inner.private_key), key.d(), "{name}");
+                assert_eq!(inner.public_key, Some(point.as_slice()), "{name}");
+
+                let spki_der = to_spki(key).unwrap();
+                let info = ::spki::SubjectPublicKeyInfoRef::try_from(spki_der.as_slice()).unwrap();
+                assert_eq!(
+                    info.subject_public_key.raw_bytes(),
+                    point.as_slice(),
+                    "{name}"
+                );
+                assert_eq!(
+                    info.algorithm.oid.to_string(),
+                    "1.2.840.10045.2.1",
+                    "{name}"
+                );
+            }
+        }
+    }
 }
