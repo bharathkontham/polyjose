@@ -22,6 +22,17 @@ use super::{Claims, Policy};
 /// or `x5c` never supplies one, and `kid` only selects among the set's
 /// members (RFC 8725 §3.10; ADR 0026 §2, ADR 0029 §2).
 ///
+/// **Never allow `HS*` with a remote or untrusted JWK Set.** A set may mix
+/// `oct` members with public keys, and [`JwkSet::from_json`] accepts both.
+/// With an `HS*` algorithm in the policy's allow-list, any `oct` member
+/// verifies an HMAC. So if the set is a published document (a `jwks_uri`,
+/// say) or comes from a party that is not trusted with your secrets,
+/// whoever published that member, or can read it, can sign tokens that
+/// verify. This is the algorithm confusion of RFC 8725 §2.1 in another
+/// form. Allow `HS*` only with `oct` keys the application holds as
+/// secrets, and verify a remote set's tokens with asymmetric algorithms
+/// only (RFC 8725 §3.1).
+///
 /// ```
 /// use polyjose::jwk::Jwk;
 /// use polyjose::jwt::Keys;
@@ -39,6 +50,9 @@ pub enum Keys<'a> {
     One(&'a Jwk),
     /// A JWK Set (RFC 7517 §5): candidates are selected by `alg`, `use`,
     /// `key_ops` and `kid`, and tried in set order (ADR 0029 §2–§4).
+    ///
+    /// The set may hold `oct` members, so never allow `HS*` with a remote
+    /// or untrusted set (RFC 8725 §2.1, §3.1; see [`Keys`]).
     Set(&'a JwkSet),
 }
 

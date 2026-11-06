@@ -114,6 +114,13 @@ impl<'a> Policy<'a> {
     /// JWS algorithms in `allowed_algs` (RFC 8725 §3.1), with the defaults
     /// in the table above.
     ///
+    /// List only the algorithms the keys you pass are meant for. In
+    /// particular, never put an `HS*` algorithm in `allowed_algs` for a
+    /// remote or untrusted JWK Set: a set may mix `oct` members with public
+    /// keys, and an `oct` member published by an attacker, or readable by
+    /// one, would then verify tokens they sign (RFC 8725 §2.1, §3.1; see
+    /// [`Keys`](super::Keys)).
+    ///
     /// # Errors
     ///
     /// [`Error::AlgorithmNotAllowed`] if `allowed_algs` is empty, or holds
