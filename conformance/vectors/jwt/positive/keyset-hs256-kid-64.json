@@ -1,0 +1,35 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "An HS256 token with kid \"hs-64\" against oct keys of 32 (kid hs-32) and 64 octets (kid hs-64): the kid selects the 64-octet key, key_index 1 (RFC 7518 §3.2, ADR 0029 §2.5, §4)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImhzLTY0In0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODE5MzgwfQ.1wMopTIXX_urGLWY6NWn08Smjd8obxfNmlR7ueQmNuc",
+    "now": 1300819320,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "LEogBFIZxkmhKksJAqKSeN60dLO4zaahULwqC5j-8pY",
+          "kid": "hs-32"
+        },
+        {
+          "kty": "oct",
+          "k": "QFTfZnD22xo54TGYuQq_MJzbjkSQOADa0aR8QXRtym-z92ejZKr_UlEhBkqk39ocvyvlkaIwUJZWjeQah6E1uQ",
+          "kid": "hs-64"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300819380
+    },
+    "alg": "HS256",
+    "key_index": 1
+  }
+}

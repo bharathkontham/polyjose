@@ -1,0 +1,29 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "exp E with leeway 0 at now E - 1: the current time is before the expiration time, accepted (RFC 7519 §4.1.4 'MUST be before', ADR 0027 §3)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODE5MzgwfQ.z7yQqxwqc0Piwj-r42DlVTUWhWq_0_dnq80beCM3ciEF_N-SaOv3JV7dXDQ1s_i711nMg_BvCqu_wxpAfUAm8g",
+    "now": 1300819379,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "policy": {
+      "leeway": 0
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300819380
+    },
+    "alg": "ES256"
+  }
+}

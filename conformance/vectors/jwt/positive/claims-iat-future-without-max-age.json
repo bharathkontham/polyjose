@@ -1,0 +1,27 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "iat 3600 s in the future (now + 3600) without max_age is accepted: a future iat is not rejected by default (RFC 7519 §4.1.6, erratum 7720, ADR 0027 §3)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODI2NTIwLCJpYXQiOjEzMDA4MjI5MjB9.FI3RsfPvCITVDl_yKzKrd3WTdbOEOMCuTF2vQgRTF2uVbRjXYwU3gx9NhefiabH0odVTLtodsi8H_Rl1ajkrGA",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300826520,
+      "iat": 1300822920
+    },
+    "alg": "ES256"
+  }
+}
