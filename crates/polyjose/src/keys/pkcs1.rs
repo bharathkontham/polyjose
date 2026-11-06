@@ -460,4 +460,81 @@ mod tests {
         // N65 (RFC 8017 App. A.1.1, exactly modulus and publicExponent).
         assert!(is_invalid(&decode(&fixtures::negative("N65"))));
     }
+
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::{decode, decode_public, encode_public};
+
+        /// Never panics, and canonical: whatever decodes as an RSAPublicKey
+        /// re-encodes to exactly the input (X.690 §10), through both entry
+        /// points.
+        fn canonical(input: &[u8]) -> Result<(), TestCaseError> {
+            if let Ok(key) = decode_public(input) {
+                prop_assert_eq!(&encode_public(key.n, key.e).unwrap()[..], input);
+            }
+            if let Ok(key) = decode(input) {
+                prop_assert_eq!(&encode_public(key.n, key.e).unwrap()[..], input);
+            }
+            Ok(())
+        }
+
+        /// DER length octets for `len` (X.690 §8.1.3), in the fewest octets.
+        fn length(len: usize) -> Vec<u8> {
+            match len {
+                0..=0x7F => vec![u8::try_from(len).unwrap()],
+                0x80..=0xFF => vec![0x81, u8::try_from(len).unwrap()],
+                _ => {
+                    let [high, low] = u16::try_from(len).unwrap().to_be_bytes();
+                    vec![0x82, high, low]
+                }
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+            #[test]
+            fn arbitrary_bytes_fail_or_are_canonical(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
+                canonical(&bytes)?;
+            }
+
+            #[test]
+            fn any_two_magnitudes_round_trip(
+                n in proptest::collection::vec(any::<u8>(), 1..300),
+                e in proptest::collection::vec(any::<u8>(), 1..8),
+            ) {
+                // Leading zero octets are not significant (X.690 §8.3.2).
+                let der = encode_public(&n, &e).unwrap();
+                let key = decode(&der).unwrap();
+                let strip = |v: &[u8]| -> Vec<u8> {
+                    let start = v.iter().position(|&b| b != 0).unwrap_or(v.len() - 1);
+                    v[start..].to_vec()
+                };
+                prop_assert_eq!(key.n.to_vec(), strip(&n));
+                prop_assert_eq!(key.e.to_vec(), strip(&e));
+                canonical(&der)?;
+            }
+
+            #[test]
+            fn private_key_shapes_are_always_unsupported(
+                multi in any::<bool>(),
+                fields in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..20), 8..12),
+            ) {
+                // RFC 8017 App. A.1.2 / ADR 0021: version 0 or 1 and eight or
+                // more INTEGER elements, whatever their contents octets.
+                let version: &[u8] = if multi { &[0x02, 0x01, 0x01] } else { &[0x02, 0x01, 0x00] };
+                let mut body = version.to_vec();
+                for contents in &fields {
+                    body.push(0x02);
+                    body.push(u8::try_from(contents.len()).unwrap());
+                    body.extend_from_slice(contents);
+                }
+                let mut der = vec![0x30];
+                der.extend_from_slice(&length(body.len()));
+                der.extend_from_slice(&body);
+                prop_assert_eq!(decode(&der).err(), Some(crate::Error::UnsupportedAlgorithm));
+            }
+        }
+    }
 }
