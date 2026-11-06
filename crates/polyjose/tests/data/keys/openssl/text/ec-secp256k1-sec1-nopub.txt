@@ -1,0 +1,11 @@
+Private-Key: (256 bit field, 128 bit security level)
+priv:
+    4c:ea:28:a9:38:ea:ef:1d:e9:36:02:fc:ed:52:c8:7b:
+    b3:37:93:e3:b2:bd:aa:d2:44:f4:70:8c:0c:25:bb:64
+pub:
+    04:2a:c8:29:c7:3e:46:9e:1e:df:b9:d3:e4:a3:f0:81:
+    25:00:7d:d4:fb:0e:d6:b3:d5:ca:9d:ca:b6:24:64:fc:
+    e2:62:8e:be:10:69:ae:b2:cf:19:49:d1:8c:f8:46:46:
+    db:e5:20:d2:d9:c2:b2:28:5d:88:c3:ae:7f:4c:1c:50:
+    02
+ASN1 OID: secp256k1

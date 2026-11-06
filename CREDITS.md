@@ -363,15 +363,28 @@ UniFFI) are not part of the core crate and are not listed here.
 - **Used for:** not used directly. The Ed25519 signature type that `ed25519-dalek` uses.
 - **Audit status:** not in the ADR 0019 register; a dependency of `ed25519-dalek`.
 
+### `x25519-dalek`
+
+- **Upstream:** dalek-cryptography,
+  [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
+  ([crates.io](https://crates.io/crates/x25519-dalek))
+- **License:** BSD-3-Clause
+- **Used for:** X25519 (RFC 7748) for the OKP `X25519` curve (RFC 8037 §2): deriving the public `x`
+  of a generated key (RFC 7748 §6.1) and, for JWE, ECDH-ES key agreement (RFC 8037 §3.2). Its
+  `static_secrets` feature provides the reusable private key a JWK holds, and `zeroize` wipes it on
+  drop.
+- **Audit status:** audited by Quarkslab in 2019 (for Tari), together with `curve25519-dalek`, but
+  reviewed only marginally. polyjose pins 3.0.0, which postdates the audit.
+
 ### `curve25519-dalek`
 
 - **Upstream:** dalek-cryptography,
   [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
   ([crates.io](https://crates.io/crates/curve25519-dalek))
 - **License:** BSD-3-Clause
-- **Used for:** not used directly. The Curve25519 group and field arithmetic under `ed25519-dalek`.
-  Its build script picks the arithmetic backend from the target and the compiler version, and on
-  x86_64 it generates its SIMD backends with `curve25519-dalek-derive`.
+- **Used for:** not used directly. The Curve25519 group and field arithmetic under `ed25519-dalek`
+  and `x25519-dalek`. Its build script picks the arithmetic backend from the target and the compiler
+  version, and on x86_64 it generates its SIMD backends with `curve25519-dalek-derive`.
 - **Audit status:** audited by Quarkslab in 2019 (for Tari): minor issues only. polyjose pins 5.0.0,
   which postdates the audit.
 
