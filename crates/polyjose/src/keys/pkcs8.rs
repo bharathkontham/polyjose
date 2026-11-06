@@ -3,5 +3,496 @@
 //! `[1]` publicKey, read into and written from `Pkcs8Parts`.
 //! EncryptedPrivateKeyInfo (RFC 5958 §3) is rejected as unsupported
 //! (ADR 0018 §4).
-//!
-//! Filled in by task T02 of the keys feature.
+
+use zeroize::Zeroizing;
+
+use super::types::Pkcs8Parts;
+use crate::error::{Error, Result};
+
+/// Decodes a DER OneAsymmetricKey (RFC 5958 §2).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "called by the key mappers (T05, T06) and the facade (T08)"
+    )
+)]
+pub(crate) fn decode(der: &[u8]) -> Result<Pkcs8Parts<'_>> {
+    decode_with_attributes(der).map(|(parts, _)| parts)
+}
+
+fn decode_with_attributes(der: &[u8]) -> Result<(Pkcs8Parts<'_>, Option<&[u8]>)> {
+    let _ = der;
+    Err(Error::InvalidKey("not implemented"))
+}
+
+/// Encodes a OneAsymmetricKey (RFC 5958 §2) in DER.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "called by the key mappers (T05, T06) and the facade (T08)"
+    )
+)]
+pub(crate) fn encode(parts: &Pkcs8Parts<'_>) -> Result<Zeroizing<Vec<u8>>> {
+    encode_with_attributes(parts, None)
+}
+
+fn encode_with_attributes(
+    parts: &Pkcs8Parts<'_>,
+    attributes: Option<&[u8]>,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let _ = (parts, attributes);
+    Err(Error::InvalidKey("not implemented"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::der::fixtures;
+    use super::super::types::AlgId;
+    use super::*;
+    use crate::jwk::EcCurve;
+
+    fn is_invalid<T>(result: &Result<T>) -> bool {
+        matches!(result, Err(Error::InvalidKey(_)))
+    }
+
+    fn is_unsupported<T>(result: &Result<T>) -> bool {
+        matches!(result, Err(Error::UnsupportedAlgorithm))
+    }
+
+    /// RFC 8037 App. A.1 as PKCS#8 v1: `30 2e 02 01 00 30 05 06 03 2b 65 70
+    /// 04 22 04 20 ‖ d` (RFC 8410 §7).
+    fn ed25519_v1() -> Vec<u8> {
+        fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der")
+    }
+
+    #[test]
+    fn framing_vectors_n01_to_n12_are_invalid() {
+        // X.690 §10.1, §8.1.3, §8.1.2.4, §8.3.2, §10.2, §8.1.1 (manifest).
+        let framing: Vec<_> = fixtures::negatives()
+            .into_iter()
+            .filter(|n| {
+                matches!(
+                    n.id.as_str(),
+                    "N01"
+                        | "N02"
+                        | "N03"
+                        | "N04"
+                        | "N05"
+                        | "N06"
+                        | "N07"
+                        | "N08"
+                        | "N09"
+                        | "N10"
+                        | "N11"
+                        | "N12"
+                )
+            })
+            .collect();
+        assert_eq!(framing.len(), 12);
+        for vector in framing {
+            assert_eq!(vector.expect, "InvalidKey", "{}", vector.id);
+            let der = fixtures::load("negative", &vector.file);
+            let result = decode(&der);
+            assert!(is_invalid(&result), "{}: {:?}", vector.id, result.err());
+        }
+    }
+
+    #[test]
+    fn container_vectors_are_invalid() {
+        // N22: OID subidentifier not minimal (X.690 §8.19.2). N23: version
+        // 2 (RFC 5958 §2 has v1(0) and v2(1)). N24: v1 with a publicKey
+        // ("If publicKey is present, then version is set to v2", §2).
+        for id in ["N22", "N23", "N24"] {
+            let der = fixtures::negative(id);
+            let result = decode(&der);
+            assert!(is_invalid(&result), "{id}: {:?}", result.err());
+        }
+    }
+
+    #[test]
+    fn v2_without_a_public_key_is_invalid() {
+        // RFC 5958 §2: "... else version is set to v1".
+        let mut der = ed25519_v1();
+        assert_eq!(&der[2..5], &[0x02, 0x01, 0x00]);
+        der[4] = 0x01;
+        assert!(is_invalid(&decode(&der)));
+    }
+
+    #[test]
+    fn the_private_key_must_be_a_primitive_octet_string() {
+        // RFC 5958 §2: PrivateKey ::= OCTET STRING; X.690 §10.2.
+        let mut der = ed25519_v1();
+        assert_eq!(der[12], 0x04);
+        der[12] = 0x02; // INTEGER: well-formed (04 20 ... is minimal), wrong type
+        assert!(is_invalid(&decode(&der)));
+        der[12] = 0x03; // BIT STRING
+        assert!(is_invalid(&decode(&der)));
+        let n05 = fixtures::negative("N05"); // constructed OCTET STRING
+        assert!(is_invalid(&decode(&n05)));
+    }
+
+    #[test]
+    fn rfc8410_v2_with_attributes_and_public_key_decodes() {
+        // RFC 8410 §10.3: version 1, id-Ed25519, CurvePrivateKey (34 octets
+        // with its own OCTET STRING header), one attribute (ignored) and a
+        // 32-octet [1] publicKey.
+        let der = fixtures::load("rfc", "rfc8410-10.3-ed25519-pkcs8-v2-attr-pub.pem");
+        let (parts, attributes) = decode_with_attributes(&der).unwrap();
+        assert_eq!(parts.version, 1);
+        assert_eq!(parts.alg, AlgId::Ed25519);
+        assert_eq!(parts.private_key.len(), 34);
+        assert_eq!(&parts.private_key[..2], &[0x04, 0x20]);
+        assert_eq!(parts.public_key.map(<[u8]>::len), Some(32));
+        let attributes = attributes.unwrap();
+        assert_eq!(attributes[0], 0xA0);
+        assert_eq!(attributes.len(), 33);
+        // RFC 8410 §10.1 is the matching public key (research.md §8).
+        let spki = fixtures::load("rfc", "rfc8410-10.1-ed25519-spki.pem");
+        assert_eq!(parts.public_key.unwrap(), &spki[spki.len() - 32..]);
+    }
+
+    /// The RFC 8410 §10.3 v2 key with its `[0]` attributes replaced by
+    /// `attributes` (a whole element, or nothing).
+    fn v2_with_attributes(attributes: &[u8]) -> Vec<u8> {
+        let der = fixtures::load("rfc", "rfc8410-10.3-ed25519-pkcs8-v2-attr-pub.pem");
+        let (parts, _) = decode_with_attributes(&der).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0x02, 0x01, 0x01]);
+        body.extend_from_slice(super::super::oid::ALG_ED25519);
+        body.extend_from_slice(&[0x04, 0x22]);
+        body.extend_from_slice(parts.private_key);
+        body.extend_from_slice(attributes);
+        body.extend_from_slice(&[0x81, 0x21, 0x00]);
+        body.extend_from_slice(parts.public_key.unwrap());
+        let mut out = vec![0x30, u8::try_from(body.len()).unwrap()];
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn attributes_must_be_well_formed_der() {
+        // ADR 0018 §3: checked as well-formed DER, then ignored.
+        // Attributes ::= SET OF Attribute (RFC 5958 §2); Attribute ::=
+        // SEQUENCE { attrType OBJECT IDENTIFIER, attrValues SET OF
+        // AttributeValue } (RFC 5652 §5.3).
+        let oid = [0x06, 0x03, 0x2A, 0x03, 0x04];
+        let attribute = |values: &[u8]| {
+            let mut set = vec![0x31, u8::try_from(values.len()).unwrap()];
+            set.extend_from_slice(values);
+            let mut seq = vec![0x30, u8::try_from(oid.len() + set.len()).unwrap()];
+            seq.extend_from_slice(&oid);
+            seq.extend_from_slice(&set);
+            seq
+        };
+        let tagged = |contents: &[u8]| {
+            let mut out = vec![0xA0, u8::try_from(contents.len()).unwrap()];
+            out.extend_from_slice(contents);
+            out
+        };
+        // Accepted: none, an empty SET OF, one and two (sorted) attributes.
+        for ok in [
+            vec![],
+            tagged(&[]),
+            tagged(&attribute(&[0x0C, 0x01, 0x41])),
+            tagged(
+                &[
+                    attribute(&[0x02, 0x01, 0x01]),
+                    attribute(&[0x02, 0x01, 0x02]),
+                ]
+                .concat(),
+            ),
+        ] {
+            let der = v2_with_attributes(&ok);
+            let (parts, attributes) = decode_with_attributes(&der).unwrap();
+            assert_eq!(parts.version, 1);
+            assert_eq!(attributes.unwrap_or(&[]), &ok[..]);
+        }
+        for bad in [
+            // Not DER inside: a constructed UTF8String, a non-minimal INTEGER.
+            tagged(&attribute(&[0x2C, 0x03, 0x0C, 0x01, 0x41])),
+            tagged(&attribute(&[0x02, 0x02, 0x00, 0x01])),
+            // Not sorted (X.690 §11.6).
+            tagged(
+                &[
+                    attribute(&[0x02, 0x01, 0x02]),
+                    attribute(&[0x02, 0x01, 0x01]),
+                ]
+                .concat(),
+            ),
+            // Not an Attribute: no SET of values, a bare NULL.
+            tagged(&[0x30, 0x05, 0x06, 0x03, 0x2A, 0x03, 0x04]),
+            tagged(&[0x05, 0x00]),
+            // The IMPLICIT [0] SET OF is constructed; a primitive [0] is not it.
+            vec![0x80, 0x00],
+        ] {
+            let der = v2_with_attributes(&bad);
+            assert!(is_invalid(&decode(&der)), "{bad:02x?}");
+        }
+    }
+
+    #[test]
+    fn fields_out_of_order_are_invalid() {
+        // RFC 5958 §2 order: version, privateKeyAlgorithm, privateKey,
+        // [0] attributes, [1] publicKey; nothing after it.
+        let der = fixtures::load("rfc", "rfc8410-10.3-ed25519-pkcs8-v2-attr-pub.pem");
+        let (parts, attributes) = decode_with_attributes(&der).unwrap();
+        let attributes = attributes.unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0x02, 0x01, 0x01]);
+        body.extend_from_slice(super::super::oid::ALG_ED25519);
+        body.extend_from_slice(&[0x04, 0x22]);
+        body.extend_from_slice(parts.private_key);
+        body.extend_from_slice(&[0x81, 0x21, 0x00]);
+        body.extend_from_slice(parts.public_key.unwrap());
+        body.extend_from_slice(attributes);
+        let mut swapped = vec![0x30, u8::try_from(body.len()).unwrap()];
+        swapped.extend_from_slice(&body);
+        assert!(is_invalid(&decode(&swapped)));
+        // A second publicKey.
+        let mut twice = v2_with_attributes(&[]);
+        twice.extend_from_slice(&[0x81, 0x02, 0x00, 0x00]);
+        twice[1] += 4;
+        assert!(is_invalid(&decode(&twice)));
+    }
+
+    #[test]
+    fn classifies_the_pkcs8_vectors() {
+        // ADR 0018 §4: N21 (id-Ed448) step 1; N20 (NULL parameters on
+        // id-Ed25519) step 3.
+        assert!(is_unsupported(&decode(&fixtures::negative("N21"))));
+        assert!(is_invalid(&decode(&fixtures::negative("N20"))));
+        for file in [
+            "reject-ed448-pkcs8.pem",
+            "reject-x448-pkcs8.pem",
+            "reject-rsapss2048-private-pkcs8.pem",
+            "reject-ec-brainpoolp256r1-pkcs8.pem",
+            "reject-ec-p256-explicit-pkcs8.pem",
+        ] {
+            let der = fixtures::load("openssl", file);
+            let result = decode(&der);
+            assert!(is_unsupported(&result), "{file}: {:?}", result.err());
+        }
+    }
+
+    #[test]
+    fn rsa_private_keys_are_unsupported_before_the_private_key_is_read() {
+        // ADR 0021: any PKCS#8 rsaEncryption key is an RSA private key.
+        for der in [
+            fixtures::negative("N67"),
+            fixtures::load("openssl", "reject-rsa2048-private-pkcs8.der"),
+            fixtures::load("openssl", "reject-rsa4096-private-pkcs8.pem"),
+        ] {
+            assert!(is_unsupported(&decode(&der)));
+        }
+        // The privateKey is never opened: garbage there changes nothing.
+        let mut body = vec![0x02, 0x01, 0x00];
+        body.extend_from_slice(super::super::oid::ALG_RSA_ENCRYPTION);
+        body.extend_from_slice(&[0x04, 0x03, 0x30, 0x80, 0xFF]);
+        let mut der = vec![0x30, u8::try_from(body.len()).unwrap()];
+        der.extend_from_slice(&body);
+        assert!(is_unsupported(&decode(&der)));
+    }
+
+    #[test]
+    fn encrypted_private_key_info_is_unsupported_and_not_parsed() {
+        // RFC 5958 §3: EncryptedPrivateKeyInfo starts with a SEQUENCE (its
+        // AlgorithmIdentifier) where OneAsymmetricKey has the version
+        // INTEGER.
+        for (dir, file) in [
+            ("openssl", "reject-ec-p256-pkcs8-encrypted.der"),
+            ("openssl", "reject-ec-p256-pkcs8-encrypted.pem"),
+            ("openssl", "reject-ed25519-pkcs8-encrypted.pem"),
+            ("openssl", "reject-rsa2048-pkcs8-encrypted.pem"),
+        ] {
+            let der = fixtures::load(dir, file);
+            assert_eq!(&der[..1], &[0x30]);
+            let result = decode(&der);
+            assert!(is_unsupported(&result), "{file}: {:?}", result.err());
+        }
+        // Its contents are not parsed: BER and garbage inside give the same
+        // answer.
+        assert!(is_unsupported(&decode(&[
+            0x30, 0x05, 0x30, 0x80, 0xFF, 0xFF, 0xFF
+        ])));
+        assert!(is_unsupported(&decode(&[0x30, 0x02, 0x30, 0x00])));
+        // The outer framing is still checked.
+        assert!(is_invalid(&decode(&[0x30, 0x02, 0x30, 0x00, 0x00])));
+    }
+
+    /// Every positive PKCS#8 fixture, with its algorithm, version and
+    /// private key length (34 for an RFC 8410 CurvePrivateKey; an RFC 5915
+    /// ECPrivateKey varies, so `None`).
+    fn positive() -> Vec<(&'static str, String, AlgId, u8, Option<usize>)> {
+        let mut out = Vec::new();
+        for (dir, prefix, alg, version, len) in [
+            (
+                "openssl",
+                "ec-p256-pkcs8",
+                AlgId::Ec(EcCurve::P256),
+                0,
+                None,
+            ),
+            (
+                "openssl",
+                "ec-p384-pkcs8",
+                AlgId::Ec(EcCurve::P384),
+                0,
+                None,
+            ),
+            (
+                "openssl",
+                "ec-p521-pkcs8",
+                AlgId::Ec(EcCurve::P521),
+                0,
+                None,
+            ),
+            (
+                "openssl",
+                "ec-secp256k1-pkcs8",
+                AlgId::Ec(EcCurve::Secp256k1),
+                0,
+                None,
+            ),
+            ("openssl", "ed25519-pkcs8", AlgId::Ed25519, 0, Some(34)),
+            ("openssl", "x25519-pkcs8", AlgId::X25519, 0, Some(34)),
+            (
+                "rfc",
+                "rfc7468-fig12-secp256k1-pkcs8",
+                AlgId::Ec(EcCurve::Secp256k1),
+                0,
+                None,
+            ),
+            (
+                "rfc",
+                "rfc7517-a2-ec-p256-pkcs8",
+                AlgId::Ec(EcCurve::P256),
+                0,
+                None,
+            ),
+            (
+                "rfc",
+                "rfc8037-a1-ed25519-pkcs8",
+                AlgId::Ed25519,
+                0,
+                Some(34),
+            ),
+            ("rfc", "rfc8037-a6-x25519-pkcs8", AlgId::X25519, 0, Some(34)),
+            (
+                "rfc",
+                "rfc8410-10.3-ed25519-pkcs8-v1",
+                AlgId::Ed25519,
+                0,
+                Some(34),
+            ),
+            (
+                "rfc",
+                "rfc8410-10.3-ed25519-pkcs8-v2-attr-pub",
+                AlgId::Ed25519,
+                1,
+                Some(34),
+            ),
+        ] {
+            let files = fixtures::files(dir, |name| {
+                name.strip_suffix(".der")
+                    .or_else(|| name.strip_suffix(".pem"))
+                    == Some(prefix)
+            });
+            assert!(!files.is_empty(), "{dir}/{prefix}");
+            out.extend(files.into_iter().map(|file| (dir, file, alg, version, len)));
+        }
+        out
+    }
+
+    #[test]
+    fn decodes_every_positive_pkcs8_fixture() {
+        for (dir, file, alg, version, len) in positive() {
+            let der = fixtures::load(dir, &file);
+            let parts = decode(&der).unwrap_or_else(|e| panic!("{file}: {e:?}"));
+            assert_eq!(parts.alg, alg, "{file}");
+            assert_eq!(parts.version, version, "{file}");
+            assert_eq!(parts.public_key.is_some(), version == 1, "{file}");
+            match len {
+                Some(len) => assert_eq!(parts.private_key.len(), len, "{file}"),
+                // ECPrivateKey ::= SEQUENCE (RFC 5915 §3).
+                None => assert_eq!(parts.private_key[0], 0x30, "{file}"),
+            }
+            assert!(der.as_ptr_range().contains(&parts.private_key.as_ptr()));
+        }
+    }
+
+    #[test]
+    fn the_positive_list_covers_every_pkcs8_fixture() {
+        let listed = positive();
+        for dir in ["openssl", "rfc"] {
+            for file in fixtures::files(dir, |n| n.contains("pkcs8") && !n.starts_with("reject-")) {
+                assert!(
+                    listed.iter().any(|(d, f, ..)| *d == dir && *f == file),
+                    "{dir}/{file} missing"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn re_encoding_gives_the_input_bytes() {
+        // ADR 0018 §3: byte-identical round trips. The attributes are not
+        // part of Pkcs8Parts (they are ignored), so the v2 vector round-trips
+        // through the attribute-preserving codec, and `encode` writes it
+        // without them.
+        for (dir, file, ..) in positive() {
+            let der = fixtures::load(dir, &file);
+            let (parts, attributes) = decode_with_attributes(&der).unwrap();
+            assert_eq!(
+                &encode_with_attributes(&parts, attributes).unwrap()[..],
+                &der[..],
+                "{file}"
+            );
+            if attributes.is_none() {
+                assert_eq!(&encode(&parts).unwrap()[..], &der[..], "{file}");
+            } else {
+                let plain = encode(&parts).unwrap();
+                assert_eq!(&plain[..], &v2_with_attributes(&[])[..]);
+                let again = decode(&plain).unwrap();
+                assert_eq!(again.private_key, parts.private_key);
+                assert_eq!(again.public_key, parts.public_key);
+            }
+        }
+    }
+
+    #[test]
+    fn encode_refuses_inconsistent_or_unsupported_parts() {
+        let key = [0x04, 0x20, 0x11, 0x11];
+        let public = [0x22; 32];
+        let v1_with_public = Pkcs8Parts {
+            version: 0,
+            alg: AlgId::Ed25519,
+            private_key: &key,
+            public_key: Some(&public),
+        };
+        assert!(is_invalid(&encode(&v1_with_public)));
+        let v2_without_public = Pkcs8Parts {
+            version: 1,
+            public_key: None,
+            ..v1_with_public
+        };
+        assert!(is_invalid(&encode(&v2_without_public)));
+        let rsa = Pkcs8Parts {
+            version: 0,
+            alg: AlgId::RsaEncryption,
+            private_key: &key,
+            public_key: None,
+        };
+        assert!(is_unsupported(&encode(&rsa)));
+        let v2 = Pkcs8Parts {
+            version: 1,
+            ..v1_with_public
+        };
+        let der = encode(&v2).unwrap();
+        let back = decode(&der).unwrap();
+        assert_eq!((back.version, back.alg), (1, AlgId::Ed25519));
+        assert_eq!(back.private_key, &key);
+        assert_eq!(back.public_key, Some(&public[..]));
+    }
+}
