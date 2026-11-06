@@ -836,7 +836,7 @@ fn a_json_jwe_is_invalid_format() {
 // Secrets (ADR 0049 §4)
 // ---------------------------------------------------------------------------
 
-/// ADR 0049 §4, ADR 0027 §7: no claim value of the decrypted inner token
+/// ADR 0049 §4, ADR 0027 §7: no claim string of the decrypted inner token
 /// is in the result's `Debug` or in any error. The marker is in every
 /// string claim: `iss`, `sub`, an `aud` element, `jti` (RFC 7519 §4.1)
 /// and a private claim. It reaches the output only if the inner token, its

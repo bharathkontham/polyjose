@@ -56,7 +56,7 @@ impl<'a> From<&'a JwkSet> for Keys<'a> {
 
 /// A verified, validated signed JWT (RFC 7519 §7.2).
 ///
-/// `Debug` prints no key material and no claim value (workspace secrets
+/// `Debug` prints no key material and no claim string (workspace secrets
 /// rule, ADR 0049 §4). It holds no key, and prints:
 ///
 /// - the claims through [`Claims`]' redacting `Debug`: `iss`, `sub`, `jti`

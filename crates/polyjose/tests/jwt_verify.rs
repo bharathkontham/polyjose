@@ -771,11 +771,11 @@ fn verified_jwt_debug_has_no_key_material() {
 }
 
 /// ADR 0049 §4, workspace secrets rule: `VerifiedJwt`'s `Debug` prints no
-/// claim value. The marker is in every string claim: `iss`, `sub`, an
+/// claim string. The marker is in every string claim: `iss`, `sub`, an
 /// `aud` element, `jti` (RFC 7519 §4.1) and a private claim, so it reaches
 /// the output only if a claim string, the token or its payload leaks.
 #[test]
-fn verified_jwt_debug_has_no_claim_value() {
+fn verified_jwt_debug_has_no_claim_string() {
     const MARKER: &str = "MARKER-3e8d5a17-secret-claim-value";
     let mut c = Claims::new();
     c.iss = Some(format!("{MARKER}-iss"));
