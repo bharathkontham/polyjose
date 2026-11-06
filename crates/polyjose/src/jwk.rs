@@ -86,6 +86,40 @@
 //! - **Unknown members** are ignored, as RFC 7517 §4 requires, and kept in
 //!   [`Jwk::other_params`][other_params] so the key re-serializes to the
 //!   same members.
+//! - **`alg`** (RFC 7517 §4.4), checked last, once the key is well-formed:
+//!   - `RSA1_5` (ADR 0021) and `RSA-OAEP` (SHA-1, ADR 0022), exactly as
+//!     registered, are rejected on every key type.
+//!   - A known JWS `alg`, JWE `alg` or JWE `enc` must be one the key's
+//!     family serves (RFC 8725 §3.1: one key, one algorithm): the JWS table
+//!     of ADR 0026 §2 step 8 (`HS*` → `oct`, `RS*`/`PS*` → `RSA`, `ES256`
+//!     → `P-256`, ...; `none` → no key), `RSA-OAEP-256` → `RSA`; `A*KW`,
+//!     `A*GCMKW`, `dir` and `PBES2-*` → `oct`; `ECDH-ES` and
+//!     `ECDH-ES+A*KW` → `EC` `P-256`/`P-384`/`P-521` or `OKP` `X25519`
+//!     (not `secp256k1` or `Ed25519`, ADR 0006); any `enc` → `oct`
+//!     (RFC 7518 §4.5). Each table exists once, on `KeyMaterial`; JWS
+//!     (0002) and JWE (0003) key binding reuse them.
+//!   - Any other value (unregistered, or registered but not shipped, such
+//!     as `Ed448`) is kept verbatim as
+//!     [`KeyAlg::Unknown`](crate::jwk::KeyAlg::Unknown) and round-trips
+//!     unchanged. It matches no header `alg`, so the key is unusable for
+//!     any operation that checks the JWK `alg`.
+//!
+//! # Check order
+//!
+//! When a key has several problems, the first in this order decides the
+//! error, so the result does not depend on member order:
+//!
+//! 1. `kty`, then the `EC`/`OKP` `crv` (unsupported → `UnsupportedAlgorithm`).
+//! 2. For `RSA`, any private member (→ `UnsupportedAlgorithm`, ADR 0021),
+//!    before anything else is read.
+//! 3. Every structural check: the key-type members, then `use`, `key_ops`
+//!    (and their consistency), `alg`'s type, `kid`, `x5u`, `x5c`, `x5t`,
+//!    `x5t#S256` (→ `InvalidKey` or `InvalidBase64`).
+//! 4. The `alg` value: `RSA1_5`/`RSA-OAEP` (→ `UnsupportedAlgorithm`), then
+//!    the family (→ `KeyAlgorithmMismatch`).
+//!
+//! A malformed key is always reported as malformed, whatever its `alg`
+//! (ADR 0018 Q3: "unsupported" presumes "well-formed").
 //!
 //! # Error codes
 //!
@@ -93,7 +127,11 @@
 //!
 //! - [`UnsupportedAlgorithm`](crate::Error::UnsupportedAlgorithm): well-formed, but not supported in
 //!   0.1.0. An unknown `kty`; an `EC` or `OKP` `crv` not listed above
-//!   (including another key type's curve); an RSA private key (ADR 0021).
+//!   (including another key type's curve); an RSA private key (ADR 0021);
+//!   an `alg` of `RSA1_5` or `RSA-OAEP` (ADRs 0021, 0022).
+//! - [`KeyAlgorithmMismatch`](crate::Error::KeyAlgorithmMismatch): a
+//!   well-formed key whose known `alg` its family cannot serve
+//!   (RFC 7517 §4.4, RFC 8725 §3.1).
 //! - [`InvalidKey`](crate::Error::InvalidKey): malformed. A missing or wrongly typed member,
 //!   a wrong length, a non-minimal or out-of-range RSA value, an empty `k`,
 //!   duplicate `key_ops`, or inconsistent `use`/`key_ops`.
@@ -437,6 +475,12 @@ impl fmt::Display for KeyOp {
 /// string, including registered names polyjose does not implement
 /// (`RSA-OAEP`, `RSA1_5`, `Ed448`), is kept verbatim as
 /// [`KeyAlg::Unknown`] and round-trips unchanged (see [`crate::jwa`]).
+///
+/// [`Jwk::from_object`] then rejects `RSA1_5` and `RSA-OAEP` with
+/// [`Error::UnsupportedAlgorithm`] (ADRs 0021, 0022), and a known value the
+/// key's family cannot serve with [`Error::KeyAlgorithmMismatch`]
+/// (RFC 7517 §4.4), so an imported [`Jwk`] never holds either. Other
+/// `Unknown` values are kept.
 ///
 /// The comparison with a header `alg` is exact: `EdDSA` and `Ed25519` are
 /// different values (RFC 9864 §2.2, ADR 0026 §2 step 8).
@@ -1020,7 +1064,13 @@ impl Jwk {
     /// - [`Error::InvalidBase64`] if a key member is not canonical unpadded
     ///   base64url (RFC 7515 §2, RFC 7518 §6).
     /// - [`Error::InvalidKey`] if the key is malformed.
+    /// - [`Error::UnsupportedAlgorithm`] if a well-formed key's `alg` is
+    ///   `RSA1_5` or `RSA-OAEP` (ADRs 0021, 0022), and
+    ///   [`Error::KeyAlgorithmMismatch`] if it is a known algorithm the
+    ///   key's family cannot serve (RFC 7517 §4.4).
     ///
+    /// The checks run in the [check order](crate::jwk#check-order) of the
+    /// module docs.
     /// No error contains any part of the input or of the key.
     pub fn from_object(object: &Object) -> Result<Jwk> {
         let material = match key_kind(object)? {
