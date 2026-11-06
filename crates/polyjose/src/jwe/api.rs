@@ -187,7 +187,9 @@ pub struct Decrypted {
     pub(super) shared_header: Option<Header>,
     pub(super) recipient_header: Option<Header>,
     pub(super) header: Header,
-    pub(super) aad: Option<Vec<u8>>,
+    /// Wiped on drop: the AAD can carry application secrets (ADR 0050 §4,
+    /// ADR 0030 §7.2).
+    pub(super) aad: Option<Zeroizing<Vec<u8>>>,
     pub(super) recipient: usize,
 }
 
@@ -226,9 +228,11 @@ impl Decrypted {
         &self.header
     }
 
-    /// The JWE AAD (RFC 7516 §7.2.1 `aad`), decoded, JSON only.
+    /// The JWE AAD (RFC 7516 §7.2.1 `aad`), decoded, JSON only. It is
+    /// held in a buffer wiped on drop, as it can carry application secrets
+    /// (ADR 0050 §4, ADR 0030 §7.2), and `Debug` never prints it.
     pub fn aad(&self) -> Option<&[u8]> {
-        self.aad.as_deref()
+        self.aad.as_deref().map(Vec::as_slice)
     }
 
     /// The index of the recipient that decrypted, in the order of the JWE's
@@ -358,7 +362,7 @@ impl Recipient {
 ///     .encrypt_compact(b"hello")?;
 /// # Ok::<(), polyjose::Error>(())
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Encryptor {
     // core.rs reads these fields directly.
     pub(super) enc: ContentEncAlg,
@@ -486,6 +490,36 @@ impl Encryptor {
             Serialization::Compact => compact::serialize(&parts),
             Serialization::Json(json_form) => json::serialize(&parts, json_form),
         }
+    }
+}
+
+/// Written by hand so the JWE AAD (RFC 7516 §7.2.1 `aad`) is never
+/// printed: it can carry application secrets, so only whether it is set and
+/// its length are shown (ADR 0050 §4; secrets are never in `Debug`, ADR
+/// 0030 §7.5). Recipients are counted, not listed; the headers are shown
+/// only as set or not set. For example:
+///
+/// ```text
+/// Encryptor { enc: A128GCM, recipients: 1, protected_header: false,
+///     shared_header: false, aad: Some(<redacted, len=13>), compress: false }
+/// ```
+impl fmt::Debug for Encryptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        /// The AAD's length, in place of its bytes.
+        struct RedactedLen(usize);
+        impl fmt::Debug for RedactedLen {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "<redacted, len={}>", self.0)
+            }
+        }
+        f.debug_struct("Encryptor")
+            .field("enc", &self.enc)
+            .field("recipients", &self.recipients.len())
+            .field("protected_header", &self.protected.is_some())
+            .field("shared_header", &self.shared.is_some())
+            .field("aad", &self.aad.as_ref().map(|aad| RedactedLen(aad.len())))
+            .field("compress", &self.compress)
+            .finish()
     }
 }
 
@@ -627,9 +661,11 @@ mod tests {
             shared_header: None,
             recipient_header: None,
             header: Header::new(),
-            aad: Some(b"MARKERaad".to_vec()),
+            aad: Some(Zeroizing::new(b"MARKERaad".to_vec())),
             recipient: 2,
         };
+        // ADR 0050 §4: the AAD is held in a buffer wiped on drop.
+        let _: &Option<Zeroizing<Vec<u8>>> = &d.aad;
         let debug = format!("{d:?}");
         assert!(!debug.contains("MARKER"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
