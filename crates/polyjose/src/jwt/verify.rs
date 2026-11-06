@@ -180,3 +180,180 @@ pub(crate) fn verify_inner(token: &str, keys: Keys<'_>, p: &Policy<'_>) -> Resul
         kid: kid.map(str::to_owned),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+    use crate::jws::{ProtectedHeader, SignOptions, Signer, sign_compact, sign_flattened};
+    use crate::jws::{VerifyOptions, verify_json};
+    use crate::jwt::FixedClock;
+
+    /// RFC 7515 Appendix A.1.1: the HMAC key of RFC 7519 §3.1.
+    const OCT_64: &str = r#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#;
+    /// RFC 7519 §3.1: the HS256 JWT.
+    const RFC7519_3_1: &str = concat!(
+        "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9",
+        ".eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ",
+        ".dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    );
+    /// RFC 7519 §3.1's claims, CRLFs included.
+    const CLAIMS: &[u8] =
+        b"{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}";
+    const HS256: [SigningAlg; 1] = [SigningAlg::HS256];
+    /// RFC 7519 §3.1's `exp − 60`.
+    const NOW: i64 = 1_300_819_320;
+
+    fn key() -> Jwk {
+        Jwk::from_json(OCT_64.as_bytes()).expect("RFC 7515 A.1.1 key")
+    }
+
+    fn protected(alg: &str) -> ProtectedHeader {
+        let mut header = Header::new();
+        header.alg = Some(alg.into());
+        ProtectedHeader::new(header).expect("protected header")
+    }
+
+    /// A flattened JWS (RFC 7515 §7.2.2) over the §3.1 claims, signed with
+    /// a protected `{"alg":"HS256"}` and the given unprotected header.
+    fn flattened(unprotected: Header) -> String {
+        let key = key();
+        let signer = Signer::new(&key)
+            .protected(protected("HS256"))
+            .unprotected(unprotected);
+        sign_flattened(&signer, CLAIMS, &SignOptions::new()).expect("flattened JWS")
+    }
+
+    /// ADR 0049 §2 (contract criterion of 0004 T07): a JWS whose
+    /// unprotected header sets `typ` or `cty` is `InvalidHeader`, whatever
+    /// the protected header says.
+    ///
+    /// `verify_inner` takes compact tokens only (RFC 7519 §1), and a
+    /// compact JWS has no unprotected header (RFC 7515 §7.1), so the
+    /// pipeline's J1 call always passes `None`. The only crate-internal
+    /// seam that sees an unprotected header is therefore
+    /// [`check_jwt_header`] itself: this drives it with the unprotected
+    /// header of a flattened JWS that 0002's `verify_json` accepted, with
+    /// a valid signature, under every `typ` mode. `verify_inner` on the
+    /// same JWS is `InvalidFormat` (step 1 decides first).
+    #[test]
+    fn an_unprotected_typ_or_cty_is_invalid_header_on_the_internal_path() {
+        let key = key();
+        let clock = FixedClock(NOW);
+        let policies = [
+            Policy::new(&clock, &HS256).expect("policy"),
+            Policy::new(&clock, &HS256)
+                .expect("policy")
+                .expect_typ("at+jwt"),
+            Policy::new(&clock, &HS256).expect("policy").any_typ(),
+        ];
+        let mut typ = Header::new();
+        typ.typ = Some("at+jwt".into());
+        let mut cty = Header::new();
+        cty.cty = Some("example".into());
+        let mut both = Header::new();
+        both.typ = Some("JWT".into());
+        both.cty = Some("JWT".into());
+        for unprotected in [typ, cty, both] {
+            let jws = flattened(unprotected);
+            let opts = VerifyOptions::new(&HS256).expect("options");
+            let verified = verify_json(&jws, &key, &opts).expect("a valid flattened JWS");
+            let protected = verified.protected.as_ref().expect("protected header");
+            assert!(verified.unprotected.is_some());
+            for policy in &policies {
+                assert!(matches!(
+                    check_jwt_header(
+                        protected,
+                        verified.unprotected.as_ref(),
+                        policy,
+                        Layer::Signed
+                    ),
+                    Err(Error::InvalidHeader(_))
+                ));
+                // The protected header alone passes the rules that apply
+                // to it, except an explicit `typ` it does not carry.
+                if !matches!(policy.typ_mode(), crate::jwt::TypMode::Exact(_)) {
+                    assert_eq!(
+                        check_jwt_header(protected, None, policy, Layer::Signed),
+                        Ok(())
+                    );
+                }
+                assert!(matches!(
+                    verify_inner(&jws, Keys::One(&key), policy),
+                    Err(Error::InvalidFormat(_))
+                ));
+            }
+        }
+        // An unprotected header without typ or cty is not this rule's
+        // concern (but is still not a JWT: InvalidFormat in the pipeline).
+        let mut other = Header::new();
+        other.kid = Some("k1".into());
+        let jws = flattened(other);
+        let opts = VerifyOptions::new(&HS256).expect("options");
+        let verified = verify_json(&jws, &key, &opts).expect("a valid flattened JWS");
+        let protected = verified.protected.as_ref().expect("protected header");
+        assert_eq!(
+            check_jwt_header(
+                protected,
+                verified.unprotected.as_ref(),
+                &policies[0],
+                Layer::Signed
+            ),
+            Ok(())
+        );
+    }
+
+    /// T09 runs `verify_inner` on the decrypted inner token: it is
+    /// `verify`, result for result.
+    #[test]
+    fn verify_inner_is_verify() {
+        let key = key();
+        for now in [NOW, 1_300_819_440] {
+            let clock = FixedClock(now);
+            let policy = Policy::new(&clock, &HS256).expect("policy");
+            for token in [RFC7519_3_1, "a.b", ""] {
+                assert_eq!(
+                    verify_inner(token, Keys::One(&key), &policy),
+                    verify(token, Keys::One(&key), &policy)
+                );
+            }
+        }
+    }
+
+    /// RFC 7519 §7.2 step 10: a verified payload that is not UTF-8, not
+    /// JSON, or not a JSON object is `InvalidJson` (ADR 0027 §1), after the
+    /// signature (J3 after step 9).
+    #[test]
+    fn a_verified_payload_that_is_not_a_json_object_is_invalid_json() {
+        let key = key();
+        let clock = FixedClock(NOW);
+        let policy = Policy::new(&clock, &HS256).expect("policy");
+        for payload in [&b"\xff\xfe"[..], b"", b"[]", b"\"joe\"", b"{\"iss\":"] {
+            let token =
+                sign_compact(&protected("HS256"), payload, &key, &SignOptions::new()).expect("JWS");
+            assert!(
+                matches!(
+                    verify_inner(&token, Keys::One(&key), &policy),
+                    Err(Error::InvalidJson(_))
+                ),
+                "{payload:?}"
+            );
+        }
+    }
+
+    /// The result's header is the JWS Protected Header the signature
+    /// covers (RFC 7515 §7.1), as parsed, and `alg` is the verified one.
+    #[test]
+    fn the_result_carries_the_protected_header_and_alg() {
+        let key = key();
+        let clock = FixedClock(NOW);
+        let policy = Policy::new(&clock, &HS256).expect("policy");
+        let v = verify_inner(RFC7519_3_1, Keys::One(&key), &policy).expect("§3.1 verifies");
+        let mut header = Header::new();
+        header.typ = Some("JWT".into());
+        header.alg = Some("HS256".into());
+        assert_eq!(v.header, header);
+        assert_eq!(v.alg, SigningAlg::HS256);
+        assert_eq!(v.claims, Claims::from_json(CLAIMS).expect("claims"));
+    }
+}
