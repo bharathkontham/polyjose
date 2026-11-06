@@ -11,7 +11,7 @@
 //!
 //! The file is untrusted input: it is parsed, never executed.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 use serde::de::IgnoredAny;
@@ -24,6 +24,8 @@ const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/third_party/wychep
 
 /// The parsed file.
 pub struct Suite {
+    /// The flag names the file defines in `notes` (upstream `doc/files.md`).
+    pub notes: BTreeSet<String>,
     /// The test groups, in file order.
     pub groups: Vec<Group>,
 }
@@ -86,8 +88,7 @@ struct RawSuite {
     number_of_tests: usize,
     #[serde(rename = "header")]
     _header: IgnoredAny,
-    #[serde(rename = "notes")]
-    _notes: IgnoredAny,
+    notes: BTreeMap<String, IgnoredAny>,
     test_groups: Vec<RawGroup>,
 }
 
@@ -209,7 +210,10 @@ fn parse(bytes: &[u8]) -> Result<Suite, String> {
             raw.number_of_tests
         ));
     }
-    Ok(Suite { groups })
+    Ok(Suite {
+        notes: raw.notes.into_keys().collect(),
+        groups,
+    })
 }
 
 /// Loads and checks the vendored file. Panics, naming the problem, if it
@@ -228,6 +232,7 @@ mod tests {
     fn json_web_encryption_loads_with_its_counts() {
         let suite = load();
         assert_eq!(suite.groups.len(), 31);
+        assert_eq!(suite.notes.len(), 5);
         assert_eq!(suite.tests().count(), 139);
         let count = |e: Expected| suite.tests().filter(|(_, t)| t.result == e).count();
         assert_eq!((count(Expected::Valid), count(Expected::Invalid)), (65, 74));
