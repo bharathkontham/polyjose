@@ -301,10 +301,10 @@ fn adversarial_json_errors_do_not_leak_input() {
     assert!(probes.len() >= 14);
     let mut echoed = 0;
     for p in probes {
-        if let Some(je) = &p.oracle {
-            if format!("{je}{je:?}").contains(MARKER) {
-                echoed += 1;
-            }
+        if let Some(je) = &p.oracle
+            && format!("{je}{je:?}").contains(MARKER)
+        {
+            echoed += 1;
         }
         let e = p.ours.err();
         assert!(e.is_some(), "probe {} must fail", p.what);

@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "A P-521 x coordinate of Gx + p, which still fits in 66 octets and is congruent to Gx, is not a field element (0 ≤ x < p, SEC 1 v2 §2.3.4), so the point is rejected (RFC 7518 §6.2.1.2; ADR 0041 §4). Computed with Python big integers from the SEC 2 values",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AsaFjga3BATpzZ4-y2YjlbRCnGSBOQU_tSH4KK9ga009uqFLXnfv51ko_h3BJ6L_qN4zSLPBhWpCm_l-fjHC5b1l",
+      "y": "ARg5KWp4mjvABFyKX7QsfRvZmPVESVebRGgXr70XJz5mLJfucple9CZAxVC5AT-tB2E1PHCGonLCQIi-lHaf0WZQ"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

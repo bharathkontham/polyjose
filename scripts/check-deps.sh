@@ -9,13 +9,23 @@
 #      [target.*.…] forms) does not use `default-features = false` (ADR 0016 §3);
 #   4. a crate in deps-allowlist.txt is not credited in CREDITS.md, or CREDITS.md credits a crate
 #      that is not in deps-allowlist.txt (ADR 0020 §5);
-#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below;
+#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below, or a crate of
+#      a guarded group (ADR 0025, ADR 0042) is reached through a path that avoids its required
+#      parent crate (for example a direct dependency of the core on `semver`);
 #   6. a package in the core's tree does not come from crates.io: a path package other than
 #      polyjose itself, a git source or another registry (an allowlisted name is not enough when
 #      the code behind it can be swapped);
 #   7. the workspace root Cargo.toml has a [patch] or [replace] section;
 #   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
-#      build-dependency ([build-dependencies] or [target.*.build-dependencies]).
+#      build-dependency ([build-dependencies] or [target.*.build-dependencies]);
+#   9. a Rust file under crates/polyjose/src or bindings names an RSA private-key or signing type,
+#      or decrypts with rsa (ADR 0021 §3: RSA is used for public-key operations only), reported
+#      with its file and line;
+#  10. `sha1` is in the core's tree (ADR 0022: no SHA-1 anywhere in the core);
+#  11. `rsa` is built with any feature enabled, by the core or by anything else in the workspace
+#      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature).
+#  Checks 9-11 are the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
+#  them means removing that ignore.
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
 # runtime dependencies and the build-dependencies of every crate in it (a build script or a
@@ -244,22 +254,106 @@ check_credits_match() {
   fi
 }
 
-# 5. Group-specific rules. Every group needs a case here, so a new group (e.g. one whose crates may
-#    only be reached through a single parent crate) cannot land without deciding its rule.
-#    ADR 0025's dalek group (feature 0002: curve25519-dalek-derive, syn, quote, proc-macro2,
-#    unicode-ident) arrives as *normal* x86_64 dependencies of curve25519-dalek, not as
-#    build-dependencies, so check 8 (the core's own manifest only) does not apply to it; its rule
-#    ("only below curve25519-dalek-derive", via `cargo tree -e normal,build --target all -i <crate>`)
-#    goes here. Because the tree includes build edges, curve25519-dalek's own build-dependency
-#    (rustc_version, which pulls semver) is in the tree too and needs allowlisting like any crate.
+# 5. Group-specific rules. Every group needs a case here, so a new group cannot land without
+#    deciding its rule. A *guarded* group holds build-time crates that a primitive needs on the
+#    builder's machine only (they link nothing into the shipped artifact) and that polyjose cannot
+#    switch off from its manifest. Each of its crates may be reached only through one required
+#    parent crate (ADR 0025, ADR 0042 §1-§2):
+#      dalek-proc-macro (ADR 0025): curve25519-dalek-derive, dalek's SIMD-backend code generator,
+#        a normal dependency of curve25519-dalek on x86_64, only below curve25519-dalek; its own
+#        tree (syn, quote, proc-macro2, unicode-ident) only below curve25519-dalek-derive.
+#      dalek-build (ADR 0042): rustc_version and semver, curve25519-dalek's build-dependencies,
+#        only below curve25519-dalek.
+#      num-traits-build (ADR 0042): autocfg, num-traits' build-dependency, only below num-traits.
+#    "Below" is checked on the tree of check 1 (cargo tree, normal and build edges, every target,
+#    every feature): the crate must be unreachable from polyjose once every package named like
+#    the parent is removed. So a second path to it (a direct dependency, or another crate that
+#    pulls it in) fails, and every path to it is printed with `cargo tree ... -i <crate>`.
+#    (Not cargo metadata's resolve graph, as check 6 walks: that graph unifies features across
+#    the whole workspace, so it would also show what only a binding enables.)
 check_group_rules() {
   local group crate
+  : >"$work/guarded"
   while read -r group crate; do
     case $group in
-      primitives | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
+      primitives | ecdsa | eddsa | rsa | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
+      dalek-proc-macro)
+        if [ "$crate" = curve25519-dalek-derive ]; then
+          echo "$crate curve25519-dalek $group" >>"$work/guarded"
+        else
+          echo "$crate curve25519-dalek-derive $group" >>"$work/guarded"
+        fi ;;
+      dalek-build) echo "$crate curve25519-dalek $group" >>"$work/guarded" ;;
+      num-traits-build) echo "$crate num-traits $group" >>"$work/guarded" ;;
       *) fail "$allowlist group '$group' (crate $crate) has no rule in check_group_rules (scripts/check-deps.sh)" ;;
     esac
   done <"$work/groups"
+  [ -s "$work/guarded" ] || return 0
+  # The graph is the tree of check 1 itself, printed with depths so that each line's parent is the
+  # nearest line above it one level up. cargo prints a repeated subtree only once (marked "(*)"),
+  # but every package's own dependencies appear at its first occurrence, so the edges are complete.
+  cargo tree --locked -p "$core_pkg" -e "normal,build" --all-features --target all --prefix depth \
+    >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree --prefix depth failed"; }
+  # Prints "<crate> <parent> <group> <path>" for each guarded crate reachable without its parent.
+  python3 -I -c '
+import re, sys
+tree_path, guarded_path = sys.argv[1], sys.argv[2]
+def norm(name):
+    return name.lower().replace("_", "-")
+line_re = re.compile(r"^([0-9]+)([A-Za-z0-9][A-Za-z0-9_-]*) (v[0-9][^ ]*)")
+edges, stack, root = {}, [], None
+with open(tree_path, encoding="utf-8") as f:
+    for number, line in enumerate(f, 1):
+        line = line.rstrip("\r\n")
+        m = line_re.match(line)
+        if m is None:
+            sys.exit("unexpected cargo tree line %d: %s" % (number, line))
+        depth, node = int(m.group(1)), (norm(m.group(2)), m.group(3))
+        if depth == 0:
+            if root is not None:
+                sys.exit("cargo tree printed more than one root")
+            root = node
+        elif depth > len(stack):
+            sys.exit("cargo tree line %d skips a level" % number)
+        else:
+            edges.setdefault(stack[depth - 1], set()).add(node)
+        del stack[depth:]
+        stack.append(node)
+if root is None:
+    sys.exit("cargo tree printed nothing")
+with open(guarded_path, encoding="utf-8") as f:
+    rules = [line.split() for line in f if line.strip()]
+for crate, parent, group in rules:
+    # Breadth-first walk from polyjose that never enters a package named `parent`.
+    prev, todo, hit = {root: None}, [root], None
+    while todo and hit is None:
+        nxt = []
+        for node in todo:
+            for dep in sorted(edges.get(node, ())):
+                if dep in prev or dep[0] == parent:
+                    continue
+                prev[dep] = node
+                if dep[0] == crate:
+                    hit = dep
+                    break
+                nxt.append(dep)
+            if hit is not None:
+                break
+        todo = nxt
+    if hit is not None:
+        path, node = [], hit
+        while node is not None:
+            path.append(node[0])
+            node = prev[node]
+        print("%s %s %s %s@%s %s" % (crate, parent, group, hit[0], hit[1][1:], " -> ".join(reversed(path))))
+' "$work/tree.depth" "$work/guarded" >"$work/guard-paths" \
+    || die "could not read the dependency graph for the guarded groups (see above)"
+  local parent spec path
+  while read -r crate parent group spec path; do
+    fail "$crate (group $group in $allowlist) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
+    echo "  Every path to it (cargo tree -p $core_pkg -e normal,build --all-features --target all -i $spec):"
+    cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$spec" </dev/null 2>&1 | sed 's/^/    /' || true
+  done <"$work/guard-paths"
 }
 
 # 6. Every package in the core's tree comes from crates.io. The walk follows normal and build
@@ -364,6 +458,115 @@ for dep in pkgs[0]["dependencies"]:
   fi
 }
 
+# 9. RSA is used for public-key operations only (ADR 0021 §3): RUSTSEC-2023-0071 (Marvin) is a
+#    timing leak of rsa's private-key operations, and deny.toml ignores it only while this check
+#    holds. Every *.rs file under crates/polyjose/src and bindings (build output and node_modules
+#    excluded) is scanned as text, comments and strings included, so the check errs toward
+#    failing. Fails, naming the file and line, on:
+#    - anywhere: `RsaPrivateKey` (so `RsaPrivateKey::new` too), `BlindedSigningKey`,
+#      `DecryptingKey`, `RandomizedDecryptor`, `Pkcs1v15Sign` and the `Pss` scheme struct
+#      (verification uses the typed `pkcs1v15::VerifyingKey` / `pss::VerifyingKey`), and
+#      `Pkcs1v15Encrypt` (RSA1_5, ADR 0021);
+#    - anywhere: `use rsa;`, `use rsa as …`, `pub use rsa…` and `extern crate rsa`, which would let
+#      other files name rsa items without writing `rsa::`;
+#    - in a file that names the rsa crate (`rsa::` not preceded by a path, `use rsa…`): the word
+#      `SigningKey` (e.g. `rsa::pkcs1v15::SigningKey`), the word `Decryptor` (`rsa::traits::
+#      Decryptor`) and any `decrypt(`/`decrypt_blinded(` call (e.g. an `Oaep` decryption). These
+#      words are legitimate elsewhere (`p256::ecdsa::SigningKey`, `cbc::Decryptor`), so RSA code
+#      lives in files of its own (jws/rsa.rs, jwe/rsa_oaep.rs) and refers to child modules named
+#      `rsa` as `self::rsa::`.
+#    Residual risk, outside any text scan: names built by macros or `include!`.
+check_rsa_public_only() {
+  python3 -I -c '
+import os, re, sys
+roots = sys.argv[1:]
+word = lambda w: re.compile(r"(?<![A-Za-z0-9_])" + w + r"(?![A-Za-z0-9_])")
+ANYWHERE = [
+    (word("RsaPrivateKey"), "RsaPrivateKey: RSA private keys are not supported (ADR 0021)"),
+    (word("BlindedSigningKey"), "BlindedSigningKey: RSA signing is not supported (ADR 0021)"),
+    (word("DecryptingKey"), "DecryptingKey: RSA decryption is not supported (ADR 0021)"),
+    (word("RandomizedDecryptor"), "RandomizedDecryptor: RSA decryption is not supported (ADR 0021)"),
+    (word("Pkcs1v15Sign"), "Pkcs1v15Sign: use the typed rsa::pkcs1v15::VerifyingKey (ADR 0021)"),
+    (word("Pss"), "Pss: use the typed rsa::pss::VerifyingKey (ADR 0021)"),
+    (word("Pkcs1v15Encrypt"), "Pkcs1v15Encrypt: RSA1_5 is not supported (ADR 0021)"),
+    (re.compile(r"(?<![A-Za-z0-9_])use\s+(::\s*)?rsa\s*(;|as(?![A-Za-z0-9_]))"),
+     "use rsa / use rsa as: aliasing the rsa crate hides it from this check"),
+    (re.compile(r"(?<![A-Za-z0-9_])pub(\s*\([^)]*\))?\s+use\s+(::\s*)?rsa(?![A-Za-z0-9_])"),
+     "pub use rsa: re-exporting rsa hides it from this check"),
+    (re.compile(r"(?<![A-Za-z0-9_])extern\s+crate\s+rsa(?![A-Za-z0-9_])"),
+     "extern crate rsa: aliasing the rsa crate hides it from this check"),
+]
+NAMES_RSA = re.compile(r"(?<![A-Za-z0-9_:])rsa\s*::|(?<![A-Za-z0-9_])::\s*rsa\s*::|(?<![A-Za-z0-9_])use\s+(::\s*)?rsa(?![A-Za-z0-9_])")
+IN_RSA_FILE = [
+    (word("SigningKey"), "SigningKey in a file that uses the rsa crate: RSA signing is not supported (ADR 0021)"),
+    (word("Decryptor"), "Decryptor in a file that uses the rsa crate: RSA decryption is not supported (ADR 0021)"),
+    (re.compile(r"(?<![A-Za-z0-9_])decrypt(_blinded)?\s*(::\s*<[^()]*>)?\s*\("),
+     "a decrypt call in a file that uses the rsa crate: RSA decryption is not supported (ADR 0021)"),
+]
+SKIP_DIRS = {"target", "node_modules", ".git"}
+found = 0
+for root in roots:
+    if not os.path.isdir(root):
+        continue
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        for name in sorted(filenames):
+            if not name.endswith(".rs"):
+                continue
+            path = os.path.join(dirpath, name)
+            with open(path, encoding="utf-8", errors="replace") as f:
+                lines = f.read().split("\n")
+            rules = list(ANYWHERE)
+            if any(NAMES_RSA.search(line) for line in lines):
+                rules += IN_RSA_FILE
+            for number, line in enumerate(lines, 1):
+                for pattern, why in rules:
+                    if pattern.search(line):
+                        print("%s:%d: %s" % (path, number, why))
+                        found += 1
+for root in roots:
+    if not os.path.isdir(root):
+        sys.exit("%s is not a directory" % root)
+' crates/polyjose/src bindings >"$work/rsa-uses" || die "could not scan the sources for RSA private-key use"
+  if [ -s "$work/rsa-uses" ]; then
+    fail "RSA private-key or signing use (ADR 0021 §3; deny.toml ignores RUSTSEC-2023-0071 only while this holds):"
+    sed 's/^/  - /' "$work/rsa-uses"
+  fi
+}
+
+# 10. No SHA-1 in the core (ADR 0022). sha1 is not allowlisted, so check 1 also fails; this names
+#     the rule, and still fails if sha1 is ever added to deps-allowlist.txt.
+check_no_sha1() {
+  if grep -qx 'sha1' "$work/tree"; then
+    fail "sha1 is in the core's tree; polyjose uses no SHA-1 (ADR 0022). To see what pulls it in:"
+    echo "    cargo tree -p $core_pkg -e normal,build --all-features --target all -i sha1"
+  fi
+}
+
+# 11. rsa is built with no feature at all (ADR 0021): not `getrandom` (blinded private-key
+#     operations), `encoding` (pkcs1/pkcs8/spki), `sha1` (ADR 0022), `hazmat`, `std` or any other.
+#     Read from cargo metadata's resolve graph, whose features are unified across the whole
+#     workspace with every feature on, so a binding or another member that enables one fails too.
+check_rsa_no_features() {
+  python3 -I -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    meta = json.load(f)
+packages = {p["id"]: p for p in meta["packages"]}
+if meta.get("resolve") is None:
+    sys.exit("cargo metadata has no resolve graph")
+for node in meta["resolve"]["nodes"]:
+    p = packages[node["id"]]
+    if p["name"] == "rsa" and node["features"]:
+        print("rsa %s with features: %s" % (p["version"], ", ".join(sorted(node["features"]))))
+' "$work/metadata.json" >"$work/rsa-features" || die "could not read rsa's features from cargo metadata"
+  if [ -s "$work/rsa-features" ]; then
+    fail "rsa must be built with no features (ADR 0021, ADR 0022):"
+    sed 's/^/  - /' "$work/rsa-features"
+    echo "  To see what enables them: cargo tree -e features --all-features --target all -i rsa"
+  fi
+}
+
 check_tree_allowlisted
 check_allowlist_not_stale
 check_default_features_off
@@ -372,13 +575,16 @@ check_group_rules
 check_sources_crates_io
 check_no_patch_or_replace
 check_core_no_build_script
+check_rsa_public_only
+check_no_sha1
+check_rsa_no_features
 
 if [ "$failed" -ne 0 ]; then
   echo "check-deps: FAILED"
   exit 1
 fi
 
-echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io"
+echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features (ADR 0021, ADR 0022)"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
 exit 0

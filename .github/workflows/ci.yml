@@ -109,8 +109,11 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.install-deny.outcome == 'success' }}
         run: cargo deny --locked --all-features check
 
-      # Enforces ADR 0016 (the core's runtime tree matches deps-allowlist.txt, with default features
-      # off) and ADR 0020 §5 (deps-allowlist.txt and CREDITS.md list the same crates).
+      # Enforces ADR 0016 (the core's tree matches deps-allowlist.txt, with default features off,
+      # and the guarded build-time groups of ADR 0025/0042 are reached only through their parent),
+      # ADR 0020 §5 (deps-allowlist.txt and CREDITS.md list the same crates) and the ADR 0021 guard
+      # that the RUSTSEC-2023-0071 ignore above depends on (no RSA private-key use, no rsa feature,
+      # no sha1).
       - name: dependency allowlist
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/check-deps.sh
@@ -132,8 +135,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # Must equal the workspace `rust-version` (checked below). Feature 0002 raises it to 1.88.
-      MSRV: 1.85.0
+      # Must equal the workspace `rust-version` (checked below). 1.89 is the floor of the JWS and
+      # JWE crypto set: crypto-bigint 0.7.10, elliptic-curve 0.14.3 and rsa 0.10.0-rc.20 need
+      # 1.87, sha2 0.11.1 needs 1.88 and aes 0.9.4 needs 1.89 (ADR 0024, raised at 0003 Gate 1).
+      MSRV: 1.89.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

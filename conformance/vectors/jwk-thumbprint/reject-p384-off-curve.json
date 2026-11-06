@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "The P-384 generator with the lowest bit of y flipped, (Gx, Gy XOR 1), does not satisfy the curve equation (SEC 1 v2 §3.2.2.1, RFC 7518 §6.2.1; ADR 0041 §4). Gy is the SEC 2 value; checked off-curve with Python big integers",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-384",
+      "x": "qofKIr6LBTeOscce8yCtdG4dO2KLp5uYWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3",
+      "y": "NhfeSpYmLG9dnpi_kpLcKfj0Hb0omhR86doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5e"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

@@ -1,31 +1,113 @@
 # Every crate allowed in the dependency tree of crates/polyjose (ADR 0016 §4), exactly as
 #   cargo tree -p polyjose -e normal,build --all-features --target all --prefix none
-# resolves it: runtime dependencies plus the build-dependencies of any crate in that tree. scripts/check-deps.sh enforces this file in both directions: a crate in the tree
+# resolves it: runtime dependencies plus the build-dependencies of any crate in that tree.
+# scripts/check-deps.sh enforces this file in both directions: a crate in the tree
 # that is not listed here fails, and so does an entry here that the tree no longer contains.
 # Every entry must also be credited in CREDITS.md, and CREDITS.md may credit nothing else (ADR 0020).
 #
 # Adding an entry needs an ADR (ADR 0016 §4). Crypto crates arrive with the features that use them.
+# A *guarded* group (ADR 0025, ADR 0042) holds build-time crates of a primitive; each of its crates
+# may be reached only through one required parent crate, which check-deps.sh checks. Growing a
+# guarded group, or adding one, needs an ADR (ADR 0042 §5).
 #
 # Format: one crate name per line; `#` starts a comment. Each crate belongs to exactly one group, and
 # each group starts with a `# group: <id>` line followed by comments that say why it is allowed.
 
 # group: primitives
-# Cryptographic primitive crates (ADR 0002) and their own dependencies (ADR 0016 §1).
-# sha2: SHA-256 for RFC 7638 JWK thumbprints. The rest is sha2's own tree: the RustCrypto digest
-# traits and buffers, the typenum/hybrid-array sizes they use, and cpufeatures, which detects the
-# SHA CPU extensions at run time on aarch64, x86 and x86_64.
+# Cryptographic primitive crates (ADR 0002) and their own dependencies (ADR 0016 §1): hashes and MACs.
+# sha2: SHA-256 for RFC 7638 JWK thumbprints and the SHA-2 hashes of HS*/RS*/PS*/ES*.
+# hmac: HMAC for HS256/384/512 (RFC 7518 §3.2).
+# The rest is their own tree: the RustCrypto digest traits and the block buffer digest keeps,
+# the typenum/hybrid-array sizes they use, cpufeatures, which detects the SHA CPU extensions at run
+# time on aarch64, x86 and x86_64, and ctutils/cmov, the constant-time helpers digest's MAC
+# verification (and crypto-bigint, sec1) use. const-oid holds the hash OIDs (digest `oid`, der).
 sha2
+hmac
 digest
 block-buffer
 crypto-common
 hybrid-array
 typenum
 cpufeatures
+ctutils
+cmov
+const-oid
+
+# group: ecdsa
+# ECDSA on P-256/P-384/P-521 (RFC 7518 §3.4) and secp256k1 (RFC 8812 §3.2), and the on-curve checks
+# of JWK import (ADR 0041 §4): the four curve crates and their own tree (ADR 0016 §1). ecdsa and
+# rfc6979 are the algorithm and its deterministic nonces (RFC 6979); elliptic-curve, primeorder,
+# primefield, ff, group and wnaf the curve and field arithmetic; crypto-bigint (with cpubits and
+# num-traits) the constant-time big integers under it; sec1, der and base16ct the point and scalar
+# encodings; signature and rand_core the RustCrypto signing and RNG traits (ed25519 and rsa use them
+# too).
+p256
+p384
+p521
+k256
+ecdsa
+rfc6979
+elliptic-curve
+primeorder
+primefield
+ff
+group
+wnaf
+crypto-bigint
+cpubits
+num-traits
+sec1
+der
+base16ct
+signature
+rand_core
+
+# group: eddsa
+# EdDSA over Ed25519 (RFC 8037 §3.1): ed25519-dalek, the RustCrypto ed25519 signature type, and the
+# curve25519-dalek arithmetic under them (ADR 0016 §1). fiat-crypto (formally verified field
+# arithmetic, ADR 0025) is compiled only when the builder selects the `fiat` backend of
+# curve25519-dalek or p384 with a --cfg.
+ed25519-dalek
+ed25519
+curve25519-dalek
+fiat-crypto
+
+# group: rsa
+# RSA public-key operations only (ADR 0021): RS*/PS* verification (RFC 7518 §3.3, §3.5) and, with
+# feature 0003, RSA-OAEP-256 encryption. Built with no features (scripts/check-deps.sh, check 11);
+# its private-key use is rejected by check 9. crypto-primes (prime generation and testing) is a
+# non-optional dependency of rsa; polyjose generates no RSA keys. rsa's other dependencies are
+# listed above (crypto-bigint, signature, sha2, digest, const-oid, ...).
+rsa
+crypto-primes
+
+# group: dalek-proc-macro
+# Guarded (ADR 0025, kept by ADR 0042 §1): curve25519-dalek's code generator for its SIMD backends,
+# a proc-macro that runs at compile time on x86_64 targets and links nothing into the artifact.
+# curve25519-dalek-derive may be reached only through curve25519-dalek, and syn, quote, proc-macro2
+# and unicode-ident only through curve25519-dalek-derive (scripts/check-deps.sh, check 5).
+curve25519-dalek-derive
+syn
+quote
+proc-macro2
+unicode-ident
+
+# group: dalek-build
+# Guarded (ADR 0042 §1): the build-dependencies of curve25519-dalek, whose build script picks its
+# backend from the compiler version. Build time only; only through curve25519-dalek (check 5).
+rustc_version
+semver
+
+# group: num-traits-build
+# Guarded (ADR 0042 §1): the build-dependency of num-traits (reached through crypto-bigint), whose
+# build script probes compiler features. Build time only; only through num-traits (check 5).
+autocfg
 
 # group: randomness
 # The OS CSPRNG, the only source of randomness (ADR 0005, ADR 0016 §1), and its per-OS dependencies:
 # libc (system calls on Unix-like systems), r-efi (UEFI only) and cfg-if (compile-time selection).
-# sha2 also uses cfg-if, and cpufeatures uses libc on some aarch64 and loongarch64 targets.
+# sha2 and curve25519-dalek also use cfg-if, and cpufeatures uses libc on some aarch64 and
+# loongarch64 targets.
 getrandom
 cfg-if
 libc

@@ -4,6 +4,8 @@
 //! `SigningAlg`, secret hygiene and robustness.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
+mod common;
+
 use polyjose::Error;
 use polyjose::jwa::SigningAlg;
 use polyjose::jwk::JwkSet;
@@ -50,18 +52,18 @@ fn idx(s: &JwkSet, alg: &SigningAlg, kid: Option<&str>) -> Vec<usize> {
 #[test]
 fn every_alg_selects_exactly_its_family() {
     let k = |p: &str| m(p, "");
-    let p384 = format!(
-        r#"{{"kty":"EC","crv":"P-384","x":"{0}","y":"{0}"}}"#,
-        "B".repeat(64)
-    );
-    let p521 = format!(
-        r#"{{"kty":"EC","crv":"P-521","x":"{0}","y":"{0}"}}"#,
-        "B".repeat(88)
-    );
-    let k256 = format!(
-        r#"{{"kty":"EC","crv":"secp256k1","x":"{0}","y":"{0}"}}"#,
-        "A".repeat(43)
-    );
+    // Real points (the generators): import checks that a point is on its
+    // curve (ADR 0041 §4).
+    let ec = |crv: &str| {
+        let g = common::generator(crv);
+        format!(
+            r#"{{"kty":"EC","crv":"{crv}","x":"{}","y":"{}"}}"#,
+            g.x, g.y
+        )
+    };
+    let p384 = ec("P-384");
+    let p521 = ec("P-521");
+    let k256 = ec("secp256k1");
     let members = [
         k(OCT),     // 0
         rsa(""),    // 1
@@ -471,8 +473,9 @@ proptest! {
         let pool = pool();
         let members: Vec<String> = picks.iter().map(|&i| pool[i].clone()).collect();
         let mut doc = set(&members).into_bytes();
-        if let Some((pos, byte)) = flip {
-            if !doc.is_empty() { let p = pos % doc.len(); doc[p] = byte; }
+        if let Some((pos, byte)) = flip && !doc.is_empty() {
+            let p = pos % doc.len();
+            doc[p] = byte;
         }
         if let Ok(s) = JwkSet::from_json(&doc) {
             let alg = &SigningAlg::KNOWN[alg_i % SigningAlg::KNOWN.len()];

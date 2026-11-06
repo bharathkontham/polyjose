@@ -950,12 +950,14 @@ fn hex(text: &str) -> Result<Vec<u8>, String> {
         b'A'..=b'F' => Ok(c - b'A' + 10),
         _ => Err(format!("not hex: {text:?}")),
     };
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Err(format!("odd-length hex: {text:?}"));
     }
     text.as_bytes()
-        .chunks_exact(2)
-        .map(|pair| Ok((digit(pair[0])? << 4) | digit(pair[1])?))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[hi, lo]| Ok((digit(hi)? << 4) | digit(lo)?))
         .collect()
 }
 

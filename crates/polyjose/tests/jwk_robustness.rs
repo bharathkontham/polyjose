@@ -153,6 +153,34 @@ fn is_import_error(e: &Error) -> bool {
     )
 }
 
+/// A real EC key pair (`x`, `y`, `d`) on `crv` from `seed` (the curve's
+/// length): `d` is the seed with its top bits cleared, so it is below n, and
+/// its low bit set, so it is not 0; the point d·G comes from the curve crate.
+fn ec_key_pair(crv: &str, seed: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use p256::elliptic_curve::sec1::ToSec1Point;
+    let mut d = seed.to_vec();
+    // n is above 2^255 (P-256, secp256k1), 2^383 (P-384) and 2^520 (P-521).
+    d[0] &= if crv == "P-521" { 0 } else { 0x7f };
+    *d.last_mut().unwrap() |= 1;
+    macro_rules! pair {
+        ($curve:ident) => {{
+            let point = $curve::SecretKey::from_slice(&d)
+                .unwrap()
+                .public_key()
+                .to_sec1_point(false);
+            (point.x().unwrap().to_vec(), point.y().unwrap().to_vec())
+        }};
+    }
+    let (x, y) = match crv {
+        "P-256" => pair!(p256),
+        "P-384" => pair!(p384),
+        "P-521" => pair!(p521),
+        "secp256k1" => pair!(k256),
+        other => panic!("unknown curve {other}"),
+    };
+    (x, y, d)
+}
+
 /// A well-formed key of a random type with random member octets.
 fn valid_key() -> impl Strategy<Value = Object> {
     let ec = (
@@ -165,16 +193,19 @@ fn valid_key() -> impl Strategy<Value = Object> {
             ][..],
         ),
         any::<bool>(),
-        any::<[u8; 3]>(),
+        prop::collection::vec(any::<u8>(), 66),
     )
-        .prop_map(|((crv, len), private, [x, y, d])| {
+        .prop_map(|((crv, len), private, seed)| {
+            // A real key pair: import checks the point and the scalar
+            // (ADR 0041 §4).
+            let (x, y, d) = ec_key_pair(crv, &seed[..len]);
             let mut o = Object::new();
             o.insert("kty", "EC");
             o.insert("crv", crv);
-            o.insert("x", b64url_encode(&vec![x; len]));
-            o.insert("y", b64url_encode(&vec![y; len]));
+            o.insert("x", b64url_encode(&x));
+            o.insert("y", b64url_encode(&y));
             if private {
-                o.insert("d", b64url_encode(&vec![d; len]));
+                o.insert("d", b64url_encode(&d));
             }
             o
         });
@@ -184,10 +215,19 @@ fn valid_key() -> impl Strategy<Value = Object> {
         any::<[u8; 32]>(),
     )
         .prop_map(|(crv, private, bytes)| {
+            // An Ed25519 `x` must be a valid public key (ADR 0041 §4), so it
+            // is derived from `d`; any 32 octets are an X25519 key.
+            let x = if crv == "Ed25519" {
+                ed25519_dalek::SigningKey::from_bytes(&bytes)
+                    .verifying_key()
+                    .to_bytes()
+            } else {
+                bytes
+            };
             let mut o = Object::new();
             o.insert("kty", "OKP");
             o.insert("crv", crv);
-            o.insert("x", b64url_encode(&bytes));
+            o.insert("x", b64url_encode(&x));
             if private {
                 o.insert("d", b64url_encode(&bytes));
             }
@@ -250,15 +290,20 @@ fn alg_family_mismatch_is_an_import_error() {
         let mut o = Object::new();
         o.insert("kty", "EC");
         o.insert("crv", crv);
-        o.insert("x", b64url_encode(&vec![7; len]));
-        o.insert("y", b64url_encode(&vec![9; len]));
+        // A real point: import checks it before `alg` (ADR 0041 §4).
+        let (x, y, _) = ec_key_pair(crv, &vec![7; len]);
+        o.insert("x", b64url_encode(&x));
+        o.insert("y", b64url_encode(&y));
         o.insert("alg", alg);
         o
     };
     let mut okp = Object::new();
     okp.insert("kty", "OKP");
     okp.insert("crv", "Ed25519");
-    okp.insert("x", b64url_encode(&[3; 32]));
+    let ed25519_x = ed25519_dalek::SigningKey::from_bytes(&[3; 32])
+        .verifying_key()
+        .to_bytes();
+    okp.insert("x", b64url_encode(&ed25519_x));
     okp.insert("alg", "ES256");
     let mut oct = Object::new();
     oct.insert("kty", "oct");

@@ -23,10 +23,16 @@ allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", 
 
 [advisories]
 # RUSTSEC-2023-0071 (Marvin timing leak in rsa private-key operations) has no patched version: it also
-# affects rsa 0.10.0-rc.20. rsa is not in the dependency tree yet. It arrives with feature 0002 for
-# public-key operations only (verify, encrypt), which handle no secret, together with an ignore of
-# this advisory that a check guards against any private-key use (ADR 0021). Never ignore it otherwise.
+# affects rsa 0.10.0-rc.20, which the core depends on with no features. polyjose uses rsa for
+# public-key operations only (RS*/PS* verification, RSA-OAEP-256 encryption), which handle no
+# secret, so the advisory does not apply to them (ADR 0021). It is ignored only because
+# scripts/check-deps.sh (checks 9-11) fails on any RSA private-key or signing type, any rsa
+# decryption, any rsa feature and any sha1 in the core, and that guard is negative-tested
+# (scripts/tests/check-deps/rsa-guard.sh). Removing the guard means removing this ignore; never
+# ignore the advisory for any other reason. Re-enabling RSA private-key operations needs a new ADR
+# once RustSec marks the advisory resolved for a stable rsa release.
 ignore = [
+  { id = "RUSTSEC-2023-0071", reason = "ADR 0021: public-key RSA operations only; guarded by scripts/check-deps.sh" },
   # basic-toml is *unmaintained* (not a vulnerability). It reaches us only through uniffi_bindgen,
   # the build-time code generator behind uniffi's "cli" feature; it is never linked into a shipped
   # library. Re-check on every uniffi upgrade and drop this entry as soon as uniffi stops using it.

@@ -1,0 +1,17 @@
+{
+  "source": "polyjose",
+  "description": "The Ed25519 identity point (0, 1) decodes but has order 1: a small-order public key is rejected at import by policy, since it can accept forged signatures (ADR 0026 §6, ADR 0041 §4; RFC 8037 §2)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
