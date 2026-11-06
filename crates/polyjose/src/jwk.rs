@@ -1486,6 +1486,21 @@ pub(crate) fn is_unsupported_key_kind(object: &Object) -> bool {
 /// The RSA private key members (RFC 7518 §6.3.2).
 const RSA_PRIVATE_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth"];
 
+/// Whether `object` has any RSA private key member (RFC 7518 §6.3.2),
+/// whatever its value.
+fn has_rsa_private_member(object: &Object) -> bool {
+    RSA_PRIVATE_MEMBERS.iter().any(|name| object.contains(name))
+}
+
+/// Whether `object` is an RSA private JWK: `kty` `RSA` with any RFC 7518
+/// §6.3.2 member, whatever else it holds. [`Jwk::from_object`] rejects it
+/// with [`Error::UnsupportedAlgorithm`] before reading anything else
+/// (ADR 0021), and a JWK Set fails as a whole on it (ADR 0029 §3). This is
+/// the one definition both use.
+pub(crate) fn is_rsa_private_key(object: &Object) -> bool {
+    matches!(key_kind(object), Ok(KeyKind::Rsa)) && has_rsa_private_member(object)
+}
+
 /// Decodes the Base64urlUInt member `name` (RFC 7518 §2): canonical
 /// base64url of the big-endian octets, non-empty, and "the minimum number
 /// of octets needed to represent the value", so no leading zero octet
@@ -1510,7 +1525,7 @@ fn parse_rsa(object: &Object) -> Result<RsaPublicKey> {
     // ADR 0021: an RSA private JWK is not supported in 0.1.0. Any private
     // member (RFC 7518 §6.3.2), whatever its value, rejects the key before
     // anything else is read, so the outcome does not depend on the rest.
-    if RSA_PRIVATE_MEMBERS.iter().any(|name| object.contains(name)) {
+    if has_rsa_private_member(object) {
         return Err(Error::UnsupportedAlgorithm);
     }
     let n = required_uint(
@@ -2022,6 +2037,36 @@ mod tests {
         ];
         for json in kept {
             assert!(!is_unsupported_key_kind(&object(json)), "{json}");
+        }
+    }
+
+    /// ADR 0021: the RSA-private predicate a JWK Set fails on is exactly
+    /// the import rejection that precedes every other check, whatever the
+    /// rest of the key (including a rejected `alg`) says.
+    #[test]
+    fn rsa_private_key_detection_matches_import() {
+        let private = [
+            r#"{"kty":"RSA","d":"AQAB"}"#.to_owned(),
+            r#"{"kty":"RSA","oth":null,"alg":"RSA1_5"}"#.to_owned(),
+            format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","qi":"AQAB","alg":"HS256"}}"#),
+        ];
+        for json in &private {
+            assert!(is_rsa_private_key(&object(json)), "{json}");
+            assert_eq!(
+                Jwk::from_json(json.as_bytes()).err(),
+                Some(Error::UnsupportedAlgorithm)
+            );
+        }
+        let not_private = [
+            rsa_json(),
+            format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","alg":"RSA-OAEP"}}"#),
+            r#"{"kty":"oct","k":"AA","d":"AQAB"}"#.to_owned(),
+            r#"{"kty":"rsa","d":"AQAB"}"#.to_owned(),
+            r#"{"kty":7,"d":"AQAB"}"#.to_owned(),
+            EC_PRIVATE.to_owned(),
+        ];
+        for json in &not_private {
+            assert!(!is_rsa_private_key(&object(json)), "{json}");
         }
     }
 
