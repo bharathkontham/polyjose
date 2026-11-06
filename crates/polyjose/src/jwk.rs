@@ -697,10 +697,6 @@ impl EcKey {
     }
 
     /// The private scalar `d`, if present (RFC 7518 §6.2.2.1).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the ES* signing and ECDH-ES features")
-    )]
     pub(crate) fn d(&self) -> Option<&[u8]> {
         self.d.as_deref().map(Vec::as_slice)
     }

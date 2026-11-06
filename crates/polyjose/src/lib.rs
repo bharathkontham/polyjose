@@ -26,15 +26,6 @@ pub mod jwk;
 pub mod jws;
 /// JSON Web Token (RFC 7519).
 pub mod jwt;
-// Internal: nothing calls the CSPRNG until the JWE/key-generation features
-// land; the expectation fails (and must be removed) once something does.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fill_random is the RNG boundary for later JWE and key-generation features"
-    )
-)]
 mod rng;
 #[cfg(feature = "insecure-test-vectors")]
 pub use rng::insecure_test_vectors;

@@ -33,6 +33,7 @@
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
 use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial};
+use crate::rng::CryptoRngAdapter;
 
 /// Signs `signing_input` with hedged RFC 6979 ECDSA (ADR 0005), returning
 /// R‖S of exactly 64/96/132/64 octets for ES256/384/512/256K
@@ -47,8 +48,27 @@ use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial};
 ///   size or not a valid scalar.
 /// - [`Error::RandomnessUnavailable`] if the OS CSPRNG fails (ADR 0005).
 pub(crate) fn sign(alg: &SigningAlg, key: &Jwk, signing_input: &[u8]) -> Result<Vec<u8>> {
-    let _ = (alg, key, signing_input);
-    Err(Error::UnsupportedAlgorithm)
+    sign_with_rng(alg, key, signing_input, &mut CryptoRngAdapter::os())
+}
+
+/// [`sign`], with the added entropy of the hedged RFC 6979 nonce drawn
+/// from `rng`. [`sign`] always passes [`CryptoRngAdapter::os`]; only tests
+/// pass another source, explicitly (ADR 0041 §3).
+fn sign_with_rng(
+    alg: &SigningAlg,
+    key: &Jwk,
+    signing_input: &[u8],
+    rng: &mut CryptoRngAdapter<'_>,
+) -> Result<Vec<u8>> {
+    let ec = bound_ec_key(alg, key)?;
+    // Key binding refuses a public key for signing; this is the guard.
+    let d = ec.d().ok_or(Error::KeyAlgorithmMismatch)?;
+    match ec.crv() {
+        EcCurve::P256 => p256_ops::sign(d, signing_input, rng),
+        EcCurve::P384 => p384_ops::sign(d, signing_input, rng),
+        EcCurve::P521 => p521_ops::sign(d, signing_input, rng),
+        EcCurve::Secp256k1 => k256_ops::sign(d, signing_input, rng),
+    }
 }
 
 /// Validates an R‖S signature over `signing_input` (RFC 7518 §3.4,
@@ -107,6 +127,10 @@ fn bound_ec_key<'k>(alg: &SigningAlg, key: &'k Jwk) -> Result<&'k EcKey> {
 const COORDINATE_LENGTH: &str = "EC coordinate has the wrong length for crv";
 /// Detail for a public point that is off the curve (SEC 1 v2 §3.2.2.1).
 const POINT_INVALID: &str = "EC point is not on the curve";
+/// Detail for a `d` that is not exactly the field size (RFC 7518 §6.2.2.1).
+const SCALAR_LENGTH: &str = "EC private key d has the wrong length for crv";
+/// Detail for a `d` outside [1, n − 1] (SEC 1 v2 §3.2.1).
+const SCALAR_INVALID: &str = "EC private key d is out of range";
 
 /// The per-curve primitives. Each curve crate exposes its ECDSA types only
 /// as concrete aliases (`pXXX::ecdsa::{Signature, SigningKey,
@@ -116,12 +140,56 @@ macro_rules! curve_ops {
     ($(#[$doc:meta])* $module:ident, $krate:ident) => {
         $(#[$doc])*
         pub(super) mod $module {
-            use $krate::ecdsa::signature::Verifier;
-            use $krate::ecdsa::{Signature, VerifyingKey};
+            use $krate::ecdsa::signature::{RandomizedSigner, Verifier};
+            use $krate::ecdsa::{Signature, SigningKey, VerifyingKey};
             use $krate::{FieldBytes, Sec1Point};
 
-            use super::{COORDINATE_LENGTH, POINT_INVALID};
+            use super::{COORDINATE_LENGTH, POINT_INVALID, SCALAR_INVALID, SCALAR_LENGTH};
             use crate::error::{Error, Result};
+            use crate::rng::CryptoRngAdapter;
+
+            /// The signing key for the private scalar `d`
+            /// (RFC 7518 §6.2.2.1).
+            ///
+            /// `d` must be exactly the field size: it is borrowed as
+            /// `FieldBytes` (no copy, no zero-padding of a short value into
+            /// another key, as `from_slice` would), and must be in
+            /// [1, n − 1] (SEC 1 v2 §3.2.1). The `SigningKey` wipes its
+            /// scalar on drop.
+            ///
+            /// # Errors
+            ///
+            /// [`Error::InvalidKey`] for a wrong length or an out-of-range
+            /// scalar.
+            pub(crate) fn signing_key(d: &[u8]) -> Result<SigningKey> {
+                let d = <&FieldBytes>::try_from(d).map_err(|_| Error::InvalidKey(SCALAR_LENGTH))?;
+                SigningKey::from_bytes(d).map_err(|_| Error::InvalidKey(SCALAR_INVALID))
+            }
+
+            /// RFC 7518 §3.4 signing: ECDSA with the curve's hash and a
+            /// hedged RFC 6979 nonce (`try_sign_with_rng`, never the
+            /// deterministic `Signer::sign`; ADR 0005), S normalized to low
+            /// form (ADR 0026 §5), serialized as R‖S of exactly twice the
+            /// field size.
+            ///
+            /// # Errors
+            ///
+            /// [`Error::InvalidKey`] from [`signing_key`];
+            /// [`Error::RandomnessUnavailable`] if `rng` fails. With a valid
+            /// key that is the only way `try_sign_with_rng` can fail in
+            /// `ecdsa` 0.17.0 (pinned through the curve crate): it draws one
+            /// field element of entropy and then signs infallibly.
+            pub(crate) fn sign(
+                d: &[u8],
+                signing_input: &[u8],
+                rng: &mut CryptoRngAdapter<'_>,
+            ) -> Result<Vec<u8>> {
+                let key = signing_key(d)?;
+                let signature: Signature = key
+                    .try_sign_with_rng(rng, signing_input)
+                    .map_err(|_| Error::RandomnessUnavailable)?;
+                Ok(signature.normalize_s().to_bytes().to_vec())
+            }
 
             /// The public key at (`x`, `y`) (RFC 7518 §6.2.1.2–§6.2.1.3):
             /// the uncompressed SEC 1 point (SEC 1 v2 §2.3.3), which the
@@ -214,6 +282,7 @@ mod tests {
     // RFC 7515 Appendix A.3: ES256.
     const A3_X: &str = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU";
     const A3_Y: &str = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0";
+    const A3_D: &str = "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI";
     const A3_INPUT: &str = "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ";
     const A3_SIG: &str =
         "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q";
@@ -223,6 +292,8 @@ mod tests {
         "AekpBQ8ST8a8VcfVOTNl353vSrDCLLJXmPk06wTjxrrjcBpXp5EOnYG_NjFZ6OvLFV1jSfS9tsz4qUxcWceqwQGk";
     const A4_Y: &str =
         "ADSmRA43Z1DSNx_RvcLI87cdL07l6jQyyBXMoxVg_l2Th-x3S1WDhjDly79ajL4Kkd0AZMaZmh9ubmf63e3kyMj2";
+    const A4_D: &str =
+        "AY5pb7A0UFiB3RELSD64fTLOSV_jazdF7fLYyuTw8lOfRhWg6Y6rUrPAxerEzgdRhajnu0ferB0d53vM9mE15j2C";
     const A4_INPUT: &str = "eyJhbGciOiJFUzUxMiJ9.UGF5bG9hZA";
     const A4_SIG: &str = "AdwMgeerwtHoh-l192l60hp9wAHZFVJbLfD_UxMi70cwnZOYaRI1bKPWROc-mZZqwqT2SI-KGDKB34XO0aw_7XdtAG8GaSwFKdCAPZgoXD2YBJZCPEX3xKpRwcdOO8KpEHwJjyqOgzDO7iKvU8vcnwNrmxYbSW9ERBXukOXolLzeO_Jn";
 
@@ -495,6 +566,235 @@ mod tests {
         for (alg, key) in &cases {
             assert_eq!(
                 verify(alg, key, input, &sig),
+                Err(Error::KeyAlgorithmMismatch),
+                "{alg}"
+            );
+        }
+    }
+
+    use crate::rng::insecure_test_vectors::FixedRng;
+
+    const ALL: [SigningAlg; 4] = [A::ES256, A::ES384, A::ES512, A::ES256K];
+
+    /// R‖S length per `alg` (RFC 7518 §3.4, RFC 8812 §3.2).
+    fn signature_len(alg: &SigningAlg) -> usize {
+        match alg {
+            A::ES256 | A::ES256K => 64,
+            A::ES384 => 96,
+            _ => 132,
+        }
+    }
+
+    /// A JWK for a private scalar `d`, with (`x`, `y`) = d·G computed by
+    /// the curve crate.
+    fn derived_jwk(crv: &str, d: &[u8], xy: (Vec<u8>, Vec<u8>)) -> Jwk {
+        let e = crate::util::b64url_encode;
+        ec_jwk(crv, &e(&xy.0), &e(&xy.1), Some(&e(d)))
+    }
+
+    /// A private key per `alg`: the RFC 7515 A.3 (P-256) and A.4 (P-521)
+    /// keys, and keys derived from fixed scalars for P-384 and secp256k1,
+    /// which have no published JWK.
+    fn private_key(alg: &SigningAlg) -> Jwk {
+        macro_rules! derived {
+            ($krate:ident, $crv:literal, $d:expr) => {{
+                use $krate::elliptic_curve::sec1::ToSec1Point;
+                let d: &[u8] = $d;
+                let public = $krate::SecretKey::from_slice(d).unwrap().public_key();
+                let point = public.to_sec1_point(false);
+                let xy = (point.x().unwrap().to_vec(), point.y().unwrap().to_vec());
+                derived_jwk($crv, d, xy)
+            }};
+        }
+        match alg {
+            A::ES256 => ec_jwk("P-256", A3_X, A3_Y, Some(A3_D)),
+            A::ES512 => ec_jwk("P-521", A4_X, A4_Y, Some(A4_D)),
+            A::ES384 => derived!(p384, "P-384", &[0x38; 48]),
+            _ => derived!(k256, "secp256k1", &[0x6b; 32]),
+        }
+    }
+
+    /// Whether `sig` is in low-S form, and its high-S twin (r, n − s),
+    /// built with the curve crate's own scalar arithmetic.
+    fn low_s_and_twin(alg: &SigningAlg, sig: &[u8]) -> (bool, Vec<u8>) {
+        macro_rules! twin {
+            ($krate:ident) => {{
+                use $krate::elliptic_curve::ff::PrimeField;
+                let sig = $krate::ecdsa::Signature::from_slice(sig).unwrap();
+                let (r, s) = sig.split_scalars();
+                let twin =
+                    $krate::ecdsa::Signature::from_scalars(r.to_repr(), (-*s).to_repr()).unwrap();
+                (sig.normalize_s() == sig, twin.to_bytes().to_vec())
+            }};
+        }
+        match alg {
+            A::ES256 => twin!(p256),
+            A::ES384 => twin!(p384),
+            A::ES512 => twin!(p521),
+            _ => twin!(k256),
+        }
+    }
+
+    #[test]
+    fn rfc_private_keys_sign_what_their_public_keys_verify() {
+        for (alg, key) in [
+            (A::ES256, private_key(&A::ES256)),
+            (A::ES512, private_key(&A::ES512)),
+            (A::ES512, jwk(RFC7520_KEY)),
+        ] {
+            let sig = sign(&alg, &key, b"RFC 7515 \xc2\xa75.1").unwrap();
+            assert_eq!(sig.len(), signature_len(&alg));
+            let public = key.to_public().unwrap();
+            assert_eq!(verify(&alg, &public, b"RFC 7515 \xc2\xa75.1", &sig), Ok(()));
+            assert_eq!(
+                verify(&alg, &public, b"RFC 7515 \xc2\xa75.2", &sig),
+                Err(Error::InvalidSignature)
+            );
+        }
+    }
+
+    #[test]
+    fn two_hundred_signatures_per_curve_are_low_s_and_verify_in_both_forms() {
+        // ADR 0026 §5: emit low-S on every curve (k256 does by itself,
+        // P-256/384/521 are normalized), and accept the high-S twin.
+        for alg in &ALL {
+            let key = private_key(alg);
+            let public = key.to_public().unwrap();
+            let mut seen = std::collections::BTreeSet::new();
+            for i in 0u32..200 {
+                let input = format!("eyJhbGciOiJFUzI1NiJ9.{i}");
+                let sig = sign(alg, &key, input.as_bytes()).unwrap();
+                assert_eq!(sig.len(), signature_len(alg), "{alg} #{i}");
+                let (low, twin) = low_s_and_twin(alg, &sig);
+                assert!(low, "{alg} #{i}: high-S emitted");
+                assert_ne!(twin, sig);
+                assert_eq!(
+                    verify(alg, &public, input.as_bytes(), &sig),
+                    Ok(()),
+                    "{alg} #{i}"
+                );
+                assert_eq!(
+                    verify(alg, &public, input.as_bytes(), &twin),
+                    Ok(()),
+                    "{alg} #{i} twin"
+                );
+                assert!(seen.insert(sig), "{alg} #{i}: repeated signature");
+            }
+        }
+    }
+
+    #[test]
+    fn signing_is_hedged_not_deterministic() {
+        // ADR 0005: try_sign_with_rng mixes fresh randomness into the
+        // RFC 6979 nonce, so the same message signs differently each time
+        // (deterministic Signer::sign would repeat; 2^-256 odds otherwise).
+        for alg in &ALL {
+            let key = private_key(alg);
+            let a = sign(alg, &key, b"same input").unwrap();
+            let b = sign(alg, &key, b"same input").unwrap();
+            assert_ne!(a, b, "{alg}");
+        }
+    }
+
+    #[test]
+    fn signing_draws_exactly_one_field_element_of_entropy() {
+        // The added entropy is one field element (RFC 6979 §3.6's k'),
+        // taken from the adapter passed in: the same bytes give the same
+        // signature, other bytes another, and too few bytes fail closed.
+        for alg in &ALL {
+            let key = private_key(alg);
+            let len = signature_len(alg) / 2;
+            let sign_fixed = |bytes: Vec<u8>| {
+                let mut fixed = FixedRng::new(bytes);
+                let sig = sign_with_rng(
+                    alg,
+                    &key,
+                    b"input",
+                    &mut CryptoRngAdapter::fixed(&mut fixed),
+                );
+                (sig, fixed.remaining())
+            };
+            let (a, left) = sign_fixed(vec![1; len]);
+            assert_eq!(left, 0, "{alg}");
+            let a = a.unwrap();
+            assert_eq!(sign_fixed(vec![1; len]).0.as_ref(), Ok(&a), "{alg}");
+            assert_ne!(sign_fixed(vec![2; len]).0.as_ref(), Ok(&a), "{alg}");
+            assert_eq!(
+                sign_fixed(vec![1; len - 1]).0,
+                Err(Error::RandomnessUnavailable),
+                "{alg}"
+            );
+            let public = key.to_public().unwrap();
+            assert_eq!(verify(alg, &public, b"input", &a), Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_getrandom_failure_is_randomness_unavailable_on_every_curve() {
+        // ADR 0005: fail closed, with no signature, through rng.rs's
+        // fail_closed injection point.
+        let injected = [
+            getrandom::Error::UNSUPPORTED,
+            getrandom::Error::UNEXPECTED,
+            getrandom::Error::new_custom(7),
+        ];
+        for alg in &ALL {
+            let key = private_key(alg);
+            for e in injected {
+                assert_eq!(
+                    sign_with_rng(alg, &key, b"input", &mut CryptoRngAdapter::failing(e)),
+                    Err(Error::RandomnessUnavailable),
+                    "{alg} {e:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn private_scalar_is_checked_at_use() {
+        // RFC 7518 §6.2.2.1: d is exactly ceil(log2(n)/8) octets. A short
+        // d must not be zero-padded into another key (SecretKey::from_slice
+        // would pad it), so the length is checked first. Import already
+        // rejects these (ADR 0041 §4); the family checks again.
+        let code = |r: Result<()>| r.map_err(|e| e.code());
+        let d = b64(A3_D);
+        let n = hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+        assert_eq!(code(p256_ops::signing_key(&d).map(|_| ())), Ok(()));
+        for bad in [
+            d[1..].to_vec(),
+            [vec![0], d.clone()].concat(),
+            vec![0; 32],
+            n,
+        ] {
+            assert_eq!(
+                code(p256_ops::signing_key(&bad).map(|_| ())),
+                Err("InvalidKey"),
+                "{} octets",
+                bad.len()
+            );
+        }
+        let d = b64(A4_D);
+        assert!(p521_ops::signing_key(&d).is_ok());
+        assert!(p521_ops::signing_key(&d[1..]).is_err());
+        assert!(p384_ops::signing_key(&[0x38; 47]).is_err());
+        assert!(k256_ops::signing_key(&[0x6b; 31]).is_err());
+        assert!(k256_ops::signing_key(&[0; 32]).is_err());
+    }
+
+    #[test]
+    fn signing_refuses_a_key_of_another_curve_family_or_without_d() {
+        // bind_key rules these out (ADR 0026 §2 step 8); the family never
+        // signs with the wrong curve or panics.
+        let cases = [
+            (A::ES384, private_key(&A::ES256)),
+            (A::ES256K, private_key(&A::ES256)),
+            (A::ES256, private_key(&A::ES256).to_public().unwrap()),
+            (A::ES256, crate::jws::alg::test_keys::oct(32, "")),
+            (A::HS256, private_key(&A::ES256)),
+        ];
+        for (alg, key) in &cases {
+            assert_eq!(
+                sign(alg, key, b"x"),
                 Err(Error::KeyAlgorithmMismatch),
                 "{alg}"
             );
