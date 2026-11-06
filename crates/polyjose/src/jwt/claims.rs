@@ -753,4 +753,65 @@ mod tests {
             assert_eq!(claims(&text).unwrap().to_json(), text);
         }
     }
+
+    #[test]
+    fn debug_shows_registered_values_and_redacts_other_strings() {
+        // Workspace secrets rule: other claims print through Value's
+        // redacting Debug; registered claim values are not secrets.
+        let c = claims(
+            r#"{"iss":"joe","exp":1300819380,"secret":"hunter2","list":["deep-secret"],"obj":{"k":"v-secret"},"n":7}"#,
+        )
+        .unwrap();
+        let debug = format!("{c:?}");
+        for shown in [
+            "\"joe\"",
+            "1300819380",
+            "\"secret\"",
+            "\"list\"",
+            "\"k\"",
+            "7",
+        ] {
+            assert!(debug.contains(shown), "{shown} missing from {debug}");
+        }
+        for hidden in ["hunter2", "deep-secret", "v-secret"] {
+            assert!(!debug.contains(hidden), "{hidden} leaked in {debug}");
+        }
+        // Nothing of the input's layout (RFC 7519 §3.1 CRLF and spaces)
+        // survives into the parsed value.
+        let debug = format!("{:?}", Claims::from_json(RFC7519_3_1_CLAIMS).unwrap());
+        assert!(!debug.contains('\r') && !debug.contains("\\r"), "{debug}");
+    }
+
+    #[test]
+    fn errors_never_echo_claim_values() {
+        // Error::InvalidClaim names the claim, never its value; the
+        // parser's InvalidJson details are fixed strings (ADR 0007).
+        let inputs = [
+            r#"{"iss":424242}"#,
+            r#"{"sub":["SENTINEL"]}"#,
+            r#"{"jti":{"SENTINEL":"SENTINEL"}}"#,
+            r#"{"aud":["SENTINEL",424242]}"#,
+            r#"{"aud":{"SENTINEL":1}}"#,
+            r#"{"exp":"SENTINEL"}"#,
+            r#"{"nbf":9007199254740993424242}"#,
+            r#"{"iat":["SENTINEL"]}"#,
+            r#"{"SENTINEL":1,"SENTINEL":2}"#,
+            r#"["SENTINEL"]"#,
+            r#""SENTINEL""#,
+            r#"{"iss":"SENTINEL"}SENTINEL"#,
+        ];
+        for input in inputs {
+            let err = claims(input).unwrap_err();
+            assert!(
+                matches!(err, Error::InvalidClaim(_) | Error::InvalidJson(_)),
+                "{input}: {err:?}"
+            );
+            for text in [format!("{err}"), format!("{err:?}")] {
+                assert!(
+                    !text.contains("SENTINEL") && !text.contains("424242"),
+                    "{input}: {text}"
+                );
+            }
+        }
+    }
 }
