@@ -106,5 +106,4 @@ mod keymgmt;
 mod pbes2;
 mod random;
 mod rsa_oaep;
-pub(crate) mod x25519_consistency;
 mod zip;

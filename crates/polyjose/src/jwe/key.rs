@@ -73,7 +73,7 @@ impl RecipientKey {
     /// RSA private keys refused; ADR 0041 §4, ADR 0021), and so is
     /// private-to-public consistency (ADR 0043 §3: EC `d·G` = (`x`, `y`),
     /// and X25519 `x` = X25519(`d`, 9) by RFC 7748 §6.1, through
-    /// `jwe::x25519_consistency`). None of that is repeated here. In this
+    /// `jwk::x25519_consistency`). None of that is repeated here. In this
     /// order:
     ///
     /// 1. **Support** → [`Error::UnsupportedAlgorithm`]: `alg` must be

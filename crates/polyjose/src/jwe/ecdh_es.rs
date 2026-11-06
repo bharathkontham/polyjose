@@ -28,12 +28,15 @@
 //! 3. `epk` must be present (RFC 7518 §4.6.1.1: "MUST be present");
 //! 4. it must hold no private key member (RFC 7518 §4.6.1.1: "MUST contain
 //!    only public key parameters");
-//! 5. it must import as a JWK ([`Jwk::from_object`]: exact coordinate
+//! 5. its raw `kty` and `crv` must be those of the recipient's key
+//!    (RFC 7518 §4.6: the agreement is on the recipient's curve; this
+//!    stops the invalid-curve attacks of research.md §4.2). This is
+//!    checked on the JSON object, before import, so a wrong-family or
+//!    wrong-curve `epk` is never decoded as a point (feature 0003 code
+//!    review #4);
+//! 6. it must import as a JWK ([`Jwk::from_object`]: exact coordinate
 //!    lengths, EC points on their curve and not the identity; ADR 0041 §4,
-//!    SP 800-56A r3 §5.6.2.3.4 partial public-key validation);
-//! 6. its `kty` and `crv` must be those of the recipient's key (RFC 7518
-//!    §4.6: the agreement is on the recipient's curve; this stops the
-//!    invalid-curve attacks of research.md §4.2).
+//!    SP 800-56A r3 §5.6.2.3.4 partial public-key validation).
 //!
 //! Only then does the agreement run. For X25519 the one remaining check is
 //! the all-zero shared secret (RFC 7748 §6.1, `ecdh_x25519::agree`); X25519
@@ -52,7 +55,7 @@ use super::{aes_kw, concat_kdf, ecdh_nist, ecdh_x25519};
 use crate::header::Header;
 use crate::json::{Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
-use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, OkpCurve};
+use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, KeyType, OkpCurve};
 use crate::util::{b64url_decode, b64url_encode};
 use crate::{Error, Result};
 
@@ -323,6 +326,19 @@ fn party_info(value: Option<&str>) -> Result<Vec<u8>> {
 /// that is not an ECDH-ES private key; the agreement's error otherwise
 /// (an all-zero X25519 secret).
 pub(super) fn agree_with_epk(key: &RecipientKey, epk: &Object) -> Result<Zeroizing<Vec<u8>>> {
+    agree_with_imported_epk(key, epk, Jwk::from_object)
+}
+
+/// [`agree_with_epk`] with the JWK import step passed in as `import`.
+///
+/// Production always passes [`Jwk::from_object`]; the seam lets the unit
+/// tests observe whether, and when, import is reached (0003 code review
+/// #4), without any global or thread-local state.
+fn agree_with_imported_epk(
+    key: &RecipientKey,
+    epk: &Object,
+    import: impl FnOnce(&Object) -> Result<Jwk>,
+) -> Result<Zeroizing<Vec<u8>>> {
     // RFC 7518 §4.6.1.1: "It MUST contain only public key parameters".
     // Checked on the raw object, before import, which would otherwise run
     // the ADR 0043 §3 d·G consistency check: a scalar multiplication on
@@ -330,10 +346,18 @@ pub(super) fn agree_with_epk(key: &RecipientKey, epk: &Object) -> Result<Zeroizi
     if PRIVATE_MEMBERS.iter().any(|name| epk.contains(name)) {
         return Err(Error::DecryptionFailed);
     }
+    // RFC 7518 §4.6, RFC 8725 §3.4, 0003 code review #4: the ephemeral key
+    // must be of the recipient's family and on its curve. Checked on the
+    // raw `kty` and `crv`, before import, so a wrong-family or wrong-curve
+    // epk never reaches point decoding, the on-curve check or an agreement.
+    if !raw_epk_is_on_recipient_curve(key, epk) {
+        return Err(Error::DecryptionFailed);
+    }
     // ADR 0041 §4: the JWK import checks (lengths, on-curve, identity).
-    let epk = Jwk::from_object(epk).map_err(|_| Error::DecryptionFailed)?;
-    // RFC 7518 §4.6, RFC 8725 §3.4: the ephemeral key must be on the
-    // recipient's curve.
+    let epk = import(epk).map_err(|_| Error::DecryptionFailed)?;
+    // RFC 7518 §4.6, RFC 8725 §3.4: the imported key is matched on its
+    // curve once more, so each arm gets the key material it needs; after
+    // the raw check above, a mismatch here cannot happen.
     match (key, epk.material()) {
         (RecipientKey::P256Secret(secret), KeyMaterial::Ec(e)) if e.crv() == EcCurve::P256 => {
             nist_decrypt(secret, e)
@@ -354,6 +378,28 @@ pub(super) fn agree_with_epk(key: &RecipientKey, epk: &Object) -> Result<Zeroizi
         }
         _ => Err(Error::DecryptionFailed),
     }
+}
+
+/// Whether the raw `epk` object's `kty` and `crv` are exactly those of the
+/// recipient's private `key` (RFC 7518 §4.6: the agreement is on the
+/// recipient's curve; RFC 8725 §3.4; 0003 code review #4).
+///
+/// Both members must be JSON strings equal, octet for octet, to the
+/// registered names (RFC 7517 §4.1 and RFC 7518 §6.2.1.1 for `EC`,
+/// RFC 8037 §2 for `OKP`), which is how [`Jwk::from_object`] reads them, so
+/// every `epk` refused here would also have failed import or the curve
+/// match after it. A `key` that is not an ECDH-ES private key matches
+/// nothing.
+fn raw_epk_is_on_recipient_curve(key: &RecipientKey, epk: &Object) -> bool {
+    let (kty, crv) = match key {
+        RecipientKey::P256Secret(_) => (KeyType::Ec.as_str(), EcCurve::P256.as_str()),
+        RecipientKey::P384Secret(_) => (KeyType::Ec.as_str(), EcCurve::P384.as_str()),
+        RecipientKey::P521Secret(_) => (KeyType::Ec.as_str(), EcCurve::P521.as_str()),
+        RecipientKey::X25519Secret(_) => (KeyType::Okp.as_str(), OkpCurve::X25519.as_str()),
+        _ => return false,
+    };
+    let member = |name| epk.get(name).and_then(Value::as_str);
+    member("kty") == Some(kty) && member("crv") == Some(crv)
 }
 
 /// Z of the recipient's `secret` and the imported `epk` on the same NIST
@@ -882,6 +928,73 @@ mod tests {
     }
 
     #[test]
+    fn an_epk_of_the_wrong_kty_or_crv_never_reaches_import() {
+        // 0003 code review #4, RFC 7518 §4.6, RFC 8725 §3.4: the raw `kty`
+        // and `crv` are compared with the recipient's key before
+        // `Jwk::from_object`, so a wrong-family or wrong-curve epk is never
+        // imported (no point decoding, no on-curve check) and never agreed
+        // with. Each case is
+        // the raw epk and the (kty, crv) of the one recipient it may reach
+        // import for, if any. Contents past `kty` and `crv` do not matter
+        // to a refused case, so most are labels only.
+        let x25519_epk =
+            r#"{"kty":"OKP","crv":"X25519","x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"}"#;
+        let cases: &[(&str, Option<(&str, &str)>)] = &[
+            (app_c::ALICE_EPK, Some(("EC", "P-256"))),
+            (P384_EPK, Some(("EC", "P-384"))),
+            (r#"{"kty":"EC","crv":"P-521"}"#, Some(("EC", "P-521"))),
+            (x25519_epk, Some(("OKP", "X25519"))),
+            (SECP256K1_EPK, None),
+            (
+                r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#,
+                None,
+            ),
+            (r#"{"kty":"OKP","crv":"P-256"}"#, None),
+            (r#"{"kty":"EC","crv":"X25519"}"#, None),
+            (r#"{"kty":"ec","crv":"p-256"}"#, None),
+            (r#"{"kty":"EC","crv":"P-256 "}"#, None),
+            (r#"{"kty":"EC"}"#, None),
+            (r#"{"crv":"P-256"}"#, None),
+            (r#"{"kty":"EC","crv":256}"#, None),
+            (r#"{"kty":["EC"],"crv":"P-256"}"#, None),
+            (r#"{"kty":"oct"}"#, None),
+            (r#"{"kty":"RSA","n":"AQAB","e":"AQAB"}"#, None),
+            (r#"{}"#, None),
+        ];
+        for key in recipients() {
+            let secret = bind(&key, &A::EcdhEs, &E::A128GCM, Direction::Decrypt);
+            let own = match &secret {
+                RecipientKey::P256Secret(_) => ("EC", "P-256"),
+                RecipientKey::P384Secret(_) => ("EC", "P-384"),
+                RecipientKey::P521Secret(_) => ("EC", "P-521"),
+                RecipientKey::X25519Secret(_) => ("OKP", "X25519"),
+                _ => panic!("not an ECDH-ES private key"),
+            };
+            for (epk, reaches) in cases {
+                let imported = core::cell::Cell::new(false);
+                let (result, ticks) = ecdh_agreements::count(|| {
+                    agree_with_imported_epk(&secret, &object(epk), |o| {
+                        imported.set(true);
+                        Jwk::from_object(o)
+                    })
+                });
+                if *reaches == Some(own) {
+                    // The positive control: the matching family and curve
+                    // is imported.
+                    assert!(imported.get(), "{own:?} {epk}");
+                } else {
+                    assert!(!imported.get(), "{own:?} {epk} reached import");
+                    assert_eq!(
+                        (result.map(|_| ()), ticks),
+                        (Err(Error::DecryptionFailed), 0),
+                        "{own:?} {epk}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn low_order_x25519_epk_fails_after_its_one_agreement() {
         // RFC 7748 §6.1, ADR 0043 §2: a low-order u gives the all-zero Z,
         // which `ecdh_x25519::agree` rejects after computing it (so the
@@ -1096,5 +1209,54 @@ mod tests {
             &b64("0DJjBXri_kBcC46IkU5_Jk9BqaQeHdv2"),
         );
         assert_eq!(cek, Ok(b64("Nou2ueKlP70ZXDbq9UrRwg")));
+    }
+
+    /// The T17 X25519 import-consistency check (ADR 0043 §3), seen from
+    /// the JWE side. Moved here from the helper's own tests so that `jwk`
+    /// never imports from `crate::jwe` (0003 code review #6).
+    mod x25519_import_consistency {
+        use super::*;
+        use crate::jwk::x25519_consistency::X25519_PRIVATE_MISMATCH;
+        use x25519_dalek::PublicKey;
+
+        /// RFC 7748 §6.1, as printed (hex).
+        const ALICE_PRIVATE: &str =
+            "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+        const BOB_PRIVATE: &str =
+            "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb";
+        const BOB_PUBLIC: &str = "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f";
+
+        /// 32 bytes from 64 lowercase hex digits.
+        fn hex32(text: &str) -> [u8; 32] {
+            <[u8; 32]>::try_from(hex(text)).unwrap_or_else(|_| panic!("{text:?} is not 32 bytes"))
+        }
+
+        /// The JWE recipient key path (0003 T05) binds only imported keys, so
+        /// the import check is what keeps a mismatched X25519 pair away from
+        /// ECDH-ES decryption: the RFC 7748 §6.1 Bob key binds for decrypt,
+        /// the same `x` with Alice's `d` never becomes a `Jwk`.
+        #[test]
+        fn jwe_recipient_binding_sees_only_consistent_keys() {
+            let jwk = |d: &str| -> Result<Jwk> {
+                let (x, d) = (b64url_encode(&hex32(BOB_PUBLIC)), b64url_encode(&hex32(d)));
+                let json = format!(r#"{{"kty":"OKP","crv":"X25519","x":"{x}","d":"{d}"}}"#);
+                Jwk::from_json(json.as_bytes())
+            };
+            let bob = jwk(BOB_PRIVATE).unwrap();
+            let bound = RecipientKey::from_jwk(
+                &bob,
+                &KeyMgmtAlg::EcdhEs,
+                &ContentEncAlg::A128GCM,
+                Direction::Decrypt,
+            );
+            let Ok(RecipientKey::X25519Secret(secret)) = bound else {
+                panic!("Bob's private key did not bind for ECDH-ES decrypt");
+            };
+            assert_eq!(PublicKey::from(&secret).to_bytes(), hex32(BOB_PUBLIC));
+            assert_eq!(
+                jwk(ALICE_PRIVATE).err(),
+                Some(Error::InvalidKey(X25519_PRIVATE_MISMATCH))
+            );
+        }
     }
 }
