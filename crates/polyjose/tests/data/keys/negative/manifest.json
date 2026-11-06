@@ -339,6 +339,14 @@
     "cite": "RFC 5915 \u00a73 (privateKey must hold an ECPrivateKey)"
   },
   {
+    "id": "N52",
+    "file": "N52-pkcs8-ec-public-key-of-other-key.der",
+    "base": "rfc7517-a2-ec-p256-pkcs8.der",
+    "mutation": "inner ECPrivateKey [1] publicKey replaced by the RFC 9500 testECCP256 public point (a different valid P-256 key)",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73 (publicKey is d*G); ADR 0043 (a private key's private part must derive its public part)"
+  },
+  {
     "id": "N60",
     "file": "N60-rsa-params-absent.der",
     "base": "rfc7517-a1-rsa-spki.der",

@@ -14,9 +14,11 @@ Error-code rule (ADR 0018):
   doesn't support (encrypted PKCS#8, RSA private keys per ADR 0021, Ed448,
   RSA-PSS OID, unsupported curves, certificates, unknown labels).
 
-Run: python3 -I negative-vectors.py   (after rfc-golden.py)
+Run: python3 -I negative-vectors.py   (after rfc-golden.py). It also rewrites
+../negative/SHA256SUMS, in the order `shasum -a 256 *.der *.pem manifest.json`
+prints.
 """
-import base64, json, os
+import base64, hashlib, json, os
 
 # The fixture directories (openssl/, rfc/, negative/) are siblings of regen/.
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -133,6 +135,16 @@ def main():
         "AlgorithmIdentifier says P-256, inner ECPrivateKey [0] says P-384", IK, "RFC 5915 §1 a); RFC 5480 §2.1.1")
     der("N51", "pkcs8-ec-oid-with-ed25519-body", P, seq(b"\x02\x01\x00", alg, tlv(0x04, tlv(0x04, priv))),
         "id-ecPublicKey AlgorithmIdentifier with an RFC 8410 CurvePrivateKey body", IK, "RFC 5915 §3 (privateKey must hold an ECPrivateKey)")
+    # N52: the inner [1] publicKey is the point of another valid P-256 key (RFC 9500 testECCP256),
+    # so the structure and the point are both valid and only d*G != publicKey is wrong.
+    pk8 = read(P)
+    assert pk8 == seq(b"\x02\x01\x00", alg, tlv(0x04, seq(b"\x02\x01\x01", tlv(0x04, d), pub)))
+    other = base64.b64decode("".join(l for l in open(os.path.join(RFC, "rfc9500-testECCP256-sec1.pem")).read().splitlines() if not l.startswith("-----")))
+    other_pub = other[-70:]
+    assert other_pub[:6] == bytes.fromhex("a14403420004") and other_pub != pub
+    der("N52", "pkcs8-ec-public-key-of-other-key", P, seq(b"\x02\x01\x00", alg, tlv(0x04, seq(b"\x02\x01\x01", tlv(0x04, d), other_pub))),
+        "inner ECPrivateKey [1] publicKey replaced by the RFC 9500 testECCP256 public point (a different valid P-256 key)",
+        IK, "RFC 5915 §3 (publicKey is d*G); ADR 0043 (a private key's private part must derive its public part)")
 
     # ---- RSA public (RFC 8017 App. A.1.1, RFC 3279 §2.3.1) ----
     rs = read("rfc7517-a1-rsa-spki.der")
@@ -200,6 +212,11 @@ def main():
     rows.sort(key=lambda r: r["id"])
     with open(os.path.join(OUT, "manifest.json"), "w") as fh:
         json.dump(rows, fh, indent=2); fh.write("\n")
+    names = sorted(os.listdir(OUT))
+    pinned = [n for n in names if n.endswith(".der")] + [n for n in names if n.endswith(".pem")] + ["manifest.json"]
+    with open(os.path.join(OUT, "SHA256SUMS"), "w") as fh:
+        for n in pinned:
+            fh.write("%s  %s\n" % (hashlib.sha256(open(os.path.join(OUT, n), "rb").read()).hexdigest(), n))
     print("wrote", len(rows), "vectors")
 
 main()
