@@ -251,4 +251,182 @@ mod tests {
         check::<p384::NistP384>(48);
         check::<p521::NistP521>(66);
     }
+
+    /// Wycheproof ECDH on P-256, P-384 and P-521 through the JWE `epk`
+    /// path (`ecdh_es::agree_with_epk`, the exact decrypt code): the
+    /// `ecpoint` files (raw SEC 1 points) and the `webcrypto` files (JWK
+    /// public keys).
+    mod wycheproof_ecdh {
+        use super::super::super::ecdh_es::agree_with_epk;
+        use super::*;
+        use crate::json::Object;
+        use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
+        use crate::jwe::key::{Direction, RecipientKey};
+        use crate::jwk::{EcCurve, Jwk};
+        use crate::test_support::wycheproof::{self, Deviation, Outcome, Summary, Test};
+        use crate::util::b64url_encode;
+
+        /// The one `acceptable` case of each `ecpoint` file (tcId 2,
+        /// `CompressedPublic`): polyjose rejects it, because a JWK cannot
+        /// carry a compressed point.
+        const ECPOINT: &[Deviation] = &[Deviation::tests(
+            &[2],
+            Outcome::Reject,
+            "RFC 7518 §6.2.1: an EC JWK (and so an epk) has no compressed form; x and y are both required",
+        )];
+
+        /// The flags of the cases that must be rejected before any agreement
+        /// (research.md §4.2, RFC 8725 §3.4).
+        const NO_AGREEMENT: &[&str] = &[
+            "InvalidCurveAttack",
+            "WrongCurve",
+            "InvalidEncoding",
+            "CompressedPoint",
+            "InvalidPublic",
+        ];
+
+        /// `key`'s private scalar as `RecipientKey`, from Wycheproof's
+        /// big-endian integer (leading zeros stripped or added to the field
+        /// length, RFC 7518 §6.2.2.1), or `None` if it is not in [1, n − 1].
+        fn recipient(crv: EcCurve, private: &[u8]) -> Option<RecipientKey> {
+            let len = crv.coordinate_len();
+            let start = private
+                .iter()
+                .position(|&b| b != 0)
+                .unwrap_or(private.len());
+            let digits = &private[start..];
+            if digits.len() > len {
+                return None;
+            }
+            let mut d = vec![0u8; len - digits.len()];
+            d.extend_from_slice(digits);
+            match crv {
+                EcCurve::P256 => SecretKey::<p256::NistP256>::from_slice(&d)
+                    .ok()
+                    .map(RecipientKey::P256Secret),
+                EcCurve::P384 => SecretKey::<p384::NistP384>::from_slice(&d)
+                    .ok()
+                    .map(RecipientKey::P384Secret),
+                EcCurve::P521 => SecretKey::<p521::NistP521>::from_slice(&d)
+                    .ok()
+                    .map(RecipientKey::P521Secret),
+                EcCurve::Secp256k1 => None,
+            }
+        }
+
+        /// The `epk` a JWE would carry for a raw SEC 1 `public` point, or
+        /// `None` if JWK cannot express it: only the uncompressed form
+        /// `04 ‖ x ‖ y` with full-length coordinates maps to `x` and `y`
+        /// (RFC 7518 §6.2.1.2–§6.2.1.3, SEC 1 v2 §2.3.3).
+        fn epk(crv: EcCurve, public: &[u8]) -> Option<Object> {
+            let len = crv.coordinate_len();
+            if public.len() != 1 + 2 * len || public[0] != 0x04 {
+                return None;
+            }
+            let mut epk = Object::new();
+            epk.insert("kty", "EC");
+            epk.insert("crv", crv.as_str());
+            epk.insert("x", b64url_encode(&public[1..=len]));
+            epk.insert("y", b64url_encode(&public[1 + len..]));
+            Some(epk)
+        }
+
+        /// Checks one test's result: an accepted case gives exactly the
+        /// expected Z, and a case flagged as an attack never reaches the
+        /// agreement.
+        fn outcome(
+            test: &Test,
+            result: &Result<Zeroizing<Vec<u8>>>,
+            shared: &[u8],
+            agreements: u64,
+        ) -> Outcome {
+            let id = test.tc_id;
+            if let Ok(z) = result {
+                assert_eq!(z.as_slice(), shared, "tcId {id}: wrong shared secret");
+            }
+            if NO_AGREEMENT.iter().any(|flag| test.has_flag(flag)) {
+                assert!(result.is_err(), "tcId {id}: attack case accepted");
+                assert_eq!(agreements, 0, "tcId {id}: agreed before refusing");
+            }
+            Outcome::of(result)
+        }
+
+        fn ecpoint(name: &str, crv: EcCurve) -> Summary {
+            let suite = wycheproof::load(name);
+            wycheproof::assert_conforms(&suite, ECPOINT, |_, test| {
+                let (public, private, shared) = test.agreement();
+                let (result, agreements) = ecdh_agreements::count(|| {
+                    let key = recipient(crv, private).ok_or(Error::InvalidKey("scalar"))?;
+                    let epk = epk(crv, public).ok_or(Error::DecryptionFailed)?;
+                    agree_with_epk(&key, &epk)
+                });
+                outcome(test, &result, shared, agreements)
+            })
+        }
+
+        fn webcrypto(name: &str) -> Summary {
+            let suite = wycheproof::load(name);
+            wycheproof::assert_conforms(&suite, &[], |_, test| {
+                let (public, private, shared) = test.jwk_agreement();
+                // Our side: the private JWK, bound to ECDH-ES for decrypt
+                // exactly as `decrypt_compact` binds it (RFC 7518 §4.6).
+                let private = Jwk::from_json(private.as_bytes()).unwrap_or_else(|e| panic!("{e}"));
+                let key = RecipientKey::from_jwk(
+                    &private,
+                    &KeyMgmtAlg::EcdhEs,
+                    &ContentEncAlg::A128GCM,
+                    Direction::Decrypt,
+                )
+                .unwrap_or_else(|e| panic!("tcId {}: {e}", test.tc_id));
+                // The peer's public JWK, as the epk of a JWE header.
+                let epk = crate::json::parse(public.as_bytes())
+                    .ok()
+                    .and_then(crate::json::Value::into_object)
+                    .unwrap_or_else(|| panic!("tcId {}: public is not an object", test.tc_id));
+                let (result, agreements) = ecdh_agreements::count(|| agree_with_epk(&key, &epk));
+                outcome(test, &result, shared, agreements)
+            })
+        }
+
+        fn summary(tests: usize, accepted: usize, deviations: usize) -> Summary {
+            Summary {
+                tests,
+                accepted,
+                rejected: tests - accepted,
+                deviations,
+            }
+        }
+
+        #[test]
+        fn wycheproof_ecdh_ecpoint() {
+            // Every `valid` case gives its Z; every `invalid` one (16
+            // InvalidCurveAttack, the InvalidEncoding, the compressed
+            // WrongCurve twist points and InvalidCompressedPublic) and the
+            // `acceptable` compressed point are rejected, all of them before
+            // any agreement.
+            assert_eq!(
+                ecpoint("ecdh_secp256r1_ecpoint", EcCurve::P256),
+                summary(355, 330, 1)
+            );
+            assert_eq!(
+                ecpoint("ecdh_secp384r1_ecpoint", EcCurve::P384),
+                summary(790, 771, 1)
+            );
+            assert_eq!(
+                ecpoint("ecdh_secp521r1_ecpoint", EcCurve::P521),
+                summary(661, 632, 1)
+            );
+        }
+
+        #[test]
+        fn wycheproof_ecdh_webcrypto() {
+            // The same agreements with JWK public keys, the closest form to
+            // an `epk`: 16 InvalidCurveAttack, the WrongCurve keys (another
+            // `crv`) and the InvalidPublic ones (modified point or group)
+            // are rejected before any agreement.
+            assert_eq!(webcrypto("ecdh_secp256r1_webcrypto"), summary(353, 330, 0));
+            assert_eq!(webcrypto("ecdh_secp384r1_webcrypto"), summary(794, 771, 0));
+            assert_eq!(webcrypto("ecdh_secp521r1_webcrypto"), summary(655, 632, 0));
+        }
+    }
 }
