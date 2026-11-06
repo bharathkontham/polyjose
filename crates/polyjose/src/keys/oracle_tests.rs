@@ -48,6 +48,8 @@ enum Kind {
 }
 
 impl Kind {
+    const ALL: [Kind; 4] = [Kind::Pkcs8, Kind::Spki, Kind::Sec1, Kind::Pkcs1];
+
     /// The container a fixture file holds, from its name.
     fn of_file(name: &str) -> Kind {
         if name.contains("pkcs8") {
@@ -1449,4 +1451,199 @@ mod reader {
             compare_typed_readers(&input);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Canonicality of mutated containers
+// ---------------------------------------------------------------------------
+
+/// Every length field of `buf` that polyjose's reader can frame, as
+/// (offset of the length octets, their count, the length), walking into
+/// constructed elements and into OCTET STRING and BIT STRING contents (the
+/// PKCS#8 privateKey and the SPKI RSAPublicKey hold DER too).
+fn length_fields(buf: &[u8]) -> Vec<(usize, usize, usize)> {
+    let mut out = Vec::new();
+    let mut stack = vec![(0usize, buf.len(), 0u8)];
+    while let Some((start, end, depth)) = stack.pop() {
+        let Ok(mut reader) = Reader::new(&buf[start..end]) else {
+            continue;
+        };
+        let mut at = start;
+        while let Ok(element) = reader.element() {
+            let header = element.encoding.len() - element.contents.len();
+            out.push((at + 1, header - 1, element.contents.len()));
+            let contents = at + header;
+            let contents_end = contents + element.contents.len();
+            if depth < 8 {
+                if element.tag & 0x20 != 0 || element.tag == 0x04 {
+                    stack.push((contents, contents_end, depth + 1));
+                } else if matches!(element.tag, 0x03 | 0x81) && contents < contents_end {
+                    stack.push((contents + 1, contents_end, depth + 1));
+                }
+            }
+            at = contents_end;
+        }
+    }
+    out
+}
+
+/// One mutation of a DER buffer.
+#[derive(Debug, Clone)]
+enum Mutation {
+    /// Flip one bit.
+    Flip(proptest::sample::Index, u8),
+    /// Insert one octet.
+    Insert(proptest::sample::Index, u8),
+    /// Delete one octet.
+    Delete(proptest::sample::Index),
+    /// Rewrite one length field: 0 non-minimal long form (X.690 §10.1),
+    /// 1 one too long, 2 one too short, 3 indefinite (§8.1.3.6).
+    Length(proptest::sample::Index, u8),
+}
+
+fn apply(seed: &[u8], mutations: &[Mutation]) -> Vec<u8> {
+    let mut m = seed.to_vec();
+    for mutation in mutations {
+        match mutation {
+            Mutation::Flip(at, bit) if !m.is_empty() => {
+                let i = at.index(m.len());
+                m[i] ^= 1 << bit;
+            }
+            Mutation::Insert(at, octet) => m.insert(at.index(m.len() + 1), *octet),
+            Mutation::Delete(at) if !m.is_empty() => {
+                m.remove(at.index(m.len()));
+            }
+            Mutation::Length(at, form) => {
+                let fields = length_fields(&m);
+                if fields.is_empty() {
+                    continue;
+                }
+                let (start, count, len) = fields[at.index(fields.len())];
+                let replacement = match form {
+                    0 if len < 0x80 => vec![0x81, len as u8],
+                    0 => {
+                        let mut long = der_length(len);
+                        long[0] += 1;
+                        long.insert(1, 0x00);
+                        long
+                    }
+                    1 => der_length(len + 1),
+                    2 => der_length(len.saturating_sub(1)),
+                    _ => vec![0x80],
+                };
+                m.splice(start..start + count, replacement);
+            }
+            _ => {}
+        }
+    }
+    m
+}
+
+/// `der` without its PKCS#8 `[0]` attributes element, which polyjose
+/// checks and then ignores (ADR 0018 §3), so never re-encodes.
+fn without_attributes(der: &[u8]) -> Vec<u8> {
+    let mut outer = Reader::new(der).unwrap();
+    let mut fields = outer.sequence().unwrap();
+    let mut body = Vec::new();
+    while let Ok(element) = fields.element() {
+        if element.tag != super::der::CONTEXT_0 {
+            body.extend_from_slice(element.encoding);
+        }
+    }
+    tlv(super::der::SEQUENCE, &body)
+}
+
+/// The canonicality property on one buffer:
+///
+/// - whenever a container codec accepts it, encoding what it decoded gives
+///   exactly the input (X.690 §10: one encoding per value), PKCS#8
+///   attributes aside;
+/// - whenever polyjose's codecs accept it, the formats crates accept it
+///   with the same fields, and whenever polyjose's import accepts it, the
+///   oracle accepts it: polyjose is never laxer (research.md §4);
+/// - nothing panics (a panic fails the property).
+///
+/// Returns whether any container codec accepted `m`.
+fn check_canonical(m: &[u8]) -> bool {
+    let accepted = Kind::ALL.iter().any(|kind| our_fields(*kind, m).is_ok());
+    if let Ok(parts) = super::pkcs8::decode(m) {
+        assert_eq!(
+            *super::pkcs8::encode(&parts).unwrap(),
+            without_attributes(m)
+        );
+        if let (AlgId::Ec(_), Ok(inner)) = (parts.alg, super::sec1::decode(parts.private_key)) {
+            assert_eq!(*super::sec1::encode(&inner).unwrap(), parts.private_key);
+        }
+    }
+    if let Ok(parts) = super::spki::decode(m) {
+        assert_eq!(*super::spki::encode(&parts).unwrap(), m);
+    }
+    if let Ok(key) = super::sec1::decode(m) {
+        assert_eq!(*super::sec1::encode(&key).unwrap(), m);
+    }
+    if let Ok(key) = super::pkcs1::decode(m) {
+        assert_eq!(*super::pkcs1::encode_public(key.n, key.e).unwrap(), m);
+    }
+    if let Ok(key) = super::pkcs1::decode_public(m) {
+        assert_eq!(*super::pkcs1::encode_public(key.n, key.e).unwrap(), m);
+    }
+    for kind in Kind::ALL {
+        if let Ok(fields) = our_fields(kind, m) {
+            assert_eq!(oracle_fields(kind, m), Ok(fields), "{kind:?} {m:02x?}");
+        }
+        if our_import(kind, m).is_ok() {
+            assert!(
+                oracle_key(kind, m).is_ok(),
+                "{kind:?} laxer than the oracle: {m:02x?}"
+            );
+        }
+    }
+    accepted
+}
+
+/// Over random mutations of the positive fixtures (bit flips, octet
+/// insertions and deletions, length-octet rewrites), whatever polyjose
+/// accepts re-encodes to exactly the input and is accepted by the oracle
+/// with the same fields, and nothing panics. 1,000 cases (pipeline rule 8);
+/// this is not a substitute for fuzzing (feature 0012).
+#[test]
+fn mutated_containers_re_encode_exactly_when_accepted() {
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::test_runner::{Config, TestRunner};
+
+    let mut seeds: Vec<Vec<u8>> = positive_fixtures()
+        .iter()
+        .map(|(dir, name)| load_positive(dir, name))
+        .collect();
+    seeds.sort();
+    seeds.dedup();
+    // The unmutated seeds hold the property too.
+    for seed in &seeds {
+        assert!(check_canonical(seed));
+    }
+    let mutation = prop_oneof![
+        (any::<proptest::sample::Index>(), 0u8..8).prop_map(|(at, bit)| Mutation::Flip(at, bit)),
+        (any::<proptest::sample::Index>(), any::<u8>())
+            .prop_map(|(at, octet)| Mutation::Insert(at, octet)),
+        any::<proptest::sample::Index>().prop_map(Mutation::Delete),
+        (any::<proptest::sample::Index>(), 0u8..4)
+            .prop_map(|(at, form)| Mutation::Length(at, form)),
+    ];
+    let strategy = (0..seeds.len(), vec(mutation, 1..4));
+    let mut runner = TestRunner::new(Config::with_cases(1000));
+    let accepted = core::cell::Cell::new(0u32);
+    runner
+        .run(&strategy, |(seed, mutations)| {
+            if check_canonical(&apply(&seeds[seed], &mutations)) {
+                accepted.set(accepted.get() + 1);
+            }
+            Ok(())
+        })
+        .unwrap();
+    // Not vacuous: a flip inside a key value, an RSA modulus or an EC
+    // point keeps the container well-formed. About 14% of cases are
+    // accepted (measured); 5% leaves a margin of over 8 standard
+    // deviations.
+    assert!(accepted.get() >= 50, "only {} accepted", accepted.get());
 }
