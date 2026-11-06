@@ -1,0 +1,16 @@
+{
+  "source": "RFC 8410 §10.1",
+  "description": "PEM import of the RFC 8410 §10.1 Ed25519 SPKI.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PUBLIC KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE"
+    }
+  }
+}

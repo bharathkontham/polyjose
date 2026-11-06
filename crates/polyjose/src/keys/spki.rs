@@ -21,13 +21,6 @@ const CURVES: [EcCurve; 4] = [
 
 /// Reads an AlgorithmIdentifier (RFC 5280 §4.1.1.2) and classifies it; see
 /// [`classify`].
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by pkcs8.rs once the key mappers (T05-T07) call pkcs8::decode"
-    )
-)]
 pub(crate) fn read_algorithm_identifier(reader: &mut Reader<'_>) -> Result<AlgId> {
     classify(reader.expect(der::SEQUENCE)?)
 }
@@ -107,13 +100,6 @@ fn classify(element: Element<'_>) -> Result<AlgId> {
 /// X.690 §8.6.2.2) and is returned as a sub-slice of `der`. Its contents
 /// (an EC point, an Ed25519/X25519 key, an RSAPublicKey) are left to the
 /// key mappers.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the key mappers (T05-T07) and the facade (T08)"
-    )
-)]
 pub(crate) fn decode(der: &[u8]) -> Result<SpkiParts<'_>> {
     let mut outer = Reader::new(der)?;
     let mut fields = outer.sequence()?;
@@ -130,13 +116,6 @@ pub(crate) fn decode(der: &[u8]) -> Result<SpkiParts<'_>> {
 /// Encodes a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7) in DER: the
 /// `oid.rs` template of `parts.alg` and the key in a BIT STRING with no
 /// unused bits, the layout OpenSSL 4 emits (ADR 0018 §3).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the key mappers (T05-T07) and the facade (T08)"
-    )
-)]
 pub(crate) fn encode(parts: &SpkiParts<'_>) -> Result<Zeroizing<Vec<u8>>> {
     let algorithm = oid::algorithm_identifier(parts.alg);
     let body = algorithm.len() + der::bit_string_len(parts.subject_public_key.len());

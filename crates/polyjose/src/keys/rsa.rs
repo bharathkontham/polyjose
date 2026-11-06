@@ -43,10 +43,6 @@ use crate::jwk::{Jwk, RsaPublicKey};
 /// non-minimal INTEGER, an extra field, an EC point), and for whatever
 /// [`Jwk::from_object`] refuses: a modulus under 2048 bits, an even
 /// modulus, an exponent that is even or outside 3 ≤ e < n.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
     if parts.alg != AlgId::RsaEncryption {
         return Err(Error::InvalidKey("the key is not an RSA key"));
@@ -64,10 +60,6 @@ pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
 /// before any private INTEGER is parsed. [`Error::InvalidKey`] for any other
 /// DER that is not an RSAPublicKey, and for whatever [`Jwk::from_object`]
 /// refuses (see [`from_spki`]).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn from_pkcs1(der: &[u8]) -> Result<Jwk> {
     to_jwk(pkcs1::decode(der)?)
 }
@@ -83,10 +75,6 @@ fn to_jwk(key: RsaPublicParts<'_>) -> Result<Jwk> {
 /// §4.1.2.7): the rsaEncryption + NULL AlgorithmIdentifier (RFC 3279
 /// §2.3.1) and the RSAPublicKey in a BIT STRING with no unused bits, the
 /// layout OpenSSL 4 emits (ADR 0018 §3).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn to_spki(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
     let rsa_public_key = to_pkcs1(key)?;
     spki::encode(&SpkiParts {
@@ -97,10 +85,6 @@ pub(crate) fn to_spki(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
 
 /// Exports an RSA public key as a DER PKCS#1 RSAPublicKey (RFC 8017
 /// App. A.1.1), the body of OpenSSL's `RSA PUBLIC KEY` PEM block.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn to_pkcs1(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
     pkcs1::encode_public(key.n(), key.e())
 }

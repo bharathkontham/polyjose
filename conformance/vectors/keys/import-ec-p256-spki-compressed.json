@@ -1,0 +1,17 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "PEM import of a P-256 SPKI with a compressed point (RFC 5480 §2.2), decompressed into x and y; expected JWK from openssl pkey -text.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PUBLIC KEY-----\nMDkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDIgAD4/tW9r66U158ob7wv5o8ljKr0F95\nGKj5GeZL3aknNPk=\n-----END PUBLIC KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "4_tW9r66U158ob7wv5o8ljKr0F95GKj5GeZL3aknNPk",
+      "y": "xDD1-yl9uzlsaGbKwYTBSZMJWiUkXxquI0m7ftzpYnU"
+    }
+  }
+}

@@ -47,10 +47,6 @@ const CURVES: [EcCurve; 4] = [
 /// zeroizing one. `Debug` redacts it and shows only the length of
 /// `public_key`.
 #[derive(Clone, Copy)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read by ec.rs, which the facade (T08) calls")
-)]
 pub(crate) struct EcPrivateKey<'a> {
     /// The contents of the `privateKey` OCTET STRING: the scalar d,
     /// big-endian (RFC 5915 §3). Secret. Its length is not checked here.
@@ -94,10 +90,6 @@ impl fmt::Debug for EcPrivateKey<'_> {
 /// [`Error::InvalidKey`] with a static detail for malformed input, and
 /// [`Error::UnsupportedAlgorithm`] for unsupported parameters. No input
 /// octet reaches an error.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by ec.rs, which the facade (T08) calls")
-)]
 pub(crate) fn decode(der: &[u8]) -> Result<EcPrivateKey<'_>> {
     let mut outer = Reader::new(der)?;
     let mut fields = outer.sequence()?;
@@ -172,10 +164,6 @@ fn read_parameters(contents: &[u8]) -> Result<EcCurve> {
 ///
 /// [`Error::InvalidKey`] only if the encoding would exceed
 /// [`der::MAX_INPUT_LEN`].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by ec.rs, which the facade (T08) calls")
-)]
 pub(crate) fn encode(key: &EcPrivateKey<'_>) -> Result<Zeroizing<Vec<u8>>> {
     let version = [EC_PRIVKEY_VER1];
     let named = key.parameters.map(oid::named_curve);

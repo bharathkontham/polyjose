@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects a 1024-bit RSA SPKI made by OpenSSL 4.1.0: RSA keys must be at least 2048 bits (RFC 7518 §3.3, §4.2; ADR 0007).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDezT5T6E/8AHWZflWMuu5IFWWa\nUxAgJ8ahqog53ifX8VeYkP598Hq1Ztx6fFs+SADQb2gkF8CDp73m4EfckyRE6SAh\n4pvdcZ1DIRIwdqtBvjjqUA8++6WTzdRIGYnc1kjbGKUeZbWnipqahrzjmR0yZfS5\n33+PNzTGbTgKjSdfewIDAQAB\n-----END PUBLIC KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
