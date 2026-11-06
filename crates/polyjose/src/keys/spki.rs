@@ -533,4 +533,82 @@ mod tests {
         expected.extend_from_slice(&key);
         assert_eq!(&der[..], &expected[..]);
     }
+
+    mod properties {
+        use std::sync::OnceLock;
+
+        use proptest::prelude::*;
+        use proptest::sample::Index;
+
+        use super::super::super::der::fixtures;
+        use super::{decode, encode, positive};
+
+        /// The positive SPKI fixtures, loaded once.
+        fn corpus() -> &'static [Vec<u8>] {
+            static CORPUS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+            CORPUS.get_or_init(|| {
+                positive()
+                    .into_iter()
+                    .map(|(dir, file, ..)| fixtures::load(dir, &file))
+                    .collect()
+            })
+        }
+
+        /// Never panics, and canonical: whatever decodes re-encodes to
+        /// exactly the input (X.690 §10).
+        fn canonical(input: &[u8]) -> Result<(), TestCaseError> {
+            if let Ok(parts) = decode(input) {
+                let again = encode(&parts);
+                prop_assert!(again.is_ok());
+                prop_assert_eq!(&again.unwrap()[..], input);
+            }
+            Ok(())
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+            #[test]
+            fn arbitrary_bytes_fail_or_are_canonical(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
+                canonical(&bytes)?;
+            }
+
+            #[test]
+            fn templated_keys_fail_or_are_canonical(
+                template in any::<Index>(),
+                key in proptest::collection::vec(any::<u8>(), 0..160),
+            ) {
+                // A real AlgorithmIdentifier and an arbitrary BIT STRING body:
+                // these decode whenever the BIT STRING is well-formed.
+                let (_, algorithm) = *template.get(&super::super::super::oid::ALGORITHM_IDENTIFIERS);
+                let mut body = algorithm.to_vec();
+                body.push(0x03);
+                body.extend_from_slice(&super::length(key.len()));
+                body.extend_from_slice(&key);
+                let mut der = vec![0x30];
+                der.extend_from_slice(&super::length(body.len()));
+                der.extend_from_slice(&body);
+                // X.690 §8.6.2: an initial octet of 0 is a valid key BIT STRING.
+                prop_assert_eq!(decode(&der).is_ok(), key.first() == Some(&0));
+                canonical(&der)?;
+            }
+
+            #[test]
+            fn single_byte_mutations_never_panic(fixture in any::<Index>(), at in any::<Index>(), byte in any::<u8>()) {
+                let mut der = fixture.get(corpus()).clone();
+                let i = at.index(der.len());
+                der[i] = byte;
+                canonical(&der)?;
+            }
+        }
+    }
+
+    /// DER length octets for `len` (X.690 §8.1.3), for building test input.
+    fn length(len: usize) -> Vec<u8> {
+        match len {
+            0..=0x7F => vec![u8::try_from(len).unwrap()],
+            0x80..=0xFF => vec![0x81, u8::try_from(len).unwrap()],
+            _ => vec![0x82, u8::try_from(len >> 8).unwrap(), (len & 0xFF) as u8],
+        }
+    }
 }

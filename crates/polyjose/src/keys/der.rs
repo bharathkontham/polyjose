@@ -1361,4 +1361,27 @@ mod tests {
             "DER unexpected tag"
         );
     }
+
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::super::{Reader, check_well_formed};
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+            /// The reader and the well-formedness walk return a result for
+            /// any input; neither panics nor recurses.
+            #[test]
+            fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..512), set_of in any::<bool>()) {
+                let _ = check_well_formed(&bytes, set_of);
+                let mut reader = Reader::new(&bytes).unwrap();
+                while let Ok(element) = reader.element() {
+                    prop_assert!(element.encoding.len() >= 2 + element.contents.len());
+                    let mut inner = Reader::new(element.contents).unwrap();
+                    let _ = (inner.integer(), inner.bit_string(), inner.oid(), inner.null());
+                }
+            }
+        }
+    }
 }

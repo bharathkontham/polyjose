@@ -621,4 +621,70 @@ mod tests {
         assert_eq!(back.private_key, &key);
         assert_eq!(back.public_key, Some(&public[..]));
     }
+
+    mod properties {
+        use std::sync::OnceLock;
+
+        use proptest::prelude::*;
+        use proptest::sample::Index;
+
+        use super::super::super::der::fixtures;
+        use super::{decode_with_attributes, encode_with_attributes, positive};
+
+        /// The positive PKCS#8 fixtures, loaded once.
+        fn corpus() -> &'static [Vec<u8>] {
+            static CORPUS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+            CORPUS.get_or_init(|| {
+                positive()
+                    .into_iter()
+                    .map(|(dir, file, ..)| fixtures::load(dir, &file))
+                    .collect()
+            })
+        }
+
+        /// Never panics, and canonical: whatever decodes re-encodes to
+        /// exactly the input (DER has one encoding per value, X.690 §10).
+        fn canonical(input: &[u8]) -> Result<(), TestCaseError> {
+            if let Ok((parts, attributes)) = decode_with_attributes(input) {
+                let again = encode_with_attributes(&parts, attributes);
+                prop_assert!(again.is_ok());
+                prop_assert_eq!(&again.unwrap()[..], input);
+            }
+            Ok(())
+        }
+
+        /// `contents` in a SEQUENCE with a correct header, so the cases get
+        /// past the outer framing.
+        fn framed(contents: &[u8]) -> Vec<u8> {
+            let mut out = vec![0x30];
+            match contents.len() {
+                len @ 0..=0x7F => out.push(u8::try_from(len).unwrap()),
+                len => out.extend_from_slice(&[0x81, u8::try_from(len).unwrap()]),
+            }
+            out.extend_from_slice(contents);
+            out
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+            #[test]
+            fn arbitrary_bytes_fail_or_are_canonical(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
+                canonical(&bytes)?;
+            }
+
+            #[test]
+            fn arbitrary_sequences_fail_or_are_canonical(bytes in proptest::collection::vec(any::<u8>(), 0..200)) {
+                canonical(&framed(&bytes))?;
+            }
+
+            #[test]
+            fn single_byte_mutations_never_panic(fixture in any::<Index>(), at in any::<Index>(), byte in any::<u8>()) {
+                let mut der = fixture.get(corpus()).clone();
+                let i = at.index(der.len());
+                der[i] = byte;
+                canonical(&der)?;
+            }
+        }
+    }
 }
