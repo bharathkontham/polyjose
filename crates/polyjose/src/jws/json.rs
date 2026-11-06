@@ -8,7 +8,7 @@
 //!
 //! # Verification, step by step (ADR 0026 §2, §3)
 //!
-//! [`verify_json`] owns steps 1–3 and the I-JSON part of step 4; the rest
+//! [`verify_json`] owns steps 1–3 and the parsing part of step 4; the rest
 //! is the shared chain of `process.rs`. Each step runs over **every**
 //! signature before the next step starts, so a JWS that is wrong in
 //! several places fails identically whatever the order of its signatures:
@@ -19,13 +19,21 @@
 //!    duplicate members anywhere in the document → `InvalidJson`;
 //! 3. base64url of each `protected` and `signature` (RFC 7515 §5.2 steps
 //!    2, 7) → `InvalidBase64`;
-//! 4. each protected header is a JSON object (RFC 7515 §5.2 step 3)
-//!    → `InvalidJson`; then each signature's header structure
-//!    (`JoseHeader::new`, RFC 7515 §5.2 step 4), then `b64` agreement
-//!    across signatures (`common_b64`, RFC 7797 §3) → `InvalidHeader`;
-//!    then the payload: base64url-decoded unless `b64` is `false`
-//!    (RFC 7515 §5.2 step 6) → `InvalidBase64`. The payload is decoded
-//!    last because only the headers say whether it is encoded;
+//! 4. in this order, each over every signature:
+//!    - each protected header is a JSON object (RFC 7515 §5.2 step 3;
+//!      duplicates included, ADR 0041 §1) → `InvalidJson`;
+//!    - every registered parameter of both headers has its type
+//!      (`Header::from_object`) → `InvalidHeader`;
+//!    - the payload, base64url-decoded unless the protected headers' `b64`
+//!      is `false` (RFC 7515 §5.2 step 6, RFC 7797 §3) → `InvalidBase64`.
+//!      It waits until here because only the headers say whether it is
+//!      encoded, and runs before the structure rules, as in `compact.rs`
+//!      (lead ruling on ADR 0026 §2 steps 3–4). If the protected headers
+//!      disagree on `b64` there is no single encoding, so this is skipped
+//!      and the disagreement below decides;
+//!    - each signature's header structure (`JoseHeader::new`, RFC 7515
+//!      §5.2 step 4, §4.1.11), then `b64` agreement across signatures
+//!      (`common_b64`, RFC 7797 §3) → `InvalidHeader`;
 //! 5. to 9. per signature, in array order, until one verifies
 //!    (`verify_signature`, RFC 7515 §5.2 step 8); if none does, the
 //!    furthest-progressed error (`furthest`, ADR 0026 §3).
@@ -302,25 +310,50 @@ pub(crate) fn verify_json_with(
         .map(|(protected, _)| protected.as_ref().map(|p| protected_object(p)).transpose())
         .collect::<Result<Vec<_>>>()?;
 
-    // Step 4, header structure (RFC 7515 §5.2 step 4), every signature,
-    // then `b64` agreement across them (RFC 7797 §3).
-    let mut headers = Vec::with_capacity(signatures.len());
+    // Step 4, parameter types (Header::from_object → InvalidHeader), every
+    // header of every signature.
+    let mut typed = Vec::with_capacity(signatures.len());
     let mut signed = Vec::with_capacity(signatures.len());
     for ((raw, protected), (_, signature)) in
         signatures.into_iter().zip(protected_objects).zip(decoded)
     {
         let protected = protected.map(Header::from_object).transpose()?;
         let unprotected = raw.header.map(Header::from_object).transpose()?;
-        headers.push(JoseHeader::new(protected, unprotected)?);
+        typed.push((protected, unprotected));
         signed.push((raw.protected, signature));
     }
-    let b64 = common_b64(&headers)?;
 
-    // The JWS Payload (RFC 7515 §5.2 step 6; RFC 7797 §3; Appendix F).
-    let payload = match payload {
-        Payload::Attached(text) if b64 => b64url_decode(&text)?,
-        Payload::Attached(text) => text.as_bytes().to_vec(),
-        Payload::Detached(octets) => octets.to_vec(),
+    // Step 3 for the payload (RFC 7515 §5.2 step 6): whether it is
+    // base64url at all is the protected headers' `b64` (RFC 7797 §3), so it
+    // runs now, before the structure rules, as in compact.rs. If the
+    // protected headers disagree there is no one encoding to check; the
+    // disagreement is reported below instead (InvalidHeader).
+    let encodings: Vec<bool> = typed
+        .iter()
+        .map(|(protected, _)| protected.as_ref().and_then(|h| h.b64) != Some(false))
+        .collect();
+    let payload = match encodings.split_first() {
+        Some((&b64, rest)) if rest.iter().all(|&other| other == b64) => Some(match payload {
+            Payload::Attached(text) if b64 => b64url_decode(&text)?,
+            Payload::Attached(text) => text.as_bytes().to_vec(),
+            Payload::Detached(octets) => octets.to_vec(),
+        }),
+        _ => None,
+    };
+
+    // Step 4, header structure (RFC 7515 §5.2 step 4), every signature,
+    // then `b64` agreement across them (RFC 7797 §3, ADR 0026 §3).
+    let headers = typed
+        .into_iter()
+        .map(|(protected, unprotected)| JoseHeader::new(protected, unprotected))
+        .collect::<Result<Vec<_>>>()?;
+    let b64 = common_b64(&headers)?;
+    // `JoseHeader::new` keeps `b64` out of unprotected headers, so each
+    // union's `b64` is its protected header's, and `common_b64` passing
+    // means `encodings` agreed and the payload was decoded. Fail closed
+    // regardless.
+    let Some(payload) = payload else {
+        return Err(Error::InvalidHeader("b64 differs between signatures"));
     };
 
     // Steps 5-9, per signature in array order, first success wins
@@ -952,6 +985,75 @@ mod tests {
         ] {
             assert_eq!(code(verify(&general(&entries))), expected, "{entries:?}");
         }
+    }
+
+    #[test]
+    fn payload_base64_runs_after_header_parsing_before_header_structure() {
+        // Lead ruling on ADR 0026 §2 steps 3-4, as in compact.rs: the
+        // payload's encoding depends on `b64`, so it is decoded once every
+        // protected header has parsed (and its parameters have their
+        // types), and before the structure rules.
+        let bad_payload = |entries: &[String]| {
+            general(entries).replacen(
+                &format!(r#""payload":"{PAYLOAD_B64}""#),
+                r#""payload":"JC4wMg=""#,
+                1,
+            )
+        };
+        let good = members(Some(P_HS256), None, SigningAlg::HS256);
+        let no_alg = members(Some(r#"{"kid":"k"}"#), None, SigningAlg::HS256);
+        let overlap = members(Some(P_HS256), Some(r#"{"alg":"HS256"}"#), SigningAlg::HS256);
+        let unknown_crit = members(
+            Some(r#"{"alg":"HS256","crit":["exp"],"exp":1}"#),
+            None,
+            SigningAlg::HS256,
+        );
+        let not_json = members(Some("{"), None, SigningAlg::HS256);
+        let mistyped = members(
+            Some(r#"{"alg":"HS256","b64":"no"}"#),
+            None,
+            SigningAlg::HS256,
+        );
+        let mistyped_unprotected = members(Some(P_HS256), Some(r#"{"kid":1}"#), SigningAlg::HS256);
+        for (entries, expected) in [
+            (vec![good.clone()], "InvalidBase64"),
+            (vec![good.clone(), no_alg], "InvalidBase64"),
+            (vec![overlap, good.clone()], "InvalidBase64"),
+            (vec![unknown_crit], "InvalidBase64"),
+            (vec![good.clone(), not_json], "InvalidJson"),
+            (vec![good.clone(), mistyped], "InvalidHeader"),
+            (vec![mistyped_unprotected, good], "InvalidHeader"),
+        ] {
+            assert_eq!(
+                code(verify(&bad_payload(&entries))),
+                expected,
+                "{entries:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn b64_disagreement_wins_over_the_payload_encoding() {
+        // When the protected headers disagree on `b64` (RFC 7797 §3) there
+        // is no single payload encoding to check, so the disagreement
+        // (InvalidHeader) is reported, never InvalidBase64.
+        let p_false = enc(P_B64_FALSE);
+        let unencoded = members_signed(
+            Some(P_B64_FALSE),
+            None,
+            &sig(SigningAlg::HS256, &p_false, "$.02"),
+        );
+        let encoded = members(Some(P_HS256), None, SigningAlg::HS256);
+        for entries in [[unencoded.clone(), encoded.clone()], [encoded, unencoded]] {
+            let jws = general(&entries).replacen(PAYLOAD_B64, "$.02", 1);
+            assert_eq!(code(verify(&jws)), "InvalidHeader");
+        }
+        // `b64` in the unprotected header does not decide the encoding:
+        // the payload is checked as base64url, then the placement fails.
+        let misplaced = members(Some(P_HS256), Some(r#"{"b64":false}"#), SigningAlg::HS256);
+        let jws = flattened(&misplaced).replacen(PAYLOAD_B64, "$.02", 1);
+        assert_eq!(code(verify(&jws)), "InvalidBase64");
+        assert_eq!(code(verify(&flattened(&misplaced))), "InvalidHeader");
     }
 
     // ---- Detached content (RFC 7515 Appendix F) ----
