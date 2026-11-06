@@ -263,6 +263,41 @@ mod tests {
         ));
     }
 
+    /// An Ed25519 `x` encoding y = p + 3 with sign bit 0, where
+    /// p = 2^255 − 19 (RFC 8032 §5.1): the same octets as the conformance
+    /// vector `jwk-thumbprint/reject-ed25519-x-non-canonical.json`.
+    const NON_CANONICAL: &str = "8P_______________________________________38";
+
+    #[test]
+    fn a_non_canonical_key_is_refused_at_verify_as_at_import() {
+        // RFC 8032 §5.1.3 step 1: "If the resulting y >= p, decoding
+        // fails". ed25519-dalek's `from_bytes` follows ZIP-215 and accepts
+        // y ≥ p, so only the re-encode round trip catches this. JWK import
+        // refuses the key (ADR 0041 §4); the key is built unchecked to show
+        // verify makes the same call instead of relying on import. Every
+        // y ≥ p that decodes gives a point of small order or with a torsion
+        // component (checked with RFC 8032 §5.1 arithmetic in Python), so
+        // the torsion check also stops this key; the point here is that
+        // verify and import share one check and answer identically.
+        let x = b64url_decode(NON_CANONICAL).unwrap();
+        assert!(
+            VerifyingKey::from_bytes(&<[u8; 32]>::try_from(&x[..]).unwrap()).is_ok(),
+            "the probe needs a key that ZIP-215 decoding accepts"
+        );
+        let jwk = format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{NON_CANONICAL}"}}"#);
+        let import = Jwk::from_json(jwk.as_bytes()).err();
+        assert!(matches!(import, Some(Error::InvalidKey(_))), "{import:?}");
+
+        let key = Jwk::okp_unchecked(OkpCurve::Ed25519, &x, None);
+        for alg in [A::EdDSA, A::Ed25519] {
+            assert_eq!(
+                verify(&alg, &key, A4_SIGNING_INPUT, &a4_signature()).err(),
+                import,
+                "{alg}"
+            );
+        }
+    }
+
     #[test]
     fn the_probe_would_pass_a_lenient_verifier() {
         // Shows the probe above tests something: ed25519-dalek's
