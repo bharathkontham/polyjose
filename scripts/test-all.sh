@@ -28,7 +28,7 @@ for p in "${platforms[@]}"; do
       # Same deny invocation as CI: full graph, dev-dependencies and every feature included.
       if have cargo && have cargo-deny; then run deny cargo deny --all-features check
       else record deny "SKIPPED (cargo-deny missing; CI runs it)"; fi
-      # No binding may enable polyjose's test-vectors feature (ADR 0005).
+      # No binding may enable polyjose's insecure-test-vectors feature (ADR 0005).
       if have cargo; then run test-vectors-off scripts/check-test-vectors-off.sh
       else record test-vectors-off "SKIPPED (cargo missing)"; fi
       # The core's runtime tree matches deps-allowlist.txt and CREDITS.md (ADR 0016, ADR 0020).

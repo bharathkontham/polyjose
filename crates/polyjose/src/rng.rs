@@ -15,9 +15,10 @@
 //! the WASM binding selects with getrandom's `wasm_js` crate feature (see
 //! `bindings/wasm/Cargo.toml`).
 //!
-//! The only other byte source is `test_vectors::FixedRng`, compiled for
-//! polyjose's own tests and behind the off-by-default `test-vectors`
-//! feature, which no binding may enable (`scripts/check-test-vectors-off.sh`).
+//! The only other byte source is `insecure_test_vectors::FixedRng`, compiled
+//! for polyjose's own tests and behind the off-by-default
+//! `insecure-test-vectors` feature, which no binding may enable
+//! (`scripts/check-test-vectors-off.sh`).
 
 use zeroize::Zeroize;
 
@@ -62,11 +63,11 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 /// is not random. It exists only so tests can reproduce outputs that depend
 /// on "random" values, such as the CEKs and IVs of the RFC 7520 JWE
 /// examples. Outside polyjose's own unit tests it exists only with the
-/// off-by-default `test-vectors` cargo feature (ADR 0005), and
+/// off-by-default `insecure-test-vectors` cargo feature (ADR 0005), and
 /// `scripts/check-test-vectors-off.sh` fails if any binding enables it.
 ///
 /// ```
-/// use polyjose::test_vectors::FixedRng;
+/// use polyjose::insecure_test_vectors::FixedRng;
 ///
 /// let mut rng = FixedRng::new([0x01, 0x02, 0x03]);
 /// let mut iv = [0u8; 2];
@@ -75,8 +76,8 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 /// assert!(rng.fill(&mut [0u8; 2]).is_err()); // only one byte is left
 /// # Ok::<(), polyjose::Error>(())
 /// ```
-#[cfg(any(test, feature = "test-vectors"))]
-pub mod test_vectors {
+#[cfg(any(test, feature = "insecure-test-vectors"))]
+pub mod insecure_test_vectors {
     use zeroize::{Zeroize, Zeroizing};
 
     use crate::{Error, Result};

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails if any binding crate's dependency graph enables polyjose's `test-vectors` feature.
+# Fails if any binding crate's dependency graph enables polyjose's `insecure-test-vectors` feature.
 #
 # That feature exposes a deterministic byte source for reproducing published test vectors and
 # must never ship (ADR 0005). Every workspace package under bindings/ is checked on every target
@@ -30,10 +30,10 @@ for pkg in "${pkgs[@]}"; do
   if ! grep -q 'polyjose v' <<<"$tree"; then
     echo "FAIL: $pkg does not depend on polyjose; check the script"; status=1; continue
   fi
-  if grep -n 'test-vectors' <<<"$tree"; then
-    echo "FAIL: $pkg enables polyjose's test-vectors feature (ADR 0005)"; status=1
+  if grep -n 'feature "insecure-test-vectors"' <<<"$tree"; then
+    echo "FAIL: $pkg enables polyjose's insecure-test-vectors feature (ADR 0005)"; status=1
   else
-    echo "ok: $pkg does not enable test-vectors"
+    echo "ok: $pkg does not enable insecure-test-vectors"
   fi
 done
 exit $status
