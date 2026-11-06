@@ -193,7 +193,9 @@ impl From<Object> for Value {
 /// order, so the serializer reproduces it. Lookups are linear, which suits
 /// the small objects JOSE uses.
 ///
-/// Equality ignores member order (RFC 8259 §4: an object is unordered).
+/// Equality ignores member order (RFC 8259 §4: an object is unordered) and
+/// is O(n log n) in the member count, so comparing untrusted objects is not
+/// quadratic.
 #[derive(Debug, Clone, Default)]
 pub struct Object {
     members: Vec<(Zeroizing<String>, Value)>,
@@ -301,13 +303,32 @@ impl Zeroize for Object {
 impl ZeroizeOnDrop for Object {}
 
 impl PartialEq for Object {
-    /// Order-insensitive: same names, and equal values for each name.
+    /// Order-insensitive (RFC 8259 §4: an object is unordered): same names,
+    /// and equal values for each name.
+    ///
+    /// Objects may come from untrusted input, so this is O(n log n), not
+    /// O(n²): each side's members are sorted by name, as references (no
+    /// name or value is copied), and compared pairwise. Names are unique
+    /// within each object, so the sorted names match pairwise exactly when
+    /// both objects have the same set of names.
     fn eq(&self, other: &Object) -> bool {
         self.len() == other.len()
             && self
-                .members
-                .iter()
-                .all(|(name, value)| other.get(name) == Some(value))
+                .sorted_by_name()
+                .into_iter()
+                .zip(other.sorted_by_name())
+                .all(|((a_name, a_value), (b_name, b_value))| {
+                    same_name(a_name, b_name) && a_value == b_value
+                })
+    }
+}
+
+impl Object {
+    /// References to the members, ordered by name ([`cmp_names`]).
+    fn sorted_by_name(&self) -> Vec<&(Zeroizing<String>, Value)> {
+        let mut members: Vec<_> = self.members.iter().collect();
+        members.sort_unstable_by(|(a, _), (b, _)| cmp_names(a, b));
+        members
     }
 }
 
@@ -623,6 +644,33 @@ mod tests {
         let ((_, inner), outer) =
             Object::count_name_comparisons(|| Object::count_name_comparisons(|| o.contains("kty")));
         assert_eq!((inner, outer), (1, 1));
+    }
+
+    #[test]
+    fn object_equality_pairs_values_by_name_at_every_level() {
+        let inner = |first: &str, second: &str| {
+            let mut o = Object::new();
+            o.insert(first, Value::from(first));
+            o.insert(second, Value::from(second));
+            Value::from(o)
+        };
+        let mut a = Object::new();
+        a.insert("x", int(1));
+        a.insert("y", int(2));
+        a.insert("nested", inner("p", "q"));
+        let mut b = Object::new();
+        b.insert("nested", inner("q", "p"));
+        b.insert("y", int(2));
+        b.insert("x", int(1));
+        assert_eq!(a, b);
+
+        // The same values under swapped names are a different object.
+        let mut swapped = b.clone();
+        swapped.insert("x", int(2));
+        swapped.insert("y", int(1));
+        assert_ne!(a, swapped);
+        assert_eq!(Object::new(), Object::new());
+        assert_ne!(a, Object::new());
     }
 
     /// `c · n · ⌈log2 n⌉` with `c = 4`: the most work an O(n log n) path
