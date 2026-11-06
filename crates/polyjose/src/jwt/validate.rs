@@ -4,6 +4,7 @@
 use core::cmp::Ordering;
 
 use crate::error::{Error, Result};
+use crate::json::Value;
 
 use super::claims::REGISTERED_CLAIMS;
 use super::typ::ACCESS_TOKEN_REQUIRED_CLAIMS;
@@ -15,12 +16,17 @@ use super::{Claims, NumericDate, Policy};
 /// diagnostic only; the code is the contract (ADR 0027 §9).
 const OTHER_REQUIRED_CLAIM: &str = "required";
 
+/// The RFC 9068 §2.2 client identifier claim, which
+/// [`Policy::access_token`] requires to be a JSON string (ADR 0052).
+const CLIENT_ID: &str = "client_id";
+
 /// Validates `c` against `p`, in the ADR 0027 §9 order; the first failing
 /// step decides the error:
 ///
 /// - J4: required-claim presence, in the order `iss, sub, aud, exp, nbf,
-///   iat, jti`, then the policy's other required names in order →
-///   [`Error::InvalidClaim`];
+///   iat, jti`, then the policy's other required names in order, and
+///   under [`Policy::access_token`] a JSON string `client_id`
+///   (ADR 0052) → [`Error::InvalidClaim`];
 /// - J5: `exp` (RFC 7519 §4.1.4) → [`Error::TokenExpired`];
 /// - J6: `nbf` (RFC 7519 §4.1.5) → [`Error::TokenNotYetValid`];
 /// - J7: `iat` with a maximum age (RFC 7519 §4.1.6) → `InvalidClaim`;
@@ -224,7 +230,9 @@ fn iat_outside_window(iat: &NumericDate, now: i64, max_age: u32, leeway: u32) ->
     iat.cmp_secs(latest) == Ordering::Greater || iat.cmp_secs(earliest) == Ordering::Less
 }
 
-/// J4 (ADR 0027 §9): every required claim is present, with any value.
+/// J4 (ADR 0027 §9): every required claim is present, with any value,
+/// except `client_id` under [`Policy::access_token`], which must be a
+/// JSON string (ADR 0052).
 ///
 /// A registered claim is required when the policy names it in
 /// [`require`](Policy::require) or implies it (ADR 0027 §3–§4):
@@ -238,8 +246,14 @@ fn iat_outside_window(iat: &NumericDate, now: i64, max_age: u32, leeway: u32) ->
 ///
 /// The registered claims are checked in the order `iss, sub, aud, exp,
 /// nbf, iat, jti`, then the other required names in the order given. Any
-/// JSON value counts as present (ADR 0027 §4; RFC 9068 §2.2 uses this for
-/// `client_id`). An empty `aud` array is present; it then fails J10.
+/// JSON value counts as present (ADR 0027 §4), with one exception
+/// (ADR 0052, superseding ADR 0027 §4 for this claim): under
+/// [`Policy::access_token`], `client_id` must be a JSON string, `""`
+/// included. RFC 9068 §2.2 defines it by RFC 8693 §4.3 as the client
+/// identifier of RFC 6749 §2.2, "a unique string". A non-string
+/// `client_id` fails at the same position as a missing one. Plain
+/// [`require`](Policy::require)`("client_id")` keeps any JSON type. An
+/// empty `aud` array is present; it then fails J10.
 ///
 /// # Errors
 ///
@@ -270,11 +284,22 @@ fn check_presence(c: &Claims, p: &Policy<'_>) -> Result<()> {
         }
     }
     for name in required {
-        if !REGISTERED_CLAIMS.contains(&name.as_str()) && c.get(name).is_none() {
+        if !REGISTERED_CLAIMS.contains(&name.as_str()) && !satisfies(c.get(name), name, p) {
             return Err(Error::InvalidClaim(detail(name)));
         }
     }
     Ok(())
+}
+
+/// Whether `value`, the claim `name` in the token, meets J4: present,
+/// and a JSON string when `name` is `client_id` under
+/// [`Policy::access_token`] (ADR 0052; RFC 9068 §2.2, RFC 6749 §2.2).
+fn satisfies(value: Option<&Value>, name: &str, p: &Policy<'_>) -> bool {
+    match value {
+        None => false,
+        Some(Value::String(_)) => true,
+        Some(_) => !(name == CLIENT_ID && p.requires_string_client_id()),
+    }
 }
 
 /// The `InvalidClaim` detail naming `name`: the name itself when it is an
@@ -840,6 +865,138 @@ mod tests {
         let mut wrong = c;
         wrong.aud = one("https://other");
         assert_eq!(validate_claims(&wrong, &p), Err(Error::InvalidClaim("aud")));
+    }
+
+    /// Every RFC 9068 §2.2 claim, valid for
+    /// `Policy::access_token(.., &["https://as"], &["https://rs"])` at
+    /// `now`, with `client_id` set to `client_id`.
+    fn access_token_claims(now: i64, client_id: Value) -> Claims {
+        let mut c = Claims::new();
+        c.iss = Some("https://as".into());
+        c.exp = date(now + 300);
+        c.aud = one("https://rs");
+        c.sub = Some("5ba552d67".into());
+        c.iat = date(now - 10);
+        c.jti = Some("dbe39bf3a3ba4238a513f51d6e1691c4".into());
+        c.insert("client_id", client_id).unwrap();
+        c
+    }
+
+    /// The JSON values that are not strings, one per RFC 8259 §3 type.
+    fn non_strings() -> [Value; 5] {
+        let mut object = Object::new();
+        object.insert("id", "s6BhdRkqt3");
+        [
+            Value::Null,
+            Value::Number(Number::from_i64(5).unwrap()),
+            Value::Bool(true),
+            Value::from(vec![Value::from("a")]),
+            Value::from(object),
+        ]
+    }
+
+    #[test]
+    fn access_token_policy_requires_client_id_to_be_a_string() {
+        // ADR 0052 §1: RFC 9068 §2.2 → RFC 8693 §4.3 → RFC 6749 §2.2 (the
+        // client identifier is "a unique string"). Any string passes,
+        // the empty one included; every other JSON type fails.
+        let now = 1_300_819_380;
+        let clock = FixedClock(now);
+        let p = Policy::access_token(&clock, ES256, &["https://as"], &["https://rs"]).unwrap();
+        for id in ["s6BhdRkqt3", ""] {
+            assert_eq!(
+                validate_claims(&access_token_claims(now, Value::from(id)), &p),
+                Ok(()),
+                "{id:?}"
+            );
+        }
+        for value in non_strings() {
+            assert_eq!(
+                validate_claims(&access_token_claims(now, value.clone()), &p),
+                Err(Error::InvalidClaim("client_id")),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_string_client_id_fails_at_its_j4_position() {
+        // ADR 0052 §2, ADR 0027 §9: the string check is part of J4,
+        // after the registered claims and before every later step, so
+        // the clock is never read for it (ADR 0028).
+        let now = ORDER_NOW;
+        let p = Policy::access_token(&PanicClock, ES256, &["https://as"], &["https://rs"]).unwrap();
+        for value in non_strings() {
+            // A registered claim missing too: it is reported first.
+            let mut c = access_token_claims(now, value.clone());
+            c.jti = None;
+            assert_eq!(
+                validate_claims(&c, &p),
+                Err(Error::InvalidClaim("jti")),
+                "{value:?}"
+            );
+            // Expired, not yet valid, wrong issuer, subject and audience
+            // as well: J4 still decides, before any clock read.
+            let mut c = access_token_claims(now, value.clone());
+            c.exp = date(now - 3600);
+            c.nbf = date(now + 3600);
+            c.iss = Some("https://evil".into());
+            c.aud = one("https://other");
+            assert_eq!(
+                validate_claims(&c, &p),
+                Err(Error::InvalidClaim("client_id")),
+                "{value:?}"
+            );
+        }
+        // Among the caller's other names, `client_id` keeps its place:
+        // first required, so checked before a later `x-tenant`.
+        let p = p.require("x-tenant");
+        let c = access_token_claims(now, Value::Null);
+        assert_eq!(
+            validate_claims(&c, &p),
+            Err(Error::InvalidClaim("client_id"))
+        );
+    }
+
+    #[test]
+    fn builder_calls_after_the_profile_keep_the_string_rule() {
+        // ADR 0052 §4: no opt-out.
+        let now = 1_300_819_380;
+        let clock = FixedClock(now);
+        let p = Policy::access_token(&clock, ES256, &["https://as"], &["https://rs"])
+            .unwrap()
+            .require("client_id")
+            .any_typ()
+            .leeway(0)
+            .unwrap();
+        assert_eq!(
+            validate_claims(&access_token_claims(now, Value::Null), &p),
+            Err(Error::InvalidClaim("client_id"))
+        );
+    }
+
+    #[test]
+    fn plain_require_client_id_keeps_any_json_type() {
+        // ADR 0052 §3: the string rule belongs to the profile, not the
+        // name; a `Policy::new` policy with the same claims and
+        // requirements accepts every type (ADR 0027 §4).
+        let now = 1_300_819_380;
+        let clock = FixedClock(now);
+        let p = Policy::new(&clock, ES256)
+            .unwrap()
+            .issuer("https://as")
+            .audience("https://rs")
+            .expect_typ("at+jwt");
+        let p = ACCESS_TOKEN_REQUIRED_CLAIMS
+            .iter()
+            .fold(p, |p, claim| p.require(claim));
+        for value in non_strings() {
+            assert_eq!(
+                validate_claims(&access_token_claims(now, value.clone()), &p),
+                Ok(()),
+                "{value:?}"
+            );
+        }
     }
 
     /// The time of the ordering tests.
