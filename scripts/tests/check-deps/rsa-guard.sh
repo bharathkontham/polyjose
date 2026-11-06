@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Negative test of the ADR 0021 guard in scripts/check-deps.sh (checks 9-11), which deny.toml's
+# ignore of RUSTSEC-2023-0071 depends on. Each change below is made in a copy of the tree and must
+# make check-deps.sh fail with the guard's own message (and no other check's):
+#   - RSA private-key and signing types and an Oaep decryption in crates/polyjose/src, and the
+#     same in a binding (bindings/**);
+#   - a sha1 dependency (also when sha1 is allowlisted and credited, so check 10 alone catches it);
+#   - an rsa feature.
+# Legitimate look-alikes must pass: an ECDSA SigningKey and a cbc Decryptor in files that do not
+# use the rsa crate, a child module named `rsa` reached as `self::rsa::`, and the typed RSA
+# VerifyingKey. The unchanged tree must pass.
+# Usage: scripts/tests/check-deps/rsa-guard.sh
+set -euo pipefail
+export LC_ALL=C
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"
+
+# Every FAIL line of a source case comes from check 9.
+src_fail='^FAIL: RSA private-key or signing use'
+jws=crates/polyjose/src/jws.rs
+
+new_case clean
+expect_pass "unchanged tree"
+
+# --- Check 9: sources ----------------------------------------------------------------------------
+new_case private-key
+append_to "$jws" 'use rsa::RsaPrivateKey;'
+expect_fail "use rsa::RsaPrivateKey" "$jws:[0-9]+: RsaPrivateKey" "$src_fail"
+
+new_case private-key-new
+append_to "$jws" 'fn k() { let _ = rsa::RsaPrivateKey::new(&mut rng, 2048); }'
+expect_fail "RsaPrivateKey::new" "$jws:[0-9]+: RsaPrivateKey" "$src_fail"
+
+new_case pkcs1v15-signing-key
+append_to "$jws" 'fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
+expect_fail "rsa::pkcs1v15::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case pss-signing-key-import
+append_to "$jws" 'use rsa::pss::{SigningKey, VerifyingKey};'
+expect_fail "use rsa::pss::{SigningKey, ...}" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case blinded-signing-key
+append_to "$jws" 'type K = rsa::pss::BlindedSigningKey<rsa::sha2::Sha256>;'
+expect_fail "BlindedSigningKey" "$jws:[0-9]+: BlindedSigningKey" "$src_fail"
+
+new_case oaep-decrypt
+append_to crates/polyjose/src/jwe.rs 'fn d<K>(k: &K, ek: &[u8]) { let _cek = k.decrypt(rsa::Oaep::<rsa::sha2::Sha256>::new(), ek); }'
+expect_fail "Oaep decrypt call" "crates/polyjose/src/jwe.rs:[0-9]+: a decrypt call in a file that uses the rsa crate" "$src_fail"
+
+new_case decrypting-key
+append_to crates/polyjose/src/jwe.rs 'type D = rsa::oaep::DecryptingKey<rsa::sha2::Sha256>;'
+expect_fail "oaep::DecryptingKey" "crates/polyjose/src/jwe.rs:[0-9]+: DecryptingKey" "$src_fail"
+
+new_case decryptor-trait
+append_to crates/polyjose/src/jwe.rs 'use rsa::traits::Decryptor;'
+expect_fail "rsa::traits::Decryptor" "crates/polyjose/src/jwe.rs:[0-9]+: Decryptor in a file that uses the rsa crate" "$src_fail"
+
+new_case randomized-decryptor
+append_to crates/polyjose/src/jwe.rs 'use rsa::traits::RandomizedDecryptor;'
+expect_fail "RandomizedDecryptor" "crates/polyjose/src/jwe.rs:[0-9]+: RandomizedDecryptor" "$src_fail"
+
+new_case pkcs1v15-sign-scheme
+append_to "$jws" 'fn v(k: &rsa::RsaPublicKey) { let _ = k.verify(rsa::Pkcs1v15Sign::new::<rsa::sha2::Sha256>(), &[], &[]); }'
+expect_fail "Pkcs1v15Sign scheme" "$jws:[0-9]+: Pkcs1v15Sign" "$src_fail"
+
+new_case pss-scheme
+append_to "$jws" 'fn v(k: &rsa::RsaPublicKey) { let _ = k.verify(rsa::Pss::new::<rsa::sha2::Sha256>(), &[], &[]); }'
+expect_fail "Pss scheme struct" "$jws:[0-9]+: Pss: use the typed" "$src_fail"
+
+new_case rsa1-5
+append_to crates/polyjose/src/jwe.rs 'fn e(k: &rsa::RsaPublicKey) { let _ = k.encrypt(&mut r, rsa::Pkcs1v15Encrypt, &[]); }'
+expect_fail "Pkcs1v15Encrypt (RSA1_5)" "crates/polyjose/src/jwe.rs:[0-9]+: Pkcs1v15Encrypt" "$src_fail"
+
+new_case reexport
+append_to crates/polyjose/src/jwk.rs 'pub(crate) use rsa::pkcs1v15;'
+expect_fail "pub(crate) use rsa::..." "crates/polyjose/src/jwk.rs:[0-9]+: pub use rsa" "$src_fail"
+
+new_case alias
+append_to crates/polyjose/src/jwk.rs 'use rsa as r;'
+expect_fail "use rsa as r" "crates/polyjose/src/jwk.rs:[0-9]+: use rsa / use rsa as" "$src_fail"
+
+new_case binding
+append_to bindings/wasm/src/lib.rs 'use rsa::RsaPrivateKey;'
+expect_fail "RsaPrivateKey in a binding" "bindings/wasm/src/lib.rs:[0-9]+: RsaPrivateKey" "$src_fail"
+
+new_case binding-new-file
+append_to bindings/ffi/src/sign/rsa.rs 'pub fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
+expect_fail "rsa SigningKey in a new binding file" "bindings/ffi/src/sign/rsa.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+# Look-alikes that are not RSA private-key use.
+new_case look-alikes
+append_to crates/polyjose/src/jws/ecdsa.rs 'fn s(k: &p256::ecdsa::SigningKey) {}'
+append_to crates/polyjose/src/jwe/enc_cbc_hmac.rs 'type D = cbc::Decryptor<aes::Aes128>; fn f(c: &D) { c.decrypt(); }'
+append_to crates/polyjose/src/jws/mod.rs 'mod rsa; fn v() { self::rsa::verify(); } fn s(k: &ed25519_dalek::SigningKey) {}'
+append_to crates/polyjose/src/jws/rsa.rs 'use rsa::pkcs1v15::VerifyingKey; use rsa::pss::VerifyingKey as PssKey; use rsa::RsaPublicKey;'
+expect_pass "ECDSA/EdDSA SigningKey, cbc Decryptor, self::rsa:: and the typed RSA VerifyingKey"
+
+# --- Check 10: sha1 --------------------------------------------------------------------------------
+new_case sha1
+add_core_dependency 'sha1 = { version = "0.11", default-features = false }'
+expect_fail "sha1 dependency" "^FAIL: sha1 is in the core's tree" \
+  "^FAIL: (sha1 is in the core's tree|the core's tree \\(normal and build dependencies\\) contains crates)"
+
+new_case sha1-allowlisted
+add_core_dependency 'sha1 = { version = "0.11", default-features = false }'
+replace_in deps-allowlist.txt $'\nsha2\n' $'\nsha2\nsha1\n'
+printf '\n### `sha1`\n\nInjected by scripts/tests/check-deps/rsa-guard.sh.\n' >>"$case_dir/CREDITS.md"
+expect_fail "sha1 dependency, allowlisted and credited" "^FAIL: sha1 is in the core's tree" "^FAIL: sha1 is in the core's tree"
+
+# --- Check 11: rsa features ------------------------------------------------------------------------
+new_case rsa-feature
+replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.20", default-features = false }' \
+  'rsa = { version = "=0.10.0-rc.20", default-features = false, features = ["hazmat"] }'
+expect_fail "rsa feature" "^  - rsa 0\\.10\\.0-rc\\.20 with features: hazmat$" "^FAIL: rsa must be built with no features"
+
+finish

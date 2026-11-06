@@ -108,3 +108,25 @@ finish() {
   echo "$((tests_run - tests_failed))/$tests_run cases passed"
   [ "$tests_failed" -eq 0 ]
 }
+
+# append_to <path in the copy> <text>: appends the text (and a newline) to a file of the copy,
+# creating it if needed.
+append_to() {
+  mkdir -p "$(dirname "$case_dir/$1")" || lib_die "could not create the directory of $1"
+  printf '%s\n' "$2" >>"$case_dir/$1" || lib_die "could not write $1 in the copy"
+}
+
+# replace_in <path in the copy> <old> <new>: replaces the one occurrence of <old>, then relocks.
+replace_in() {
+  python3 -I -c '
+import sys
+path, old, new = sys.argv[1:4]
+with open(path, encoding="utf-8") as f:
+    text = f.read()
+if text.count(old) != 1:
+    sys.exit("expected exactly one %r in %s" % (old, path))
+with open(path, "w", encoding="utf-8") as f:
+    f.write(text.replace(old, new))
+' "$case_dir/$1" "$2" "$3" || lib_die "could not edit $1 in the copy"
+  relock
+}
