@@ -666,4 +666,72 @@ mod tests {
         assert_eq!((run, skipped, summary.tests), (197, 119, 316));
         assert_eq!(summary.accepted, 116);
     }
+
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::super::*;
+        use super::GCM;
+
+        /// An A*GCM `enc` with a key of its size, a 96-bit IV, and up to
+        /// 256 bytes of plaintext and 64 of AAD.
+        fn gcm_input() -> impl Strategy<Value = (ContentEncAlg, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)>
+        {
+            (0..GCM.len()).prop_flat_map(|i| {
+                let enc = GCM[i].clone();
+                let n = cek_len(&enc).unwrap();
+                (
+                    Just(enc),
+                    proptest::collection::vec(any::<u8>(), n),
+                    proptest::collection::vec(any::<u8>(), 12),
+                    proptest::collection::vec(any::<u8>(), 0..=64),
+                    proptest::collection::vec(any::<u8>(), 0..=256),
+                )
+            })
+        }
+
+        proptest! {
+            // ADR 0008 layer 2: bounded case counts in the fast suite.
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// RFC 7516 §5.1 step 15 and §5.2 step 16: decrypt inverts
+            /// encrypt for every key size, plaintext and AAD, with a
+            /// same-length ciphertext and a 128-bit tag (RFC 7518 §5.3).
+            #[test]
+            fn gcm_round_trips((enc, key, iv, aad, msg) in gcm_input()) {
+                let cek = Cek::from_slice(&key);
+                let (ct, tag) = encrypt(&enc, &cek, &iv, &aad, &msg)?;
+                prop_assert_eq!((ct.len(), tag.len()), (msg.len(), 16));
+                let opened = decrypt(&enc, &cek, &iv, &aad, &ct, &tag)?;
+                prop_assert_eq!(opened.as_slice(), msg.as_slice());
+            }
+
+            /// RFC 7516 §5.2 step 16, RFC 7518 §5.3: flipping any one bit
+            /// of the ciphertext, tag, IV or AAD makes decryption fail with
+            /// the detail-free DecryptionFailed.
+            #[test]
+            fn gcm_rejects_any_one_bit_flip(
+                (enc, key, iv, aad, msg) in gcm_input(),
+                bit in any::<usize>(),
+            ) {
+                let cek = Cek::from_slice(&key);
+                let (ct, tag) = encrypt(&enc, &cek, &iv, &aad, &msg)?;
+                let mut parts = [ct, tag, iv, aad];
+                let total: usize = parts.iter().map(|p| p.len() * 8).sum();
+                let mut at = bit % total;
+                for part in parts.iter_mut() {
+                    if at < part.len() * 8 {
+                        part[at / 8] ^= 1 << (at % 8);
+                        break;
+                    }
+                    at -= part.len() * 8;
+                }
+                let [ct, tag, iv, aad] = parts;
+                prop_assert_eq!(
+                    decrypt(&enc, &cek, &iv, &aad, &ct, &tag),
+                    Err(Error::DecryptionFailed)
+                );
+            }
+        }
+    }
 }
