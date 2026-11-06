@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
-use crate::jwk::{Jwk, KeyMaterial, OkpCurve, OkpKey};
+use crate::jwk::{Jwk, KeyMaterial, OkpCurve, OkpKey, ed25519_public_is_valid};
 
 /// Signs `signing_input` with Ed25519 (RFC 8032 §5.1.6; RFC 8037 §3.1,
 /// RFC 9864 §2.2), returning the 64-octet signature `R || S`.
@@ -83,8 +83,9 @@ pub(crate) fn sign(alg: &SigningAlg, key: &Jwk, signing_input: &[u8]) -> Result<
 /// # Errors
 ///
 /// - [`Error::InvalidKey`] if `x` is not 32 octets (RFC 8037 §2, RFC 8032
-///   §5.1.5), does not decode to a point (RFC 8032 §5.1.3), is of small
-///   order (ADR 0026 §6), or has a torsion component (ADR 0043 §1).
+///   §5.1.5), does not decode canonically to a point (RFC 8032 §5.1.3), is
+///   of small order (ADR 0026 §6), or has a torsion component
+///   (ADR 0043 §1): JWK import's own check (ADR 0041 §4).
 /// - [`Error::InvalidSignature`] if the signature is not 64 octets
 ///   (RFC 8032 §5.1.6 step 6), has a small-order or non-canonical R, or
 ///   s ≥ L (RFC 8032 §5.1.7 step 1), or does not validate (RFC 8032 §5.1.7
@@ -125,32 +126,40 @@ fn ed25519_key<'k>(alg: &SigningAlg, key: &'k Jwk) -> Result<&'k OkpKey> {
     }
 }
 
+/// The [`Error::InvalidKey`] message for an `x` that fails
+/// [`ed25519_public_is_valid`]: the same text JWK import uses, so a key
+/// refused at verify reads exactly as it would have at import.
+const ED25519_PUBLIC_INVALID: &str = "Ed25519 public key is invalid";
+
 /// The public key `x` (RFC 8037 §2) as a point that strict verification
 /// accepts.
 ///
+/// The key passes exactly the check JWK import applies
+/// ([`ed25519_public_is_valid`], ADR 0041 §4), so the two cannot drift
+/// apart:
+///
 /// - `x` is 32 octets (RFC 8037 §2, RFC 8032 §5.1.5) and decodes to a point
-///   (RFC 8032 §5.1.3);
+///   (RFC 8032 §5.1.3 steps 2–4);
+/// - the encoding is canonical (RFC 8032 §5.1.3 step 1: "If the resulting
+///   y >= p, decoding fails"), by a re-encode round trip, since
+///   `VerifyingKey::from_bytes` follows ZIP-215 and accepts y ≥ p;
 /// - the point is not of small order (`is_weak`, ADR 0026 §6): a
 ///   small-order key admits signatures valid for almost every message;
 /// - the point has no torsion component (`is_torsion_free`, ADR 0043 §1):
 ///   implementations disagree on mixed-order keys, which `verify_strict`
 ///   and RFC 8032 §5.1.7 accept.
 ///
-/// JWK import already rejects all of these (ADR 0041 §4, ADR 0043 §1);
-/// this is defence in depth, so the family never relies on how a key was
-/// built.
+/// JWK import already rejects all of these; this is defence in depth, so
+/// the family never relies on how a key was built.
 fn verifying_key(x: &[u8]) -> Result<VerifyingKey> {
+    if !ed25519_public_is_valid(x) {
+        return Err(Error::InvalidKey(ED25519_PUBLIC_INVALID));
+    }
+    // Both steps succeeded inside the check; mapping their errors keeps
+    // this free of panics all the same.
     let x = <&[u8; PUBLIC_KEY_LENGTH]>::try_from(x)
-        .map_err(|_| Error::InvalidKey("Ed25519 x must be 32 octets"))?;
-    let public = VerifyingKey::from_bytes(x)
-        .map_err(|_| Error::InvalidKey("Ed25519 x is not a valid point"))?;
-    if public.is_weak() {
-        return Err(Error::InvalidKey("Ed25519 x is of small order"));
-    }
-    if !public.to_edwards().is_torsion_free() {
-        return Err(Error::InvalidKey("Ed25519 x has a torsion component"));
-    }
-    Ok(public)
+        .map_err(|_| Error::InvalidKey(ED25519_PUBLIC_INVALID))?;
+    VerifyingKey::from_bytes(x).map_err(|_| Error::InvalidKey(ED25519_PUBLIC_INVALID))
 }
 
 #[cfg(test)]
@@ -218,7 +227,7 @@ mod tests {
         let zero = [0u8; 64];
         assert_eq!(
             verify_ed25519(&IDENTITY, b"any message", &zero),
-            Err(Error::InvalidKey("Ed25519 x is of small order"))
+            Err(Error::InvalidKey(ED25519_PUBLIC_INVALID))
         );
         // The same with the identity as R (encoded as IDENTITY) and s = 0.
         let mut identity_r = [0u8; 64];
@@ -254,7 +263,7 @@ mod tests {
         assert!(!key.is_weak());
         assert_eq!(
             verify_ed25519(&x, A4_SIGNING_INPUT, &a4_signature()),
-            Err(Error::InvalidKey("Ed25519 x has a torsion component"))
+            Err(Error::InvalidKey(ED25519_PUBLIC_INVALID))
         );
         let jwk = format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{MIXED_ORDER}"}}"#);
         assert!(matches!(
