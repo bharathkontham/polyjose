@@ -462,7 +462,9 @@ fn check_reproducible(given: &str, built: &Header) -> Result<()> {
 /// `enc` (and `zip`) always go in the protected header. For compact and
 /// flattened output each recipient's `alg` and key management parameters
 /// do too; for general JSON they go in the recipient's header (as RFC 7520
-/// §5.13).
+/// §5.13), except for the direct modes, `dir` and ECDH-ES, whose one
+/// recipient's `alg` and parameters are protected in every form (ADR 0050
+/// §1), leaving its `recipients` entry without them.
 ///
 /// `protected_b64` is the `insecure-test-vectors` hook
 /// ([`check_reproducible`]).
@@ -570,7 +572,10 @@ pub(crate) fn encrypt(
             // A family broke the `KeyOutput` contract: fail closed.
             _ => return Err(Error::UnsupportedAlgorithm),
         }
-        let header = if general {
+        // A direct mode's `alg` and parameters are protected in every form
+        // (ADR 0050 §1): it has the only recipient, so the general form
+        // loses nothing, and decrypt requires it (`check_direct_protected`).
+        let header = if general && mode.has_random_cek() {
             let base = recipient.header.clone().unwrap_or_default();
             Some(with_key_params(
                 &base,
@@ -1149,6 +1154,21 @@ mod tests {
             .as_ref()
             .unwrap_or_else(|| panic!("none"));
         assert_eq!(r.alg.as_deref(), Some("A128KW"));
+
+        // ADR 0050 §1: a direct mode is protected in the general form too;
+        // a caller's per-recipient header stays where it was put.
+        let d = Encryptor::new(ContentEncAlg::A128GCM)
+            .recipient(Recipient::new(A::Dir, &k).header(header(r#"{"kid":"r"}"#)));
+        let general =
+            encrypt(&d, b"x", general_form, &mut OsRandom, None).unwrap_or_else(|e| panic!("{e}"));
+        let p = general.protected.as_ref().unwrap_or_else(|| panic!("none"));
+        assert_eq!(p.alg.as_deref(), Some("dir"));
+        let r = general.recipients[0]
+            .header
+            .as_ref()
+            .unwrap_or_else(|| panic!("none"));
+        assert!(r.alg.is_none());
+        assert_eq!(r.kid.as_deref(), Some("r"));
     }
 
     #[test]

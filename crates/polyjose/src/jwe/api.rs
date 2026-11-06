@@ -327,7 +327,9 @@ impl Recipient {
 ///
 /// `enc` always goes in the JWE Protected Header. For compact and flattened
 /// output, each recipient's `alg` and key management parameters do too; for
-/// general JSON they go in the recipient's `header` (as RFC 7520 §5.13).
+/// general JSON they go in the recipient's `header` (as RFC 7520 §5.13),
+/// except for `dir` and ECDH-ES, which are protected in every form (ADR
+/// 0050 §1: a direct mode's `alg` and `enc` must be protected to decrypt).
 /// Every random value comes from the OS CSPRNG (ADR 0005).
 ///
 /// ```no_run

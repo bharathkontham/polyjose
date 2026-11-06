@@ -9,12 +9,13 @@
 //!   forms. The values are read from the vendored ietf-jose cookbook at
 //!   test time, never transcribed.
 //! - With `insecure-test-vectors`, `encrypt_reproducible` reproduces the
-//!   flattened §5.6, §5.8 and §5.10 outputs exactly. The other RFC JSON
-//!   outputs carry `alg` where polyjose's encryptor never puts it (the
-//!   general forms have it in the protected header; §5.11, §5.12 and A.5
-//!   in an unprotected one), so they are decrypt-only: the tests below
-//!   show the hook refusing them and that only the header placement
-//!   differs.
+//!   flattened §5.6, §5.8 and §5.10 outputs exactly, and the general §5.6
+//!   output but for its empty `recipients` entry (`dir` is protected in
+//!   every form, ADR 0050 §1). The other RFC JSON outputs carry `alg`
+//!   where polyjose's encryptor never puts it (the general §5.8 and §5.10
+//!   have it in the protected header; §5.11, §5.12 and A.5 in an
+//!   unprotected one), so they are decrypt-only: the tests below show the
+//!   hook refusing them and that only the header placement differs.
 //! - Several recipients on encrypt, recipient selection in the plan.md
 //!   order, the negative cases of the task, and a property round trip.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)] // test code: a panic is a failed assertion
@@ -555,11 +556,11 @@ mod reproducible {
 
     #[test]
     fn rfc_7520_general_outputs_put_alg_where_polyjose_does_not() {
-        // The RFC 7520 general outputs of §5.6, §5.8 and §5.10 keep `alg`
-        // in the protected header; polyjose's general form puts it in the
-        // recipient's header (plan.md, as RFC 7520 §5.13). The hook refuses
-        // the RFC's header, so these are decrypt-only vectors.
-        for ex in [c5_6(), c5_8(), c5_10()] {
+        // The RFC 7520 general outputs of §5.8 and §5.10 keep `alg` in the
+        // protected header; polyjose's general form puts a non-direct
+        // `alg` in the recipient's header (plan.md, as RFC 7520 §5.13). The
+        // hook refuses the RFC's header, so these are decrypt-only vectors.
+        for ex in [c5_8(), c5_10()] {
             let e = encryptor(&ex, true);
             assert_eq!(
                 reproduce(&ex, &e, GENERAL).map(|_| ()),
@@ -590,6 +591,23 @@ mod reproducible {
             assert_ne!(out.get("tag"), ex.flattened.get("tag"));
             ex.decrypts(&out);
         }
+    }
+
+    #[test]
+    fn rfc_7520_5_6_general_differs_only_by_its_empty_recipient_entry() {
+        // `dir` is protected in every form (ADR 0050 §1), as in the RFC: the
+        // hook accepts the RFC's protected header and the same draws give
+        // its IV, ciphertext and tag. The cookbook's `output.json` has no
+        // `recipients`; polyjose's general form writes the one recipient
+        // as `[{}]` (RFC 7516 §7.2.1: both members are optional).
+        let ex = c5_6();
+        let out = reproduce(&ex, &encryptor(&ex, true), GENERAL).unwrap();
+        let mut members = out.into_object().unwrap();
+        let entries = members.remove("recipients").map(|r| r.to_json());
+        assert_eq!(entries.as_deref(), Some("[{}]"));
+        let out = Value::from(members);
+        assert_eq!(out, ex.general);
+        ex.decrypts(&out);
     }
 
     #[test]
@@ -850,8 +868,10 @@ fn a_single_dir_recipient_has_no_encrypted_key() {
         .recipient(Recipient::new(A::Dir, &oct(&K128)))
         .encrypt_json(b"x", JsonForm::General)
         .unwrap();
+    // ADR 0050 §1: `dir` is protected in the general form too, so its
+    // entry is empty.
     let entries = object(&general).get("recipients").unwrap().to_json();
-    assert_eq!(entries, r#"[{"header":{"alg":"dir"}}]"#);
+    assert_eq!(entries, "[{}]");
     let flat = Encryptor::new(E::A128GCM)
         .recipient(Recipient::new(A::Dir, &oct(&K128)))
         .encrypt_json(b"x", JsonForm::Flattened)

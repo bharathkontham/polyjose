@@ -417,8 +417,11 @@ fn check_structure(cell: &Cell, enc: &ContentEncAlg, form: Serialization, text: 
         }
     };
     assert_eq!(protected["enc"], enc.as_str(), "enc is always protected");
+    // General JSON puts `alg` in the recipient's header, except for the
+    // direct modes, whose `alg` is protected in every form (ADR 0050 §1).
+    let direct = matches!(cell.alg, KeyMgmtAlg::Dir | KeyMgmtAlg::EcdhEs);
     let alg_at = match form {
-        Serialization::Json(JsonForm::General) => &header["alg"],
+        Serialization::Json(JsonForm::General) if !direct => &header["alg"],
         _ => &protected["alg"],
     };
     assert_eq!(alg_at, cell.alg.as_str(), "{form:?}: alg placement");
