@@ -14,6 +14,30 @@
 //! that oracle is listed in this file with its ADR 0018 reason, and the
 //! lists are exact: a listed case the oracle starts rejecting fails too.
 //!
+//! # Where polyjose and the oracles differ (all deliberate)
+//!
+//! - **polyjose stricter, key containers:** the negative vectors in
+//!   `NEGATIVE_STRICTER_THAN_ORACLE` (template-exact AlgorithmIdentifiers,
+//!   unsupported OIDs and curves, minimal OID subidentifiers, exact scalar
+//!   lengths, the SEC1 `[0]` requirement, embedded-key and curve
+//!   consistency, RSA key strength, no RSA private keys) and the `reject-*`
+//!   fixtures in `REJECT_FIXTURES_STRICTER_THAN_ORACLE`. Each entry carries
+//!   its ADR 0018 reason; the lists are exact.
+//! - **polyjose stricter, PEM:** no explanatory text before the block, only
+//!   the exact upper-case key labels, any other label refused from the
+//!   BEGIN line (`PEM_VECTOR_DIFFERENCES`).
+//! - **polyjose more lenient, PEM:** any whitespace around the block
+//!   (ADR 0018 §2); `check_pem` proves the trimmed block decodes alike in
+//!   `pem-rfc7468`, so this is the only leniency.
+//! - **DER readers:** a BIT STRING key must have no unused bits; OBJECT
+//!   IDENTIFIERs `const-oid` cannot represent (arc 2.40+, subidentifiers
+//!   above 2^32 − 1, more than 39 octets) are read but only ever compared
+//!   with templates (`oid_beyond_const_oid`, T02 tester's note).
+//! - **Encodings:** none. polyjose's SPKI, SEC1, PKCS#8 and PEM output is
+//!   byte for byte what the formats crates write, including the PKCS#8
+//!   ECPrivateKey without `[0]`, which RustCrypto's `elliptic-curve` writes
+//!   too.
+//!
 //! The oracle crates are reached by absolute paths (`::der`, `::pkcs8`,
 //! `::spki`, `::sec1`, `::pkcs1`), polyjose's own codecs by `super::` paths,
 //! so the two are never confused. Only the public-key types of `pkcs1` are
