@@ -227,7 +227,7 @@ impl Object {
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.members
             .iter()
-            .find_map(|(n, v)| (n.as_str() == name).then_some(v))
+            .find_map(|(n, v)| same_name(n, name).then_some(v))
     }
 
     /// Whether a member called `name` exists.
@@ -253,11 +253,7 @@ impl Object {
     pub fn insert(&mut self, name: impl Into<String>, value: impl Into<Value>) -> Option<Value> {
         let name = Zeroizing::new(name.into());
         let value = value.into();
-        match self
-            .members
-            .iter_mut()
-            .find(|(n, _)| n.as_str() == name.as_str())
-        {
+        match self.members.iter_mut().find(|(n, _)| same_name(n, &name)) {
             Some((_, slot)) => Some(core::mem::replace(slot, value)),
             None => {
                 self.members.push((name, value));
@@ -270,7 +266,7 @@ impl Object {
     /// their relative order. The removed name is wiped; the returned value
     /// wipes its strings when dropped.
     pub fn remove(&mut self, name: &str) -> Option<Value> {
-        let index = self.members.iter().position(|(n, _)| n.as_str() == name)?;
+        let index = self.members.iter().position(|(n, _)| same_name(n, name))?;
         Some(self.members.remove(index).1)
     }
 
@@ -281,7 +277,7 @@ impl Object {
     /// point order.
     pub fn sort_members(&mut self) {
         self.members
-            .sort_unstable_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+            .sort_unstable_by(|(a, _), (b, _)| cmp_names(a, b));
     }
 
     /// The members as `(name, value)` pairs, in order.
@@ -312,6 +308,67 @@ impl PartialEq for Object {
                 .members
                 .iter()
                 .all(|(name, value)| other.get(name) == Some(value))
+    }
+}
+
+/// Whether two member names are the same name: compared as unescaped
+/// strings, code point by code point (RFC 8259 §8.3).
+///
+/// Every name equality test an [`Object`] makes goes through here, so tests
+/// can count them (see [`Object::count_name_comparisons`]).
+#[inline]
+fn same_name(a: &str, b: &str) -> bool {
+    #[cfg(test)]
+    name_comparisons::tick();
+    a == b
+}
+
+/// Orders two member names by Unicode code point (RFC 8259 §8.3, RFC 7638
+/// §3.3): Rust orders `str` by UTF-8 bytes, which is code point order.
+///
+/// Every name ordering an [`Object`] makes goes through here, so tests can
+/// count them (see [`Object::count_name_comparisons`]).
+#[inline]
+fn cmp_names(a: &str, b: &str) -> core::cmp::Ordering {
+    #[cfg(test)]
+    name_comparisons::tick();
+    a.cmp(b)
+}
+
+/// Test-only, per-thread count of the member-name comparisons ([`same_name`]
+/// and [`cmp_names`]) objects make. It turns "this is O(n log n)" into a
+/// deterministic assertion without wall-clock timing, and is not compiled
+/// into non-test builds.
+#[cfg(test)]
+mod name_comparisons {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    pub(super) fn get() -> u64 {
+        COUNT.with(Cell::get)
+    }
+}
+
+#[cfg(test)]
+impl Object {
+    /// Runs `f` and returns its result together with the number of
+    /// member-name comparisons objects made on this thread while it ran.
+    ///
+    /// Used by regression tests that bound the work of untrusted-input
+    /// paths (JWK and JWK Set import) deterministically. Only comparisons
+    /// made by `Object` itself are counted, not those of the parser's
+    /// duplicate check.
+    pub(crate) fn count_name_comparisons<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = name_comparisons::get();
+        let result = f();
+        (result, name_comparisons::get() - before)
     }
 }
 
@@ -553,6 +610,19 @@ mod tests {
         let mut s = Value::from(String::from("k"));
         s.zeroize();
         assert!(s.is_null());
+    }
+
+    #[test]
+    fn the_comparison_counter_sees_every_name_comparison() {
+        let o = sample();
+        // A missing name is compared with all four members.
+        let (found, count) = Object::count_name_comparisons(|| o.get("missing").is_some());
+        assert!(!found);
+        assert_eq!(count, 4);
+        // Counts nest: the outer scope includes the inner one.
+        let ((_, inner), outer) =
+            Object::count_name_comparisons(|| Object::count_name_comparisons(|| o.contains("kty")));
+        assert_eq!((inner, outer), (1, 1));
     }
 
     #[test]
