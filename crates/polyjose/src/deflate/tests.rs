@@ -691,6 +691,50 @@ fn bomb_stream(matches: usize) -> Vec<u8> {
     })
 }
 
+/// A near-maximal-ratio stream inflates in full under an unlimited cap: the
+/// output fits the one allocation of `inflate::max_expansion(len)` bytes,
+/// within a few percent of it (so the bound is tight), and the buffer is
+/// never reallocated.
+#[test]
+fn maximal_expansion_fits_the_single_allocation() {
+    let matches = 32_768;
+    let input = bomb_stream(matches);
+    let mut capacity = inflate::Capacity::default();
+    let out = inflate::inflate_tracked(&input, usize::MAX, &mut capacity).unwrap();
+    assert_eq!(out.len(), 1 + matches * 258);
+    assert!(out.iter().all(|&b| b == b'a'));
+    assert_eq!(capacity.initial, 1032 * input.len());
+    assert_eq!(capacity.initial, inflate::max_expansion(input.len()));
+    assert_eq!(capacity.last, capacity.initial, "buffer reallocated");
+    assert!(out.len() * 100 > capacity.initial * 99, "bound not tight");
+}
+
+/// The single allocation is min(`max_output`, 1032 × input length): a small
+/// input under a huge cap allocates for its own worst case, not the cap.
+#[test]
+fn allocation_is_the_smaller_of_cap_and_expansion_bound() {
+    let input = stream(|w| {
+        header(w, true, 0b01);
+        fixed(w, u32::from(b'a'));
+        fixed(w, 256);
+    });
+    let mut capacity = inflate::Capacity::default();
+    let out = inflate::inflate_tracked(&input, usize::MAX, &mut capacity).unwrap();
+    assert_eq!(&out[..], b"a");
+    assert_eq!(capacity.initial, 1032 * input.len());
+    assert_eq!(capacity.last, capacity.initial);
+
+    let mut capacity = inflate::Capacity::default();
+    let out = inflate::inflate_tracked(&input, 1, &mut capacity).unwrap();
+    assert_eq!(&out[..], b"a");
+    assert_eq!(capacity.initial, 1);
+
+    let mut capacity = inflate::Capacity::default();
+    assert!(inflate::inflate_tracked(&[], usize::MAX, &mut capacity).is_err());
+    assert_eq!(capacity.initial, 0);
+    assert_eq!(inflate::max_expansion(usize::MAX), usize::MAX);
+}
+
 /// RFC 7520 §5.9.2: the compressed plaintext the cookbook prints (Fig. 162,
 /// vendored as `generated.plaintext_c`) inflates to exactly the Fig. 72
 /// plaintext.
