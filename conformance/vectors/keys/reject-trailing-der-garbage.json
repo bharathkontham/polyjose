@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects valid PEM armor around the RFC 8037 A.1 Ed25519 PKCS#8 followed by one 0x00 octet: no data may follow the outermost element (X.690 §8.1.1, RFC 5958 §2).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\nAA==\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

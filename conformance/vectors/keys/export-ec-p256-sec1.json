@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7517 App. A.2",
+  "description": "PEM export of the RFC 7517 A.2 P-256 private JWK as SEC1 with [0] and [1] (RFC 5915 §3).",
+  "operation": "keys.export_pem",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+      "d": "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"
+    },
+    "format": "sec1"
+  },
+  "expect": {
+    "ok": true,
+    "pem": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIPO9DAeoH7kyeB7VJ1L2DMiaa+XlGTT+AZON21XY93gBoAoGCCqGSM49\nAwEHoUQDQgAEMKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D7gS2XpJFbZ\niItSs3m9+9Ue6GnvHw/GW2ZZaVtszggXIw==\n-----END EC PRIVATE KEY-----\n"
+  }
+}

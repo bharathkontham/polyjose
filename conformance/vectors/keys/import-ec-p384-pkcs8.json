@@ -1,0 +1,18 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "PEM import of a P-384 private key as PKCS#8 (RFC 5958 §2); expected JWK from openssl pkey -text.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDBPSgtlqRoNzNvUEiS6\nvFsD6MOysnJcMcXbFVfH+fbqm8ecvpd5GqsAeO0qpZIdZbmhZANiAARkBMC4qn7f\nyI884Pr3/istLLfUBcs0uBrD8k7xV/niwqA8bGId/DBVg/Ur56N4VLHMWlN4Eo45\npKbw/H9z+v9EqDorVdx+wqfyfuBFdPRxt60FhGFF0yMZXeIY6+bhPXE=\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-384",
+      "x": "ZATAuKp-38iPPOD69_4rLSy31AXLNLgaw_JO8Vf54sKgPGxiHfwwVYP1K-ejeFSx",
+      "y": "zFpTeBKOOaSm8Px_c_r_RKg6K1XcfsKn8n7gRXT0cbetBYRhRdMjGV3iGOvm4T1x",
+      "d": "T0oLZakaDczb1BIkurxbA-jDsrJyXDHF2xVXx_n26pvHnL6XeRqrAHjtKqWSHWW5"
+    }
+  }
+}

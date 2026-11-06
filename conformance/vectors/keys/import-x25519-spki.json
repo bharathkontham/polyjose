@@ -1,0 +1,16 @@
+{
+  "source": "RFC 8037 App. A.6",
+  "description": "PEM import of the RFC 8037 A.6 recipient's X25519 public key (RFC 7748 §6.1 Bob) as SPKI (RFC 8410 §4); built from the published JWK and checked with OpenSSL.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEA3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=\n-----END PUBLIC KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "source": "RFC 7468 §13",
+  "description": "PEM import of RFC 7468 Figure 15, a P-384 SPKI.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEn1LlwLN/KBYQRVH6HfIMTzfEqJOVztLe\nkLchp2hi78cCaMY81FBlYs8J9l7krc+M4aBeCGYFjba+hiXttJWPL7ydlE+5UG4U\nNkn3Eos8EiZByi9DVsyfy9eejh+8AXgp\n-----END PUBLIC KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-384",
+      "x": "n1LlwLN_KBYQRVH6HfIMTzfEqJOVztLekLchp2hi78cCaMY81FBlYs8J9l7krc-M",
+      "y": "4aBeCGYFjba-hiXttJWPL7ydlE-5UG4UNkn3Eos8EiZByi9DVsyfy9eejh-8AXgp"
+    }
+  }
+}

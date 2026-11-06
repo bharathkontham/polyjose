@@ -1,0 +1,17 @@
+{
+  "source": "RFC 8410 §10.3",
+  "description": "PEM import of the RFC 8410 §10.3 v2 key with an attribute (ignored) and a publicKey that must match d (RFC 5958 §2).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\noB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB\nZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+      "d": "1O5y2_kTWErVttjx92n4rTr-fCjL8dT74Jeoj0R1WEI"
+    }
+  }
+}
