@@ -816,3 +816,39 @@ fn deflate_output_never_exceeds_the_stored_bound() {
     assert!(out.capacity() <= stored_bound(input.len()));
     assert_eq!(&inflate(&out, input.len()).unwrap()[..], &input[..]);
 }
+
+// ---- totality (ADR 0017 §1; the fuzz target of feature 0012) ----
+
+mod properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // ADR 0008 layer 2: bounded case counts in the fast suite.
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// `inflate` is total: any bytes and any cap give `Ok` or `Err`,
+        /// never a panic, and an `Ok` output never exceeds the cap.
+        #[test]
+        fn inflate_never_panics(
+            input in prop::collection::vec(any::<u8>(), 0..4096),
+            max_output in prop_oneof![0usize..512, 0usize..1 << 20, Just(usize::MAX)],
+        ) {
+            let mut peak = 0;
+            match inflate::inflate_tracked(&input, max_output, &mut peak) {
+                Ok(out) => prop_assert!(out.len() <= max_output),
+                Err(e) => prop_assert!(matches!(e, Error::InvalidFormat(_))),
+            }
+            prop_assert!(peak <= max_output);
+        }
+
+        /// `deflate` is total, and our own inflate inverts it.
+        #[test]
+        fn deflate_round_trips(input in prop::collection::vec(any::<u8>(), 0..4096)) {
+            let compressed = deflate(&input).unwrap();
+            prop_assert!(compressed.len() <= stored_bound(input.len()));
+            let out = inflate(&compressed, input.len()).unwrap();
+            prop_assert_eq!(&out[..], &input[..]);
+        }
+    }
+}
