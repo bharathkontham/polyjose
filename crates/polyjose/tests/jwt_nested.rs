@@ -1273,4 +1273,9 @@ fn encrypt_nested_inner_alg_edge_spellings() {
         jwt::encrypt_nested(&hdr(r#"{"alg":"none"}"#), &kw("{}")),
         Err(Error::AlgorithmNotAllowed)
     );
+    // A JSON-escaped spelling of `none` is still `none` once unescaped.
+    assert_eq!(
+        jwt::encrypt_nested(&hdr("{\"alg\":\"\\u006eone\"}"), &kw("{}")),
+        Err(Error::AlgorithmNotAllowed)
+    );
 }
