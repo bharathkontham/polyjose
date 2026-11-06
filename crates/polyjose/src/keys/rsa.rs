@@ -494,3 +494,261 @@ mod tests {
         }
     }
 }
+
+/// Tester additions (feature 0005, T07): adversarial modulus and exponent
+/// encodings, and the PEM and PKCS#8 early-return paths for RSA private keys.
+#[cfg(test)]
+mod adversarial {
+    use super::super::types::{AlgId, SpkiParts};
+    use super::super::{pem, pkcs8, spki};
+    use super::*;
+
+    /// A DER INTEGER with exactly these contents octets (no normalisation).
+    fn int(contents: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x02];
+        push_len(&mut out, contents.len());
+        out.extend_from_slice(contents);
+        out
+    }
+
+    fn push_len(out: &mut Vec<u8>, len: usize) {
+        match len {
+            0..=0x7F => out.push(u8::try_from(len).unwrap()),
+            0x80..=0xFF => out.extend_from_slice(&[0x81, u8::try_from(len).unwrap()]),
+            _ => {
+                let [high, low] = u16::try_from(len).unwrap().to_be_bytes();
+                out.extend_from_slice(&[0x82, high, low]);
+            }
+        }
+    }
+
+    /// `SEQUENCE { n, e }` where both are raw INTEGER contents.
+    fn raw_public(n: &[u8], e: &[u8]) -> Vec<u8> {
+        let mut body = int(n);
+        body.extend_from_slice(&int(e));
+        let mut out = vec![0x30];
+        push_len(&mut out, body.len());
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn detail<T>(result: Result<T>) -> &'static str {
+        match result {
+            Err(Error::InvalidKey(detail)) => detail,
+            Err(other) => panic!("expected InvalidKey, got {other:?}"),
+            Ok(_) => panic!("expected InvalidKey, got a key"),
+        }
+    }
+
+    /// A 256-octet odd modulus with the top bit set (2048 bits).
+    fn n2048() -> Vec<u8> {
+        let mut n = vec![0xC3; 256];
+        n[255] = 0xC1;
+        n
+    }
+
+    fn with_sign_octet(n: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x00];
+        out.extend_from_slice(n);
+        out
+    }
+
+    #[test]
+    fn modulus_sign_octet_is_required_exactly_when_the_top_bit_is_set() {
+        let n = n2048();
+        let key = from_pkcs1(&raw_public(&with_sign_octet(&n), &[0x01, 0x00, 0x01])).unwrap();
+        assert_eq!(rsa(&key).n(), &n[..], "the sign octet is not part of n");
+        assert_eq!(rsa(&key).modulus_bits(), 2048);
+        // Without the sign octet the INTEGER is negative (X.690 §8.3.3).
+        assert!(matches!(
+            from_pkcs1(&raw_public(&n, &[0x01, 0x00, 0x01])),
+            Err(Error::InvalidKey(_))
+        ));
+        // A sign octet where the top bit is clear is non-minimal (§8.3.2).
+        let mut small_top = vec![0x7F; 256];
+        small_top[255] = 0x01;
+        assert!(matches!(
+            from_pkcs1(&raw_public(&with_sign_octet(&small_top), &[0x03])),
+            Err(Error::InvalidKey(_))
+        ));
+    }
+
+    fn rsa(jwk: &Jwk) -> &RsaPublicKey {
+        let crate::jwk::KeyMaterial::Rsa(key) = jwk.material() else {
+            panic!("an RSA key")
+        };
+        key
+    }
+
+    #[test]
+    fn exponent_with_a_leading_zero_is_non_minimal() {
+        let n = with_sign_octet(&n2048());
+        for e in [
+            &[0x00, 0x03][..],
+            &[0x00, 0x01, 0x00, 0x01][..],
+            &[0x00, 0x00, 0x03][..],
+        ] {
+            assert!(
+                matches!(from_pkcs1(&raw_public(&n, e)), Err(Error::InvalidKey(_))),
+                "{e:?}"
+            );
+        }
+        // 0x00 0x81 is the minimal DER of 129 (top bit set): accepted, odd.
+        let key = from_pkcs1(&raw_public(&n, &[0x00, 0x81])).unwrap();
+        assert_eq!(rsa(&key).e(), &[0x81]);
+        assert_eq!(
+            &to_pkcs1(rsa(&key)).unwrap()[..],
+            &raw_public(&n, &[0x00, 0x81])[..]
+        );
+    }
+
+    #[test]
+    fn a_2047_bit_modulus_is_refused_and_2048_is_accepted() {
+        let mut n = vec![0x7F; 256];
+        n[255] = 0xFF;
+        assert_eq!(
+            detail(from_pkcs1(&raw_public(&n, &[0x01, 0x00, 0x01]))),
+            "RSA modulus is shorter than 2048 bits"
+        );
+        let mut n = vec![0x80; 256];
+        n[255] = 0x01;
+        let key = from_pkcs1(&raw_public(&with_sign_octet(&n), &[0x01, 0x00, 0x01])).unwrap();
+        assert_eq!(rsa(&key).modulus_bits(), 2048);
+    }
+
+    #[test]
+    fn odd_and_even_n_and_e() {
+        let mut n = n2048();
+        let e = [0x01, 0x00, 0x01];
+        assert!(from_pkcs1(&raw_public(&with_sign_octet(&n), &e)).is_ok());
+        n[255] = 0xC0;
+        assert_eq!(
+            detail(from_pkcs1(&raw_public(&with_sign_octet(&n), &e))),
+            "RSA modulus must be odd"
+        );
+        let n = with_sign_octet(&n2048());
+        for even in [&[0x02][..], &[0x01, 0x00][..], &[0x01, 0x00, 0x00][..]] {
+            assert_eq!(
+                detail(from_pkcs1(&raw_public(&n, even))),
+                "RSA exponent must be odd and greater than 1",
+                "{even:?}"
+            );
+        }
+        for bad in [&[0x01][..], &[0x00][..]] {
+            assert!(matches!(
+                from_pkcs1(&raw_public(&n, bad)),
+                Err(Error::InvalidKey(_))
+            ));
+        }
+        assert!(from_pkcs1(&raw_public(&n, &[0x03])).is_ok());
+    }
+
+    #[test]
+    fn exponent_not_less_than_the_modulus_is_refused() {
+        let n = n2048();
+        let signed = with_sign_octet(&n);
+        // e == n (odd): not below the modulus.
+        assert_eq!(
+            detail(from_pkcs1(&raw_public(&signed, &signed))),
+            "RSA exponent must be less than the modulus"
+        );
+        // e longer than n.
+        let mut longer = vec![0x01];
+        longer.extend_from_slice(&n);
+        assert_eq!(
+            detail(from_pkcs1(&raw_public(&signed, &longer))),
+            "RSA exponent must be less than the modulus"
+        );
+        // e == n - 2 (odd, below n) is within the rule.
+        let mut below = n.clone();
+        below[255] -= 2;
+        assert!(from_pkcs1(&raw_public(&signed, &with_sign_octet(&below))).is_ok());
+    }
+
+    #[test]
+    fn modulus_above_8192_bits_imports_because_the_ceiling_is_enforced_at_use() {
+        // jwk.rs documents: "The 8192-bit RSA ceiling is enforced where an RSA
+        // key is used (ADR 0026 §2 step 8)", so the import-time mapper accepts
+        // 8193 and larger moduli, and exports them back unchanged.
+        for bytes in [1024usize, 1025, 1100] {
+            let mut n = vec![0x80; bytes];
+            n[bytes - 1] = 0x01;
+            let e = [0x01, 0x00, 0x01];
+            let der = raw_public(&with_sign_octet(&n), &e);
+            let key = from_pkcs1(&der).unwrap_or_else(|e| panic!("{bytes}: {e:?}"));
+            assert_eq!(rsa(&key).modulus_bits(), bytes * 8);
+            assert_eq!(&to_pkcs1(rsa(&key)).unwrap()[..], &der[..]);
+            let spki_der = to_spki(rsa(&key)).unwrap();
+            assert!(import_spki_der(&spki_der).is_ok());
+        }
+        // 8193 bits exactly: 1025 octets with a top octet of 0x01.
+        let mut n = vec![0x55; 1025];
+        n[0] = 0x01;
+        n[1024] = 0x01;
+        let key = from_pkcs1(&raw_public(&n, &[0x01, 0x00, 0x01])).unwrap();
+        assert_eq!(rsa(&key).modulus_bits(), 8193);
+    }
+
+    fn import_spki_der(der: &[u8]) -> Result<Jwk> {
+        from_spki(spki::decode(der)?)
+    }
+
+    #[test]
+    fn spki_with_a_trailing_byte_or_wrong_bit_string_is_invalid() {
+        let pkcs1 = pkcs1::encode_public(&n2048(), &[0x01, 0x00, 0x01]).unwrap();
+        let der = spki::encode(&SpkiParts {
+            alg: AlgId::RsaEncryption,
+            subject_public_key: &pkcs1,
+        })
+        .unwrap();
+        assert!(import_spki_der(&der).is_ok());
+        let mut trailing = der.to_vec();
+        trailing.push(0);
+        assert!(import_spki_der(&trailing).is_err());
+        let mut truncated = der.to_vec();
+        truncated.pop();
+        assert!(import_spki_der(&truncated).is_err());
+    }
+
+    #[test]
+    fn rsa_private_pem_is_refused_before_its_body_is_decoded() {
+        // The literal criterion for PEM: the BEGIN line decides. A body that
+        // is not even base64 still gives UnsupportedAlgorithm, so no body
+        // octet can have been decoded.
+        for label in ["RSA PRIVATE KEY", "ENCRYPTED PRIVATE KEY"] {
+            let text = format!(
+                "-----BEGIN {label}-----\n!!!not base64 at all!!!\n-----END {label}-----\n"
+            );
+            assert_eq!(pem::decode(&text).unwrap_err(), Error::UnsupportedAlgorithm);
+            // Truncated: no END line at all.
+            let text = format!("-----BEGIN {label}-----\nAAAA\n");
+            assert_eq!(pem::decode(&text).unwrap_err(), Error::UnsupportedAlgorithm);
+        }
+    }
+
+    #[test]
+    fn pkcs8_rsa_encryption_returns_on_the_algorithm_identifier() {
+        // rsaEncryption AlgorithmIdentifier followed by an OCTET STRING whose
+        // contents are not DER at all, and by nothing at all after the
+        // AlgorithmIdentifier: both are UnsupportedAlgorithm, never a parse
+        // error from privateKey.
+        let alg = [
+            0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01, 0x05,
+            0x00,
+        ];
+        let mut with_garbage = vec![0x02, 0x01, 0x00];
+        with_garbage.extend_from_slice(&alg);
+        with_garbage.extend_from_slice(&[0x04, 0x04, 0xA5, 0xA5, 0xA5, 0xA5]);
+        let mut without = vec![0x02, 0x01, 0x00];
+        without.extend_from_slice(&alg);
+        for body in [with_garbage, without] {
+            let mut der = vec![0x30];
+            push_len(&mut der, body.len());
+            der.extend_from_slice(&body);
+            assert_eq!(
+                pkcs8::decode(&der).map(drop).unwrap_err(),
+                Error::UnsupportedAlgorithm
+            );
+        }
+    }
+}
