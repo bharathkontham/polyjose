@@ -260,33 +260,40 @@ check_credits_match() {
 # 5. Group-specific rules. Every group needs a case here, so a new group cannot land without
 #    deciding its rule. A *guarded* group holds build-time crates that a primitive needs on the
 #    builder's machine only (they link nothing into the shipped artifact) and that polyjose cannot
-#    switch off from its manifest. Each of its crates may be reached only through one required
-#    parent crate (ADR 0025, ADR 0042 §1-§2):
+#    switch off from its manifest (ADR 0025, ADR 0042 §1-§2, ADR 0049 §5):
 #      dalek-proc-macro (ADR 0025): curve25519-dalek-derive, dalek's SIMD-backend code generator,
 #        a normal dependency of curve25519-dalek on x86_64, only below curve25519-dalek; its own
 #        tree (syn, quote, proc-macro2, unicode-ident) only below curve25519-dalek-derive.
 #      dalek-build (ADR 0042): rustc_version and semver, curve25519-dalek's build-dependencies,
 #        only below curve25519-dalek.
 #      num-traits-build (ADR 0042): autocfg, num-traits' build-dependency, only below num-traits.
-#    "Below" is checked on the tree of check 1 (cargo tree, normal and build edges, every target,
-#    every feature): the crate must be unreachable from polyjose once every package named like
-#    the parent is removed. So a second path to it (a direct dependency, or another crate that
-#    pulls it in) fails, and every path to it is printed with `cargo tree ... -i <crate>`.
+#    Three rules hold for them:
+#    a. Membership (ADR 0049 §5). The members of each guarded group are fixed in
+#       guarded_group_members below, not read from deps-allowlist.txt, so the allowlist alone
+#       cannot grow a guarded group or move a crate out of one. Rules b and c run on every crate of
+#       that table, whatever the allowlist says, and the allowlist must agree with it:
+#       - a crate the allowlist lists in a guarded group must be a member of that group here, so a
+#         crate added to a group (e.g. libm, which num-traits' `libm` feature pulls in below
+#         num-traits, where rule b alone would accept it) fails until this script and an ADR add
+#         it (ADR 0042 §5);
+#       - a member listed by the allowlist in any other group (e.g. syn under primitives) fails;
+#       - a member in the core's tree that the allowlist does not list fails (check 1 also fails);
+#       - a member in neither the tree nor the allowlist passes: the primitive dropped it, which
+#         only shrinks the tree. Check 2 makes the allowlist entry go when the tree loses the
+#         crate; the row here can then go too, and rules b and c still hold for the crate if it
+#         ever comes back while its row is here.
+#    b. Required parent (ADR 0025, ADR 0042 §2). "Below" is checked on the tree of check 1 (cargo
+#       tree, normal and build edges, every target, every feature): the crate must be unreachable
+#       from polyjose once every package named like the parent is removed. So a second path to it
+#       (a direct dependency, or another crate that pulls it in) fails.
+#    c. Edge kinds (ADR 0049 §5), from guarded_group_edges: the dalek-build and num-traits-build
+#       crates must be absent from `cargo tree -e normal` (same flags otherwise), so they reach
+#       polyjose through build edges only, and the dalek-proc-macro crates must be absent from
+#       `-e normal,no-proc-macro`, so they reach it only through a proc-macro. Rule b alone would
+#       accept a parent's *normal* edge to a build-time crate (e.g. num-traits -> libm).
+#    Each failure prints a shortest offending path and every path, with `cargo tree ... -i <crate>`.
 #    (Not cargo metadata's resolve graph, as check 6 walks: that graph unifies features across
 #    the whole workspace, so it would also show what only a binding enables.)
-#    The members of each guarded group are fixed in guarded_group_members below, not read from
-#    deps-allowlist.txt (ADR 0049 §5), so the allowlist alone cannot grow a guarded group or move a
-#    crate out of one. The rules run on every crate of that table, whatever the allowlist says, and
-#    the allowlist must agree with it:
-#      - a crate the allowlist lists in a guarded group must be a member of that group here, so a
-#        crate added to a group (e.g. libm, which num-traits' `libm` feature pulls in below
-#        num-traits, where the path rule alone would accept it) fails until this script and an ADR
-#        add it (ADR 0042 §5);
-#      - a member listed by the allowlist in any other group (e.g. syn under primitives) fails;
-#      - a member in the core's tree that the allowlist does not list fails (check 1 also fails);
-#      - a member in neither the tree nor the allowlist passes: the primitive dropped it, which only
-#        shrinks the tree. Check 2 makes the allowlist entry go when the tree loses the crate; the
-#        row here can then go too, and the rules still hold for it if the crate ever comes back.
 #    A table row is "<group> <crate> <required parent>".
 
 # The guarded groups' members (ADR 0025, ADR 0042 §1, ADR 0049 §5). Growing a group, or adding
