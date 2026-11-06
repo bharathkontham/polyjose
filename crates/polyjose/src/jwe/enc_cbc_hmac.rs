@@ -704,6 +704,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn wycheproof_aes_cbc_hmac_sha2_suites_conform_with_no_deviations() {
+        // Wycheproof's `a*cbc_hs*_test.json` are written for exactly
+        // RFC 7518 §5.2: K is MAC_KEY || ENC_KEY, the IV is 128 bits and the
+        // tag is T_LEN octets. Every `valid` case must encrypt to its ct and
+        // tag and decrypt back to its msg; every `invalid` case (all are
+        // `ModifiedTag`) must be DecryptionFailed without reaching AES-CBC.
+        use crate::test_support::wycheproof::{self, Expected, Outcome, Summary};
+        for (name, enc) in [
+            ("a128cbc_hs256", ContentEncAlg::A128CbcHs256),
+            ("a192cbc_hs384", ContentEncAlg::A192CbcHs384),
+            ("a256cbc_hs512", ContentEncAlg::A256CbcHs512),
+        ] {
+            let suite = wycheproof::load(name);
+            let summary = wycheproof::assert_conforms(&suite, &[], |_, test| {
+                let id = test.tc_id;
+                let input = test.aead();
+                let (result, n) = decrypt_counted(
+                    &enc, &input.key, &input.iv, &input.aad, &input.ct, &input.tag,
+                );
+                match test.result {
+                    Expected::Valid => {
+                        let sealed = encrypt(&enc, &input.key, &input.iv, &input.aad, &input.msg);
+                        assert_eq!(
+                            sealed.as_ref().map(|(e, _)| e),
+                            Ok(&input.ct),
+                            "{name} tcId {id}: E"
+                        );
+                        assert_eq!(
+                            sealed.as_ref().map(|(_, t)| t),
+                            Ok(&input.tag),
+                            "{name} tcId {id}: T"
+                        );
+                        if let Ok(plaintext) = &result {
+                            assert_eq!(&plaintext[..], &input.msg[..], "{name} tcId {id}: P");
+                        }
+                    }
+                    Expected::Invalid | Expected::Acceptable => {
+                        if let Err(e) = &result {
+                            assert_eq!(e, &Error::DecryptionFailed, "{name} tcId {id}");
+                        }
+                        if test.has_flag("ModifiedTag") {
+                            assert_eq!(n, 0, "{name} tcId {id}: reached the cipher");
+                        }
+                    }
+                }
+                Outcome::of(&result)
+            });
+            assert_eq!(
+                summary,
+                Summary {
+                    tests: 94,
+                    accepted: 67,
+                    rejected: 27,
+                    deviations: 0,
+                },
+                "{name}"
+            );
+        }
+    }
+
     /// M, the full HMAC output over A || IV || E || AL (RFC 7518 §5.2.2.1
     /// step 5), for forging test inputs under a known K.
     fn full_mac(enc: &ContentEncAlg, k: &[u8], iv: &[u8], a: &[u8], e: &[u8]) -> Vec<u8> {
