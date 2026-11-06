@@ -1,0 +1,34 @@
+{
+  "source": "RFC 7516 §5.2 step 11; RFC 7515 §5.2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Precedence: the outer tag is tampered and the inner signature is invalid too. The JWE layer runs first, so DecryptionFailed, never InvalidSignature (ADR 0027 §9)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0.HHqoQh1K6zum26opURDBr-Fd0VVe4ry_.HTf0eLJEl1I1_jq5.8nsrJEkeFegtt0TZ3P5TvX4-AAshFRQl7e1cFqJy3OReMokWV8Wks31rKG7ZGUgjkdgiD3fxe0BhAg-qs3atVoAx441-nl_NfraxraerrugW8phuXnVArW-bO3zr20DMDXH4_r8qeCMcwV9GGG4G_zptfW-dsWnv0Q5u0G-1_aDbNgN5HrIz_4dUearP5HyUSEt97F-ZRm8gQdsBLXyhzxzF-4ApvVdOTBQxL3CGK_W11bepv9WAtK3xMOE9SLAdnXxF88UjuyAaFAVm4f9nJL7RbyyXhEAMyxvCyMS_VEZtMihmHRyy.Bx5yC3vHQz1sVnvnrVrl5w",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

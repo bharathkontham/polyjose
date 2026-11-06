@@ -1,0 +1,38 @@
+{
+  "source": "RFC 7515 §5.2; RFC 8725 §3.3; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Inner JWS signed by a P-256 key outside the jwks (the oracle's p256-attacker), then correctly encrypted: the outer layer decrypts, the inner signature fails against the set's only key, InvalidSignature (ADR 0027 §9 step 9, RFC 8725 §3.3)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0.T02y_4RXqtTreOpuywoowzrPHhhnLLeW.-PzP1MscTrI6-AUa.N1nG7ed9ulIOA4xIvVtd7acQoBWz7fjwSXAH-hYHnXf-TXBTKzM7GGwmU0_vman9eW-KUc6LrQd4CkA7kHucxWCkyjna7i3ZEE651ZCQB-rT42ve8lrUdtFwP38BPthqDtFkQZ8tLNWVJY5F4gy3S0lBm_I1ygEvKW3m8E6JetyfK_QyA6CKxe1KsNDNt-WfIqRfBmnlapR7lBk-2umFwNjSIkdo8FVm9ezB16tdWJdYBwbacMM7zreBjcBf-w-QcfybpMxMZDXso8LmnVQRMQlWEhOMAfjv56Aor9D_AlrHvClqcv8Y.luKRNxj-LBn8-Xf7luufjQ",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      ]
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}
