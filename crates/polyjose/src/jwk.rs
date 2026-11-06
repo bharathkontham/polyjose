@@ -153,6 +153,15 @@
 //! [`Jwk::to_object`][to_object] an [`Object`](crate::json::Object), which wipes its strings on
 //! drop. [`Jwk::to_public`][to_public] drops `d` and every unknown member.
 //!
+//! **Timing.** JSON parsing, which runs before any base64url decoding of
+//! the private members, is not constant-time: the parser branches on the
+//! bytes it reads, including the base64url text of `k` and `d`. So the
+//! length and structure of a JWK (its member names, value types and string
+//! lengths) are observable. The base64url decoding of the secret members
+//! is constant-time with respect to their content (best effort at the
+//! source level, as for any pure-Rust code): only their length, which the
+//! JSON already reveals, affects it.
+//!
 //! [from_json]: crate::jwk::Jwk::from_json
 //! [from_object]: crate::jwk::Jwk::from_object
 //! [to_json]: crate::jwk::Jwk::to_json

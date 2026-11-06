@@ -493,7 +493,7 @@ fn names_are_unique(members: &[(Zeroizing<String>, Value)]) -> bool {
 /// strings, code point by code point (RFC 8259 §8.3).
 ///
 /// Every name equality test an [`Object`] makes goes through here, so tests
-/// can count them (see [`Object::count_name_comparisons`]).
+/// can count them (see the test-only `Object::count_name_comparisons`).
 #[inline]
 fn same_name(a: &str, b: &str) -> bool {
     #[cfg(test)]
@@ -505,7 +505,7 @@ fn same_name(a: &str, b: &str) -> bool {
 /// §3.3): Rust orders `str` by UTF-8 bytes, which is code point order.
 ///
 /// Every name ordering an [`Object`] makes goes through here, so tests can
-/// count them (see [`Object::count_name_comparisons`]).
+/// count them (see the test-only `Object::count_name_comparisons`).
 #[inline]
 fn cmp_names(a: &str, b: &str) -> core::cmp::Ordering {
     #[cfg(test)]

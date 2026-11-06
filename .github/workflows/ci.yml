@@ -94,9 +94,11 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm --locked
 
-      # Enforces ADR 0002 (no OpenSSL, ring, aws-lc, boring or libsodium) and ADR 0003
-      # (RUSTSEC-2023-0071 is never ignored). Dev-dependencies are part of the graph, and
-      # --all-features also covers optional, off-by-default features.
+      # Enforces ADR 0002 (no OpenSSL, ring, aws-lc, boring or libsodium) and ADR 0021: the RSA
+      # timing advisory RUSTSEC-2023-0071 fails this step unless deny.toml ignores it for RSA
+      # public-key operations only, which handle no secret, with a check that rejects any RSA
+      # private-key use. Dev-dependencies are part of the graph, and --all-features also covers
+      # optional, off-by-default features.
       - name: cargo deny
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.install-deny.outcome == 'success' }}
         run: cargo deny --locked --all-features check
