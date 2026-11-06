@@ -191,10 +191,29 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 
 The Rust runner also checks `schema.json` against its own tables (`schema_and_runner_agree`), so the schema and the runner can't drift apart.
 
+## Binding runners
+
+Which operation families each platform's runner runs today. The rules above apply to every runner that exists. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
+
+| Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jws.*` | `keys.*` |
+|---|---|---|---|
+| Rust | `crates/polyjose/tests/conformance.rs` | runs | runs |
+| WASM | none yet (0006, over the 0013 surface) | no runner yet (0006) | not yet bound (0006–0009) |
+| Node | none yet (0007, over the 0013 surface) | no runner yet (0007) | not yet bound (0006–0009) |
+| Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) |
+| Swift | none yet (0009, over the 0013 surface) | no runner yet (0009) | not yet bound (0006–0009) |
+
+When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row. ADR 0034's parity check then compares its results with the Rust reference run.
+
 ## Writing vectors
 
 - Name files after what they check, grouped by operation: `vectors/b64url/encode-rfc4648-10-foo.json`, `vectors/jwk-thumbprint/reject-oct-k-padded.json`.
-- Key vectors live in `keys/`: `import-*` and `export-*` for successes, `reject-*` for failures. Their expected JWKs and PEM texts are the committed key fixtures (`crates/polyjose/tests/data/keys/`: OpenSSL 4.1.0 output and the RFC golden files), never polyjose output; `source` names the RFC, or OpenSSL for a generated key. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them (`python3 -I`); edit the script, not the files. **Until features 0006–0009 bind the keys API, test reports list WASM, Node, Kotlin and Swift as `SKIPPED (API not yet bound)` for them; each binding's runner implements `keys.*` when it binds the API, and the never-skip rule above then applies.**
+- Key vectors live in `keys/`. Successes are `import-*`, `import-der-*`, `export-*`, `export-der-*` and `generate-*`; failures are `reject-*`. Their expected values never come from polyjose:
+  - JWKs, PEM texts and DER are the committed key fixtures (`crates/polyjose/tests/data/keys/`: OpenSSL 4.1.0 output and the RFC golden files). The DER is each PEM fixture's body.
+  - `generate-*` shapes are the RFC sizes and curves.
+  - The RSA modulus-bound keys are built by the generator, which also writes their JWK.
+
+  `source` names the RFC, OpenSSL for a generated key, or `polyjose` for a rule the description cites. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them all (`python3 -I`); edit the script, not the files. **Until features 0006–0009 bind the keys API, test reports list WASM, Node, Kotlin and Swift as `SKIPPED (API not yet bound)` for them (see [Binding runners](#binding-runners)). Each binding's runner implements `keys.*` when it binds the API, and the never-skip rule above then applies.**
 - JWS vectors are grouped by origin: `jws-rfc7515/` (RFC 7515 Appendix A and F; `source` "RFC 7515 App. A.x" or "RFC 7515 App. F"), `jws-rfc7797/`, `jws-rfc8037/`, `jws-oracle/` (generated independently of polyjose; `source` names the tool and its versions), `jws-negative/` (`source` names the RFC section, CVE or ADR enforced), and `third_party/rfc7520/jws/` (the RFC 7520 §4 cookbook).
 - Check every expected value against the RFC text yourself. If the RFC doesn't print the value, derive it independently of polyjose (for example with Python's `hashlib` over the hand-built input) and say so in `description`.
 - **Deterministic algorithms** (HMAC, EdDSA) also have `sign` vectors with an exact expected output. **Randomized ones** (ECDSA, JWE) are checked by round trip (`verify_with`) plus a `verify`/`decrypt` vector of the RFC's published output. RS\*/PS\* are verify-only (ADR 0021): only `verify` vectors, and `sign` vectors that expect `UnsupportedAlgorithm`.
