@@ -2,7 +2,8 @@
 //! `x25519-dalek`.
 //!
 //! - [`generate`] makes the ephemeral key pair of one ECDH-ES agreement
-//!   (RFC 7518 §4.6) from 32 bytes of the [`RandomSource`] (RFC 7748 §6.1).
+//!   (RFC 7518 §4.6) from 32 bytes of the [`RandomSource`] (RFC 7748 §6.1),
+//!   through the crate-wide `keys::generate::generate_x25519_secret`.
 //! - [`agree`] computes the shared secret Z = X25519(secret, public)
 //!   (RFC 7748 §5, §6.1) and rejects an all-zero Z.
 //!
@@ -21,19 +22,23 @@
 //!
 //! `StaticSecret` and `SharedSecret` wipe themselves on drop (the
 //! `zeroize` feature of the pinned `x25519-dalek`), the random bytes of
-//! [`generate`] are held in a [`Zeroizing`] buffer, and Z is returned as a
-//! [`Zeroizing`] array.
+//! [`generate`] are held in a [`Zeroizing`] buffer inside
+//! `generate_x25519_secret`, and Z is returned as a [`Zeroizing`] array.
 
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 use super::random::RandomSource;
+use crate::keys::generate::generate_x25519_secret;
 use crate::{Error, Result};
 
-/// A fresh ephemeral key pair (RFC 7518 §4.6, RFC 8037 §3.2): exactly 32
-/// bytes drawn from `rng` into `StaticSecret::from` (RFC 7748 §6.1: the
-/// private key is 32 random bytes; clamping, §5 `decodeScalar25519`, is
-/// done by the primitive), and its public key X25519(secret, 9).
+/// A fresh ephemeral key pair (RFC 7518 §4.6.1, RFC 8037 §3.2): the
+/// secret from `keys::generate::generate_x25519_secret`, the crate-wide
+/// X25519 generator (F08, ADR 0050), fed by `rng`'s
+/// [`RandomSource::crypto_rng`]; it consumes exactly 32 bytes (RFC 7748
+/// §6.1: the private key is 32 random bytes; clamping, §5
+/// `decodeScalar25519`, is done by the primitive). The public key is
+/// X25519(secret, 9) (RFC 7748 §6.1).
 ///
 /// `StaticSecret` rather than `EphemeralSecret`, because only it can be
 /// built from bytes, which is how the [`RandomSource`] (and so the
@@ -43,9 +48,7 @@ use crate::{Error, Result};
 ///
 /// [`Error::RandomnessUnavailable`] if `rng` fails.
 pub(crate) fn generate(rng: &mut dyn RandomSource) -> Result<(StaticSecret, PublicKey)> {
-    let mut bytes = Zeroizing::new([0u8; 32]);
-    rng.fill(bytes.as_mut_slice())?;
-    let secret = StaticSecret::from(*bytes);
+    let secret = generate_x25519_secret(&mut rng.crypto_rng())?;
     let public = PublicKey::from(&secret);
     Ok((secret, public))
 }
@@ -204,6 +207,58 @@ mod tests {
         assert_eq!(rng.remaining(), 1);
         assert_eq!(secret.to_bytes(), [0x42u8; 32]);
         assert_eq!(public, PublicKey::from(&secret));
+    }
+
+    #[test]
+    fn generate_matches_the_keys_generator_on_the_same_bytes() {
+        // F08 (ADR 0050, code review #1): one crate-wide X25519 generation
+        // path. The same injected 32 bytes give the same key through JWE's
+        // ephemeral `generate` and `keys::generate_okp`: d is the drawn
+        // bytes (RFC 7748 §6.1, RFC 8037 §2) and x = X25519(d, 9). The RFC
+        // 8037 A.6 secret and 00 01 02 … are checked; both consume exactly
+        // 32 bytes (the `jwe::random` draw order).
+        use crate::keys::generate::generate_okp;
+        use crate::rng::CryptoRngAdapter;
+        let counting: [u8; 32] = core::array::from_fn(|i| i as u8);
+        for bytes in [hex32(ALICE_PRIVATE), counting] {
+            let mut jwe_rng = FixedRng::new([bytes, [0xEE; 32]].concat());
+            let (secret, public) = generate(&mut jwe_rng).unwrap();
+            assert_eq!(jwe_rng.remaining(), 32);
+
+            let mut keys_rng = FixedRng::new([bytes, [0xEE; 32]].concat());
+            let jwk = generate_okp(
+                OkpCurve::X25519,
+                &mut CryptoRngAdapter::fixed(&mut keys_rng),
+            )
+            .unwrap();
+            assert_eq!(keys_rng.remaining(), 32);
+
+            let KeyMaterial::Okp(key) = jwk.material() else {
+                panic!("an OKP key")
+            };
+            assert_eq!(key.crv(), OkpCurve::X25519);
+            assert_eq!(key.d(), Some(&secret.to_bytes()[..]));
+            assert_eq!(key.x(), &public.to_bytes()[..]);
+            assert_eq!(secret.to_bytes(), bytes);
+        }
+    }
+
+    #[test]
+    fn generate_goes_through_the_crate_wide_generator() {
+        // F08 (ADR 0050): the ephemeral secret comes from
+        // `keys::generate::generate_x25519_secret`, so the production half
+        // of this file builds no `StaticSecret` itself. The needle is
+        // joined at run time so this test is not itself a match.
+        let source = include_str!("ecdh_x25519.rs");
+        let production = &source[..source.find("#[cfg(test)]").unwrap()];
+        let needle = ["StaticSecret", "::from("].concat();
+        assert_eq!(production.matches(needle.as_str()).count(), 0);
+        assert_eq!(
+            production
+                .matches("generate_x25519_secret(&mut rng.crypto_rng())")
+                .count(),
+            1
+        );
     }
 
     #[test]
