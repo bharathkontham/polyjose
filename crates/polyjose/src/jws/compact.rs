@@ -245,8 +245,8 @@ impl PrecheckedPayload<'_> {
 impl CompactPrechecked<'_> {
     /// The JWS Protected Header, which is the whole JOSE Header in this
     /// serialization (RFC 7515 §7.1). It has passed every header rule of
-    /// ADR 0026 §2 steps 3–5 (types, structure, `crit` understood), and
-    /// is read-only: the signature covers its received encoding, not this
+    /// ADR 0026 §2 steps 4–5 (I-JSON, types and structure; `crit`
+    /// understood), and is read-only: the signature covers its received encoding, not this
     /// value. `typ`, `cty`, `kid` and `crit` are read from here
     /// (ADR 0049 §2).
     pub(crate) fn header(&self) -> &Header {
