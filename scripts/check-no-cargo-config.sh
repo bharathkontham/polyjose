@@ -141,7 +141,7 @@ done
 # Names only: a value (e.g. a registry token) is never printed.
 set_vars=$(compgen -e | grep -E "^($names)$" || true)
 if [ -n "$set_vars" ]; then
-  echo "note: the environment sets $(echo "$set_vars" | tr '\n' ' ')(cargo reads them; not checked)"
+  echo "note: the environment sets $(echo "$set_vars" | tr '\n' ' ')(cargo reads these variables; not checked)"
 fi
 
 if [ $status -ne 0 ]; then
