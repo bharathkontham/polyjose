@@ -909,4 +909,56 @@ mod tests {
         assert_eq!(ec_d(&jwk), ec_d(&published));
         assert_eq!(jwk.alg().map(|a| a.as_str()), Some("ES256"));
     }
+
+    /// The private member (`k` or `d`) of a generated key.
+    fn secret_of(jwk: &Jwk) -> Vec<u8> {
+        match jwk.material() {
+            KeyMaterial::Oct(key) => key.k().to_vec(),
+            KeyMaterial::Ec(_) => ec_d(jwk),
+            KeyMaterial::Okp(_) => okp_d(jwk),
+            other => panic!("generated an unexpected key type: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn consecutive_generations_differ() {
+        // A sanity check only (no statistics, no timing): two draws from
+        // the OS CSPRNG never repeat a 128-bit or longer secret.
+        let mut specs = vec![KeySpec::Oct { bytes: 16 }];
+        specs.extend(EC_CURVES.map(KeySpec::Ec));
+        specs.extend(OKP_CURVES.map(KeySpec::Okp));
+        for spec in specs {
+            let first = generate(spec).unwrap();
+            let second = generate(spec).unwrap();
+            assert_ne!(secret_of(&first), secret_of(&second), "{spec:?}");
+            assert_ne!(*first.to_json(), *second.to_json(), "{spec:?}");
+        }
+    }
+
+    #[test]
+    fn debug_of_a_generated_oct_key_redacts_k() {
+        let jwk = generate_for(SigningAlg::HS256).unwrap();
+        let debug = format!("{jwk:?}");
+        assert!(debug.contains(r#"k: "<redacted>""#), "{debug}");
+        assert!(!debug.contains(&b64url_encode(&oct_k(&jwk))));
+    }
+
+    #[test]
+    fn ec_sampling_uses_nonzero_scalar_rejection_sampling() {
+        // ADR 0018 §5, research.md §6: the one EC sampling call is
+        // NonZeroScalar's, never SecretKey's (which can in principle yield
+        // 0). The zero-block test above checks the behaviour; this pins the
+        // call in the production half of this file.
+        let source = include_str!("generate.rs");
+        let production = &source[..source.find("#[cfg(test)]").unwrap()];
+        assert_eq!(
+            production
+                .matches("NonZeroScalar::<C>::try_generate_from_rng(rng)")
+                .count(),
+            1
+        );
+        assert!(!production.contains("SecretKey::try_generate_from_rng("));
+        assert!(!production.contains("SecretKey::<C>::try_generate_from_rng("));
+        assert!(!production.contains("impl TryCryptoRng"));
+    }
 }
