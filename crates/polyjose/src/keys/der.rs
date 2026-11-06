@@ -22,8 +22,32 @@ use crate::error::{Error, Result};
 /// supported key (ADR 0018 §2; research.md §4).
 pub(crate) const MAX_INPUT_LEN: usize = 64 * 1024;
 
-/// UNIVERSAL 16, constructed: SEQUENCE (X.690 §8.9).
+/// UNIVERSAL 2: INTEGER (X.690 §8.3).
+pub(crate) const INTEGER: u8 = 0x02;
+/// UNIVERSAL 3, primitive: BIT STRING (X.690 §8.6, §10.2).
+pub(crate) const BIT_STRING: u8 = 0x03;
+/// UNIVERSAL 4, primitive: OCTET STRING (X.690 §8.7, §10.2).
+pub(crate) const OCTET_STRING: u8 = 0x04;
+/// UNIVERSAL 5: NULL (X.690 §8.8).
+pub(crate) const NULL: u8 = 0x05;
+/// UNIVERSAL 6: OBJECT IDENTIFIER (X.690 §8.19).
+pub(crate) const OID: u8 = 0x06;
+/// UNIVERSAL 16, constructed: SEQUENCE and SEQUENCE OF (X.690 §8.9, §8.10).
 pub(crate) const SEQUENCE: u8 = 0x30;
+/// UNIVERSAL 17, constructed: SET and SET OF (X.690 §8.11, §8.12).
+pub(crate) const SET: u8 = 0x31;
+/// Context-specific `[0]`, constructed: an EXPLICIT `[0]` (X.690 §8.14.2)
+/// or an IMPLICIT `[0]` of a constructed type (RFC 5958 §2 attributes).
+pub(crate) const CONTEXT_0: u8 = 0xA0;
+/// Context-specific `[1]`, constructed: an EXPLICIT `[1]` (RFC 5915 §3
+/// publicKey).
+pub(crate) const CONTEXT_1: u8 = 0xA1;
+/// Context-specific `[1]`, primitive: an IMPLICIT `[1]` BIT STRING
+/// (RFC 5958 §2 publicKey, an IMPLICIT TAGS module).
+pub(crate) const CONTEXT_1_PRIMITIVE: u8 = 0x81;
+
+/// The constructed bit of an identifier octet (X.690 §8.1.2.5).
+const CONSTRUCTED: u8 = 0x20;
 
 /// One DER element: its identifier octet, its whole encoding (identifier,
 /// length and contents octets) and its contents octets (X.690 §8.1.1).
@@ -127,6 +151,131 @@ impl<'a> Reader<'a> {
         })
     }
 
+    /// Reads one element whose identifier octet is exactly `tag`.
+    pub(crate) fn expect(&mut self, tag: u8) -> Result<Element<'a>> {
+        let element = self.element()?;
+        if element.tag == tag {
+            Ok(element)
+        } else {
+            Err(Error::InvalidKey("DER unexpected tag"))
+        }
+    }
+
+    /// Reads the next element only if its identifier octet is `tag`
+    /// (an OPTIONAL component, X.680 §25.8), otherwise reads nothing.
+    pub(crate) fn optional(&mut self, tag: u8) -> Result<Option<Element<'a>>> {
+        if self.peek_tag() == Some(tag) {
+            self.element().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Reads a SEQUENCE (X.690 §8.9) and returns a reader over its contents.
+    pub(crate) fn sequence(&mut self) -> Result<Reader<'a>> {
+        self.explicit(SEQUENCE)
+    }
+
+    /// Reads a constructed element tagged `tag`, such as an EXPLICIT `[0]`
+    /// (X.690 §8.14.2 c: the contents are the complete encoding of the
+    /// inner value), and returns a reader over its contents.
+    pub(crate) fn explicit(&mut self, tag: u8) -> Result<Reader<'a>> {
+        let element = self.expect(tag)?;
+        Ok(Reader {
+            rest: element.contents,
+        })
+    }
+
+    /// Reads an INTEGER (X.690 §8.3) and returns its two's-complement
+    /// contents octets, which must be minimal (§8.3.2).
+    pub(crate) fn integer(&mut self) -> Result<&'a [u8]> {
+        let contents = self.expect(INTEGER)?.contents;
+        check_integer(contents)?;
+        Ok(contents)
+    }
+
+    /// Reads a non-negative INTEGER and returns its magnitude, big-endian in
+    /// the fewest octets: the leading 0x00 that keeps the sign bit clear
+    /// (X.690 §8.3.3) is dropped, and zero is the single octet 0x00.
+    pub(crate) fn unsigned_integer(&mut self) -> Result<&'a [u8]> {
+        let contents = self.integer()?;
+        match contents {
+            [first, ..] if first & 0x80 != 0 => Err(Error::InvalidKey("DER INTEGER negative")),
+            [0x00, magnitude @ ..] if !magnitude.is_empty() => Ok(magnitude),
+            _ => Ok(contents),
+        }
+    }
+
+    /// Reads a non-negative INTEGER of at most 255, such as a `version`
+    /// (RFC 5958 §2, RFC 5915 §3).
+    pub(crate) fn small_unsigned(&mut self) -> Result<u8> {
+        match self.unsigned_integer()? {
+            [value] => Ok(*value),
+            _ => Err(Error::InvalidKey("DER INTEGER out of range")),
+        }
+    }
+
+    /// Reads a primitive OCTET STRING (X.690 §8.7) and returns its contents.
+    /// The constructed form is BER only (§10.2).
+    pub(crate) fn octet_string(&mut self) -> Result<&'a [u8]> {
+        Ok(self.string(OCTET_STRING)?.contents)
+    }
+
+    /// Reads a primitive BIT STRING (X.690 §8.6) with no unused bits and
+    /// returns the octets after its initial octet; see
+    /// [`Reader::implicit_bit_string`].
+    pub(crate) fn bit_string(&mut self) -> Result<&'a [u8]> {
+        self.implicit_bit_string(BIT_STRING)
+    }
+
+    /// Reads a primitive BIT STRING under the identifier `tag` (BIT_STRING,
+    /// or an IMPLICIT tag such as the RFC 5958 §2 `[1]` publicKey, 0x81) and
+    /// returns the octets after the initial octet.
+    ///
+    /// The initial octet, always present (X.690 §8.6.2.3), counts the unused
+    /// bits of the last octet (§8.6.2.2). Every key polyjose reads from a
+    /// BIT STRING is a whole number of octets (RFC 5480 §2.2, RFC 8410 §4,
+    /// RFC 3279 §2.3.1, RFC 5958 §2), so the count must be 0, which also
+    /// satisfies DER's zero padding rule (§11.2.1) trivially.
+    pub(crate) fn implicit_bit_string(&mut self, tag: u8) -> Result<&'a [u8]> {
+        match self.string(tag)?.contents {
+            [0x00, octets @ ..] => Ok(octets),
+            [] => Err(Error::InvalidKey("DER BIT STRING empty")),
+            [_, ..] => Err(Error::InvalidKey("DER BIT STRING has unused bits")),
+        }
+    }
+
+    /// Reads a NULL (X.690 §8.8), whose contents must be empty (§8.8.2).
+    pub(crate) fn null(&mut self) -> Result<()> {
+        if self.expect(NULL)?.contents.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::InvalidKey("DER NULL not empty"))
+        }
+    }
+
+    /// Reads an OBJECT IDENTIFIER (X.690 §8.19) with minimal subidentifiers
+    /// (§8.19.2) and returns its whole encoding, to compare with the `OID_*`
+    /// constants of `oid.rs`.
+    pub(crate) fn oid(&mut self) -> Result<&'a [u8]> {
+        let element = self.expect(OID)?;
+        check_oid(element.contents)?;
+        Ok(element.encoding)
+    }
+
+    /// Reads a primitive string element tagged `tag`, naming the BER-only
+    /// constructed form (X.690 §10.2) in the error.
+    fn string(&mut self, tag: u8) -> Result<Element<'a>> {
+        let element = self.element()?;
+        if element.tag == tag {
+            Ok(element)
+        } else if element.tag == tag | CONSTRUCTED {
+            Err(Error::InvalidKey("DER constructed string"))
+        } else {
+            Err(Error::InvalidKey("DER unexpected tag"))
+        }
+    }
+
     /// Fails unless every octet has been read: no data may follow the last
     /// element (X.690 §8.1.1; RFC 5958 §2, RFC 5280 §4.1).
     pub(crate) fn finish(self) -> Result<()> {
@@ -136,6 +285,36 @@ impl<'a> Reader<'a> {
             Err(Error::InvalidKey("DER trailing data"))
         }
     }
+}
+
+/// Checks INTEGER contents octets (X.690 §8.3): at least one octet
+/// (§8.3.1), and minimal, so the first nine bits are neither all zero nor
+/// all one (§8.3.2).
+fn check_integer(contents: &[u8]) -> Result<()> {
+    match contents {
+        [] => Err(Error::InvalidKey("DER INTEGER empty")),
+        [0x00, next, ..] if next & 0x80 == 0 => Err(Error::InvalidKey("DER INTEGER not minimal")),
+        [0xFF, next, ..] if next & 0x80 != 0 => Err(Error::InvalidKey("DER INTEGER not minimal")),
+        _ => Ok(()),
+    }
+}
+
+/// Checks OBJECT IDENTIFIER contents octets (X.690 §8.19): one or more
+/// subidentifiers (§8.19.1), each in the fewest octets, so its leading octet
+/// is never 0x80, and each ending in an octet with bit 8 clear (§8.19.2).
+fn check_oid(contents: &[u8]) -> Result<()> {
+    let malformed = Err(Error::InvalidKey("DER OBJECT IDENTIFIER malformed"));
+    if contents.last().is_none_or(|last| last & 0x80 != 0) {
+        return malformed;
+    }
+    let mut at_start = true;
+    for &octet in contents {
+        if at_start && octet == 0x80 {
+            return malformed;
+        }
+        at_start = octet & 0x80 == 0;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -285,5 +464,241 @@ mod tests {
         let range = input.as_ptr_range();
         assert!(range.contains(&element.contents.as_ptr()));
         assert!(range.contains(&element.encoding.as_ptr()));
+    }
+
+    /// A reader over `input` that must yield `read`'s value and then end.
+    fn read_all<'a, T>(
+        input: &'a [u8],
+        read: impl FnOnce(&mut Reader<'a>) -> Result<T>,
+    ) -> Result<T> {
+        let mut reader = Reader::new(input)?;
+        let value = read(&mut reader)?;
+        reader.finish()?;
+        Ok(value)
+    }
+
+    #[test]
+    fn expect_checks_the_tag() {
+        let element = read_all(&[0x05, 0x00], |r| r.expect(0x05)).unwrap();
+        assert_eq!(element.contents, &[] as &[u8]);
+        assert_eq!(
+            invalid(read_all(&[0x05, 0x00], |r| r.expect(0x04))),
+            "DER unexpected tag"
+        );
+        assert_eq!(invalid(read_all(&[], |r| r.expect(0x04))), "DER truncated");
+    }
+
+    #[test]
+    fn sequence_and_explicit_tags_read_their_contents() {
+        // SEQUENCE (X.690 §8.9) and an EXPLICIT [0] (§8.14.2 b) are both
+        // constructed; their contents are read by a nested reader.
+        let input = [0x30, 0x06, 0xA0, 0x02, 0x05, 0x00, 0x05, 0x00];
+        let (first, second) = read_all(&input, |r| {
+            let mut seq = r.sequence()?;
+            let mut tagged = seq.explicit(0xA0)?;
+            tagged.null()?;
+            tagged.finish()?;
+            seq.null()?;
+            seq.finish()?;
+            Ok((input[2], input[6]))
+        })
+        .unwrap();
+        assert_eq!((first, second), (0xA0, 0x05));
+        assert_eq!(
+            invalid(read_all(&[0x31, 0x00], |r| r.sequence().map(|_| ()))),
+            "DER unexpected tag"
+        );
+    }
+
+    #[test]
+    fn optional_reads_only_a_matching_tag() {
+        let input = [0x81, 0x01, 0x00, 0x05, 0x00];
+        read_all(&input, |r| {
+            assert!(r.optional(0xA0)?.is_none());
+            assert_eq!(r.optional(0x81)?.map(|e| e.contents), Some(&[0u8][..]));
+            assert!(r.optional(0x81)?.is_none());
+            r.null()
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn integers_must_be_minimal() {
+        // X.690 §8.3.2: the first nine bits are neither all zero nor all
+        // one; §8.3.1: at least one contents octet.
+        for ok in [
+            &[0x02, 0x01, 0x00][..],
+            &[0x02, 0x01, 0x7F],
+            &[0x02, 0x02, 0x00, 0x80],
+            &[0x02, 0x01, 0x80],
+            &[0x02, 0x02, 0xFF, 0x7F],
+        ] {
+            let contents = read_all(ok, Reader::integer).unwrap();
+            assert_eq!(contents, &ok[2..]);
+        }
+        for (bad, why) in [
+            (&[0x02, 0x00][..], "DER INTEGER empty"),
+            (&[0x02, 0x02, 0x00, 0x00], "DER INTEGER not minimal"),
+            (&[0x02, 0x02, 0x00, 0x7F], "DER INTEGER not minimal"),
+            (&[0x02, 0x02, 0xFF, 0x80], "DER INTEGER not minimal"),
+            (&[0x02, 0x02, 0xFF, 0xFF], "DER INTEGER not minimal"),
+        ] {
+            assert_eq!(invalid(read_all(bad, Reader::integer)), why, "{bad:02x?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_integers_reject_negatives_and_drop_the_sign_octet() {
+        // X.690 §8.3.3: two's complement, so a set high bit is negative.
+        assert_eq!(
+            read_all(&[0x02, 0x02, 0x00, 0x80], Reader::unsigned_integer).unwrap(),
+            &[0x80]
+        );
+        assert_eq!(
+            read_all(&[0x02, 0x01, 0x00], Reader::unsigned_integer).unwrap(),
+            &[0x00]
+        );
+        assert_eq!(
+            read_all(&[0x02, 0x02, 0x01, 0x00], Reader::unsigned_integer).unwrap(),
+            &[0x01, 0x00]
+        );
+        assert_eq!(
+            invalid(read_all(&[0x02, 0x01, 0x80], Reader::unsigned_integer)),
+            "DER INTEGER negative"
+        );
+        assert_eq!(
+            invalid(read_all(
+                &[0x02, 0x02, 0xFF, 0x00],
+                Reader::unsigned_integer
+            )),
+            "DER INTEGER negative"
+        );
+    }
+
+    #[test]
+    fn small_unsigned_reads_versions() {
+        assert_eq!(
+            read_all(&[0x02, 0x01, 0x00], Reader::small_unsigned).unwrap(),
+            0
+        );
+        assert_eq!(
+            read_all(&[0x02, 0x01, 0x02], Reader::small_unsigned).unwrap(),
+            2
+        );
+        assert_eq!(
+            read_all(&[0x02, 0x02, 0x00, 0xFF], Reader::small_unsigned).unwrap(),
+            255
+        );
+        assert_eq!(
+            invalid(read_all(&[0x02, 0x02, 0x01, 0x00], Reader::small_unsigned)),
+            "DER INTEGER out of range"
+        );
+        assert_eq!(
+            invalid(read_all(&[0x02, 0x01, 0xFF], Reader::small_unsigned)),
+            "DER INTEGER negative"
+        );
+    }
+
+    #[test]
+    fn strings_must_be_primitive() {
+        // X.690 §10.2: DER uses the primitive form for string types, so the
+        // constructed OCTET STRING (0x24) and BIT STRING (0x23) are BER only.
+        assert_eq!(
+            read_all(&[0x04, 0x02, 0x01, 0x02], Reader::octet_string).unwrap(),
+            &[0x01, 0x02]
+        );
+        assert_eq!(
+            invalid(read_all(
+                &[0x24, 0x03, 0x04, 0x01, 0x00],
+                Reader::octet_string
+            )),
+            "DER constructed string"
+        );
+        assert_eq!(
+            invalid(read_all(
+                &[0x23, 0x03, 0x03, 0x01, 0x00],
+                Reader::bit_string
+            )),
+            "DER constructed string"
+        );
+        assert_eq!(
+            invalid(read_all(&[0x05, 0x00], Reader::octet_string)),
+            "DER unexpected tag"
+        );
+    }
+
+    #[test]
+    fn bit_strings_must_have_no_unused_bits() {
+        // X.690 §8.6.2.2: the initial octet counts the unused bits. Every
+        // key carried in a BIT STRING is an octet string (RFC 5480 §2.2,
+        // RFC 8410 §4, RFC 3279 §2.3.1), so it must be 0, and §8.6.2.3: the
+        // initial octet is always present.
+        assert_eq!(
+            read_all(&[0x03, 0x03, 0x00, 0xAB, 0xCD], Reader::bit_string).unwrap(),
+            &[0xAB, 0xCD]
+        );
+        assert_eq!(
+            read_all(&[0x03, 0x01, 0x00], Reader::bit_string).unwrap(),
+            &[] as &[u8]
+        );
+        assert_eq!(
+            invalid(read_all(&[0x03, 0x02, 0x01, 0xAA], Reader::bit_string)),
+            "DER BIT STRING has unused bits"
+        );
+        assert_eq!(
+            invalid(read_all(&[0x03, 0x00], Reader::bit_string)),
+            "DER BIT STRING empty"
+        );
+        // The same rules under an IMPLICIT [1] tag (RFC 5958 §2 publicKey).
+        assert_eq!(
+            read_all(&[0x81, 0x02, 0x00, 0x11], |r| r.implicit_bit_string(0x81)).unwrap(),
+            &[0x11]
+        );
+        assert_eq!(
+            invalid(read_all(&[0x81, 0x02, 0x07, 0x80], |r| r.implicit_bit_string(0x81))),
+            "DER BIT STRING has unused bits"
+        );
+    }
+
+    #[test]
+    fn null_must_be_empty() {
+        // X.690 §8.8.2: "The contents octets shall not contain any octets."
+        read_all(&[0x05, 0x00], Reader::null).unwrap();
+        assert_eq!(
+            invalid(read_all(&[0x05, 0x01, 0x00], Reader::null)),
+            "DER NULL not empty"
+        );
+    }
+
+    #[test]
+    fn object_identifiers_must_have_minimal_subidentifiers() {
+        // X.690 §8.19.2: each subidentifier in the fewest octets, so its
+        // leading octet is never 0x80; its last octet has bit 8 clear.
+        let ed25519 = [0x06, 0x03, 0x2B, 0x65, 0x70];
+        assert_eq!(read_all(&ed25519, Reader::oid).unwrap(), &ed25519);
+        let p256 = [0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07];
+        assert_eq!(read_all(&p256, Reader::oid).unwrap(), &p256);
+        for bad in [
+            &[0x06, 0x00][..],
+            &[0x06, 0x04, 0x2B, 0x80, 0x65, 0x70],
+            &[0x06, 0x02, 0x80, 0x01],
+            &[0x06, 0x02, 0x2B, 0x86],
+        ] {
+            assert_eq!(
+                invalid(read_all(bad, Reader::oid)),
+                "DER OBJECT IDENTIFIER malformed",
+                "{bad:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn peek_and_is_empty_do_not_consume() {
+        let mut reader = Reader::new(&[0x05, 0x00]).unwrap();
+        assert_eq!(reader.peek_tag(), Some(0x05));
+        assert!(!reader.is_empty());
+        reader.null().unwrap();
+        assert_eq!(reader.peek_tag(), None);
+        assert!(reader.is_empty());
     }
 }
