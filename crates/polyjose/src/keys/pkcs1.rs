@@ -24,13 +24,6 @@ use crate::error::{Error, Result};
 /// Base64urlUInt needs (RFC 7518 §2, §6.3.1). Both borrow from the decoded
 /// DER. The values are public, so they need no zeroization.
 #[derive(Clone, Copy)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by rsa.rs, which the PEM/DER facade (T08) calls"
-    )
-)]
 pub(crate) struct RsaPublicParts<'a> {
     /// `modulus`, n (RFC 8017 App. A.1.1).
     pub(crate) n: &'a [u8],
@@ -47,13 +40,6 @@ pub(crate) struct RsaPublicParts<'a> {
 ///
 /// [`Error::InvalidKey`] for anything else: a negative or non-minimal
 /// INTEGER, a missing or extra field, trailing data.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by rsa.rs, which the PEM/DER facade (T08) calls"
-    )
-)]
 pub(crate) fn decode_public(der: &[u8]) -> Result<RsaPublicParts<'_>> {
     let mut outer = Reader::new(der)?;
     let fields = outer.sequence()?;
@@ -86,13 +72,6 @@ pub(crate) fn decode_public(der: &[u8]) -> Result<RsaPublicParts<'_>> {
 /// exponent and primes among them, are never interpreted (not even
 /// checked for minimal encoding), never copied and never reach an error.
 /// Whatever follows the eighth (`otherPrimeInfos`) is not read at all.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by rsa.rs, which the PEM/DER facade (T08) calls"
-    )
-)]
 pub(crate) fn decode(der: &[u8]) -> Result<RsaPublicParts<'_>> {
     let mut outer = Reader::new(der)?;
     let fields = outer.sequence()?;

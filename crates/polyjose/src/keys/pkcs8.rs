@@ -45,13 +45,6 @@ const V2: u8 = 1;
 ///   then ignored (ADR 0018 §3).
 /// - privateKey and publicKey are returned as sub-slices of `der`, whose
 ///   buffer the caller must zeroize; the publicKey has no unused bits.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the key mappers (T05, T06) and the facade (T08)"
-    )
-)]
 pub(crate) fn decode(der: &[u8]) -> Result<Pkcs8Parts<'_>> {
     decode_with_attributes(der).map(|(parts, _)| parts)
 }

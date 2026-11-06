@@ -87,10 +87,6 @@ const PROC_TYPE: &[u8] = b"Proc-Type:";
 ///
 /// The returned octets wipe on drop; the base64 copy is wiped before
 /// returning.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM entry points in api.rs")
-)]
 pub(crate) fn decode(text: &str) -> Result<(Label, Zeroizing<Vec<u8>>)> {
     let mut body = Zeroizing::new(Vec::new());
     let mut der = Zeroizing::new(Vec::new());

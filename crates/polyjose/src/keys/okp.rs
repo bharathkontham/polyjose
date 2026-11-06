@@ -123,10 +123,6 @@ fn x25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
 /// [`Error::InvalidKey`] if the privateKey is not a 32-octet
 /// CurvePrivateKey, the publicKey is not 32 octets or not the public key
 /// of `d`, the key fails JWK validation, or `parts` is not an OKP key.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
     let crv = curve(parts.alg)?;
     let d = curve_private_key(parts.private_key)?;
@@ -196,10 +192,6 @@ pub(crate) fn to_pkcs8(key: &OkpKey) -> Result<Zeroizing<Vec<u8>>> {
 ///
 /// [`Error::InvalidKey`] if the key is not 32 octets, is an invalid Ed25519
 /// key, or `parts` is not an OKP key.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
     let crv = curve(parts.alg)?;
     if parts.subject_public_key.len() != KEY_LEN {

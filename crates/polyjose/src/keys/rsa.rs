@@ -43,10 +43,6 @@ use crate::jwk::{Jwk, RsaPublicKey};
 /// non-minimal INTEGER, an extra field, an EC point), and for whatever
 /// [`Jwk::from_object`] refuses: a modulus under 2048 bits, an even
 /// modulus, an exponent that is even or outside 3 ≤ e < n.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
     if parts.alg != AlgId::RsaEncryption {
         return Err(Error::InvalidKey("the key is not an RSA key"));
@@ -64,10 +60,6 @@ pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
 /// before any private INTEGER is parsed. [`Error::InvalidKey`] for any other
 /// DER that is not an RSAPublicKey, and for whatever [`Jwk::from_object`]
 /// refuses (see [`from_spki`]).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn from_pkcs1(der: &[u8]) -> Result<Jwk> {
     to_jwk(pkcs1::decode(der)?)
 }
