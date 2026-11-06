@@ -8,7 +8,18 @@
 // dependencies). Keys are named from keys.json next to this file. The spec
 // format is documented in README.md.
 
-import { createHmac, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createECDH,
+  createHash,
+  createHmac,
+  createPrivateKey,
+  createPublicKey,
+  randomBytes,
+  sign,
+  verify,
+} from "node:crypto";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -329,17 +340,231 @@ function buildJws(spec, keys) {
 }
 
 // ---------------------------------------------------------------------------
+// JWE (RFC 7516), for nested JWTs (RFC 7519 §5.2, §11.2)
+// ---------------------------------------------------------------------------
+
+// RFC 7518 §5.3: AES-GCM content encryption, 96-bit IV, 128-bit tag.
+const ENCS = { A128GCM: 16, A192GCM: 24, A256GCM: 32 };
+// RFC 7518 §4.4 (A*KW) and §4.6 (ECDH-ES+A*KW): the AES key wrap key size in octets.
+const KW_BYTES = { A128KW: 16, A192KW: 24, A256KW: 32 };
+const CURVES = { "P-256": ["prime256v1", 32], "P-384": ["secp384r1", 48], "P-521": ["secp521r1", 66] };
+const KW_IV = Buffer.alloc(8, 0xa6); // RFC 3394 §2.2.3.1 default initial value
+
+function be32(n) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32BE(n, 0);
+  return b;
+}
+
+/**
+ * RFC 7518 §4.6.2: Concat KDF (NIST SP 800-56A §5.8.1) with SHA-256.
+ * OtherInfo = AlgorithmID || PartyUInfo || PartyVInfo || SuppPubInfo, each
+ * datum length-prefixed with 32-bit big-endian, SuppPubInfo = keydatalen in
+ * bits, SuppPrivInfo empty. The digest is node:crypto's; this only frames it.
+ */
+function concatKdf(z, algId, apu, apv, keyBytes) {
+  const lp = (b) => Buffer.concat([be32(b.length), b]);
+  const otherInfo = Buffer.concat([lp(ascii(algId)), lp(apu), lp(apv), be32(keyBytes * 8)]);
+  const out = [];
+  for (let counter = 1; out.length * 32 < keyBytes; counter += 1) {
+    out.push(createHash("sha256").update(Buffer.concat([be32(counter), z, otherInfo])).digest());
+  }
+  return Buffer.concat(out).subarray(0, keyBytes);
+}
+
+/** RFC 3394 AES key wrap with OpenSSL's id-aes*-wrap. */
+function aesKeyWrap(kek, cek) {
+  const c = createCipheriv(`id-aes${kek.length * 8}-wrap`, kek, KW_IV);
+  const wrapped = Buffer.concat([c.update(cek), c.final()]);
+  const d = createDecipheriv(`id-aes${kek.length * 8}-wrap`, kek, KW_IV);
+  if (!Buffer.concat([d.update(wrapped), d.final()]).equals(cek)) fail("AES key wrap does not round-trip");
+  return wrapped;
+}
+
+function octBytes(jwk, want, what) {
+  if (jwk.kty !== "oct") fail(`${what} needs an oct key, got ${jwk.kty}`);
+  const k = unb64u(jwk.k, "oct key k");
+  if (k.length !== want) fail(`${what} needs a ${want}-octet key, got ${k.length}`);
+  return k;
+}
+
+/**
+ * RFC 7518 §4.6: an ephemeral key on the recipient's curve (createECDH,
+ * OpenSSL's RNG), Z from ECDH with the recipient's public point, and the
+ * `epk` header parameter holding only the ephemeral public key (§4.6.1.1).
+ */
+function ecdhAgree(recipient, what) {
+  if (recipient.kty !== "EC" || CURVES[recipient.crv] === undefined) {
+    fail(`${what} needs an EC P-256, P-384 or P-521 key, got ${recipient.kty}${recipient.crv ? ` ${recipient.crv}` : ""}`);
+  }
+  const [name, len] = CURVES[recipient.crv];
+  const peer = Buffer.concat([Buffer.from([4]), unb64u(recipient.x, "x"), unb64u(recipient.y, "y")]);
+  const eph = createECDH(name);
+  eph.generateKeys();
+  const point = eph.getPublicKey(null, "uncompressed");
+  const z = eph.computeSecret(peer);
+  if (z.length !== len) fail(`${what}: Z is ${z.length} octets, expected ${len}`);
+  const epk = { kty: "EC", crv: recipient.crv, x: b64u(point.subarray(1, 1 + len)), y: b64u(point.subarray(1 + len)) };
+  if (recipient.d !== undefined) {
+    // Cross-check: the recipient's side of the agreement gives the same Z.
+    const own = createECDH(name);
+    own.setPrivateKey(unb64u(recipient.d, "d"));
+    if (!own.computeSecret(point).equals(z)) fail(`${what}: ECDH does not agree`);
+  }
+  return { z, epk };
+}
+
+const JWE_MEMBERS = [
+  "alg",
+  "enc",
+  "key",
+  "header",
+  "serialization",
+  "unprotected",
+  "recipient_header",
+  "plaintext",
+  "plaintext_b64u",
+  "corrupt",
+];
+
+/**
+ * Encrypts `plaintext` (the inner token's octets) as a JWE (RFC 7516 §5.1).
+ * The protected header is { alg, enc, epk?, cty: "JWT" } (RFC 7519 §5.2:
+ * cty "JWT" marks a nested JWT) with the spec's `header` merged over it
+ * (a null value deletes a member; alg, enc and epk are the generator's).
+ * The AAD is ASCII(BASE64URL(UTF8(protected))) (§5.1 step 14).
+ *
+ * - compact (RFC 7516 §7.1): five base64url parts.
+ * - flattened (§7.2.2): protected, unprotected (shared), header
+ *   (per-recipient), encrypted_key (absent when empty, §7.2.1), iv,
+ *   ciphertext, tag.
+ *
+ * `corrupt: "tag" | "ciphertext"` flips the low bit of that part's last octet.
+ */
+function buildJwe(spec, plaintext, keys, what) {
+  if (!isObject(spec)) fail(`${what} must be an object`);
+  onlyMembers(spec, JWE_MEMBERS, what);
+  const { alg, enc } = spec;
+  const cekLen = ENCS[enc];
+  if (cekLen === undefined) fail(`${what}: unsupported enc "${enc}" (${Object.keys(ENCS).join(", ")})`);
+  const serialization = spec.serialization ?? "compact";
+  if (serialization !== "compact" && serialization !== "flattened") {
+    fail(`${what}: serialization must be "compact" or "flattened"`);
+  }
+  for (const m of ["unprotected", "recipient_header"]) {
+    if (spec[m] === undefined) continue;
+    if (serialization !== "flattened") fail(`${what}: "${m}" needs serialization "flattened"`);
+    if (!isObject(spec[m])) fail(`${what}: "${m}" must be an object`);
+  }
+  if (spec.key === undefined) fail(`${what}: "key" is required`);
+  const key = signingKey(spec.key, keys, what);
+
+  const header = { alg, enc };
+  const extra = spec.header ?? {};
+  if (!isObject(extra)) fail(`${what}: "header" must be an object`);
+  for (const m of ["alg", "enc", "epk"]) {
+    if (m in extra) fail(`${what}: header may not set "${m}"; the generator sets it (use jwe.alg / jwe.enc)`);
+  }
+
+  let cek;
+  let encryptedKey = Buffer.alloc(0);
+  let ecdh = null;
+  if (alg === "dir") {
+    cek = octBytes(key, cekLen, `${what} dir with ${enc}`); // RFC 7518 §4.5
+  } else if (KW_BYTES[alg] !== undefined) {
+    cek = randomBytes(cekLen);
+    encryptedKey = aesKeyWrap(octBytes(key, KW_BYTES[alg], `${what} ${alg}`), cek);
+  } else if (alg?.startsWith("ECDH-ES+") && KW_BYTES[alg.slice(8)] !== undefined) {
+    ecdh = ecdhAgree(key, `${what} ${alg}`);
+    header.epk = ecdh.epk;
+  } else {
+    fail(`${what}: unsupported alg "${alg}" (dir, A128KW/A192KW/A256KW, ECDH-ES+A128KW/A192KW/A256KW)`);
+  }
+  header.cty = "JWT";
+  for (const [m, v] of Object.entries(extra)) {
+    if (v === null) delete header[m];
+    else header[m] = v;
+  }
+  if (ecdh !== null) {
+    // RFC 7518 §4.6.2: AlgorithmID is the alg; apu/apv from the header (§4.6.1.2–§4.6.1.3).
+    const party = (m) => (header[m] === undefined ? Buffer.alloc(0) : unb64u(header[m], `${what}.header.${m}`));
+    const kekLen = KW_BYTES[alg.slice(8)];
+    const kek = concatKdf(ecdh.z, alg, party("apu"), party("apv"), kekLen);
+    cek = randomBytes(cekLen);
+    encryptedKey = aesKeyWrap(kek, cek);
+  }
+
+  const protectedB64 = b64u(utf8(JSON.stringify(header)));
+  const aad = ascii(protectedB64);
+  const iv = randomBytes(12);
+  const c = createCipheriv(`aes-${cekLen * 8}-gcm`, cek, iv, { authTagLength: 16 });
+  c.setAAD(aad);
+  const ciphertext = Buffer.concat([c.update(plaintext), c.final()]);
+  const tag = c.getAuthTag();
+  {
+    const d = createDecipheriv(`aes-${cekLen * 8}-gcm`, cek, iv, { authTagLength: 16 });
+    d.setAAD(aad);
+    d.setAuthTag(tag);
+    if (!Buffer.concat([d.update(ciphertext), d.final()]).equals(plaintext)) fail(`${what}: AES-GCM does not round-trip`);
+  }
+  if (spec.corrupt !== undefined) {
+    const target = { tag, ciphertext }[spec.corrupt];
+    if (target === undefined) fail(`${what}: corrupt must be "tag" or "ciphertext"`);
+    if (target.length === 0) fail(`${what}: nothing to corrupt in an empty ${spec.corrupt}`);
+    target[target.length - 1] ^= 0x01;
+  }
+
+  if (serialization === "compact") {
+    return { token: [protectedB64, b64u(encryptedKey), b64u(iv), b64u(ciphertext), b64u(tag)].join("."), json: null };
+  }
+  const json = { protected: protectedB64 };
+  if (spec.unprotected !== undefined) json.unprotected = spec.unprotected;
+  if (spec.recipient_header !== undefined) json.header = spec.recipient_header;
+  if (encryptedKey.length > 0) json.encrypted_key = b64u(encryptedKey);
+  json.iv = b64u(iv);
+  json.ciphertext = b64u(ciphertext);
+  json.tag = b64u(tag);
+  return { token: JSON.stringify(json), json };
+}
+
+/**
+ * The entry's token: its `jws` (if any), then each `jwe` layer in order
+ * (an object or an array of objects), each encrypting the previous token's
+ * octets, or its own plaintext / plaintext_b64u when it is the first layer.
+ */
+function buildToken(resolved, keys) {
+  let built = resolved.jws === undefined ? null : buildJws(resolved.jws, keys);
+  if (resolved.jwe === undefined) return built;
+  const layers = Array.isArray(resolved.jwe) ? resolved.jwe : [resolved.jwe];
+  if (layers.length === 0) fail("jwe: give at least one layer");
+  layers.forEach((layer, i) => {
+    const what = layers.length === 1 ? "jwe" : `jwe[${i}]`;
+    const own = isObject(layer) ? ["plaintext", "plaintext_b64u"].filter((m) => layer[m] !== undefined) : [];
+    let plaintext;
+    if (built !== null) {
+      if (own.length > 0) fail(`${what}: ${own[0]} is only for a first layer with no jws`);
+      plaintext = utf8(built.token);
+    } else {
+      const which = exactlyOne(layer, ["plaintext", "plaintext_b64u"], what);
+      plaintext = which === "plaintext" ? utf8(layer.plaintext) : unb64u(layer.plaintext_b64u, `${what}.plaintext_b64u`);
+    }
+    built = buildJwe(layer, plaintext, keys, what);
+  });
+  return built;
+}
+
+// ---------------------------------------------------------------------------
 // Vectors
 // ---------------------------------------------------------------------------
 
-const DIRECTIVES = ["jws"];
+const DIRECTIVES = ["jws", "jwe"];
 const REQUIRED = ["description", "operation", "input", "expect"];
 const ORDER = ["source", "description", "operation", "input", "expect", "features"];
 
 /** Replaces the strings "$token" and "$token_json" anywhere in `value`. */
 function placeToken(value, built, used) {
   if (value === "$token" || value === "$token_json") {
-    if (built === null) fail(`"${value}" is used, but the entry builds no token (no jws)`);
+    if (built === null) fail(`"${value}" is used, but the entry builds no token (no jws or jwe)`);
     used.count += 1;
     if (value === "$token") return built.token;
     if (built.json === null) fail('"$token_json" needs a JSON serialization');
@@ -356,7 +581,7 @@ function buildVector(entry, keys) {
   if (!isObject(entry)) fail("a spec entry must be an object");
   for (const m of REQUIRED) if (entry[m] === undefined) fail(`missing "${m}"`);
   const resolved = resolveRefs(entry, keys);
-  const built = resolved.jws === undefined ? null : buildJws(resolved.jws, keys);
+  const built = buildToken(resolved, keys);
   const vector = {};
   vector.source = typeof entry.source === "string" ? `${entry.source}; ${ORACLE_SOURCE}` : ORACLE_SOURCE;
   for (const m of ORDER.slice(1)) if (resolved[m] !== undefined) vector[m] = resolved[m];
