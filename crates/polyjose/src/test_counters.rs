@@ -50,3 +50,123 @@ pub(crate) mod key_op_comparisons {
         (result, COUNT.with(Cell::get) - before)
     }
 }
+
+// The JWE counters (feature 0003). Each is ticked by one family task, which
+// calls `tick()` under `#[cfg(test)]` and asserts with `count` in its own
+// unit tests, without editing this file.
+
+/// AES-CBC decryptions started by A*CBC-HS* (`jwe/enc_cbc_hmac.rs`, T03),
+/// ticked right before the CBC decryption: a tag that fails the HMAC check
+/// must leave it at 0 (RFC 7518 §5.2.2.2).
+pub(crate) mod cbc_hmac_decryptions {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of ticks on this
+    /// thread while it ran.
+    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
+}
+
+/// PBKDF2 derivations started by PBES2 (`jwe/pbes2.rs`, T12): a `p2c` over
+/// the policy bound must leave it at 0 (RFC 7518 §4.8, ADR 0023).
+pub(crate) mod pbkdf2_derivations {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of ticks on this
+    /// thread while it ran.
+    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
+}
+
+/// Diffie-Hellman agreements computed for ECDH-ES (`jwe/ecdh_nist.rs` and
+/// `jwe/ecdh_x25519.rs`, T13 and T07): an invalid `epk` must leave it at 0
+/// (RFC 7518 §4.6, RFC 8725 §3.4).
+pub(crate) mod ecdh_agreements {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of ticks on this
+    /// thread while it ran.
+    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
+}
+
+/// Inflate calls made by JWE `zip` (`jwe/zip.rs`, T15): a JWE whose tag
+/// fails must leave it at 0, since decompression comes after tag
+/// verification (RFC 7516 §5.2 step 17).
+pub(crate) mod inflate_calls {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of ticks on this
+    /// thread while it ran.
+    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jwe_counters_count_only_their_own_ticks_while_f_runs() {
+        cbc_hmac_decryptions::tick();
+        let ((), n) = cbc_hmac_decryptions::count(|| {
+            cbc_hmac_decryptions::tick();
+            cbc_hmac_decryptions::tick();
+            pbkdf2_derivations::tick();
+        });
+        assert_eq!(n, 2);
+        assert_eq!(pbkdf2_derivations::count(|| ()).1, 0);
+        let (value, n) = pbkdf2_derivations::count(|| {
+            pbkdf2_derivations::tick();
+            7
+        });
+        assert_eq!((value, n), (7, 1));
+        assert_eq!(ecdh_agreements::count(ecdh_agreements::tick).1, 1);
+        assert_eq!(inflate_calls::count(inflate_calls::tick).1, 1);
+        assert_eq!(inflate_calls::count(ecdh_agreements::tick).1, 0);
+    }
+}
