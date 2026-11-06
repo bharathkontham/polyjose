@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "Export refusal: a public EC key cannot be exported as PKCS#8, a private-key structure (RFC 5958 §2; ADR 0018 §3).",
+  "operation": "keys.export_pem",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"
+    },
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

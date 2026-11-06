@@ -1,0 +1,18 @@
+{
+  "source": "RFC 8410 §10.3",
+  "description": "PEM export of the RFC 8410 §10.3 Ed25519 key as PKCS#8 v1 (RFC 8410 §7), byte for byte the RFC text.",
+  "operation": "keys.export_pem",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+      "d": "1O5y2_kTWErVttjx92n4rTr-fCjL8dT74Jeoj0R1WEI"
+    },
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n"
+  }
+}

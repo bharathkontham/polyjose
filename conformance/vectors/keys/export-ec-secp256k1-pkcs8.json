@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7468 §10",
+  "description": "PEM export of the RFC 7468 Figure 12 secp256k1 key as PKCS#8, byte for byte the RFC text.",
+  "operation": "keys.export_pem",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "secp256k1",
+      "x": "nO1CbYJxf2m6ljOtE91zSRMwb-Xs_U3cCh9DOsaTNqs",
+      "y": "7nfCaw395gt2C2OAF3cMGYe0-KUKSIUgJfJoDzP0uQk",
+      "d": "VcB_UNPxalR9zDYAjQIfjojUDiQuGnSJrFEEzZPT_90"
+    },
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "pem": "-----BEGIN PRIVATE KEY-----\nMIGEAgEAMBAGByqGSM49AgEGBSuBBAAKBG0wawIBAQQgVcB/UNPxalR9zDYAjQIf\njojUDiQuGnSJrFEEzZPT/92hRANCAASc7UJtgnF/abqWM60T3XNJEzBv5ez9TdwK\nH0M6xpM2q+53wmsN/eYLdgtjgBd3DBmHtPilCkiFICXyaA8z9LkJ\n-----END PRIVATE KEY-----\n"
+  }
+}
