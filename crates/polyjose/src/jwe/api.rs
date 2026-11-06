@@ -119,6 +119,11 @@ impl DecryptPolicy {
     /// [`DEFAULT_MAX_DECOMPRESSED_LEN`](Self::DEFAULT_MAX_DECOMPRESSED_LEN)
     /// (250,000). Only used with the `deflate` feature; without it `zip` is
     /// always [`Error::UnsupportedAlgorithm`].
+    ///
+    /// The value is also the size of the output buffer inflation allocates
+    /// up front, before decoding (less only when the compressed input is too
+    /// short to expand that far, RFC 1951 §3.2.5). Raising it raises the
+    /// memory one authenticated JWE can claim by the same amount.
     #[must_use]
     pub fn max_decompressed_len(mut self, n: usize) -> Self {
         self.max_decompressed_len = n;

@@ -1,0 +1,83 @@
+{
+  "source": "RFC 7520 §5.13",
+  "description": "Encrypting to recipients #2 (ECDH-ES+A256KW, P-384) and #3 (A256GCMKW) of RFC 7520 §5.13, with its random values as the drawn bytes (CEK, then the 48-octet ephemeral d, accepted on the first draw, then the 96-bit key-wrap IV, then the content IV), kid in each per-recipient header and its shared unprotected cty, reproduces the RFC 7520 §5.13 general JSON JWE exactly with recipient #1 (RSA1_5, not implemented, ADR 0022) left out: alg and the key management parameters go in each recipient's header and enc in the protected header, as in the RFC (RFC 7516 §7.2.1; generated from the ietf-jose cookbook)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "general",
+    "enc": "A128CBC-HS256",
+    "plaintext_b64u": "WW91IGNhbiB0cnVzdCB1cyB0byBzdGljayB3aXRoIHlvdSB0aHJvdWdoIHRoaWNrIGFuZCB0aGlu4oCTdG8gdGhlIGJpdHRlciBlbmQuIEFuZCB5b3UgY2FuIHRydXN0IHVzIHRvIGtlZXAgYW55IHNlY3JldCBvZiB5b3Vyc-KAk2Nsb3NlciB0aGFuIHlvdSBrZWVwIGl0IHlvdXJzZWxmLiBCdXQgeW91IGNhbm5vdCB0cnVzdCB1cyB0byBsZXQgeW91IGZhY2UgdHJvdWJsZSBhbG9uZSwgYW5kIGdvIG9mZiB3aXRob3V0IGEgd29yZC4gV2UgYXJlIHlvdXIgZnJpZW5kcywgRnJvZG8u",
+    "recipients": [
+      {
+        "alg": "ECDH-ES+A256KW",
+        "key": {
+          "kty": "EC",
+          "kid": "peregrin.took@tuckborough.example",
+          "use": "enc",
+          "crv": "P-384",
+          "x": "YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2",
+          "y": "A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP"
+        },
+        "header": {
+          "kid": "peregrin.took@tuckborough.example"
+        }
+      },
+      {
+        "alg": "A256GCMKW",
+        "key": {
+          "kty": "oct",
+          "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d",
+          "use": "enc",
+          "alg": "A256GCMKW",
+          "k": "qC57l_uxcm7Nm3K-ct4GFjx8tM1U8CZ0NLBvdQstiS8"
+        },
+        "header": {
+          "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d"
+        }
+      }
+    ],
+    "protected_b64u": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+    "unprotected": {
+      "cty": "text/plain"
+    },
+    "rng_b64u": "zXayeJ4gvm8NJr3IUInyokTUO-LbQNKEhe_zWlYbdpTUMod9O_4-KJ9XDZUEcz9mJVzA4zGQ7IA1L-VAclysPFVjeOFUK9k_AzEkogTv3cIC-l6g9n01yf2aQGdWAQgdjbQSfNS1kWXZGkHW"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": {
+      "recipients": [
+        {
+          "encrypted_key": "ExInT0io9BqBMYF6-maw5tZlgoZXThD1zWKsHixJuw_elY4gSSId_w",
+          "header": {
+            "alg": "ECDH-ES+A256KW",
+            "kid": "peregrin.took@tuckborough.example",
+            "epk": {
+              "kty": "EC",
+              "crv": "P-384",
+              "x": "Uzdvk3pi5wKCRc1izp5_r0OjeqT-I68i8g2b8mva8diRhsE2xAn2DtMRb25Ma2CX",
+              "y": "VDrRyFJh-Kwd1EjAgmj5Eo-CTHAZ53MC7PjjpLioy3ylEjI1pOMbw91fzZ84pbfm"
+            }
+          }
+        },
+        {
+          "encrypted_key": "a7CclAejo_7JSuPB8zeagxXRam8dwCfmkt9-WyTpS1E",
+          "header": {
+            "alg": "A256GCMKW",
+            "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d",
+            "tag": "59Nqh1LlYtVIhfD3pgRGvw",
+            "iv": "AvpeoPZ9Ncn9mkBn"
+          }
+        }
+      ],
+      "unprotected": {
+        "cty": "text/plain"
+      },
+      "protected": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+      "iv": "VgEIHY20EnzUtZFl2RpB1g",
+      "ciphertext": "ajm2Q-OpPXCr7-MHXicknb1lsxLdXxK_yLds0KuhJzfWK04SjdxQeSw2L9mu3a_k1C55kCQ_3xlkcVKC5yr__Is48VOoK0k63_QRM9tBURMFqLByJ8vOYQX0oJW4VUHJLmGhF-tVQWB7Kz8mr8zeE7txF0MSaP6ga7-siYxStR7_G07Thd1jh-zGT0wxM5g-VRORtq0K6AXpLlwEqRp7pkt2zRM0ZAXqSpe1O6FJ7FHLDyEFnD-zDIZukLpCbzhzMDLLw2-8I14FQrgi-iEuzHgIJFIJn2wh9Tj0cg_kOZy9BqMRZbmYXMY9YQjorZ_P_JYG3ARAIF3OjDNqpdYe-K_5Q5crGJSDNyij_ygEiItR5jssQVH2ofDQdLChtazE",
+      "tag": "BESYyFN7T09KY7i8zKs5_g"
+    }
+  },
+  "features": [
+    "fixed-rng"
+  ]
+}

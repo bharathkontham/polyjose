@@ -70,9 +70,10 @@ impl RecipientKey {
     /// (`Jwk::from_object`: exact member lengths, EC points on their curve
     /// and not the identity, `d` in [1, n − 1], RSA moduli of at least 2048
     /// bits, RSA private keys refused; ADR 0041 §4, ADR 0021), and so is
-    /// private-to-public consistency (ADR 0043 §3: EC `d·G` = (`x`, `y`)
-    /// now; X25519 `d` → `x` when 0002 T17 adds it there). None of that is
-    /// repeated here. In this order:
+    /// private-to-public consistency (ADR 0043 §3: EC `d·G` = (`x`, `y`),
+    /// and X25519 `x` = X25519(`d`, 9) by RFC 7748 §6.1, through
+    /// `jwe::x25519_consistency`). None of that is repeated here. In this
+    /// order:
     ///
     /// 1. **Support** → [`Error::UnsupportedAlgorithm`]: `alg` must be
     ///    implemented in `direction` (`keymgmt::supported`: RSA-OAEP-256 is

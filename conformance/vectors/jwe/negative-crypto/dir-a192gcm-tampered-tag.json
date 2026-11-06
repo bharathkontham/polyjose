@@ -1,0 +1,22 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.2 step 16, §11.5 and RFC 7518 §5.3: the dir + A192GCM JWE of dir-a192gcm-decrypts with one bit of its Authentication Tag flipped is DecryptionFailed, the one detail-free error (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8), independently of polyjose)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTkyR0NNIn0..4ovPTlZ-oYg1sQiJ.y85GtG7DP9RICYUSkdXT3GrGt06GrVHZiSW8uYmjHGgDnTLIeX5GNDQuS-h5W81I2HlbJs0m3v1tZtm8SLwVPZTpXJl_H5cEvbXb5skT-_9yPhgPB-0xNBOjxIQHBzRBCOodswZhhQ.ibCv9pKvEhqfLafTv2yVyg",
+    "key": {
+      "kty": "oct",
+      "k": "7sfQWXWZY3kStl0mBQRl_pYX8HKX0ork"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A192GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "source": "RFC 7520 §5.7, erratum 4802",
+  "description": "Encrypting with the RFC 7520 §5.7 random values as the drawn bytes (CEK, then the 96-bit key-wrap IV, then the content IV) and its protected header (kid in the protected header) reproduces the RFC 7520 §5.7 flattened JSON JWE exactly, in its erratum 4802 form (tag DKW7jrb4WaRSNfbXVPlT5g)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "flattened",
+    "enc": "A128CBC-HS256",
+    "plaintext_b64u": "WW91IGNhbiB0cnVzdCB1cyB0byBzdGljayB3aXRoIHlvdSB0aHJvdWdoIHRoaWNrIGFuZCB0aGlu4oCTdG8gdGhlIGJpdHRlciBlbmQuIEFuZCB5b3UgY2FuIHRydXN0IHVzIHRvIGtlZXAgYW55IHNlY3JldCBvZiB5b3Vyc-KAk2Nsb3NlciB0aGFuIHlvdSBrZWVwIGl0IHlvdXJzZWxmLiBCdXQgeW91IGNhbm5vdCB0cnVzdCB1cyB0byBsZXQgeW91IGZhY2UgdHJvdWJsZSBhbG9uZSwgYW5kIGdvIG9mZiB3aXRob3V0IGEgd29yZC4gV2UgYXJlIHlvdXIgZnJpZW5kcywgRnJvZG8u",
+    "recipients": [
+      {
+        "alg": "A256GCMKW",
+        "key": {
+          "kty": "oct",
+          "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d",
+          "use": "enc",
+          "alg": "A256GCMKW",
+          "k": "qC57l_uxcm7Nm3K-ct4GFjx8tM1U8CZ0NLBvdQstiS8"
+        }
+      }
+    ],
+    "protected": {
+      "kid": "18ec08e1-bfa9-4d95-b205-2b4dd1d4321d"
+    },
+    "protected_b64u": "eyJhbGciOiJBMjU2R0NNS1ciLCJraWQiOiIxOGVjMDhlMS1iZmE5LTRkOTUtYjIwNS0yYjRkZDFkNDMyMWQiLCJ0YWciOiJrZlBkdVZRM1QzSDZ2bmV3dC0ta3N3IiwiaXYiOiJLa1lUMEdYXzJqSGxmcU5fIiwiZW5jIjoiQTEyOENCQy1IUzI1NiJ9",
+    "rng_b64u": "UWxARpat23nL9ReIj4WG3D1ee9I4r-Mv5QLuFXdy_rEqRhPQZf_aMeV-o3-DPo2PIQU2b--bwaPoXCgV"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": {
+      "protected": "eyJhbGciOiJBMjU2R0NNS1ciLCJraWQiOiIxOGVjMDhlMS1iZmE5LTRkOTUtYjIwNS0yYjRkZDFkNDMyMWQiLCJ0YWciOiJrZlBkdVZRM1QzSDZ2bmV3dC0ta3N3IiwiaXYiOiJLa1lUMEdYXzJqSGxmcU5fIiwiZW5jIjoiQTEyOENCQy1IUzI1NiJ9",
+      "encrypted_key": "lJf3HbOApxMEBkCMOoTnnABxs_CvTWUmZQ2ElLvYNok",
+      "iv": "gz6NjyEFNm_vm8Gj6FwoFQ",
+      "ciphertext": "Jf5p9-ZhJlJy_IQ_byKFmI0Ro7w7G1QiaZpI8OaiVgD8EqoDZHyFKFBupS8iaEeVIgMqWmsuJKuoVgzR3YfzoMd3GxEm3VxNhzWyWtZKX0gxKdy6HgLvqoGNbZCzLjqcpDiF8q2_62EVAbr2uSc2oaxFmFuIQHLcqAHxy51449xkjZ7ewzZaGV3eFqhpco8o4DijXaG5_7kp3h2cajRfDgymuxUbWgLqaeNQaJtvJmSMFuEOSAzw9Hdeb6yhdTynCRmu-kqtO5Dec4lT2OMZKpnxc_F1_4yDJFcqb5CiDSmA-psB2k0JtjxAj4UPI61oONK7zzFIu4gBfjJCndsZfdvG7h8wGjV98QhrKEnR7xKZ3KCr0_qR1B-gxpNk3xWU",
+      "tag": "DKW7jrb4WaRSNfbXVPlT5g"
+    }
+  },
+  "features": [
+    "fixed-rng"
+  ]
+}
