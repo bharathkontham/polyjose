@@ -42,8 +42,8 @@ part of the core crate and are not listed here.
 - **Upstream:** RustCrypto, [RustCrypto/utils](https://github.com/RustCrypto/utils)
   ([crates.io](https://crates.io/crates/block-buffer))
 - **License:** MIT OR Apache-2.0
-- **Used for:** not used directly. `sha2` buffers its input into blocks with it.
-- **Audit status:** not in the ADR 0019 register; a dependency of `sha2`.
+- **Used for:** not used directly. `digest` buffers `sha2`'s input into blocks with it.
+- **Audit status:** not in the ADR 0019 register; a dependency of `digest` (which `sha2` uses).
 
 ### `crypto-common`
 
