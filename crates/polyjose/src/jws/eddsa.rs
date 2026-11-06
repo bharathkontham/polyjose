@@ -144,6 +144,7 @@ fn verifying_key(x: &[u8]) -> Result<VerifyingKey> {
 mod tests {
     use super::*;
     use crate::jws::alg::test_keys as keys;
+    use crate::test_support::wycheproof::{self, Deviation, Outcome};
     use crate::util::b64url_decode;
 
     use SigningAlg as A;
@@ -459,5 +460,66 @@ mod tests {
                 "{len}"
             );
         }
+    }
+
+    /// Where polyjose's outcome on `ed25519_test.json` differs from
+    /// Wycheproof's `result`, or picks a side on an `acceptable` test.
+    /// Every other test, `valid` and `invalid`, gets exactly the required
+    /// outcome.
+    const WYCHEPROOF_ED25519: &[Deviation] = &[
+        Deviation::range(
+            152,
+            159,
+            Outcome::Reject,
+            "ADR 0026 §6, ADR 0041 §4: a public key of small order (the identity \
+             and the seven torsion points, RFC 8032 §5.1.3) is rejected with \
+             InvalidKey at JWK import; verify re-checks is_weak()",
+        ),
+        Deviation::range(
+            160,
+            180,
+            Outcome::Accept,
+            "ADR 0026 §6: verify_strict plus is_weak() is the policy; a mixed-order \
+             key is not of small order, and these signatures satisfy the \
+             cofactorless equation [S]B = R + [k]A that RFC 8032 §5.1.7 step 3 \
+             allows",
+        ),
+    ];
+
+    #[test]
+    fn wycheproof_ed25519() {
+        // ADR 0008 layer 1, ADR 0026 §6. The group key is `publicKeyJwk`
+        // where the file has one, else a JWK rebuilt from `pk`.
+        let suite = wycheproof::load("ed25519");
+        let summary = wycheproof::assert_conforms(&suite, WYCHEPROOF_ED25519, |group, test| {
+            let (msg, sig) = test.signature();
+            let id = test.tc_id;
+            let key = match Jwk::from_json(group.verification_jwk().as_bytes()) {
+                Ok(key) => key,
+                Err(e) => {
+                    // Only the small-order keys fail import, and only with
+                    // InvalidKey (ADR 0041 §4).
+                    assert!(test.has_flag("SmallOrderPublicKey"), "tcId {id}: {e:?}");
+                    assert_eq!(e.code(), "InvalidKey", "tcId {id}");
+                    return Outcome::Reject;
+                }
+            };
+            let eddsa = verify(&A::EdDSA, &key, msg, sig);
+            // RFC 9864 §2.2: `Ed25519` is the same algorithm as `EdDSA`
+            // with an Ed25519 key.
+            assert_eq!(eddsa, verify(&A::Ed25519, &key, msg, sig), "tcId {id}");
+            // alg.rs contract: a key that imported is never refused here,
+            // so every rejection is the signature's.
+            if let Err(e) = &eddsa {
+                assert_eq!(*e, Error::InvalidSignature, "tcId {id}");
+            }
+            Outcome::of(&eddsa)
+        });
+        assert_eq!(summary.tests, 210);
+        assert_eq!(summary.deviations, 29);
+        // 117 valid + 21 mixed-order acceptable; 64 invalid + 8 small-order
+        // acceptable rejected.
+        assert_eq!(summary.accepted, 117 + 21);
+        assert_eq!(summary.rejected, 64 + 8);
     }
 }
