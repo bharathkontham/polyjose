@@ -1,0 +1,24 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 \u00a74.3: \"A key of size 2048 bits or larger MUST be used with these algorithms\"; a 1024-bit RSA public key (generated with Node's crypto) is InvalidKey",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "dGVzdA",
+    "recipients": [
+      {
+        "alg": "RSA-OAEP-256",
+        "key": {
+          "kty": "RSA",
+          "n": "3CR9Xsh0d7aX69Xj3BBSEQ3p-VHQj7EisZXUQFdpfxfNK0S0PyC1LeXIdb1cR8Yp9Z8SuL0Lro2fktr0NRZ5flKcfKHdVdnkfMvuaAQlvpENwoXABTNSQZoFVlYoTb-M71xiIH6U_joDcKcSglTw7SzO_u4NXHXlnJdHgRPMpu0",
+          "e": "AQAB"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
