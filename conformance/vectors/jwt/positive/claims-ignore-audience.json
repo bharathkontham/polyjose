@@ -1,0 +1,30 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "ignore_audience true with aud present and no audience configured: the explicit opt-out of RFC 7519 §4.1.3 is accepted (ADR 0027 §4, RFC 8725 §3.9)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjoic29tZW9uZS1lbHNlIiwiZXhwIjoxMzAwODE5MzgwfQ.7Ajsi_ypRX9It6Bkpk05ZwbvUu73kBc1eSPwXOm5h1FSABcx7Fy7C7cvQbSLnD1eJXiNsh0pzgQLHrMFHyGTYA",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "policy": {
+      "ignore_audience": true
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "aud": "someone-else",
+      "exp": 1300819380
+    },
+    "alg": "ES256"
+  }
+}

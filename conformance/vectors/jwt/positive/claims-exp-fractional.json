@@ -1,0 +1,29 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "exp 1300819380.5 at now 1300819380 with leeway 0: compared exactly, never truncated, so exp > now is accepted (RFC 7519 §2, §4.1.4, ADR 0027 §2-§3)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODE5MzgwLjV9.SeLmdOdNqXp6rGotCfEQpRuX98AH3uwWW2vvOt3FEgCO4r2NqrL-NXI0kkM4xU9gzQC13Oq8XzeLg-m-8yNu8A",
+    "now": 1300819380,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "policy": {
+      "leeway": 0
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300819380.5
+    },
+    "alg": "ES256"
+  }
+}
