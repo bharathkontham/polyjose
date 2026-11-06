@@ -5,7 +5,7 @@
 
 use polyjose::Error;
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
-use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient, decrypt_compact};
+use polyjose::jwe::{DecryptPolicy, Encryptor, JsonForm, Recipient, decrypt_compact, decrypt_json};
 use polyjose::jwk::Jwk;
 use polyjose::util::b64url_encode;
 use proptest::prelude::*;
@@ -305,6 +305,36 @@ fn encryptor_debug_redacts_aad_and_keys() {
     let bare = format!("{:?}", Encryptor::new(E::A128GCM));
     assert!(bare.contains("aad: None, "), "{bare}");
     assert!(bare.contains("recipients: 0"), "{bare}");
+}
+
+/// The decrypted AAD (RFC 7516 §7.2.1 `aad`) is returned unchanged through
+/// the slice accessor, and `Decrypted`'s `Debug` never prints it (ADR 0050
+/// §4, ADR 0030 §7.5).
+#[test]
+fn decrypted_aad_round_trips_and_stays_out_of_debug() {
+    const AAD: &[u8] = b"ZZAADMARKERZZ";
+    let key = oct(&[7; 16]);
+    let token = Encryptor::new(E::A128GCM)
+        .aad(AAD)
+        .recipient(Recipient::new(A::A128KW, &key))
+        .encrypt_json(b"x", JsonForm::Flattened)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let d = decrypt_json(&token, &key, &policy(&[A::A128KW], &[E::A128GCM]))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let aad: Option<&[u8]> = d.aad();
+    assert_eq!(aad, Some(AAD));
+    let needles = [
+        String::from_utf8_lossy(AAD).into_owned(),
+        b64url_encode(AAD),
+        squash(&format!("{AAD:?}")),
+    ];
+    for dump in [format!("{d:?}"), format!("{d:#?}")] {
+        let squashed = squash(&dump);
+        for needle in &needles {
+            assert!(!squashed.contains(needle.as_str()), "{needle} in {dump}");
+        }
+        assert!(squashed.contains(r#"aad:Some("<redacted>""#), "{dump}");
+    }
 }
 
 #[test]
