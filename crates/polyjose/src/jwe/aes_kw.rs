@@ -1,50 +1,108 @@
 //! A128KW, A192KW and A256KW: AES Key Wrap (RFC 3394) of a random CEK
 //! (RFC 7518 §4.4), on `aes-kw`. Also the [`wrap`]/[`unwrap`] helper that
-//! PBES2 (RFC 7518 §4.8) and ECDH-ES+A*KW (RFC 7518 §4.6) call. Filled in
-//! by T06.
+//! PBES2 (RFC 7518 §4.8) and ECDH-ES+A*KW (RFC 7518 §4.6) call.
+//!
+//! `aes-kw` wraps and unwraps any multiple of 8 bytes, 0 included
+//! (research.md §3), so the RFC 3394 §2 sizes are enforced here: key data
+//! of at least two 64-bit blocks, a KEK of an AES key size.
 
 use super::api::DecryptPolicy;
-use super::content::Cek;
+use super::content::{Cek, cek_len};
 use super::key::RecipientKey;
 use super::keymgmt::{KeyOutput, RecipientOptions};
 use super::random::RandomSource;
 use crate::header::Header;
+use crate::json::Object;
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
 use crate::{Error, Result};
 use aes_kw::{KeyInit, KwAes128, KwAes192, KwAes256};
 use zeroize::Zeroizing;
 
-/// Key management on encrypt (RFC 7516 §5.1 steps 3–7) for A128KW, A192KW and A256KW.
+/// Key management on encrypt (RFC 7516 §5.1 steps 3–7) for A128KW, A192KW
+/// and A256KW: the random CEK wrapped under the shared symmetric key with
+/// RFC 3394 is the JWE Encrypted Key (RFC 7518 §4.4, RFC 7516 §5.1 step 4).
+/// The algorithm defines no header parameters, and draws no randomness:
+/// RFC 3394 wrapping is deterministic (§2.2.1).
 ///
 /// # Errors
 ///
-/// An error if the KEK length does not match `alg` (16, 24 or 32 bytes).
+/// - [`Error::UnsupportedAlgorithm`] for an `alg` outside the family or an
+///   unknown `enc`;
+/// - [`Error::KeyAlgorithmMismatch`] for a key that is not a symmetric key
+///   (RFC 7518 §6.4, RFC 8725 §3.1);
+/// - [`Error::InvalidKey`] if the KEK length does not match `alg` (16, 24
+///   or 32 bytes, RFC 7518 §4.4), or the CEK is missing or not the length
+///   `enc` requires (RFC 7516 §5.1 step 2).
 pub(super) fn encrypt_key(
-    _alg: &KeyMgmtAlg,
-    _key: &RecipientKey,
-    _enc: &ContentEncAlg,
-    _cek: Option<&Cek>,
+    alg: &KeyMgmtAlg,
+    key: &RecipientKey,
+    enc: &ContentEncAlg,
+    cek: Option<&Cek>,
     _options: &RecipientOptions,
     _rng: &mut dyn RandomSource,
 ) -> Result<KeyOutput> {
-    Err(Error::UnsupportedAlgorithm)
+    let kek_len = kek_len(alg).ok_or(Error::UnsupportedAlgorithm)?;
+    let RecipientKey::Symmetric(kek) = key else {
+        return Err(Error::KeyAlgorithmMismatch);
+    };
+    if kek.len() != kek_len {
+        return Err(Error::InvalidKey(KEK_SIZE));
+    }
+    let cek_len = cek_len(enc)?;
+    let cek = cek
+        .filter(|cek| cek.len() == cek_len)
+        .ok_or(Error::InvalidKey(CEK_SIZE))?;
+    Ok(KeyOutput {
+        encrypted_key: wrap(kek, cek.as_bytes())?,
+        header_params: Object::new(),
+        cek: None,
+    })
 }
 
-/// Key management on decrypt (RFC 7516 §5.2 steps 6–12) for A128KW, A192KW and A256KW: the
-/// CEK, which must have the length `enc` requires (§5.2 step 9).
+/// Key management on decrypt (RFC 7516 §5.2 steps 6–12) for A128KW, A192KW
+/// and A256KW: the JWE Encrypted Key unwrapped under the shared symmetric
+/// key with RFC 3394 (RFC 7518 §4.4, RFC 7516 §5.2 step 10). The CEK must
+/// have the length `enc` requires (§5.2 step 9).
 ///
 /// # Errors
 ///
-/// An error for a wrong KEK length, a wrapped key of the wrong size, an integrity failure (RFC 3394 §2.2.3) or an unwrapped CEK of the wrong length. `core` reports every error from here as `DecryptionFailed`.
+/// [`Error::DecryptionFailed`], whatever the cause, so no cause can be told
+/// from another (RFC 7516 §11.4–§11.5, the plan.md error contract): an
+/// `alg` outside the family, a key that is not symmetric or whose length
+/// does not match `alg`, an unknown `enc`, a wrapped key of the wrong size,
+/// an integrity failure (RFC 3394 §2.2.3) or an unwrapped CEK of the wrong
+/// length. No CEK, partial or whole, is returned with an error, and every
+/// unwrapped byte is wiped before returning.
 pub(super) fn decrypt_key(
-    _alg: &KeyMgmtAlg,
-    _key: &RecipientKey,
-    _enc: &ContentEncAlg,
+    alg: &KeyMgmtAlg,
+    key: &RecipientKey,
+    enc: &ContentEncAlg,
     _header: &Header,
-    _encrypted_key: &[u8],
+    encrypted_key: &[u8],
     _policy: &DecryptPolicy,
 ) -> Result<Cek> {
-    Err(Error::UnsupportedAlgorithm)
+    let kek = match (kek_len(alg), key) {
+        (Some(len), RecipientKey::Symmetric(kek)) if kek.len() == len => kek,
+        _ => return Err(Error::DecryptionFailed),
+    };
+    let cek_len = cek_len(enc).map_err(|_| Error::DecryptionFailed)?;
+    let cek = unwrap(kek, encrypted_key)?;
+    if cek.len() != cek_len {
+        // `cek` is `Zeroizing`: dropping it here wipes the unwrapped bytes.
+        return Err(Error::DecryptionFailed);
+    }
+    Ok(Cek::new(cek))
+}
+
+/// The KEK length of `alg` in bytes (RFC 7518 §4.4), or `None` for an `alg`
+/// outside the A*KW family.
+fn kek_len(alg: &KeyMgmtAlg) -> Option<usize> {
+    match alg {
+        KeyMgmtAlg::A128KW => Some(16),
+        KeyMgmtAlg::A192KW => Some(24),
+        KeyMgmtAlg::A256KW => Some(32),
+        _ => None,
+    }
 }
 
 /// Wraps `cek` under `kek` (RFC 3394 §2.2.1). The KEK is 16, 24 or 32
@@ -348,5 +406,229 @@ mod tests {
         });
         assert_eq!(summary.tests, 165);
         assert_eq!(summary.deviations, 3);
+    }
+
+    use crate::rng::insecure_test_vectors::FixedRng;
+
+    /// `(alg, KEK length)` of RFC 7518 §4.4.
+    const FAMILY: [(KeyMgmtAlg, usize); 3] = [
+        (KeyMgmtAlg::A128KW, 16),
+        (KeyMgmtAlg::A192KW, 24),
+        (KeyMgmtAlg::A256KW, 32),
+    ];
+
+    fn kek(len: usize) -> RecipientKey {
+        RecipientKey::Symmetric(Zeroizing::new((0..len).map(|i| 0x40 ^ i as u8).collect()))
+    }
+
+    fn cek_for(enc: &ContentEncAlg) -> Cek {
+        let len = cek_len(enc).unwrap_or_else(|e| panic!("{e}"));
+        Cek::new(Zeroizing::new((0..len).map(|i| 0xC0 ^ i as u8).collect()))
+    }
+
+    fn policy() -> DecryptPolicy {
+        DecryptPolicy::new(&FAMILY.map(|(alg, _)| alg), ContentEncAlg::KNOWN)
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    fn encrypt(
+        alg: &KeyMgmtAlg,
+        key: &RecipientKey,
+        enc: &ContentEncAlg,
+        cek: Option<&Cek>,
+    ) -> Result<KeyOutput> {
+        let mut rng = FixedRng::new(vec![0x5A; 64]);
+        let out = encrypt_key(alg, key, enc, cek, &RecipientOptions::default(), &mut rng);
+        // A*KW is deterministic (RFC 3394 §2.2.1): it draws nothing.
+        assert_eq!(rng.remaining(), 64, "{alg} drew randomness");
+        out
+    }
+
+    fn decrypt(
+        alg: &KeyMgmtAlg,
+        key: &RecipientKey,
+        enc: &ContentEncAlg,
+        encrypted_key: &[u8],
+    ) -> Result<Cek> {
+        decrypt_key(alg, key, enc, &Header::new(), encrypted_key, &policy())
+    }
+
+    #[test]
+    fn encrypt_key_wraps_the_random_cek_and_adds_no_header_parameter() {
+        // RFC 7518 §4.4: the CEK is wrapped with RFC 3394 and the result is
+        // the JWE Encrypted Key; no header parameters are used.
+        for (alg, kek_len) in &FAMILY {
+            for enc in ContentEncAlg::KNOWN {
+                let key = kek(*kek_len);
+                let cek = cek_for(enc);
+                let out = encrypt(alg, &key, enc, Some(&cek))
+                    .unwrap_or_else(|e| panic!("{alg} {enc}: {e}"));
+                let RecipientKey::Symmetric(k) = &key else {
+                    unreachable!()
+                };
+                assert_eq!(
+                    out.encrypted_key,
+                    wrap(k, cek.as_bytes()).unwrap_or_else(|e| panic!("{e}")),
+                    "{alg} {enc}"
+                );
+                assert_eq!(out.encrypted_key.len(), cek.len() + 8, "{alg} {enc}");
+                assert!(out.header_params.is_empty(), "{alg} {enc}");
+                assert!(out.cek.is_none(), "{alg} {enc}");
+            }
+        }
+    }
+
+    #[test]
+    fn decrypt_key_unwraps_what_encrypt_key_wrapped() {
+        for (alg, kek_len) in &FAMILY {
+            for enc in ContentEncAlg::KNOWN {
+                let key = kek(*kek_len);
+                let cek = cek_for(enc);
+                let out = encrypt(alg, &key, enc, Some(&cek)).unwrap_or_else(|e| panic!("{e}"));
+                let got = decrypt(alg, &key, enc, &out.encrypted_key)
+                    .unwrap_or_else(|e| panic!("{alg} {enc}: {e}"));
+                assert_eq!(got.as_bytes(), cek.as_bytes(), "{alg} {enc}");
+            }
+        }
+    }
+
+    #[test]
+    fn encrypt_key_rejects_a_kek_whose_length_does_not_match_the_alg() {
+        // RFC 7518 §4.4: A128KW, A192KW, A256KW use 128, 192, 256 bit keys.
+        let enc = ContentEncAlg::A128GCM;
+        let cek = cek_for(&enc);
+        for (alg, kek_len) in &FAMILY {
+            for len in [0, 8, 16, 24, 32, 48, 64] {
+                if len == *kek_len {
+                    continue;
+                }
+                assert_eq!(
+                    encrypt(alg, &kek(len), &enc, Some(&cek)).map(|_| ()),
+                    Err(Error::InvalidKey(KEK_SIZE)),
+                    "{alg} with a {len} byte KEK"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encrypt_key_rejects_a_missing_or_wrong_length_cek_and_a_non_symmetric_key() {
+        let enc = ContentEncAlg::A256GCM;
+        let alg = KeyMgmtAlg::A128KW;
+        let key = kek(16);
+        assert_eq!(
+            encrypt(&alg, &key, &enc, None).map(|_| ()),
+            Err(Error::InvalidKey(CEK_SIZE))
+        );
+        // RFC 7516 §5.1 step 2: the CEK has the length `enc` requires.
+        let short = cek_for(&ContentEncAlg::A128GCM);
+        assert_eq!(
+            encrypt(&alg, &key, &enc, Some(&short)).map(|_| ()),
+            Err(Error::InvalidKey(CEK_SIZE))
+        );
+        let password = RecipientKey::Password(Zeroizing::new(vec![0x50; 16]));
+        let x25519 = RecipientKey::X25519Public(x25519_dalek::PublicKey::from([9; 32]));
+        for wrong in [password, x25519] {
+            assert_eq!(
+                encrypt(&alg, &wrong, &enc, Some(&cek_for(&enc))).map(|_| ()),
+                Err(Error::KeyAlgorithmMismatch),
+                "{wrong:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_decrypt_key_failure_is_decryption_failed_with_no_cek() {
+        // RFC 7516 §11.4–§11.5 and the plan.md error contract: integrity,
+        // input length, KEK and CEK length failures are indistinguishable.
+        let alg = KeyMgmtAlg::A128KW;
+        let key = kek(16);
+        let enc = ContentEncAlg::A128GCM;
+        let wrapped = encrypt(&alg, &key, &enc, Some(&cek_for(&enc)))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .encrypted_key;
+        let mut tampered = wrapped.clone();
+        tampered[5] ^= 0x20;
+        // A valid wrapping of a 32-byte key: it unwraps, but A128GCM needs
+        // 16 bytes (RFC 7516 §5.2 step 9).
+        let RecipientKey::Symmetric(k) = &key else {
+            unreachable!()
+        };
+        let long = wrap(k, &[0xC5; 32]).unwrap_or_else(|e| panic!("{e}"));
+        let short = wrap(k, &[0xC5; 16]).unwrap_or_else(|e| panic!("{e}"));
+        let cases: Vec<(&str, KeyMgmtAlg, RecipientKey, ContentEncAlg, Vec<u8>)> = vec![
+            ("tampered", alg.clone(), kek(16), enc.clone(), tampered),
+            (
+                "wrong KEK",
+                alg.clone(),
+                kek(24),
+                enc.clone(),
+                wrapped.clone(),
+            ),
+            (
+                "A192KW with a 16 byte KEK",
+                KeyMgmtAlg::A192KW,
+                kek(16),
+                enc.clone(),
+                wrapped.clone(),
+            ),
+            (
+                "A256KW with a 24 byte KEK",
+                KeyMgmtAlg::A256KW,
+                kek(24),
+                enc.clone(),
+                wrapped.clone(),
+            ),
+            ("empty", alg.clone(), kek(16), enc.clone(), Vec::new()),
+            (
+                "one semiblock short",
+                alg.clone(),
+                kek(16),
+                enc.clone(),
+                wrapped[..16].to_vec(),
+            ),
+            (
+                "not a multiple of 8",
+                alg.clone(),
+                kek(16),
+                enc.clone(),
+                wrapped[..23].to_vec(),
+            ),
+            (
+                "unwrapped CEK too long",
+                alg.clone(),
+                kek(16),
+                enc.clone(),
+                long,
+            ),
+            (
+                "unwrapped CEK too short",
+                alg.clone(),
+                kek(16),
+                ContentEncAlg::A128CbcHs256,
+                short,
+            ),
+            (
+                "unknown enc",
+                alg.clone(),
+                kek(16),
+                ContentEncAlg::from("A512GCM"),
+                wrapped.clone(),
+            ),
+            (
+                "password key",
+                alg.clone(),
+                RecipientKey::Password(Zeroizing::new(vec![0x40; 16])),
+                enc.clone(),
+                wrapped.clone(),
+            ),
+        ];
+        for (what, alg, key, enc, encrypted_key) in cases {
+            let result = decrypt(&alg, &key, &enc, &encrypted_key);
+            assert!(
+                matches!(result, Err(Error::DecryptionFailed)),
+                "{what}: {result:?}"
+            );
+        }
     }
 }
