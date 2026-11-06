@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7515 App. A.5",
+  "description": "The A.5 Unsecured JWS (alg none) is never accepted, whatever the allow-list and key: AlgorithmNotAllowed (RFC 8725 §3.1, ADR 0026 §2 step 7)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}
