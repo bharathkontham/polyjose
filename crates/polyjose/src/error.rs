@@ -86,6 +86,10 @@ pub enum Error {
     /// The JWS is invalid if `alg` is not a supported algorithm
     /// (RFC 7515 §4.1.1); the same holds for JWE `alg` and `enc`
     /// (RFC 7516 §4.1.1–§4.1.2). The rejected value is not echoed.
+    ///
+    /// Also a well-formed key or key encoding that polyjose does not
+    /// support, e.g. encrypted PKCS#8 (RFC 5958 §3) or RSA private keys
+    /// (ADR 0018, ADR 0021).
     UnsupportedAlgorithm,
 
     /// The algorithm is supported but not in the caller's allow-list.
@@ -100,8 +104,9 @@ pub enum Error {
     /// For example: missing or malformed JWK members (RFC 7517 §4,
     /// RFC 7518 §6), an RSA modulus under 2048 bits (RFC 7518 §3.3, §3.5,
     /// §4.2), an HMAC key shorter than the hash output (RFC 7518 §3.2), or
-    /// an EC point that is not on its curve (RFC 8725 §3.4). The detail
-    /// never contains key material.
+    /// an EC point that is not on its curve (RFC 8725 §3.4), and malformed
+    /// or non-canonical DER/PEM key encodings (ADR 0018). The detail never
+    /// contains key material.
     InvalidKey(&'static str),
 
     /// The key is valid but not for this algorithm or operation.
