@@ -35,6 +35,12 @@ fn key(kind: &str, tail: &str) -> String {
             let g = common::generator(kind);
             format!(r#"{{"kty":"EC","crv":"{kind}","x":"{}","y":"{}""#, g.x, g.y)
         }
+        // A real Ed25519 key (RFC 8037 A.2): import rejects points with a
+        // torsion component (ADR 0043 §1). Any 32 octets are an X25519 key.
+        "Ed25519" => {
+            r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo""#
+                .to_owned()
+        }
         _ => format!(r#"{{"kty":"OKP","crv":"{kind}","x":"{}""#, c(32)),
     };
     format!("{head}{tail}}}")
@@ -174,10 +180,13 @@ fn set_rsa_private_wherever_placed_and_however_escaped() {
             );
         }
     }
-    // Non-RSA kinds with d / p are not RSA private keys: kept.
+    // Non-RSA kinds with d / p are not RSA private keys: kept. `d` = 1 is
+    // the generator's private key (import checks the pair, ADR 0043 §3).
+    let mut one = [0u8; 32];
+    one[31] = 1;
     let ok = set(&[key(
         "P-256",
-        r#","d":"AA","alg":"ES256""#.replace("AA", &b64url_encode(&[9u8; 32])).as_str(),
+        r#","d":"AA","alg":"ES256""#.replace("AA", &b64url_encode(&one)).as_str(),
     )])
     .unwrap();
     assert_eq!(ok.len(), 1);

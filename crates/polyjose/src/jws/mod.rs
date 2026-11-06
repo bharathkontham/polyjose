@@ -653,18 +653,21 @@ mod tests {
     #[test]
     fn signer_debug_redacts_key_material() {
         let oct = Jwk::from_json(format!(r#"{{"kty":"oct","k":"{SECRET}"}}"#).as_bytes()).unwrap();
-        // RFC 7517 Appendix A.1's P-256 point, with `d` replaced.
+        // A P-256 key whose `d` is the marker; (x, y) = d·G, derived
+        // independently in Python (SEC 1 §2.2.1 arithmetic), since import
+        // checks the pair (ADR 0043 §3).
         let ec = Jwk::from_json(
             format!(
-                r#"{{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"{SECRET}"}}"#
+                r#"{{"kty":"EC","crv":"P-256","x":"Qm0_Y3iAhrDndVQ247skVXv2bFfwnTvlLUyup22HGDM","y":"MXHhtkN4vHVS87SCP6IfVsIXSeUWHsOjnuQIgzhWL6Q","d":"{SECRET}"}}"#
             )
             .as_bytes(),
         )
         .unwrap();
-        // RFC 8037 Appendix A.1's Ed25519 public key, with `d` replaced.
+        // An Ed25519 key whose seed `d` is the marker; `x` derived
+        // independently in Python (RFC 8032 §5.1.5).
         let okp = Jwk::from_json(
             format!(
-                r#"{{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"{SECRET}"}}"#
+                r#"{{"kty":"OKP","crv":"Ed25519","x":"TrgjJgt_upZmFJb7d22T8iGZ_57PzgtlGh4Tq4b-tkc","d":"{SECRET}"}}"#
             )
             .as_bytes(),
         )
