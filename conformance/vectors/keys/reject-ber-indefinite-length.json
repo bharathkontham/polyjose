@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects the RFC 8037 A.1 Ed25519 PKCS#8 with an indefinite outer length, a BER-only encoding (X.690 §10.1, §8.1.3.6; ADR 0018 §2).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMIACAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\nAAA=\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

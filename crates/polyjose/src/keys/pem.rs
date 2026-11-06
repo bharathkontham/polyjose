@@ -87,10 +87,6 @@ const PROC_TYPE: &[u8] = b"Proc-Type:";
 ///
 /// The returned octets wipe on drop; the base64 copy is wiped before
 /// returning.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM entry points in api.rs")
-)]
 pub(crate) fn decode(text: &str) -> Result<(Label, Zeroizing<Vec<u8>>)> {
     let mut body = Zeroizing::new(Vec::new());
     let mut der = Zeroizing::new(Vec::new());
@@ -280,10 +276,6 @@ fn parse_label(text: &[u8]) -> Result<Label> {
 /// The base64 comes from the constant-time standard codec in
 /// [`crate::util`]; everything else depends only on `der.len()` and the
 /// label.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM entry points in api.rs")
-)]
 pub(crate) fn encode(label: Label, der: &[u8]) -> Result<Zeroizing<String>> {
     if is_unsupported(label) {
         return Err(Error::UnsupportedAlgorithm);

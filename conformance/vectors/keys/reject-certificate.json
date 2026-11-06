@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects a CERTIFICATE block (RFC 7468 §5): not a key label, refused from the BEGIN line (ADR 0018 §2).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN CERTIFICATE-----\nMIIBYzCCAQqgAwIBAgIUOS1b+e4kpOWjh5ZtgDrawMoetSowCgYIKoZIzj0EAwIw\nGDEWMBQGA1UEAwwNcG9seWpvc2UtdGVzdDAeFw0yNjExMDUxOTQxMzhaFw0yNjEx\nMDYxOTQxMzhaMBgxFjAUBgNVBAMMDXBvbHlqb3NlLXRlc3QwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAATj+1b2vrpTXnyhvvC/mjyWMqvQX3kYqPkZ5kvdqSc0+cQw\n9fspfbs5bGhmysGEwUmTCVolJF8ariNJu37c6WJ1ozIwMDAdBgNVHQ4EFgQU4hbw\nm8wq+EjcKaOeUucTXm6RpwEwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNH\nADBEAiB2JOesxcK6/EutFzJY5zU/gDLcmzQsvZVbUu+UEhMTKwIgM7gt9E4/fSoW\ngGfYFuY6jGgEtsnH8K4+wNjDgpv1VMg=\n-----END CERTIFICATE-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

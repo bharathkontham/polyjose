@@ -34,8 +34,10 @@ const V2: u8 = 1;
 /// - One element, no trailing data (X.690 §8.1.1), and no fields beyond
 ///   publicKey: polyjose knows no later version.
 /// - An EncryptedPrivateKeyInfo (RFC 5958 §3) starts with a SEQUENCE where
-///   this starts with the version INTEGER. It is unsupported (ADR 0018 §4)
-///   and nothing inside it is parsed.
+///   this starts with the version INTEGER. Only its exact shape, `SEQUENCE {
+///   SEQUENCE, OCTET STRING }`, is unsupported (ADR 0018 §4), and nothing
+///   inside it is parsed; any other leading SEQUENCE is `InvalidKey`
+///   (`check_encrypted_shape`).
 /// - `version` is v1(0) or v2(1), and "If publicKey is present, then version
 ///   is set to v2 else version is set to v1" (RFC 5958 §2).
 /// - The algorithm is classified first (`spki::read_algorithm_identifier`,
@@ -45,13 +47,6 @@ const V2: u8 = 1;
 ///   then ignored (ADR 0018 §3).
 /// - privateKey and publicKey are returned as sub-slices of `der`, whose
 ///   buffer the caller must zeroize; the publicKey has no unused bits.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the key mappers (T05, T06) and the facade (T08)"
-    )
-)]
 pub(crate) fn decode(der: &[u8]) -> Result<Pkcs8Parts<'_>> {
     decode_with_attributes(der).map(|(parts, _)| parts)
 }
@@ -62,9 +57,8 @@ fn decode_with_attributes(der: &[u8]) -> Result<(Pkcs8Parts<'_>, Option<&[u8]>)>
     let mut outer = Reader::new(der)?;
     let mut fields = outer.sequence()?;
     outer.finish()?;
-    // EncryptedPrivateKeyInfo ::= SEQUENCE { encryptionAlgorithm
-    // AlgorithmIdentifier, encryptedData OCTET STRING } (RFC 5958 §3).
     if fields.peek_tag() == Some(der::SEQUENCE) {
+        check_encrypted_shape(fields)?;
         return Err(Error::UnsupportedAlgorithm);
     }
     let version = fields.small_unsigned()?;
@@ -100,6 +94,31 @@ fn decode_with_attributes(der: &[u8]) -> Result<(Pkcs8Parts<'_>, Option<&[u8]>)>
     Ok((parts, attributes.map(|attributes| attributes.encoding)))
 }
 
+/// Checks that `fields`, the contents of an outer SEQUENCE whose first
+/// element is a SEQUENCE, have the EncryptedPrivateKeyInfo shape (RFC 5958
+/// §3):
+///
+/// ```text
+/// EncryptedPrivateKeyInfo ::= SEQUENCE {
+///   encryptionAlgorithm  EncryptionAlgorithmIdentifier, -- a SEQUENCE
+///   encryptedData        EncryptedData }                -- OCTET STRING
+/// ```
+///
+/// - `Ok` means exactly that shape: a well-formed encrypted key, which the
+///   caller reports as `UnsupportedAlgorithm` (ADR 0018 §4).
+/// - Only the framing of the two elements is read (X.690 §8.1, §10.1, and a
+///   primitive OCTET STRING, §10.2). Neither the AlgorithmIdentifier's
+///   contents nor the ciphertext is ever parsed.
+/// - Anything else, such as an SPKI (`SEQUENCE { AlgorithmIdentifier, BIT
+///   STRING }`, RFC 5280 §4.1.2.7), a missing encryptedData or a third
+///   element (X.690 §8.1.1), is malformed PKCS#8: `InvalidKey` with the
+///   reader's static detail.
+fn check_encrypted_shape(mut fields: Reader<'_>) -> Result<()> {
+    fields.expect(der::SEQUENCE)?;
+    fields.octet_string()?;
+    fields.finish()
+}
+
 /// Checks the contents of `[0] Attributes`, an IMPLICIT `SET OF Attribute`
 /// (RFC 5958 §2), where `Attribute ::= SEQUENCE { attrType OBJECT
 /// IDENTIFIER, attrValues SET OF AttributeValue }` (RFC 5652 §5.3). Every
@@ -124,13 +143,6 @@ fn check_attributes(contents: &[u8]) -> Result<()> {
 /// `parts.version` must agree with `parts.public_key` (RFC 5958 §2), and RSA
 /// private keys are never written (ADR 0021). The output is zeroized on
 /// drop.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the key mappers (T05, T06) and the facade (T08)"
-    )
-)]
 pub(crate) fn encode(parts: &Pkcs8Parts<'_>) -> Result<Zeroizing<Vec<u8>>> {
     encode_with_attributes(parts, None)
 }
@@ -437,14 +449,123 @@ mod tests {
             let result = decode(&der);
             assert!(is_unsupported(&result), "{file}: {:?}", result.err());
         }
-        // Its contents are not parsed: BER and garbage inside give the same
-        // answer.
-        assert!(is_unsupported(&decode(&[
-            0x30, 0x05, 0x30, 0x80, 0xFF, 0xFF, 0xFF
-        ])));
-        assert!(is_unsupported(&decode(&[0x30, 0x02, 0x30, 0x00])));
+        // Only the framing of the two components is read: BER and garbage
+        // inside encryptedData or inside the AlgorithmIdentifier give the
+        // same answer.
+        for input in [
+            // SEQUENCE { SEQUENCE {}, OCTET STRING {} }
+            &[0x30, 0x04, 0x30, 0x00, 0x04, 0x00][..],
+            // encryptedData holding an indefinite length and garbage.
+            &[
+                0x30, 0x09, 0x30, 0x00, 0x04, 0x05, 0x30, 0x80, 0xFF, 0x00, 0x1F,
+            ],
+            // encryptionAlgorithm holding no OID, an indefinite length and
+            // garbage.
+            &[0x30, 0x08, 0x30, 0x04, 0x02, 0x80, 0xFF, 0xFF, 0x04, 0x00],
+        ] {
+            assert!(is_unsupported(&decode(input)), "{input:02x?}");
+        }
+        // A real encrypted key whose ciphertext is flipped: encryptedData is
+        // the last element, so its last 32 octets are all ciphertext.
+        let mut der = fixtures::load("openssl", "reject-ec-p256-pkcs8-encrypted.der");
+        let len = der.len();
+        for byte in &mut der[len - 32..] {
+            *byte ^= 0xFF;
+        }
+        assert!(is_unsupported(&decode(&der)));
         // The outer framing is still checked.
         assert!(is_invalid(&decode(&[0x30, 0x02, 0x30, 0x00, 0x00])));
+    }
+
+    /// `SEQUENCE { parts }` with a short- or long-form length.
+    fn seq(parts: &[&[u8]]) -> Vec<u8> {
+        let contents = parts.concat();
+        let mut out = vec![der::SEQUENCE];
+        match contents.len() {
+            len @ 0..=0x7F => out.push(u8::try_from(len).unwrap()),
+            len @ 0x80..=0xFF => out.extend_from_slice(&[0x81, u8::try_from(len).unwrap()]),
+            len => {
+                let len = u16::try_from(len).unwrap().to_be_bytes();
+                out.extend_from_slice(&[0x82, len[0], len[1]]);
+            }
+        }
+        out.extend_from_slice(&contents);
+        out
+    }
+
+    #[test]
+    fn only_the_encrypted_private_key_info_shape_is_unsupported() {
+        // RFC 5958 §3: EncryptedPrivateKeyInfo is exactly `SEQUENCE {
+        // AlgorithmIdentifier (a SEQUENCE), OCTET STRING }`. Anything else
+        // that starts with an inner SEQUENCE is malformed PKCS#8, so
+        // InvalidKey (ADR 0018 §4).
+        let alg: &[u8] = &[0x30, 0x00];
+        let data: &[u8] = &[0x04, 0x01, 0x00];
+        for (what, input) in [
+            (
+                "an SPKI: BIT STRING second",
+                seq(&[alg, &[0x03, 0x01, 0x00]]),
+            ),
+            ("no encryptedData", seq(&[alg])),
+            ("an INTEGER second", seq(&[alg, &[0x02, 0x01, 0x00]])),
+            ("a SEQUENCE second", seq(&[alg, alg])),
+            ("a constructed OCTET STRING", seq(&[alg, &[0x24, 0x00]])),
+            ("a third element", seq(&[alg, data, data])),
+            ("a trailing NULL", seq(&[alg, data, &[0x05, 0x00]])),
+            ("a stray octet", seq(&[alg, data, &[0x00]])),
+            (
+                "an indefinite-length AlgorithmIdentifier",
+                seq(&[&[0x30, 0x80, 0x00, 0x00], data]),
+            ),
+            (
+                "an AlgorithmIdentifier longer than its SEQUENCE",
+                seq(&[&[0x30, 0x05], data]),
+            ),
+            ("non-SEQUENCE first: OCTET STRING", seq(&[data, alg])),
+            ("non-SEQUENCE first: SET", seq(&[&[0x31, 0x00], data])),
+            ("non-SEQUENCE first: [0]", seq(&[&[0xA0, 0x00], data])),
+        ] {
+            let result = decode(&input);
+            assert!(is_invalid(&result), "{what}: {:?}", result.err());
+        }
+    }
+
+    #[test]
+    fn encrypted_private_key_info_with_trailing_bytes_is_invalid() {
+        // X.690 §8.1.1 and RFC 5958 §3: nothing after encryptedData, and
+        // nothing after the outer SEQUENCE.
+        let der = fixtures::load("openssl", "reject-ec-p256-pkcs8-encrypted.der");
+        assert!(is_unsupported(&decode(&der)));
+        let after = [&der[..], &[0x00]].concat();
+        assert!(is_invalid(&decode(&after)));
+        let mut outer = Reader::new(&der).unwrap();
+        let mut fields = outer.sequence().unwrap();
+        let alg = fields.expect(der::SEQUENCE).unwrap().encoding;
+        let data = fields.expect(der::OCTET_STRING).unwrap().encoding;
+        assert!(fields.is_empty());
+        assert!(is_unsupported(&decode(&seq(&[alg, data]))));
+        for tail in [&[0x05, 0x00][..], &[0x04, 0x00], &[0x00]] {
+            let inside = seq(&[alg, data, tail]);
+            assert!(is_invalid(&decode(&inside)), "{tail:02x?}");
+        }
+    }
+
+    #[test]
+    fn spki_fixtures_are_invalid_pkcs8() {
+        // An SPKI (RFC 5280 §4.1.2.7) is `SEQUENCE { AlgorithmIdentifier,
+        // BIT STRING }`: malformed as PKCS#8, not an encrypted key.
+        let mut checked = 0;
+        for dir in ["openssl", "rfc"] {
+            for file in fixtures::files(dir, |n| {
+                n.ends_with("-spki.der") && !n.starts_with("reject-")
+            }) {
+                let der = fixtures::load(dir, &file);
+                let result = decode(&der);
+                assert!(is_invalid(&result), "{dir}/{file}: {:?}", result.err());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 10, "{checked} SPKI fixtures");
     }
 
     /// Every positive PKCS#8 fixture, with its algorithm, version and

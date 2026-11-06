@@ -210,7 +210,6 @@ fn ec_curve(alg: AlgId) -> Result<EcCurve> {
 /// [`Error::InvalidKey`] if `parts.alg` is not an EC curve, or the point
 /// has another first octet than 0x02/0x03/0x04, has the wrong length for
 /// the curve, is not on the curve or is the identity.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
     let crv = ec_curve(parts.alg)?;
     let point = decode_point(crv, parts.subject_public_key)?;
@@ -225,7 +224,6 @@ pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
 /// # Errors
 ///
 /// None in practice; [`Error::InvalidKey`] only if the DER writer refuses.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn to_spki(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
     let point = uncompressed_point(key);
     spki::encode(&SpkiParts {
@@ -254,7 +252,6 @@ pub(crate) fn to_spki(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
 /// - [`Error::InvalidKey`] for malformed DER, a missing `[0]`, a wrong
 ///   version or length, d out of range, an invalid point, or a point that
 ///   is not d·G.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn from_sec1(der: &[u8]) -> Result<Jwk> {
     let key = sec1::decode(der)?;
     let crv = key.parameters.ok_or(Error::InvalidKey(
@@ -271,7 +268,6 @@ pub(crate) fn from_sec1(der: &[u8]) -> Result<Jwk> {
 /// # Errors
 ///
 /// [`Error::InvalidKey`] if `key` has no `d`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn to_sec1(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
     let d = key.d().ok_or(Error::InvalidKey(NOT_PRIVATE))?;
     let point = uncompressed_point(key);
@@ -304,7 +300,6 @@ pub(crate) fn to_sec1(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
 /// structure is malformed or names another curve, the privateKey has the
 /// wrong length, d is out of range, a point is invalid, or the points
 /// disagree with each other or with d.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
     let crv = ec_curve(parts.alg)?;
     let inner = sec1::decode(parts.private_key)?;
@@ -339,7 +334,6 @@ pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
 /// # Errors
 ///
 /// [`Error::InvalidKey`] if `key` has no `d`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn to_pkcs8(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
     let d = key.d().ok_or(Error::InvalidKey(NOT_PRIVATE))?;
     let point = uncompressed_point(key);

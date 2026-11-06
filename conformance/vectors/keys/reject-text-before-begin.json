@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects explanatory text before the BEGIN line, which RFC 7468 §2 permits and polyjose deliberately rejects (ADR 0018 §2).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "Bag Attributes\n-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
