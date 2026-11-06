@@ -369,14 +369,26 @@ impl Recipient {
 
     /// The PBES2 iteration count `p2c` (RFC 7518 §4.8.1.2). The default is
     /// 10,000 (ADR 0023), inside every mainstream library's decrypt bound.
+    ///
+    /// Encrypting accepts 1,000 (RFC 7518 §4.8.1.2's recommended minimum)
+    /// to 1,000,000
+    /// ([`DecryptPolicy::MAX_PBES2_COUNT_CEILING`], the most any decrypt
+    /// policy allows; ADR 0050 §2). Outside that range encryption fails with
+    /// [`Error::InvalidKey`]. A count above the decrypting side's
+    /// [`DecryptPolicy::max_pbes2_count`] (10,000 by default) is
+    /// [`Error::DecryptionFailed`] there.
     #[must_use]
     pub fn p2c(mut self, p2c: u32) -> Self {
         self.options.p2c = Some(p2c);
         self
     }
 
-    /// The length of the random PBES2 salt input `p2s`, in bytes, at least
-    /// 8 (RFC 7518 §4.8.1.1). The default is 16.
+    /// The length of the random PBES2 salt input `p2s`, in bytes. The
+    /// default is 16.
+    ///
+    /// Encrypting accepts 8 (RFC 7518 §4.8.1.1's minimum) to 256 (ADR 0050
+    /// §2, which bounds the salt PBKDF2 hashes); outside that range
+    /// encryption fails with [`Error::InvalidKey`].
     #[must_use]
     pub fn p2s_len(mut self, len: usize) -> Self {
         self.options.p2s_len = Some(len);
