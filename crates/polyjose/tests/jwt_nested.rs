@@ -370,8 +370,11 @@ fn encrypt_nested_refuses_a_different_caller_cty() {
 }
 
 /// RFC 7515 §7.1, ADR 0027 §6–§7: the input must be a three-part compact
-/// JWS. A nested JWT (five parts), a JWS JSON serialization, or anything
-/// else is `InvalidFormat`, before the caller's `cty` is looked at.
+/// JWS. A nested JWT (five parts), a JWS JSON serialization, an empty
+/// signature part (an Unsecured JWS, RFC 7519 §6; RFC 8725 §3.2), a
+/// protected header that is not base64url-encoded JSON object text
+/// (RFC 7515 §5.2 steps 2–3), or anything else is `InvalidFormat`,
+/// before the caller's `cty` is looked at.
 #[test]
 fn encrypt_nested_needs_a_compact_jws() {
     let inner = inner_es256();
@@ -383,6 +386,16 @@ fn encrypt_nested_needs_a_compact_jws() {
         inner.split('.').nth(2).unwrap(),
     );
     let with_newline = format!("{inner}\n");
+    let (head, rest) = inner.split_once('.').unwrap();
+    let (payload, _) = rest.split_once('.').unwrap();
+    // A signed JWT with its signature part emptied.
+    let no_signature = format!("{head}.{payload}.");
+    // Protected headers that are not base64url JSON objects.
+    let with_header = |h: &[u8]| format!("{}.{payload}.c2ln", b64url_encode(h));
+    let not_json = with_header(b"not json");
+    let an_array = with_header(br#"["alg","none"]"#);
+    let duplicate_alg = with_header(br#"{"alg":"ES256","alg":"none"}"#);
+    let not_utf8 = with_header(b"{\"alg\":\"\xff\"}");
     for input in [
         "",
         "not a jws",
@@ -391,14 +404,89 @@ fn encrypt_nested_needs_a_compact_jws() {
         json.as_str(),
         with_newline.as_str(),
         ".eyJ9.sig",
+        no_signature.as_str(),
+        // RFC 7519 §6.1: the example Unsecured JWT.
+        "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.",
+        // Review probe (b): `{"alg":"none"}`, `{"sub":"x"}`, no signature.
+        "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.",
+        // Not base64url: one character in a final quantum, and a
+        // non-canonical final quantum (RFC 4648 §3.5, §4).
+        "e.eyJ9.sig",
+        "QR.eyJ9.sig",
+        not_json.as_str(),
+        an_array.as_str(),
+        duplicate_alg.as_str(),
+        not_utf8.as_str(),
     ] {
-        for e in [kw("{}"), kw(r#"{"cty":"JOSE"}"#)] {
+        for e in [kw("{}"), kw(r#"{"cty":"JOSE"}"#), kw("{}").compress()] {
             assert!(
                 matches!(jwt::encrypt_nested(input, &e), Err(Error::InvalidFormat(_))),
                 "{input:?}"
             );
         }
     }
+}
+
+/// RFC 8725 §3.2, ADR 0007, ADR 0027 §8: `none` is never produced. An
+/// inner protected header with `alg: none` is `AlgorithmNotAllowed` even
+/// with a non-empty (fake) signature part, before the caller's `cty` and
+/// `zip` are looked at. A missing or non-string `alg` (RFC 7515 §4.1.1:
+/// it "MUST be present" and is a string) is `InvalidHeader("alg")`. Only
+/// the protected header is decoded.
+#[test]
+fn encrypt_nested_refuses_an_unsecured_or_alg_less_jws() {
+    let encryptors = [
+        kw("{}"),
+        kw(r#"{"typ":"JWT","kid":"outer-1"}"#),
+        kw(r#"{"cty":"JOSE"}"#),
+        kw("{}").compress(),
+        kw(r#"{"cty":"JOSE"}"#).compress(),
+    ];
+    let with_header = |h: &str| format!("{}.eyJzdWIiOiJ4In0.c2ln", b64url_encode(h.as_bytes()));
+    for h in [
+        r#"{"alg":"none"}"#,
+        r#"{"typ":"JWT","alg":"none"}"#,
+        r#"{"alg":"none","kid":"k1","crit":["exp"],"exp":1}"#,
+        "  {\"alg\" : \"none\"}\n",
+    ] {
+        let input = with_header(h);
+        for e in &encryptors {
+            assert_eq!(
+                jwt::encrypt_nested(&input, e),
+                Err(Error::AlgorithmNotAllowed),
+                "{h}"
+            );
+        }
+    }
+    // The review's probe (b) with a fake signature part.
+    for e in &encryptors {
+        assert_eq!(
+            jwt::encrypt_nested("eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.c2ln", e),
+            Err(Error::AlgorithmNotAllowed)
+        );
+    }
+    for h in [
+        "{}",
+        r#"{"typ":"JWT"}"#,
+        r#"{"alg":null}"#,
+        r#"{"alg":1}"#,
+        r#"{"alg":["none"]}"#,
+        r#"{"alg":{"none":true}}"#,
+        r#"{"Alg":"none"}"#,
+    ] {
+        let input = with_header(h);
+        for e in &encryptors {
+            assert_eq!(
+                jwt::encrypt_nested(&input, e),
+                Err(Error::InvalidHeader("alg")),
+                "{h}"
+            );
+        }
+    }
+    // RFC 7515 §4.1.1: any other string `alg` is the receiver's to check
+    // against its allow-list; the issuer checks the shape and `none` only.
+    let other = with_header(r#"{"alg":"x-unregistered"}"#);
+    assert_eq!(code(jwt::encrypt_nested(&other, &kw("{}"))), "ok");
 }
 
 /// RFC 7516 §7.1: the output is compact, so the encryptor's compact
@@ -483,15 +571,26 @@ fn an_inner_alg_outside_the_jwt_policy_is_algorithm_not_allowed() {
 }
 
 /// RFC 8725 §3.2, ADR 0007: an inner Unsecured JWS (`alg: none`) is never
-/// accepted, even inside a valid JWE.
+/// accepted, even inside a valid JWE, with an empty or a fake signature.
+/// `encrypt_nested` never makes one, so the JWE is built with 0003's
+/// encryptor directly.
 #[test]
 fn an_inner_alg_none_is_algorithm_not_allowed() {
     let payload = b64url_encode(claims().to_json().as_bytes());
-    let inner = format!("{}.{payload}.", b64url_encode(br#"{"alg":"none"}"#));
-    assert!(matches!(
-        open(&nest(&inner)),
-        Err(Error::AlgorithmNotAllowed)
-    ));
+    let header = b64url_encode(br#"{"alg":"none"}"#);
+    for inner in [
+        format!("{header}.{payload}."),
+        format!("{header}.{payload}.c2ln"),
+    ] {
+        assert!(jwt::encrypt_nested(&inner, &kw("{}")).is_err(), "{inner}");
+        assert!(
+            matches!(
+                open(&nest_raw(&inner, r#"{"cty":"JWT"}"#)),
+                Err(Error::AlgorithmNotAllowed)
+            ),
+            "{inner}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

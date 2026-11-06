@@ -6,11 +6,13 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::header::Header;
-use crate::json::Value;
+use crate::json::{self, Value};
+use crate::jwa::SigningAlg;
 #[cfg(doc)]
 use crate::jwe::Decrypted;
 use crate::jwe::{DecryptPolicy, Encryptor, decrypt_compact};
 use crate::jwk::Jwk;
+use crate::util::b64url_decode;
 
 use super::typ::{JWT, Layer, check_jwt_header, media_type_eq};
 use super::verify::verify_inner;
@@ -46,9 +48,16 @@ pub struct VerifiedNestedJwt {
 /// step 5): the sign-then-encrypt order of RFC 7519 §11.2.
 ///
 /// - `signed_jwt` must be shaped like a compact JWS (RFC 7515 §7.1):
-///   exactly three parts of base64url characters with a non-empty header
-///   part, not a JSON serialization (RFC 7519 §1, ADR 0027 §6–§7). Only
-///   the shape is checked; the signature is the receiver's to verify.
+///   exactly three parts of base64url characters with non-empty header
+///   and signature parts, not a JSON serialization (RFC 7519 §1, ADR 0027
+///   §6–§7). An empty signature part is an Unsecured JWS (RFC 7519 §6),
+///   which is never produced (RFC 8725 §3.2, ADR 0007).
+/// - Of `signed_jwt`, only the JWS Protected Header is decoded (it is not
+///   secret; RFC 7515 §5.2 steps 2–3), and only its `alg` is read: it
+///   must be a string (RFC 7515 §4.1.1) other than `none` (RFC 7518 §3.6;
+///   RFC 8725 §3.2; ADR 0027 §8, as for [`sign`](fn@super::sign)). The
+///   payload is never decoded or copied, and the signature is the
+///   receiver's to verify.
 /// - The JWE Protected Header is a **copy** of the one set on `encryptor`
 ///   with [`Encryptor::protected_header`] (its other parameters, such as
 ///   `typ` or `kid`, are kept) plus `cty: "JWT"`, spelled exactly as
@@ -59,16 +68,31 @@ pub struct VerifiedNestedJwt {
 /// - The output is the JWE Compact Serialization (RFC 7516 §7.1), so
 ///   `encryptor` needs exactly one recipient and no unprotected header or
 ///   AAD.
+/// - Nested under a policy with an explicit type (such as
+///   [`Policy::access_token`]), the outer `typ` must be omitted or match
+///   that type; see [`decrypt_nested`].
 ///
 /// # Errors
 ///
-/// [`Error::InvalidFormat`] if `signed_jwt` is not a three-part compact
-/// JWS; [`Error::InvalidHeader`] if the encryptor's protected header sets
-/// a `cty` other than `JWT`; and the errors of
-/// [`Encryptor::encrypt_compact`].
+/// The checks run in this order, before anything is encrypted or drawn
+/// from the random source, and the first failure decides the error:
+///
+/// 1. **Shape**: [`Error::InvalidFormat`] if `signed_jwt` is not a
+///    three-part compact JWS, its signature part is empty, or its
+///    protected header is not base64url-encoded JSON object text
+///    (RFC 7515 §5.2 steps 2–3).
+/// 2. **The inner `alg`**: [`Error::InvalidHeader`]`("alg")` if it is
+///    missing or not a string; [`Error::AlgorithmNotAllowed`] if it is
+///    `none`.
+/// 3. **The caller's `cty`**: [`Error::InvalidHeader`]`("cty")` if the
+///    encryptor's protected header sets a `cty` other than `JWT`.
+/// 4. **Encryption**: the errors of [`Encryptor::encrypt_compact`].
 pub fn encrypt_nested(signed_jwt: &str, encryptor: &Encryptor) -> Result<String> {
-    check_compact_jws_shape(signed_jwt)?;
-    // RFC 7519 §5.2, §7.1 step 5: the caller's header, copied, plus cty.
+    // 1. Shape (RFC 7515 §7.1), with a signature (RFC 8725 §3.2).
+    let inner_header = check_compact_jws_shape(signed_jwt)?;
+    // 2. The inner `alg`, from the protected header only (RFC 8725 §3.2).
+    check_inner_alg(inner_header)?;
+    // 3. RFC 7519 §5.2, §7.1 step 5: the caller's header, copied, plus cty.
     let mut protected = encryptor.protected().cloned().unwrap_or_default();
     if protected
         .cty
@@ -84,27 +108,67 @@ pub fn encrypt_nested(signed_jwt: &str, encryptor: &Encryptor) -> Result<String>
         .encrypt_compact(signed_jwt.as_bytes())
 }
 
-/// Whether `token` is shaped like a JWS Compact Serialization (RFC 7515
-/// §7.1): three `.`-separated parts of base64url characters (RFC 7515 §2,
-/// no padding), the first (the protected header) non-empty. Nothing is
-/// decoded or copied, so a secret payload is not duplicated.
+/// Checks that `token` is shaped like a JWS Compact Serialization
+/// (RFC 7515 §7.1): three `.`-separated parts of base64url characters
+/// (RFC 7515 §2, no padding), the first (the protected header) and the
+/// last (the signature) non-empty. An empty signature is an Unsecured JWS
+/// (RFC 7519 §6), never produced (RFC 8725 §3.2). Nothing is decoded or
+/// copied, so a secret payload is not duplicated.
+///
+/// Returns the encoded protected header part.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidFormat`] for any other shape.
-fn check_compact_jws_shape(token: &str) -> Result<()> {
+fn check_compact_jws_shape(token: &str) -> Result<&str> {
     const NOT_A_JWS: Error = Error::InvalidFormat("a nested JWT encrypts a compact JWS");
     let mut parts = token.split('.');
-    let (Some(header), Some(_), Some(_), None) =
+    let (Some(header), Some(_), Some(signature), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
         return Err(NOT_A_JWS);
     };
     let base64url = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
-    if header.is_empty() || !token.bytes().all(|b| b == b'.' || base64url(b)) {
+    if header.is_empty()
+        || signature.is_empty()
+        || !token.bytes().all(|b| b == b'.' || base64url(b))
+    {
         return Err(NOT_A_JWS);
     }
-    Ok(())
+    Ok(header)
+}
+
+/// Refuses an inner JWS whose protected header has no usable `alg`, or
+/// `alg: none` (RFC 7518 §3.6; RFC 8725 §3.2: `none` is never produced;
+/// ADR 0007, ADR 0027 §8).
+///
+/// `encoded` is the JWS Protected Header part, which is not secret: it is
+/// base64url-decoded and parsed as JSON (RFC 7515 §5.2 steps 2–3), and
+/// only its `alg` member is read. A duplicate member name is a parse
+/// error (RFC 7515 §5.2 step 4), so a second `alg` cannot hide `none`.
+/// Any other string `alg` is left to the receiver's allow-list
+/// (RFC 8725 §3.1).
+///
+/// # Errors
+///
+/// - [`Error::InvalidFormat`] if `encoded` is not base64url-encoded
+///   UTF-8 JSON object text.
+/// - [`Error::InvalidHeader`]`("alg")` if `alg` is missing or not a
+///   string (RFC 7515 §4.1.1: it "MUST be present").
+/// - [`Error::AlgorithmNotAllowed`] if `alg` is `none`.
+fn check_inner_alg(encoded: &str) -> Result<()> {
+    const UNDECODABLE: Error =
+        Error::InvalidFormat("the inner JWS Protected Header is not base64url JSON");
+    let json = b64url_decode(encoded).map_err(|_| UNDECODABLE)?;
+    let header = json::parse(&json)
+        .ok()
+        .and_then(Value::into_object)
+        .ok_or(UNDECODABLE)?;
+    match header.get("alg").and_then(Value::as_str) {
+        None => Err(Error::InvalidHeader("alg")),
+        Some(alg) if SigningAlg::from(alg) == SigningAlg::None => Err(Error::AlgorithmNotAllowed),
+        Some(_) => Ok(()),
+    }
 }
 
 /// Decrypts the nested JWT `token` with `decrypt_key` under
@@ -424,8 +488,9 @@ mod tests {
     }
 
     /// RFC 7515 §7.1, ADR 0027 §7: the input must be shaped like a compact
-    /// JWS: three parts of base64url characters, a non-empty header part,
-    /// and no JSON serialization. Checked before the `cty`.
+    /// JWS: three parts of base64url characters, non-empty header and
+    /// signature parts (RFC 8725 §3.2), and no JSON serialization.
+    /// Checked before the `cty`.
     #[test]
     fn encrypt_nested_needs_a_three_part_compact_jws() {
         let jws = inner(CLAIMS);
@@ -440,6 +505,7 @@ mod tests {
             ".b.c",
             "a.b+.c",
             "a.b.c=",
+            "a.b.",
             " a.b.c",
             "{\"payload\":\"x.y.z\"}",
         ] {
