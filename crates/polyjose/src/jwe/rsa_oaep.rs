@@ -2,13 +2,21 @@
 //! SHA-256, to an RSA public key of at least 2048 bits. **Encryption
 //! only** (ADR 0021): polyjose performs no RSA private-key operation, so
 //! the dispatcher in `keymgmt` answers RSA-OAEP-256 on the receiving side
-//! with `UnsupportedAlgorithm` itself and never reaches this file. The OAEP
-//! seed comes from `RandomSource::crypto_rng`. Filled in by T11.
+//! with `UnsupportedAlgorithm` itself and never reaches this file, and an
+//! RSA private JWK never imports (`jwk`). The OAEP seed comes from
+//! `RandomSource::crypto_rng`, the crate's one `rng::CryptoRngAdapter`.
+//!
+//! This file and `jws/rsa.rs` are the only ones that name the `rsa` crate
+//! (ADR 0021 §3, the guard in `scripts/check-deps.sh`). RSA-OAEP with
+//! SHA-1 is not implemented (ADR 0022), and neither is RSA1_5 (ADR 0021).
 
-use super::content::Cek;
+use rsa::traits::PaddingScheme;
+
+use super::content::{Cek, cek_len};
 use super::key::RecipientKey;
 use super::keymgmt::{KeyOutput, RecipientOptions};
 use super::random::RandomSource;
+use crate::json::Object;
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
 use crate::{Error, Result};
 
@@ -16,20 +24,104 @@ use crate::{Error, Result};
 /// §7.1.1 step 2.d).
 const SEED_LEN: usize = 32;
 
-/// Key management on encrypt (RFC 7516 §5.1 steps 3–7) for RSA-OAEP-256.
+/// The smallest RSA modulus RSA-OAEP-256 accepts, in bits (RFC 7518 §4.3:
+/// "A key of size 2048 bits or larger MUST be used with these
+/// algorithms").
+const MIN_MODULUS_BITS: u32 = 2048;
+
+const CEK_SIZE: &str = "CEK is missing or not the size enc requires";
+const MODULUS_SIZE: &str = "RSA modulus must be at least 2048 bits";
+const MEMBER_SIZE: &str = "RSA key member is empty or too long";
+const KEY_INVALID: &str = "RSA public key is not valid for RSA-OAEP-256";
+
+/// Key management on encrypt (RFC 7516 §5.1 steps 3–7) for RSA-OAEP-256:
+/// the random CEK encrypted to the recipient's RSA public key with
+/// RSAES-OAEP-ENCRYPT (RFC 8017 §7.1.1), SHA-256 as the hash and MGF1 with
+/// SHA-256 as the mask generation function, and the empty label (RFC 7518
+/// §4.3: "the default parameters specified by RFC 3447 ... except for
+/// using SHA-256"). The result is the JWE Encrypted Key (RFC 7516 §5.1
+/// step 4), exactly k octets, k being the modulus length (RFC 8017
+/// §7.1.1 step 3.c). The algorithm defines no header parameter.
+///
+/// The one random value is the hLen-octet OAEP seed (RFC 8017 §7.1.1 step
+/// 2.d), drawn through `rng.crypto_rng()` at this recipient's place in
+/// the draw order of `jwe::random`. The key checks run first, so a
+/// refused key draws nothing.
+///
+/// The key is imported with `rsa::RsaPublicKey::new` (RFC 8017 §3.1: n
+/// odd, e odd and 1 < e < n; at most 8192 bits) after the RFC 7518 §4.3
+/// floor of 2048 bits, which `jwk` import enforces already; `key` also
+/// bounds the modulus at 8192 bits.
 ///
 /// # Errors
 ///
-/// An error for a key that is not an RSA public key of at least 2048 bits; `RandomnessUnavailable` if `rng` fails.
+/// - [`Error::UnsupportedAlgorithm`] for an `alg` other than RSA-OAEP-256
+///   (RSA-OAEP, ADR 0022) or an unknown `enc`;
+/// - [`Error::KeyAlgorithmMismatch`] for a key that is not an RSA public
+///   key (RFC 7518 §4.3, RFC 8725 §3.1);
+/// - [`Error::InvalidKey`] for a modulus under 2048 bits, a malformed
+///   public key, or a CEK that is missing or not the length `enc`
+///   requires (RFC 7516 §5.1 step 2);
+/// - [`Error::RandomnessUnavailable`] if `rng` cannot supply the seed
+///   (ADR 0005).
 pub(super) fn encrypt_key(
-    _alg: &KeyMgmtAlg,
-    _key: &RecipientKey,
-    _enc: &ContentEncAlg,
-    _cek: Option<&Cek>,
+    alg: &KeyMgmtAlg,
+    key: &RecipientKey,
+    enc: &ContentEncAlg,
+    cek: Option<&Cek>,
     _options: &RecipientOptions,
-    _rng: &mut dyn RandomSource,
+    rng: &mut dyn RandomSource,
 ) -> Result<KeyOutput> {
-    Err(Error::UnsupportedAlgorithm)
+    if *alg != KeyMgmtAlg::RsaOaep256 {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    let RecipientKey::RsaPublic { n, e } = key else {
+        return Err(Error::KeyAlgorithmMismatch);
+    };
+    let cek_len = cek_len(enc)?;
+    let cek = cek
+        .filter(|cek| cek.len() == cek_len)
+        .ok_or(Error::InvalidKey(CEK_SIZE))?;
+    let public = public_key(n, e)?;
+    let mut seed_rng = rng.crypto_rng();
+    let encrypted_key = rsa::Oaep::<sha2::Sha256>::new()
+        .encrypt(&mut seed_rng, &public, cek.as_bytes())
+        .map_err(|err| match err {
+            rsa::errors::Error::Rng => Error::RandomnessUnavailable,
+            // A CEK of at most 64 octets always fits: k − 2·hLen − 2 is at
+            // least 190 for 2048 bits (RFC 8017 §7.1.1 step 1.b).
+            _ => Error::InvalidKey(KEY_INVALID),
+        })?;
+    Ok(KeyOutput {
+        encrypted_key,
+        header_params: Object::new(),
+        cek: None,
+    })
+}
+
+/// The `rsa` crate's public key for the big-endian modulus `n` and public
+/// exponent `e` (RFC 7518 §6.3.1.1–§6.3.1.2, OS2IP of RFC 8017 §4.2),
+/// refusing a modulus under [`MIN_MODULUS_BITS`] (RFC 7518 §4.3) before
+/// `rsa::RsaPublicKey::new` checks the rest (RFC 8017 §3.1). The error
+/// detail names the rule, never the values (ADR 0007).
+fn public_key(n: &[u8], e: &[u8]) -> Result<rsa::RsaPublicKey> {
+    let (n, e) = (uint(n)?, uint(e)?);
+    if n.bits() < MIN_MODULUS_BITS {
+        return Err(Error::InvalidKey(MODULUS_SIZE));
+    }
+    rsa::RsaPublicKey::new(n, e).map_err(|_| Error::InvalidKey(KEY_INVALID))
+}
+
+/// The unsigned integer of the big-endian `bytes` (OS2IP, RFC 8017
+/// §4.2), with a precision of 8 bits per octet. Empty input is no
+/// integer.
+fn uint(bytes: &[u8]) -> Result<rsa::BoxedUint> {
+    let bits = u32::try_from(bytes.len())
+        .ok()
+        .and_then(|len| len.checked_mul(8))
+        .filter(|&bits| bits > 0)
+        .ok_or(Error::InvalidKey(MEMBER_SIZE))?;
+    rsa::BoxedUint::from_be_slice(bytes, bits).map_err(|_| Error::InvalidKey(MEMBER_SIZE))
 }
 
 #[cfg(test)]
