@@ -1,0 +1,23 @@
+{
+  "source": "RFC 7519 §4.1.2; ADR 0027 §4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "sub is \"user-2\" and the expected subject is \"user-1\": InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTIiLCJleHAiOjE3MDAwMDA2MDB9.Sj2F-2uWmV_R2M5MrrYEXK6XZeJbeRaVspJ3fwpXmhg",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "subject": "user-1"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}
