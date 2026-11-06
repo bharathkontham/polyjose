@@ -7,6 +7,12 @@
 //! bytes back, always into output already produced), so the only heap
 //! allocation is the output buffer, whose capacity never exceeds
 //! `max_output`; the Huffman tables are fixed-size values on the stack.
+//!
+//! The buffer grows geometrically (doubling, clipped to `max_output`). A
+//! growth step copies into a fresh buffer and then zeroizes and frees the
+//! old one, so for the duration of that copy both are live: never more
+//! than twice `max_output` in total, and only once the output has already
+//! reached half the new capacity.
 
 use zeroize::Zeroizing;
 

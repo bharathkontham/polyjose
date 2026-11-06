@@ -45,7 +45,9 @@ pub(super) fn compress(input: &[u8]) -> Zeroizing<Vec<u8>> {
     let bound = input.len() + spans * STORED_OVERHEAD + 1;
     let mut out = Zeroizing::new(Vec::with_capacity(bound));
     let mut matcher = Matcher::new();
-    let mut tokens: Zeroizing<Vec<Token>> = Zeroizing::new(Vec::with_capacity(SPAN));
+    // A span has at most one token per byte, so this never grows.
+    let mut tokens: Zeroizing<Vec<Token>> =
+        Zeroizing::new(Vec::with_capacity(SPAN.min(input.len())));
     {
         let mut w = BitWriter::new(&mut out);
         let mut start = 0;
