@@ -1,0 +1,21 @@
+{
+  "source": "RFC 7797 §4.1",
+  "description": "HS256 compact verify of the §4.1 JWS ({\"alg\":\"HS256\"}, base64url payload \"JC4wMg\") with the RFC 7515 A.1 key",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiJ9.JC4wMg.5mvfOroL-g7HyqJoozehmsaqmvTYGEq5jTI1gVvoEoQ",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "JC4wMg",
+    "alg": "HS256",
+    "signature_index": 0
+  }
+}

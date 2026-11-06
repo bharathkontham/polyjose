@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7797 §6",
+  "description": "Verify of the §4.2 detached compact JWS with \"crit\" removed from the protected header, {\"alg\":\"HS256\",\"b64\":false}, and a signature that is otherwise valid (HMAC-SHA256 over the unencoded signing input with the RFC 7515 A.1 key, derived with Python hmac and node:crypto since the RFC prints none): \"b64\" without \"crit\" is rejected with InvalidHeader (ADR 0026 §4; RFC 7797 §6, §8)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2V9..GsyM6AQJbQHY8aQKCbZSPJHzMRWo3HKIlcDuXof7nqs",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ],
+    "detached_payload_b64u": "JC4wMg"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}
