@@ -313,4 +313,97 @@ mod tests {
             assert!(!production.contains(banned), "found {banned:?}");
         }
     }
+
+    #[test]
+    fn a_key_shorter_than_the_hash_is_an_invalid_key_on_sign_and_verify() {
+        // RFC 7518 §3.2: "A key of the same size as the hash output ... or
+        // larger MUST be used". Checked here too, not only in key binding.
+        for (alg, min) in [
+            (SigningAlg::HS256, 32),
+            (SigningAlg::HS384, 48),
+            (SigningAlg::HS512, 64),
+        ] {
+            for len in [1, min / 2, min - 1] {
+                let short = oct(&vec![0x42; len]);
+                assert_eq!(
+                    sign(&alg, &short, b"input"),
+                    Err(Error::InvalidKey(SHORT_KEY)),
+                    "{alg} sign, {len} octets"
+                );
+                // Even with the tag that key would give, the key is refused.
+                let tag = vec![0; min];
+                assert_eq!(
+                    verify(&alg, &short, b"input", &tag),
+                    Err(Error::InvalidKey(SHORT_KEY)),
+                    "{alg} verify, {len} octets"
+                );
+            }
+            let exact = oct(&vec![0x42; min]);
+            let tag = sign(&alg, &exact, b"input").unwrap();
+            assert_eq!(tag.len(), min, "{alg}");
+            assert_eq!(verify(&alg, &exact, b"input", &tag), Ok(()), "{alg}");
+        }
+    }
+
+    #[test]
+    fn no_key_bytes_reach_an_error_or_debug() {
+        // ADR 0007 / RFC 7518 §3.2: the secret never appears in output.
+        let secret = [0x5c_u8; 31];
+        let key = oct(&secret);
+        let k_b64 = b64url_encode(&secret);
+        let k_hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
+        let errors = [
+            sign(&SigningAlg::HS256, &key, b"input").unwrap_err(),
+            verify(&SigningAlg::HS256, &key, b"input", &[0; 32]).unwrap_err(),
+            verify(&SigningAlg::HS256, &jwk(A1_KEY), b"input", &[0; 32]).unwrap_err(),
+        ];
+        let a1_k = "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ";
+        for text in errors
+            .iter()
+            .flat_map(|e| [format!("{e}"), format!("{e:?}")])
+            .chain([format!("{key:?}"), format!("{:?}", jwk(A1_KEY))])
+        {
+            assert!(!text.contains(&k_b64), "{text}");
+            assert!(!text.contains(&k_hex), "{text}");
+            assert!(!text.contains(a1_k), "{text}");
+            assert!(!text.contains("5c5c"), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_keyed_hmac_state_is_wiped_on_drop() {
+        // CLAUDE.md secrets rule. hmac 0.13.0's `Hmac<D>` holds its keyed
+        // state as two `D::Core` values (inner and outer, RFC 2104 §2) and
+        // has no `ZeroizeOnDrop` marker of its own, so the marker is checked
+        // on those cores, which sha2's `zeroize` feature wipes in `Drop`.
+        use hmac::EagerHash;
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<<Sha256 as EagerHash>::Core>();
+        assert_zeroize_on_drop::<<Sha384 as EagerHash>::Core>();
+        assert_zeroize_on_drop::<<Sha512 as EagerHash>::Core>();
+    }
+
+    #[test]
+    fn a_call_against_the_contract_is_a_mismatch_not_a_panic() {
+        // alg.rs contract: key binding stops these first; the family still
+        // refuses them (RFC 8725 §3.1, ADR 0026 §2 step 8).
+        use crate::jws::alg::test_keys;
+        let ec = test_keys::p256_private("");
+        assert_eq!(
+            sign(&SigningAlg::HS256, &ec, b"x"),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        assert_eq!(
+            verify(&SigningAlg::HS256, &ec, b"x", &[0; 32]),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        let key = jwk(A1_KEY);
+        for alg in [SigningAlg::RS256, SigningAlg::ES256, SigningAlg::None] {
+            assert_eq!(sign(&alg, &key, b"x"), Err(Error::KeyAlgorithmMismatch));
+            assert_eq!(
+                verify(&alg, &key, b"x", &[0; 32]),
+                Err(Error::KeyAlgorithmMismatch)
+            );
+        }
+    }
 }
