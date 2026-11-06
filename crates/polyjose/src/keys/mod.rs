@@ -60,4 +60,4 @@ pub use self::types::{JoseAlg, KeyFormat, KeySpec};
 
 /// The public generation API (`generate`, `generate_for`) is defined in
 /// `generate.rs` and re-exported here, so that module alone owns it.
-pub use self::generate::*;
+pub use self::generate::{generate, generate_for};
