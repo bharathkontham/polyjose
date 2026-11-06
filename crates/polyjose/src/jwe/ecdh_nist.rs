@@ -1,5 +1,14 @@
 //! ECDH on P-256, P-384 and P-521 for ECDH-ES (RFC 7518 §4.6), on the
-//! `ecdh` feature of the pinned curve crates. Filled in by T13.
+//! `ecdh` feature of the pinned curve crates.
+//!
+//! - [`generate`] makes the ephemeral key pair of one agreement through the
+//!   crate's one EC sampler (`keys::generate::generate_ec_secret`).
+//! - [`agree`] computes Z, the x-coordinate of the shared point.
+//!
+//! Neither decodes a peer key: the `epk` is validated and decoded by
+//! `ecdh_es` (JWK import, then the curve check) before [`agree`] can be
+//! reached, so a `PublicKey` here is always on the curve and never the
+//! identity (RFC 8725 §3.4, SP 800-56A r3 §5.6.2.3.4).
 //!
 //! The functions are generic over the curve, so `C` is `p256::NistP256`,
 //! `p384::NistP384` or `p521::NistP521`.
