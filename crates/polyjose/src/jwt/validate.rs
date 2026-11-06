@@ -27,8 +27,16 @@ const OTHER_REQUIRED_CLAIM: &str = "required";
 /// - J8–J10: `iss`, `sub`, `aud`, the last including a token `aud` with
 ///   no configured audience (RFC 7519 §4.1.1–§4.1.3) → `InvalidClaim`.
 ///
-/// The clock is read (through the policy) only when a time check runs
-/// (ADR 0028).
+/// The clock is read (through the policy) only when a time check runs,
+/// and at most once (ADR 0028). A clock that fails or is outside
+/// ±(2^53 − 1) fails the first time check that runs with
+/// [`Error::InvalidClaim`]`("clock")` (ADR 0028 §1); presence (J4) is
+/// decided before that.
+///
+/// The `InvalidClaim` detail names the registered claim, or `client_id`;
+/// another caller-required name is reported as `"required"`, since the
+/// detail is a `&'static str`. Details are diagnostic; the codes are the
+/// contract (ADR 0027 §9). No claim value is ever put in an error.
 pub(crate) fn validate_claims(c: &Claims, p: &Policy<'_>) -> Result<()> {
     check_presence(c, p)?;
     let mut now = Now::new(p);
