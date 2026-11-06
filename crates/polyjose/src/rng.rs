@@ -228,9 +228,16 @@ mod tests {
     #[test]
     fn no_global_or_thread_local_state_can_switch_the_rng() {
         // A global RNG switch needs process-wide or thread-local state:
-        // `static` items or `thread_local!`. polyjose has none, so FixedRng
-        // can only be passed explicitly. The banned tokens are split so this
-        // test does not match itself.
+        // `static` items or `thread_local!`. polyjose's library code has
+        // none, so FixedRng can only be passed explicitly. The banned tokens
+        // are split so this test does not match itself.
+        //
+        // One file is exempt: `src/test_counters.rs`, the thread-local
+        // operation counters that let tests bound the work of untrusted-input
+        // paths without wall-clock timing. It is skipped only after this test
+        // proves it never reaches a non-test build: the file opens with
+        // `#![cfg(test)]`, and the crate declares it exactly once, as
+        // `mod test_counters;` in `lib.rs` directly under `#[cfg(test)]`.
         let banned = [
             ["thread", "_local!"].concat(),
             ["Once", "Lock"].concat(),
@@ -246,10 +253,24 @@ mod tests {
                 .unwrap_or(line);
             item.starts_with(&["static", " "].concat())
         };
-        let mut dirs = vec![std::path::PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src"
-        ))];
+        let src = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+        let exempt = src.join(["test", "_counters.rs"].concat());
+        let exempt_mod = ["test", "_counters"].concat();
+        // Any `mod test_counters`, whatever its visibility, attributes or
+        // spacing: the word `mod` followed by the module's name.
+        let declares_exempt = |line: &str| {
+            let words: Vec<&str> = line
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|w| !w.is_empty())
+                .collect();
+            words
+                .windows(2)
+                .any(|w| w[0] == "mod" && w[1] == exempt_mod)
+        };
+        // (file, declaration line, the line directly above it), trimmed.
+        let mut declarations = Vec::new();
+        let mut exempt_text = None;
+        let mut dirs = vec![src.clone()];
         let mut scanned = 0;
         while let Some(dir) = dirs.pop() {
             let entries = std::fs::read_dir(&dir);
@@ -270,9 +291,14 @@ mod tests {
                 assert!(text.is_ok(), "cannot read {}", path.display());
                 let text = text.unwrap_or_default();
                 scanned += 1;
+                let mut previous = "";
                 for (n, line) in text.lines().enumerate() {
-                    let line = line.trim_start();
-                    if line.starts_with("//") {
+                    let line = line.trim();
+                    if !line.starts_with("//") && declares_exempt(line) {
+                        declarations.push((path.clone(), line.to_owned(), previous.to_owned()));
+                    }
+                    previous = line;
+                    if path == exempt || line.starts_with("//") {
                         continue;
                     }
                     let hit = banned.iter().any(|b| line.contains(b.as_str()));
@@ -283,10 +309,37 @@ mod tests {
                         n + 1
                     );
                 }
+                if path == exempt {
+                    exempt_text = Some(text);
+                }
             }
         }
         // Guard against a vacuous pass if the layout changes.
         assert!(scanned >= 10, "scanned only {scanned} source files");
+
+        // The exemption holds only while the exempt file is test-only.
+        if let Some(text) = exempt_text {
+            let first_code = text
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with("//"));
+            assert_eq!(
+                first_code,
+                Some("#![cfg(test)]"),
+                "{} must open with #![cfg(test)]",
+                exempt.display()
+            );
+            let expected = [(
+                src.join("lib.rs"),
+                ["mod ", &exempt_mod, ";"].concat(),
+                "#[cfg(test)]".to_owned(),
+            )];
+            assert_eq!(
+                declarations, expected,
+                "{exempt_mod} must be declared exactly once, as `mod {exempt_mod};` \
+                 in lib.rs directly under #[cfg(test)]"
+            );
+        }
     }
 
     #[test]
