@@ -367,3 +367,105 @@ describe("gen.mjs: vector members", () => {
 function hmacB64u(hash, key, text) {
   return b64u(createHmac(hash, key).update(Buffer.from(text, "ascii")).digest());
 }
+
+describe("gen.mjs: JWS negative-vector features", () => {
+  const good = { header: { alg: "HS256", typ: "JWT" }, payload: '{"sub":"x"}', key: "oct-32" };
+
+  it("corrupt_signature flips the low bit of the last signature octet, nothing else", () => {
+    for (const spec of [good, { header: { alg: "ES256" }, payload: "{}", key: "p256" }, { header: { alg: "EdDSA" }, payload: "{}", key: "ed25519" }]) {
+      const [h, p, s] = parts(tokenOf({ ...spec, corrupt_signature: true }));
+      const sig = unb64u(s);
+      const alg = spec.header.alg;
+      if (alg === "HS256") {
+        const [gh, gp, gs] = parts(tokenOf(spec));
+        assert.equal(h, gh);
+        assert.equal(p, gp);
+        const orig = unb64u(gs);
+        assert.deepEqual(sig.subarray(0, -1), orig.subarray(0, -1));
+        assert.equal(sig.at(-1), orig.at(-1) ^ 0x01);
+      } else {
+        const hash = alg === "ES256" ? "sha256" : null;
+        const k = alg === "ES256" ? { key: pub("p256"), dsaEncoding: "ieee-p1363" } : pub("ed25519");
+        assert.equal(verify(hash, Buffer.from(`${h}.${p}`, "ascii"), k, sig), false, `${alg} no longer verifies`);
+        sig[sig.length - 1] ^= 0x01;
+        assert.ok(verify(hash, Buffer.from(`${h}.${p}`, "ascii"), k, sig), `${alg} un-flipped verifies`);
+      }
+    }
+  });
+
+  it('alg "none" gives an empty signature and takes no key (RFC 7519 §6.1)', () => {
+    const token = tokenOf({ header: { alg: "none" }, payload: '{"iss":"joe"}' });
+    const [h, p, s] = parts(token);
+    assert.equal(s, "");
+    assert.equal(unb64u(h).toString(), '{"alg":"none"}');
+    assert.equal(unb64u(p).toString(), '{"iss":"joe"}');
+    assert.throws(() => tokenOf({ header: { alg: "none" }, payload: "{}", key: "oct-32" }), /none/);
+  });
+
+  it("signature_b64u forges a signature verbatim", () => {
+    const forged = b64u(Buffer.alloc(32, 7));
+    assert.equal(parts(tokenOf({ header: { alg: "none" }, payload: "{}", signature_b64u: forged }))[2], forged);
+    assert.throws(() => tokenOf({ ...good, signature_b64u: forged }), /signature_b64u/);
+  });
+
+  it("refuses a b64:false compact payload containing '.' (RFC 7797 §5.2)", () => {
+    const header = { alg: "HS256", b64: false, crit: ["b64"] };
+    assert.throws(() => tokenOf({ header, payload: "a.b", key: "oct-32" }), /RFC 7797 §5\.2/);
+  });
+
+  it("b64:false compact payload is the raw text and the MAC covers it (RFC 7797 §3)", () => {
+    const header = { alg: "HS256", b64: false, crit: ["b64"] };
+    const [h, p, s] = parts(tokenOf({ header, payload: '{"sub":"x"}', key: "oct-32" }));
+    assert.equal(p, '{"sub":"x"}');
+    assert.equal(s, hmacB64u("sha256", unb64u(KEYS["oct-32"].jwk.k), `${h}.${p}`));
+  });
+
+  it("replace_after_signing swaps the header or payload while keeping the signature", () => {
+    const [gh, gp, gs] = parts(tokenOf(good));
+    const [h1, p1, s1] = parts(tokenOf({ ...good, replace_after_signing: { payload: '{"sub":"y"}' } }));
+    assert.equal(h1, gh);
+    assert.equal(s1, gs);
+    assert.equal(unb64u(p1).toString(), '{"sub":"y"}');
+    const [h2, p2, s2] = parts(tokenOf({ ...good, replace_after_signing: { header: { alg: "HS256", typ: "at+jwt" } } }));
+    assert.equal(p2, gp);
+    assert.equal(s2, gs);
+    assert.equal(unb64u(h2).toString(), '{"alg":"HS256","typ":"at+jwt"}');
+    assert.throws(() => tokenOf({ ...good, replace_after_signing: { signature: "x" } }), /signature/);
+  });
+
+  it("rewraps the compact JWS as flattened JSON with a spec-given unprotected header (ADR 0049 §2)", () => {
+    const compact = parts(tokenOf(good));
+    const v = generate(
+      entry(
+        { jws: { ...good, serialization: "flattened", unprotected: { typ: "at+jwt" } } },
+        { input: { token: "$token", now: 0 }, expect: { ok: false, error: "InvalidFormat", seen: "$token_json" } },
+      ),
+      keys,
+    );
+    const obj = JSON.parse(v.input.token);
+    // RFC 7515 §7.2.2: payload, protected, header, signature.
+    assert.deepEqual(Object.keys(obj), ["payload", "protected", "header", "signature"]);
+    assert.equal(obj.protected, compact[0]);
+    assert.equal(obj.payload, compact[1]);
+    assert.equal(obj.signature, compact[2]);
+    assert.deepEqual(obj.header, { typ: "at+jwt" });
+    assert.deepEqual(v.expect.seen, obj);
+    assert.equal(obj.signature, hmacB64u("sha256", unb64u(KEYS["oct-32"].jwk.k), `${obj.protected}.${obj.payload}`));
+    assert.throws(() => tokenOf({ ...good, unprotected: { typ: "x" } }), /flattened/);
+    assert.throws(() => generate(entry({ jws: good }, { input: { t: "$token_json" } }), keys), /JSON serialization/);
+  });
+
+  it("refuses RSA signing (ADR 0021), a wrong curve, and a short HMAC key (RFC 7518 §3.2)", () => {
+    assert.throws(() => tokenOf({ header: { alg: "RS256" }, payload: "{}", key: "rsa-2048" }), /ADR 0021/);
+    assert.throws(() => tokenOf({ header: { alg: "PS256" }, payload: "{}", key: "p256" }), /ADR 0021/);
+    assert.throws(() => tokenOf({ header: { alg: "HS256" }, payload: "{}", key: "rsa-2048" }), /ADR 0021/);
+    assert.throws(() => tokenOf({ header: { alg: "ES256" }, payload: "{}", key: "p384" }), /P-256/);
+    assert.throws(() => tokenOf({ header: { alg: "HS256" }, payload: "{}", key: "oct-16" }), /RFC 7518 §3\.2/);
+    assert.throws(() => tokenOf({ header: { alg: "ES256" }, payload: "{}", key: { $public: "p256" } }), /private/);
+  });
+
+  it("signs with `alg` when the header names none or another alg", () => {
+    const [h, p, s] = parts(tokenOf({ header: { typ: "JWT" }, payload: "{}", key: "oct-32", alg: "HS256" }));
+    assert.equal(s, hmacB64u("sha256", unb64u(KEYS["oct-32"].jwk.k), `${h}.${p}`));
+  });
+});
