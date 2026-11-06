@@ -483,7 +483,7 @@ UniFFI) are not part of the core crate and are not listed here.
   non-optional dependency of `rsa`; polyjose generates no RSA keys.
 - **Audit status:** not in the ADR 0019 register; a dependency of `rsa`.
 
-## EdDSA and X25519
+## EdDSA
 
 ### `ed25519-dalek`
 
@@ -497,19 +497,6 @@ UniFFI) are not part of the core crate and are not listed here.
   issues only, but `ed25519-dalek` was reviewed only marginally. RUSTSEC-2022-0093 (double public
   key oracle, fixed in 2.0) and a scalar timing fix came later; polyjose pins 3.0.0.
 
-### `x25519-dalek`
-
-- **Upstream:** dalek-cryptography,
-  [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
-  ([crates.io](https://crates.io/crates/x25519-dalek))
-- **License:** BSD-3-Clause
-- **Used for:** X25519 (RFC 7748) for JWE ECDH-ES with `crv` `X25519` keys (RFC 8037 §3.2),
-  including the check that the shared secret is not all-zero. Its `zeroize` feature wipes secrets on
-  drop.
-- **Audit status:** audited by Quarkslab in 2019 (for Tari), together with `curve25519-dalek`: minor
-  issues only, but `x25519-dalek` was reviewed only marginally. polyjose pins 3.0.0, which postdates
-  the audit.
-
 ### `ed25519`
 
 - **Upstream:** RustCrypto, [RustCrypto/signatures](https://github.com/RustCrypto/signatures)
@@ -518,6 +505,19 @@ UniFFI) are not part of the core crate and are not listed here.
 - **Used for:** not used directly. The Ed25519 signature type that `ed25519-dalek` uses.
 - **Audit status:** not in the ADR 0019 register; a dependency of `ed25519-dalek`.
 
+### `x25519-dalek`
+
+- **Upstream:** dalek-cryptography,
+  [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
+  ([crates.io](https://crates.io/crates/x25519-dalek))
+- **License:** BSD-3-Clause
+- **Used for:** X25519 (RFC 7748) for the OKP `X25519` curve (RFC 8037 §2): deriving the public `x`
+  of a generated key (RFC 7748 §6.1) and, for JWE, ECDH-ES key agreement (RFC 8037 §3.2). Its
+  `static_secrets` feature provides the reusable private key a JWK holds, and `zeroize` wipes it on
+  drop.
+- **Audit status:** audited by Quarkslab in 2019 (for Tari), together with `curve25519-dalek`, but
+  reviewed only marginally. polyjose pins 3.0.0, which postdates the audit.
+
 ### `curve25519-dalek`
 
 - **Upstream:** dalek-cryptography,
@@ -525,9 +525,8 @@ UniFFI) are not part of the core crate and are not listed here.
   ([crates.io](https://crates.io/crates/curve25519-dalek))
 - **License:** BSD-3-Clause
 - **Used for:** not used directly. The Curve25519 group and field arithmetic under `ed25519-dalek`
-  and `x25519-dalek`.
-  Its build script picks the arithmetic backend from the target and the compiler version, and on
-  x86_64 it generates its SIMD backends with `curve25519-dalek-derive`.
+  and `x25519-dalek`. Its build script picks the arithmetic backend from the target and the compiler
+  version, and on x86_64 it generates its SIMD backends with `curve25519-dalek-derive`.
 - **Audit status:** audited by Quarkslab in 2019 (for Tari): minor issues only. polyjose pins 5.0.0,
   which postdates the audit.
 
