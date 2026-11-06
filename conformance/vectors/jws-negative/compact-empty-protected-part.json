@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7515 §7.1",
+  "description": "A compact JWS \".UGF5bG9hZA.<sig>\" whose protected part is empty, with the HS256 MAC over \".UGF5bG9hZA\" correct (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key): the empty part decodes to zero octets, which are not JSON, so the JWS Protected Header fails to parse: InvalidJson (RFC 7515 §5.2 step 3; ADR 0048 step 3). This differs on purpose from the JSON serialization, where \"protected\": \"\" is InvalidFormat because RFC 7515 §7.2.1 requires the member to be absent when the protected header is empty, a shape violation (ADR 0026 §1)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": ".UGF5bG9hZA.mAH-uu8cnk62h9BQTeRzajO_E3N-zzzDvsi4tuTEEXg",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

@@ -7,12 +7,18 @@
 //! validated at import (ADR 0041 §4, ADR 0043 §3), that the JWK members the
 //! binding reads (`kid`, `use`, `key_ops`, `alg`) are exposed, and that
 //! the RSA, `RSA-OAEP` and `RSA1_5` refusals happen before any JWE code
-//! runs (ADRs 0021, 0022).
+//! runs (ADRs 0021, 0022). The RSA-OAEP-256 modulus range is import's
+//! alone (`jwk::RSA_MODULUS_BITS`, 0003 F04): a key outside it never
+//! becomes a [`Jwk`], so no [`Recipient`] can be built from it.
 #![allow(clippy::panic)] // test code: a panic is a failed assertion
 
+use std::path::PathBuf;
+
 use polyjose::Error;
-use polyjose::jwa::KeyMgmtAlg;
+use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
+use polyjose::jwe::{Encryptor, Recipient};
 use polyjose::jwk::{EcCurve, Jwk, KeyAlg, KeyMaterial, KeyOp, KeyType, KeyUse, OkpCurve};
+use polyjose::util::b64url_decode;
 
 fn import(json: &str) -> polyjose::Result<Jwk> {
     Jwk::from_json(json.as_bytes())
@@ -274,5 +280,52 @@ fn debug_of_private_keys_prints_no_secret() {
         assert!(!debug.contains("197, 197"), "{debug}");
         assert!(!debug.to_lowercase().contains("c5c5"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
+    }
+}
+
+/// The `bits`-bit RSA public JWK of `tests/data/jwe/rsa-bound/` (OpenSSL
+/// and Node output, `regen.sh`).
+fn rsa_bound_jwk(bits: usize) -> Vec<u8> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("tests/data/jwe/rsa-bound/rsa{bits}.jwk.json"));
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// RFC 7518 §4.3: "A key of size 2048 bits or larger MUST be used"; at most
+/// 8192 bits (ADR 0026 §2 step 8). Out-of-range keys are refused at import,
+/// the only place the bound lives, so `Recipient::new`, which takes a
+/// `&Jwk`, can never be given one. Every import path refuses them alike
+/// (`tests/jwe_rsa_bound_import.rs`).
+#[test]
+fn an_out_of_range_rsa_key_never_imports_so_never_becomes_a_recipient() {
+    for (bits, detail) in [
+        (1024, "RSA modulus is shorter than 2048 bits"),
+        (2047, "RSA modulus is shorter than 2048 bits"),
+        (8193, "RSA modulus is longer than 8192 bits"),
+        (8200, "RSA modulus is longer than 8192 bits"),
+    ] {
+        assert_eq!(
+            Jwk::from_json(&rsa_bound_jwk(bits)).map(|_| ()),
+            Err(Error::InvalidKey(detail)),
+            "{bits}"
+        );
+    }
+}
+
+/// Both ends of the range encrypt with RSA-OAEP-256: a compact JWE
+/// (RFC 7516 §7.1) whose encrypted key is exactly k octets, the modulus
+/// length (RFC 8017 §7.1.1).
+#[test]
+fn rsa_oaep_256_encrypts_to_2048_and_8192_bit_keys() {
+    for bits in [2048, 8192] {
+        let key = Jwk::from_json(&rsa_bound_jwk(bits)).unwrap_or_else(|e| panic!("{bits}: {e}"));
+        let token = Encryptor::new(ContentEncAlg::A128GCM)
+            .recipient(Recipient::new(KeyMgmtAlg::RsaOaep256, &key))
+            .encrypt_compact(b"in range")
+            .unwrap_or_else(|e| panic!("{bits}: {e}"));
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 5, "{bits}");
+        let encrypted_key = b64url_decode(parts[1]).unwrap_or_else(|e| panic!("{bits}: {e}"));
+        assert_eq!(encrypted_key.len(), bits / 8, "{bits}");
     }
 }

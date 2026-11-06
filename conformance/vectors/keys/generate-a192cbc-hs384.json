@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §5.2.4",
+  "description": "Key generation for an algorithm: an A192CBC-HS384 key is 48 octets (RFC 7518 §5.2.4); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A192CBC-HS384"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A192CBC-HS384",
+      "k_octets": 48
+    }
+  }
+}

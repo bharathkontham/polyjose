@@ -197,15 +197,43 @@ pub(crate) fn common_b64(headers: &[JoseHeader]) -> Result<bool> {
 /// received ([`super::ProtectedHeader::encoded`]), or `""` when a JSON
 /// signature has none (RFC 7515 §5.1, RFC 7520 §4.7). `payload` is the
 /// JWS Payload, also for detached content (RFC 7515 Appendix F).
-pub(crate) fn signing_input(protected_b64: &str, payload: &[u8], b64: bool) -> Vec<u8> {
-    let mut input = Vec::with_capacity(protected_b64.len() + 1 + payload.len().div_ceil(3) * 4);
+///
+/// The payload may be secret (ADR 0049 §4), so the result and the
+/// intermediate BASE64URL(JWS Payload) are wiped on drop. When the payload
+/// is already at hand in its signing-input form, use
+/// [`signing_input_from_part`] instead of encoding it again.
+pub(crate) fn signing_input(protected_b64: &str, payload: &[u8], b64: bool) -> Zeroizing<Vec<u8>> {
+    if b64 {
+        let encoded = Zeroizing::new(b64url_encode(payload));
+        signing_input_from_part(protected_b64, encoded.as_bytes())
+    } else {
+        signing_input_from_part(protected_b64, payload)
+    }
+}
+
+/// The JWS Signing Input from the payload in the form the signing input
+/// carries it (RFC 7515 §5.1 step 5, RFC 7797 §3):
+/// `ASCII(BASE64URL(UTF8(JWS Protected Header)) || '.') || payload_part`.
+///
+/// `payload_part` is BASE64URL(JWS Payload) when `b64` is true, for
+/// example a received compact payload part or JSON `payload` member, and
+/// the JWS Payload octets when `b64` is false. Received base64url text can
+/// be passed as is: [`crate::util::b64url_decode`] accepts only the
+/// canonical encoding (RFC 4648 §3.5), so it equals the re-encoding of
+/// the decoded payload.
+///
+/// The result is wiped on drop (ADR 0049 §4) and allocated once at its
+/// exact length, so no reallocation leaves a copy behind.
+pub(crate) fn signing_input_from_part(
+    protected_b64: &str,
+    payload_part: &[u8],
+) -> Zeroizing<Vec<u8>> {
+    let mut input = Zeroizing::new(Vec::with_capacity(
+        protected_b64.len() + 1 + payload_part.len(),
+    ));
     input.extend_from_slice(protected_b64.as_bytes());
     input.push(b'.');
-    if b64 {
-        input.extend_from_slice(b64url_encode(payload).as_bytes());
-    } else {
-        input.extend_from_slice(payload);
-    }
+    input.extend_from_slice(payload_part);
     input
 }
 
@@ -384,7 +412,7 @@ mod tests {
             b"{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}";
         let expected = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ";
         let input = signing_input("eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9", payload, true);
-        assert_eq!(input, expected.as_bytes());
+        assert_eq!(*input, expected.as_bytes());
         // The RFC lists the first and last octets of the ASCII array.
         assert_eq!(&input[..8], &[101, 121, 74, 48, 101, 88, 65, 105]);
         assert_eq!(&input[input.len() - 4..], &[86, 108, 102, 81]);
@@ -394,29 +422,56 @@ mod tests {
     fn signing_input_rfc7797_section_4() {
         // RFC 7797 §4.1: b64 true, payload "$.02".
         assert_eq!(
-            signing_input("eyJhbGciOiJIUzI1NiJ9", b"$.02", true),
+            *signing_input("eyJhbGciOiJIUzI1NiJ9", b"$.02", true),
             b"eyJhbGciOiJIUzI1NiJ9.JC4wMg"
         );
         // RFC 7797 §4.2: b64 false, the payload octets themselves (§3).
         let protected = "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19";
         let input = signing_input(protected, b"$.02", false);
         assert_eq!(
-            input,
+            *input,
             b"eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19.$.02"
         );
         assert_eq!(&input[input.len() - 5..], &[46, 36, 46, 48, 50]);
     }
 
     #[test]
+    fn signing_input_is_wiped_on_drop() {
+        // ADR 0049 §4: the signing input holds the payload, so it is a
+        // `Zeroizing` buffer, whichever way it is built.
+        let input: Zeroizing<Vec<u8>> = signing_input("e30", b"secret", true);
+        assert_eq!(*input, b"e30.c2VjcmV0");
+        let part: Zeroizing<Vec<u8>> = signing_input_from_part("e30", b"c2VjcmV0");
+        assert_eq!(part, input);
+    }
+
+    #[test]
+    fn signing_input_from_part_matches_signing_input() {
+        // RFC 7515 §5.1 step 5, RFC 7797 §3: the part is BASE64URL(JWS
+        // Payload) for b64 true and the payload octets for b64 false.
+        for payload in [&b""[..], b"$.02", b"\x00\xff.", b"hello world"] {
+            let encoded = b64url_encode(payload);
+            assert_eq!(
+                signing_input_from_part("e30", encoded.as_bytes()),
+                signing_input("e30", payload, true)
+            );
+            assert_eq!(
+                signing_input_from_part("e30", payload),
+                signing_input("e30", payload, false)
+            );
+        }
+    }
+
+    #[test]
     fn signing_input_edge_cases() {
         // RFC 7515 §5.1, RFC 7520 §4.7: no protected header, empty first part.
-        assert_eq!(signing_input("", b"$.02", true), b".JC4wMg");
+        assert_eq!(*signing_input("", b"$.02", true), b".JC4wMg");
         // An empty payload (RFC 7515 Appendix F detached content still signs it).
-        assert_eq!(signing_input("e30", b"", true), b"e30.");
-        assert_eq!(signing_input("e30", b"", false), b"e30.");
+        assert_eq!(*signing_input("e30", b"", true), b"e30.");
+        assert_eq!(*signing_input("e30", b"", false), b"e30.");
         // b64 false keeps any octets, untouched.
         assert_eq!(
-            signing_input("e30", &[0, 0xff, b'.'], false),
+            *signing_input("e30", &[0, 0xff, b'.'], false),
             b"e30.\x00\xff."
         );
     }

@@ -1,0 +1,17 @@
+{
+  "source": "RFC 7517 App. A.3",
+  "description": "DER export refusal: the RFC 7517 A.3 oct key cannot be exported as SPKI (RFC 8725 §2.1, ADR 0018 §3).",
+  "operation": "keys.export_der",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "alg": "A128KW",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "format": "spki"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

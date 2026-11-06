@@ -1,0 +1,20 @@
+{
+  "source": "ADR 0026 §6",
+  "description": "The small-order-R forgery copied from crates/polyjose/tests/jws_eddsa.rs (SMALL_ORDER_R_FORGERY, payload \"forged\") with the RFC 8037 A.2 public key: R is the identity point and S = k·a mod L, so the cofactorless RFC 8032 §5.1.7 equation [S]B = R + [k]A holds (checked independently with the RFC 8032 §6 reference Python arithmetic), but strict verification (verify_strict) refuses a small-order R",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFZERTQSJ9.Zm9yZ2Vk.AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADl_T4pLKwoGTnFRGQYoV79pc-ReYRX6BWHBGBejO3oDQ",
+    "key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    },
+    "allowed_algs": [
+      "EdDSA"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

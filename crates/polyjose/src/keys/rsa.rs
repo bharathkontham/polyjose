@@ -12,12 +12,19 @@
 //!   body is decoded.
 //! - PKCS#1 DER: `pkcs1::decode` recognizes the RSAPrivateKey shape from
 //!   its version and the framing of the INTEGERs after it.
+//! - A PKCS#1 RSAPrivateKey read as PKCS#8 or SEC1 (under `PRIVATE KEY` or
+//!   `EC PRIVATE KEY`, ADR 0018 §3): `pkcs8::decode` and
+//!   `sec1::decode_standalone` fail their own parse, then
+//!   `pkcs1::relabel_rsa_private_key` recognizes the same framing.
 //!
 //! This module never uses the rsa crate: an RSA public key is two DER
 //! INTEGERs, and [`Jwk::from_object`](crate::jwk::Jwk::from_object), reached
 //! through `jwk_build::rsa_public_jwk`, checks that they are a usable key
-//! (at least 2048 bits, RFC 7518 §3.3, §4.2, ADR 0007; odd `n`; odd `e` with
-//! 3 ≤ e < n, RFC 8017 §3.1).
+//! (a modulus of 2048–8192 bits, [`RSA_MODULUS_BITS`]: at least 2048 by
+//! RFC 7518 §3.3, §4.2 and ADR 0007, at most 8192 by ADR 0026 §2 step 8;
+//! odd `n`; odd `e` with 3 ≤ e < n, RFC 8017 §3.1).
+//!
+//! [`RSA_MODULUS_BITS`]: crate::jwk::RSA_MODULUS_BITS
 
 use zeroize::Zeroizing;
 
@@ -41,8 +48,10 @@ use crate::jwk::{Jwk, RsaPublicKey};
 /// [`Error::InvalidKey`] when `parts` is not an rsaEncryption key, when the
 /// subjectPublicKey is not a well-formed RSAPublicKey (a negative or
 /// non-minimal INTEGER, an extra field, an EC point), and for whatever
-/// [`Jwk::from_object`] refuses: a modulus under 2048 bits, an even
-/// modulus, an exponent that is even or outside 3 ≤ e < n.
+/// [`Jwk::from_object`] refuses: a modulus outside 2048–8192 bits
+/// ([`RSA_MODULUS_BITS`](crate::jwk::RSA_MODULUS_BITS); RFC 7518 §3.3,
+/// ADR 0026 §2 step 8), an even modulus, an exponent that is even or
+/// outside 3 ≤ e < n.
 pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
     if parts.alg != AlgId::RsaEncryption {
         return Err(Error::InvalidKey("the key is not an RSA key"));
@@ -650,27 +659,48 @@ mod adversarial {
     }
 
     #[test]
-    fn modulus_above_8192_bits_imports_because_the_ceiling_is_enforced_at_use() {
-        // jwk.rs documents: "The 8192-bit RSA ceiling is enforced where an RSA
-        // key is used (ADR 0026 §2 step 8)", so the import-time mapper accepts
-        // 8193 and larger moduli, and exports them back unchanged.
-        for bytes in [1024usize, 1025, 1100] {
+    fn modulus_above_8192_bits_is_refused_at_import() {
+        // jwk.rs enforces 2048..=8192 bits at import (RFC 7518 §3.3,
+        // ADR 0026 §2 step 8), so the mapper refuses 8193 and larger moduli
+        // from PKCS#1 and SPKI alike; 8192 still round-trips unchanged.
+        let e = [0x01, 0x00, 0x01];
+        for bytes in [1025usize, 1100] {
             let mut n = vec![0x80; bytes];
             n[bytes - 1] = 0x01;
-            let e = [0x01, 0x00, 0x01];
             let der = raw_public(&with_sign_octet(&n), &e);
-            let key = from_pkcs1(&der).unwrap_or_else(|e| panic!("{bytes}: {e:?}"));
-            assert_eq!(rsa(&key).modulus_bits(), bytes * 8);
-            assert_eq!(&to_pkcs1(rsa(&key)).unwrap()[..], &der[..]);
-            let spki_der = to_spki(rsa(&key)).unwrap();
-            assert!(import_spki_der(&spki_der).is_ok());
+            assert_eq!(
+                detail(from_pkcs1(&der)),
+                "RSA modulus is longer than 8192 bits",
+                "{bytes}"
+            );
+            let spki_der = spki::encode(&SpkiParts {
+                alg: AlgId::RsaEncryption,
+                subject_public_key: &der,
+            })
+            .unwrap();
+            assert_eq!(
+                detail(import_spki_der(&spki_der)),
+                "RSA modulus is longer than 8192 bits",
+                "{bytes}"
+            );
         }
         // 8193 bits exactly: 1025 octets with a top octet of 0x01.
         let mut n = vec![0x55; 1025];
         n[0] = 0x01;
         n[1024] = 0x01;
-        let key = from_pkcs1(&raw_public(&n, &[0x01, 0x00, 0x01])).unwrap();
-        assert_eq!(rsa(&key).modulus_bits(), 8193);
+        assert_eq!(
+            detail(from_pkcs1(&raw_public(&n, &e))),
+            "RSA modulus is longer than 8192 bits"
+        );
+        // 8192 bits: imports and exports back unchanged.
+        let mut n = vec![0x80; 1024];
+        n[1023] = 0x01;
+        let der = raw_public(&with_sign_octet(&n), &e);
+        let key = from_pkcs1(&der).unwrap();
+        assert_eq!(rsa(&key).modulus_bits(), 8192);
+        assert_eq!(&to_pkcs1(rsa(&key)).unwrap()[..], &der[..]);
+        let spki_der = to_spki(rsa(&key)).unwrap();
+        assert!(import_spki_der(&spki_der).is_ok());
     }
 
     fn import_spki_der(der: &[u8]) -> Result<Jwk> {

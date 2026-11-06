@@ -1,0 +1,19 @@
+{
+  "source": "RFC 9500 §2.3",
+  "description": "DER import of RFC 9500 testECCP521 as a SEC1 EC PRIVATE KEY (RFC 5915 §3); y is padded to 66 octets (RFC 7518 §6.2.1.3).",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MIHcAgEBBEIB2STcygqIf42Zdno32HTmN6Esy0d9bghmU1ZpTWi3ZV5QaWOP3ntFyFQBPcd6NbGGVbhMlmpgIg1A-R7Z9RRYAuqgBwYFK4EEACOhgYkDgYYABAHQ_XJXqEx0f1YldcBzhdvr8vUr6lgIPbgv3RUx2KrjzIdf8C_3-i2iYNjrYtbS9dZJJ44yFzagYoy7swMItuYY2wD2KtIExkYDWbyBiriWG_Dw_A7FquikKBc85W8A3psVfB5cgsZPVi_K3vxKTCj200LPPvYW_ILTO3KFySHyvzb92A",
+    "format": "sec1"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AdD9cleoTHR_ViV1wHOF2-vy9SvqWAg9uC_dFTHYquPMh1_wL_f6LaJg2Oti1tL11kknjjIXNqBijLuzAwi25hjb",
+      "y": "APYq0gTGRgNZvIGKuJYb8PD8DsWq6KQoFzzlbwDemxV8HlyCxk9WL8re_EpMKPbTQs8-9hb8gtM7coXJIfK_Nv3Y",
+      "d": "Adkk3MoKiH-NmXZ6N9h05jehLMtHfW4IZlNWaU1ot2VeUGljj957RchUAT3HejWxhlW4TJZqYCINQPke2fUUWALq"
+    }
+  }
+}

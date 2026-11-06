@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"RSA-OAEP-256\": RSA keys are never generated (ADR 0021).",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "RSA-OAEP-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

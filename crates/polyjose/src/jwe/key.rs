@@ -68,8 +68,9 @@ impl RecipientKey {
     ///
     /// The key itself was validated when the [`Jwk`] was imported
     /// (`Jwk::from_object`: exact member lengths, EC points on their curve
-    /// and not the identity, `d` in [1, n − 1], RSA moduli of at least 2048
-    /// bits, RSA private keys refused; ADR 0041 §4, ADR 0021), and so is
+    /// and not the identity, `d` in [1, n − 1], RSA moduli of 2048 to 8192
+    /// bits by `jwk::RSA_MODULUS_BITS` (RFC 7518 §4.3, ADR 0026 §2 step 8),
+    /// RSA private keys refused; ADR 0041 §4, ADR 0021), and so is
     /// private-to-public consistency (ADR 0043 §3: EC `d·G` = (`x`, `y`),
     /// and X25519 `x` = X25519(`d`, 9) by RFC 7748 §6.1, through
     /// `jwe::x25519_consistency`). None of that is repeated here. In this
@@ -101,8 +102,7 @@ impl RecipientKey {
     ///    candidate; plan.md error contract). On decrypt the `dir` length
     ///    is *not* checked here: `enc` comes from the attacker-controlled
     ///    header, so a mismatch is the `dir` key management's
-    ///    [`Error::DecryptionFailed`]. An RSA modulus above 8192 bits is
-    ///    [`Error::InvalidKey`] (encrypt is RSA's only direction).
+    ///    [`Error::DecryptionFailed`].
     ///
     /// # Errors
     ///
@@ -330,24 +330,17 @@ fn okp_key(key: &OkpKey, direction: Direction) -> Result<RecipientKey> {
     }
 }
 
-/// The largest RSA modulus polyjose uses, in bits: the `rsa` crate's own
-/// maximum, as for JWS (ADR 0026 §2 step 8). Import already refuses fewer
-/// than 2048 bits (RFC 7518 §4.2–§4.3, ADR 0007).
-const RSA_MAX_BITS: usize = 8192;
-
 /// An `RSA` public key (RFC 7518 §6.3.1) for RSA-OAEP-256 encryption
 /// (RFC 7518 §4.3), held as its validated `n` and `e`, big-endian.
 ///
 /// Only encryption reaches here: RSA-OAEP-256 decryption is
 /// [`Error::UnsupportedAlgorithm`] (ADR 0021), and an RSA private JWK
-/// never imports. A modulus above [`RSA_MAX_BITS`] is
-/// [`Error::InvalidKey`].
+/// never imports. The modulus is in range already: JWK import, on every
+/// path (JSON, PEM, DER), refuses one outside `jwk::RSA_MODULUS_BITS`
+/// (RFC 7518 §4.3, ADR 0026 §2 step 8), so no bound is repeated here.
 fn rsa_key(key: &RsaPublicKey, direction: Direction) -> Result<RecipientKey> {
     if direction == Direction::Decrypt {
         return Err(Error::UnsupportedAlgorithm);
-    }
-    if key.modulus_bits() > RSA_MAX_BITS {
-        return Err(Error::InvalidKey("RSA modulus must be 2048 to 8192 bits"));
     }
     Ok(RecipientKey::RsaPublic {
         n: key.n().to_vec(),
@@ -761,15 +754,6 @@ mod tests {
         }
     }
 
-    /// An RSA public key with a `bits`-bit modulus (all ones: odd and
-    /// minimal) and e = 65537. Structurally valid only.
-    fn rsa_bits(bits: usize) -> Jwk {
-        let mut n = vec![0xff; bits.div_ceil(8)];
-        n[0] >>= (8 - bits % 8) % 8;
-        let n = b64url_encode(&n);
-        jwk(&format!(r#"{{"kty":"RSA","n":"{n}","e":"AQAB"}}"#))
-    }
-
     #[test]
     fn an_rsa_public_key_serves_rsa_oaep_256_encrypt_with_its_n_and_e() {
         let key = rsa("");
@@ -790,24 +774,6 @@ mod tests {
             bind(&rsa(""), &A::RsaOaep256, &GCM128, Decrypt),
             Err(Error::UnsupportedAlgorithm)
         );
-    }
-
-    #[test]
-    fn an_rsa_modulus_must_be_2048_to_8192_bits() {
-        // RFC 7518 §4.3 (via §4.2): "A key of size 2048 bits or larger MUST
-        // be used"; 8192 is the `rsa` crate's maximum (ADR 0026 §2 step 8).
-        // Import already refuses < 2048 (ADR 0007).
-        for bits in [2048, 3072, 4096, 8192] {
-            assert_eq!(
-                bind(&rsa_bits(bits), &A::RsaOaep256, &GCM128, Encrypt),
-                variant("RsaPublic"),
-                "{bits}"
-            );
-        }
-        for bits in [8193, 16384] {
-            let bound = bind(&rsa_bits(bits), &A::RsaOaep256, &GCM128, Encrypt);
-            assert!(matches!(bound, Err(Error::InvalidKey(_))), "{bits}");
-        }
     }
 
     #[test]

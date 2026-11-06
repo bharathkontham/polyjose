@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7517 App. A.2",
+  "description": "DER import of the RFC 7517 A.2 P-256 private key as PKCS#8 (RFC 5958 §2, inner RFC 5915 ECPrivateKey); the PEM was built from the published JWK and checked with OpenSSL.",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAGhRANCAAQwoEJM0hwpRIOKLXXJKzfnbqINnwCJOjtO7oo8Cq_sPuBLZekkVtmIi1Kzeb371R7oae8fD8ZbZllpW2zOCBcj",
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+      "d": "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"
+    }
+  }
+}
