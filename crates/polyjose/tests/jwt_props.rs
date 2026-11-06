@@ -43,7 +43,8 @@ use core::cmp::Ordering;
 
 use polyjose::Error;
 use polyjose::json::{MAX_SAFE_INTEGER, Number, Object, Value, parse};
-use polyjose::jwa::SigningAlg;
+use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
+use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient};
 use polyjose::jwk::{Jwk, JwkSet};
 use polyjose::jwt::{self, Audience, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy};
 use polyjose::util::b64url_encode;
@@ -1098,5 +1099,100 @@ proptest! {
             (Err(want), Err(got)) => prop_assert_eq!(want.code(), got.code(), "{}", json),
             _ => prop_assert!(false, "want {:?}, got {:?}\nset {}\ncase {:?}", want, got.map(|v| v.key_index), json, case),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Nested round trip (RFC 7519 §5.2, §11.2; ADR 0027 §7)
+// ---------------------------------------------------------------------------
+
+/// The `dir` key for A256GCM: 32 fixed octets (RFC 7518 §4.5, §5.3).
+fn dir_key() -> Jwk {
+    jwk(&format!(r#"{{"kty":"oct","k":"{}"}}"#, oct_k(&[0x5a; 32])))
+}
+
+/// The ECDH-ES+A128KW recipient: the RFC 7515 A.3 P-256 key pair
+/// (RFC 7518 §4.6).
+fn p256_recipient() -> Jwk {
+    let (x, y, d) = RFC7515_A3;
+    jwk(&format!(
+        r#"{{"kty":"EC","crv":"P-256","x":"{x}","y":"{y}","d":"{d}"}}"#
+    ))
+}
+
+/// Claims that pass a policy with `allow_missing_exp` and
+/// `ignore_audience` at `now`: any registered strings and audience, any
+/// `iat`, an `exp` after and an `nbf` at or before `now`, and random other
+/// claims.
+fn nested_claims(now: i64) -> impl Strategy<Value = Claims> {
+    let t = now as f64;
+    (
+        (
+            proptest::option::of(any_string()),
+            proptest::option::of(any_string()),
+            proptest::option::of(audience(any_string())),
+            proptest::option::of(
+                (1i64..=1_000_000, fraction()).prop_map(move |(d, f)| t + d as f64 + f),
+            ),
+        ),
+        (
+            proptest::option::of(
+                (0i64..=1_000_000, fraction()).prop_map(move |(d, f)| t - d as f64 - f.abs()),
+            ),
+            proptest::option::of(date_double()),
+            proptest::option::of(any_string()),
+            other_claims(),
+        ),
+    )
+        .prop_map(|((iss, sub, aud, exp), (nbf, iat, jti, other))| {
+            claims_of(iss, sub, aud, exp, nbf, iat, jti, other)
+        })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// RFC 7519 §11.2 sign-then-encrypt: any claims through `jwt::sign`
+    /// (HS256 or EdDSA), `encrypt_nested` with `dir` + A256GCM or
+    /// ECDH-ES+A128KW, then `decrypt_nested`, come back unchanged, with
+    /// `cty: JWT` on the outer header (RFC 7519 §5.2).
+    #[test]
+    fn nested_round_trip_returns_the_claims(
+        (signer, ecdh, enc, now, claims) in (
+            signer(),
+            any::<bool>(),
+            select(vec![ContentEncAlg::A128GCM, ContentEncAlg::A256GCM]),
+            0i64..=4_102_444_800,
+        )
+            .prop_flat_map(|(signer, ecdh, enc, now)| {
+                (Just(signer), Just(ecdh), Just(enc), Just(now), nested_claims(now))
+            }),
+    ) {
+        let inner = jwt::sign(&claims, &IssueOptions::new(signer.alg()), &signer.signing_key())
+            .expect("issued");
+        let (recipient_key, decrypt_key, alg, enc) = if ecdh {
+            let key = p256_recipient();
+            (key.to_public().unwrap(), key, KeyMgmtAlg::EcdhEsA128KW, enc)
+        } else {
+            (dir_key(), dir_key(), KeyMgmtAlg::Dir, ContentEncAlg::A256GCM)
+        };
+        let encryptor = Encryptor::new(enc.clone()).recipient(Recipient::new(alg.clone(), &recipient_key));
+        let token = jwt::encrypt_nested(&inner, &encryptor).expect("nested");
+        prop_assert_eq!(token.split('.').count(), 5);
+
+        let decrypt_policy = DecryptPolicy::new(&[alg], core::slice::from_ref(&enc)).unwrap();
+        let clock = FixedClock(now);
+        let policy = Policy::new(&clock, &ALLOWED)
+            .unwrap()
+            .allow_missing_exp()
+            .ignore_audience();
+        let verifier = signer.verifying_key();
+        let v = jwt::decrypt_nested(&token, &decrypt_key, &decrypt_policy, Keys::One(&verifier), &policy)
+            .unwrap_or_else(|e| panic!("{e}: {}", claims.to_json()));
+        prop_assert_eq!(&v.inner.claims, &claims);
+        prop_assert_eq!(&v.inner.alg, &signer.alg());
+        prop_assert_eq!(v.outer_header.cty.as_deref(), Some("JWT"));
+        prop_assert_eq!(v.outer_header.enc.as_ref(), Some(&enc));
+        prop_assert_eq!(v.recipient, 0);
     }
 }
