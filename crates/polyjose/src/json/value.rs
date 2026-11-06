@@ -1,6 +1,8 @@
 //! The owned JSON value tree (RFC 8259 §3).
 
-use super::Number;
+use core::fmt;
+
+use super::{Limits, Number};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// A JSON value (RFC 8259 §3): `null`, `true`/`false`, a number, a string,
@@ -26,9 +28,39 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 ///
 /// Not covered: the caller's input bytes, copies the caller makes (for
 /// example with `as_str().to_owned()`), and [`to_json`](Value::to_json)
-/// output, which the caller must wipe (see there). `Debug` prints strings as
-/// `Zeroizing { .. }`.
-#[derive(Debug, Clone, PartialEq)]
+/// output, which the caller must wipe (see there).
+///
+/// # Debug
+///
+/// `Debug` is polyjose's own and never prints the text of a string, so a
+/// logged value cannot leak a key (workspace secrets rule). It does not rely
+/// on how `zeroize` formats [`Zeroizing`].
+///
+/// - Every string prints as `String("<redacted>")`, whatever its content
+///   or length, so not even the length of a secret shows.
+/// - Member names print: they say which members are present (`"kty"`,
+///   `"d"`, …) and are not secret. JOSE never carries key material in a
+///   name (RFC 7515 §4, RFC 7517 §4).
+/// - `null`, booleans and numbers print. JOSE has no secret of those types:
+///   every private key member is a base64url string (RFC 7518 §6.2.2,
+///   §6.3.2, §6.4.1; RFC 8037 §2), while numbers are values like `exp` or
+///   `p2c` (RFC 7519 §4.1.4, RFC 7518 §4.8.1.2).
+/// - Arrays and objects print their structure. A container nested more
+///   than [`Limits::MAX_DEPTH_CEILING`] deep prints as `<too deep>`, so
+///   `Debug` of a hand-built value, which has no depth limit, recurses no
+///   deeper than the parser ever nests.
+///
+/// ```
+/// use polyjose::json::{parse, Value};
+///
+/// let jwk = parse(br#"{"kty":"oct","k":"c2VjcmV0","ext":true}"#)?;
+/// assert_eq!(
+///     format!("{jwk:?}"),
+///     r#"Object({"kty": String("<redacted>"), "k": String("<redacted>"), "ext": Bool(true)})"#
+/// );
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+#[derive(Clone, PartialEq)]
 pub enum Value {
     /// `null` (RFC 8259 §3).
     Null,
@@ -148,6 +180,17 @@ impl Zeroize for Value {
 /// Every string a `Value` owns is a [`Zeroizing<String>`].
 impl ZeroizeOnDrop for Value {}
 
+/// Redacting: strings print as `"<redacted>"` (see [`Value`#debug]).
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Redacted {
+            value: self,
+            depth: 0,
+        }
+        .fmt(f)
+    }
+}
+
 impl From<bool> for Value {
     fn from(b: bool) -> Value {
         Value::Bool(b)
@@ -196,7 +239,10 @@ impl From<Object> for Value {
 /// Equality ignores member order (RFC 8259 §4: an object is unordered) and
 /// is O(n log n) in the member count, so comparing untrusted objects is not
 /// quadratic.
-#[derive(Debug, Clone, Default)]
+///
+/// `Debug` prints the members as a map of names to redacted values, like
+/// `{"kty": String("<redacted>"), "ext": Bool(true)}` (see [`Value`#debug]).
+#[derive(Clone, Default)]
 pub struct Object {
     members: Vec<(Zeroizing<String>, Value)>,
 }
@@ -313,6 +359,96 @@ impl Zeroize for Object {
 /// Member names are [`Zeroizing<String>`]s and values are [`Value`]s.
 impl ZeroizeOnDrop for Object {}
 
+/// Redacting: names print, string values print as `"<redacted>"` (see
+/// [`Value`#debug]).
+impl fmt::Debug for Object {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        RedactedMembers {
+            members: &self.members,
+            depth: 1,
+        }
+        .fmt(f)
+    }
+}
+
+/// What `Debug` prints instead of a string's text.
+const REDACTED: &str = "<redacted>";
+
+/// What `Debug` prints instead of a container nested more than
+/// [`Limits::MAX_DEPTH_CEILING`] deep.
+const TOO_DEEP: &str = "<too deep>";
+
+/// The redacting `Debug` of a [`Value`] that `depth` containers enclose.
+///
+/// Recursion goes through `depth`, which grows by one per container and
+/// stops at [`Limits::MAX_DEPTH_CEILING`], so it is bounded however deep a
+/// hand-built value is.
+struct Redacted<'a> {
+    value: &'a Value,
+    depth: usize,
+}
+
+impl fmt::Debug for Redacted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let depth = self.depth + 1;
+        match self.value {
+            Value::Null => f.write_str("Null"),
+            Value::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
+            Value::Number(n) => f.debug_tuple("Number").field(n).finish(),
+            Value::String(_) => f.debug_tuple("String").field(&REDACTED).finish(),
+            Value::Array(_) | Value::Object(_) if self.depth >= Limits::MAX_DEPTH_CEILING => {
+                f.write_str(TOO_DEEP)
+            }
+            Value::Array(items) => f
+                .debug_tuple("Array")
+                .field(&RedactedItems { items, depth })
+                .finish(),
+            Value::Object(o) => f
+                .debug_tuple("Object")
+                .field(&RedactedMembers {
+                    members: &o.members,
+                    depth,
+                })
+                .finish(),
+        }
+    }
+}
+
+/// The redacting `Debug` of array elements that `depth` containers enclose.
+struct RedactedItems<'a> {
+    items: &'a [Value],
+    depth: usize,
+}
+
+impl fmt::Debug for RedactedItems<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let depth = self.depth;
+        f.debug_list()
+            .entries(self.items.iter().map(|value| Redacted { value, depth }))
+            .finish()
+    }
+}
+
+/// The redacting `Debug` of object members whose values `depth` containers
+/// enclose: a map from each name to its redacted value.
+struct RedactedMembers<'a> {
+    members: &'a [(Zeroizing<String>, Value)],
+    depth: usize,
+}
+
+impl fmt::Debug for RedactedMembers<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let depth = self.depth;
+        f.debug_map()
+            .entries(
+                self.members
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), Redacted { value, depth })),
+            )
+            .finish()
+    }
+}
+
 impl PartialEq for Object {
     /// Order-insensitive (RFC 8259 §4: an object is unordered): same names,
     /// and equal values for each name.
@@ -399,8 +535,9 @@ impl Object {
     }
 }
 
-/// Iterator over an [`Object`]'s members, in order.
-#[derive(Debug, Clone)]
+/// Iterator over an [`Object`]'s members, in order. `Debug` prints the
+/// members not yet yielded, redacted like [`Object`]'s.
+#[derive(Clone)]
 pub struct Iter<'a>(core::slice::Iter<'a, (Zeroizing<String>, Value)>);
 
 impl<'a> Iterator for Iter<'a> {
@@ -417,6 +554,17 @@ impl<'a> Iterator for Iter<'a> {
 
 impl ExactSizeIterator for Iter<'_> {}
 
+impl fmt::Debug for Iter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Iter")
+            .field(&RedactedMembers {
+                members: self.0.as_slice(),
+                depth: 1,
+            })
+            .finish()
+    }
+}
+
 impl<'a> IntoIterator for &'a Object {
     type Item = (&'a str, &'a Value);
     type IntoIter = Iter<'a>;
@@ -428,7 +576,7 @@ impl<'a> IntoIterator for &'a Object {
 
 /// Owning iterator over an [`Object`]'s members, in order. Names stay
 /// [`Zeroizing`], and members not taken are wiped when it is dropped.
-#[derive(Debug)]
+/// `Debug` prints the members not yet yielded, redacted like [`Object`]'s.
 pub struct IntoIter(std::vec::IntoIter<(Zeroizing<String>, Value)>);
 
 impl Iterator for IntoIter {
@@ -444,6 +592,17 @@ impl Iterator for IntoIter {
 }
 
 impl ExactSizeIterator for IntoIter {}
+
+impl fmt::Debug for IntoIter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("IntoIter")
+            .field(&RedactedMembers {
+                members: self.0.as_slice(),
+                depth: 1,
+            })
+            .finish()
+    }
+}
 
 impl IntoIterator for Object {
     type Item = (Zeroizing<String>, Value);
