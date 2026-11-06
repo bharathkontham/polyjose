@@ -37,10 +37,16 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
+mod common;
+
 use core::cmp::Ordering;
 
+use polyjose::Error;
 use polyjose::json::{MAX_SAFE_INTEGER, Number, Object, Value, parse};
-use polyjose::jwt::{Audience, Claims, NumericDate};
+use polyjose::jwa::SigningAlg;
+use polyjose::jwk::Jwk;
+use polyjose::jwt::{self, Audience, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy};
+use polyjose::util::b64url_encode;
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -405,5 +411,380 @@ proptest! {
         let names: Vec<&str> = back.other_claims().iter().map(|(n, _)| n).collect();
         let expected: Vec<&str> = c.other_claims().iter().map(|(n, _)| n).collect();
         prop_assert_eq!(names, expected, "insertion order");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keys (fixed; no key is generated)
+// ---------------------------------------------------------------------------
+
+/// RFC 7515 Appendix A.1.1: the 64-octet HMAC key of RFC 7519 §3.1.
+const RFC7515_A1_K: &str =
+    "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow";
+
+/// Ed25519 key pairs `(x, d)`: RFC 8037 A.1 (RFC 8032 §7.1 TEST 1), and
+/// RFC 8032 §7.1 TEST 2 and TEST 3.
+const ED25519: [(&str, &str); 3] = [
+    (common::ED25519_X, common::ED25519_D),
+    (
+        "PUAXw-hDiVqStwqnTRt-vJyYLM8uxJaMwM1V8Sr0Zgw",
+        "TM0Imyj_ltqdtsNG7BFOD1uKMZ81q6Yk2oz27U-4pvs",
+    ),
+    (
+        "_FHNjmIYoaONpH7QAjDwWAgW7RO6MwOsXeuRFUiQgCU",
+        "xaqN9D-fg3vtt0QvMdy3sWbThTUHbwlLhc46LgtEWPc",
+    ),
+];
+
+fn jwk(json: &str) -> Jwk {
+    Jwk::from_json(json.as_bytes()).unwrap_or_else(|e| panic!("fixture key: {e}"))
+}
+
+/// An HMAC key of `octets` (RFC 7518 §3.2; RFC 7517 §6.4).
+fn oct_k(octets: &[u8]) -> String {
+    b64url_encode(octets)
+}
+
+/// The HMAC keys of the HS256 properties: RFC 7515 A.1.1, and fixed octet
+/// patterns at least the SHA-256 output long (RFC 7518 §3.2).
+fn hmac_k(i: usize) -> String {
+    match i % 3 {
+        0 => RFC7515_A1_K.to_owned(),
+        1 => oct_k(&(0u8..32).collect::<Vec<_>>()),
+        _ => oct_k(&[0xa5; 48]),
+    }
+}
+
+fn ed25519_private(i: usize) -> Jwk {
+    let (x, d) = ED25519[i % ED25519.len()];
+    jwk(&format!(
+        r#"{{"kty":"OKP","crv":"Ed25519","x":"{x}","d":"{d}"}}"#
+    ))
+}
+
+/// The signer of the verdict and nested properties: HS256 with HMAC key
+/// `key`, or EdDSA with Ed25519 key `key` (RFC 7518 §3.2, RFC 8037 §3.1),
+/// and the key its verifier holds.
+#[derive(Debug, Clone, Copy)]
+struct Signer {
+    eddsa: bool,
+    key: usize,
+}
+
+impl Signer {
+    fn alg(self) -> SigningAlg {
+        if self.eddsa {
+            SigningAlg::EdDSA
+        } else {
+            SigningAlg::HS256
+        }
+    }
+
+    fn signing_key(self) -> Jwk {
+        if self.eddsa {
+            ed25519_private(self.key)
+        } else {
+            jwk(&format!(r#"{{"kty":"oct","k":"{}"}}"#, hmac_k(self.key)))
+        }
+    }
+
+    fn verifying_key(self) -> Jwk {
+        let key = self.signing_key();
+        if self.eddsa {
+            key.to_public().expect("Ed25519 public half")
+        } else {
+            key
+        }
+    }
+}
+
+fn signer() -> impl Strategy<Value = Signer> {
+    (any::<bool>(), 0usize..3).prop_map(|(eddsa, key)| Signer { eddsa, key })
+}
+
+// ---------------------------------------------------------------------------
+// 3. The verdict model (ADR 0027 §9 J4–J10)
+// ---------------------------------------------------------------------------
+
+/// The model of `iat` with a maximum age (RFC 7519 §4.1.6, ADR 0027 §3):
+/// rejected iff `iat > now + leeway` or `iat < now − max_age − leeway`.
+fn model_iat_rejected(iat: f64, now: i64, max_age: u32, leeway: u32) -> bool {
+    let (now, max_age, leeway) = (i128::from(now), i128::from(max_age), i128::from(leeway));
+    cmp_exact(iat, now + leeway) == Ordering::Greater
+        || cmp_exact(iat, now - max_age - leeway) == Ordering::Less
+}
+
+/// The extra required names the verdict policy draws from: the registered
+/// names, an RFC 9068 §2.2 name and a private one.
+const REQUIRABLE: [&str; 9] = [
+    "iss",
+    "sub",
+    "aud",
+    "exp",
+    "nbf",
+    "iat",
+    "jti",
+    "client_id",
+    "x-tenant",
+];
+
+/// A random JWT policy, as data (ADR 0027 §3–§5).
+#[derive(Debug, Clone)]
+struct PolicySpec {
+    /// `None` keeps the default (60 s, ADR 0007).
+    leeway: Option<u32>,
+    issuers: Vec<&'static str>,
+    audiences: Vec<&'static str>,
+    subject: Option<&'static str>,
+    max_age: Option<u32>,
+    required: Vec<&'static str>,
+    allow_missing_exp: bool,
+    ignore_audience: bool,
+}
+
+impl PolicySpec {
+    fn leeway(&self) -> u32 {
+        self.leeway.unwrap_or(Policy::DEFAULT_LEEWAY)
+    }
+
+    fn build<'a>(&self, clock: &'a FixedClock, algs: &'a [SigningAlg]) -> Policy<'a> {
+        let mut p = Policy::new(clock, algs).unwrap();
+        if let Some(leeway) = self.leeway {
+            p = p.leeway(leeway).unwrap();
+        }
+        p = p.issuers(&self.issuers).audiences(&self.audiences);
+        if let Some(sub) = self.subject {
+            p = p.subject(sub);
+        }
+        if let Some(max_age) = self.max_age {
+            p = p.max_age(max_age);
+        }
+        for name in &self.required {
+            p = p.require(name);
+        }
+        if self.allow_missing_exp {
+            p = p.allow_missing_exp();
+        }
+        if self.ignore_audience {
+            p = p.ignore_audience();
+        }
+        p
+    }
+}
+
+fn policy_spec() -> impl Strategy<Value = PolicySpec> {
+    let names = |pool: Vec<&'static str>| vec(select(pool), 0..3);
+    (
+        (
+            proptest::option::of(prop_oneof![0u32..=600, select(vec![0u32, 600])]),
+            names(vec!["i1", "i2"]),
+            names(vec!["a1", "a2"]),
+            proptest::option::of(select(vec!["s1", "s2"])),
+        ),
+        (
+            proptest::option::of(prop_oneof![0u32..=1200, select(vec![0u32, 1, u32::MAX])]),
+            vec(select(REQUIRABLE.to_vec()), 0..4),
+            any::<bool>(),
+            any::<bool>(),
+        ),
+    )
+        .prop_map(
+            |(
+                (leeway, issuers, audiences, subject),
+                (max_age, required, allow_missing_exp, ignore_audience),
+            )| PolicySpec {
+                leeway,
+                issuers,
+                audiences,
+                subject,
+                max_age,
+                required,
+                allow_missing_exp,
+                ignore_audience,
+            },
+        )
+}
+
+/// What the model predicts: success, or one error. A detail is compared
+/// only where ADR 0027 names it (`InvalidClaim("<registered name>")`);
+/// an extra required name is compared by code alone, since the detail is
+/// a `&'static str` that cannot carry the caller's name (ADR 0027 §9: the
+/// details are diagnostic, the codes are the contract).
+#[derive(Debug, Clone, PartialEq)]
+enum Want {
+    Ok,
+    Exactly(Error),
+    Code(&'static str),
+}
+
+impl Want {
+    fn matches<T>(&self, got: &polyjose::Result<T>) -> bool {
+        match (self, got) {
+            (Want::Ok, Ok(_)) => true,
+            (Want::Exactly(want), Err(e)) => want == e,
+            (Want::Code(code), Err(e)) => *code == e.code(),
+            _ => false,
+        }
+    }
+}
+
+/// ADR 0027 §9 J4–J10 for a Claims Set that verified (steps 1–J3 pass:
+/// the token is issued by `jwt::sign` with an allowed algorithm and the
+/// verifier's key, and its claims are well typed).
+fn model_verdict(c: &Claims, p: &PolicySpec, now: i64) -> Want {
+    let leeway = p.leeway();
+    // J4 (ADR 0027 §3–§4, §9): presence in the order iss, sub, aud, exp,
+    // nbf, iat, jti, then the caller's other names in the order given.
+    let present = [
+        c.iss.is_some(),
+        c.sub.is_some(),
+        c.aud.is_some(),
+        c.exp.is_some(),
+        c.nbf.is_some(),
+        c.iat.is_some(),
+        c.jti.is_some(),
+    ];
+    let implied = [
+        !p.issuers.is_empty(),   // §4: a configured issuer requires iss
+        p.subject.is_some(),     // §4: an expected subject requires sub
+        !p.audiences.is_empty(), // §4: a configured audience requires aud
+        !p.allow_missing_exp,    // §3, ADR 0007: exp required by default
+        false,                   // nbf: never implied
+        p.max_age.is_some(),     // §3: max_age requires iat
+        false,                   // jti: never implied
+    ];
+    for (i, name) in REGISTERED.iter().enumerate() {
+        if !present[i] && (implied[i] || p.required.contains(name)) {
+            return Want::Exactly(Error::InvalidClaim(name));
+        }
+    }
+    for name in &p.required {
+        if !REGISTERED.contains(name) && c.get(name).is_none() {
+            return Want::Code(Error::InvalidClaim("required").code());
+        }
+    }
+    // J5: exp (RFC 7519 §4.1.4).
+    if let Some(exp) = c.exp
+        && model_expired(exp.as_f64(), now, leeway)
+    {
+        return Want::Exactly(Error::TokenExpired);
+    }
+    // J6: nbf (RFC 7519 §4.1.5).
+    if let Some(nbf) = c.nbf
+        && model_not_yet_valid(nbf.as_f64(), now, leeway)
+    {
+        return Want::Exactly(Error::TokenNotYetValid);
+    }
+    // J7: iat, only with max_age (RFC 7519 §4.1.6; erratum 7720).
+    if let (Some(max_age), Some(iat)) = (p.max_age, c.iat)
+        && model_iat_rejected(iat.as_f64(), now, max_age, leeway)
+    {
+        return Want::Exactly(Error::InvalidClaim("iat"));
+    }
+    // J8: iss, exact (RFC 7519 §4.1.1, §7.3; RFC 8725 §3.8).
+    if !p.issuers.is_empty() && !c.iss.as_deref().is_some_and(|i| p.issuers.contains(&i)) {
+        return Want::Exactly(Error::InvalidClaim("iss"));
+    }
+    // J9: sub (RFC 7519 §4.1.2).
+    if let Some(sub) = p.subject
+        && c.sub.as_deref() != Some(sub)
+    {
+        return Want::Exactly(Error::InvalidClaim("sub"));
+    }
+    // J10: aud (RFC 7519 §4.1.3), including the unconfigured audience.
+    let aud_ok = if p.audiences.is_empty() {
+        c.aud.is_none() || p.ignore_audience
+    } else {
+        c.aud.as_ref().is_some_and(|aud| {
+            aud.values()
+                .iter()
+                .any(|v| p.audiences.contains(&v.as_str()))
+        })
+    };
+    if !aud_ok {
+        return Want::Exactly(Error::InvalidClaim("aud"));
+    }
+    Want::Ok
+}
+
+/// Claims for the verdict model: small value pools, so issuer, subject and
+/// audience match about half the time, and dates within a few seconds of
+/// each boundary.
+fn verdict_claims(now: i64, leeway_hint: u32) -> impl Strategy<Value = Claims> {
+    let t = i128::from(now);
+    let l = i128::from(leeway_hint);
+    let date = move || {
+        proptest::option::of(prop_oneof![
+            date_near(t - l),
+            date_near(t + l),
+            date_near(t),
+            date_near(t - 1200),
+        ])
+    };
+    let value = |pool: Vec<&'static str>| select(pool).prop_map(str::to_owned);
+    (
+        (
+            proptest::option::of(value(vec!["i1", "i2", "i3"])),
+            proptest::option::of(value(vec!["s1", "s2"])),
+            proptest::option::of(audience(value(vec!["a1", "a2", "a3"]))),
+            date(),
+        ),
+        (
+            date(),
+            date(),
+            proptest::option::of(value(vec!["id"])),
+            proptest::option::of(json_value()),
+            proptest::option::of(json_value()),
+        ),
+    )
+        .prop_map(
+            |((iss, sub, aud, exp), (nbf, iat, jti, client_id, tenant))| {
+                let mut other = Vec::new();
+                if let Some(v) = client_id {
+                    other.push(("client_id".to_owned(), v));
+                }
+                if let Some(v) = tenant {
+                    other.push(("x-tenant".to_owned(), v));
+                }
+                claims_of(iss, sub, aud, exp, nbf, iat, jti, other)
+            },
+        )
+}
+
+/// The algorithms the verdict, selection and nested policies allow.
+const ALLOWED: [SigningAlg; 4] = [
+    SigningAlg::HS256,
+    SigningAlg::EdDSA,
+    SigningAlg::Ed25519,
+    SigningAlg::ES256,
+];
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// ADR 0027 §9 J4–J10: `jwt::verify` of a token issued by `jwt::sign`
+    /// returns exactly what the model predicts, and on success the claims
+    /// it signed.
+    #[test]
+    fn verify_matches_the_verdict_model(
+        (signer, spec, now, claims) in (signer(), policy_spec(), now_secs())
+            .prop_flat_map(|(signer, spec, now)| {
+                let claims = verdict_claims(now, spec.leeway());
+                (Just(signer), Just(spec), Just(now), claims)
+            }),
+    ) {
+        let token = jwt::sign(&claims, &IssueOptions::new(signer.alg()), &signer.signing_key())
+            .expect("issued");
+        let clock = FixedClock(now);
+        let policy = spec.build(&clock, &ALLOWED);
+        let verifier = signer.verifying_key();
+        let got = jwt::verify(&token, Keys::One(&verifier), &policy);
+        let want = model_verdict(&claims, &spec, now);
+        prop_assert!(want.matches(&got), "want {:?}, got {:?}\nclaims {}\npolicy {:?}", want, got, claims.to_json(), spec);
+        if let Ok(v) = got {
+            prop_assert_eq!(&v.claims, &claims);
+            prop_assert_eq!(v.alg, signer.alg());
+            prop_assert_eq!(v.key_index, None);
+        }
     }
 }
