@@ -208,4 +208,55 @@ gen_refusals = [
 ]
 for name, alg, code, what in gen_refusals:
     write('reject-generate-' + name, 'polyjose', 'Key generation refuses ' + json.dumps(alg) + ': ' + what + '.', 'keys.generate_for', {'alg': alg}, {'ok': False, 'error': code})
+
+# --- contract vectors from the 0005 review fixes (B01, F02, F03) -----------
+# B01: no format sniffing (ADR 0007); an SPKI is not a OneAsymmetricKey.
+write('reject-der-spki-as-pkcs8', 'polyjose', 'DER import rejects the RFC 7517 A.1 P-256 SPKI offered as pkcs8: the caller names the structure and an SPKI is not a OneAsymmetricKey (RFC 5958 §2; ADR 0007, ADR 0018 §2).', 'keys.import_der', der_input(text('rfc', 'rfc7517-a1-ec-p256-spki.pem'), 'pkcs8'), {'ok': False, 'error': 'InvalidKey'})
+
+# F03: a PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2) is an RSA private key in
+# any format or label (ADR 0018 §3, ADR 0021), recognized by its framing.
+rsa_private = open(os.path.join(data, 'openssl', 'reject-rsa2048-private-pkcs1.der'), 'rb').read()
+assert neg_der('N68-rsa-private-pkcs1-as-pkcs8.der') == rsa_private == neg_der('N69-rsa-private-pkcs1-as-sec1.der')
+for fmt, structure in [('pkcs8', 'a OneAsymmetricKey (RFC 5958 §2)'), ('sec1', 'an ECPrivateKey (RFC 5915 §3)'), ('pkcs1', 'an RSAPublicKey (RFC 8017 App. A.1.1)')]:
+    write('reject-der-rsa-private-pkcs1-as-' + fmt, 'polyjose', f'DER import rejects a 2048-bit PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0) offered as {fmt}, where {structure} is expected: an RSA private key in any format is UnsupportedAlgorithm, not malformed input (ADR 0018 §3, ADR 0021).', 'keys.import_der', {'der_b64u': b64u(rsa_private), 'format': fmt}, {'ok': False, 'error': 'UnsupportedAlgorithm'})
+for f, label in [('P17-label-private-key-body-rsa-pkcs1.pem', 'PRIVATE KEY'), ('P18-label-ec-private-key-body-rsa-pkcs1.pem', 'EC PRIVATE KEY')]:
+    pem = text('negative', f)
+    assert unwrap(pem) == (label, rsa_private)
+    write('reject-rsa-private-pkcs1-under-' + label.lower().replace(' ', '-') + '-label', 'polyjose', f'PEM import rejects a {label} label around a 2048-bit PKCS#1 RSAPrivateKey body (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0): an RSA private key under any label is UnsupportedAlgorithm (ADR 0018 §3, ADR 0021).', 'keys.import_pem', {'pem': pem}, {'ok': False, 'error': 'UnsupportedAlgorithm'})
+
+# F02: RSA moduli are 2048 to 8192 bits (RFC 7518 §3.3 floor; ADR 0007 and
+# ADR 0026 §2 ceiling) on every import path. The keys are built here, as in
+# tests/keys_rsa_modulus_bounds.rs: an odd modulus of exactly `bits` bits
+# (top bit set, 0xA5 filler) and e = 65537. They are structurally valid only,
+# which is all an import checks.
+def modulus(bits):
+    m = bytearray([0xA5] * ((bits + 7) // 8))
+    top = (bits - 1) % 8
+    m[0] = (1 << top) | (0xA5 & ((1 << top) - 1))
+    m[-1] |= 1
+    assert int.from_bytes(m, 'big').bit_length() == bits
+    return bytes(m)
+def tlv(tag, contents):
+    """A DER element (X.690 §8.1), its length in the fewest octets (§10.1)."""
+    k = len(contents)
+    if k < 0x80: return bytes([tag, k]) + contents
+    octets = k.to_bytes((k.bit_length() + 7) // 8, 'big')
+    return bytes([tag, 0x80 | len(octets)]) + octets + contents
+def integer(magnitude):
+    """A non-negative DER INTEGER (X.690 §8.3)."""
+    return tlv(0x02, (b'\x00' if magnitude[0] & 0x80 else b'') + magnitude)
+F4 = b'\x01\x00\x01'
+def rsa_pkcs1(m): return tlv(0x30, integer(m) + integer(F4))     # RFC 8017 App. A.1.1
+def rsa_spki(m):                                                  # RFC 3279 §2.3.1
+    alg = tlv(0x30, tlv(0x06, bytes.fromhex('2a864886f70d010101')) + b'\x05\x00')
+    return tlv(0x30, alg + tlv(0x03, b'\x00' + rsa_pkcs1(m)))
+def rsa_jwk(m): return {'kty': 'RSA', 'n': b64u(m), 'e': b64u(F4)}
+ceiling, over = modulus(8192), modulus(8193)
+BOUND = 'RSA moduli are at most 8192 bits (ADR 0007, ADR 0026 §2)'
+BUILT = 'built by this generator (odd, top bit set, e = 65537)'
+write('import-der-rsa-8192-bits', 'polyjose', f'DER import of an SPKI whose RSA modulus is exactly 8192 bits, the largest accepted ({BOUND}; RFC 7518 §3.3 sets the 2048-bit floor), {BUILT}; the expected JWK holds the same n and e (RFC 7518 §6.3.1).', 'keys.import_der', {'der_b64u': b64u(rsa_spki(ceiling)), 'format': 'spki'}, {'ok': True, 'jwk': rsa_jwk(ceiling)})
+write('reject-rsa-8193-bits', 'polyjose', f'PEM import rejects a PUBLIC KEY (an RSA SPKI) whose modulus is 8193 bits, {BUILT}: {BOUND}.', 'keys.import_pem', {'pem': wrap('PUBLIC KEY', rsa_spki(over))}, {'ok': False, 'error': 'InvalidKey'})
+write('reject-der-rsa-8193-bits-spki', 'polyjose', f'DER import rejects an SPKI whose RSA modulus is 8193 bits, {BUILT}: {BOUND}.', 'keys.import_der', {'der_b64u': b64u(rsa_spki(over)), 'format': 'spki'}, {'ok': False, 'error': 'InvalidKey'})
+write('reject-der-rsa-8193-bits-pkcs1', 'polyjose', f'DER import rejects a PKCS#1 RSAPublicKey whose modulus is 8193 bits, {BUILT}: {BOUND}.', 'keys.import_der', {'der_b64u': b64u(rsa_pkcs1(over)), 'format': 'pkcs1'}, {'ok': False, 'error': 'InvalidKey'})
+write('reject-export-der-rsa-8193-bits', 'polyjose', f'An RSA JWK whose n is 8193 bits, {BUILT}, fails at the JWK import before any export: {BOUND}.', 'keys.export_der', {'jwk': rsa_jwk(over), 'format': 'spki'}, {'ok': False, 'error': 'InvalidKey'})
 print(n, 'vectors written')

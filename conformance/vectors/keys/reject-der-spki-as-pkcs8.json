@@ -1,0 +1,13 @@
+{
+  "source": "polyjose",
+  "description": "DER import rejects the RFC 7517 A.1 P-256 SPKI offered as pkcs8: the caller names the structure and an SPKI is not a OneAsymmetricKey (RFC 5958 §2; ADR 0007, ADR 0018 §2).",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D7gS2XpJFbZiItSs3m9-9Ue6GnvHw_GW2ZZaVtszggXIw",
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
