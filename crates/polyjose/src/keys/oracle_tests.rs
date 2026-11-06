@@ -1647,3 +1647,282 @@ fn mutated_containers_re_encode_exactly_when_accepted() {
     // deviations.
     assert!(accepted.get() >= 50, "only {} accepted", accepted.get());
 }
+
+// ---------------------------------------------------------------------------
+// PEM against `pem-rfc7468`
+// ---------------------------------------------------------------------------
+
+/// The labels polyjose writes (RFC 7468 §10, §13; RFC 5915 §4; OpenSSL's
+/// `RSA PUBLIC KEY`).
+const WRITTEN_LABELS: [Label; 4] = [
+    Label::PrivateKey,
+    Label::PublicKey,
+    Label::EcPrivateKey,
+    Label::RsaPublic,
+];
+
+/// polyjose's PEM verdict: the label text and the octets.
+fn our_pem(text: &[u8]) -> Option<(&'static str, Vec<u8>)> {
+    let text = core::str::from_utf8(text).ok()?;
+    let (label, der) = super::pem::decode(text).ok()?;
+    Some((label.as_str()?, der.to_vec()))
+}
+
+/// `pem-rfc7468`'s strict decoder's verdict (RFC 7468 §3 Figure 3, with
+/// its preamble handling and 64-column lines).
+fn oracle_pem(text: &[u8]) -> Option<(String, Vec<u8>)> {
+    pem_rfc7468::decode_vec(text)
+        .ok()
+        .map(|(label, der)| (label.to_owned(), der))
+}
+
+/// `text` without the whitespace around it (SP, HTAB, CR, LF).
+fn trim_pem(text: &[u8]) -> &[u8] {
+    let is_ws = |c: &u8| matches!(c, b' ' | b'\t' | b'\r' | b'\n');
+    let start = text.iter().position(|c| !is_ws(c)).unwrap_or(text.len());
+    let end = text
+        .iter()
+        .rposition(|c| !is_ws(c))
+        .map_or(start, |i| i + 1);
+    &text[start..end]
+}
+
+/// The PEM differential on one text:
+///
+/// - Whatever polyjose accepts, `pem-rfc7468` accepts with the same label
+///   and octets, except surrounding whitespace: polyjose takes any SP,
+///   HTAB, CR and LF before the BEGIN line and after the END line
+///   (ADR 0018 §2, "optionally surrounded by whitespace"), where
+///   `pem-rfc7468` wants the BEGIN line at the start or after an LF and at
+///   most one eol after the END line. For those texts the oracle must
+///   accept the trimmed block, so surrounding whitespace is the only way
+///   polyjose is more lenient.
+/// - What `pem-rfc7468` rejects polyjose rejects, by the same argument.
+/// - polyjose never panics.
+///
+/// Where `pem-rfc7468` accepts and polyjose rejects, polyjose is stricter
+/// on purpose (see [`PEM_VECTOR_DIFFERENCES`]).
+fn check_pem(text: &[u8]) {
+    let Some(ours) = our_pem(text) else {
+        return;
+    };
+    let theirs = oracle_pem(text).or_else(|| oracle_pem(trim_pem(text)));
+    let theirs = theirs.unwrap_or_else(|| {
+        panic!(
+            "PEM laxer than pem-rfc7468: {:?}",
+            String::from_utf8_lossy(text)
+        )
+    });
+    assert_eq!((ours.0, &ours.1), (theirs.0.as_str(), &theirs.1));
+}
+
+/// How polyjose and `pem-rfc7468` disagree on the PEM vectors (`negative/`
+/// P01–P16 and A01–A03, the RFC 8410 rejection files): (vector, polyjose
+/// accepts, `pem-rfc7468` accepts, reason). Every other vector gets the
+/// same verdict from both, and the same label and octets where both
+/// accept.
+const PEM_VECTOR_DIFFERENCES: &[(&str, bool, bool, &str)] = &[
+    (
+        "A03",
+        true,
+        false,
+        "blank lines after the END line: polyjose takes any whitespace around the block \
+         (ADR 0018 §2); pem-rfc7468 at most one eol. The trimmed block decodes alike \
+         (check_pem)",
+    ),
+    (
+        "P07",
+        false,
+        true,
+        "explanatory text before the BEGIN line: rejected (ADR 0018 §2; RFC 7468 §2 \
+         permits it, §3 lets the parser choose); pem-rfc7468 skips a preamble",
+    ),
+    (
+        "P10",
+        false,
+        true,
+        "a lower-case label: RFC 7468 §2 labels are \"formally case-sensitive, \
+         uppercase\" and polyjose knows only the exact upper-case labels (ADR 0018 §2); \
+         pem-rfc7468 takes any labelchar",
+    ),
+    (
+        "P13",
+        false,
+        true,
+        "label DSA PRIVATE KEY: names no supported structure, UnsupportedAlgorithm from \
+         the BEGIN line (ADR 0018 §2, §4); pem-rfc7468 decodes any label",
+    ),
+];
+
+#[test]
+fn pem_vectors_differ_from_pem_rfc7468_only_as_listed() {
+    let mut vectors: Vec<(String, Vec<u8>)> = negative_entries()
+        .into_iter()
+        .filter(|entry| entry.file.ends_with(".pem"))
+        .map(|entry| (entry.id, raw("negative", &entry.file)))
+        .collect();
+    for name in fixtures::files("rfc", |name| name.starts_with("reject-rfc8410")) {
+        let bytes = raw("rfc", &name);
+        vectors.push((name, bytes));
+    }
+    let mut differences = Vec::new();
+    for (id, text) in &vectors {
+        let ours = our_pem(text);
+        let theirs = oracle_pem(text);
+        match (&ours, &theirs) {
+            (Some(ours), Some(theirs)) => {
+                assert_eq!((ours.0, &ours.1), (theirs.0.as_str(), &theirs.1), "{id}");
+            }
+            (None, None) => {}
+            _ => differences.push((id.clone(), ours.is_some(), theirs.is_some())),
+        }
+        check_pem(text);
+    }
+    let listed: Vec<(String, bool, bool)> = PEM_VECTOR_DIFFERENCES
+        .iter()
+        .map(|(id, ours, theirs, _)| ((*id).to_owned(), *ours, *theirs))
+        .collect();
+    assert_eq!(differences, listed);
+    // A01–A03, P01–P16 and the two RFC 8410 files.
+    assert_eq!(vectors.len(), 21);
+}
+
+mod pem_properties {
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// One textual mutation of a PEM document.
+    #[derive(Debug, Clone)]
+    enum Edit {
+        Replace(prop::sample::Index, u8),
+        Insert(prop::sample::Index, u8),
+        Delete(prop::sample::Index),
+        Prefix(Vec<u8>),
+        Suffix(Vec<u8>),
+        /// Every LF becomes CRLF (0) or CR (1), RFC 7468 §3 `eol`.
+        LineEndings(u8),
+    }
+
+    /// The characters that matter to the grammar: eol and whitespace,
+    /// hyphen-minus, base64 alphabet and padding, a header colon, a
+    /// lower-case letter and NUL.
+    const ALPHABET: &[u8] = b"\n\r \t-AZaz09+/=:x\0";
+
+    fn interesting() -> impl Strategy<Value = u8> {
+        prop::sample::select(ALPHABET)
+    }
+
+    fn edit() -> impl Strategy<Value = Edit> {
+        prop_oneof![
+            (any::<prop::sample::Index>(), interesting()).prop_map(|(at, c)| Edit::Replace(at, c)),
+            (any::<prop::sample::Index>(), interesting()).prop_map(|(at, c)| Edit::Insert(at, c)),
+            any::<prop::sample::Index>().prop_map(Edit::Delete),
+            vec(interesting(), 1..4).prop_map(Edit::Prefix),
+            vec(interesting(), 1..4).prop_map(Edit::Suffix),
+            (0u8..2).prop_map(Edit::LineEndings),
+        ]
+    }
+
+    fn apply_edits(text: &[u8], edits: &[Edit]) -> Vec<u8> {
+        let mut t = text.to_vec();
+        for edit in edits {
+            match edit {
+                Edit::Replace(at, c) if !t.is_empty() => {
+                    let i = at.index(t.len());
+                    t[i] = *c;
+                }
+                Edit::Insert(at, c) => t.insert(at.index(t.len() + 1), *c),
+                Edit::Delete(at) if !t.is_empty() => {
+                    t.remove(at.index(t.len()));
+                }
+                Edit::Prefix(p) => t.splice(0..0, p.iter().copied()).for_each(drop),
+                Edit::Suffix(p) => t.extend_from_slice(p),
+                Edit::LineEndings(form) => {
+                    let eol: &[u8] = if *form == 0 { b"\r\n" } else { b"\r" };
+                    t = t
+                        .iter()
+                        .flat_map(|&c| if c == b'\n' { eol.to_vec() } else { vec![c] })
+                        .collect();
+                }
+                _ => {}
+            }
+        }
+        t
+    }
+
+    /// The PEM seeds: every positive `.pem` fixture and the accepted
+    /// variants A01–A03.
+    fn seeds() -> Vec<Vec<u8>> {
+        let mut seeds: Vec<Vec<u8>> = positive_fixtures()
+            .into_iter()
+            .filter(|(_, name)| name.ends_with(".pem"))
+            .map(|(dir, name)| raw(dir, &name))
+            .collect();
+        seeds.extend(
+            negative_entries()
+                .into_iter()
+                .filter(|entry| entry.id.starts_with('A'))
+                .map(|entry| raw("negative", &entry.file)),
+        );
+        seeds
+    }
+
+    proptest! {
+        // ≤ 1,000 cases per property (pipeline rule 8).
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// `pem::encode` writes exactly what `pem-rfc7468`'s encoder writes
+        /// with LF line endings (RFC 7468 §2: 64-column lines, the same
+        /// label on the END line), its strict decoder reads it back to the
+        /// same label and octets, and so does `pem::decode`.
+        #[test]
+        fn encoded_pem_is_what_pem_rfc7468_writes_and_reads(
+            der in vec(any::<u8>(), 1..700),
+            label in prop::sample::select(WRITTEN_LABELS.to_vec()),
+        ) {
+            let text = super::super::pem::encode(label, &der).unwrap();
+            let label_text = label.as_str().unwrap();
+            let oracle = pem_rfc7468::encode_string(label_text, pem_rfc7468::LineEnding::LF, &der)
+                .unwrap();
+            prop_assert_eq!(text.as_str(), oracle.as_str());
+            let (decoded_label, decoded) = pem_rfc7468::decode_vec(text.as_bytes()).unwrap();
+            prop_assert_eq!(decoded_label, label_text);
+            prop_assert_eq!(&decoded, &der);
+            let (our_label, our_der) = super::super::pem::decode(&text).unwrap();
+            prop_assert_eq!(our_label, label);
+            prop_assert_eq!(&*our_der, &der);
+        }
+    }
+
+    /// Over random edits of real PEM documents, polyjose accepts nothing
+    /// `pem-rfc7468` rejects except for surrounding whitespace, decodes to
+    /// the same label and octets, and never panics (see `check_pem`).
+    #[test]
+    fn edited_pem_is_never_laxer_than_pem_rfc7468() {
+        use proptest::test_runner::{Config, TestRunner};
+
+        let seeds = seeds();
+        for seed in &seeds {
+            check_pem(seed);
+        }
+        let strategy = (0..seeds.len(), vec(edit(), 1..4));
+        let mut runner = TestRunner::new(Config::with_cases(1000));
+        let accepted = core::cell::Cell::new(0u32);
+        runner
+            .run(&strategy, |(seed, edits)| {
+                let text = apply_edits(&seeds[seed], &edits);
+                check_pem(&text);
+                if our_pem(&text).is_some() {
+                    accepted.set(accepted.get() + 1);
+                }
+                Ok(())
+            })
+            .unwrap();
+        // Not vacuous: whitespace and eol edits keep many documents valid,
+        // about 11% of cases (measured); 5% is over 5 standard deviations
+        // below.
+        assert!(accepted.get() >= 50, "only {} accepted", accepted.get());
+    }
+}
