@@ -1,0 +1,26 @@
+{
+  "source": "RFC 7515 §7.2.1",
+  "description": "A flattened JWS with kid \"a\" in both the protected header {\"alg\":\"HS256\",\"kid\":\"a\"} and the unprotected header, MAC correct (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key): the two must be disjoint (RFC 7515 §5.2 step 4; ADR 0026 §2 step 4)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "protected": "eyJhbGciOiJIUzI1NiIsImtpZCI6ImEifQ",
+      "header": {
+        "kid": "a"
+      },
+      "signature": "3A8I4XL8GPOke6NfXhCxi-FNmMVzUoScWvOdFdUWk5A"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

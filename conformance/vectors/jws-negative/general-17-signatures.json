@@ -1,0 +1,91 @@
+{
+  "source": "ADR 0026 §7",
+  "description": "A general JWS with 17 copies of one valid HS256 signature over \"Payload\" (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key): more than the default 16 signatures is refused before any is checked",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "signatures": [
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        }
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}
