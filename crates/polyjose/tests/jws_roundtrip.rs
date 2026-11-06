@@ -28,9 +28,9 @@ use polyjose::jws::{
     ProtectedHeader, SignOptions, Signer, Verified, VerifyOptions, sign_compact, sign_flattened,
     sign_general, verify_compact, verify_json,
 };
-use polyjose::util::b64url_encode;
+use polyjose::util::{b64url_decode, b64url_encode};
 use proptest::prelude::*;
-use proptest::sample::select;
+use proptest::sample::{Index, select};
 
 /// Every signing algorithm polyjose ships (RS*/PS* are verify-only,
 /// ADR 0021).
@@ -432,6 +432,136 @@ proptest! {
             prop_assert_eq!(verified.protected, case.protected(first));
             prop_assert_eq!(verified.unprotected, case.unprotected(first));
         }
+    }
+}
+
+/// A case whose payload its serialization can carry (`b64` is turned on
+/// where the unencoded payload would not fit).
+fn signable_case() -> impl Strategy<Value = Case> {
+    case().prop_map(|mut case| {
+        if !case.payload_fits() {
+            case.b64 = true;
+        }
+        case
+    })
+}
+
+/// The part of a JWS a tamper property changes.
+#[derive(Debug, Clone, Copy)]
+enum Part {
+    Protected,
+    Payload,
+    Signature,
+}
+
+/// Flips bit `bit` of the octet at `at` (modulo the length).
+fn flip(bytes: &mut [u8], at: Index, bit: u8) {
+    let i = at.index(bytes.len());
+    bytes[i] ^= 1 << bit;
+}
+
+/// `part` with one bit of its base64url-decoded octets flipped.
+fn flip_encoded(part: &str, at: Index, bit: u8) -> String {
+    let mut octets = b64url_decode(part).unwrap();
+    flip(&mut octets, at, bit);
+    b64url_encode(&octets)
+}
+
+/// `text` with one character changed: an ASCII one by one of its low
+/// seven bits, so the text stays UTF-8 (a `&str` cannot hold anything
+/// else), any other by `A`.
+fn flip_text(text: &str, at: Index, bit: u8) -> String {
+    let i = at.index(text.chars().count());
+    text.chars()
+        .enumerate()
+        .map(|(j, c)| match (j == i, u8::try_from(c)) {
+            (false, _) => c,
+            (true, Ok(b)) if b.is_ascii() => char::from(b ^ (1 << (bit % 7))),
+            (true, _) => 'A',
+        })
+        .collect()
+}
+
+/// `jws` with one octet of `part` changed: of the payload (or of
+/// `detached`, the payload a detached verifier supplies), of the protected
+/// header, or of the signature of every entry that signer 0's key could
+/// verify. An empty payload, or a JSON entry without a protected header,
+/// has its signature changed instead.
+fn tamper(case: &Case, jws: &str, detached: &mut [u8], part: Part, at: Index, bit: u8) -> String {
+    let part = match part {
+        Part::Payload if case.payload.is_empty() => Part::Signature,
+        part => part,
+    };
+    if let (Part::Payload, true) = (part, case.detached) {
+        flip(detached, at, bit);
+        return jws.to_owned();
+    }
+    if case.form == Form::Compact {
+        let mut parts: Vec<String> = jws.split('.').map(String::from).collect();
+        match part {
+            Part::Protected => parts[0] = flip_encoded(&parts[0], at, bit),
+            Part::Payload if case.b64 => parts[1] = flip_encoded(&parts[1], at, bit),
+            Part::Payload => parts[1] = flip_text(&parts[1], at, bit),
+            Part::Signature => parts[2] = flip_encoded(&parts[2], at, bit),
+        }
+        return parts.join(".");
+    }
+    let mut value: serde_json::Value = serde_json::from_str(jws).unwrap();
+    let edit = |object: &mut serde_json::Value, name: &str, b64: bool| {
+        let text = object[name].as_str().unwrap();
+        let changed = if b64 {
+            flip_encoded(text, at, bit)
+        } else {
+            flip_text(text, at, bit)
+        };
+        object[name] = serde_json::Value::from(changed);
+    };
+    if let Part::Payload = part {
+        edit(&mut value, "payload", case.b64);
+        return serde_json::to_string(&value).unwrap();
+    }
+    let id = case.signers[0].identity();
+    for (i, spec) in case.signers.iter().enumerate() {
+        if spec.identity() != id {
+            continue;
+        }
+        let entry = match case.form {
+            Form::General => &mut value["signatures"][i],
+            _ => &mut value,
+        };
+        match part {
+            Part::Protected if entry.get("protected").is_some() => edit(entry, "protected", true),
+            _ => edit(entry, "signature", true),
+        }
+    }
+    serde_json::to_string(&value).unwrap()
+}
+
+proptest! {
+    // ADR 0009: at most 1,000 cases.
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// RFC 7515 §5.2 step 8: the signature covers the protected header and
+    /// the payload, so changing one octet of either, or of the signature,
+    /// makes verification fail, whatever the alg or serialization. For a
+    /// detached JWS the payload is the one the verifier supplies
+    /// (Appendix F).
+    #[test]
+    fn changing_one_octet_fails_verification(
+        case in signable_case(),
+        part in select(&[Part::Protected, Part::Payload, Part::Signature][..]),
+        at in any::<Index>(),
+        bit in 0u8..8,
+    ) {
+        let keys = case.keys();
+        let jws = case.sign(&keys).unwrap();
+        let allowed = [case.signers[0].alg.clone()];
+        let key = &keys[0].verify;
+        prop_assert!(case.verify(&jws, key, &allowed, &case.payload).is_ok());
+        let mut detached = case.payload.clone();
+        let tampered = tamper(&case, &jws, &mut detached, part, at, bit);
+        let result = case.verify(&tampered, key, &allowed, &detached);
+        prop_assert!(result.is_err(), "{part:?} changed, still verified: {tampered}");
     }
 }
 
