@@ -331,6 +331,109 @@ fn forbidden_header_members_are_invalid_header() {
     assert!(matches!(err, Error::InvalidHeader(_)), "{err:?}");
 }
 
+/// A marker standing in for secret key material: a canonical base64url
+/// value that must never appear in an error.
+const SECRET_MARKER: &str = "c2VjcmV0LWtleS1tYXRlcmlhbC1tYXJrZXI";
+
+/// RFC 7515 Appendix A.3.1's P-256 key without `d`: a public EC JWK.
+const P256_PUBLIC: &str = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}"#;
+
+/// RFC 8037 Appendix A.2's Ed25519 public key: a public OKP JWK.
+fn ed25519_public_json() -> String {
+    format!(
+        r#"{{"kty":"OKP","crv":"Ed25519","x":"{}"}}"#,
+        common::ED25519_X
+    )
+}
+
+/// `json` with the member `"name":"<SECRET_MARKER>"` appended.
+fn with_member(json: &str, name: &str) -> String {
+    let body = json.strip_suffix('}').unwrap();
+    format!(r#"{body},"{name}":"{SECRET_MARKER}"}}"#)
+}
+
+/// The JSON value of `json`.
+fn value(json: &str) -> Value {
+    json::parse(json.as_bytes()).unwrap()
+}
+
+/// Asserts that `header_param("jwk", jwk)` is `InvalidHeader("jwk")` and
+/// that the error carries none of the key material.
+fn assert_jwk_refused(jwk: &str, what: &str) {
+    let err = IssueOptions::new(SigningAlg::ES256)
+        .header_param("jwk", value(jwk))
+        .unwrap_err();
+    assert_eq!(err, Error::InvalidHeader("jwk"), "{what}");
+    let shown = format!("{err} {err:?}");
+    assert!(!shown.contains(SECRET_MARKER), "{what}: {shown}");
+}
+
+#[test]
+fn an_embedded_jwk_with_secret_or_private_members_is_invalid_header() {
+    // RFC 7515 §4.1.3: `jwk` is "the public key"; a secret (`oct` `k`,
+    // RFC 7518 §6.4.1) or private member (`d`, RFC 7518 §6.2.2.1, RFC 8037
+    // §2; `d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, RFC 7518 §6.3.2) in it
+    // would publish key material in the header (CLAUDE.md, review S2).
+    assert_jwk_refused(
+        &format!(r#"{{"kty":"oct","k":"{SECRET_MARKER}"}}"#),
+        "oct k",
+    );
+    assert_jwk_refused(OCT_64, "RFC 7515 A.1 oct key");
+    assert_jwk_refused(P256, "EC private d");
+    assert_jwk_refused(
+        &format!(
+            r#"{{"kty":"OKP","crv":"Ed25519","x":"{}","d":"{}"}}"#,
+            common::ED25519_X,
+            common::ED25519_D
+        ),
+        "OKP private d",
+    );
+    // An RSA private JWK, as JSON test data only: it is refused here and
+    // never used to sign (ADR 0021).
+    for name in ["d", "p", "q", "dp", "dq", "qi", "oth"] {
+        assert_jwk_refused(&with_member(RS_PUBLIC, name), name);
+    }
+    // A private or secret member a public key's type does not define still
+    // carries key material, so it is refused too, not kept as an unknown
+    // member (RFC 7517 §4).
+    for public in [P256_PUBLIC.to_owned(), ed25519_public_json()] {
+        for name in ["k", "p", "q", "dp", "dq", "qi", "oth"] {
+            assert_jwk_refused(&with_member(&public, name), name);
+        }
+    }
+    assert_jwk_refused(&with_member(RS_PUBLIC, "k"), "k on a public RSA key");
+    // A lone stray `d`: no key around it.
+    assert_jwk_refused(&format!(r#"{{"d":"{SECRET_MARKER}"}}"#), "lone d");
+}
+
+#[test]
+fn an_embedded_jwk_that_is_not_a_valid_jwk_is_invalid_header() {
+    // RFC 7515 §4.1.3: the value is a JWK (RFC 7517 §4).
+    for jwk in [
+        "{}",
+        r#"{"kty":"EC","crv":"P-256","x":"AA","y":"AA"}"#,
+        r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU"}"#,
+        r#"{"kty":"OKP","crv":"Ed25519","x":"!!"}"#,
+    ] {
+        assert_jwk_refused(jwk, jwk);
+    }
+}
+
+#[test]
+fn an_embedded_public_jwk_is_signed_into_the_header() {
+    // RFC 7515 §4.1.3: a public EC or OKP key is accepted as given.
+    for public in [P256_PUBLIC.to_owned(), ed25519_public_json()] {
+        let opts = IssueOptions::new(SigningAlg::ES256)
+            .header_param("jwk", value(&public))
+            .unwrap();
+        let token = jwt::sign(&rfc7519_claims(), &opts, &jwk(P256)).unwrap();
+        assert_eq!(
+            header_text(&token),
+            format!(r#"{{"alg":"ES256","typ":"JWT","jwk":{public}}}"#)
+        );
+    }
+}
+
 #[test]
 fn members_set_by_the_options_or_the_key_are_invalid_header() {
     // `alg` comes from `IssueOptions::new`, `typ` from its typ setters and
