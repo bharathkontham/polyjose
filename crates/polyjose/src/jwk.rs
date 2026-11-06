@@ -188,6 +188,7 @@ use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, Sec1Point, ToSec1Po
 use p256::elliptic_curve::{
     AffinePoint, Curve, CurveArithmetic, FieldBytes, FieldBytesSize, PublicKey, SecretKey,
 };
+use subtle::ConstantTimeEq as _;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::error::{Error, Result};
@@ -1676,6 +1677,12 @@ fn parse_ec(object: &Object, crv: EcCurve) -> Result<EcKey> {
     if d.as_ref().is_some_and(|d| !ec_scalar_is_valid(crv, d)) {
         return Err(Error::InvalidKey(EC_SCALAR_INVALID));
     }
+    // ADR 0043 §3: last, a private key must be the key of its own point.
+    if d.as_ref()
+        .is_some_and(|d| !ec_private_matches(crv, &x, &y, d))
+    {
+        return Err(Error::InvalidKey(EC_PRIVATE_MISMATCH));
+    }
     Ok(EcKey { crv, x, y, d })
 }
 
@@ -1683,6 +1690,9 @@ fn parse_ec(object: &Object, crv: EcCurve) -> Result<EcKey> {
 const EC_POINT_INVALID: &str = "EC point is not on the curve";
 /// Detail for an `EC` private scalar outside [1, n − 1].
 const EC_SCALAR_INVALID: &str = "EC private key d is out of range";
+/// Detail for an `EC` private scalar `d` whose public point is not
+/// (`x`, `y`).
+const EC_PRIVATE_MISMATCH: &str = "EC private key d does not match x and y";
 /// Detail for an `OKP` `Ed25519` `x` that is not a usable public key.
 const ED25519_PUBLIC_INVALID: &str = "Ed25519 public key is invalid";
 
@@ -1719,6 +1729,55 @@ fn ec_scalar_is_valid(crv: EcCurve, d: &[u8]) -> bool {
         EcCurve::P521 => scalar_in_range::<p521::NistP521>(d),
         EcCurve::Secp256k1 => scalar_in_range::<k256::Secp256k1>(d),
     }
+}
+
+/// Whether the valid scalar `d` is the private key of the valid point
+/// (`x`, `y`) of `crv`: Q = d·G (SEC 1 v2 §3.2.1; RFC 7518 §6.2.2.1: `d`
+/// is "the Elliptic Curve private key value" of the key's point). A
+/// mismatched pair would sign for a key other than the published one
+/// (ADR 0043 §3, the class behind RUSTSEC-2022-0093). The caller has
+/// checked the point and the range of `d`; anything else is a mismatch.
+fn ec_private_matches(crv: EcCurve, x: &[u8], y: &[u8], d: &[u8]) -> bool {
+    match crv {
+        EcCurve::P256 => private_matches_point::<p256::NistP256>(x, y, d),
+        EcCurve::P384 => private_matches_point::<p384::NistP384>(x, y, d),
+        EcCurve::P521 => private_matches_point::<p521::NistP521>(x, y, d),
+        EcCurve::Secp256k1 => private_matches_point::<k256::Secp256k1>(x, y, d),
+    }
+}
+
+/// See [`ec_private_matches`]: the curve crate derives d·G
+/// (`SecretKey::public_key`, in its constant-time arithmetic) and the two
+/// points are compared with `subtle`'s constant-time equality, since the
+/// derived point is computed from the secret. `d` is borrowed from its
+/// wiped-on-drop buffer, and the `SecretKey` built from it is wiped when
+/// dropped.
+fn private_matches_point<C>(x: &[u8], y: &[u8], d: &[u8]) -> bool
+where
+    C: CurveArithmetic,
+    AffinePoint<C>: FromSec1Point<C> + ToSec1Point<C>,
+    FieldBytesSize<C>: ModulusSize,
+{
+    let (Ok(x), Ok(y), Ok(d)) = (
+        <&FieldBytes<C>>::try_from(x),
+        <&FieldBytes<C>>::try_from(y),
+        <&FieldBytes<C>>::try_from(d),
+    ) else {
+        return false;
+    };
+    let Ok(secret) = SecretKey::<C>::from_bytes(d) else {
+        return false;
+    };
+    let point = Sec1Point::<C>::from_affine_coordinates(x, y, false);
+    let Some(public) = PublicKey::<C>::from_sec1_point(&point).into_option() else {
+        return false;
+    };
+    bool::from(
+        secret
+            .public_key()
+            .to_projective()
+            .ct_eq(&public.to_projective()),
+    )
 }
 
 /// See [`ec_point_is_valid`]: `PublicKey::from_sec1_point` on the
