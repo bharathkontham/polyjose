@@ -12,6 +12,7 @@
 #   6. a package in the core's tree does not come from crates.io: a path package other than
 #      polyjose itself, a git source or another registry (an allowlisted name is not enough when
 #      the code behind it can be swapped);
+#   7. the workspace root Cargo.toml has a [patch] or [replace] section;
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
 # runtime dependencies and the build-dependencies of every crate in it (a build script or a
@@ -111,6 +112,51 @@ normalize <"$work/tree.names" | sort -u >"$work/tree"
 # read what cargo will build, not the manifest text.
 cargo metadata --locked --format-version 1 --all-features >"$work/metadata.json" 2>"$work/metadata.err" \
   || { cat "$work/metadata.err" >&2; die "cargo metadata failed"; }
+
+# Reads keys from a Cargo.toml: `python3 -I -c "$toml_keys_py" <manifest> <dotted.key>...` prints one
+# line per key that is present. With tomllib (Python 3.11+, as on the CI runners) the answer is exact.
+# Without it, a conservative line scan reports every line that could define the key (after dropping
+# quotes and whitespace, the key's last part followed by `=`, `.` or `]`), so it can only err toward
+# failing; a manifest with \u escapes, which could spell a key, cannot be scanned and is an error.
+# (Single-quoted for the shell, so the Python uses no single quotes.)
+toml_keys_py='
+import re, sys
+path, keys = sys.argv[1], sys.argv[2:]
+try:
+    import tomllib
+except ImportError:
+    tomllib = None
+def describe(node, depth=2):
+    if not isinstance(node, dict):
+        return "= ..."
+    if depth == 0 or not node:
+        return "{...}" if node else "{}"
+    return "{" + ", ".join("%s %s" % (k, describe(v, depth - 1)) for k, v in sorted(node.items())) + "}"
+if tomllib is not None:
+    with open(path, "rb") as f:
+        doc = tomllib.load(f)
+    for key in keys:
+        node = doc
+        for part in key.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        if node is not None:
+            print("%s %s" % (key, describe(node)))
+    sys.exit(0)
+with open(path, encoding="utf-8") as f:
+    text = f.read()
+if "\\u" in text or "\\U" in text:
+    sys.exit("%s has \\u escapes and python3 has no tomllib (Python 3.11+): cannot scan it safely" % path)
+drop = re.compile("[\\s\"" + chr(39) + "]")
+for number, line in enumerate(text.splitlines(), 1):
+    stripped = line.strip()
+    if stripped.startswith("#"):
+        continue
+    flat = drop.sub("", stripped)
+    for key in keys:
+        last = re.escape(key.split(".")[-1])
+        if re.search("(^|[.{,\\[])" + last + "([.=\\]]|$)", flat):
+            print("%s? line %d: %s (no tomllib, conservative scan; Python 3.11+ checks exactly)" % (key, number, stripped))
+'
 
 # --- Checks -----------------------------------------------------------------------------------------
 # Each check reports every offender with fail(); the script exits 1 at the end if any check failed.
@@ -234,12 +280,27 @@ for pkg_id in sorted(seen - set(core)):
   fi
 }
 
+# 7. No [patch] or [replace] in the workspace root manifest: it swaps a crates.io crate for other
+#    code under the same name and version. Check 6 also catches the result; this names the cause.
+check_no_patch_or_replace() {
+  local ws_root
+  ws_root=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["workspace_root"])' \
+    "$work/metadata.json") || die "could not read workspace_root from cargo metadata"
+  [ "$(cd "$ws_root" && pwd -P)" = "$root_physical" ] || die "cargo's workspace root $ws_root is not this repository ($root)"
+  python3 -I -c "$toml_keys_py" Cargo.toml patch replace >"$work/patches" || die "could not read Cargo.toml"
+  if [ -s "$work/patches" ]; then
+    fail "the workspace root Cargo.toml must not have [patch] or [replace] sections; depend on crates.io releases:"
+    sed 's/^/  - /' "$work/patches"
+  fi
+}
+
 check_tree_allowlisted
 check_allowlist_not_stale
 check_default_features_off
 check_credits_match
 check_group_rules
 check_sources_crates_io
+check_no_patch_or_replace
 
 if [ "$failed" -ne 0 ]; then
   echo "check-deps: FAILED"
