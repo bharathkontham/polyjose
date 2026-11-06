@@ -183,6 +183,7 @@ mod tests {
     /// must be added here: [`the_scan_covers_every_jwt_source_file`]
     /// fails otherwise.
     const OTHER_SOURCES: &[(&str, &str)] = &[
+        ("claims.rs", include_str!("claims.rs")),
         ("mod.rs", include_str!("mod.rs")),
         ("numeric_date.rs", include_str!("numeric_date.rs")),
         ("policy.rs", include_str!("policy.rs")),

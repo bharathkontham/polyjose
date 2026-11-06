@@ -1,6 +1,7 @@
 //! JSON Web Token (RFC 7519): claims, the RFC 8725 validation policy, and
 //! nested JWTs.
 
+mod claims;
 mod clock;
 mod numeric_date;
 // The pipeline modules below are wired together by the later tasks of
@@ -16,6 +17,7 @@ mod numeric_date;
 mod policy;
 pub mod typ;
 
+pub use claims::{Audience, Claims};
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub use clock::SystemClock;
 pub use clock::{Clock, FixedClock};
