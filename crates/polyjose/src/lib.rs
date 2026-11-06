@@ -42,6 +42,10 @@ pub use rng::insecure_test_vectors;
 // RNG state scan (rng.rs) exempts the file only when it is declared so.
 #[cfg(test)]
 mod test_counters;
+// Test-only fixtures (the vendored Wycheproof loader): never in a non-test
+// build, and not reachable from the integration tests in `tests/`.
+#[cfg(test)]
+mod test_support;
 /// base64url and helpers.
 pub mod util;
 
