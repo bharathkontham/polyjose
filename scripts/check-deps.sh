@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Enforces polyjose's minimal runtime dependency tree (ADR 0016) and its public credits (ADR 0020).
+# Enforces polyjose's minimal dependency tree (ADR 0016), its supply chain (crates.io only, no
+# patches, no build script in the core) and its public credits (ADR 0020).
 #
 # Fails, listing every offender, when:
 #   1. the core's tree contains a crate that deps-allowlist.txt does not list (ADR 0016 §4);
@@ -21,6 +22,9 @@
 # build-dependency runs on the builder's machine and can change the code that ships, so it is
 # audit surface too), on every target and with every feature, so a target- or feature-specific
 # dependency cannot hide. Dev-dependencies never ship and are not checked (ADR 0016 §5).
+#
+# deny.toml (cargo-deny) is the second layer: it bans C/C++ build tooling (cc, cmake) and git or
+# non-crates.io registry sources for the whole workspace, bindings included.
 #
 # Fails closed: if cargo or python3 is missing, or any command errors, it exits non-zero.
 # Runs on macOS /bin/bash 3.2 and on Linux bash, so no associative arrays or mapfile.
@@ -229,6 +233,12 @@ check_credits_match() {
 
 # 5. Group-specific rules. Every group needs a case here, so a new group (e.g. one whose crates may
 #    only be reached through a single parent crate) cannot land without deciding its rule.
+#    ADR 0025's dalek group (feature 0002: curve25519-dalek-derive, syn, quote, proc-macro2,
+#    unicode-ident) arrives as *normal* x86_64 dependencies of curve25519-dalek, not as
+#    build-dependencies, so check 8 (the core's own manifest only) does not apply to it; its rule
+#    ("only below curve25519-dalek-derive", via `cargo tree -e normal,build --target all -i <crate>`)
+#    goes here. Because the tree includes build edges, curve25519-dalek's own build-dependency
+#    (rustc_version, which pulls semver) is in the tree too and needs allowlisting like any crate.
 check_group_rules() {
   local group crate
   while read -r group crate; do
