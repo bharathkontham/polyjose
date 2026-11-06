@@ -984,6 +984,181 @@
       }
     },
     {
+      "file": "identity-access-token-client-id-not-string-null",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id null, under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":null}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-number",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id a number (5), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":5}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-bool",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id a boolean (true), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":true}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-array",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id an array ([\"a\"]), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":[\"a\"]}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-object",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id an object ({}), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":{}}",
+        "key": "oct-32"
+      }
+    },
+    {
       "file": "header-alg-none",
       "source": "RFC 7519 §6.1; RFC 8725 §2.1, §3.2; ADR 0007; ADR 0027 §6",
       "description": "An Unsecured JWT in the RFC 7519 §6.1 form (header {\"alg\":\"none\"}, empty signature) with valid claims, allow-list [HS256] and an HS256 key: never accepted: AlgorithmNotAllowed",
