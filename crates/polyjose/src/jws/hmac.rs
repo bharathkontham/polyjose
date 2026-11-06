@@ -235,4 +235,79 @@ mod tests {
             assert_eq!(verify(&alg, &key, RFC4231_TC6_DATA, &tag), Ok(()), "{alg}");
         }
     }
+
+    #[test]
+    fn a_tag_of_the_wrong_length_is_an_invalid_signature() {
+        // RFC 7518 §3.2: no truncated tags, and nothing appended.
+        let key = jwk(A1_KEY);
+        let input = a1_signing_input();
+        let sig = a1_signature();
+        let mut long = sig.clone();
+        long.push(0);
+        for bad in [&sig[..sig.len() - 1], &long[..], &sig[..16], &[][..]] {
+            assert_eq!(
+                verify(&SigningAlg::HS256, &key, &input, bad),
+                Err(Error::InvalidSignature),
+                "{} octets",
+                bad.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_flipped_bit_anywhere_is_an_invalid_signature() {
+        let key = jwk(A1_KEY);
+        let input = a1_signing_input();
+        for at in 0..32 {
+            for bit in 0..8 {
+                let mut sig = a1_signature();
+                sig[at] ^= 1 << bit;
+                assert_eq!(
+                    verify(&SigningAlg::HS256, &key, &input, &sig),
+                    Err(Error::InvalidSignature),
+                    "octet {at} bit {bit}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_tag_over_other_input_or_under_another_hash_is_rejected() {
+        let key = jwk(A1_KEY);
+        let mut input = a1_signing_input();
+        let last = input.len() - 1;
+        input[last] ^= 1;
+        assert_eq!(
+            verify(&SigningAlg::HS256, &key, &input, &a1_signature()),
+            Err(Error::InvalidSignature)
+        );
+        // The same key and input under HS384/HS512: other hash, other length.
+        let key = oct(&[0xaa; 131]);
+        let [(_, hs256), (_, hs384), _] = rfc4231_tc6();
+        for alg in [SigningAlg::HS384, SigningAlg::HS512] {
+            assert_eq!(
+                verify(&alg, &key, RFC4231_TC6_DATA, &hs256),
+                Err(Error::InvalidSignature),
+                "{alg}"
+            );
+        }
+        // An HS384 tag cut to 32 octets is not an HS256 tag.
+        assert_eq!(
+            verify(&SigningAlg::HS256, &key, RFC4231_TC6_DATA, &hs384[..32]),
+            Err(Error::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn tags_are_compared_only_by_verify_slice() {
+        // RFC 7518 §3.2 constant-time comparison: the production code (this
+        // file above its tests) compares tags only through
+        // `Mac::verify_slice`, never a truncated check or `==`.
+        let source = include_str!("hmac.rs");
+        let production = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
+        assert!(production.contains(".verify_slice(signature)"));
+        for banned in ["verify_truncated", "==", "!=", "ct_eq", ".verify("] {
+            assert!(!production.contains(banned), "found {banned:?}");
+        }
+    }
 }
