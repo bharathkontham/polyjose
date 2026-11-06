@@ -1,7 +1,8 @@
 //! The single-step Concat KDF of NIST SP 800-56A §5.8.1 with SHA-256, as
 //! RFC 7518 §4.6.2 profiles it for ECDH-ES. polyjose's own composition on
-//! `sha2` (ADR 0002), in the scope of the ADR 0019 §5 audit. Filled in by
-//! T04.
+//! `sha2` (ADR 0002), in the scope of the ADR 0019 §5 audit. SHA-256
+//! itself comes from `sha2`; only the counter, OtherInfo layout and
+//! truncation are written here.
 
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -25,15 +26,31 @@ pub(crate) const MAX_KEYDATALEN_BITS: u32 = 512;
 /// be32(len) || apu || be32(len) || apv || be32(keydatalen_bits)` with an
 /// empty SuppPrivInfo.
 ///
+/// - `z` is the ECDH shared secret. It is borrowed: the caller owns it
+///   and keeps it in a zeroizing buffer. The SHA-256 state that absorbs it
+///   is wiped on drop, and each block is written into a zeroizing buffer.
 /// - `alg_id` is the `enc` value for direct ECDH-ES and the `alg` value
-///   for ECDH-ES+A*KW (RFC 7518 §4.6.2).
+///   for ECDH-ES+A*KW (RFC 7518 §4.6.2, AlgorithmID).
 /// - `apu` and `apv` are the base64url-decoded header values; an absent
-///   value is passed as empty and encoded as a zero length.
+///   value is passed as empty and encoded as a zero length (RFC 7518
+///   §4.6.2, PartyUInfo and PartyVInfo). A present but empty value
+///   therefore derives the same key as an absent one, as the RFC defines.
+/// - `keydatalen_bits` is the key length in bits (RFC 7518 §4.6.2,
+///   keydatalen): the `enc` CEK length for direct ECDH-ES, the AES Key
+///   Wrap key length for ECDH-ES+A*KW.
+///
+/// The result has exactly `keydatalen_bits / 8` octets.
 ///
 /// # Errors
 ///
-/// An error unless `keydatalen_bits` is a positive multiple of 8 and at
-/// most 512.
+/// - [`Error::UnsupportedAlgorithm`] unless `keydatalen_bits` is a
+///   positive multiple of 8 and at most [`MAX_KEYDATALEN_BITS`].
+/// - [`Error::InvalidFormat`] if `alg_id`, `apu` or `apv` is longer than a
+///   32-bit Datalen can state (2^32 - 1 octets).
+///
+/// Both are caller bugs or oversized encrypt requests; a decrypt caller must
+/// map any error from here to `DecryptionFailed` (plan.md error
+/// contract, RFC 7516 §5.2 steps 6–17).
 pub(crate) fn derive(
     z: &[u8],
     alg_id: &str,
@@ -58,7 +75,7 @@ pub(crate) fn derive(
     let mut out = Zeroizing::new(Vec::with_capacity(keydatalen));
     // Each K(i) lands here, never in an unwiped temporary.
     let mut block = Zeroizing::new([0u8; HASH_LEN]);
-    // NIST SP 800-56A §5.8.1.1 step 4: `counter` starts at 1 and is a
+    // NIST SP 800-56A §5.8.1.1: `counter` starts at 1 and is hashed as a
     // 32-bit big-endian integer.
     let mut counter: u32 = 1;
     while out.len() < keydatalen {
@@ -69,8 +86,8 @@ pub(crate) fn derive(
         hash.update(z);
         hash.update(&other_info);
         hash.finalize_into((&mut *block).into());
-        // §5.8.1.1 steps 5–6: the leftmost keydatalen bits of
-        // K(1) || … || K(reps); only the last block is truncated.
+        // §5.8.1.1: the leftmost keydatalen bits of K(1) || … || K(reps);
+        // only the last block is truncated.
         let take = (keydatalen - out.len()).min(HASH_LEN);
         out.extend_from_slice(&block[..take]);
         // At most two blocks (MAX_KEYDATALEN_BITS), so this never overflows.
@@ -248,7 +265,7 @@ mod tests {
     }
 
     /// 384 bits (A192CBC-HS384) truncate the second block to its leftmost
-    /// 16 octets (NIST SP 800-56A §5.8.1.1 step 6).
+    /// 16 octets (NIST SP 800-56A §5.8.1.1).
     #[test]
     fn derive_384_bits_truncates_the_second_block() {
         let z = [0xa5; 48];
