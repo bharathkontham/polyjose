@@ -1,0 +1,159 @@
+{
+  "source": "ADR 0050 §2",
+  "description": "ADR 0050 §2: a general JWE (RFC 7516 §7.2.1) with 16 kid-less PBES2-HS256+A128KW + A128GCM recipients of p2c 1000, the 16th for this password and the others for decoys (built with node:crypto, F07) decrypts as recipient 15 once max_pbes2_count is raised to 16,000, the sum of p2c over the 16 candidates tried",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4R0NNIn0",
+      "recipients": [
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "Xcv03CF-l0zNlPMm1AxQhQ",
+            "p2c": 1000
+          },
+          "encrypted_key": "7_hS77hDHFJZ_PVTcMtNcwQca1AP1S_L"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "_-j9Z_AR3HTPeRFT6D0aVA",
+            "p2c": 1000
+          },
+          "encrypted_key": "51RVpYjkUJLnKsxfgz1eLSlJ6F-bL_LC"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "UKmaYCA91M9e8D3yERphKg",
+            "p2c": 1000
+          },
+          "encrypted_key": "LFMVqoGeFPFZKlOHYeAXOcspub18lRPe"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "7x0Y0y4MbfUs3Cx2T547iQ",
+            "p2c": 1000
+          },
+          "encrypted_key": "8eBC4997HBiY4IVMLi7N4pPQPJFQ8yw1"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "RCPhieiyMTzNasj87WURZw",
+            "p2c": 1000
+          },
+          "encrypted_key": "whrMpHu4AL0hbO3z9zgg3-0Gy79kgagN"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "pKOW-PKcQQNmC9mmiLjW1Q",
+            "p2c": 1000
+          },
+          "encrypted_key": "7Oz_-5ycKXpNxNMHASjz1TERPg2MKtj7"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "3uvQpXUAg1BJFr3M64I7GQ",
+            "p2c": 1000
+          },
+          "encrypted_key": "XppSgnXNpFvu9L5i_txGI1PqP9bT5uWg"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "0akiKoXq_nA7mmAcx6LFkg",
+            "p2c": 1000
+          },
+          "encrypted_key": "E031qmpkWhFzYjSd45lU2zsFAxfe8zKJ"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "7MFevGhghrMgG49v0LcN_w",
+            "p2c": 1000
+          },
+          "encrypted_key": "zQxh3snU1Mo7ID5O5E1NUkej7gSB8cdl"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "CK2O9hj5n_fGHkkMNE5elQ",
+            "p2c": 1000
+          },
+          "encrypted_key": "R7BU_m9uU1v6uSiuvNfjioi_2ml95C84"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "0tSGxwSU7cWa4-hbZYtGuw",
+            "p2c": 1000
+          },
+          "encrypted_key": "yXXRsnBdb8vYGerfyd1KlHOi9dGT1n_w"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "wAsIXM0AX4EPlseiAQ9YjA",
+            "p2c": 1000
+          },
+          "encrypted_key": "6UjWOyjrTl-Xcr28gWKSmdKtaVSSxD55"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "b0k1ZpIwQykM1yYDfpQPfw",
+            "p2c": 1000
+          },
+          "encrypted_key": "sZPDR72lrkwey0FKdqEWKLQo7v-tskry"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "w9D_lZ_JJFbV_oitzxJScQ",
+            "p2c": 1000
+          },
+          "encrypted_key": "M38pwlWDXXSzIxl-Vg0lRa7aTV-SAsIx"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "b8ruc0gvzMXw0vfPX5XKPg",
+            "p2c": 1000
+          },
+          "encrypted_key": "TURj2yzXRPBgDR1dRBetavq5ZZru9nV_"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "EL40rVHFDr4MKOiDtlGQMQ",
+            "p2c": 1000
+          },
+          "encrypted_key": "OWJxfnHoNhTxCaxDxSZGxvAvUZDg_ZG4"
+        }
+      ],
+      "iv": "ubje3mg6YR2w3kC_",
+      "ciphertext": "Bbw6X5G1MP6VeOtuw8gaLv9RARERjOdGWdm_nb5NXQ",
+      "tag": "t_S5NpBHA7XfuQz78kCOXg"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "Y29ycmVjdCBob3JzZSwgYnVkZ2V0ZWQ"
+    },
+    "allowed_algs": [
+      "PBES2-HS256+A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ],
+    "max_pbes2_count": 16000
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "U2l4dGVlbiByZWNpcGllbnRzLCBvbmUgYnVkZ2V0Lg",
+    "recipient": 15
+  }
+}

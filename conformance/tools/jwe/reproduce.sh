@@ -91,6 +91,10 @@ python3 -I "$here/t12-pbes2.py" \
   "$here/t12-rfc7517c.json" "$tmp/t12"
 compare "t12-pbes2.py (pbes2/)" "$tmp/t12" "$vectors/pbes2"
 
+# F07: the per-token PBES2 budget vectors in pbes2/ (ADR 0050 §2).
+node "$here/f07-pbes2-budget.mjs" "$tmp/f07" > /dev/null
+compare "f07-pbes2-budget.mjs (pbes2/)" "$tmp/f07" "$vectors/pbes2"
+
 # T13: ecdh-es/ (it needs its output directory to exist).
 mkdir -p "$tmp/t13"
 node "$here/t13-ecdh-es.js" "$cookbook/jwe" "$tmp/t13" > /dev/null

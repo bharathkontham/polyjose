@@ -82,13 +82,25 @@ write('roundtrip-pbes2-hs256-a128kw-minimum-parameters', {
             "recipients": [{"alg": FAMILY[0], "key": key, "p2c": 1000, "p2s_len": 8}]},
   "expect": {"ok": True, "decrypt_with": {"key": key, "allowed_algs": [FAMILY[0]], "allowed_enc": ["A128CBC-HS256"]}}})
 
+write('roundtrip-pbes2-hs256-a128kw-p2s-len-256', {
+  "source": "ADR 0050 §2",
+  "description": "ADR 0050 §2, RFC 7518 §4.8.1.1: the longest Salt Input polyjose encrypts with, 256 octets (with p2c 1000), round-trips",
+  "operation": "jwe.encrypt",
+  "input": {"serialization": "compact", "enc": "A128GCM", "plaintext_b64u": b64(b'Live long and prosper.'),
+            "recipients": [{"alg": FAMILY[0], "key": key, "p2c": 1000, "p2s_len": 256}]},
+  "expect": {"ok": True, "decrypt_with": {"key": key, "allowed_algs": [FAMILY[0]], "allowed_enc": ["A128GCM"]}}})
+
 # Encrypt negatives.
 for name, rec, why in [
     ('encrypt-p2c-999', {"p2c": 999}, 'RFC 7518 §4.8.1.2 ("A minimum iteration count of 1000 is RECOMMENDED"): polyjose refuses to encrypt with p2c 999'),
     ('encrypt-p2s-len-7', {"p2s_len": 7}, 'RFC 7518 §4.8.1.1 ("A Salt Input value containing 8 or more octets MUST be used"): polyjose refuses to encrypt with a 7-octet p2s'),
+    # F07, ADR 0050 §2: the upper limits, checked before any draw or derivation.
+    ('encrypt-p2c-ceiling-plus-one', {"p2c": 1000001}, 'ADR 0050 §2: polyjose refuses to encrypt with p2c 1000001, above the 1,000,000 decrypt ceiling of ADR 0023 that no DecryptPolicy can exceed, before any draw or derivation'),
+    ('encrypt-p2s-len-257', {"p2s_len": 257}, 'ADR 0050 §2: p2s_len is capped at 256 octets; polyjose refuses to encrypt with a 257-octet p2s, before any draw or derivation'),
 ]:
     r = {"alg": FAMILY[0], "key": key}; r.update(rec)
-    write(name, {"source": "RFC 7518 §4.8.1", "description": why + ' (InvalidKey)', "operation": "jwe.encrypt",
+    source = 'ADR 0050 §2' if why.startswith('ADR 0050') else 'RFC 7518 §4.8.1'
+    write(name, {"source": source, "description": why + ' (InvalidKey)', "operation": "jwe.encrypt",
       "input": {"serialization": "compact", "enc": "A128GCM", "plaintext_b64u": b64(b'x'), "recipients": [r]},
       "expect": {"ok": False, "error": "InvalidKey"}})
 
