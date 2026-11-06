@@ -665,6 +665,66 @@ fn decompression_bomb_stops_at_the_cap() {
     }
 }
 
+/// ADR 0050 §4: a caller-chosen 1 GiB cap does not make a small input
+/// reserve 1 GiB, nor 1,032 × its length, up front: at most the default
+/// bound, [`inflate::INITIAL_RESERVATION`] (250,000 bytes, ADR 0017 §3).
+#[test]
+fn a_huge_cap_reserves_at_most_the_default_bound_up_front() {
+    const GIB: usize = 1 << 30;
+    assert_eq!(inflate::INITIAL_RESERVATION, 250_000);
+
+    // A 1,000-byte stored block (RFC 1951 §3.2.4): 1,032 × 1,005 input
+    // bytes is above the default bound, so the reservation is the bound,
+    // and 1,000 bytes of output never grow it.
+    let mut stored = vec![1, 0xE8, 0x03, 0x17, 0xFC];
+    stored.extend(std::iter::repeat_n(b'x', 1000));
+    let mut capacity = inflate::Capacity::default();
+    let out = inflate::inflate_tracked(&stored, GIB, &mut capacity).unwrap();
+    assert_eq!(out.len(), 1000);
+    assert_eq!(capacity.initial, inflate::INITIAL_RESERVATION);
+    assert_eq!(capacity.last, capacity.initial);
+    assert_eq!(capacity.peak, capacity.initial);
+
+    // The bomb's first 1 KiB under the same 1 GiB cap: the same up-front
+    // reservation, then growth to the input's own expansion bound
+    // (1,032 × 1,024), never to the cap. It is truncated (no end-of-block).
+    let bomb = bomb_stream(32_768);
+    let mut capacity = inflate::Capacity::default();
+    let result = inflate::inflate_tracked(&bomb[..1024], GIB, &mut capacity);
+    assert_eq!(result, Err(Error::InvalidFormat(TRUNCATED)));
+    assert_eq!(capacity.initial, inflate::INITIAL_RESERVATION);
+    assert!(capacity.len > 1_000_000, "output {}", capacity.len);
+    assert_eq!(capacity.last, inflate::max_expansion(1024));
+    assert_growth_bounds(&capacity);
+}
+
+/// Growth beyond the up-front reservation still never passes the cap, and
+/// the output-limit error still fires as soon as the output would exceed it
+/// (ADR 0017 §1, ADR 0050 §4); a cap equal to the output size succeeds.
+#[test]
+fn growth_stops_at_the_cap() {
+    const MAX: usize = 600_000;
+    let bomb = bomb_stream(10_000);
+    let mut capacity = inflate::Capacity::default();
+    let result = inflate::inflate_tracked(&bomb, MAX, &mut capacity);
+    assert_eq!(result, Err(Error::InvalidFormat(OUTPUT_LIMIT)));
+    assert_eq!(capacity.initial, inflate::INITIAL_RESERVATION);
+    // 250,000, then 500,000, then the cap: never above it.
+    assert_eq!(capacity.last, MAX);
+    assert!(capacity.len <= MAX && capacity.len + 258 > MAX);
+    assert_growth_bounds(&capacity);
+
+    let exact = 1 + 258 * 10_000;
+    let mut capacity = inflate::Capacity::default();
+    let out = inflate::inflate_tracked(&bomb, exact, &mut capacity).unwrap();
+    assert_eq!(out.len(), exact);
+    assert!(capacity.last <= exact);
+    assert_eq!(
+        inflate::inflate_tracked(&bomb, exact - 1, &mut inflate::Capacity::default()),
+        Err(Error::InvalidFormat(OUTPUT_LIMIT))
+    );
+}
+
 /// The growth invariants of ADR 0050 §4, for any run that grew: the buffer
 /// at rest is at most twice the output, a growth step (old and new buffer
 /// both live) at most three times the output, and neither passes the
