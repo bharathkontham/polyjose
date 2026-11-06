@@ -293,6 +293,11 @@ impl<'a> Policy<'a> {
     /// any signature is computed, which bounds the work an unauthenticated
     /// token can cause (ADR 0029 §4). Default
     /// [`DEFAULT_MAX_KEY_CANDIDATES`](Self::DEFAULT_MAX_KEY_CANDIDATES).
+    ///
+    /// `0` allows no candidate at all, so every verification against a JWK
+    /// Set ([`Keys::Set`](super::Keys::Set)) fails with
+    /// [`Error::NoMatchingKey`] (ADR 0029 §4). A single key
+    /// ([`Keys::One`](super::Keys::One)) is not a set and is unaffected.
     pub fn max_key_candidates(mut self, n: usize) -> Self {
         self.max_key_candidates = n;
         self
