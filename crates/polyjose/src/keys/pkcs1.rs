@@ -26,7 +26,10 @@ use crate::error::{Error, Result};
 #[derive(Clone, Copy)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "read by the RSA mapper (rsa.rs)")
+    expect(
+        dead_code,
+        reason = "read by rsa.rs, which the PEM/DER facade (T08) calls"
+    )
 )]
 pub(crate) struct RsaPublicParts<'a> {
     /// `modulus`, n (RFC 8017 App. A.1.1).
@@ -46,7 +49,10 @@ pub(crate) struct RsaPublicParts<'a> {
 /// INTEGER, a missing or extra field, trailing data.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "called by the RSA mapper (rsa.rs)")
+    expect(
+        dead_code,
+        reason = "called by rsa.rs, which the PEM/DER facade (T08) calls"
+    )
 )]
 pub(crate) fn decode_public(der: &[u8]) -> Result<RsaPublicParts<'_>> {
     let mut outer = Reader::new(der)?;
@@ -82,7 +88,10 @@ pub(crate) fn decode_public(der: &[u8]) -> Result<RsaPublicParts<'_>> {
 /// Whatever follows the eighth (`otherPrimeInfos`) is not read at all.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "called by the RSA mapper (rsa.rs)")
+    expect(
+        dead_code,
+        reason = "called by rsa.rs, which the PEM/DER facade (T08) calls"
+    )
 )]
 pub(crate) fn decode(der: &[u8]) -> Result<RsaPublicParts<'_>> {
     let mut outer = Reader::new(der)?;
@@ -139,7 +148,10 @@ fn read_public(mut fields: Reader<'_>) -> Result<RsaPublicParts<'_>> {
 /// emits (ADR 0018 §3).
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "called by the RSA mapper (rsa.rs)")
+    expect(
+        dead_code,
+        reason = "called by rsa.rs, which the PEM/DER facade (T08) calls"
+    )
 )]
 pub(crate) fn encode_public(n: &[u8], e: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let body = der::unsigned_integer_len(n) + der::unsigned_integer_len(e);
