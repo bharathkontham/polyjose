@@ -1,0 +1,41 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "typ \"at+JWT\" (the RFC 9068 §3 spelling) with profile access_token, issuer and audience, and every RFC 9068 §2.2 claim present: accepted (RFC 9068 §2.1, §2.2, §4, ADR 0027 §5)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImF0K0pXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoiaHR0cHM6Ly9ycy5leGFtcGxlIiwiZXhwIjoxMzAwODE5MzgwLCJpYXQiOjEzMDA4MTkzMTAsImp0aSI6ImF0LTEiLCJjbGllbnRfaWQiOiJjbGllbnQtMSIsInNjb3BlIjoicmVhZCJ9.0Hdvd4bRq2t9Txtt39iBaZTW_weMIZXlJHL3VBclus4Br77LVXhnyUGjf77QsFZhcWM8OVESAD2DMaj6QQ9HJg",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "policy": {
+      "profile": "access_token",
+      "issuer": [
+        "https://issuer.example"
+      ],
+      "audience": [
+        "https://rs.example"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "user-1",
+      "aud": "https://rs.example",
+      "exp": 1300819380,
+      "iat": 1300819310,
+      "jti": "at-1",
+      "client_id": "client-1",
+      "scope": "read"
+    },
+    "alg": "ES256"
+  }
+}

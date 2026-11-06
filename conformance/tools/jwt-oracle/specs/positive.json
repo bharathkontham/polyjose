@@ -792,6 +792,275 @@
           "exp": 1300819380
         }
       }
+    },
+    {
+      "file": "typ-absent-default.json",
+      "description": "typ absent under the default typ mode is accepted: typ is OPTIONAL (RFC 7519 §5.1, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-jwt-default.json",
+      "description": "typ \"JWT\" under the default typ mode is accepted (RFC 7519 §5.1, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-jwt-lowercase-default.json",
+      "description": "typ \"jwt\" under the default typ mode is accepted: media types compare ASCII-case-insensitively (RFC 7515 §4.1.9, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "jwt"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-application-jwt-default.json",
+      "description": "typ \"application/jwt\" under the default typ mode is accepted: the application/ prefix is implicit (RFC 7515 §4.1.9, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "application/jwt"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-at-jwt-access-token-profile.json",
+      "description": "typ \"at+JWT\" (the RFC 9068 §3 spelling) with profile access_token, issuer and audience, and every RFC 9068 §2.2 claim present: accepted (RFC 9068 §2.1, §2.2, §4, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "profile": "access_token",
+          "issuer": [
+            "https://issuer.example"
+          ],
+          "audience": [
+            "https://rs.example"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "https://rs.example",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "at-1",
+          "client_id": "client-1",
+          "scope": "read"
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "at+JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "https://rs.example",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "at-1",
+          "client_id": "client-1",
+          "scope": "read"
+        }
+      }
+    },
+    {
+      "file": "typ-secevent-exact-with-prefix.json",
+      "description": "typ \"secevent+jwt\" with typ mode exact \"application/secevent+jwt\": equal as media types, accepted (RFC 7515 §4.1.9, RFC 8417 §2.3, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "typ": {
+            "mode": "exact",
+            "value": "application/secevent+jwt"
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "secevent+jwt"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-any-mode.json",
+      "description": "typ \"dpop+jwt\" with typ mode any: no typ check at all, accepted (ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "typ": {
+            "mode": "any"
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "dpop+jwt"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
     }
   ]
 }

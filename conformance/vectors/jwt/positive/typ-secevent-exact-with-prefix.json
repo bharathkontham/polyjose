@@ -1,0 +1,32 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "typ \"secevent+jwt\" with typ mode exact \"application/secevent+jwt\": equal as media types, accepted (RFC 7515 §4.1.9, RFC 8417 §2.3, ADR 0027 §5)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6InNlY2V2ZW50K2p3dCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODE5MzgwfQ.-YRgmSprD-T_qDXvup4Ff71DZf4iya9CP9cVsbl7U-7xsN5gkfYV9m_ITcRCyLpsMcJHBZvQiyQh_TPg6LJ84w",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "policy": {
+      "typ": {
+        "mode": "exact",
+        "value": "application/secevent+jwt"
+      }
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300819380
+    },
+    "alg": "ES256"
+  }
+}
