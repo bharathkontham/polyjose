@@ -14,14 +14,12 @@
 //!   private-key, signing or decryption type appears here or anywhere
 //!   else in the core.
 //! - **Key import.** [`public_key`] turns a JWK's `n` and `e` into the
-//!   `rsa` crate's key with the modulus bounds of [`MODULUS_BITS`]. It is
+//!   `rsa` crate's key with the modulus bounds of [`RSA_MODULUS_BITS`]. It is
 //!   the crate's one RSA public-key import, shared with RSA-OAEP-256
 //!   encryption (feature 0003).
 //! - **No SHA-1.** Only SHA-256/384/512 (ADR 0022).
 //! - **No secrets.** Every input is public; errors carry no key or input
 //!   octets (ADR 0007).
-
-use core::ops::RangeInclusive;
 
 use rsa::signature::Verifier;
 use rsa::{BoxedUint, pkcs1v15, pss};
@@ -29,15 +27,9 @@ use sha2::{Sha256, Sha384, Sha512};
 
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
-use crate::jwk::{Jwk, KeyMaterial};
+use crate::jwk::{Jwk, KeyMaterial, RSA_MODULUS_BITS};
 
 use super::alg::{self, Family};
-
-/// The RSA modulus sizes polyjose uses, in bits: at least 2048
-/// (RFC 7518 §3.3, §3.5 and, for RSA-OAEP-256, §4.3: "A key of size 2048
-/// bits or larger MUST be used") and at most 8192, the `rsa` crate's own
-/// maximum (ADR 0026 §2 step 8).
-pub(crate) const MODULUS_BITS: RangeInclusive<usize> = 2048..=8192;
 
 /// RSA signing is not offered in 0.1.0 (ADR 0021: RUSTSEC-2023-0071
 /// affects private-key operations). This body is final.
@@ -131,7 +123,7 @@ fn pss_signature(signature: &[u8]) -> Result<pss::Signature> {
 /// verify uses it, and so does RSA-OAEP-256 encryption (feature 0003,
 /// ADR 0022). It handles public values only (ADR 0021).
 ///
-/// `rsa::RsaPublicKey::new_with_size_limits` with [`MODULUS_BITS`] checks:
+/// `rsa::RsaPublicKey::new_with_size_limits` with [`RSA_MODULUS_BITS`] checks:
 ///
 /// - the modulus is 2048..=8192 bits (RFC 7518 §3.3, §3.5, §4.3;
 ///   ADR 0026 §2 step 8), and odd (RFC 8017 §3.1: a product of odd primes);
@@ -152,7 +144,7 @@ fn pss_signature(signature: &[u8]) -> Result<pss::Signature> {
 pub(crate) fn public_key(n: &[u8], e: &[u8]) -> Result<rsa::RsaPublicKey> {
     use rsa::errors::Error as E;
     let (n, e) = (uint(n)?, uint(e)?);
-    rsa::RsaPublicKey::new_with_size_limits(n, e, MODULUS_BITS).map_err(|err| {
+    rsa::RsaPublicKey::new_with_size_limits(n, e, RSA_MODULUS_BITS).map_err(|err| {
         Error::InvalidKey(match err {
             E::ModulusTooSmall | E::ModulusTooLarge => "RSA modulus must be 2048 to 8192 bits",
             E::InvalidExponent | E::PublicExponentTooSmall => {

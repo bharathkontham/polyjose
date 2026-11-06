@@ -192,6 +192,7 @@
 
 use core::cmp::Ordering;
 use core::fmt;
+use core::ops::RangeInclusive;
 use std::collections::BTreeSet;
 
 use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, Sec1Point, ToSec1Point};
@@ -614,6 +615,16 @@ impl fmt::Debug for OctKey {
 
 /// The only secret, `k`, is a [`Zeroizing`] buffer.
 impl ZeroizeOnDrop for OctKey {}
+
+/// The RSA modulus sizes polyjose accepts, in bits: at least 2048
+/// (RFC 7518 §3.3, §3.5 and, for RSA-OAEP-256, §4.3: "A key of size 2048
+/// bits or larger MUST be used"; ADR 0007) and at most 8192, the `rsa`
+/// crate's own maximum (ADR 0026 §2 step 8).
+///
+/// This is the crate's one definition. JWK import checks it, so every RSA
+/// key (JSON, PEM or DER) is in range at the trust boundary, and the JWS
+/// RSA family passes it to the `rsa` crate when it builds a key.
+pub(crate) const RSA_MODULUS_BITS: RangeInclusive<usize> = 2048..=8192;
 
 /// An RSA public key (`kty` `RSA`, RFC 7518 §6.3.1).
 ///
