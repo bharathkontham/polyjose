@@ -31,10 +31,12 @@ use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
 use crate::jwk::{Jwk, KeyMaterial};
 
+use super::alg::{self, Family};
+
 /// The RSA modulus sizes polyjose uses, in bits: at least 2048
-/// (RFC 7518 §3.3, §3.5, §4.2: "A key of size 2048 bits or larger MUST be
-/// used") and at most 8192, the `rsa` crate's own maximum
-/// (ADR 0026 §2 step 8).
+/// (RFC 7518 §3.3, §3.5 and, for RSA-OAEP-256, §4.3: "A key of size 2048
+/// bits or larger MUST be used") and at most 8192, the `rsa` crate's own
+/// maximum (ADR 0026 §2 step 8).
 pub(crate) const MODULUS_BITS: RangeInclusive<usize> = 2048..=8192;
 
 /// RSA signing is not offered in 0.1.0 (ADR 0021: RUSTSEC-2023-0071
@@ -90,10 +92,7 @@ pub(crate) fn verify(
     let KeyMaterial::Rsa(jwk_key) = key.material() else {
         return Err(Error::KeyAlgorithmMismatch);
     };
-    if !matches!(
-        alg,
-        A::RS256 | A::RS384 | A::RS512 | A::PS256 | A::PS384 | A::PS512
-    ) {
+    if alg::family(alg) != Some(Family::Rsa) {
         return Err(Error::KeyAlgorithmMismatch);
     }
     let public = public_key(jwk_key.n(), jwk_key.e())?;
@@ -134,7 +133,7 @@ fn pss_signature(signature: &[u8]) -> Result<pss::Signature> {
 ///
 /// `rsa::RsaPublicKey::new_with_size_limits` with [`MODULUS_BITS`] checks:
 ///
-/// - the modulus is 2048..=8192 bits (RFC 7518 §3.3, §3.5, §4.2;
+/// - the modulus is 2048..=8192 bits (RFC 7518 §3.3, §3.5, §4.3;
 ///   ADR 0026 §2 step 8), and odd (RFC 8017 §3.1: a product of odd primes);
 /// - `e` is odd and 2 < e < n (RFC 8017 §3.1);
 /// - `e` is at most 2^33 − 1. RFC 8017 §3.1 allows any e < n, but the
