@@ -18,23 +18,54 @@
 //!   rejects first with [`Error::InvalidKey`] as defence in depth (JWK
 //!   import already refuses one, ADR 0041 §4).
 
-use ed25519_dalek::{PUBLIC_KEY_LENGTH, Signature, VerifyingKey};
+use ed25519_dalek::{
+    PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, Signature, Signer as _, SigningKey, VerifyingKey,
+};
+use subtle::ConstantTimeEq as _;
+use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
 use crate::jwk::{Jwk, KeyMaterial, OkpCurve, OkpKey};
 
 /// Signs `signing_input` with Ed25519 (RFC 8032 §5.1.6; RFC 8037 §3.1,
-/// RFC 9864 §2.2), returning the 64-octet signature.
+/// RFC 9864 §2.2), returning the 64-octet signature `R || S`.
 ///
 /// Key binding has checked that `key` is an `OKP` `Ed25519` private key.
+/// Ed25519 is deterministic (RFC 8032 §5.1.6), so this uses no randomness.
+///
+/// The 32-octet seed `d` is copied only into a [`Zeroizing`] buffer, and
+/// the `SigningKey` built from it is wiped on drop (ed25519-dalek's
+/// `zeroize` feature; ADR 0007). Neither appears in an error.
 ///
 /// # Errors
 ///
-/// [`Error::InvalidKey`] if the key does not decode.
+/// - [`Error::InvalidKey`] if `d` is not 32 octets (RFC 8037 §2, RFC 8032
+///   §5.1.5), or is not the private key of `x` (RFC 8037 §2: a mismatched
+///   pair would sign for a key other than the published one).
+/// - [`Error::KeyAlgorithmMismatch`] only if key binding was bypassed:
+///   `alg` or `key` is not this family's, or `key` has no `d` (`alg.rs`
+///   contract).
 pub(crate) fn sign(alg: &SigningAlg, key: &Jwk, signing_input: &[u8]) -> Result<Vec<u8>> {
-    let _ = (alg, key, signing_input);
-    Err(Error::UnsupportedAlgorithm)
+    let okp = ed25519_key(alg, key)?;
+    let d = okp.d().ok_or(Error::KeyAlgorithmMismatch)?;
+    if d.len() != SECRET_KEY_LENGTH {
+        return Err(Error::InvalidKey("Ed25519 d must be 32 octets"));
+    }
+    let mut seed = Zeroizing::new([0u8; SECRET_KEY_LENGTH]);
+    seed.copy_from_slice(d);
+    let signing_key = SigningKey::from_bytes(&seed);
+    // RFC 8037 §2: `x` is the public key of `d` (RFC 8032 §5.1.5). The
+    // derived key is public, but subtle keeps the comparison free of
+    // data-dependent branches anyway.
+    let derived = signing_key.verifying_key();
+    if !bool::from(derived.as_bytes()[..].ct_eq(okp.x())) {
+        return Err(Error::InvalidKey("Ed25519 d does not match x"));
+    }
+    let signature = signing_key
+        .try_sign(signing_input)
+        .map_err(|_| Error::InvalidKey("Ed25519 signing failed"))?;
+    Ok(signature.to_bytes().to_vec())
 }
 
 /// Validates an Ed25519 signature over `signing_input` with strict
@@ -349,5 +380,84 @@ mod tests {
             Jwk::from_json(jwk.as_bytes()).err(),
             Some(Error::UnsupportedAlgorithm)
         );
+    }
+
+    #[test]
+    fn rfc8037_a4_signs_exactly() {
+        // RFC 8037 §A.4: Ed25519 is deterministic (RFC 8032 §5.1.6), so
+        // the A.1 private key gives exactly the published signature. The
+        // fully-specified `Ed25519` (RFC 9864 §2.2) is the same algorithm
+        // and gives the same octets.
+        let private = keys::ed25519_private("");
+        for alg in [A::EdDSA, A::Ed25519] {
+            let sig = sign(&alg, &private, A4_SIGNING_INPUT).unwrap();
+            assert_eq!(sig, a4_signature(), "{alg}");
+            assert_eq!(sig.len(), 64);
+        }
+    }
+
+    #[test]
+    fn signatures_round_trip_and_bind_the_input() {
+        let private = keys::ed25519_private("");
+        let public = keys::ed25519("");
+        for input in [&b""[..], b"x", &[0xff; 1000][..]] {
+            let sig = sign(&A::Ed25519, &private, input).unwrap();
+            assert_eq!(verify(&A::Ed25519, &public, input, &sig), Ok(()));
+            assert_eq!(verify(&A::EdDSA, &private, input, &sig), Ok(()));
+            assert_eq!(
+                verify(&A::Ed25519, &public, b"other", &sig),
+                Err(Error::InvalidSignature)
+            );
+        }
+    }
+
+    #[test]
+    fn a_private_key_that_does_not_match_x_is_an_invalid_key() {
+        // RFC 8037 §2: `d` is the private key of the public key `x`. A
+        // mismatched pair would emit signatures that never verify under the
+        // published `x`, so signing fails closed instead.
+        let other_d = crate::util::b64url_encode(&[7u8; 32]);
+        let mismatched = keys::ed25519(&format!(r#","d":"{other_d}""#));
+        assert_eq!(
+            sign(&A::EdDSA, &mismatched, A4_SIGNING_INPUT),
+            Err(Error::InvalidKey("Ed25519 d does not match x"))
+        );
+    }
+
+    #[test]
+    fn signing_needs_this_familys_private_key() {
+        // alg.rs contract: key binding refuses these first; the family still
+        // answers with KeyAlgorithmMismatch rather than panicking.
+        assert_eq!(
+            sign(&A::EdDSA, &keys::ed25519(""), A4_SIGNING_INPUT),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        assert_eq!(
+            sign(&A::ES256, &keys::ed25519_private(""), A4_SIGNING_INPUT),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        for key in [keys::p256_private(""), keys::oct(32, "")] {
+            assert_eq!(
+                sign(&A::Ed25519, &key, A4_SIGNING_INPUT),
+                Err(Error::KeyAlgorithmMismatch)
+            );
+        }
+    }
+
+    #[test]
+    fn a_private_key_of_the_wrong_length_never_imports() {
+        // RFC 8037 §2, RFC 8032 §5.1.5: `d` is the 32-octet seed. Import
+        // rejects any other length (InvalidKey), so `sign` only sees 32.
+        for len in [0, 31, 33, 64] {
+            let d = crate::util::b64url_encode(&vec![1u8; len]);
+            let jwk = format!(
+                r#"{{"kty":"OKP","crv":"Ed25519","x":"{}","d":"{d}"}}"#,
+                keys::ED25519_X
+            );
+            assert!(
+                matches!(Jwk::from_json(jwk.as_bytes()), Err(Error::InvalidKey(_))),
+                "{len}"
+            );
+        }
     }
 }
