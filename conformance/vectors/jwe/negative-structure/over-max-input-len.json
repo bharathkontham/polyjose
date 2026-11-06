@@ -1,0 +1,23 @@
+{
+  "source": "polyjose",
+  "description": "ADR 0026 §7 applied to JWE: an input longer than max_input_len is InvalidFormat before any parsing, here a malformed one that would otherwise be InvalidBase64",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.====.A",
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ],
+    "max_input_len": 100
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

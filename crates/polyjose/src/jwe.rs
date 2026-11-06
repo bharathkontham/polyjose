@@ -43,9 +43,9 @@
 //! |---|---|---|
 //! | limits | input over `max_input_len`; more than `max_recipients` | [`Error::InvalidFormat`] |
 //! | 1 | not 5 compact parts; a JSON shape RFC 7516 §7.2 forbids | [`Error::InvalidFormat`] |
-//! | 1 | JSON syntax, I-JSON, depth, size; duplicate members (ADR 0041 §1) | [`Error::InvalidJson`] |
+//! | 1, 3 | JSON syntax, I-JSON, depth, size; duplicate members (ADR 0041 §1); a protected header that is valid JSON but not an object, as for JWS (ADR 0026 §2 step 4) | [`Error::InvalidJson`] |
 //! | 2 | a part or member that is not strict base64url | [`Error::InvalidBase64`] |
-//! | 3–4 | header not an object, header parts not disjoint, `alg`/`enc` missing, `zip` outside the protected header, a registered parameter of the wrong type | [`Error::InvalidHeader`] |
+//! | 3–4 | header parts not disjoint, `alg`/`enc` missing, `zip` outside the protected header, a registered parameter of the wrong type | [`Error::InvalidHeader`] |
 //! | 5 | `crit` names something not understood | [`Error::UnknownCritical`] |
 //! | support | `alg`, `enc` or `zip` not implemented (checked over every recipient first) | [`Error::UnsupportedAlgorithm`] |
 //! | allow-list | `alg` or `enc` not in the policy | [`Error::AlgorithmNotAllowed`] |

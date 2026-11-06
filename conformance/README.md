@@ -25,7 +25,7 @@ The format is defined by [`schema.json`](schema.json) (JSON Schema draft 2020-12
 
 ## Members
 
-All five top-level members are required and no others are allowed. Every object the schema defines is closed (`additionalProperties: false`).
+The five members below are required, `features` is optional, and no others are allowed. Every object the schema defines is closed (`additionalProperties: false`).
 
 | Member | Meaning |
 |---|---|
@@ -34,6 +34,7 @@ All five top-level members are required and no others are allowed. Every object 
 | `operation` | One of the operations below. |
 | `input` | The operation's input. |
 | `expect` | `{ "ok": true, ...outputs }`, or `{ "ok": false, "error": <code> }` where `<code>` is one of the stable error codes (`Error::CODES` in `crates/polyjose/src/error.rs`). |
+| `features` | Optional. The polyjose cargo features the vector needs, each at most once: `"fixed-rng"` (the cargo feature `insecure-test-vectors`, ADR 0041 §3) or `"deflate"` (ADR 0017). See [Features](#features). |
 
 ## Operations
 
@@ -44,14 +45,16 @@ All five top-level members are required and no others are allowed. Every object 
 | `jwk.thumbprint` | `jwk` (a JSON object), `hash` (`"sha-256"`) | `thumbprint`, `thumbprint_uri` | yes |
 | `jws.sign` | `serialization`, `payload_b64u`, `detached`, `signers` ([below](#jwssign)) | `jws` (exact), or `verify_with` (round trip) | yes |
 | `jws.verify` | `jws`, `key`, `allowed_algs`, and optionally `detached_payload_b64u`, `max_input_len`, `max_signatures` ([below](#jwsverify)) | `payload_b64u`, `alg`, `signature_index` | yes |
-| `jwe.encrypt`, `jwe.decrypt`, `jwt.validate` | reserved | reserved | |
+| `jwe.encrypt` | `serialization`, `enc`, `plaintext_b64u`, `recipients`, and optionally `protected`, `protected_b64u`, `unprotected`, `aad_b64u`, `compress`, `rng_b64u` ([below](#jweencrypt)) | `jwe` (exact), or `decrypt_with` (round trip) | yes |
+| `jwe.decrypt` | `jwe`, `key`, `allowed_algs`, `allowed_enc`, and optionally `understood_crit`, `max_input_len`, `max_recipients`, `max_pbes2_count`, `max_decompressed_len` ([below](#jwedecrypt)) | `plaintext_b64u`, `recipient` | yes |
+| `jwt.validate` | reserved | reserved | |
 
 A reserved operation's input and output members are defined by the feature that implements it, which adds them to `schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails.
 
 ### How bytes are written
 
 - **Codec operations (`b64url.*`, `jwk.thumbprint`): lowercase hex** (`bytes_hex`: two digits per octet, `""` for none), never base64url, so the base64url codec is never checked against itself.
-- **`jws.*` operations: canonical base64url** (members ending in `_b64u`). This is deliberate: the codec is no longer under test there (it has its own vectors), and every JWS field is natively base64url (RFC 7515 §2), so the RFC's values are copied as printed. A runner decodes `payload_b64u` and `detached_payload_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome. `protected_b64u` is passed to the library as text, unchanged.
+- **`jws.*` and `jwe.*` operations: canonical base64url** (members ending in `_b64u`). This is deliberate: the codec is no longer under test there (it has its own vectors), and every JWS field is natively base64url (RFC 7515 §2), so the RFC's values are copied as printed. A runner decodes `payload_b64u` and `detached_payload_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome. `protected_b64u` is passed to the library as text, unchanged.
 
 ## `jws.sign`
 
@@ -102,9 +105,73 @@ Expect `{ "ok": true, "payload_b64u", "alg", "signature_index" }`: the payload, 
 - **JSON-object `jws`.** Pass the object's JSON text in any formatting. The serialized length then depends on the platform's JSON writer, so a `max_input_len` vector uses a compact `jws` or a limit far from the boundary. A JSON-object `jws` can't contain duplicate member names, because the vector file itself must be I-JSON. Duplicate members can therefore be tested only inside a base64url-encoded protected header.
 - Map `serialization` to the binding's compact, flattened and general sign functions, `detached` to its detached option, and the limits to its verify options. Never substitute defaults of your own: an absent limit means the library default (ADR 0030).
 
+## `jwe.encrypt`
+
+Encrypts `plaintext_b64u` (RFC 7516 §5.1) in one serialization.
+
+| Input member | Meaning |
+|---|---|
+| `serialization` | `"compact"` (RFC 7516 §7.1), `"flattened"` (§7.2.2) or `"general"` (§7.2.1). Unlike `jws.sign`, the schema does not limit the recipients per serialization: the library's refusal (`InvalidFormat`) is what such a vector tests. |
+| `enc` | The content encryption algorithm (RFC 7516 §4.1.2), passed as given. |
+| `plaintext_b64u` | The plaintext octets. |
+| `recipients` | One or more recipients, in output order. Each is `{ "alg", "key", "header"?, "apu_b64u"?, "apv_b64u"?, "p2c"?, "p2s_len"? }`: the key management `alg`, the recipient's JWK (a public key, or the `oct` key of `dir`, A\*KW, A\*GCMKW or the PBES2 password), its Per-Recipient Unprotected Header (§7.2.1, JSON only), the ECDH-ES `apu`/`apv` octets (RFC 7518 §4.6.1.2–§4.6.1.3), and the PBES2 iteration count and salt length (§4.8.1.1–§4.8.1.2; library defaults when absent). |
+| `protected` | Extra JWE Protected Header parameters (`typ`, `cty`, `kid`, …). polyjose sets `alg`, `enc`, `zip` and the key management parameters itself, and refuses them here (`InvalidHeader`). For compact and flattened output, `alg` and the key management parameters go in the protected header; for general, in each recipient's header (as RFC 7520 §5.13). |
+| `protected_b64u` | The exact encoded protected header to reproduce. Used verbatim for the AAD and the output only if it decodes to a header JSON-equal to the one polyjose builds (member order aside), otherwise `InvalidFormat`. Needs `"fixed-rng"`. |
+| `unprotected` | The JWE Shared Unprotected Header (§7.2.1), JSON only. |
+| `aad_b64u` | The JWE AAD octets (§7.2.1), JSON only. |
+| `compress` | `true` compresses with `zip: "DEF"` (§4.1.3). Needs `"deflate"`. |
+| `rng_b64u` | The octets the encryption draws instead of the OS CSPRNG, in the documented order: the CEK (when the `alg` needs a random one), then each recipient's key management values in order (ECDH ephemeral key, PBES2 salt, AES-GCM key wrap IV), then the content IV. Every octet must be drawn; a leftover fails the vector, so the vector pins the order. Needs `"fixed-rng"`. |
+
+The runner calls the library's reproducible encryption when `rng_b64u` or `protected_b64u` is present (both need `"fixed-rng"`, and a vector using them without listing it is schema-invalid), and its ordinary encrypt on the OS CSPRNG otherwise.
+
+Expect one of:
+
+- **`{ "ok": true, "jwe": <jwe> }`** for a reproducible encryption: the exact output. A compact JWE is a string, compared exactly; a JSON JWE is an object, compared as a JSON value.
+- **`{ "ok": true, "decrypt_with": { "key", "allowed_algs", "allowed_enc" } }`** for an encryption on the OS CSPRNG. The runner checks its own output: it has the requested serialization's shape (five compact parts; `ciphertext` without `recipients` for flattened; one `recipients` entry per recipient for general), it decrypts with `decrypt_with`, and the plaintext equals `plaintext_b64u`.
+- **`{ "ok": false, "error": <code> }`.**
+
+## `jwe.decrypt`
+
+Decrypts a JWE with one key and the allow-lists (RFC 7516 §5.2, RFC 8725 §3.1), under the error order of the JWE plan (ADR 0026 §2 applied to JWE): limits, structure, base64url, headers, `crit`, then the support check over every recipient, the allow-list, the key binding, and only then the cryptography, after which every failure is the one detail-free `DecryptionFailed` (RFC 7516 §11.4–§11.5).
+
+| Input member | Meaning |
+|---|---|
+| `jwe` | A **string** is a compact JWE (RFC 7516 §7.1). An **object** is a flattened or general JSON JWE (§7.2); the runner passes its JSON text to the library's JSON decrypt. Otherwise unconstrained. |
+| `key` | The decrypting JWK, a JSON object. |
+| `allowed_algs`, `allowed_enc` | The allow-lists, arrays of names passed as given. An empty list is `AlgorithmNotAllowed`. An unknown or unimplemented name (`RSA1_5`, `RSA-OAEP`, `RSA-OAEP-256`) may be listed, but never decrypts: the support check comes first (`UnsupportedAlgorithm`). |
+| `understood_crit` | Optional. The `crit` extension names the caller understands (§4.1.13); none when absent. |
+| `max_input_len`, `max_recipients`, `max_pbes2_count`, `max_decompressed_len` | Optional limits; absent means the library default (1 MiB, 16, 10,000 (ADR 0023), 250,000 (ADR 0017)). |
+
+Expect `{ "ok": true, "plaintext_b64u", "recipient" }`: the plaintext and the index of the recipient that decrypted (`0` for compact and flattened; for general, the first in array order whose key management and content decryption succeed). Or `{ "ok": false, "error": <code> }`.
+
+## Rules for `jwe.*` runners
+
+- **Step order**, the first error being the outcome:
+  1. `jwe.encrypt`: for each recipient in order, import `key`, then parse `header`; then parse `protected`, then `unprotected`. `jwe.decrypt`: import `key`, then build the policy from the allow-lists and the optional members.
+  2. Call the library.
+- **One fault per failure vector**, as for `jws.*`; the precedence vectors put every fault inside `jwe` itself.
+- Map `serialization` to the binding's compact and JSON encrypt functions, and the limits to its decrypt policy. Never substitute defaults of your own.
+
+## Features
+
+A vector may need a cargo feature of polyjose, written in `features` as:
+
+| Name in a vector | Cargo feature | Needed by |
+|---|---|---|
+| `"fixed-rng"` | `insecure-test-vectors` (ADR 0041 §3) | a byte-exact `jwe.encrypt` (`rng_b64u`, `protected_b64u`) |
+| `"deflate"` | `deflate` (ADR 0017) | `zip` (`compress`, and the `zip` decrypt vectors) |
+
+The test RNG's cargo name may appear only in `crates/polyjose`, `scripts/check-test-vectors-off.sh` and Markdown (that script fails the build otherwise, so no build file can switch it on, ADR 0005); vector files therefore use `"fixed-rng"`. A runner whose build does not enable every listed feature:
+
+- still validates the vector against the schema, and fails it if invalid;
+- does not run it, and reports it **SKIPPED with the missing feature names** (the Rust runner prints the cargo name: ``<file>: SKIPPED (needs feature `insecure-test-vectors`)``);
+- never counts it as passing.
+
+The bindings never enable `insecure-test-vectors` (ADR 0005), so `fixed-rng` vectors are Rust-only; every RFC output they reproduce also has a `jwe.decrypt` vector that every platform runs.
+
 ## Binding readiness
 
-Every vector under `jws-*/` and `third_party/**/jws/`, and every `jws.*` vector anywhere, must be readable by every binding's own JSON parser unchanged. The Rust runner's `jws_vectors_are_binding_ready` test checks it:
+Every vector under `jws-*/`, `third_party/**/jws/` and `jwe/`, and every `jws.*` or `jwe.*` vector anywhere, must be readable by every binding's own JSON parser unchanged. The Rust runner's `jws_vectors_are_binding_ready` and `jwe_vectors_are_binding_ready` tests check it:
 
 - every number is a plain integer (no fraction, no exponent) of magnitude at most 2^32 − 1 (`count` in the schema is a `u32`, as in ADR 0030), so no binding needs a 64-bit-only type or reads a double;
 - octets are base64url strings (`*_b64u`), never `*_hex` or raw bytes, and every one a runner decodes is canonical.
@@ -115,7 +182,7 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 
 - load every `*.json` file under `vectors/`, recursively, `third_party/` included;
 - **fail** on a file that is not schema-valid, including a misspelled or unknown member anywhere: every object the schema defines is closed;
-- **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. Nothing is skipped;
+- **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks, reported SKIPPED by name ([Features](#features));
 - **fail** when it finds no vector files, so a wrong path can't pass vacuously;
 - run every vector and report every failure, not only the first, each naming the file and its `source`.
 
@@ -124,6 +191,7 @@ The Rust runner also checks `schema.json` against its own tables (`schema_and_ru
 ## Writing vectors
 
 - Name files after what they check, grouped by operation: `vectors/b64url/encode-rfc4648-10-foo.json`, `vectors/jwk-thumbprint/reject-oct-k-padded.json`.
+- JWE vectors live under `jwe/`, one directory per task and kind: `jwe/compact/` (RFC 7516 Appendix A, RFC 7520 §5.6 and §5.8, round trips), `jwe/negative-structure/` (the error contract, one vector per rule; `source` "polyjose" or the RFC whose vector is refused), and the per-family and JSON directories of the later JWE tasks. RFC 7520 values are generated from the vendored ietf-jose cookbook (`crates/polyjose/tests/third_party/ietf-jose-cookbook/`), not transcribed.
 - JWS vectors are grouped by origin: `jws-rfc7515/` (RFC 7515 Appendix A and F; `source` "RFC 7515 App. A.x" or "RFC 7515 App. F"), `jws-rfc7797/`, `jws-rfc8037/`, `jws-oracle/` (generated independently of polyjose; `source` names the tool and its versions), `jws-negative/` (`source` names the RFC section, CVE or ADR enforced), and `third_party/rfc7520/jws/` (the RFC 7520 §4 cookbook).
 - Check every expected value against the RFC text yourself. If the RFC doesn't print the value, derive it independently of polyjose (for example with Python's `hashlib` over the hand-built input) and say so in `description`.
 - **Deterministic algorithms** (HMAC, EdDSA) also have `sign` vectors with an exact expected output. **Randomized ones** (ECDSA, JWE) are checked by round trip (`verify_with`) plus a `verify`/`decrypt` vector of the RFC's published output. RS\*/PS\* are verify-only (ADR 0021): only `verify` vectors, and `sign` vectors that expect `UnsupportedAlgorithm`.

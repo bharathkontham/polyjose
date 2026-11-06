@@ -1,0 +1,30 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §7.1: a compact JWE has one recipient; two is InvalidFormat",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "eA",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "AQEBAQEBAQEBAQEBAQEBAQ"
+        }
+      },
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "AQEBAQEBAQEBAQEBAQEBAQ"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}
