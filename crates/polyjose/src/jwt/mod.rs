@@ -16,6 +16,19 @@
 //! policy's clock: `SystemClock` where std has one, [`FixedClock`] in
 //! tests (ADR 0028).
 //!
+//! **What nesting proves.** The outer JWE gives confidentiality, and the
+//! inner JWS's signature authenticates the issuer (RFC 7519 §11.2). A
+//! nested JWT does not prove that the issuer encrypted it. Anyone able to
+//! decrypt it can take out the inner JWS, which is an ordinary signed JWT,
+//! and present it to [`verify`]. With a key management mode that anyone
+//! can use (ECDH-ES, RSA-OAEP-256 to a published key, or a known PBES2
+//! password), anyone can also encrypt a signed JWT of the issuer to the
+//! recipient. Both layers are still validated with the caller's keys
+//! (RFC 8725 §3.3), so nothing is forged. A deployment that must accept a
+//! token only in nested form makes that visible inside the signed inner
+//! JWT, with a distinct explicit `typ` or a distinct `aud`, and checks it
+//! in the policy (RFC 8725 §3.11–§3.12). See [`decrypt_nested`].
+//!
 //! [`verify`]: crate::jwt::verify
 //! [`Keys`]: crate::jwt::Keys
 //! [`Policy`]: crate::jwt::Policy

@@ -19,6 +19,27 @@
 //! might quote input, ever reaches an `Error`. JWE decryption has a single,
 //! detail-free failure, [`Error::DecryptionFailed`] (RFC 7516 §11.5).
 //!
+//! # Codes are for logs, not for clients
+//!
+//! A code says exactly which check failed. That is what logs and
+//! diagnostics need, but don't pass it on to whoever presented the token.
+//! A server should answer every rejected token with one opaque failure,
+//! such as the `invalid_token` error of an OAuth bearer-token response
+//! (RFC 6750 §3.1), and keep the code in its own logs.
+//!
+//! Returning codes to clients lets an unauthenticated token probe the
+//! verifier's configuration. Verifying against a JWK Set, for example
+//! (ADR 0029 §4):
+//!
+//! - [`Error::NoMatchingKey`] says that no member serves the token's
+//!   `kid` and `alg`, while [`Error::InvalidSignature`] says that one does;
+//! - [`Error::InvalidKey`] says that a matching `oct` member without a
+//!   JWK `alg` is shorter than the hash output of the token's `HS*`
+//!   (RFC 7518 §3.2).
+//!
+//! The codes stay deterministic and stable regardless (ADR 0007); only
+//! what reaches the client should be opaque.
+//!
 //! # Adding a variant
 //!
 //! Give it a doc comment citing its RFC section, add its code to

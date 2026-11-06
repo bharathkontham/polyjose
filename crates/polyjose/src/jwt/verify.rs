@@ -22,6 +22,52 @@ use super::{Claims, Policy};
 /// or `x5c` never supplies one, and `kid` only selects among the set's
 /// members (RFC 8725 §3.10; ADR 0026 §2, ADR 0029 §2).
 ///
+/// **Never allow `HS*` with a remote or untrusted JWK Set.** A set may mix
+/// `oct` members with public keys, and [`JwkSet::from_json`] accepts both.
+/// With an `HS*` algorithm in the policy's allow-list, any `oct` member
+/// verifies an HMAC. So if the set is a published document (a `jwks_uri`,
+/// say) or comes from a party that is not trusted with your secrets,
+/// whoever published that member, or can read it, can sign tokens that
+/// verify. This is the algorithm confusion of RFC 8725 §2.1 in another
+/// form. Allow `HS*` only with `oct` keys the application holds as
+/// secrets, and verify a remote set's tokens with asymmetric algorithms
+/// only (RFC 8725 §3.1).
+///
+/// **With several keys, pass a set.** [`Keys::One`] doesn't compare the
+/// header `kid` (ADR 0029 §1). Don't pick "the" key yourself from the
+/// header's `kid`, which is not yet verified: pass the keys as a
+/// [`JwkSet`] in [`Keys::Set`]. Its candidate filter compares `kid`
+/// exactly, checks each member's family, JWK `alg`, `use` and `key_ops`,
+/// and bounds the work per token (ADR 0029 §2, §4).
+///
+/// ```
+/// use polyjose::Error;
+/// use polyjose::jwa::SigningAlg;
+/// use polyjose::jwk::{Jwk, JwkSet};
+/// use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy};
+///
+/// // The application's own HMAC secret (RFC 7515 Appendix A.1.1), signed
+/// // under one `kid` and held under another.
+/// const K: &str = "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow";
+/// let signer = Jwk::from_json(format!(r#"{{"kty":"oct","kid":"someone-else","k":"{K}"}}"#).as_bytes())?;
+/// let mine = Jwk::from_json(format!(r#"{{"kty":"oct","kid":"k1","k":"{K}"}}"#).as_bytes())?;
+/// let set = JwkSet::from_json(format!(r#"{{"keys":[{{"kty":"oct","kid":"k1","k":"{K}"}}]}}"#).as_bytes())?;
+///
+/// let mut claims = Claims::new();
+/// claims.exp = NumericDate::from_secs(1_300_819_380);
+/// let token = jwt::sign(&claims, &IssueOptions::new(SigningAlg::HS256), &signer)?;
+///
+/// let clock = FixedClock(1_300_819_320);
+/// let algs = [SigningAlg::HS256];
+/// let policy = Policy::new(&clock, &algs)?;
+/// // One key: the header's `kid: "someone-else"` is not compared.
+/// assert!(jwt::verify(&token, Keys::One(&mine), &policy).is_ok());
+/// // A set: no member has that `kid`.
+/// let by_set = jwt::verify(&token, Keys::Set(&set), &policy);
+/// assert_eq!(by_set.unwrap_err(), Error::NoMatchingKey);
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+///
 /// ```
 /// use polyjose::jwk::Jwk;
 /// use polyjose::jwt::Keys;
@@ -35,10 +81,16 @@ use super::{Claims, Policy};
 #[non_exhaustive]
 pub enum Keys<'a> {
     /// A single key. ADR 0026 §2 step 8 binds it to the header `alg`; its
-    /// `kid` is not compared (ADR 0029 §1).
+    /// `kid` is not compared (ADR 0029 §1), so a token whose header names
+    /// another `kid` is still checked against this key. Callers with
+    /// several keys should pass them as [`Keys::Set`] rather than choose
+    /// one by the header's unverified `kid`.
     One(&'a Jwk),
     /// A JWK Set (RFC 7517 §5): candidates are selected by `alg`, `use`,
     /// `key_ops` and `kid`, and tried in set order (ADR 0029 §2–§4).
+    ///
+    /// The set may hold `oct` members, so never allow `HS*` with a remote
+    /// or untrusted set (RFC 8725 §2.1, §3.1; see [`Keys`]).
     Set(&'a JwkSet),
 }
 
@@ -105,6 +157,13 @@ pub struct VerifiedJwt {
 /// `typ`, `cty`, `kid` and `crit` are read from the JWS Protected Header
 /// only, which the signature covers (ADR 0049 §2); a compact JWS has no
 /// other header (RFC 7515 §7.1).
+///
+/// **Opaque to clients.** The error codes below are for logs and
+/// diagnostics. A server should answer the client with one opaque
+/// "invalid token" whatever the code (RFC 6750 §3.1 `invalid_token`), and
+/// not reveal which check failed: against a JWK Set, the code alone tells
+/// whether a `kid` exists (see
+/// [the error module](crate::error#codes-are-for-logs-not-for-clients)).
 ///
 /// # Errors
 ///
