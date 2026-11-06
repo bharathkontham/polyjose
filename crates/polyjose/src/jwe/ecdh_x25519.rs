@@ -387,4 +387,62 @@ mod tests {
             }
         );
     }
+
+    /// The low-order u-coordinates, whose X25519 product is 0 for every
+    /// clamped scalar (the clamping clears the cofactor, RFC 7748 §5): 0, 1,
+    /// the two points of order 8, p - 1, and p and p + 1 (non-canonical 0
+    /// and 1, reduced mod p by RFC 7748 §5). Each is also a Wycheproof
+    /// `LowOrderPublic` case.
+    const LOW_ORDER_U: [&str; 7] = [
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+        "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    ];
+
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// RFC 7748 §6.1: both parties compute the same non-zero K from
+            /// any two private keys, and a public key made by `generate` is
+            /// never low order (the clamped scalar is a non-zero multiple
+            /// of the cofactor times the base point).
+            #[test]
+            fn agreement_is_symmetric(a in any::<[u8; 32]>(), b in any::<[u8; 32]>()) {
+                let mut rng = FixedRng::new([a, b].concat());
+                let (alice, alice_public) = generate(&mut rng).unwrap();
+                let (bob, bob_public) = generate(&mut rng).unwrap();
+                let k = agree(&alice, &bob_public).unwrap();
+                prop_assert_eq!(*k, *agree(&bob, &alice_public).unwrap());
+                prop_assert_ne!(*k, [0u8; 32]);
+            }
+
+            /// RFC 7748 §6.1, RFC 8725 §3.4: a low-order peer key is
+            /// rejected whatever the private key, with or without the
+            /// masked top bit set (RFC 7748 §5).
+            #[test]
+            fn low_order_public_keys_are_always_rejected(
+                secret in any::<[u8; 32]>(),
+                which in 0..LOW_ORDER_U.len(),
+                top_bit in any::<bool>(),
+            ) {
+                let mut u = hex32(LOW_ORDER_U[which]);
+                if top_bit {
+                    u[31] |= 0x80;
+                }
+                prop_assert_eq!(
+                    agree(&StaticSecret::from(secret), &PublicKey::from(u)),
+                    Err(Error::InvalidKey("X25519 shared secret is all-zero"))
+                );
+            }
+        }
+    }
 }
