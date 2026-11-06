@@ -1,0 +1,18 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "PEM import of a SEC1 ECPrivateKey without the optional [1] publicKey (RFC 5915 §3): x and y are derived from d; expected JWK from openssl pkey -text.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN EC PRIVATE KEY-----\nMDECAQEEIBxGY+85tQvL4khDw3C+H/jb8L5rsCDJr4hQ7viKTcxsoAoGCCqGSM49\nAwEH\n-----END EC PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "4_tW9r66U158ob7wv5o8ljKr0F95GKj5GeZL3aknNPk",
+      "y": "xDD1-yl9uzlsaGbKwYTBSZMJWiUkXxquI0m7ftzpYnU",
+      "d": "HEZj7zm1C8viSEPDcL4f-NvwvmuwIMmviFDu-IpNzGw"
+    }
+  }
+}

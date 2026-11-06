@@ -1,0 +1,19 @@
+{
+  "source": "RFC 9500 §2.3",
+  "description": "PEM export of RFC 9500 testECCP384 as SEC1, byte for byte the RFC text.",
+  "operation": "keys.export_pem",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-384",
+      "x": "WwkBuIUjKW65GdUP-hqcs3S8TUCVhigr_soRsdla27VHNK9XC_grcijPImvPTCXd",
+      "y": "vP47GjrTlDDv92Ph1o0uFR2Rcgt3lbWNprNGOWE6j7m1qNpIxnRxF_mRnoQk837I",
+      "d": "4lYzKN-r9oGIYGuRMkKBwdWKRFZDGwnVELNf7MnzB8oYIoRvomcTcamoG6wONXSd"
+    },
+    "format": "sec1"
+  },
+  "expect": {
+    "ok": true,
+    "pem": "-----BEGIN EC PRIVATE KEY-----\nMIGkAgEBBDDiVjMo36v2gYhga5EyQoHB1YpEVkMbCdUQs1/syfMHyhgihG+iZxNx\nqagbrA41dJ2gBwYFK4EEACKhZANiAARbCQG4hSMpbrkZ1Q/6GpyzdLxNQJWGKCv+\nyhGx2VrbtUc0r1cL+CtyKM8ia89MJd28/jsaOtOUMO/3Y+HWjS4VHZFyC3eVtY2m\ns0Y5YTqPubWo2kjGdHEX+ZGehCTzfsg=\n-----END EC PRIVATE KEY-----\n"
+  }
+}

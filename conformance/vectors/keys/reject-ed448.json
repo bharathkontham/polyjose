@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects an Ed448 PKCS#8 (id-Ed448, RFC 8410 §3) made by OpenSSL 4.1.0: Ed448 is not supported (ADR 0006).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMEcCAQAwBQYDK2VxBDsEOZYsma3fqV617zem0bTofBXxFxATR2tHRKQ4pOumvpux\n1NsU76Up3LxsKwgVWlNpIyoL1/xybapg4Q==\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

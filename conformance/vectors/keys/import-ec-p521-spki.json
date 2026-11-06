@@ -1,0 +1,17 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "PEM import of a P-521 public key as SPKI (RFC 5480 §2); expected JWK from openssl pkey -text.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PUBLIC KEY-----\nMIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQB1hAONSlcR+kOWIE+tKxYAoYriflO\nYGOeCJLSOXjMVNjgmjyHvVPBW8o/0V1sgKZ6dyqtq+R4tK0zSUOlEDavmxcAAqXf\nXT7C7ESnfERZNwx33EOuBJKRgjcTln4VkFF3tHq3vygur7QaMFvLQtgoP0j2iUsv\nE55w/lljU720NxedDPM=\n-----END PUBLIC KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AdYQDjUpXEfpDliBPrSsWAKGK4n5TmBjngiS0jl4zFTY4Jo8h71TwVvKP9FdbICmencqravkeLStM0lDpRA2r5sX",
+      "y": "AAKl310-wuxEp3xEWTcMd9xDrgSSkYI3E5Z-FZBRd7R6t78oLq-0GjBby0LYKD9I9olLLxOecP5ZY1O9tDcXnQzz"
+    }
+  }
+}

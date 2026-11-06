@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7517 App. A.1",
+  "description": "PEM import of the RFC 7517 A.1 RSA public key as a PKCS#1 RSA PUBLIC KEY (RFC 8017 App. A.1.1).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN RSA PUBLIC KEY-----\nMIIBCgKCAQEA0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4\ncbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc/BJECPebWKRXjBZCiFV4n3oknjhMst\nn64tZ/2W+5JsGY4Hc5n9yBXArwl93lqt7/RN5w6Cf0h4QyQ5v+65YGjQR0/FDW2Q\nvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbIS\nD08qNLyrdkt+bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ+G/xBniIqbw\n0Ls1jF44+csFCur+kEgU8awapJzKnqDKgwIDAQAB\n-----END RSA PUBLIC KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "RSA",
+      "n": "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+      "e": "AQAB"
+    }
+  }
+}
