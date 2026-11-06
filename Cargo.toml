@@ -67,5 +67,11 @@ ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["zer
 # ignores the advisory only while that guard holds. Exact pin on a release candidate: the 0.10 API
 # may still change before 0.10.0, so moving to a newer rc is its own PR.
 rsa = { version = "=0.10.0-rc.20", default-features = false }
-# Still to come with their features: x25519-dalek 3, aes-gcm 0.11, aes-kw 0.3, cbc 0.2,
-# pbkdf2 0.13 (feature 0003).
+# X25519 (RFC 7748) keys for the OKP `X25519` curve (RFC 8037 §2, §3.2): key generation derives the
+# public `x` from a 32-octet private key (RFC 7748 §6.1), and feature 0003 runs ECDH-ES on it.
+# `static_secrets` gives `StaticSecret`, the reusable private key a JWK holds (an `EphemeralSecret`
+# cannot be built from stored bytes); `zeroize` wipes it on drop. `precomputed-tables` (a default)
+# stays off, as for ed25519-dalek. It reuses ed25519-dalek's curve25519-dalek, so it adds only itself
+# to the tree.
+x25519-dalek = { version = "=3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
+# Still to come with their features: aes-gcm 0.11, aes-kw 0.3, cbc 0.2, pbkdf2 0.13 (feature 0003).

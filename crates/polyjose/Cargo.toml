@@ -31,6 +31,7 @@ p384.workspace = true
 p521.workspace = true
 k256.workspace = true
 ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
 rsa.workspace = true
 
 [dev-dependencies]
