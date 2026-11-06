@@ -21,7 +21,9 @@ use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
 use crate::{Error, Result};
 
 /// hLen of SHA-256 in octets: the length of the OAEP seed (RFC 8017
-/// §7.1.1 step 2.d).
+/// §7.1.1 step 2.d). The `rsa` crate draws the seed itself; only the tests
+/// count it.
+#[cfg(test)]
 const SEED_LEN: usize = 32;
 
 /// The smallest RSA modulus RSA-OAEP-256 accepts, in bits (RFC 7518 §4.3:
