@@ -500,7 +500,8 @@ fn check_reproducible(given: &str, built: &Header) -> Result<()> {
 ///    `crit` is well formed and protected ([`jose_header`]);
 /// 3. `enc` and every `alg` implemented for encryption →
 ///    [`Error::UnsupportedAlgorithm`] (`RSA-OAEP` and `RSA1_5` are not,
-///    ADRs 0021, 0022);
+///    ADRs 0021, 0022), as is `zip: DEF` when `compress` is asked for
+///    without the `deflate` feature (ADR 0017 §5, ADR 0030 §4);
 /// 4. every key bound to its `alg` ([`RecipientKey::from_jwk`]) →
 ///    [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`];
 /// 5. every PBES2 recipient's `p2c` and `p2s` length in range
@@ -571,6 +572,12 @@ pub(crate) fn encrypt(
             return Err(Error::UnsupportedAlgorithm);
         }
         modes.push(keymgmt::mode(&recipient.alg).ok_or(Error::UnsupportedAlgorithm)?);
+    }
+    // RFC 7516 §4.1.3: `Encryptor::compress` exists in every build (ADR
+    // 0030 §4), but `zip: DEF` needs the `deflate` codec (ADR 0017 §5).
+    // Refused here, with the other support checks, so nothing is drawn.
+    if encryptor.compress && !cfg!(feature = "deflate") {
+        return Err(Error::UnsupportedAlgorithm);
     }
     let random_cek = modes.iter().all(|m| m.has_random_cek());
     if !random_cek && recipients.len() > 1 {
@@ -1390,6 +1397,32 @@ mod tests {
             });
             assert_eq!((code(out), n), ("InvalidKey", 0), "case {i}");
             assert_eq!(rng.remaining(), 128, "case {i}: drew before the checks");
+        }
+    }
+
+    #[cfg(not(feature = "deflate"))]
+    #[test]
+    fn compress_without_deflate_is_refused_before_any_draw() {
+        // ADR 0030 §4, ADR 0017 §5: no codec, so `compress()` is a support
+        // failure, raised before the CEK (draw 1), key management (draw 2)
+        // or the IV (draw 3), in every form and for direct and key-wrapping
+        // modes alike.
+        let k = oct(&[1; 16], "");
+        for alg in [A::Dir, A::A128KW] {
+            let e = compact_encryptor(alg.clone(), &k).compress();
+            for form in [
+                Serialization::Compact,
+                Serialization::Json(JsonForm::Flattened),
+                Serialization::Json(JsonForm::General),
+            ] {
+                let mut rng = FixedRng::new([0u8; 64]);
+                assert_eq!(
+                    code(encrypt(&e, b"x", form, &mut rng, None)),
+                    "UnsupportedAlgorithm",
+                    "{alg:?} {form:?}"
+                );
+                assert_eq!(rng.remaining(), 64, "{alg:?} {form:?}: drew first");
+            }
         }
     }
 

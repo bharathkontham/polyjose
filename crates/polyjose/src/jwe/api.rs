@@ -422,8 +422,9 @@ impl Encryptor {
     /// `compress` option is the same on every platform (ADR 0030 §4). The
     /// codec is the off-by-default `deflate` feature (ADR 0017): without
     /// it, encrypting after `compress()` fails with
-    /// [`Error::UnsupportedAlgorithm`] and never produces an uncompressed
-    /// JWE in its place (ADR 0017 §5, ADR 0030 §4).
+    /// [`Error::UnsupportedAlgorithm`], among the support checks and so
+    /// before anything is drawn from the random source, and never produces
+    /// an uncompressed JWE in its place (ADR 0017 §5, ADR 0030 §4).
     #[must_use]
     pub fn compress(mut self) -> Self {
         self.compress = true;
