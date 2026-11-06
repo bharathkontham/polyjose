@@ -195,6 +195,17 @@ pub enum Error {
     /// stay [`Error::InvalidBase64`]. The detail names the rule, never the
     /// input.
     InvalidFormat(&'static str),
+
+    /// No key of the caller's JWK Set may verify this JWS (ADR 0029 §4).
+    ///
+    /// Raised by JWT verification against a JWK Set when no member is a
+    /// candidate for the JWS Protected Header's `alg` and `kid`: none has
+    /// a matching key type and curve, JWK `alg`, `use`, `key_ops` and
+    /// `kid` (RFC 7515 §4.1.4, §6; RFC 7517 §4.2–§4.5, §5; RFC 8725 §3.1),
+    /// or more members match than the policy's candidate bound, which is
+    /// checked before any signature is computed (ADR 0029 §4). Neither the
+    /// `kid` nor any key is echoed.
+    NoMatchingKey,
 }
 
 impl Error {
@@ -218,6 +229,7 @@ impl Error {
         "InvalidClaim",
         "RandomnessUnavailable",
         "InvalidFormat",
+        "NoMatchingKey",
     ];
 
     /// The stable, cross-platform code for this error (ADR 0007).
@@ -241,6 +253,7 @@ impl Error {
             Error::InvalidClaim(_) => "InvalidClaim",
             Error::RandomnessUnavailable => "RandomnessUnavailable",
             Error::InvalidFormat(_) => "InvalidFormat",
+            Error::NoMatchingKey => "NoMatchingKey",
         }
     }
 }
@@ -269,6 +282,7 @@ impl core::fmt::Display for Error {
             Error::InvalidClaim(detail) => write!(f, "invalid claim: {detail}"),
             Error::RandomnessUnavailable => f.write_str("randomness unavailable"),
             Error::InvalidFormat(detail) => write!(f, "invalid format: {detail}"),
+            Error::NoMatchingKey => f.write_str("no matching key"),
         }
     }
 }
@@ -307,6 +321,7 @@ mod tests {
             Error::InvalidClaim("aud"),
             Error::RandomnessUnavailable,
             Error::InvalidFormat("compact JWS must have three parts"),
+            Error::NoMatchingKey,
         ]
     }
 
@@ -328,6 +343,7 @@ mod tests {
             Error::InvalidClaim(_) => 12,
             Error::RandomnessUnavailable => 13,
             Error::InvalidFormat(_) => 14,
+            Error::NoMatchingKey => 15,
         }
     }
 
@@ -351,6 +367,7 @@ mod tests {
             "InvalidClaim",
             "RandomnessUnavailable",
             "InvalidFormat",
+            "NoMatchingKey",
         ];
         let actual: Vec<&str> = one_of_each().iter().map(Error::code).collect();
         assert_eq!(actual, expected);
@@ -401,6 +418,7 @@ mod tests {
             "invalid claim: aud",
             "randomness unavailable",
             "invalid format: compact JWS must have three parts",
+            "no matching key",
         ];
         let actual: Vec<String> = one_of_each().iter().map(Error::to_string).collect();
         assert_eq!(actual, expected);

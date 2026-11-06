@@ -305,7 +305,8 @@
         "TokenNotYetValid",
         "InvalidClaim",
         "RandomnessUnavailable",
-        "InvalidFormat"
+        "InvalidFormat",
+        "NoMatchingKey"
       ]
     },
     "failure": {
