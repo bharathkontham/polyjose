@@ -904,4 +904,78 @@ mod standard_tests {
             assert_eq!(out.capacity(), n, "{n} octets");
         }
     }
+
+    /// Exhaustive comparison with `base64ct::Base64` (dev-dependency oracle,
+    /// ADR 0016 §5) over every string of up to three characters, and every
+    /// four-character string over a reduced alphabet, on accept/reject and
+    /// the decoded octets.
+    #[test]
+    fn exhaustive_short_strings_agree_with_base64ct() {
+        use base64ct::{Base64, Encoding};
+        let full: Vec<char> = "ABCDQRSTwxyz0189+/=-_ ".chars().collect();
+        let mut strings = vec![String::new()];
+        for &a in &full {
+            strings.push(format!("{a}"));
+            for &b in &full {
+                strings.push(format!("{a}{b}"));
+                for &c in &full {
+                    strings.push(format!("{a}{b}{c}"));
+                    for &d in &full {
+                        strings.push(format!("{a}{b}{c}{d}"));
+                    }
+                }
+            }
+        }
+        for s in strings {
+            assert_eq!(decode(&s).ok(), Base64::decode_vec(&s).ok(), "{s:?}");
+        }
+    }
+
+    mod properties {
+        use super::{decode, encode};
+        use base64ct::{Base64, Encoding};
+        use proptest::prelude::*;
+
+        /// A valid oracle encoding with one character replaced: mostly
+        /// near-miss inputs (bad symbol, misplaced `=`, bad pad bits).
+        fn mutated_encoding() -> impl Strategy<Value = String> {
+            (
+                proptest::collection::vec(any::<u8>(), 1..64),
+                any::<prop::sample::Index>(),
+                prop::sample::select("AQgw+/RSTUVf09=-_ \n.".chars().collect::<Vec<char>>()),
+            )
+                .prop_map(|(bytes, at, with)| {
+                    let encoded = Base64::encode_string(&bytes);
+                    let i = at.index(encoded.len());
+                    format!("{}{with}{}", &encoded[..i], &encoded[i + 1..])
+                })
+        }
+
+        proptest! {
+            // ADR 0008 layer 2: at most 1,000 cases per property.
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            /// Our encoder matches `base64ct::Base64` (RFC 4648 §4), and
+            /// decoding inverts it.
+            #[test]
+            fn encode_matches_base64ct(bytes in proptest::collection::vec(any::<u8>(), 0..300)) {
+                let ours = encode(&bytes);
+                prop_assert_eq!(&ours, &Base64::encode_string(&bytes));
+                prop_assert_eq!(decode(&ours)?, bytes);
+            }
+
+            /// Accept/reject and the decoded octets match `base64ct::Base64`
+            /// for arbitrary text and for near-miss encodings.
+            #[test]
+            fn decode_matches_base64ct(
+                s in prop_oneof![
+                    "[A-Za-z0-9+/=_ \\n-]{0,40}",
+                    any::<String>(),
+                    mutated_encoding(),
+                ]
+            ) {
+                prop_assert_eq!(decode(&s).ok(), Base64::decode_vec(&s).ok(), "{:?}", s);
+            }
+        }
+    }
 }
