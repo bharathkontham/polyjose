@@ -108,8 +108,8 @@ pub(crate) fn to_pkcs1(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::super::der::fixtures;
-    use super::super::pem;
     use super::super::types::{AlgId, Label};
+    use super::super::{oid, pem, pkcs8};
     use super::*;
     use crate::jwk::KeyMaterial;
 
@@ -275,6 +275,10 @@ mod tests {
         matches!(result, Err(Error::InvalidKey(_)))
     }
 
+    fn is_unsupported<T>(result: &Result<T>) -> bool {
+        matches!(result, Err(Error::UnsupportedAlgorithm))
+    }
+
     /// The `InvalidKey` detail of `result`.
     fn detail<T>(result: Result<T>) -> &'static str {
         match result {
@@ -337,5 +341,113 @@ mod tests {
                 "{file}"
             );
         }
+    }
+
+    /// `text` through polyjose's PEM codec, then the structure its label
+    /// names: PKCS#8 for `PRIVATE KEY`, SPKI for `PUBLIC KEY`, PKCS#1 for
+    /// `RSA PUBLIC KEY` (the T08 dispatch, reduced to what RSA needs).
+    fn import_pem(text: &str) -> Result<()> {
+        let (label, der) = pem::decode(text)?;
+        match label {
+            Label::PrivateKey => pkcs8::decode(&der).map(drop),
+            Label::PublicKey => import_spki(&der).map(drop),
+            Label::RsaPublic => from_pkcs1(&der).map(drop),
+            other => panic!("pem::decode returned {other:?}"),
+        }
+    }
+
+    /// Every RSA private key fixture of the acceptance criteria (ADR 0021),
+    /// with whether it is PKCS#8 (else PKCS#1 RSAPrivateKey) and whether the
+    /// test oracle can turn it into DER (legacy encrypted PEM has RFC 1421
+    /// headers, which RFC 7468 does not allow).
+    fn rsa_private_fixtures() -> Vec<(&'static str, String, bool, bool)> {
+        let mut out = Vec::new();
+        for bits in [1024, 2048, 3072, 4096] {
+            for ext in ["pem", "der"] {
+                let file = format!("reject-rsa{bits}-private-pkcs8.{ext}");
+                if fixtures::files("openssl", |name| name == file).len() == 1 {
+                    out.push(("openssl", file, true, true));
+                }
+            }
+        }
+        for (file, pkcs8, oracle) in [
+            ("reject-rsa2048-private-pkcs1.pem", false, true),
+            ("reject-rsa2048-private-pkcs1.der", false, true),
+            ("reject-rsa2048-3prime-private-pkcs8.pem", true, true),
+            ("reject-rsa2048-3prime-private-pkcs1.pem", false, true),
+            ("reject-rsa2048-pkcs8-encrypted.pem", true, true),
+            ("reject-rsa2048-pkcs1-legacy-encrypted.pem", false, false),
+        ] {
+            out.push(("openssl", file.to_owned(), pkcs8, oracle));
+        }
+        for bits in [1024, 2048, 4096] {
+            let file = format!("reject-rfc9500-testRSA{bits}-private-pkcs1.pem");
+            out.push(("rfc", file, false, true));
+        }
+        // rsa{1024,2048,3072,4096}-private-pkcs8.pem, the 2048-bit .der,
+        // and the nine others listed.
+        assert_eq!(out.len(), 14);
+        out
+    }
+
+    #[test]
+    fn every_rsa_private_key_fixture_is_unsupported() {
+        // ADR 0021 end to end. PEM through polyjose's codec: `RSA PRIVATE
+        // KEY` and `ENCRYPTED PRIVATE KEY` are refused from the BEGIN line,
+        // and `PRIVATE KEY` (PKCS#8 rsaEncryption) by pkcs8::decode on the
+        // AlgorithmIdentifier. DER through the decoder of its format.
+        for (dir, file, pkcs8, oracle) in rsa_private_fixtures() {
+            if file.ends_with(".pem") {
+                let result = import_pem(&pem_text(dir, &file));
+                assert!(is_unsupported(&result), "{file}: {:?}", result.err());
+            }
+            if oracle {
+                let der = fixtures::load(dir, &file);
+                let result = if pkcs8 {
+                    pkcs8::decode(&der).map(drop)
+                } else {
+                    from_pkcs1(&der).map(drop)
+                };
+                assert!(is_unsupported(&result), "{file} as DER: {:?}", result.err());
+            }
+        }
+        // N67: a minimal PKCS#8 with rsaEncryption.
+        assert!(is_unsupported(&pkcs8::decode(&fixtures::negative("N67"))));
+    }
+
+    #[test]
+    fn pkcs8_rsa_private_keys_are_refused_before_private_key_is_opened() {
+        // pkcs8::decode returns on the rsaEncryption AlgorithmIdentifier
+        // (ADR 0021): with the privateKey's identifier octet replaced by
+        // the high-tag-number form, which any read of that element rejects
+        // as InvalidKey (X.690 §8.1.2.4), the result is still
+        // UnsupportedAlgorithm.
+        let mut keys = vec![fixtures::negative("N67")];
+        for (dir, file, pkcs8, oracle) in rsa_private_fixtures() {
+            if pkcs8 && oracle && !file.contains("encrypted") {
+                keys.push(fixtures::load(dir, &file));
+            }
+        }
+        assert_eq!(keys.len(), 7);
+        for mut der in keys {
+            let at = der
+                .windows(oid::ALG_RSA_ENCRYPTION.len())
+                .position(|window| window == oid::ALG_RSA_ENCRYPTION)
+                .unwrap()
+                + oid::ALG_RSA_ENCRYPTION.len();
+            assert_eq!(der[at], 0x04, "privateKey is an OCTET STRING");
+            der[at] = 0x1F;
+            assert!(is_unsupported(&pkcs8::decode(&der)));
+        }
+    }
+
+    #[test]
+    fn rsa_pss_keys_are_unsupported() {
+        // id-RSASSA-PSS (RFC 4055 §3.1) is not rsaEncryption: unsupported
+        // in SPKI and in PKCS#8 (ADR 0018 §4 step 1).
+        let result = import_pem(&pem_text("openssl", "reject-rsapss2048-spki.pem"));
+        assert!(is_unsupported(&result), "{:?}", result.err());
+        let result = import_pem(&pem_text("openssl", "reject-rsapss2048-private-pkcs8.pem"));
+        assert!(is_unsupported(&result), "{:?}", result.err());
     }
 }
