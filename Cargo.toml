@@ -39,9 +39,10 @@ proptest = { version = "1.12", default-features = false, features = ["std"] }
 # enables `wasm_js` (bindings/wasm/Cargo.toml).
 getrandom = { version = "0.4.3", default-features = false }
 # SHA-256 (FIPS 180-4) for RFC 7638 JWK thumbprints: the core's first crypto primitive (ADR 0002).
-# Exact pin (ADR 0019 §4) on the latest 0.11.x, which needs Rust 1.88 (ADR 0024). Default features
-# (`alloc`, `oid`) off (ADR 0016): polyjose needs only the `Digest` API. `zeroize` wipes the hash
-# state on drop, since an `oct` thumbprint hashes the secret `k` (RFC 7638 §7).
+# Exact pin (ADR 0019 §4) on the latest 0.11.x, which needs Rust 1.88: within the workspace MSRV,
+# 1.89 since 0003 Gate 1 (ADR 0024 as amended). Default features (`alloc`, `oid`) off (ADR 0016):
+# polyjose needs only the `Digest` API. `zeroize` wipes the hash state on drop, since an `oct`
+# thumbprint hashes the secret `k` (RFC 7638 §7).
 sha2 = { version = "=0.11.1", default-features = false, features = ["zeroize"] }
 # JWS primitives (feature 0002, ADR 0002). Every crypto crate is pinned exactly (ADR 0019 §4) and
 # turns default features off (ADR 0016 §3); the ones enabled are what polyjose calls. Their own

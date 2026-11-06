@@ -161,11 +161,12 @@ jobs:
           if [ "$found" -eq 0 ]; then echo "::error::no negative tests found (scripts/tests/*/*.sh)"; exit 1; fi
           exit "$failed"
 
-  # Keeps the published `rust-version` honest (ADR 0024): polyjose must build on its MSRV, not
-  # only on the pinned toolchain. One Linux job is enough, because the core has no OS-specific
-  # code, and a separate job keeps the second toolchain (and its build artifacts) out of the
-  # matrix jobs and their cache. `cargo +<version>` bypasses rust-toolchain.toml on purpose, and
-  # the job has no rust-cache step, since that would query (and so install) the pinned toolchain.
+  # Keeps the published `rust-version` honest (ADR 0024 as amended: 1.89 since 0003 Gate 1):
+  # polyjose must build on its MSRV, not only on the pinned toolchain. One Linux job is enough,
+  # because the core has no OS-specific code, and a separate job keeps the second toolchain (and
+  # its build artifacts) out of the matrix jobs and their cache. `cargo +<version>` bypasses
+  # rust-toolchain.toml on purpose, and the job has no rust-cache step, since that would query (and
+  # so install) the pinned toolchain.
   msrv:
     name: msrv
     runs-on: ubuntu-latest
