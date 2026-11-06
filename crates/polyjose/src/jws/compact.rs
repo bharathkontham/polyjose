@@ -1,7 +1,30 @@
 //! JWS Compact Serialization (RFC 7515 §3.1, §7.1), with detached content
 //! (RFC 7515 Appendix F) and the unencoded payload option (RFC 7797 §5.2).
 //!
-//! This file is a stub until T04 replaces it; the signatures are final.
+//! A compact JWS is `BASE64URL(UTF8(JWS Protected Header)) '.'
+//! BASE64URL(JWS Payload) '.' BASE64URL(JWS Signature)` (RFC 7515 §3.1,
+//! §7.1): one signature, and the protected header is the whole JOSE
+//! Header. This file owns the serialization's own rules, ADR 0026 §2
+//! steps 1–3, and hands everything else to the shared rules in
+//! `jws/process.rs`, which `json.rs` uses too:
+//!
+//! | step | compact rule | error |
+//! |---|---|---|
+//! | 1 | the input is at most [`VerifyOptions::max_input_len`] octets, a detached payload not counted (ADR 0026 §7) | [`Error::InvalidFormat`] |
+//! | 2 | exactly two `.` (RFC 7515 §5.2 step 1); with a detached payload, an empty payload part (Appendix F) | [`Error::InvalidFormat`] |
+//! | 3 | strict base64url of the protected header, the signature and, unless `b64` is `false`, the payload part (RFC 7515 §2, §5.2 steps 2, 6, 7; RFC 7797 §3) | [`Error::InvalidBase64`] |
+//! | 4 | the protected header is one I-JSON object, duplicate members included (RFC 7515 §5.2 step 3; ADR 0041 §1), then `JoseHeader::new` | [`Error::InvalidJson`]; [`Error::InvalidHeader`] |
+//! | 5–9 | `verify_signature` over the received header encoding (RFC 7515 §5.2 steps 5, 8) | as in the [module table](crate::jws) |
+//!
+//! Step 3 for the payload part needs the protected header's `b64`, so it
+//! runs as soon as that header has parsed as JSON and before its structure
+//! rules: a token with an unparsable header and a bad payload part is
+//! [`Error::InvalidJson`], while one with a parsable header missing `alg`
+//! and a bad payload part is [`Error::InvalidBase64`].
+//!
+//! Signing runs `JoseHeader::new` and `prepare_sign` (steps 4–8), then the
+//! RFC 7797 §5.2 payload rule, then the family.
+//!
 //! The public functions call their `*_with` twins with the real
 //! [`FAMILIES`]; tests call the twins with a fake table (see `jws/alg.rs`,
 //! "The test seam").
@@ -28,7 +51,13 @@ use super::{ProtectedHeader, SignOptions, Verified, VerifyOptions};
 /// - With [`SignOptions::detached`] the payload part is empty:
 ///   `header..signature` (RFC 7515 Appendix F).
 /// - With `"b64": false` (listed in `crit`), the payload is signed and
-///   carried unencoded (RFC 7797 §3, §5.2).
+///   carried unencoded (RFC 7797 §3, §5.2). Attached, it must then be
+///   printable ASCII without `.`; detached, any octets are allowed.
+///
+/// The signing input uses `protected`'s exact encoding
+/// ([`ProtectedHeader::encoded`]), so a header made with
+/// [`ProtectedHeader::from_encoded`] is signed as given (RFC 7515 §5.1
+/// step 5). The output is ASCII.
 ///
 /// # Errors
 ///
@@ -125,9 +154,12 @@ fn is_unencoded_octet(octet: u8) -> bool {
 /// [module docs](crate::jws)):
 ///
 /// - Steps 1–2, [`Error::InvalidFormat`]: longer than
-///   [`VerifyOptions::max_input_len`], not three parts, or a payload part
-///   present against the detached mode.
-/// - Step 3, [`Error::InvalidBase64`]: a part is not strict base64url.
+///   [`VerifyOptions::max_input_len`] (a detached payload not counted),
+///   not three parts, or a payload part present against the detached mode.
+/// - Step 3, [`Error::InvalidBase64`]: a part is not strict base64url
+///   (padding, `+`, `/` or whitespace, RFC 7515 §2). The payload part is
+///   checked once the protected header has parsed, since its `b64` decides
+///   whether the part is base64url at all (RFC 7797 §3).
 /// - Step 4, [`Error::InvalidJson`] (including a duplicate header member,
 ///   ADR 0041 §1) or [`Error::InvalidHeader`].
 /// - Step 5, [`Error::UnknownCritical`].
