@@ -12,12 +12,20 @@
 //! - [`Test`]: `tc_id`, `comment`, `flags`, the expected `result`
 //!   ([`Expected`]: valid, invalid or acceptable) and the hex-decoded
 //!   [`Input`], read with [`Test::signature`] (`msg`, `sig`), [`Test::mac`]
-//!   (`key`, `msg`, `tag`) or [`Test::jws`].
+//!   (`key`, `msg`, `tag`) or [`Test::jws`], and for the JWE families with
+//!   [`Test::aead`] (`key`, `iv`, `aad`, `msg`, `ct`, `tag`),
+//!   [`Test::key_wrap`] (`key`, `msg`, `ct`), [`Test::agreement`] (raw
+//!   `public`, `private`, `shared`: XDH and ECDH `ecpoint`),
+//!   [`Test::jwk_agreement`] (JWK `public` and `private`, raw `shared`: XDH
+//!   JWK and ECDH `webcrypto`), [`Test::pbkdf`] (`password`, `salt`,
+//!   `iterationCount`, `dkLen`, `dk`) or [`Test::jwe`] (`jwe`, `pt`, `enc`).
 //! - [`Group`]: the parameters (`key_size`, `tag_size`, `sha`, `mgf_sha`,
 //!   `salt_len`), the file's `keyJwk`/`publicKeyJwk` as JSON text
 //!   ([`Group::key_jwk`]), the raw key ([`PublicKey`]: `modulus` and
 //!   `publicExponent`, `wx`/`wy`, or `pk`), and for the JOSE-level file the
-//!   `private`/`public` JWKs ([`JwsKeys`]). [`Group::verification_jwk`]
+//!   `private`/`public` JWKs ([`JwsKeys`], in [`Group::jws_keys`] or
+//!   [`Group::jwe_keys`]), plus `ivSize`, `curve` and `encoding` where the
+//!   JWE-family schemas have them. [`Group::verification_jwk`]
 //!   gives the key to verify with, rebuilding a JWK from the raw key where
 //!   the file has none ([`PublicKey::to_jwk`]).
 //!
@@ -173,6 +181,35 @@ pub(crate) enum Schema {
     /// objects (RFC 7515), tests with [`Input::Jws`] and groups with
     /// [`JwsKeys`].
     JsonWebSignature,
+    /// `aead_test_schema_v1.json` (`AeadTest`): AES-GCM (RFC 7518 §5.3) and
+    /// the JOSE AES_CBC_HMAC_SHA2 algorithms (RFC 7518 §5.2). Groups carry
+    /// `keySize`, `ivSize` and `tagSize`; tests [`Input::Aead`].
+    Aead,
+    /// `keywrap_test_schema_v1.json` (`KeywrapTest`): AES Key Wrap
+    /// (RFC 3394, RFC 7518 §4.4). Groups carry `keySize`; tests
+    /// [`Input::KeyWrap`].
+    Keywrap,
+    /// `xdh_comp_schema_v1.json` (`XdhComp`): X25519 (RFC 7748 §5) on raw
+    /// 32-byte keys. Groups carry `curve`; tests [`Input::Agreement`].
+    XdhComp,
+    /// `xdh_jwk_comp_schema_v1.json` (`XdhJwkComp`): X25519 with JWK keys
+    /// (RFC 8037 §2). Groups carry `curve`; tests [`Input::JwkAgreement`].
+    XdhJwkComp,
+    /// `ecdh_ecpoint_test_schema_v1.json` (`EcdhEcpointTest`): ECDH on a
+    /// NIST curve with the peer key as a SEC 1 point. Groups carry `curve`
+    /// and `encoding`; tests [`Input::Agreement`].
+    EcdhEcpoint,
+    /// `ecdh_webcrypto_test_schema_v1.json` (`EcdhWebcryptoTest`): ECDH on a
+    /// NIST curve with JWK keys (RFC 7518 §6.2), the form of a JWE `epk`.
+    /// Groups carry `curve` and `encoding`; tests [`Input::JwkAgreement`].
+    EcdhWebcrypto,
+    /// `pbkdf_test_schema.json` (`PbkdfTest`): PBKDF2 (RFC 8018 §5.2), as
+    /// PBES2 uses it (RFC 7518 §4.8); tests [`Input::Pbkdf`].
+    Pbkdf,
+    /// `json_web_encryption_schema_v1.json` (`JsonWebEncryption`): whole JWE
+    /// objects (RFC 7516), tests with [`Input::Jwe`] and groups with
+    /// [`Group::jwe_keys`].
+    JsonWebEncryption,
 }
 
 impl Schema {
@@ -185,6 +222,14 @@ impl Schema {
             Schema::EcdsaP1363Verify => "EcdsaP1363Verify",
             Schema::EddsaVerify => "EddsaVerify",
             Schema::JsonWebSignature => "JsonWebSignature",
+            Schema::Aead => "AeadTest",
+            Schema::Keywrap => "KeywrapTest",
+            Schema::XdhComp => "XdhComp",
+            Schema::XdhJwkComp => "XdhJwkComp",
+            Schema::EcdhEcpoint => "EcdhEcpointTest",
+            Schema::EcdhWebcrypto => "EcdhWebcryptoTest",
+            Schema::Pbkdf => "PbkdfTest",
+            Schema::JsonWebEncryption => "JsonWebEncryption",
         }
     }
 
@@ -197,6 +242,14 @@ impl Schema {
             Schema::EcdsaP1363Verify => "ecdsa_p1363_verify_schema_v1.json",
             Schema::EddsaVerify => "eddsa_verify_schema_v1.json",
             Schema::JsonWebSignature => "json_web_signature_schema_v1.json",
+            Schema::Aead => "aead_test_schema_v1.json",
+            Schema::Keywrap => "keywrap_test_schema_v1.json",
+            Schema::XdhComp => "xdh_comp_schema_v1.json",
+            Schema::XdhJwkComp => "xdh_jwk_comp_schema_v1.json",
+            Schema::EcdhEcpoint => "ecdh_ecpoint_test_schema_v1.json",
+            Schema::EcdhWebcrypto => "ecdh_webcrypto_test_schema_v1.json",
+            Schema::Pbkdf => "pbkdf_test_schema.json",
+            Schema::JsonWebEncryption => "json_web_encryption_schema_v1.json",
         }
     }
 }
@@ -310,8 +363,55 @@ const SUITES: &[(&str, Schema, Option<&str>)] = &[
     ),
     ("ed25519", Schema::EddsaVerify, Some("EDDSA")),
     ("json_web_signature", Schema::JsonWebSignature, None),
+    // JWE (feature 0003).
+    ("aes_gcm", Schema::Aead, Some("AES-GCM")),
+    ("a128cbc_hs256", Schema::Aead, Some("A128CBC-HS256")),
+    ("a192cbc_hs384", Schema::Aead, Some("A192CBC-HS384")),
+    ("a256cbc_hs512", Schema::Aead, Some("A256CBC-HS512")),
+    ("aes_wrap", Schema::Keywrap, Some("AES-WRAP")),
+    ("x25519", Schema::XdhComp, Some("XDH")),
+    ("x25519_jwk", Schema::XdhJwkComp, Some("XDH")),
+    ("ecdh_secp256r1_ecpoint", Schema::EcdhEcpoint, Some("ECDH")),
+    ("ecdh_secp384r1_ecpoint", Schema::EcdhEcpoint, Some("ECDH")),
+    ("ecdh_secp521r1_ecpoint", Schema::EcdhEcpoint, Some("ECDH")),
+    (
+        "ecdh_secp256r1_webcrypto",
+        Schema::EcdhWebcrypto,
+        Some("ECDH"),
+    ),
+    (
+        "ecdh_secp384r1_webcrypto",
+        Schema::EcdhWebcrypto,
+        Some("ECDH"),
+    ),
+    (
+        "ecdh_secp521r1_webcrypto",
+        Schema::EcdhWebcrypto,
+        Some("ECDH"),
+    ),
+    (
+        "pbkdf2_hmacsha256",
+        Schema::Pbkdf,
+        Some("PBKDF2-HMACSHA256"),
+    ),
+    (
+        "pbkdf2_hmacsha384",
+        Schema::Pbkdf,
+        Some("PBKDF2-HMACSHA384"),
+    ),
+    (
+        "pbkdf2_hmacsha512",
+        Schema::Pbkdf,
+        Some("PBKDF2-HMACSHA512"),
+    ),
+    ("json_web_encryption", Schema::JsonWebEncryption, None),
 ];
 const PKCS1: &str = "RSASSA-PKCS1-v1_5";
+/// Flags that a test uses but its file's `notes` does not define, at the
+/// pinned commit: `(suite, flag)`. [`load`] accepts exactly these, and the
+/// `every_undefined_flag_exception_is_needed` test fails once upstream
+/// defines them, so the list cannot hide a new gap.
+const UNDEFINED_FLAGS: &[(&str, &str)] = &[("json_web_encryption", "Pkcs5Padding")];
 const PSS: &str = "RSASSA-PSS";
 
 /// The names of the vendored suites that start with `prefix`, for example
@@ -358,7 +458,8 @@ impl Suite {
 pub(crate) struct Note {
     /// Upstream's classification, e.g. `AUTH_BYPASS`, `EDGE_CASE`.
     pub(crate) bug_type: String,
-    /// Upstream's description of the flag.
+    /// Upstream's description of the flag. Empty where upstream gives none
+    /// (`SpecialCaseIv` in the A*CBC-HS* files at the pinned commit).
     pub(crate) description: String,
 }
 
@@ -396,6 +497,19 @@ pub(crate) struct Group {
     pub(crate) public_key: Option<PublicKey>,
     /// The `private` and `public` JWKs (`JsonWebSignature`).
     pub(crate) jws_keys: Option<JwsKeys>,
+    /// The `private` (decryption) JWK and, for asymmetric keys, the
+    /// `public` (encryption) JWK (`JsonWebEncryption`). An `oct` key has
+    /// only `private`.
+    pub(crate) jwe_keys: Option<JwsKeys>,
+    /// `ivSize` in bits (`Aead`). JWE uses 96 for AES-GCM (RFC 7518 §5.3)
+    /// and 128 for AES-CBC (RFC 7518 §5.2.2.1).
+    pub(crate) iv_size: Option<u32>,
+    /// `curve` (`XdhComp`, `XdhJwkComp`: `"curve25519"`; `EcdhEcpoint`:
+    /// `"secp256r1"`, …; `EcdhWebcrypto`: `"P-256"`, …).
+    pub(crate) curve: Option<String>,
+    /// `encoding` of the peer key (`EcdhEcpoint`: `"ecpoint"`,
+    /// `EcdhWebcrypto`: `"webcrypto"`).
+    pub(crate) encoding: Option<String>,
     /// The tests, in file order.
     pub(crate) tests: Vec<Test>,
 }
@@ -549,6 +663,75 @@ pub(crate) enum Input {
     },
     /// `JsonWebSignature`: the JWS, in compact or JSON serialization.
     Jws(String),
+    /// `Aead`: one AEAD operation.
+    Aead(AeadInput),
+    /// `Keywrap`: the key-encryption `key`, the key data `msg` and the
+    /// wrapped `ct`.
+    KeyWrap {
+        key: Vec<u8>,
+        msg: Vec<u8>,
+        ct: Vec<u8>,
+    },
+    /// `XdhComp` and `EcdhEcpoint`: the peer's `public` key (32 bytes for
+    /// X25519, a SEC 1 point for ECDH), our `private` scalar and the
+    /// expected `shared` secret.
+    Agreement {
+        public: Vec<u8>,
+        private: Vec<u8>,
+        shared: Vec<u8>,
+    },
+    /// `XdhJwkComp` and `EcdhWebcrypto`: the `public` and `private` keys as
+    /// JWK JSON text, and the expected `shared` secret.
+    JwkAgreement {
+        public: String,
+        private: String,
+        shared: Vec<u8>,
+    },
+    /// `Pbkdf`: one PBKDF2 derivation.
+    Pbkdf(PbkdfInput),
+    /// `JsonWebEncryption`: one JWE.
+    Jwe(JweInput),
+}
+
+/// The inputs of an `Aead` test (hex-decoded).
+pub(crate) struct AeadInput {
+    /// The key: for AES_CBC_HMAC_SHA2, MAC_KEY || ENC_KEY (RFC 7518 §5.2.2.1).
+    pub(crate) key: Vec<u8>,
+    /// The IV (nonce).
+    pub(crate) iv: Vec<u8>,
+    /// The additional authenticated data.
+    pub(crate) aad: Vec<u8>,
+    /// The plaintext.
+    pub(crate) msg: Vec<u8>,
+    /// The ciphertext, without the tag.
+    pub(crate) ct: Vec<u8>,
+    /// The authentication tag.
+    pub(crate) tag: Vec<u8>,
+}
+
+/// The inputs of a `Pbkdf` test (hex-decoded).
+pub(crate) struct PbkdfInput {
+    /// The password `P` (RFC 8018 §5.2).
+    pub(crate) password: Vec<u8>,
+    /// The salt `S`.
+    pub(crate) salt: Vec<u8>,
+    /// The iteration count `c`.
+    pub(crate) iteration_count: u32,
+    /// The derived key length `dkLen` in bytes.
+    pub(crate) dk_len: usize,
+    /// The expected derived key.
+    pub(crate) dk: Vec<u8>,
+}
+
+/// The inputs of a `JsonWebEncryption` test.
+pub(crate) struct JweInput {
+    /// The JWE, in compact or JSON serialization, or malformed text.
+    pub(crate) jwe: String,
+    /// The plaintext (hex-decoded). Present for every `valid` test and for
+    /// some `invalid` ones.
+    pub(crate) pt: Option<Vec<u8>>,
+    /// The `enc` the test names.
+    pub(crate) enc: String,
 }
 
 impl Test {
@@ -573,6 +756,65 @@ impl Test {
         match &self.input {
             Input::Jws(jws) => jws,
             _ => panic!("tcId {} is not a JWS test", self.tc_id),
+        }
+    }
+
+    /// The inputs of an `Aead` test. Panics on another schema.
+    pub(crate) fn aead(&self) -> &AeadInput {
+        match &self.input {
+            Input::Aead(input) => input,
+            _ => panic!("tcId {} is not an AEAD test", self.tc_id),
+        }
+    }
+
+    /// `(key, msg, ct)` of a `Keywrap` test. Panics on another schema.
+    pub(crate) fn key_wrap(&self) -> (&[u8], &[u8], &[u8]) {
+        match &self.input {
+            Input::KeyWrap { key, msg, ct } => (key, msg, ct),
+            _ => panic!("tcId {} is not a key wrap test", self.tc_id),
+        }
+    }
+
+    /// `(public, private, shared)` of an `XdhComp` or `EcdhEcpoint` test.
+    /// Panics on another schema.
+    pub(crate) fn agreement(&self) -> (&[u8], &[u8], &[u8]) {
+        match &self.input {
+            Input::Agreement {
+                public,
+                private,
+                shared,
+            } => (public, private, shared),
+            _ => panic!("tcId {} is not a raw key agreement test", self.tc_id),
+        }
+    }
+
+    /// `(public JWK, private JWK, shared)` of an `XdhJwkComp` or
+    /// `EcdhWebcrypto` test; the JWKs are JSON text, re-serialized like
+    /// [`Group::key_jwk`]. Panics on another schema.
+    pub(crate) fn jwk_agreement(&self) -> (&str, &str, &[u8]) {
+        match &self.input {
+            Input::JwkAgreement {
+                public,
+                private,
+                shared,
+            } => (public, private, shared),
+            _ => panic!("tcId {} is not a JWK key agreement test", self.tc_id),
+        }
+    }
+
+    /// The inputs of a `Pbkdf` test. Panics on another schema.
+    pub(crate) fn pbkdf(&self) -> &PbkdfInput {
+        match &self.input {
+            Input::Pbkdf(input) => input,
+            _ => panic!("tcId {} is not a PBKDF test", self.tc_id),
+        }
+    }
+
+    /// The inputs of a `JsonWebEncryption` test. Panics on another schema.
+    pub(crate) fn jwe(&self) -> &JweInput {
+        match &self.input {
+            Input::Jwe(input) => input,
+            _ => panic!("tcId {} is not a JWE test", self.tc_id),
         }
     }
 
@@ -881,6 +1123,7 @@ struct RawSuite {
 #[serde(rename_all = "camelCase")]
 struct RawNote {
     bug_type: String,
+    #[serde(default)]
     description: String,
 }
 
@@ -893,7 +1136,10 @@ struct RawGroup {
     _source: IgnoredAny,
     comment: Option<String>,
     key_size: Option<u32>,
+    iv_size: Option<u32>,
     tag_size: Option<u32>,
+    curve: Option<String>,
+    encoding: Option<String>,
     sha: Option<String>,
     mgf: Option<String>,
     mgf_sha: Option<String>,
@@ -940,6 +1186,22 @@ struct RawTest {
     sig: Option<String>,
     tag: Option<String>,
     jws: Option<String>,
+    iv: Option<String>,
+    aad: Option<String>,
+    ct: Option<String>,
+    // A hex string (`XdhComp`, `EcdhEcpoint`) or a JWK object
+    // (`XdhJwkComp`, `EcdhWebcrypto`).
+    public: Option<serde_json::Value>,
+    private: Option<serde_json::Value>,
+    shared: Option<String>,
+    password: Option<String>,
+    salt: Option<String>,
+    iteration_count: Option<u32>,
+    dk_len: Option<usize>,
+    dk: Option<String>,
+    jwe: Option<String>,
+    pt: Option<String>,
+    enc: Option<String>,
 }
 
 /// Decodes hex (either case, even length).
@@ -1002,7 +1264,10 @@ fn parse(name: &str, schema: Schema, algorithm: Option<&str>, text: &str) -> Res
             if !tc_ids.insert(test.tc_id) {
                 return Err(format!("duplicate tcId {}", test.tc_id));
             }
-            if let Some(flag) = test.flags.iter().find(|f| !notes.contains_key(*f)) {
+            let undefined = |f: &&String| {
+                !notes.contains_key(*f) && !UNDEFINED_FLAGS.contains(&(name, f.as_str()))
+            };
+            if let Some(flag) = test.flags.iter().find(undefined) {
                 return Err(format!("tcId {}: flag {flag:?} has no note", test.tc_id));
             }
         }
@@ -1038,7 +1303,7 @@ fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
         (None, None) => None,
     };
     let public_key = raw.public_key.map(parse_public_key).transpose()?;
-    let jws_keys = match (&raw.private, &raw.public) {
+    let jose_keys = match (&raw.private, &raw.public) {
         (Some(private), public) => Some(JwsKeys {
             private: json_text(private)?,
             public: public.as_ref().map(json_text).transpose()?,
@@ -1046,9 +1311,21 @@ fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
         (None, Some(_)) => return Err("group has `public` without `private`".to_owned()),
         (None, None) => None,
     };
+    // The JOSE-level files share the `private`/`public` group members.
+    let (jws_keys, jwe_keys) = if schema == Schema::JsonWebEncryption {
+        (None, jose_keys)
+    } else {
+        (jose_keys, None)
+    };
+    let no_signature_key = public_key.is_none() && key_jwk.is_none() && jws_keys.is_none();
+    let no_jwe_params = jwe_keys.is_none()
+        && raw.iv_size.is_none()
+        && raw.curve.is_none()
+        && raw.encoding.is_none();
     let is_rsa = |k: &Option<PublicKey>| matches!(k, Some(PublicKey::Rsa { .. }));
     let is_ec = |k: &Option<PublicKey>| matches!(k, Some(PublicKey::Ec { .. }));
     let is_eddsa = |k: &Option<PublicKey>| matches!(k, Some(PublicKey::Eddsa { .. }));
+    let curve_is = |names: &[&str]| raw.curve.as_deref().is_some_and(|c| names.contains(&c));
     // The fields each schema must have (and the key fields it must not).
     let shape_ok = match schema {
         Schema::Mac => {
@@ -1056,6 +1333,46 @@ fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
                 && raw.tag_size.is_some()
                 && public_key.is_none()
                 && key_jwk.is_none()
+                && no_jwe_params
+        }
+        Schema::Aead => {
+            raw.key_size.is_some()
+                && raw.tag_size.is_some()
+                && no_signature_key
+                && jwe_keys.is_none()
+                && raw.iv_size.is_some()
+                && raw.curve.is_none()
+                && raw.encoding.is_none()
+        }
+        Schema::Keywrap => raw.key_size.is_some() && no_signature_key && no_jwe_params,
+        Schema::XdhComp | Schema::XdhJwkComp => {
+            no_signature_key
+                && jwe_keys.is_none()
+                && raw.iv_size.is_none()
+                && raw.encoding.is_none()
+                && curve_is(&["curve25519"])
+        }
+        Schema::EcdhEcpoint | Schema::EcdhWebcrypto => {
+            let (encoding, curves): (&str, &[&str]) = if schema == Schema::EcdhEcpoint {
+                ("ecpoint", &["secp256r1", "secp384r1", "secp521r1"])
+            } else {
+                ("webcrypto", &["P-256", "P-384", "P-521"])
+            };
+            no_signature_key
+                && jwe_keys.is_none()
+                && raw.iv_size.is_none()
+                && raw.encoding.as_deref() == Some(encoding)
+                && curve_is(curves)
+        }
+        Schema::Pbkdf => raw.key_size.is_none() && no_signature_key && no_jwe_params,
+        Schema::JsonWebEncryption => {
+            jwe_keys.is_some()
+                && raw.comment.is_some()
+                && public_key.is_none()
+                && key_jwk.is_none()
+                && raw.iv_size.is_none()
+                && raw.curve.is_none()
+                && raw.encoding.is_none()
         }
         Schema::RsassaPkcs1Verify => {
             raw.key_size.is_some()
@@ -1074,7 +1391,9 @@ fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
         }
         Schema::EcdsaP1363Verify => raw.sha.is_some() && is_ec(&public_key),
         Schema::EddsaVerify => is_eddsa(&public_key),
-        Schema::JsonWebSignature => jws_keys.is_some() && public_key.is_none() && key_jwk.is_none(),
+        Schema::JsonWebSignature => {
+            jws_keys.is_some() && public_key.is_none() && key_jwk.is_none() && no_jwe_params
+        }
     };
     if !shape_ok {
         return Err(format!(
@@ -1097,6 +1416,10 @@ fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
         key_jwk,
         public_key,
         jws_keys,
+        jwe_keys,
+        iv_size: raw.iv_size,
+        curve: raw.curve,
+        encoding: raw.encoding,
         tests,
     })
 }
@@ -1145,29 +1468,162 @@ fn parse_public_key(raw: RawPublicKey) -> Result<PublicKey, String> {
     }
 }
 
-fn parse_test(schema: Schema, raw: RawTest) -> Result<Test, String> {
-    let tc_id = raw.tc_id;
-    let input = match (schema, raw.key, raw.msg, raw.sig, raw.tag, raw.jws) {
-        (Schema::Mac, Some(key), Some(msg), None, Some(tag), None) => Input::Mac {
-            key: hex(&key)?,
-            msg: hex(&msg)?,
-            tag: hex(&tag)?,
-        },
-        (Schema::JsonWebSignature, None, None, None, None, Some(jws)) => Input::Jws(jws),
-        (Schema::Mac | Schema::JsonWebSignature, ..) => {
-            return Err(format!("tcId {tc_id}: fields do not match the schema"));
+impl Schema {
+    /// The test members this schema requires, and those it allows to be
+    /// absent. Every other input member must be absent.
+    fn test_fields(self) -> (&'static [&'static str], &'static [&'static str]) {
+        match self {
+            Schema::Mac => (&["key", "msg", "tag"], &[]),
+            Schema::RsassaPkcs1Verify
+            | Schema::RsassaPssVerify
+            | Schema::EcdsaP1363Verify
+            | Schema::EddsaVerify => (&["msg", "sig"], &[]),
+            Schema::JsonWebSignature => (&["jws"], &[]),
+            Schema::Aead => (&["key", "iv", "aad", "msg", "ct", "tag"], &[]),
+            Schema::Keywrap => (&["key", "msg", "ct"], &[]),
+            Schema::XdhComp | Schema::XdhJwkComp | Schema::EcdhEcpoint | Schema::EcdhWebcrypto => {
+                (&["public", "private", "shared"], &[])
+            }
+            Schema::Pbkdf => (&["password", "salt", "iterationCount", "dkLen", "dk"], &[]),
+            Schema::JsonWebEncryption => (&["jwe", "enc"], &["pt"]),
         }
-        (_, None, Some(msg), Some(sig), None, None) => Input::Signature {
-            msg: hex(&msg)?,
-            sig: hex(&sig)?,
+    }
+}
+
+/// The hex string `value` of member `name`, decoded.
+fn hex_member(value: Option<String>, name: &str) -> Result<Vec<u8>, String> {
+    hex(&value.ok_or_else(|| format!("missing {name}"))?)
+}
+
+/// A member that is a hex string, decoded (`public`/`private` of the raw
+/// agreement schemas).
+fn hex_value(value: Option<serde_json::Value>, name: &str) -> Result<Vec<u8>, String> {
+    match value {
+        Some(serde_json::Value::String(text)) => hex(&text),
+        _ => Err(format!("{name} is not a hex string")),
+    }
+}
+
+/// A member that is a JWK object, as JSON text.
+fn jwk_member(value: Option<serde_json::Value>, name: &str) -> Result<String, String> {
+    json_text(&value.ok_or_else(|| format!("missing {name}"))?)
+}
+
+fn parse_test(schema: Schema, raw: RawTest) -> Result<Test, String> {
+    let RawTest {
+        tc_id,
+        comment,
+        flags,
+        result,
+        key,
+        msg,
+        sig,
+        tag,
+        jws,
+        iv,
+        aad,
+        ct,
+        public,
+        private,
+        shared,
+        password,
+        salt,
+        iteration_count,
+        dk_len,
+        dk,
+        jwe,
+        pt,
+        enc,
+    } = raw;
+    let present = [
+        ("key", key.is_some()),
+        ("msg", msg.is_some()),
+        ("sig", sig.is_some()),
+        ("tag", tag.is_some()),
+        ("jws", jws.is_some()),
+        ("iv", iv.is_some()),
+        ("aad", aad.is_some()),
+        ("ct", ct.is_some()),
+        ("public", public.is_some()),
+        ("private", private.is_some()),
+        ("shared", shared.is_some()),
+        ("password", password.is_some()),
+        ("salt", salt.is_some()),
+        ("iterationCount", iteration_count.is_some()),
+        ("dkLen", dk_len.is_some()),
+        ("dk", dk.is_some()),
+        ("jwe", jwe.is_some()),
+        ("pt", pt.is_some()),
+        ("enc", enc.is_some()),
+    ];
+    let (required, optional) = schema.test_fields();
+    for (name, is_present) in present {
+        let fits = if required.contains(&name) {
+            is_present
+        } else {
+            !is_present || optional.contains(&name)
+        };
+        if !fits {
+            return Err(format!(
+                "tcId {tc_id}: fields do not match the schema ({name})"
+            ));
+        }
+    }
+    let input = match schema {
+        Schema::Mac => Input::Mac {
+            key: hex_member(key, "key")?,
+            msg: hex_member(msg, "msg")?,
+            tag: hex_member(tag, "tag")?,
         },
-        _ => return Err(format!("tcId {tc_id}: fields do not match the schema")),
+        Schema::RsassaPkcs1Verify
+        | Schema::RsassaPssVerify
+        | Schema::EcdsaP1363Verify
+        | Schema::EddsaVerify => Input::Signature {
+            msg: hex_member(msg, "msg")?,
+            sig: hex_member(sig, "sig")?,
+        },
+        Schema::JsonWebSignature => Input::Jws(jws.unwrap_or_default()),
+        Schema::Aead => Input::Aead(AeadInput {
+            key: hex_member(key, "key")?,
+            iv: hex_member(iv, "iv")?,
+            aad: hex_member(aad, "aad")?,
+            msg: hex_member(msg, "msg")?,
+            ct: hex_member(ct, "ct")?,
+            tag: hex_member(tag, "tag")?,
+        }),
+        Schema::Keywrap => Input::KeyWrap {
+            key: hex_member(key, "key")?,
+            msg: hex_member(msg, "msg")?,
+            ct: hex_member(ct, "ct")?,
+        },
+        Schema::XdhComp | Schema::EcdhEcpoint => Input::Agreement {
+            public: hex_value(public, "public")?,
+            private: hex_value(private, "private")?,
+            shared: hex_member(shared, "shared")?,
+        },
+        Schema::XdhJwkComp | Schema::EcdhWebcrypto => Input::JwkAgreement {
+            public: jwk_member(public, "public")?,
+            private: jwk_member(private, "private")?,
+            shared: hex_member(shared, "shared")?,
+        },
+        Schema::Pbkdf => Input::Pbkdf(PbkdfInput {
+            password: hex_member(password, "password")?,
+            salt: hex_member(salt, "salt")?,
+            iteration_count: iteration_count.unwrap_or_default(),
+            dk_len: dk_len.unwrap_or_default(),
+            dk: hex_member(dk, "dk")?,
+        }),
+        Schema::JsonWebEncryption => Input::Jwe(JweInput {
+            jwe: jwe.unwrap_or_default(),
+            pt: pt.map(|pt| hex(&pt)).transpose()?,
+            enc: enc.unwrap_or_default(),
+        }),
     };
     Ok(Test {
         tc_id,
-        comment: raw.comment,
-        flags: raw.flags,
-        result: raw.result,
+        comment,
+        flags,
+        result,
         input,
     })
 }
@@ -1284,8 +1740,10 @@ mod tests {
             assert_eq!(suite.algorithm.as_deref(), algorithm);
             assert!(suite.tests().count() > 0, "{name} has no tests");
             for (flag, note) in &suite.notes {
+                // Upstream gives one note no description (pinned commit).
+                let undescribed = name.contains("cbc_hs") && flag == "SpecialCaseIv";
                 assert!(
-                    !note.bug_type.is_empty() && !note.description.is_empty(),
+                    !note.bug_type.is_empty() && note.description.is_empty() == undescribed,
                     "{name}: {flag}"
                 );
             }
@@ -1514,13 +1972,296 @@ mod tests {
         assert!(suite.tests().any(|(_, t)| t.jws().starts_with("ey")));
     }
 
+    /// `(valid, invalid, acceptable)` counts of `suite`.
+    fn results(suite: &Suite) -> (usize, usize, usize) {
+        (
+            count(suite, Expected::Valid),
+            count(suite, Expected::Invalid),
+            count(suite, Expected::Acceptable),
+        )
+    }
+
+    #[test]
+    fn aead_accessor_reads_aes_gcm_and_the_cbc_hmac_suites() {
+        let suite = load("aes_gcm");
+        assert_eq!(suite.schema, Schema::Aead);
+        assert_eq!(suite.groups.len(), 45);
+        assert_eq!(suite.tests().count(), 316);
+        assert_eq!(results(&suite), (229, 87, 0));
+        // The groups JWE uses: a 96-bit IV and a 128-bit tag (RFC 7518 §5.3).
+        let jwe_shaped: Vec<(u32, usize)> = suite
+            .groups
+            .iter()
+            .filter(|g| g.iv_size == Some(96) && g.tag_size == Some(128))
+            .map(|g| (g.key_size.unwrap_or_default(), g.tests.len()))
+            .collect();
+        assert_eq!(jwe_shaped, [(128, 67), (256, 66), (192, 64)]);
+        // AES_CBC_HMAC_SHA2 (RFC 7518 §5.2): K is MAC_KEY || ENC_KEY, the IV
+        // is 128 bits and T_LEN is half of K.
+        for (name, key_bits, tag_bits) in [
+            ("a128cbc_hs256", 256, 128),
+            ("a192cbc_hs384", 384, 192),
+            ("a256cbc_hs512", 512, 256),
+        ] {
+            let suite = load(name);
+            assert_eq!(suite.schema, Schema::Aead, "{name}");
+            assert_eq!(suite.tests().count(), 94, "{name}");
+            assert_eq!(results(&suite), (67, 27, 0), "{name}");
+            let modified_tag = suite.tests().filter(|(_, t)| t.has_flag("ModifiedTag"));
+            assert_eq!(modified_tag.count(), 27, "{name}");
+            let [group] = &suite.groups[..] else {
+                panic!("{name}: expected one group");
+            };
+            assert_eq!(
+                (group.key_size, group.iv_size, group.tag_size),
+                (Some(key_bits), Some(128), Some(tag_bits)),
+                "{name}"
+            );
+        }
+        for name in ["aes_gcm", "a128cbc_hs256", "a192cbc_hs384", "a256cbc_hs512"] {
+            let suite = load(name);
+            for (group, test) in suite.tests() {
+                let input = test.aead();
+                let bits = |b: &[u8]| Some(u32::try_from(b.len() * 8).unwrap_or(u32::MAX));
+                assert_eq!(
+                    bits(&input.key),
+                    group.key_size,
+                    "{name} tcId {}",
+                    test.tc_id
+                );
+                if test.result == Expected::Valid {
+                    assert_eq!(bits(&input.iv), group.iv_size, "{name} tcId {}", test.tc_id);
+                    assert_eq!(
+                        bits(&input.tag),
+                        group.tag_size,
+                        "{name} tcId {}",
+                        test.tc_id
+                    );
+                    if name == "aes_gcm" {
+                        // GCM is a stream mode: |C| = |P|.
+                        assert_eq!(input.ct.len(), input.msg.len());
+                    }
+                }
+                assert!(input.aad.len() < 1 << 20);
+            }
+        }
+    }
+
+    #[test]
+    fn key_wrap_accessor_reads_aes_wrap() {
+        let suite = load("aes_wrap");
+        assert_eq!(suite.schema, Schema::Keywrap);
+        let groups: Vec<(Option<u32>, usize)> = suite
+            .groups
+            .iter()
+            .map(|g| (g.key_size, g.tests.len()))
+            .collect();
+        assert_eq!(groups, [(Some(128), 42), (Some(192), 55), (Some(256), 68)]);
+        assert_eq!(suite.tests().count(), 165);
+        assert_eq!(results(&suite), (36, 126, 3));
+        for (group, test) in suite.tests() {
+            let (key, msg, ct) = test.key_wrap();
+            assert_eq!(Some(key.len() as u32 * 8), group.key_size);
+            if test.result == Expected::Valid {
+                // RFC 3394 §2.2.1: one 64-bit block longer than the key data.
+                assert_eq!(ct.len(), msg.len() + 8, "tcId {}", test.tc_id);
+            }
+        }
+    }
+
+    #[test]
+    fn agreement_accessor_reads_x25519_and_the_ecpoint_suites() {
+        let suite = load("x25519");
+        assert_eq!(suite.schema, Schema::XdhComp);
+        assert_eq!(suite.tests().count(), 518);
+        assert_eq!(results(&suite), (264, 0, 254));
+        for (group, test) in suite.tests() {
+            assert_eq!(group.curve.as_deref(), Some("curve25519"));
+            let (public, private, shared) = test.agreement();
+            // RFC 7748 §5: 32-byte u-coordinates and scalars.
+            assert_eq!((public.len(), private.len(), shared.len()), (32, 32, 32));
+        }
+        for (name, curve, tests, (valid, invalid), field) in [
+            ("ecdh_secp256r1_ecpoint", "secp256r1", 355, (330, 24), 32),
+            ("ecdh_secp384r1_ecpoint", "secp384r1", 790, (771, 18), 48),
+            ("ecdh_secp521r1_ecpoint", "secp521r1", 661, (632, 28), 66),
+        ] {
+            let suite = load(name);
+            assert_eq!(suite.schema, Schema::EcdhEcpoint, "{name}");
+            assert_eq!(suite.tests().count(), tests, "{name}");
+            assert_eq!(results(&suite), (valid, invalid, 1), "{name}");
+            for (group, test) in suite.tests() {
+                assert_eq!(group.curve.as_deref(), Some(curve), "{name}");
+                assert_eq!(group.encoding.as_deref(), Some("ecpoint"), "{name}");
+                let (public, _, shared) = test.agreement();
+                if test.result == Expected::Valid {
+                    // The x-coordinate, full field length (RFC 7518 §4.6.2).
+                    assert_eq!(shared.len(), field, "{name} tcId {}", test.tc_id);
+                }
+                // Uncompressed and compressed SEC 1 points both occur.
+                let _ = public.first();
+            }
+            assert!(
+                suite
+                    .tests()
+                    .any(|(_, t)| t.agreement().0.first() == Some(&0x04))
+            );
+            assert!(suite.tests().any(|(_, t)| t.has_flag("CompressedPoint")));
+        }
+    }
+
+    #[test]
+    fn jwk_agreement_accessor_reads_x25519_jwk_and_the_webcrypto_suites() {
+        let suite = load("x25519_jwk");
+        assert_eq!(suite.schema, Schema::XdhJwkComp);
+        assert_eq!(suite.tests().count(), 531);
+        assert_eq!(results(&suite), (264, 13, 254));
+        for (_, test) in suite.tests() {
+            let (public, private, shared) = test.jwk_agreement();
+            assert!(jwk_value(Some(public)).is_object());
+            let private = jwk_value(Some(private));
+            assert_eq!(
+                (&private["kty"], &private["crv"]),
+                (&"OKP".into(), &"X25519".into())
+            );
+            // Invalid cases have no shared secret.
+            let expected = if test.result == Expected::Invalid {
+                0
+            } else {
+                32
+            };
+            assert_eq!(shared.len(), expected, "tcId {}", test.tc_id);
+        }
+        // Malformed public JWKs (an empty object, a missing `kty`) are
+        // among the invalid cases.
+        let empty = suite
+            .tests()
+            .filter(|(_, t)| t.jwk_agreement().0 == "{}")
+            .map(|(_, t)| t.result)
+            .collect::<Vec<_>>();
+        assert_eq!(empty, [Expected::Invalid]);
+        for (name, crv, tests, invalid, field) in [
+            ("ecdh_secp256r1_webcrypto", "P-256", 353, 23, 32),
+            ("ecdh_secp384r1_webcrypto", "P-384", 794, 23, 48),
+            ("ecdh_secp521r1_webcrypto", "P-521", 655, 23, 66),
+        ] {
+            let suite = load(name);
+            assert_eq!(suite.schema, Schema::EcdhWebcrypto, "{name}");
+            assert_eq!(suite.tests().count(), tests, "{name}");
+            assert_eq!(results(&suite), (tests - invalid, invalid, 0), "{name}");
+            for (group, test) in suite.tests() {
+                assert_eq!(group.curve.as_deref(), Some(crv), "{name}");
+                assert_eq!(group.encoding.as_deref(), Some("webcrypto"), "{name}");
+                let (public, private, shared) = test.jwk_agreement();
+                let public = jwk_value(Some(public));
+                assert_eq!(public["kty"], "EC", "{name}");
+                assert!(public.get("d").is_none(), "{name}: public JWK has d");
+                assert!(jwk_value(Some(private)).get("d").is_some(), "{name}");
+                if test.result == Expected::Valid {
+                    assert_eq!(shared.len(), field, "{name} tcId {}", test.tc_id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pbkdf_accessor_reads_the_pbkdf2_suites() {
+        for (name, tests) in [
+            ("pbkdf2_hmacsha256", 60),
+            ("pbkdf2_hmacsha384", 58),
+            ("pbkdf2_hmacsha512", 58),
+        ] {
+            let suite = load(name);
+            assert_eq!(suite.schema, Schema::Pbkdf, "{name}");
+            assert_eq!(suite.tests().count(), tests, "{name}");
+            assert_eq!(results(&suite), (tests, 0, 0), "{name}");
+            for (_, test) in suite.tests() {
+                let input = test.pbkdf();
+                assert_eq!(input.dk.len(), input.dk_len, "{name} tcId {}", test.tc_id);
+                assert!(input.iteration_count >= 1, "{name} tcId {}", test.tc_id);
+                let _ = (&input.password, &input.salt);
+            }
+            // RFC 7914 §11's PBKDF2-HMAC-SHA-256 vector is tcId 1.
+            if name == "pbkdf2_hmacsha256" {
+                let (_, first) = suite.tests().next().unwrap_or_else(|| panic!("no tests"));
+                assert_eq!(first.pbkdf().password, b"passwd");
+                assert_eq!(first.pbkdf().salt, b"salt");
+                assert_eq!(first.pbkdf().iteration_count, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn jwe_accessor_reads_json_web_encryption_with_group_keys() {
+        let suite = load("json_web_encryption");
+        assert_eq!(suite.schema, Schema::JsonWebEncryption);
+        assert_eq!(suite.algorithm, None);
+        assert_eq!(suite.groups.len(), 31);
+        assert_eq!(suite.tests().count(), 139);
+        assert_eq!(results(&suite), (65, 74, 0));
+        let mut kty = BTreeMap::new();
+        for group in &suite.groups {
+            assert!(group.comment.is_some() && group.jws_keys.is_none());
+            let keys = group.jwe_keys.as_ref().unwrap_or_else(|| panic!("no keys"));
+            let private = jwk_value(Some(&keys.private));
+            *kty.entry(private["kty"].as_str().unwrap_or_default().to_owned())
+                .or_insert(0) += 1;
+            if let Some(public) = &keys.public {
+                let public = jwk_value(Some(public));
+                assert!(public.get("d").is_none(), "public JWK has d");
+            }
+        }
+        let kty: Vec<(&str, i32)> = kty.iter().map(|(k, n)| (k.as_str(), *n)).collect();
+        assert_eq!(kty, [("EC", 7), ("RSA", 9), ("oct", 15)]);
+        assert_eq!(
+            suite
+                .groups
+                .iter()
+                .filter(|g| g.jwe_keys.as_ref().is_some_and(|k| k.public.is_some()))
+                .count(),
+            11
+        );
+        // Every valid test carries its plaintext.
+        for (_, test) in suite.tests() {
+            let input = test.jwe();
+            if test.result == Expected::Valid {
+                assert!(input.pt.is_some(), "tcId {}", test.tc_id);
+            }
+            assert!(crate::jwa::ContentEncAlg::from(input.enc.as_str()).is_known());
+        }
+        let with_pt = suite.tests().filter(|(_, t)| t.jwe().pt.is_some()).count();
+        assert_eq!(with_pt, 90);
+        // Both serializations (RFC 7516 §7.1, §7.2) and malformed text.
+        let forms = |p: fn(&str) -> bool| suite.tests().filter(|(_, t)| p(&t.jwe().jwe)).count();
+        assert_eq!(forms(|j| j.starts_with('{')), 1);
+        assert_eq!(forms(|j| j.starts_with("ey")), 134);
+        // RFC 7520 §5 examples are a group of their own.
+        assert!(
+            suite
+                .groups
+                .iter()
+                .any(|g| g.comment.as_deref() == Some("rfc_7520"))
+        );
+    }
+
     #[test]
     fn input_accessors_reject_the_wrong_schema() {
         let suite = load("ed25519");
         let (_, test) = suite.tests().next().unwrap_or_else(|| panic!("no tests"));
         assert!(std::panic::catch_unwind(|| test.mac()).is_err());
         assert!(std::panic::catch_unwind(|| test.jws()).is_err());
+        assert!(std::panic::catch_unwind(|| test.aead()).is_err());
+        assert!(std::panic::catch_unwind(|| test.key_wrap()).is_err());
+        assert!(std::panic::catch_unwind(|| test.agreement()).is_err());
+        assert!(std::panic::catch_unwind(|| test.jwk_agreement()).is_err());
+        assert!(std::panic::catch_unwind(|| test.pbkdf()).is_err());
+        assert!(std::panic::catch_unwind(|| test.jwe()).is_err());
         let _ = test.signature();
+        let suite = load("aes_wrap");
+        let (_, test) = suite.tests().next().unwrap_or_else(|| panic!("no tests"));
+        assert!(std::panic::catch_unwind(|| test.aead()).is_err());
+        assert!(std::panic::catch_unwind(|| test.signature()).is_err());
+        let _ = test.key_wrap();
     }
 
     #[test]
@@ -1619,6 +2360,24 @@ mod tests {
         for (what, text) in cases {
             assert!(parse_mac(&text).is_err(), "{what} was accepted");
         }
+    }
+
+    #[test]
+    fn every_undefined_flag_exception_is_needed() {
+        for &(name, flag) in UNDEFINED_FLAGS {
+            let suite = load(name);
+            assert!(
+                !suite.notes.contains_key(flag),
+                "{name}: {flag} is now defined"
+            );
+            assert!(
+                suite.tests().any(|(_, t)| t.has_flag(flag)),
+                "{name}: no test uses {flag}"
+            );
+        }
+        // Any other undefined flag still fails.
+        let text = mac_file(1, "", &GOOD_TEST.replace("Pseudorandom", "Pkcs5Padding"));
+        assert!(parse_mac(&text).is_err());
     }
 
     #[test]
