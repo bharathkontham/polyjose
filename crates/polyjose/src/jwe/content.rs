@@ -310,4 +310,74 @@ mod tests {
         assert_eq!(aad("", Some(b"\xff")), b"._w");
         assert_eq!(aad("", None), b"");
     }
+
+    /// The content-encryption part of one RFC 7520 §5 example, read from
+    /// the vendored ietf-jose cookbook JSON (`tests/third_party/
+    /// ietf-jose-cookbook/`, Unlicense), not transcribed by hand.
+    struct Cookbook {
+        enc: ContentEncAlg,
+        /// The encoded protected header as printed, or `""` when the
+        /// example has none (RFC 7520 §5.12).
+        protected_b64: String,
+        /// The JWE AAD as raw bytes (`input.aad`, RFC 7520 §5.10).
+        jwe_aad: Option<Vec<u8>>,
+        /// `BASE64URL(JWE AAD)` as the RFC prints it.
+        jwe_aad_b64: Option<String>,
+    }
+
+    fn b64(text: &str) -> Vec<u8> {
+        crate::util::b64url_decode(text).unwrap()
+    }
+
+    fn cookbook(json: &str) -> Cookbook {
+        let doc: serde_json::Value = serde_json::from_str(json).unwrap();
+        let text = |v: &serde_json::Value| v.as_str().unwrap().to_owned();
+        let content = &doc["encrypting_content"];
+        Cookbook {
+            enc: ContentEncAlg::from(doc["input"]["enc"].as_str().unwrap()),
+            protected_b64: content.get("protected_b64u").map(text).unwrap_or_default(),
+            jwe_aad: doc["input"].get("aad").map(|v| text(v).into_bytes()),
+            jwe_aad_b64: doc["generated"].get("aad_b64u").map(text),
+        }
+    }
+
+    const RFC7520_5_10: &str = include_str!(
+        "../../tests/third_party/ietf-jose-cookbook/jwe/5_10.including_additional_authentication_data.json"
+    );
+    const RFC7520_5_12: &str = include_str!(
+        "../../tests/third_party/ietf-jose-cookbook/jwe/5_12.protecting_content_only.json"
+    );
+
+    #[test]
+    fn aad_matches_rfc_7520_5_10() {
+        // RFC 7520 §5.10.4: the AAD is ASCII(protected || '.' ||
+        // BASE64URL(JWE AAD)). The JWE AAD is encoded here from the raw
+        // vCard text and must equal the RFC's printed encoding.
+        let example = cookbook(RFC7520_5_10);
+        let (raw, printed) = (example.jwe_aad.unwrap(), example.jwe_aad_b64.unwrap());
+        let expected = format!("{}.{printed}", example.protected_b64);
+        assert!(expected.starts_with("eyJhbGciOiJBMTI4S1ciLCJraWQiOiI4MWIy"));
+        assert!(expected.ends_with(".WyJ2Y2FyZCIsW1sidmVyc2lvbiIse30sInRleHQiLCI0LjAiXSxbImZuIix7fSwidGV4dCIsIk1lcmlhZG9jIEJyYW5keWJ1Y2siXSxbIm4iLHt9LCJ0ZXh0IixbIkJyYW5keWJ1Y2siLCJNZXJpYWRvYyIsIk1yLiIsIiJdXSxbImJkYXkiLHt9LCJ0ZXh0IiwiVEEgMjk4MiJdLFsiZ2VuZGVyIix7fSwidGV4dCIsIk0iXV1d"));
+        assert_eq!(aad(&example.protected_b64, Some(&raw)), expected.as_bytes());
+        // Without the JWE AAD only the protected header is authenticated.
+        assert_eq!(
+            aad(&example.protected_b64, None),
+            example.protected_b64.as_bytes()
+        );
+    }
+
+    #[test]
+    fn aad_is_empty_without_protected_header_or_jwe_aad() {
+        // RFC 7520 §5.12: no protected header and no AAD, so the AAD is
+        // ASCII("") (RFC 7516 §5.1 step 14).
+        let example = cookbook(RFC7520_5_12);
+        assert_eq!(example.protected_b64, "");
+        assert!(example.jwe_aad.is_none());
+        assert_eq!(aad(&example.protected_b64, None), b"");
+        // An empty protected header with a JWE AAD keeps the '.'.
+        assert_eq!(
+            aad("", Some(b"[\"vcard\"]")),
+            format!(".{}", b64url_encode(b"[\"vcard\"]")).as_bytes()
+        );
+    }
 }
