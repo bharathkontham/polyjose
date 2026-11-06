@@ -1,6 +1,8 @@
 //! The JWT Claims Set (RFC 7519 §4): typed registered claims, every other
 //! claim kept as a [`Value`] (ADR 0027 §1).
 
+use core::fmt;
+
 use crate::error::{Error, Result};
 use crate::json::{Object, Value, parse};
 use zeroize::Zeroizing;
@@ -17,7 +19,17 @@ pub(crate) const REGISTERED_CLAIMS: [&str; 7] = ["iss", "sub", "aud", "exp", "nb
 /// "In the general case, the "aud" value is an array of case-sensitive
 /// strings", and with one audience it "MAY be a single case-sensitive
 /// string" (RFC 7519 §4.1.3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` prints the form and one `"<redacted>"` per value, never a
+/// value, like [`Value`]'s strings (see [`Claims`#debug]).
+///
+/// ```
+/// use polyjose::jwt::Audience;
+///
+/// let aud = Audience::Many(vec!["alice@example.com".into(), "api".into()]);
+/// assert_eq!(format!("{aud:?}"), r#"Many(["<redacted>", "<redacted>"])"#);
+/// ```
+#[derive(Clone, PartialEq, Eq)]
 pub enum Audience {
     /// A single string.
     One(String),
@@ -71,9 +83,44 @@ impl Audience {
 /// # Ok::<(), polyjose::Error>(())
 /// ```
 ///
-/// `Debug` prints the claim values; other claims print through [`Value`]'s
-/// `Debug`, which redacts strings.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// # Debug
+///
+/// `Debug` is polyjose's own and never prints a claim string, so a logged
+/// Claims Set (or the [`VerifiedJwt`](super::VerifiedJwt) or
+/// [`VerifiedNestedJwt`](super::VerifiedNestedJwt) holding it) cannot leak
+/// a claim (workspace secrets rule, ADR 0049 §4). A nested JWT is
+/// encrypted because its claims are confidential (RFC 7519 §11.2), and a
+/// `sub` is often personal data. It follows [`Value`]'s redacting `Debug`:
+///
+/// - `iss`, `sub` and `jti` print as `Some("<redacted>")` or `None`,
+///   whatever their content or length (RFC 7519 §4.1.1, §4.1.2, §4.1.7).
+/// - `aud` prints its form, [`One`](Audience::One) or
+///   [`Many`](Audience::Many), with one `"<redacted>"` per value, so the
+///   number of audiences shows and no value does (RFC 7519 §4.1.3).
+/// - `exp`, `nbf` and `iat` print in full: a NumericDate is a time, not a
+///   secret, and is what a reader needs to diagnose an expiry
+///   (RFC 7519 §4.1.4–§4.1.6).
+/// - The other claims print through [`Object`]'s `Debug`: claim names,
+///   `null`, booleans, numbers and structure show, and every string
+///   prints as `String("<redacted>")` (see [`Value`#debug]).
+///
+/// ```
+/// use polyjose::jwt::{Audience, Claims};
+///
+/// let mut claims = Claims::new();
+/// claims.sub = Some("alice@example.com".into());
+/// claims.aud = Some(Audience::One("https://api.example".into()));
+/// claims.insert("email", "alice@example.com")?;
+/// assert_eq!(
+///     format!("{claims:?}"),
+///     concat!(
+///         r#"Claims { iss: None, sub: Some("<redacted>"), aud: Some(One("<redacted>")), "#,
+///         r#"exp: None, nbf: None, iat: None, jti: None, other: {"email": String("<redacted>")} }"#,
+///     )
+/// );
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+#[derive(Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub struct Claims {
     /// `iss`, the issuer: a case-sensitive StringOrURI (RFC 7519 §4.1.1).
@@ -375,6 +422,54 @@ fn date_claim(value: Option<&Value>, claim: &'static str) -> Result<Option<Numer
     value
         .map(|value| NumericDate::from_json(value, claim))
         .transpose()
+}
+
+/// What `Debug` prints instead of a claim string: the placeholder
+/// [`Value`]'s `Debug` prints for a string.
+const REDACTED: &str = "<redacted>";
+
+/// Redacting: the form and one placeholder per value (see
+/// [`Claims`#debug]).
+impl fmt::Debug for Audience {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Audience::One(_) => f.debug_tuple("One").field(&REDACTED).finish(),
+            Audience::Many(auds) => f.debug_tuple("Many").field(&RedactedStrings(auds)).finish(),
+        }
+    }
+}
+
+/// The redacting `Debug` of a list of strings: one placeholder each.
+struct RedactedStrings<'a>(&'a [String]);
+
+impl fmt::Debug for RedactedStrings<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|_| REDACTED))
+            .finish()
+    }
+}
+
+/// Redacting: `iss`, `sub`, `jti` and `aud` print placeholders, the
+/// NumericDates print, other claims print through [`Object`]'s redacting
+/// `Debug` (see [`Claims`#debug]).
+impl fmt::Debug for Claims {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        /// `Some("<redacted>")` for a present string claim, else `None`.
+        fn redacted(claim: &Option<String>) -> Option<&'static str> {
+            claim.as_ref().map(|_| REDACTED)
+        }
+        f.debug_struct("Claims")
+            .field("iss", &redacted(&self.iss))
+            .field("sub", &redacted(&self.sub))
+            .field("aud", &self.aud)
+            .field("exp", &self.exp)
+            .field("nbf", &self.nbf)
+            .field("iat", &self.iat)
+            .field("jti", &redacted(&self.jti))
+            .field("other", &self.other)
+            .finish()
+    }
 }
 
 /// Moves the string out of its wiping buffer without copying it: the
