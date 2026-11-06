@@ -8,15 +8,18 @@
 //!   fixtures README table (`tests/data/keys/regen/README.md`);
 //! - encrypted keys (RFC 5958 §3, RFC 1421 §4.6.1.1) are
 //!   `UnsupportedAlgorithm`;
-//! - the export format matrix (plan.md, ADR 0018 §3).
+//! - the export format matrix (plan.md, ADR 0018 §3);
+//! - **no input ever yields an `oct` JWK** (RFC 8725 §2.1: the key-confusion
+//!   class of CVE-2015-9235, CVE-2017-11424, CVE-2023-48223).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 use std::path::{Path, PathBuf};
 
 use polyjose::Error;
 use polyjose::json::{self, Value};
-use polyjose::jwk::Jwk;
+use polyjose::jwk::{Jwk, KeyType};
 use polyjose::keys::{KeyFormat, KeySpec, generate};
+use proptest::prelude::*;
 
 const FORMATS: [KeyFormat; 4] = [
     KeyFormat::Pkcs8,
@@ -347,5 +350,103 @@ fn key_types_a_format_cannot_hold_are_unsupported() {
         ("X25519 public", pem_key("openssl", "x25519-spki.pem")),
     ] {
         assert_export(&key, KeyFormat::Pkcs1, &unsupported, what);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// No input ever yields an `oct` JWK (RFC 8725 §2.1, ADR 0018 §3)
+// ---------------------------------------------------------------------------
+
+/// Imports `input` every way the public API allows: as PEM text when it is
+/// UTF-8, and as DER in each of the four formats. Returns every success.
+fn every_import(input: &[u8]) -> Vec<Jwk> {
+    let mut keys = Vec::new();
+    if let Ok(text) = std::str::from_utf8(input) {
+        keys.extend(Jwk::from_pem(text));
+    }
+    for format in FORMATS {
+        keys.extend(Jwk::from_der(input, format));
+    }
+    keys
+}
+
+/// Every committed key fixture and negative vector, and the DER inside each
+/// PEM file (decoded by the `pem-rfc7468` oracle where it can).
+fn every_fixture_input() -> Vec<(String, Vec<u8>)> {
+    let mut inputs = Vec::new();
+    for dir in ["openssl", "rfc", "negative"] {
+        for file in files(dir) {
+            let bytes = read(dir, &file);
+            if file.ends_with(".pem")
+                && let Ok((_, der)) = pem_rfc7468::decode_vec(&bytes)
+            {
+                inputs.push((format!("{dir}/{file} (body)"), der));
+            }
+            inputs.push((format!("{dir}/{file}"), bytes));
+        }
+    }
+    inputs
+}
+
+#[test]
+fn no_fixture_or_negative_vector_ever_yields_an_oct_jwk() {
+    let inputs = every_fixture_input();
+    assert!(inputs.len() > 200, "{} inputs", inputs.len());
+    let mut successes = 0;
+    for (name, input) in &inputs {
+        for jwk in every_import(input) {
+            assert_ne!(jwk.key_type(), KeyType::Oct, "{name}");
+            assert_ne!(
+                jwk.to_object().get("kty").and_then(Value::as_str),
+                Some("oct"),
+                "{name}"
+            );
+            successes += 1;
+        }
+    }
+    // The positive fixtures do import, so the check is not vacuous.
+    assert!(successes > 100, "{successes} successful imports");
+}
+
+/// A positive DER fixture to mutate.
+fn some_der() -> Vec<Vec<u8>> {
+    ["openssl", "rfc"]
+        .iter()
+        .flat_map(|dir| {
+            files(dir)
+                .into_iter()
+                .filter(|f| f.ends_with(".der") && !f.starts_with("reject-"))
+                .map(|f| read(dir, &f))
+        })
+        .collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+
+    /// Arbitrary bytes never import as `oct`, and never panic.
+    #[test]
+    fn random_input_never_yields_an_oct_jwk(input in proptest::collection::vec(any::<u8>(), 0..512)) {
+        for jwk in every_import(&input) {
+            prop_assert_ne!(jwk.key_type(), KeyType::Oct);
+        }
+    }
+
+    /// A valid key with one octet changed, or cut short, never imports as
+    /// `oct`, and a changed key that still imports is EC, OKP or RSA.
+    #[test]
+    fn mutated_fixtures_never_yield_an_oct_jwk(
+        which in any::<prop::sample::Index>(),
+        at in any::<prop::sample::Index>(),
+        xor in 1u8..=255,
+        cut in any::<bool>(),
+    ) {
+        let all = some_der();
+        let mut der = which.get(&all).clone();
+        let i = at.index(der.len());
+        if cut { der.truncate(i); } else { der[i] ^= xor; }
+        for jwk in every_import(&der) {
+            prop_assert_ne!(jwk.key_type(), KeyType::Oct);
+        }
     }
 }
