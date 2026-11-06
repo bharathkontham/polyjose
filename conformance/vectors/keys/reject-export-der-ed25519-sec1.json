@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "DER export refusal: an Ed25519 key cannot be exported as SEC1, which holds only EC keys (RFC 5915 §3).",
+  "operation": "keys.export_der",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+      "d": "1O5y2_kTWErVttjx92n4rTr-fCjL8dT74Jeoj0R1WEI"
+    },
+    "format": "sec1"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

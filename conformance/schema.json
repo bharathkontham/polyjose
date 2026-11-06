@@ -24,6 +24,7 @@
         "keys.import_pem",
         "keys.export_pem",
         "keys.import_der",
+        "keys.export_der",
         "jwe.encrypt",
         "jwe.decrypt",
         "jwt.validate"
@@ -169,6 +170,23 @@
           "expect": {
             "oneOf": [
               { "$ref": "#/$defs/keys_import_der_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.export_der" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_export_der_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/keys_export_der_ok" },
               { "$ref": "#/$defs/failure" }
             ]
           }
@@ -491,6 +509,29 @@
       "properties": {
         "ok": { "const": true },
         "jwk": { "type": "object" }
+      }
+    },
+    "keys_export_der_input": {
+      "description": "Export a JWK as DER in format (ADR 0018 §3), with the format matrix of keys.export_pem. The runner imports jwk with the library's JWK import first; an import error is the vector's outcome.",
+      "type": "object",
+      "required": ["jwk", "format"],
+      "additionalProperties": false,
+      "properties": {
+        "jwk": { "type": "object" },
+        "format": {
+          "description": "pkcs8 (RFC 5958 §2), sec1 (RFC 5915 §3), spki (RFC 5280 §4.1.2.7) or pkcs1 (RFC 8017 App. A.1.1, RSA public keys).",
+          "enum": ["pkcs8", "sec1", "spki", "pkcs1"]
+        }
+      }
+    },
+    "keys_export_der_ok": {
+      "description": "The exact DER, in OpenSSL 4's layout (ADR 0018 §3), as canonical base64url; compared as a string.",
+      "type": "object",
+      "required": ["ok", "der_b64u"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "der_b64u": { "$ref": "#/$defs/base64url" }
       }
     }
   }

@@ -108,6 +108,7 @@ oct_a3 = {"kty": "oct", "alg": "A128KW", "k": "GawgguFyGrWKav7AX4VKUg"}
 p256_pub = jwk('rfc', 'rfc7517-a1-ec-p256-spki.jwk.json')
 ed_priv = jwk('rfc', 'rfc8410-10.3-ed25519-pkcs8-v1.jwk.json')
 p256_priv = jwk('rfc', 'rfc7517-a2-ec-p256-pkcs8.jwk.json')
+export_refusals = []
 for name, j, fmt, code, what in [
   ('reject-export-oct-pkcs8', oct_a3, 'pkcs8', 'UnsupportedAlgorithm', 'the RFC 7517 A.3 oct key cannot be exported as PKCS#8: oct keys never cross PEM/DER, so no text can become an HMAC secret (RFC 8725 §2.1, ADR 0018 §3)'),
   ('reject-export-oct-spki', oct_a3, 'spki', 'UnsupportedAlgorithm', 'the RFC 7517 A.3 oct key cannot be exported as SPKI (RFC 8725 §2.1, ADR 0018 §3)'),
@@ -117,6 +118,7 @@ for name, j, fmt, code, what in [
 ]:
     src = 'RFC 7517 App. A.3' if 'oct' in name else 'polyjose'
     write(name, src, 'Export refusal: ' + what + '.', 'keys.export_pem', {'jwk': j, 'format': fmt}, {'ok': False, 'error': code})
+    export_refusals.append((name, src, j, fmt, code, what))
 
 # --- the 12 representative import negatives ------------------------------
 negs = [
@@ -153,4 +155,10 @@ der_negs = {
 for name, src, pem, code, what in negs:
     if name in der_negs:
         write(name.replace('reject-', 'reject-der-', 1), src, 'DER import rejects ' + der_negs[name] + '.', 'keys.import_der', der_input(pem), {'ok': False, 'error': code})
+
+# --- DER exports and export refusals: the PEM ones, as DER ----------------
+for name, source, jd, jf, fmt, d, pem, what in exports:
+    write(name.replace('export-', 'export-der-', 1), source, 'DER export of ' + what + '.', 'keys.export_der', {'jwk': jwk(jd, jf), 'format': fmt}, {'ok': True, 'der_b64u': der_input(text(d, pem))['der_b64u']})
+for name, src, j, fmt, code, what in export_refusals:
+    write(name.replace('reject-export-', 'reject-export-der-', 1), src, 'DER export refusal: ' + what + '.', 'keys.export_der', {'jwk': j, 'format': fmt}, {'ok': False, 'error': code})
 print(n, 'vectors written')

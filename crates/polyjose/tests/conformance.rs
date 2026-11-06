@@ -21,7 +21,8 @@
 //!   import gives the expected JWK, and the export, after the JWK import,
 //!   gives the exact PEM text;
 //! - for `keys.import_der`, `der_b64u` is decoded (a non-canonical value is
-//!   a broken vector, never an outcome) and imported in the named `format`.
+//!   a broken vector, never an outcome) and imported in the named `format`;
+//!   `keys.export_der` gives the exact DER, as canonical base64url.
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
@@ -62,6 +63,7 @@ const OPERATIONS: &[&str] = &[
     "keys.import_pem",
     "keys.export_pem",
     "keys.import_der",
+    "keys.export_der",
     "jwe.encrypt",
     "jwe.decrypt",
     "jwt.validate",
@@ -372,6 +374,21 @@ const KEYS_IMPORT_DER_OK: Shape = Shape {
     members: &[req("jwk", Kind::Object)],
     rules: &[],
 };
+// ADR 0018 §3 DER export through `Jwk::from_object` then `Jwk::to_der`.
+const KEYS_EXPORT_DER_INPUT: Shape = Shape {
+    def: "keys_export_der_input",
+    members: &[
+        req("jwk", Kind::Object),
+        req("format", Kind::Enum(KEY_FORMAT_NAMES)),
+    ],
+    rules: &[],
+};
+/// The exact DER, as canonical base64url, compared as a string.
+const KEYS_EXPORT_DER_OK: Shape = Shape {
+    def: "keys_export_der_ok",
+    members: &[req("der_b64u", Kind::Base64url)],
+    rules: &[],
+};
 
 /// The operations this runner implements.
 const SPECS: &[OpSpec] = &[
@@ -421,6 +438,12 @@ const SPECS: &[OpSpec] = &[
         name: "keys.import_der",
         input: &KEYS_IMPORT_DER_INPUT,
         ok: &[&KEYS_IMPORT_DER_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "keys.export_der",
+        input: &KEYS_EXPORT_DER_INPUT,
+        ok: &[&KEYS_EXPORT_DER_OK],
         can_fail: true,
     },
 ];
@@ -1049,6 +1072,23 @@ fn run_keys_export_pem(input: &Object, out: &mut Object) -> Result<Result<(), Er
     }
 }
 
+/// `keys.export_der`: the JWK import (`Jwk::from_object`), whose error is
+/// the outcome, then `Jwk::to_der` in `format`, as canonical base64url.
+fn run_keys_export_der(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let format = input_format(input);
+    let key = match Jwk::from_object(input_object(input, "jwk")) {
+        Ok(key) => key,
+        Err(e) => return Ok(Err(e)),
+    };
+    match key.to_der(format) {
+        Ok(der) => {
+            out.insert("der_b64u", b64url_encode(&der));
+            Ok(Ok(()))
+        }
+        Err(e) => Ok(Err(e)),
+    }
+}
+
 /// Runs the operation through the public API: the success outputs, or the
 /// library's error.
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
@@ -1103,6 +1143,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
         }
         "keys.import_der" => {
             if let Err(e) = run_keys_import_der(input, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "keys.export_der" => {
+            if let Err(e) = run_keys_export_der(input, &mut out)? {
                 return Ok(Err(e));
             }
         }
@@ -1729,6 +1774,16 @@ fn valid_vectors_pass() {
             &format!(r#"{{"format":"pkcs8","der_b64u":"{RFC8410_10_1_DER}"}}"#),
             r#"{"ok":false,"error":"InvalidKey"}"#,
         ),
+        vector(
+            "keys.export_der",
+            r#"{"format":"spki","jwk":{"kty":"OKP","crv":"Ed25519","x":"Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE"}}"#,
+            &format!(r#"{{"ok":true,"der_b64u":"{RFC8410_10_1_DER}"}}"#),
+        ),
+        vector(
+            "keys.export_der",
+            r#"{"format":"spki","jwk":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}}"#,
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+        ),
     ];
     for json in cases {
         assert!(
@@ -1845,6 +1900,42 @@ fn keys_vectors_fail_when_wrong_or_malformed() {
                 r#"{"ok":false,"error":"InvalidKey"}"#,
             ),
             "/input/pem",
+        ),
+        (
+            "export-der-wrong-der.json",
+            vector(
+                "keys.export_der",
+                &format!(r#"{{"jwk":{jwk},"format":"spki"}}"#),
+                r#"{"ok":true,"der_b64u":"MCowBQYDK2VwAyEA"}"#,
+            ),
+            "`der_b64u`",
+        ),
+        (
+            "export-der-padded.json",
+            vector(
+                "keys.export_der",
+                &format!(r#"{{"jwk":{jwk},"format":"spki"}}"#),
+                &format!(r#"{{"ok":true,"der_b64u":"{RFC8410_10_1_DER}="}}"#),
+            ),
+            "/expect/der_b64u",
+        ),
+        (
+            "export-der-pem-output.json",
+            vector(
+                "keys.export_der",
+                &format!(r#"{{"jwk":{jwk},"format":"spki"}}"#),
+                &format!(r#"{{"ok":true,"pem":{pem}}}"#),
+            ),
+            "/expect/pem",
+        ),
+        (
+            "export-der-bad-format.json",
+            vector(
+                "keys.export_der",
+                &format!(r#"{{"jwk":{jwk},"format":"pem"}}"#),
+                r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+            ),
+            "/input/format",
         ),
         (
             "import-extra-member.json",
