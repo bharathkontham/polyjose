@@ -215,6 +215,7 @@ mod tests {
     use super::*;
     use crate::jwe::random::OsRandom;
     use crate::rng::insecure_test_vectors::FixedRng;
+    use crate::test_support::wycheproof::{self, Outcome};
 
     fn assert_zeroize_on_drop<T: Zeroize + ZeroizeOnDrop>() {}
 
@@ -590,5 +591,79 @@ mod tests {
                 assert!(!error.to_string().contains("secret"));
             }
         }
+    }
+
+    /// Wycheproof AES-GCM tests whose group polyjose rejects as a whole:
+    /// every IV size but 96 bits (64, 128, 120, 160, 256, 512, 1024, 2056,
+    /// 8–80 bits). The 0-bit groups (tcId 311–316) are `invalid` upstream
+    /// too, so they need no entry.
+    const AES_GCM: &[wycheproof::Deviation] = &[
+        wycheproof::Deviation::range(68, 90, Outcome::Reject, GCM_IV_ONLY_96),
+        wycheproof::Deviation::range(157, 175, Outcome::Reject, GCM_IV_ONLY_96),
+        wycheproof::Deviation::range(240, 310, Outcome::Reject, GCM_IV_ONLY_96),
+    ];
+    const GCM_IV_ONLY_96: &str = "RFC 7518 §5.3: JWE AES-GCM requires a 96-bit IV";
+
+    /// The `enc` of a Wycheproof AES-GCM group, if JWE has one: a 96-bit
+    /// IV, a 128-bit tag and a 128-, 192- or 256-bit key (RFC 7518 §5.3).
+    fn jwe_enc(group: &wycheproof::Group) -> Option<ContentEncAlg> {
+        if (group.iv_size, group.tag_size) != (Some(96), Some(128)) {
+            return None;
+        }
+        match group.key_size {
+            Some(128) => Some(ContentEncAlg::A128GCM),
+            Some(192) => Some(ContentEncAlg::A192GCM),
+            Some(256) => Some(ContentEncAlg::A256GCM),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn wycheproof_aes_gcm() {
+        // Every in-scope `valid` test round-trips exactly (the ciphertext
+        // and detached tag, and the plaintext back); every `invalid` one is
+        // DecryptionFailed (RFC 7516 §5.2 step 16, §11.4). Groups JWE
+        // cannot express still run through decrypt and must be rejected;
+        // they are counted so nothing is skipped silently.
+        let suite = wycheproof::load("aes_gcm");
+        let (mut run, mut skipped) = (0usize, 0usize);
+        let summary = wycheproof::assert_conforms(&suite, AES_GCM, |group, test| {
+            let input = test.aead();
+            let cek = Cek::from_slice(&input.key);
+            let Some(enc) = jwe_enc(group) else {
+                skipped += 1;
+                // Decrypt as A*GCM by key size: the IV length rejects it.
+                let enc = match input.key.len() {
+                    16 => ContentEncAlg::A128GCM,
+                    24 => ContentEncAlg::A192GCM,
+                    _ => ContentEncAlg::A256GCM,
+                };
+                let opened = decrypt(&enc, &cek, &input.iv, &input.aad, &input.ct, &input.tag);
+                assert_eq!(opened, Err(Error::DecryptionFailed), "tcId {}", test.tc_id);
+                return Outcome::Reject;
+            };
+            run += 1;
+            let opened = decrypt(&enc, &cek, &input.iv, &input.aad, &input.ct, &input.tag);
+            if test.result == wycheproof::Expected::Valid {
+                let sealed = encrypt(&enc, &cek, &input.iv, &input.aad, &input.msg);
+                assert_eq!(
+                    sealed,
+                    Ok((input.ct.clone(), input.tag.clone())),
+                    "tcId {}",
+                    test.tc_id
+                );
+                let opened = opened.as_ref().map(|pt| pt.as_slice());
+                assert_eq!(opened, Ok(input.msg.as_slice()), "tcId {}", test.tc_id);
+            } else if opened.is_err() {
+                assert_eq!(opened, Err(Error::DecryptionFailed), "tcId {}", test.tc_id);
+            }
+            Outcome::of(&opened)
+        });
+        // The pinned file: 316 tests in 45 groups; 3 groups (128-, 192- and
+        // 256-bit keys, 96-bit IV, 128-bit tag) with 197 tests are JWE's.
+        let in_scope = suite.groups.iter().filter(|g| jwe_enc(g).is_some()).count();
+        assert_eq!((in_scope, suite.groups.len() - in_scope), (3, 42));
+        assert_eq!((run, skipped, summary.tests), (197, 119, 316));
+        assert_eq!(summary.accepted, 116);
     }
 }
