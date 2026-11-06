@@ -87,6 +87,9 @@ pub struct Policy<'a> {
     subject: Option<String>,
     max_age: Option<u32>,
     required: Vec<String>,
+    /// Whether a present `client_id` must be a JSON string: set by
+    /// [`Policy::access_token`] only (ADR 0052 §1, RFC 9068 §2.2).
+    string_client_id: bool,
     require_exp: bool,
     ignore_audience: bool,
     typ: TypMode,
@@ -127,6 +130,7 @@ impl<'a> Policy<'a> {
             subject: None,
             max_age: None,
             required: Vec::new(),
+            string_client_id: false,
             require_exp: true,
             ignore_audience: false,
             typ: TypMode::Default,
@@ -143,6 +147,13 @@ impl<'a> Policy<'a> {
     /// - every claim of
     ///   [`ACCESS_TOKEN_REQUIRED_CLAIMS`]
     ///   must be present (RFC 9068 §2.2);
+    /// - `client_id` must be a JSON string, `""` included: RFC 9068 §2.2
+    ///   defines it by RFC 8693 §4.3, the client identifier of RFC 6749
+    ///   §2.2, "a unique string". `null`, a number, a boolean, an array
+    ///   or an object fails with [`Error::InvalidClaim`]`("client_id")`,
+    ///   at the same step as a missing one (ADR 0052). Later builder
+    ///   calls keep this rule; [`require`](Self::require) alone does not
+    ///   add it;
     /// - the signature is always verified, and `none` is never accepted
     ///   (RFC 9068 §2.1, §4).
     ///
@@ -173,9 +184,10 @@ impl<'a> Policy<'a> {
         if audiences.is_empty() {
             return Err(Error::InvalidClaim("aud"));
         }
-        let policy = ACCESS_TOKEN_REQUIRED_CLAIMS
+        let mut policy = ACCESS_TOKEN_REQUIRED_CLAIMS
             .iter()
             .fold(policy, |policy, claim| policy.require(claim));
+        policy.string_client_id = true;
         Ok(policy
             .issuers(issuers)
             .audiences(audiences)
@@ -249,6 +261,10 @@ impl<'a> Policy<'a> {
     /// Requires the claim `claim` to be present, with any JSON value
     /// (RFC 7519 §4: which claims are required "is context dependent";
     /// ADR 0027 §4). Requiring a name twice has no further effect.
+    ///
+    /// Any JSON value counts, for `client_id` too; only
+    /// [`Policy::access_token`] requires `client_id` to be a string
+    /// (ADR 0052 §3).
     ///
     /// Presence is checked in the ADR 0027 §9 J4 order: the registered
     /// claims `iss, sub, aud, exp, nbf, iat, jti` first, then the other
@@ -384,6 +400,12 @@ impl<'a> Policy<'a> {
         &self.required
     }
 
+    /// Whether a present `client_id` must be a JSON string (ADR 0052 §1):
+    /// true only for a [`Policy::access_token`] policy.
+    pub(crate) fn requires_string_client_id(&self) -> bool {
+        self.string_client_id
+    }
+
     /// Whether `exp` is required (true unless
     /// [`allow_missing_exp`](Self::allow_missing_exp)).
     pub(crate) fn requires_exp(&self) -> bool {
@@ -417,6 +439,7 @@ impl fmt::Debug for Policy<'_> {
             .field("subject", &self.subject)
             .field("max_age", &self.max_age)
             .field("required", &self.required)
+            .field("string_client_id", &self.string_client_id)
             .field("require_exp", &self.require_exp)
             .field("ignore_audience", &self.ignore_audience)
             .field("typ", &self.typ)
@@ -546,6 +569,9 @@ mod tests {
         assert!(!p.ignores_audience());
         assert_eq!(p.leeway_secs(), 60);
         assert_eq!(p.allowed_algs(), ES256);
+        // ADR 0052 §1: the profile, and only the profile, types client_id.
+        assert!(p.requires_string_client_id());
+        assert!(!policy().require("client_id").requires_string_client_id());
     }
 
     #[test]
