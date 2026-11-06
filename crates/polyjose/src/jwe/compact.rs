@@ -229,9 +229,10 @@ mod tests {
             parse_code(&enc(r#"{"alg":"dir","alg":"dir","enc":"A128GCM"}"#)),
             "InvalidJson"
         );
-        // Valid JSON that is not an object (plan.md: steps 3-4).
-        for json in ["[]", "\"x\"", "1", "null"] {
-            assert_eq!(parse_code(&enc(json)), "InvalidHeader", "{json}");
+        // Valid JSON that is not an object: InvalidJson, as for JWS
+        // (ADR 0026 §2 step 4).
+        for json in ["[]", "[1]", "\"x\"", "\"\"", "1", "null"] {
+            assert_eq!(parse_code(&enc(json)), "InvalidJson", "{json}");
         }
         // A registered parameter of the wrong type.
         assert_eq!(

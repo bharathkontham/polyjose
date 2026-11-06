@@ -103,17 +103,15 @@ const SET_BY_POLYJOSE: &[&str] = &[
 ///
 /// # Errors
 ///
-/// [`Error::InvalidJson`] for bytes that are not I-JSON, including a
-/// duplicate member name at any depth (ADR 0041 §1) or the JSON limits;
-/// [`Error::InvalidHeader`] for valid JSON that is not an object, or a
-/// registered parameter of the wrong type (plan.md error contract, steps
-/// 3–4).
+/// [`Error::InvalidJson`] for bytes that are not an I-JSON object: a
+/// syntax error, a duplicate member name at any depth (ADR 0041 §1), the
+/// JSON limits, or valid JSON that is not an object (`[1]`, `""`), as for
+/// JWS (ADR 0026 §2 step 4); [`Error::InvalidHeader`] for a registered
+/// parameter of the wrong type (plan.md error contract, steps 3–4).
 pub(crate) fn parse_protected(json: &[u8]) -> Result<Header> {
     let object = json::parse(json)?
         .into_object()
-        .ok_or(Error::InvalidHeader(
-            "protected header must be a JSON object",
-        ))?;
+        .ok_or(Error::InvalidJson("protected header must be a JSON object"))?;
     Header::from_object(object)
 }
 
@@ -707,7 +705,8 @@ mod tests {
             code(parse_protected(br#"{"x":{"a":1,"a":2}}"#)),
             "InvalidJson"
         );
-        assert_eq!(code(parse_protected(b"[]")), "InvalidHeader");
+        assert_eq!(code(parse_protected(b"[]")), "InvalidJson");
+        assert_eq!(code(parse_protected(b"\"\"")), "InvalidJson");
         assert_eq!(code(parse_protected(br#"{"enc":7}"#)), "InvalidHeader");
     }
 

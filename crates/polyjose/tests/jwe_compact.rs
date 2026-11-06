@@ -627,8 +627,20 @@ fn header_structure_errors() {
         at(r#"{"alg":"A128KW","enc":"A128CBC-HS256","x":{"a":1,"a":1}}"#),
         "InvalidJson"
     );
-    // Not an object, or a registered parameter of the wrong type.
-    assert_eq!(at(r#"["alg","A128KW"]"#), "InvalidHeader");
+    // Valid JSON that is not an object is InvalidJson, as for JWS
+    // (ADR 0026 §2 step 4): `[1]` (WzFd) and `""` (IiI) among them.
+    for json in [r#"["alg","A128KW"]"#, "[1]", r#""""#, "null", "7"] {
+        assert_eq!(at(json), "InvalidJson", "{json}");
+    }
+    for protected in ["WzFd", "IiI"] {
+        let token = format!("{protected}..AAAA.AAAA.AAAA");
+        assert_eq!(
+            code(decrypt_compact(&token, &key, &a3_policy())),
+            "InvalidJson",
+            "{protected}"
+        );
+    }
+    // A registered parameter of the wrong type.
     assert_eq!(
         at(r#"{"alg":"A128KW","enc":"A128CBC-HS256","kid":7}"#),
         "InvalidHeader"
