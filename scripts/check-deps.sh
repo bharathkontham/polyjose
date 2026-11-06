@@ -485,16 +485,38 @@ for dep in pkgs[0]["dependencies"]:
 #      Decryptor`) and any `decrypt(`/`decrypt_blinded(` call (e.g. an `Oaep` decryption). These
 #      words are legitimate elsewhere (`p256::ecdsa::SigningKey`, `cbc::Decryptor`), so RSA code
 #      lives in files of its own (jws/rsa.rs, jwe/rsa_oaep.rs) and refers to child modules named
-#      `rsa` as `self::rsa::`.
+#      `rsa` as `self::rsa::`;
+#    - anywhere, the macro rule (ADR 0049 §1): `rsa` or `r#rsa` as an identifier inside the token
+#      tree of a macro call (`name!(..)`, `name![..]`, `name!{..}`, `macro_rules! name {..}`, at
+#      any depth) or of an attribute (`#[..]`, `#![..]`). A macro can make it the head of a path
+#      (`macro_rules! k { ($c:ident) => { $c::pkcs1v15::SigningKey<..> } }` with `k!(rsa)`) that
+#      no rule above sees, and the compiled-symbol check sees that path only in code that is
+#      codegened, not in an uncalled `#[inline] pub fn`, a generic `pub fn` never instantiated in
+#      the workspace, or code the built profiles leave out, all of which a downstream crate can
+#      still compile. The rule reads the file with every comment and literal removed
+#      (`format!("rsa")`, `k!(/* rsa */ x)` pass), and allows two forms:
+#        - a later segment of a path, `<ident>::rsa` (`polyjose::jws::rsa::verify`, `self::rsa`,
+#          `$crate::jws::rsa`), which names a module of polyjose; a global `::rsa` is the crate
+#          and fails;
+#        - inside the std macros of STD_MACROS called by their plain name (`assert!`,
+#          `assert_eq!`, `format!`, `vec!`, ..), whose arguments are ordinary expressions,
+#          patterns or format arguments that no path is built from, so the rules above read them
+#          as any other code (`assert!(rsa.is_public())` in a test). Every enclosing macro call
+#          must be one (`k!(assert!(rsa))` and `assert!(k!(rsa))` fail), and a `macro_rules!` or
+#          an `as` that takes one of their names fails, so a local macro cannot pass as one.
 #    Rust allows whitespace and comments between the tokens of a path (`rsa` / newline /
 #    `::pkcs1v15::SigningKey`, `rsa /* … */ :: x`), and rustfmt need not have run. So every rule
-#    runs on each line and also on two whole-file views, with whitespace runs (newlines included)
-#    collapsed to one space and the spaces next to `::` removed: one with the comments kept and
-#    one with each comment replaced by a space. A view only adds findings; a finding that only a
-#    view sees is reported with the line where the match starts.
-#    Residual risk, outside any text scan: names built by macros (`k!(rsa)`). This scan is the fast
-#    first layer; scripts/check-rsa-symbols.sh reads the compiled objects of polyjose and the
-#    bindings, where no spelling of a path can hide it (ADR 0049 §1).
+#    but the macro rule (which reads tokens) runs on each line and also on two whole-file views,
+#    with whitespace runs (newlines included) collapsed to one space and the spaces next to `::`
+#    removed: one with the comments kept and one with each comment replaced by a space. A view
+#    only adds findings; a finding that only a view sees is reported with the line where the
+#    match starts.
+#    Residual risk, outside this scan: a macro that drops the leading segments of a path it is
+#    given (`k!(x::rsa)` to `rsa::..`), a dependency's macro with a std macro's name brought in by
+#    a glob import, and a derive or attribute macro of a dependency that builds a path from an
+#    item's own identifiers. This scan is the fast first layer; scripts/check-rsa-symbols.sh reads
+#    the compiled objects of polyjose and the bindings (dev and release profiles), where no
+#    spelling of a path can hide codegened code (ADR 0049 §1).
 check_rsa_public_only() {
   python3 -I -c '
 import bisect, os, re, sys
@@ -556,8 +578,9 @@ SKIP_DIRS = {"target", "node_modules", ".git"}
 Q = chr(39)
 RAW_STR = re.compile(r"[bc]?r(#*)\"")
 CHAR_LIT = re.compile(Q + r"(?:\\(?:u\{[0-9A-Fa-f_]*\}|x[0-9A-Fa-f]{2}|.)|[^\\\n" + Q + "])" + Q)
-def strip_comments(text):
-    """(char, offset) pairs of text with each comment replaced by one space at its offset."""
+def strip_comments(text, literals=False):
+    """(char, offset) pairs of text with each comment replaced by one space at its offset, and
+    with literals=True each string, raw string and char literal too (for the macro rule)."""
     out, i, n = [], 0, len(text)
     while i < n:
         if text.startswith("//", i):
@@ -591,7 +614,10 @@ def strip_comments(text):
                 end = char.end()
             else:
                 end = i + 1
-            out.extend((text[k], k) for k in range(i, end))
+            if literals and (raw is not None or text[i] == "\"" or char is not None):
+                out.append((" ", i))
+            else:
+                out.extend((text[k], k) for k in range(i, end))
         i = end
     return out
 def flatten(pairs):
@@ -608,6 +634,63 @@ def flatten(pairs):
     keep = [k for k in range(len(chars)) if not (chars[k] == " " and (
         "".join(chars[k + 1:k + 3]) == "::" or "".join(chars[max(k - 2, 0):k]) == "::"))]
     return "".join(chars[k] for k in keep), [offsets[k] for k in keep]
+# The macro rule (see the comment of check 9): the std macros whose arguments are ordinary
+# expressions, patterns or format arguments, called by their plain name. Keywords never name a
+# macro (`if !(x)`, `return !(x)` are negations).
+STD_MACROS = {"assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne",
+              "format", "format_args", "print", "println", "eprint", "eprintln", "write", "writeln",
+              "panic", "unreachable", "todo", "unimplemented", "vec", "matches"}
+KEYWORDS = {"as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+            "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
+            "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true",
+            "type", "unsafe", "use", "where", "while", "yield"}
+TOKEN = re.compile(r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*|[0-9][A-Za-z0-9_]*|" + Q + r"[A-Za-z_][A-Za-z0-9_]*|::|\S")
+IDENT = re.compile(r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*$")
+CLOSE = {"(": ")", "[": "]", "{": "}"}
+def macro_rule(text):
+    """(offset, reason) for each rsa identifier inside a macro call or attribute that the macro
+    rule rejects, and for each local macro that takes a name of STD_MACROS."""
+    pairs = strip_comments(text, literals=True)
+    code = "".join(ch for ch, _ in pairs)
+    toks = [(m.group(0), pairs[m.start()][1]) for m in TOKEN.finditer(code)]
+    tok = lambda k: toks[k][0] if 0 <= k < len(toks) else ""
+    # One entry per open delimiter: None, or (what it is the token tree of, trusted).
+    found, stack = [], []
+    for k, (t, offset) in enumerate(toks):
+        if t in CLOSE:
+            frame, shown = None, t + ".." + CLOSE[t]
+            if tok(k - 1) == "!" and IDENT.match(tok(k - 2)) and tok(k - 2) not in KEYWORDS:
+                name, plain = tok(k - 2), tok(k - 3) not in ("::", "$")
+                frame = ("the macro call %s!%s%s" % (name, shown, "" if plain or name not in STD_MACROS
+                         else " (a qualified or $ name is not the std macro)"), plain and name in STD_MACROS)
+            elif IDENT.match(tok(k - 1)) and tok(k - 2) == "!" and tok(k - 3) in ("macro_rules", "r#macro_rules"):
+                frame = ("the macro call macro_rules! %s %s" % (tok(k - 1), shown), False)
+            elif t == "[" and (tok(k - 1) == "#" or (tok(k - 1) == "!" and tok(k - 2) == "#")):
+                frame = ("the attribute #[%s ..]" % tok(k + 1), False)
+            stack.append(frame)
+        elif t in (")", "]", "}"):
+            if stack:
+                stack.pop()
+        elif t in ("rsa", "r#rsa"):
+            frames = [f for f in stack if f is not None]
+            if not frames or all(trusted for _, trusted in frames):
+                continue
+            # A later segment of a path (`polyjose::jws::rsa`, `self::rsa`, `$crate::jws::rsa`)
+            # names a module of polyjose; a global `::rsa` is the crate.
+            if tok(k - 1) == "::" and (IDENT.match(tok(k - 2)) or tok(k - 2) == ">"):
+                continue
+            where = [w for w, trusted in frames if not trusted][-1]
+            found.append((offset, "rsa as an identifier inside %s: a macro can build an rsa path from it"
+                                  " that no other text rule sees (ADR 0049 §1)" % where))
+        elif IDENT.match(t) and (t[2:] if t.startswith("r#") else t) in STD_MACROS:
+            name = t[2:] if t.startswith("r#") else t
+            if tok(k - 1) == "!" and tok(k - 2) in ("macro_rules", "r#macro_rules"):
+                found.append((offset, "macro_rules! %s: a macro named like a std macro whose arguments"
+                                      " the macro rule trusts (ADR 0049 §1); name it otherwise" % name))
+            elif tok(k - 1) == "as":
+                found.append((offset, "as %s: a macro named like a std macro whose arguments the macro"
+                                      " rule trusts (ADR 0049 §1); name it otherwise" % name))
+    return found
 found = 0
 for root in roots:
     if not os.path.isdir(root):
@@ -651,6 +734,12 @@ for root in roots:
                             print("%s:%d: %s (path split across lines, by whitespace or by a comment)" % (path, number, explain(why, m)))
                             found += 1
                             reported.add((number, explain(why, m)))
+            for offset, why in macro_rule(text):
+                number = bisect.bisect_right(line_starts, offset)
+                if (number, why) not in reported:
+                    print("%s:%d: %s" % (path, number, why))
+                    found += 1
+                    reported.add((number, why))
 for root in roots:
     if not os.path.isdir(root):
         sys.exit("%s is not a directory" % root)
