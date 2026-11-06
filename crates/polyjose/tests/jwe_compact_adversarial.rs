@@ -225,6 +225,88 @@ fn no_key_material_in_debug_or_errors() {
     }
 }
 
+/// Removes every whitespace character, so a `{:#?}` dump (one byte per
+/// line) is searched the same way as a `{:?}` dump.
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// The JWE AAD (RFC 7516 §7.2.1 `aad`) can carry application secrets, so
+/// `Encryptor`'s `Debug` shows only whether it is set and its length (ADR
+/// 0050 §4, ADR 0030 §7.5). `Recipient` (its key) and `DecryptPolicy` stay
+/// redacted. Checked alone and nested inside a derived-`Debug` struct, in
+/// both the compact and the pretty form.
+#[test]
+fn encryptor_debug_redacts_aad_and_keys() {
+    const AAD: &[u8] = b"ZZAADMARKERZZ";
+    const KEY: &[u8; 16] = b"ZZKEYMARKERZZ016";
+
+    #[derive(Debug)]
+    #[allow(dead_code)] // read only through `Debug`
+    struct Holder<'a> {
+        encryptor: &'a Encryptor,
+        recipient: &'a Recipient,
+        policy: &'a DecryptPolicy,
+    }
+
+    let key = oct(KEY);
+    let recipient = Recipient::new(A::A128KW, &key).apu(b"Alice".to_vec());
+    let e = Encryptor::new(E::A128GCM)
+        .aad(AAD)
+        .recipient(recipient.clone())
+        .recipient(recipient.clone());
+    let p = policy(&[A::A128KW], &[E::A128GCM]);
+    let holder = Holder {
+        encryptor: &e,
+        recipient: &recipient,
+        policy: &p,
+    };
+    // Every form the secrets could take in a dump: text, base64url and the
+    // derived `Debug` of the byte vector.
+    let needles: Vec<String> = [AAD, &KEY[..]]
+        .iter()
+        .flat_map(|bytes| {
+            [
+                String::from_utf8_lossy(bytes).into_owned(),
+                b64url_encode(bytes),
+                squash(&format!("{bytes:?}")),
+            ]
+        })
+        .collect();
+
+    let alone = format!("{e:?}");
+    for dump in [
+        alone.clone(),
+        format!("{e:#?}"),
+        format!("{recipient:?}"),
+        format!("{p:?}"),
+        format!("{holder:?}"),
+        format!("{holder:#?}"),
+    ] {
+        let squashed = squash(&dump);
+        for needle in &needles {
+            assert!(!squashed.contains(needle.as_str()), "{needle} in {dump}");
+        }
+        assert!(!dump.contains("MARKER"), "{dump}");
+    }
+
+    // What the dump does show: enc, the recipient count, the flags, and
+    // the AAD's length only.
+    for shown in [
+        "enc: A128GCM",
+        "recipients: 2",
+        "protected_header: false",
+        "shared_header: false",
+        "aad: Some(<redacted, len=13>)",
+        "compress: false",
+    ] {
+        assert!(alone.contains(shown), "{shown} not in {alone}");
+    }
+    let bare = format!("{:?}", Encryptor::new(E::A128GCM));
+    assert!(bare.contains("aad: None, "), "{bare}");
+    assert!(bare.contains("recipients: 0"), "{bare}");
+}
+
 #[test]
 fn gcm_wrapped_token_every_part_tamper_is_decryption_failed() {
     let key = oct(&[7; 16]);

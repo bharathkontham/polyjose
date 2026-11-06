@@ -358,7 +358,7 @@ impl Recipient {
 ///     .encrypt_compact(b"hello")?;
 /// # Ok::<(), polyjose::Error>(())
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Encryptor {
     // core.rs reads these fields directly.
     pub(super) enc: ContentEncAlg,
@@ -486,6 +486,36 @@ impl Encryptor {
             Serialization::Compact => compact::serialize(&parts),
             Serialization::Json(json_form) => json::serialize(&parts, json_form),
         }
+    }
+}
+
+/// Written by hand so the JWE AAD (RFC 7516 §7.2.1 `aad`) is never
+/// printed: it can carry application secrets, so only whether it is set and
+/// its length are shown (ADR 0050 §4; secrets are never in `Debug`, ADR
+/// 0030 §7.5). Recipients are counted, not listed; the headers are shown
+/// only as set or not set. For example:
+///
+/// ```text
+/// Encryptor { enc: A128GCM, recipients: 1, protected_header: false,
+///     shared_header: false, aad: Some(<redacted, len=13>), compress: false }
+/// ```
+impl fmt::Debug for Encryptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        /// The AAD's length, in place of its bytes.
+        struct RedactedLen(usize);
+        impl fmt::Debug for RedactedLen {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "<redacted, len={}>", self.0)
+            }
+        }
+        f.debug_struct("Encryptor")
+            .field("enc", &self.enc)
+            .field("recipients", &self.recipients.len())
+            .field("protected_header", &self.protected.is_some())
+            .field("shared_header", &self.shared.is_some())
+            .field("aad", &self.aad.as_ref().map(|aad| RedactedLen(aad.len())))
+            .field("compress", &self.compress)
+            .finish()
     }
 }
 
