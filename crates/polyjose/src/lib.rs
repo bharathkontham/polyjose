@@ -10,6 +10,13 @@
 //! - [`jwt`]  RFC 7519 – tokens and claims
 //! - [`util`] base64url and other helpers
 
+// Raw DEFLATE for JWE `zip: DEF` (ADR 0017), only with the off-by-default
+// `deflate` feature. `allow`, not `expect`: the codec (T08) and its caller
+// (`jwe::zip`, T15) land separately and may not edit this file; remove the
+// attribute once both have.
+#[cfg(feature = "deflate")]
+#[allow(dead_code, reason = "called by jwe::zip once 0003 T15 lands")]
+mod deflate;
 /// Error type.
 pub mod error;
 /// The JOSE Header (RFC 7515 §4, RFC 7516 §4).
