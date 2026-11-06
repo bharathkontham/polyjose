@@ -220,8 +220,16 @@ struct Shape {
     /// Its name under `$defs`.
     def: &'static str,
     members: &'static [Member],
-    /// Per-serialization signer rules (`jws_sign_input` only).
-    rules: &'static [SignerRule],
+    /// Its `allOf` rules, in schema order.
+    rules: &'static [Rule],
+}
+
+/// One entry of a closed definition's `allOf`: a constraint across its
+/// members, which the per-member kinds cannot say.
+#[derive(Debug)]
+enum Rule {
+    /// The per-serialization signer limits of `jws_sign_input`.
+    Signers(SignerRule),
 }
 
 /// One `allOf` rule of `jws_sign_input`: when `serialization` is
@@ -347,19 +355,19 @@ const JWS_SIGN_INPUT: Shape = Shape {
     ],
     rules: &[
         // RFC 7515 §7.1: one signature over a JWS Protected Header only.
-        SignerRule {
+        Rule::Signers(SignerRule {
             serialization: "compact",
             max_signers: 1,
             requires: &["protected_b64u"],
             forbids: &["header"],
-        },
+        }),
         // RFC 7515 §7.2.2: one signature.
-        SignerRule {
+        Rule::Signers(SignerRule {
             serialization: "flattened",
             max_signers: 1,
             requires: &[],
             forbids: &[],
-        },
+        }),
     ],
 };
 /// A deterministic signature's exact output: a string for compact, an
@@ -801,8 +809,15 @@ fn check_shape(object: &Object, shape: &Shape, ok: bool, pointer: &str) -> Resul
     Ok(())
 }
 
+/// Applies a [`Rule`] to an object whose members are valid.
+fn check_rule(object: &Object, rule: &Rule, pointer: &str) -> Result<(), String> {
+    match rule {
+        Rule::Signers(rule) => check_signer_rule(object, rule, pointer),
+    }
+}
+
 /// Applies a [`SignerRule`] to a `jws_sign_input` whose members are valid.
-fn check_rule(object: &Object, rule: &SignerRule, pointer: &str) -> Result<(), String> {
+fn check_signer_rule(object: &Object, rule: &SignerRule, pointer: &str) -> Result<(), String> {
     if object.get("serialization").and_then(Value::as_str) != Some(rule.serialization) {
         return Ok(());
     }
@@ -2151,8 +2166,15 @@ fn schema_kind(kind: Kind) -> Value {
     }
 }
 
+/// How a [`Rule`] is spelled in the schema's `allOf`.
+fn schema_rule(rule: &Rule) -> Value {
+    match rule {
+        Rule::Signers(rule) => schema_signer_rule(rule),
+    }
+}
+
 /// How a [`SignerRule`] is spelled in the schema's `allOf`.
-fn schema_rule(rule: &SignerRule) -> Value {
+fn schema_signer_rule(rule: &SignerRule) -> Value {
     let mut signers = format!(r#""maxItems":{}"#, rule.max_signers);
     if !rule.requires.is_empty() || !rule.forbids.is_empty() {
         let required: Vec<Value> = rule.requires.iter().map(|n| Value::from(*n)).collect();
