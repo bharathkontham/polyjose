@@ -888,3 +888,36 @@ fn the_inner_token_never_appears_in_debug_or_errors() {
         assert!(!leaks(&text), "{text}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// PBES2 budget through the nested entry point (ADR 0050 §2)
+// ---------------------------------------------------------------------------
+
+/// ADR 0050 §2: a `DecryptPolicy` PBES2 budget bounds `p2c` for a nested
+/// JWT too: over budget is the uniform `DecryptionFailed`, at or under it
+/// decrypts and verifies.
+#[test]
+fn the_pbes2_budget_applies_to_nested_decryption() {
+    let password =
+        Jwk::from_json(format!(r#"{{"kty":"oct","k":"{}"}}"#, b64url_encode(PASSWORD)).as_bytes())
+            .unwrap();
+    let token = jwt::encrypt_nested(
+        &inner_es256(),
+        &Encryptor::new(E::A128GCM)
+            .recipient(Recipient::new(A::Pbes2Hs256A128KW, &password).p2c(1_000)),
+    )
+    .unwrap();
+    let clock = FixedClock(NOW);
+    let policy = Policy::new(&clock, &SIGNING).unwrap();
+    let key = public(&es256_key());
+    let run = |budget: u32| {
+        let dp = DecryptPolicy::new(&[A::Pbes2Hs256A128KW], &[E::A128GCM])
+            .unwrap()
+            .max_pbes2_count(budget);
+        jwt::decrypt_nested(&token, &password, &dp, Keys::One(&key), &policy)
+    };
+    assert_eq!(run(999).unwrap_err(), Error::DecryptionFailed);
+    assert_eq!(run(1).unwrap_err(), Error::DecryptionFailed);
+    assert!(run(1_000).is_ok());
+    assert!(run(10_000).is_ok());
+}
