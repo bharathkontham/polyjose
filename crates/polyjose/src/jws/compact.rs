@@ -13,10 +13,10 @@ use zeroize::Zeroizing;
 use crate::error::{Error, Result};
 use crate::header::Header;
 use crate::jwk::Jwk;
-use crate::util::b64url_decode;
+use crate::util::{b64url_decode, b64url_encode};
 
 use super::alg::{FAMILIES, Families};
-use super::process::{JoseHeader, signing_input, verify_signature};
+use super::process::{JoseHeader, prepare_sign, signing_input, verify_signature};
 use super::{ProtectedHeader, SignOptions, Verified, VerifyOptions};
 
 /// Signs `payload` in the JWS Compact Serialization (RFC 7515 §5.1, §7.1):
@@ -63,15 +63,47 @@ pub(crate) fn sign_compact_with(
     key: &Jwk,
     opts: &SignOptions,
 ) -> Result<String> {
-    let _ = (
-        families.sign,
-        families.verify,
-        protected,
-        payload,
-        key,
-        opts,
-    );
-    Err(Error::UnsupportedAlgorithm)
+    // Step 4 (RFC 7515 §7.1: the protected header is the whole JOSE
+    // Header), then steps 5-8 (ADR 0026 §2).
+    let header = JoseHeader::new(Some(protected.header().clone()), None)?;
+    let ready = prepare_sign(&header, key)?;
+    let b64 = header.b64();
+    // RFC 7797 §5.2, ADR 0026 §4: an attached unencoded payload is a part
+    // of the serialization, so it may hold no '.' and only %x20-7E.
+    if !b64 && !opts.detached && !payload.iter().all(|&b| is_unencoded_octet(b)) {
+        return Err(Error::InvalidFormat(
+            "b64:false compact payload must be printable ASCII without '.'",
+        ));
+    }
+    // RFC 7515 §5.1 steps 5-6, over the header's exact encoding.
+    let input = signing_input(protected.encoded(), payload, b64);
+    let signature = b64url_encode(&ready.sign(families, &input)?);
+
+    // RFC 7515 §5.1 step 8, §7.1; Appendix F leaves the payload part empty.
+    let payload_len = match (opts.detached, b64) {
+        (true, _) => 0,
+        (false, true) => payload.len().div_ceil(3) * 4,
+        (false, false) => payload.len(),
+    };
+    let mut jws =
+        String::with_capacity(protected.encoded().len() + payload_len + signature.len() + 2);
+    jws.push_str(protected.encoded());
+    jws.push('.');
+    match (opts.detached, b64) {
+        (true, _) => {}
+        (false, true) => jws.push_str(&b64url_encode(payload)),
+        // Checked above: every octet is ASCII, so each is one `char`.
+        (false, false) => jws.extend(payload.iter().copied().map(char::from)),
+    }
+    jws.push('.');
+    jws.push_str(&signature);
+    Ok(jws)
+}
+
+/// An octet an attached `b64:false` compact payload may contain: %x20-7E
+/// except '.' (RFC 7797 §5.2; ADR 0026 §1, §4).
+fn is_unencoded_octet(octet: u8) -> bool {
+    matches!(octet, 0x20..=0x7e) && octet != b'.'
 }
 
 /// Verifies a JWS in the Compact Serialization (RFC 7515 §5.2, §7.1)
@@ -574,5 +606,246 @@ mod tests {
             verify_code(&format!("{none_bad_crit}.{l}.{s}")),
             "InvalidHeader"
         );
+    }
+
+    // ---- Signing ----
+
+    fn protected(json: &str) -> ProtectedHeader {
+        ProtectedHeader::from_encoded(&b64url_encode(json.as_bytes())).unwrap()
+    }
+
+    fn sign(header_json: &str, payload: &[u8], detached: bool) -> Result<String> {
+        let opts = SignOptions::new().detached(detached);
+        sign_compact_with(&FAKE, &protected(header_json), payload, &hs_key(), &opts)
+    }
+
+    fn sign_code(header_json: &str, payload: &[u8], detached: bool) -> &'static str {
+        sign(header_json, payload, detached).map_or_else(|e| e.code(), |_| "ok")
+    }
+
+    #[test]
+    fn sign_emits_three_parts() {
+        // RFC 7515 §5.1, §7.1: BASE64URL(header) '.' BASE64URL(payload) '.'
+        // BASE64URL(signature), over the header's exact encoding.
+        let jws = sign(HS256, b"hello", false).unwrap();
+        assert_eq!(jws, forge(&A::HS256, HS256, b"hello", false));
+        let [p, l, s] = parts(&jws);
+        assert_eq!(p, b64url_encode(HS256.as_bytes()));
+        assert_eq!(l, "aGVsbG8");
+        let input = format!("{p}.{l}");
+        assert_eq!(
+            s,
+            b64url_encode(&fake_signature(&A::HS256, input.as_bytes()))
+        );
+        // An empty payload has an empty part (RFC 7515 §7.1).
+        assert_eq!(parts(&sign(HS256, b"", false).unwrap())[1], "");
+    }
+
+    #[test]
+    fn sign_keeps_the_rfc7515_a1_header_encoding() {
+        // RFC 7515 Appendix A.1: a header made by from_encoded is signed
+        // with its CRLF octets, not re-serialized.
+        let a1 = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9";
+        let payload =
+            b"{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}";
+        let header = ProtectedHeader::from_encoded(a1).unwrap();
+        let jws =
+            sign_compact_with(&FAKE, &header, payload, &hs_key(), &SignOptions::new()).unwrap();
+        let input = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ";
+        let sig = b64url_encode(&fake_signature(&A::HS256, input.as_bytes()));
+        assert_eq!(jws, format!("{input}.{sig}"));
+    }
+
+    #[test]
+    fn sign_detached_emits_an_empty_payload_part() {
+        // RFC 7515 Appendix F: header..signature, signed over the payload.
+        let jws = sign(HS256, b"hello", true).unwrap();
+        assert_eq!(jws, forge(&A::HS256, HS256, b"hello", true));
+        let [p, l, _] = parts(&jws);
+        assert_eq!(l, "");
+        assert!(jws.starts_with(&format!("{p}..")));
+        let opts = VerifyOptions::new(ALLOW_HS256)
+            .unwrap()
+            .detached_payload(b"hello");
+        assert_eq!(verify_with(&jws, &opts).unwrap().payload, b"hello");
+    }
+
+    #[test]
+    fn sign_b64_false_attached_payload_rules() {
+        // RFC 7797 §5.2, ADR 0026 §4: no '.', only %x20-7E.
+        for payload in [
+            &b"$.02"[..],
+            b".",
+            b"a\nb",
+            b"\t",
+            b"\x1f",
+            b"\x7f",
+            b"\x80",
+            "\u{e9}".as_bytes(),
+            b"\x00",
+        ] {
+            assert_eq!(
+                sign_code(HS256_B64_FALSE, payload, false),
+                "InvalidFormat",
+                "{payload:?}"
+            );
+        }
+        // The edges of the range are fine, and are carried unencoded.
+        for payload in [&b"$02"[..], b" ", b"~", b" !~-_", b""] {
+            let jws = sign(HS256_B64_FALSE, payload, false).unwrap();
+            assert_eq!(jws, forge(&A::HS256, HS256_B64_FALSE, payload, false));
+            assert_eq!(parts(&jws)[1].as_bytes(), payload);
+            assert_eq!(verify(&jws).unwrap().payload, payload);
+        }
+    }
+
+    #[test]
+    fn sign_b64_false_detached_rfc7797_section_4_2() {
+        // RFC 7797 §4.2: "$.02" detached is allowed (§5.2 restricts only
+        // attached payloads); any octets are, when detached.
+        let header = ProtectedHeader::from_encoded(
+            "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19",
+        )
+        .unwrap();
+        let opts = SignOptions::new().detached(true);
+        let jws = sign_compact_with(&FAKE, &header, b"$.02", &hs_key(), &opts).unwrap();
+        let input = "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19.$.02";
+        let sig = b64url_encode(&fake_signature(&A::HS256, input.as_bytes()));
+        assert_eq!(
+            jws,
+            format!("eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..{sig}")
+        );
+        assert_eq!(sign_code(HS256_B64_FALSE, b"\x00\xff.\n", true), "ok");
+    }
+
+    #[test]
+    fn sign_b64_must_be_critical() {
+        // RFC 7797 §6, ADR 0026 §4: b64 not listed in crit is InvalidHeader,
+        // whatever its value, attached or detached.
+        for header in [
+            r#"{"alg":"HS256","b64":false}"#,
+            r#"{"alg":"HS256","b64":true}"#,
+            r#"{"alg":"HS256","b64":false,"crit":["x-a"],"x-a":1}"#,
+        ] {
+            for detached in [false, true] {
+                assert_eq!(
+                    sign_code(header, b"$02", detached),
+                    "InvalidHeader",
+                    "{header}"
+                );
+            }
+        }
+        // Header rules come before the payload rules: no InvalidFormat for
+        // "$.02" while b64 is not critical.
+        assert_eq!(
+            sign_code(r#"{"alg":"HS256","b64":false}"#, b"$.02", false),
+            "InvalidHeader"
+        );
+        // b64: true listed in crit is the ordinary encoding (RFC 7797 §7
+        // discourages it, but it is valid).
+        let t = r#"{"alg":"HS256","b64":true,"crit":["b64"]}"#;
+        assert_eq!(parts(&sign(t, b"$.02", false).unwrap())[1], "JC4wMg");
+    }
+
+    #[test]
+    fn sign_policy_errors() {
+        // ADR 0026 §2 steps 4-8 through process::prepare_sign.
+        assert_eq!(sign_code(r#"{"typ":"JWT"}"#, b"x", false), "InvalidHeader");
+        assert_eq!(
+            sign_code(r#"{"alg":"HS256","crit":["x-a"],"x-a":1}"#, b"x", false),
+            "UnknownCritical"
+        );
+        assert_eq!(
+            sign_code(r#"{"alg":"HS1"}"#, b"x", false),
+            "UnsupportedAlgorithm"
+        );
+        // RFC 8725 §3.2: never produce `none`.
+        assert_eq!(
+            sign_code(r#"{"alg":"none"}"#, b"x", false),
+            "AlgorithmNotAllowed"
+        );
+        // ADR 0021: no RSA signing.
+        assert_eq!(
+            sign_code(r#"{"alg":"RS256"}"#, b"x", false),
+            "UnsupportedAlgorithm"
+        );
+        assert_eq!(sign_code(r#"{"alg":"HS512"}"#, b"x", false), "InvalidKey");
+        let opts = SignOptions::new();
+        let es = protected(r#"{"alg":"ES256"}"#);
+        assert_eq!(
+            sign_compact_with(&FAKE, &es, b"x", &keys::p256(""), &opts),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        assert_eq!(
+            sign_compact_with(&FAKE, &es, b"x", &hs_key(), &opts),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+    }
+
+    #[test]
+    fn sign_verify_round_trip() {
+        // Sign, then verify, through the shared rules with the fake family.
+        let cases = [
+            (
+                A::HS256,
+                r#"{"alg":"HS256","kid":"k1"}"#,
+                keys::oct(32, ""),
+                keys::oct(32, ""),
+            ),
+            (
+                A::HS512,
+                r#"{"alg":"HS512"}"#,
+                keys::oct(64, ""),
+                keys::oct(64, ""),
+            ),
+            (
+                A::ES256,
+                r#"{"alg":"ES256","typ":"JWT"}"#,
+                keys::p256_private(""),
+                keys::p256(""),
+            ),
+            (
+                A::EdDSA,
+                r#"{"alg":"EdDSA"}"#,
+                keys::ed25519_private(""),
+                keys::ed25519(""),
+            ),
+            (
+                A::Ed25519,
+                r#"{"alg":"Ed25519"}"#,
+                keys::ed25519_private(""),
+                keys::ed25519(""),
+            ),
+        ];
+        for (alg, header_json, private, public) in cases {
+            let allowed = [alg.clone()];
+            for (payload, detached, b64_false) in [
+                (&b"hello"[..], false, false),
+                (b"", false, false),
+                (b"\x00\xff binary", false, false),
+                (b"\x00\xff binary", true, false),
+                (b"$02", false, true),
+                (b"$.02", true, true),
+            ] {
+                let json = if b64_false {
+                    header_json.replacen('}', r#","b64":false,"crit":["b64"]}"#, 1)
+                } else {
+                    header_json.to_owned()
+                };
+                let header = protected(&json);
+                let opts = SignOptions::new().detached(detached);
+                let jws = sign_compact_with(&FAKE, &header, payload, &private, &opts).unwrap();
+                let mut vopts = VerifyOptions::new(&allowed).unwrap();
+                if detached {
+                    vopts = vopts.detached_payload(payload);
+                }
+                let v = verify_compact_with(&FAKE, &jws, &public, &vopts).unwrap();
+                assert_eq!(v.alg, alg);
+                assert_eq!(v.protected.as_ref(), Some(header.header()));
+                assert_eq!(v.unprotected, None);
+                assert_eq!(v.payload, payload);
+                assert_eq!(v.signature_index, 0);
+            }
+        }
     }
 }
