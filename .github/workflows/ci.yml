@@ -66,6 +66,7 @@ jobs:
       # Once setup succeeded, every gate runs even if an earlier gate failed, so one run reports
       # every failure.
       - name: rustfmt
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo fmt --all --check
 
       - name: clippy
