@@ -1,0 +1,34 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §7.2.1 (ciphertext is always present), RFC 7518 §5.3: an empty plaintext under A128KW + A128GCM gives an empty ciphertext member and decrypts to the empty plaintext",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "flattened",
+    "enc": "A128GCM",
+    "plaintext_b64u": "",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "EREREREREREREREREREREQ"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "decrypt_with": {
+      "key": {
+        "kty": "oct",
+        "k": "EREREREREREREREREREREQ"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  }
+}
