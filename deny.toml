@@ -7,7 +7,16 @@ deny = [
   { name = "aws-lc-rs" }, { name = "aws-lc-sys" },
   { name = "boring" }, { name = "boring-sys" },
   { name = "libsodium-sys" },
+  # C/C++ build tooling: a pure-Rust tree never compiles native code (ADR 0002).
+  { name = "cc" }, { name = "cmake" },
 ]
+
+[sources]
+# Only crates.io (the allow-registry default, stated explicitly): no git source, no other registry.
+# cargo-deny does not check path sources; scripts/check-deps.sh rejects them in the core's tree.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 [licenses]
 allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "MPL-2.0"]

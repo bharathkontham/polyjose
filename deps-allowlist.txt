@@ -1,6 +1,6 @@
-# Every crate allowed in the runtime dependency tree of crates/polyjose (ADR 0016 §4), exactly as
-#   cargo tree -p polyjose -e normal --all-features --target all --prefix none
-# resolves it. scripts/check-deps.sh enforces this file in both directions: a crate in the tree
+# Every crate allowed in the dependency tree of crates/polyjose (ADR 0016 §4), exactly as
+#   cargo tree -p polyjose -e normal,build --all-features --target all --prefix none
+# resolves it: runtime dependencies plus the build-dependencies of any crate in that tree. scripts/check-deps.sh enforces this file in both directions: a crate in the tree
 # that is not listed here fails, and so does an entry here that the tree no longer contains.
 # Every entry must also be credited in CREDITS.md, and CREDITS.md may credit nothing else (ADR 0020).
 #
