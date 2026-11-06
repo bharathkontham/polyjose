@@ -5,5 +5,5 @@ pkg/
 bindings/mobile/out/
 platforms/android/build/
 platforms/android/src/main/jniLibs/
-platforms/apple/*.xcframework
+platforms/swift/*.xcframework
 .build/
