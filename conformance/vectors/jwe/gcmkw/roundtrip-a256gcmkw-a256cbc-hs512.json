@@ -1,0 +1,34 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.1/§5.2: a compact A256GCMKW + A256CBC-HS512 encryption on the OS CSPRNG (RFC 7518 §4.7, a fresh 96-bit key-wrap IV) has five parts and decrypts with the same key to the plaintext",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A256CBC-HS512",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "A256GCMKW",
+        "key": {
+          "kty": "oct",
+          "k": "P0zZ_P6XixW5azoUmaL-u23eg-0kEeft2ecxPtGK_Pw"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "decrypt_with": {
+      "key": {
+        "kty": "oct",
+        "k": "P0zZ_P6XixW5azoUmaL-u23eg-0kEeft2ecxPtGK_Pw"
+      },
+      "allowed_algs": [
+        "A256GCMKW"
+      ],
+      "allowed_enc": [
+        "A256CBC-HS512"
+      ]
+    }
+  }
+}
