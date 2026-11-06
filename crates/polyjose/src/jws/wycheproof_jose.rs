@@ -16,10 +16,10 @@
 //! It is a unit-test module, not an integration test, because the loader
 //! (`crate::test_support::wycheproof`) is `cfg(test)` only.
 
+use crate::Result;
 use crate::jwa::SigningAlg;
 use crate::jwk::{EcCurve, Jwk, KeyAlg, KeyMaterial};
 use crate::test_support::wycheproof::{self, Deviation, Expected, Group, Outcome, Suite, Test};
-use crate::{Error, Result};
 
 use super::{Verified, VerifyOptions, verify_compact};
 
@@ -179,18 +179,78 @@ fn upstream_duplicates_verify_like_their_valid_twin() {
     }
 }
 
+/// The error of every test polyjose rejects, by the ADR 0026 §2 step that
+/// fails first: `(tcIds, code, why)`. A rejected test not listed here fails
+/// at step 9, the signature check (`InvalidSignature`): a modified or
+/// truncated signature, RSA padding or PSS encoding, an ES256 signature of
+/// the wrong length (RFC 7518 §3.4) or with r or s out of range, an
+/// embedded `jwk` that is ignored (ADR 0026 §2, CVE-2018-0114).
+const ERRORS: &[(&[u32], &str, &str)] = &[
+    (
+        &[
+            4, 7, 10, 12, 13, 14, 15, 17, 21, 24, 27, 29, 30, 36, 39, 42, 44, 45,
+        ],
+        "InvalidFormat",
+        "step 2, RFC 7515 §7.1: not three parts (tcId 17 is a JSON JWS given to the compact API)",
+    ),
+    (
+        &[
+            360, 361, 362, 363, 364, 365, 366, 368, 369, 371, 372, 373, 374, 375,
+        ],
+        "InvalidBase64",
+        "step 3, RFC 7515 §2: spaces, '?', '#', or non-zero unused bits (RFC 4648 §3.5)",
+    ),
+    (
+        &[9, 11, 26, 28, 41, 43],
+        "InvalidJson",
+        "step 4, RFC 7515 §5.2 step 3: an empty header part is no JSON object",
+    ),
+    (
+        &[342],
+        "UnsupportedAlgorithm",
+        "step 6, RFC 7515 §4.1.1: \"NONE\" is no algorithm; names are case-sensitive",
+    ),
+    (
+        &[16, 31, 332, 334, 336, 338, 340, 341, 343, 344, 346, 350],
+        "AlgorithmNotAllowed",
+        "step 7, RFC 8725 §3.1: the header alg is not the group's (or is none)",
+    ),
+    (
+        &[347, 351, 353, 354, 355, 356],
+        "KeyAlgorithmMismatch",
+        "step 8, RFC 7517 §4.2-§4.4: the key's alg differs, its use is enc, or its \
+         key_ops lack verify",
+    ),
+];
+
 #[test]
-fn rejections_that_wycheproof_allows_fail_with_the_policy_error() {
-    // The tests in DEVIATIONS fail at the step ADR 0026 §2 names.
+fn every_rejection_fails_at_its_adr_0026_step() {
     let suite = wycheproof::load(SUITE);
-    for (group, test) in suite.tests() {
-        let expected = match test.tc_id {
-            346 | 350 => Error::AlgorithmNotAllowed,
-            347 | 351 => Error::KeyAlgorithmMismatch,
-            372 | 373 => Error::InvalidBase64,
-            _ => continue,
-        };
-        let error = verify(group, test).map(drop).unwrap_err();
-        assert_eq!(error.code(), expected.code(), "tcId {}", test.tc_id);
+    let mut listed = std::collections::BTreeMap::new();
+    for (ids, code, why) in ERRORS {
+        assert!(why.contains("RFC "), "{code}: the reason cites no RFC");
+        for id in *ids {
+            assert!(
+                listed.insert(*id, *code).is_none(),
+                "tcId {id} listed twice"
+            );
+        }
     }
+    let mut seen = 0;
+    for (group, test) in suite.tests() {
+        let id = test.tc_id;
+        match (verify(group, test), listed.get(&id)) {
+            (Ok(_), None) => {}
+            (Ok(_), Some(code)) => panic!("tcId {id} verified; ERRORS expects {code}"),
+            (Err(e), code) => {
+                assert_eq!(e.code(), *code.unwrap_or(&"InvalidSignature"), "tcId {id}");
+            }
+        }
+        seen += usize::from(listed.contains_key(&id));
+    }
+    assert_eq!(
+        seen,
+        listed.len(),
+        "ERRORS lists a tcId that is not in the suite"
+    );
 }
