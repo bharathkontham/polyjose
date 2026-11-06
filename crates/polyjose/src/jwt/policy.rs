@@ -148,6 +148,13 @@ impl<'a> Policy<'a> {
     ///
     /// The other settings keep their defaults.
     ///
+    /// For a nested JWT ([`decrypt_nested`](super::decrypt_nested)), the
+    /// `typ` rule applies to the outer JWE too: an outer `typ` that is
+    /// present must also be `at+jwt`, so an outer `typ: JWT` fails with
+    /// [`Error::InvalidHeader`]`("typ")` (ADR 0027 §7). RFC 8725 §3.11
+    /// requires the explicit type only on the inner JWT, so issuers should
+    /// omit the outer `typ`.
+    ///
     /// # Errors
     ///
     /// As [`Policy::new`]; then [`Error::InvalidClaim`]`("iss")` if
