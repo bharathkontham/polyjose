@@ -1,0 +1,19 @@
+{
+  "source": "ADR 0041 §1",
+  "description": "An HS256 JWS whose protected header is {\"alg\":\"HS256\",\"alg\":\"HS256\"} (alg twice, same value), MAC correct (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key): the JSON layer rejects the duplicate before header parsing (RFC 7515 §4, RFC 7493 §2.3; amends ADR 0026 §2 step 4)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImFsZyI6IkhTMjU2In0.UGF5bG9hZA.Jd_haTYHuCl9hma6tQ_pTZdGqcuz-u6lFdMJtjxScM0",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "source": "RFC 8017 §8.2.2",
+  "description": "Control for the stripped case: an RS256 JWS over payload \"Payload 167\" signed by node:crypto with the RFC 7515 A.2 private key, chosen (by trying payloads) so that its 256-octet signature starts with a zero octet, verifies with the A.2 public key as printed (RFC 7518 §3.3)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzI1NiJ9.UGF5bG9hZCAxNjc.AJVB2keDU_YHxeI9H0tMQ2Q_5L-AY5NK8_56lMJukJtAX52yaMoGckp00pWDZcokPojQySbfCE_gzlrncoBxCpv1P0s7xUcxIjlE96HB9g-woXWMSMA5LdJrONMgpoAJSlH_lrPmZ0khkscJ6Kpsl1GIaq0arsGNQ59ZquYnHBILtk8EsKNkeL8fFOlhDv4la022sEh7U4sbMNmAEePCg8oOCFmZeDZOyTtpkhuM-J5m8-29wVgXcMZ056HxsmvolSkKPfRNSwp6nH9bX8hZMa1O-EFcPL6gcgV2i6VecYHrnIoG2pxJSYKce7e2sNJgI7gXZ1HQrmhDQNzBmzudGw",
+    "key": {
+      "kty": "RSA",
+      "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "RS256"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "UGF5bG9hZCAxNjc",
+    "alg": "RS256",
+    "signature_index": 0
+  }
+}

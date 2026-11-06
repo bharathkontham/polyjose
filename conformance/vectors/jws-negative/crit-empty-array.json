@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7515 §4.1.11",
+  "description": "An HS256 JWS with crit [] (producers MUST NOT use the empty list), MAC correct (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key), is rejected (ADR 0026 §2 step 4)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImNyaXQiOltdfQ.UGF5bG9hZA.7ffFRJDiXBDqbDpiuaKFSfR_rNeLRajykIlC9MXJ9rs",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}
