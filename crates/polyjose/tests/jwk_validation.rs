@@ -244,13 +244,24 @@ fn binary_members_must_be_canonical_unpadded_base64url() {
 #[test]
 fn okp_accepts_only_ed25519_and_x25519_with_32_octet_members() {
     for (crv, curve) in [("Ed25519", OkpCurve::Ed25519), ("X25519", OkpCurve::X25519)] {
-        let key = ok(&okp(crv, &b64(32, 9), Some(&b64(32, 8))));
+        // Ed25519 needs a real key pair (RFC 8037 A.1): import rejects
+        // points with a torsion component and a `d` that does not derive
+        // `x` (ADR 0043 §1, §3). Any 32 octets are an X25519 key.
+        let (x, d) = if crv == "Ed25519" {
+            (
+                "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
+                "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A".to_owned(),
+            )
+        } else {
+            (b64(32, 9), b64(32, 8))
+        };
+        let key = ok(&okp(crv, &x, Some(&d)));
         let KeyMaterial::Okp(okp_key) = key.material() else {
             panic!("not OKP")
         };
         assert_eq!(okp_key.crv(), curve);
         assert!(okp_key.is_private());
-        assert!(ok(&okp(crv, &b64(32, 9), None)).is_public());
+        assert!(ok(&okp(crv, &x, None)).is_public());
         for bad_len in [0, 31, 33, 57, 64] {
             assert_eq!(
                 err(&okp(crv, &b64(bad_len, 9), None)),
@@ -258,7 +269,7 @@ fn okp_accepts_only_ed25519_and_x25519_with_32_octet_members() {
                 "{crv} x {bad_len}"
             );
             assert_eq!(
-                err(&okp(crv, &b64(32, 9), Some(&b64(bad_len, 8)))),
+                err(&okp(crv, &x, Some(&b64(bad_len, 8)))),
                 Some(Error::InvalidKey("d has the wrong length for crv")),
                 "{crv} d {bad_len}"
             );
