@@ -1121,6 +1121,32 @@ mod tests {
     }
 
     #[test]
+    fn unprotected_header_types_are_checked_before_the_payload_encoding() {
+        // ADR 0049 §3, amending ADR 0048 step 3: registered parameters of
+        // the `header` member (RFC 7515 §7.2.1) get their types checked
+        // with the protected header's, before the payload's base64url
+        // (step 4). `kid` must be a string (RFC 7515 §4.1.4).
+        let with_bad_payload = |jws: String| {
+            jws.replacen(
+                &format!(r#""payload":"{PAYLOAD_B64}""#),
+                r#""payload":"JC4wMg=""#,
+                1,
+            )
+        };
+        for (header, expected) in [
+            (r#"{"kid":1}"#, "InvalidHeader"),
+            // Control: a well-typed `kid` reaches the payload check.
+            (r#"{"kid":"k1"}"#, "InvalidBase64"),
+        ] {
+            let m = members(Some(P_HS256), Some(header), SigningAlg::HS256);
+            for jws in [flattened(&m), general(std::slice::from_ref(&m))] {
+                let jws = with_bad_payload(jws);
+                assert_eq!(code(verify(&jws)), expected, "{jws}");
+            }
+        }
+    }
+
+    #[test]
     fn b64_disagreement_wins_over_the_payload_encoding() {
         // When the protected headers disagree on `b64` (RFC 7797 §3) there
         // is no single payload encoding to check, so the disagreement
