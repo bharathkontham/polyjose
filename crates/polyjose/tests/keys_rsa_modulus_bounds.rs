@@ -221,3 +221,64 @@ fn a_pkcs1_key_over_the_der_cap_is_refused_by_the_cap() {
     assert_eq!(Jwk::from_pem(&pem("RSA PUBLIC KEY", &der)).err(), refused);
     assert_eq!(Jwk::from_der(&der, KeyFormat::Pkcs1).err(), refused);
 }
+
+/// An RSA public JWK with `n` and a given raw `e` string (not necessarily
+/// well formed).
+fn json_with_e(n: &[u8], e: &str) -> String {
+    format!(
+        r#"{{"kty":"RSA","n":"{}","e":{e}}}"#,
+        Base64UrlUnpadded::encode_string(n)
+    )
+}
+
+#[test]
+fn an_oversize_n_with_a_malformed_e_is_refused_for_its_size_in_json() {
+    // Malformed `e` in every way import knows: not a string, not minimal
+    // (leading zero), even, one, and larger than `n`. For an over-size `n`
+    // the answer is always the size error, so `e` is never parsed.
+    let n = modulus(8193);
+    for e in [
+        "1",
+        r#""AAEAAQ""#,
+        r#""Ag""#,
+        r#""AQ""#,
+        r#""!!!""#,
+        r#""""#,
+        "null",
+    ] {
+        assert_eq!(
+            Jwk::from_json(json_with_e(&n, e).as_bytes()).err(),
+            Some(TOO_LONG),
+            "e = {e}"
+        );
+    }
+    // Control: the same malformed `e` on an in-range `n` is refused, for `e`
+    // (bad base64 is InvalidBase64, the rest InvalidKey), so the size error
+    // above really did pre-empt it.
+    let n = modulus(8192);
+    for e in ["1", r#""Ag""#, r#""AQ""#, r#""!!!""#] {
+        let err = Jwk::from_json(json_with_e(&n, e).as_bytes()).err();
+        assert!(
+            matches!(&err, Some(Error::InvalidBase64))
+                || matches!(&err, Some(Error::InvalidKey(d)) if *d != "RSA modulus is longer than 8192 bits"),
+            "e = {e}: {err:?}"
+        );
+        assert_ne!(err, Some(TOO_LONG), "e = {e}");
+    }
+}
+
+#[test]
+fn an_oversize_n_with_an_even_e_is_invalid_key_through_der_and_pem() {
+    // DER carries e as an INTEGER; use an even one (2). Whichever check
+    // fires, the code is InvalidKey and never a success.
+    let n = modulus(65536);
+    let mut body = integer(&n);
+    body.extend_from_slice(&integer(&[0x02]));
+    let pkcs1_der = tlv(0x30, &body);
+    for r in [
+        Jwk::from_der(&pkcs1_der, KeyFormat::Pkcs1),
+        Jwk::from_pem(&pem("RSA PUBLIC KEY", &pkcs1_der)),
+    ] {
+        assert_eq!(r.err(), Some(TOO_LONG));
+    }
+}
