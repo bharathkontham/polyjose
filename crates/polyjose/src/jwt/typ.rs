@@ -14,7 +14,7 @@ use super::{Policy, TypMode};
 /// `JWT`, the `typ` RFC 7519 §5.1 recommends for a generic JWT.
 ///
 /// It is not an explicit type in the RFC 8725 §3.11 sense: under the
-/// default [`TypMode`](super::TypMode) it is accepted like an absent `typ`
+/// default [`TypMode`] it is accepted like an absent `typ`
 /// (ADR 0027 §5).
 pub const JWT: &str = "JWT";
 
@@ -23,10 +23,11 @@ pub const JWT: &str = "JWT";
 /// (RFC 7515 §4.1.9).
 pub const AT_JWT: &str = "at+jwt";
 
-/// The claims a JWT access token must carry (RFC 9068 §2.2), in the
-/// ADR 0027 §9 J4 order: `iss`, `exp`, `aud`, `sub`, `client_id`, `iat`,
-/// `jti`. [`Policy::access_token`](super::Policy::access_token) requires
-/// every one of them.
+/// The claims a JWT access token must carry (RFC 9068 §2.2), in that
+/// section's order: `iss`, `exp`, `aud`, `sub`, `client_id`, `iat`, `jti`.
+/// [`Policy::access_token`](super::Policy::access_token) requires every one
+/// of them; validation reports a missing one in the ADR 0027 §9 J4 order,
+/// not this one.
 pub const ACCESS_TOKEN_REQUIRED_CLAIMS: [&str; 7] =
     ["iss", "exp", "aud", "sub", "client_id", "iat", "jti"];
 
@@ -111,12 +112,16 @@ fn without_application(media_type: &[u8]) -> Option<&[u8]> {
 ///   `typ` policy (ADR 0027 §7).
 /// - Both layers: an `unprotected` header that sets `typ` or `cty` →
 ///   `InvalidHeader`, even when `protected` is valid (ADR 0049 §2,
-///   ADR 0050 §3).
+///   ADR 0050 §3). Its other members are ignored here.
 ///
-/// [`TypMode`]: super::TypMode
+/// The checks run in the order listed, unprotected header first; every
+/// failure is `InvalidHeader`, and the detail string is diagnostic only
+/// (ADR 0027 §9). `b64` is a JWS parameter (RFC 7797 §3) and is not
+/// checked on the outer layer. Comparisons use [`media_type_eq`].
 ///
-/// **Not implemented yet** (feature 0004 T04): returns
-/// [`Error::UnsupportedAlgorithm`].
+/// # Errors
+///
+/// [`Error::InvalidHeader`] when any rule above fails.
 pub(crate) fn check_jwt_header(
     protected: &Header,
     unprotected: Option<&Header>,
