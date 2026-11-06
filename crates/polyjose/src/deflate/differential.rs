@@ -152,9 +152,10 @@ proptest! {
         assert_agree(&stream)?;
     }
 
-    /// Under an unlimited cap, the single allocation is never outgrown and
-    /// the unreachable EXPANSION_BOUND guard never fires, on streams that
-    /// reach the decode loop (dynamic prefix) and on corrupted real ones.
+    /// Under an unlimited cap, the buffer never grows past the expansion
+    /// bound and the unreachable EXPANSION_BOUND guard never fires, on
+    /// streams that reach the decode loop (dynamic prefix) and on corrupted
+    /// real ones (ADR 0050 §4: growth is capped at that bound).
     #[test]
     fn expansion_bound_guard_never_fires(
         mut input in prop::collection::vec(any::<u8>(), 1..2048),
@@ -177,13 +178,14 @@ proptest! {
         if let Ok(out) = &result {
             prop_assert!(out.len() <= inflate::max_expansion(input.len()));
         }
-        prop_assert_eq!(capacity.last, capacity.initial);
+        prop_assert!(capacity.initial <= inflate::INITIAL_RESERVATION);
+        prop_assert!(capacity.last <= inflate::max_expansion(input.len()));
     }
 }
 
 /// Stored blocks are the 8-bits-per-byte floor: 65,535 bytes in a block
-/// plus a 5-byte header can never exceed the 1032:1 allocation, and many
-/// empty or non-final stored blocks produce nothing.
+/// plus a 5-byte header fit the up-front reservation without growing it,
+/// and many empty or non-final stored blocks produce nothing.
 #[test]
 fn stored_blocks_and_tiny_blocks_stay_within_the_allocation() {
     let mut full = vec![1, 0xFF, 0xFF, 0x00, 0x00];

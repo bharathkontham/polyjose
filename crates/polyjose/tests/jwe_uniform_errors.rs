@@ -415,7 +415,7 @@ fn pbes2_causes(cases: &mut Cases) {
 
     let doc = general(
         Encryptor::new(E::A128GCM),
-        Recipient::new(alg, &password),
+        Recipient::new(alg.clone(), &password),
         &password,
     );
     cases.push((
@@ -434,6 +434,27 @@ fn pbes2_causes(cases: &mut Cases) {
     cases.push((
         "PBES2 p2c changed within the bound",
         open_json(&lower, &password),
+    ));
+
+    // ADR 0050 §2 (amends ADR 0023): the bound is one budget per token. 16
+    // kid-less PBES2 recipients of p2c 1,000, the last for the password,
+    // spend the default 10,000 on the first 10, so the 16th is never
+    // tried. Only a budget of 16,000 or more decrypts it.
+    let mut sixteen = Encryptor::new(E::A128GCM);
+    for i in 0..15 {
+        let decoy = oct(format!("decoy {i}").as_bytes());
+        sixteen = sixteen.recipient(Recipient::new(alg.clone(), &decoy).p2c(1000));
+    }
+    let sixteen = sixteen
+        .recipient(Recipient::new(alg, &password).p2c(1000))
+        .encrypt_json(PT, JsonForm::General)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let raised = policy().max_pbes2_count(16_000);
+    let opened = decrypt_json(&sixteen, &password, &raised).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((opened.recipient(), opened.plaintext()), (15, PT));
+    cases.push((
+        "PBES2 16 recipients over the default per-token budget",
+        decrypt_json(&sixteen, &password, &policy()).map(drop),
     ));
 }
 
@@ -636,7 +657,7 @@ fn every_post_key_management_failure_is_the_same_decryption_failed() {
 
 #[test]
 fn the_table_counts_its_causes() {
-    // 45 causes in every build, 47 with `deflate`.
-    let expected = if cfg!(feature = "deflate") { 47 } else { 45 };
+    // 46 causes in every build, 48 with `deflate`.
+    let expected = if cfg!(feature = "deflate") { 48 } else { 46 };
     assert_eq!(all_causes().len(), expected);
 }

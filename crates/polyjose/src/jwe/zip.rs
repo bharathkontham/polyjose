@@ -53,17 +53,21 @@ pub(crate) fn compress(_plaintext: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
 /// `max_len == 0` rejects every compressed JWE (ADR 0017 §3), even one
 /// whose plaintext is empty, without starting inflation.
 ///
-/// **`max_len` is also the up-front allocation.** `deflate::inflate`
-/// allocates its single output buffer before decoding, with capacity
-/// min(`max_len`, 1,032 × `compressed.len()`), and never grows it, so one
-/// JWE costs at most `max_len` bytes of plaintext buffer however far its
-/// stream claims to expand (the LZ77 window lives inside that buffer;
-/// ADR 0017 §1 allows the bound plus 32 KiB). `max_len` is therefore passed
-/// on unchanged, never widened (say, to `usize::MAX`), and a caller who
-/// raises `DecryptPolicy::max_decompressed_len` raises the memory one
-/// authenticated JWE can claim by the same amount. The returned buffer is
-/// that allocation, not shrunk (a shrink would reallocate and leave an
-/// unwiped copy of the plaintext behind), and is wiped on drop.
+/// **`max_len` bounds the memory, but is not reserved up front** (ADR 0050
+/// §4). `deflate::inflate` reserves min(`max_len`, 1,032 ×
+/// `compressed.len()`, 250,000) bytes before decoding, the last term being
+/// the default `DecryptPolicy::max_decompressed_len` (ADR 0017 §3), so a
+/// caller-chosen huge `max_len` costs nothing until the stream really
+/// inflates that far. Beyond that the buffer grows by doubling, never past
+/// min(`max_len`, 1,032 × `compressed.len()`); each step copies into a new
+/// buffer and wipes the old one, so no unwiped plaintext stays in freed
+/// memory. A step briefly holds both buffers, under 3× the output so far
+/// and under 2 × `max_len` (the LZ77 window lives inside the buffer).
+/// `max_len` is therefore passed on unchanged, never widened (say, to
+/// `usize::MAX`): a caller who raises `DecryptPolicy::max_decompressed_len`
+/// raises the memory one authenticated JWE can claim. The returned buffer
+/// is not shrunk (a shrink would reallocate and leave an unwiped copy of
+/// the plaintext behind), and is wiped on drop.
 ///
 /// Inflation runs only on authenticated data, but the sender can be anyone
 /// holding the recipient's public key (ECDH-ES, RSA-OAEP-256), so the
@@ -82,9 +86,9 @@ pub(crate) fn decompress(compressed: &[u8], max_len: usize) -> Result<Zeroizing<
 }
 
 /// [`decompress`] over the inflater `inflate`, which tests replace to see
-/// the bound it is given. `max_len` is passed unchanged: it is also the
-/// size `deflate::inflate` allocates up front (at most; less when the input
-/// cannot expand that far), so a larger value would only allocate more.
+/// the bound it is given. `max_len` is passed unchanged: it is the most
+/// `deflate::inflate` lets its buffer grow to, so a larger value would only
+/// let one JWE claim more memory.
 #[cfg(feature = "deflate")]
 fn decompress_with(
     compressed: &[u8],
@@ -381,9 +385,9 @@ mod tests {
 
     #[test]
     fn inflate_gets_exactly_the_policy_bound() {
-        // The T08 note: `deflate::inflate` allocates min(max_output, 1,032 x
-        // input length) up front, so the bound zip passes is the allocation
-        // size and must be the policy's, never a larger one.
+        // The T08 note: `deflate::inflate` grows its buffer up to
+        // min(max_output, 1,032 x input length), so the bound zip passes
+        // caps the memory and must be the policy's, never a larger one.
         let bomb = gib_bomb();
         for bound in [
             DecryptPolicy::DEFAULT_MAX_DECOMPRESSED_LEN,
@@ -406,7 +410,7 @@ mod tests {
     fn the_output_buffer_is_at_most_the_policy_bound() {
         // Through the whole pipeline (policy -> core -> zip -> inflate): a
         // stream inflating to exactly the policy bound succeeds, so the cap
-        // inflate got is at least the bound; its single buffer, sized
+        // inflate got is at least the bound; its buffer, grown at most to
         // min(cap, 1,032 x input length) with the second term above the
         // bound, is no larger than the bound, so the cap is at most the
         // bound. With bound - 1 it fails.
@@ -423,5 +427,38 @@ mod tests {
         let under = policy().max_decompressed_len(bound - 1);
         let result = pipeline::decrypt(zip_jwe(&stream), &dir_key(), &under);
         assert_eq!(result.err(), Some(Error::DecryptionFailed));
+    }
+
+    #[test]
+    fn a_huge_policy_bound_reserves_at_most_the_default_bound() {
+        // ADR 0050 §4: a caller-chosen 1 GiB max_decompressed_len with a
+        // small stream reserves at most the default bound up front, not
+        // the policy bound and not 1,032 x the input. A 1,000-byte stored
+        // block (RFC 1951 §3.2.4) can expand to 1,032 x 1,005 bytes, above
+        // the default, so its reservation is exactly the default bound;
+        // this also pins inflate's reservation to the policy default.
+        const GIB: usize = 1 << 30;
+        let mut stored = vec![1, 0xE8, 0x03, 0x17, 0xFC];
+        stored.extend(std::iter::repeat_n(b'x', 1000));
+        assert!(1032 * stored.len() > DecryptPolicy::DEFAULT_MAX_DECOMPRESSED_LEN);
+        let huge = policy().max_decompressed_len(GIB);
+        let decrypted = pipeline::decrypt(zip_jwe(&stored), &dir_key(), &huge)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(&decrypted.plaintext[..], &[b'x'; 1000][..]);
+        assert_eq!(
+            decrypted.plaintext.capacity(),
+            DecryptPolicy::DEFAULT_MAX_DECOMPRESSED_LEN
+        );
+
+        // Past the default bound the buffer grows with the output, at
+        // most twice it, and never to the policy bound.
+        let matches = 2000;
+        let stream = bomb(matches);
+        let decrypted = pipeline::decrypt(zip_jwe(&stream), &dir_key(), &huge)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let len = decrypted.plaintext.len();
+        assert_eq!(len, 1 + 258 * matches);
+        assert!(decrypted.plaintext.capacity() <= 2 * len);
+        assert!(decrypted.plaintext.capacity() <= 1032 * stream.len());
     }
 }
