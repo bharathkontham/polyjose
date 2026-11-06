@@ -195,3 +195,28 @@ fn mismatched_d_and_wrong_length_fail_with_fixed_strings_not_key_bytes() {
         .is_err()
     );
 }
+
+/// A forgery that only strict verification stops: R is the identity (small
+/// order) and S = k*a mod L, so [S]B = R + [k]A holds for the A.1 key. It was
+/// computed offline from the A.1 seed (RFC 8032 §5.1.5-§5.1.6 arithmetic with
+/// R replaced by the identity). RFC 8032 §5.1.7 cofactorless verification
+/// accepts it; ADR 0026 §6 (`verify_strict`) must not.
+const SMALL_ORDER_R_FORGERY: &str = "eyJhbGciOiJFZERTQSJ9.Zm9yZ2Vk.AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADl_T4pLKwoGTnFRGQYoV79pc-ReYRX6BWHBGBejO3oDQ";
+
+#[test]
+fn small_order_r_forgery_valid_under_the_lenient_equation_is_refused() {
+    use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
+
+    // Oracle: the lenient check does accept this forgery, so the test below
+    // distinguishes `verify_strict` from `verify`.
+    let (input, sig) = SMALL_ORDER_R_FORGERY.rsplit_once('.').unwrap();
+    let sig = Signature::from_slice(&b64url_decode(sig).unwrap()).unwrap();
+    let vk = VerifyingKey::from_bytes(&b64url_decode(X).unwrap().try_into().unwrap()).unwrap();
+    assert!(vk.verify(input.as_bytes(), &sig).is_ok());
+    assert!(vk.verify_strict(input.as_bytes(), &sig).is_err());
+
+    assert_eq!(
+        code(SMALL_ORDER_R_FORGERY, &public(""), &[SigningAlg::EdDSA]),
+        "InvalidSignature"
+    );
+}
