@@ -660,6 +660,54 @@ fn the_default_typ_mode_applies_to_the_outer_typ() {
     assert!(matches!(open(&token), Err(Error::InvalidHeader(_))));
 }
 
+/// Review N3, ADR 0027 §7: under an explicit-type policy
+/// (`Policy::access_token`, `Policy::expect_typ`) an outer JWE `typ` that
+/// is present must match the same type, so the common issuer habit of an
+/// outer `typ: JWT` is `InvalidHeader("typ")`; RFC 8725 §3.11 types the
+/// inner JWT. An issuer omits the outer `typ`, as `encrypt_nested` does
+/// unless the caller's protected header sets one.
+#[test]
+fn an_outer_typ_jwt_fails_an_explicit_type_policy() {
+    let key = es256_key();
+    let at = jwt::sign(
+        &access_token_claims(),
+        &IssueOptions::new(SigningAlg::ES256).access_token(),
+        &key,
+    )
+    .unwrap();
+    let clock = FixedClock(NOW);
+    let verifier = public(&key);
+    let policies = [
+        Policy::access_token(&clock, &SIGNING, &[ISSUER], &[AUDIENCE]).unwrap(),
+        Policy::new(&clock, &SIGNING)
+            .unwrap()
+            .audiences(&[AUDIENCE])
+            .expect_typ("at+jwt"),
+    ];
+    let omitted = jwt::encrypt_nested(&at, &kw("{}")).unwrap();
+    let outer_jwt = jwt::encrypt_nested(&at, &kw(r#"{"typ":"JWT"}"#)).unwrap();
+    let outer_same = jwt::encrypt_nested(&at, &kw(r#"{"typ":"at+jwt"}"#)).unwrap();
+    assert_eq!(outer_header_of(&omitted).typ, None);
+    assert_eq!(outer_header_of(&outer_jwt).typ.as_deref(), Some("JWT"));
+    for policy in &policies {
+        let run = |token: &str| {
+            jwt::decrypt_nested(
+                token,
+                &jwk(KEK),
+                &decrypt_policy(),
+                Keys::One(&verifier),
+                policy,
+            )
+        };
+        assert_eq!(code(run(&omitted)), "ok");
+        assert_eq!(code(run(&outer_same)), "ok");
+        assert_eq!(
+            run(&outer_jwt).map(|_| ()),
+            Err(Error::InvalidHeader("typ"))
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Replicated claims (RFC 7519 §5.3)
 // ---------------------------------------------------------------------------
