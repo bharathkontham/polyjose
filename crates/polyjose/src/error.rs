@@ -54,23 +54,42 @@ pub enum Error {
     ///
     /// Raised when decoding any base64url-encoded JOSE component
     /// (RFC 7515 §5.2 steps 2, 6 and 7; RFC 7516 §5.2) or JWK member.
+    ///
+    /// In JWS verification the payload's base64url (skipped for
+    /// `b64: false`, RFC 7797 §3) is checked after the protected header is
+    /// decoded and before the whole-header checks (ADR 0048, clarifying
+    /// ADR 0026 §2).
     InvalidBase64,
 
     /// Input is not a valid JSON object of the expected shape.
     ///
     /// A JOSE Header must be a completely valid JSON object (RFC 7515 §5.2
     /// step 3, RFC 7516 §5.2 step 3), and so must a JWT Claims Set
-    /// (RFC 7519 §7.2 step 10) and a JWK (RFC 7517 §4). The detail names
-    /// the failure category only, never the offending input.
+    /// (RFC 7519 §7.2 step 10) and a JWK (RFC 7517 §4). That includes a
+    /// member name occurring twice in one object, a JOSE Header included
+    /// (RFC 7515 §5.2 step 4, RFC 7516 §5.2 step 4; ADR 0041 §1). The
+    /// detail names the failure category only, never the offending input.
     InvalidJson(&'static str),
 
     /// The JOSE Header is structurally invalid.
     ///
     /// For example: a required parameter such as `alg` is missing
-    /// (RFC 7515 §4.1.1, RFC 7516 §4.1.1–§4.1.2), a parameter has the wrong
-    /// type, a Header Parameter name is duplicated (RFC 7515 §5.2 step 4,
-    /// RFC 7516 §5.2 step 4), or `crit` itself is malformed
-    /// (RFC 7515 §4.1.11, RFC 7516 §4.1.13).
+    /// (RFC 7515 §4.1.1, RFC 7516 §4.1.1–§4.1.2), a registered parameter
+    /// has the wrong type, the protected and unprotected headers share a
+    /// name (RFC 7515 §5.2 step 4, §7.2.1; RFC 7516 §5.2 step 4), `crit`
+    /// is malformed or not in the protected header (RFC 7515 §4.1.11,
+    /// RFC 7516 §4.1.13), or `b64` breaks the RFC 7797 §3/§6 rules.
+    ///
+    /// A member name that occurs twice **inside one** header object is not
+    /// this error: the JSON layer rejects it first, as
+    /// [`Error::InvalidJson`] (ADR 0041 §1, amending ADR 0026 §2 step 4).
+    ///
+    /// In JWS verification (ADR 0026 §2 as clarified by ADR 0048), the
+    /// per-parameter type checks and the `crit` syntax checks run while the
+    /// protected header is decoded, so before the payload's base64url is
+    /// checked. The whole-header checks (`crit` naming an absent parameter,
+    /// a missing `alg`, overlapping protected and unprotected headers,
+    /// `b64` placement) run after it.
     InvalidHeader(&'static str),
 
     /// The `alg` or `enc` value does not name an algorithm polyjose
@@ -144,6 +163,25 @@ pub enum Error {
     /// (RFC 7515 §10.1, RFC 8725 §3.5); polyjose never falls back to a
     /// weaker one (ADR 0005).
     RandomnessUnavailable,
+
+    /// The serialization does not have the shape its RFC requires, or the
+    /// input exceeds a configured limit (ADR 0026 §1, §7).
+    ///
+    /// For JWS: a compact JWS without exactly three dot-separated parts
+    /// (RFC 7515 §7.1, §5.2 step 1); a JSON JWS that is not an object of
+    /// the RFC 7515 §7.2.1/§7.2.2 shape (for example a missing or
+    /// non-string `signature`, an empty `signatures` array, `signatures`
+    /// mixed with top-level signature members, or an empty-string
+    /// `protected`); a payload that is present or absent against the
+    /// detached-content mode (RFC 7515 Appendix F); a `b64: false` payload
+    /// that the serialization cannot carry (RFC 7797 §5.2, §5.3); or an
+    /// input over the size or signature-count limits. JWE reuses it for its
+    /// own serialization shapes.
+    ///
+    /// JSON syntax errors stay [`Error::InvalidJson`] and base64url errors
+    /// stay [`Error::InvalidBase64`]. The detail names the rule, never the
+    /// input.
+    InvalidFormat(&'static str),
 }
 
 impl Error {
@@ -166,6 +204,7 @@ impl Error {
         "TokenNotYetValid",
         "InvalidClaim",
         "RandomnessUnavailable",
+        "InvalidFormat",
     ];
 
     /// The stable, cross-platform code for this error (ADR 0007).
@@ -188,6 +227,7 @@ impl Error {
             Error::TokenNotYetValid => "TokenNotYetValid",
             Error::InvalidClaim(_) => "InvalidClaim",
             Error::RandomnessUnavailable => "RandomnessUnavailable",
+            Error::InvalidFormat(_) => "InvalidFormat",
         }
     }
 }
@@ -215,6 +255,7 @@ impl core::fmt::Display for Error {
             Error::TokenNotYetValid => f.write_str("token not yet valid"),
             Error::InvalidClaim(detail) => write!(f, "invalid claim: {detail}"),
             Error::RandomnessUnavailable => f.write_str("randomness unavailable"),
+            Error::InvalidFormat(detail) => write!(f, "invalid format: {detail}"),
         }
     }
 }
@@ -252,6 +293,7 @@ mod tests {
             Error::TokenNotYetValid,
             Error::InvalidClaim("aud"),
             Error::RandomnessUnavailable,
+            Error::InvalidFormat("compact JWS must have three parts"),
         ]
     }
 
@@ -272,6 +314,7 @@ mod tests {
             Error::TokenNotYetValid => 11,
             Error::InvalidClaim(_) => 12,
             Error::RandomnessUnavailable => 13,
+            Error::InvalidFormat(_) => 14,
         }
     }
 
@@ -294,6 +337,7 @@ mod tests {
             "TokenNotYetValid",
             "InvalidClaim",
             "RandomnessUnavailable",
+            "InvalidFormat",
         ];
         let actual: Vec<&str> = one_of_each().iter().map(Error::code).collect();
         assert_eq!(actual, expected);
@@ -343,6 +387,7 @@ mod tests {
             "token not yet valid",
             "invalid claim: aud",
             "randomness unavailable",
+            "invalid format: compact JWS must have three parts",
         ];
         let actual: Vec<String> = one_of_each().iter().map(Error::to_string).collect();
         assert_eq!(actual, expected);

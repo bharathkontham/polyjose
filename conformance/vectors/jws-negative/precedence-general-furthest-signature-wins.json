@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0026 §3",
+  "description": "A general JWS over the A.1 payload: signature 0 is the RFC 7515 A.3 ES256 one (AlgorithmNotAllowed under allowed_algs [HS256]), signature 1 an HS256 MAC with its first character changed (InvalidSignature); none verifies, so the error of the one that progressed furthest wins",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ",
+      "signatures": [
+        {
+          "protected": "eyJhbGciOiJFUzI1NiJ9",
+          "signature": "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "BCfJaSBBMSnC8CXslIf5orCzS7AboBan4qE7aXuYSDs"
+        }
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

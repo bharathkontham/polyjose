@@ -26,15 +26,6 @@ pub mod jwk;
 pub mod jws;
 /// JSON Web Token (RFC 7519).
 pub mod jwt;
-// Internal: nothing calls the CSPRNG until the JWE/key-generation features
-// land; the expectation fails (and must be removed) once something does.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fill_random is the RNG boundary for later JWE and key-generation features"
-    )
-)]
 mod rng;
 #[cfg(feature = "insecure-test-vectors")]
 pub use rng::insecure_test_vectors;
@@ -42,6 +33,10 @@ pub use rng::insecure_test_vectors;
 // RNG state scan (rng.rs) exempts the file only when it is declared so.
 #[cfg(test)]
 mod test_counters;
+// Test-only fixtures (the vendored Wycheproof loader): never in a non-test
+// build, and not reachable from the integration tests in `tests/`.
+#[cfg(test)]
+mod test_support;
 /// base64url and helpers.
 pub mod util;
 

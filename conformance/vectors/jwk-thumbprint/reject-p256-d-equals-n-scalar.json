@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "A P-256 private key d equal to the group order n is outside [1, n − 1] (SEC 1 v2 §3.2.1, RFC 7518 §6.2.2.1; ADR 0041 §4). The public point is the valid generator G, so only d is wrong",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+      "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+      "d": "_____wAAAAD__________7zm-q2nF56E87nKwvxjJVE"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

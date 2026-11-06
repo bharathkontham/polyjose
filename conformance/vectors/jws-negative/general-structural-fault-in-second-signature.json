@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0026 §3",
+  "description": "A general JWS over \"Payload\" whose first signature verifies (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key) and whose second has crit [] (also with a correct MAC): structure checks run over every signature first, so the whole JWS is rejected",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "signatures": [
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiIsImNyaXQiOltdfQ",
+          "signature": "7ffFRJDiXBDqbDpiuaKFSfR_rNeLRajykIlC9MXJ9rs"
+        }
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

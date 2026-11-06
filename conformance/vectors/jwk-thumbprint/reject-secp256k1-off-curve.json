@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "The secp256k1 generator with the lowest bit of y flipped, (Gx, Gy XOR 1), does not satisfy the curve equation (SEC 1 v2 §3.2.2.1, RFC 7518 §6.2.1; ADR 0041 §4). Gy is the SEC 2 value; checked off-curve with Python big integers",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "secp256k1",
+      "x": "eb5mfvncu6xVoGKVzocLBwKb_NstzijZWfKBWxb4F5g",
+      "y": "SDradyajxGVdpPv8DhEIqP0XtEimhVQZnEfQj_sQ1Lk"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "A P-256 private key whose d (RFC 7517 Appendix A.2) does not derive its public point (the RFC 7515 Appendix A.3 ES256 point, itself on the curve) is rejected at import (ADR 0043 §3, amending ADR 0041 §4; SEC 1 v2 §3.2.1 Q = d·G, RFC 7518 §6.2.2.1). d is in [1, n − 1] and the point is valid, so only the pairing is wrong. Derived independently of polyjose with SEC 1 v2 §2.2.1 affine arithmetic over the FIPS 186-5 P-256 parameters in pure Python: the A.2 d·G is the A.2 point MKBCTNIc…/4Etl6SRW…, not this one",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+      "d": "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

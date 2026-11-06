@@ -1,0 +1,22 @@
+{
+  "source": "ADR 0026 §2",
+  "description": "The RFC 8037 A.4 EdDSA JWS verified with its Ed25519 key carrying \"alg\": \"Ed25519\": EdDSA and Ed25519 (RFC 9864) are distinct alg values, so the JWK alg does not equal the header alg (RFC 7517 §4.4; ADR 0026 §2 step 8, §6)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg",
+    "key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+      "alg": "Ed25519"
+    },
+    "allowed_algs": [
+      "EdDSA",
+      "Ed25519"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

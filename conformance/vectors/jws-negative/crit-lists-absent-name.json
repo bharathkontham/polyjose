@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7515 §4.1.11",
+  "description": "An HS256 JWS with crit [\"x-a\"] but no x-a parameter, MAC correct (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key): every name crit lists must be present (ADR 0026 §2 step 4)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImNyaXQiOlsieC1hIl19.UGF5bG9hZA.r75aVf69sAUtrnXVZ3uwt2WMR8bJlBMYc9DWNgl2Xhk",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

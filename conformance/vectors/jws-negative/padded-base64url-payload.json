@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7515 §2",
+  "description": "An HS256 JWS over \"Payload\" whose MAC is correct for the unpadded payload part UGF5bG9hZA (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key), sent with the payload padded as UGF5bG9hZA==: padding is rejected (ADR 0026 §2 step 3)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiJ9.UGF5bG9hZA==.bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

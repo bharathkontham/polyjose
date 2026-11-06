@@ -1,0 +1,19 @@
+{
+  "source": "ADR 0026 §2",
+  "description": "Precedence (ADR 0026 §2 as clarified by ADR 0048: shape and limits, then signature base64url, then protected-header decoding (base64url, JSON, then per-parameter types and crit syntax), then the payload's base64url under the effective b64, then whole-header structure, then ADR 0026 §2 steps 5–9): a compact JWS with alg XS256 (no such JWS algorithm, step 6), which is necessarily also outside allowed_algs [HS256] (step 7), fails with the step 6 code",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJYUzI1NiJ9.UGF5bG9hZA.gygGucexvZQk9RgUe31dVtSpaO4-U_nyW3yqpFd36zE",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

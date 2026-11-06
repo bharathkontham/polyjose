@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7518 §3.3",
+  "description": "A valid RS256 JWS signed by node:crypto with a 1024-bit RSA key, verified with its public JWK: a modulus under 2048 bits is rejected (ADR 0026 §2 step 8)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzI1NiJ9.UGF5bG9hZA.HF2bwyUqTcWoI8oylSnmJSGZJAeEoo1rQh3HhbC5KrLnu1ekOmTR-S33fpdLkDZ0P8xETgxKhL-4XQoZxPQT26MrA5uUaqKuZN1Oe6pF1lIsMNEGO39rS8m7BqQH5fCZ03HV3dgUmuTnkNdyPQzB4pnn2-w_y1V-jFZPfshsv5w",
+    "key": {
+      "kty": "RSA",
+      "n": "664Zzy7xgNbjXqqkXt2TwWlZtCH6qVFsKhfPueURnjOlMyQM9oP2FKuANNDvi3YUvHjatiOuU_3gCGrHNCa39VrhcJSEBEYEguuAOGRWLqzid9npk-Tq6dBp8CLHgeBZbarxuc91sMzITwOa8KgNePMG-BJZ1oPPKlAJBszli8U",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "RS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

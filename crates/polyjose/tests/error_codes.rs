@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 const MARKER: &str = "pj-SECRET-marker-9c1d";
 
-const AC_CODES: [&str; 14] = [
+const AC_CODES: [&str; 15] = [
     "InvalidBase64",
     "InvalidJson",
     "InvalidHeader",
@@ -29,6 +29,7 @@ const AC_CODES: [&str; 14] = [
     "TokenNotYetValid",
     "InvalidClaim",
     "RandomnessUnavailable",
+    "InvalidFormat",
 ];
 
 #[test]
@@ -57,6 +58,7 @@ fn code_is_reachable_for_every_code_via_public_api() {
         Error::TokenNotYetValid,
         Error::InvalidClaim("x"),
         Error::RandomnessUnavailable,
+        Error::InvalidFormat("x"),
     ];
     let mut codes: Vec<&str> = all.iter().map(Error::code).collect();
     codes.sort_unstable();
@@ -299,10 +301,10 @@ fn adversarial_json_errors_do_not_leak_input() {
     assert!(probes.len() >= 14);
     let mut echoed = 0;
     for p in probes {
-        if let Some(je) = &p.oracle {
-            if format!("{je}{je:?}").contains(MARKER) {
-                echoed += 1;
-            }
+        if let Some(je) = &p.oracle
+            && format!("{je}{je:?}").contains(MARKER)
+        {
+            echoed += 1;
         }
         let e = p.ours.err();
         assert!(e.is_some(), "probe {} must fail", p.what);

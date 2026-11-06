@@ -1,0 +1,21 @@
+{
+  "source": "RFC 7518 §3.4",
+  "description": "The RFC 7515 A.3 signature with its last octet removed (63 octets; ES256 requires exactly 64) is rejected",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU",
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "allowed_algs": [
+      "ES256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "source": "RFC 7520 §4.7.3, Figure 55",
+  "description": "HS256 flattened JWS JSON Serialization sign with no protected header, only the Figure 51 unprotected header, signs \".\" || payload (RFC 7515 §5.1, ADR 0045) and reproduces the RFC output exactly (signature Figure 53, rechecked with Python hmac)",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "flattened",
+    "payload_b64u": "SXTigJlzIGEgZGFuZ2Vyb3VzIGJ1c2luZXNzLCBGcm9kbywgZ29pbmcgb3V0IHlvdXIgZG9vci4gWW91IHN0ZXAgb250byB0aGUgcm9hZCwgYW5kIGlmIHlvdSBkb24ndCBrZWVwIHlvdXIgZmVldCwgdGhlcmXigJlzIG5vIGtub3dpbmcgd2hlcmUgeW91IG1pZ2h0IGJlIHN3ZXB0IG9mZiB0by4",
+    "detached": false,
+    "signers": [
+      {
+        "header": {
+          "alg": "HS256",
+          "kid": "018c0ae5-4d9b-471b-bfd6-eef314bc7037"
+        },
+        "key": {
+          "kty": "oct",
+          "kid": "018c0ae5-4d9b-471b-bfd6-eef314bc7037",
+          "use": "sig",
+          "alg": "HS256",
+          "k": "hJtXIZ2uSN5kbQfbtTNWbpdmhkV8FJG-Onbc6mxCcYg"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "jws": {
+      "payload": "SXTigJlzIGEgZGFuZ2Vyb3VzIGJ1c2luZXNzLCBGcm9kbywgZ29pbmcgb3V0IHlvdXIgZG9vci4gWW91IHN0ZXAgb250byB0aGUgcm9hZCwgYW5kIGlmIHlvdSBkb24ndCBrZWVwIHlvdXIgZmVldCwgdGhlcmXigJlzIG5vIGtub3dpbmcgd2hlcmUgeW91IG1pZ2h0IGJlIHN3ZXB0IG9mZiB0by4",
+      "header": {
+        "alg": "HS256",
+        "kid": "018c0ae5-4d9b-471b-bfd6-eef314bc7037"
+      },
+      "signature": "xuLifqLGiblpv9zBpuZczWhNj1gARaLV3UxvxhJxZuk"
+    }
+  }
+}

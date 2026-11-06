@@ -1,0 +1,20 @@
+{
+  "source": "RFC 8017 §8.2.2",
+  "description": "An RS256 JWS over payload \"Payload 167\" signed by node:crypto with the RFC 7515 A.2 private key, chosen (by trying payloads) so that its 256-octet signature starts with a zero octet, with that zero octet stripped (255 octets): the signature must be exactly k = 256 octets (step 1), so it is rejected (RFC 7518 §3.3)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzI1NiJ9.UGF5bG9hZCAxNjc.lUHaR4NT9gfF4j0fS0xDZD_kv4Bjk0rz_nqUwm6Qm0BfnbJoygZySnTSlYNlyiQ-iNDJJt8IT-DOWudygHEKm_U_SzvFRzEiOUT3ocH2D7ChdYxIwDkt0ms40yCmgAlKUf-Ws-ZnSSGSxwnoqmyXUYhqrRquwY1Dn1mq5iccEgu2TwSwo2R4vx8U6WEO_iVrTbawSHtTixsw2YAR48KDyg4IWZl4Nk7JO2mSG4z4nmbz7b3BWBdwxnTnofGya-iVKQo99E1LCnqcf1tfyFkxrU74QVw8vqByBXaLpV5xgeucigbanElJgpx7t7aw0mAjuBdnUdCuaENA3MGbO50b",
+    "key": {
+      "kty": "RSA",
+      "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "RS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

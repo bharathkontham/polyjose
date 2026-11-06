@@ -51,10 +51,13 @@ jobs:
       # stay defined in one place. That file lists every binding target (WASM, Android, iOS,
       # macOS), so this step downloads their standard libraries too. It costs some setup time
       # but keeps CI and local builds on the same toolchain.
+      # llvm-tools gives the toolchain's own llvm-nm and llvm-ar, which scripts/check-rsa-symbols.sh
+      # needs to read polyjose's objects for every target it builds (GNU nm cannot read wasm32).
       - name: Install toolchain (rust-toolchain.toml)
         id: toolchain
         run: |
           rustup toolchain install
+          rustup component add llvm-tools
           rustup show
           cargo --version
 
@@ -109,11 +112,22 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.install-deny.outcome == 'success' }}
         run: cargo deny --locked --all-features check
 
-      # Enforces ADR 0016 (the core's runtime tree matches deps-allowlist.txt, with default features
-      # off) and ADR 0020 §5 (deps-allowlist.txt and CREDITS.md list the same crates).
+      # Enforces ADR 0016 (the core's tree matches deps-allowlist.txt, with default features off,
+      # and the guarded build-time groups of ADR 0025/0042 are reached only through their parent),
+      # ADR 0020 §5 (deps-allowlist.txt and CREDITS.md list the same crates) and the ADR 0021 guard
+      # that the RUSTSEC-2023-0071 ignore above depends on (no RSA private-key use, no rsa feature,
+      # no sha1).
       - name: dependency allowlist
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/check-deps.sh
+
+      # The ADR 0021 guard on compiled output (ADR 0049 §1), as in `scripts/test-all.sh rust`, after
+      # the text scan above: builds polyjose (all features) and each binding (host, and the WASM
+      # binding for wasm32), and fails on any RSA private-key, signing or decryption symbol in their
+      # own object code, however the source spelled it. The RUSTSEC-2023-0071 ignore depends on it.
+      - name: RSA public-key only (compiled symbols)
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/check-rsa-symbols.sh
 
       # Enforces ADR 0005: nothing that builds a binding can turn on polyjose's deterministic test
       # RNG, whether through a binding feature (optional ones too), workspace feature unification,
@@ -122,18 +136,46 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/check-test-vectors-off.sh
 
-  # Keeps the published `rust-version` honest (ADR 0024): polyjose must build on its MSRV, not
-  # only on the pinned toolchain. One Linux job is enough, because the core has no OS-specific
-  # code, and a separate job keeps the second toolchain (and its build artifacts) out of the
-  # matrix jobs and their cache. `cargo +<version>` bypasses rust-toolchain.toml on purpose, and
-  # the job has no rust-cache step, since that would query (and so install) the pinned toolchain.
+      # The gate scripts' own negative tests, as in `scripts/test-all.sh rust`: every
+      # scripts/tests/<gate>/*.sh except lib.sh (the helpers they source), each in its own log
+      # group and reported by name. They prove the gates above still fail when they should, e.g.
+      # check-deps.sh's ADR 0021 guard, which the RUSTSEC-2023-0071 ignore in deny.toml depends
+      # on. A failing or non-executable script fails the step after the others ran, and so does
+      # finding none.
+      - name: negative tests of the gate scripts
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: |
+          found=0; failed=0
+          for t in scripts/tests/*/*.sh; do
+            [ -e "$t" ] || continue
+            case ${t##*/} in lib.sh) continue ;; esac
+            found=1
+            echo "::group::$t"
+            result=PASS
+            if [ ! -x "$t" ]; then echo "$t is not executable"; result=FAIL
+            elif ! "$t"; then result=FAIL; fi
+            echo "::endgroup::"
+            echo "negative: ${t#scripts/tests/}: $result"
+            if [ "$result" = FAIL ]; then echo "::error file=$t::negative test failed"; failed=1; fi
+          done
+          if [ "$found" -eq 0 ]; then echo "::error::no negative tests found (scripts/tests/*/*.sh)"; exit 1; fi
+          exit "$failed"
+
+  # Keeps the published `rust-version` honest (ADR 0024 as amended: 1.89 since 0003 Gate 1):
+  # polyjose must build on its MSRV, not only on the pinned toolchain. One Linux job is enough,
+  # because the core has no OS-specific code, and a separate job keeps the second toolchain (and
+  # its build artifacts) out of the matrix jobs and their cache. `cargo +<version>` bypasses
+  # rust-toolchain.toml on purpose, and the job has no rust-cache step, since that would query (and
+  # so install) the pinned toolchain.
   msrv:
     name: msrv
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # Must equal the workspace `rust-version` (checked below). Feature 0002 raises it to 1.88.
-      MSRV: 1.85.0
+      # Must equal the workspace `rust-version` (checked below). 1.89 is the floor of the JWS and
+      # JWE crypto set: crypto-bigint 0.7.10, elliptic-curve 0.14.3 and rsa 0.10.0-rc.20 need
+      # 1.87, sha2 0.11.1 needs 1.88 and aes 0.9.4 needs 1.89 (ADR 0024, raised at 0003 Gate 1).
+      MSRV: 1.89.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

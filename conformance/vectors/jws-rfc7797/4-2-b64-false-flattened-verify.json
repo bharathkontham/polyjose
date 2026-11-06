@@ -1,0 +1,25 @@
+{
+  "source": "RFC 7797 §4.2",
+  "description": "HS256 flattened JSON verify of the §4.2 flattened JWS, whose \"payload\" member is the unencoded \"$.02\" (§3, §5.3), with the RFC 7515 A.1 key",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "protected": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19",
+      "payload": "$.02",
+      "signature": "A5dxf2s96_n5FLueVuW1Z_vh161FwXZC4YLPff6dmDY"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "JC4wMg",
+    "alg": "HS256",
+    "signature_index": 0
+  }
+}
