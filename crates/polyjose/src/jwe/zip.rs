@@ -41,13 +41,21 @@ pub(crate) fn compress(_plaintext: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
 /// after the authentication tag verified (§5.2 step 16), with
 /// `max_len` = `DecryptPolicy::max_decompressed_len` (ADR 0017 §3).
 ///
+/// The bound is inclusive: exactly `max_len` bytes inflate, one more fails.
+/// `max_len == 0` rejects every compressed JWE (ADR 0017 §3), even one
+/// whose plaintext is empty, without starting inflation.
+///
 /// # Errors
 ///
 /// [`Error::DecryptionFailed`] for every failure: a malformed RFC 1951
-/// stream or output over `max_len` (ADR 0017 §1; RFC 7516 §11.4 asks for
-/// one undifferentiated error once key management has started).
+/// stream, output over `max_len`, or `max_len == 0` (ADR 0017 §1; RFC 7516
+/// §11.4 asks for one undifferentiated error once key management has
+/// started).
 #[cfg(feature = "deflate")]
 pub(crate) fn decompress(compressed: &[u8], max_len: usize) -> Result<Zeroizing<Vec<u8>>> {
+    if max_len == 0 {
+        return Err(Error::DecryptionFailed);
+    }
     crate::deflate::inflate(compressed, max_len).map_err(|_| Error::DecryptionFailed)
 }
 
@@ -99,5 +107,66 @@ mod tests {
         }
         let compressed = compress(&text).unwrap_or_else(|e| panic!("{e}"));
         assert!(compressed.len() < text.len() / 4, "not compressed");
+    }
+
+    /// A fixed-Huffman block (RFC 1951 §3.2.6) holding only end-of-block:
+    /// a valid stream that inflates to nothing.
+    const EMPTY_STREAM: [u8; 2] = [0x03, 0x00];
+
+    #[test]
+    fn the_bound_is_inclusive() {
+        // ADR 0017 §1: inflation fails "the moment the output would exceed"
+        // the bound, so exactly `max_len` bytes still succeed.
+        let plaintext = b"0123456789".repeat(25_000);
+        let compressed = compress(&plaintext).unwrap_or_else(|e| panic!("{e}"));
+        let out = decompress(&compressed, 250_000).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(&out[..], &plaintext[..]);
+        assert_eq!(
+            decompress(&compressed, 249_999),
+            Err(Error::DecryptionFailed)
+        );
+
+        let longer = b"0123456789".repeat(25_001);
+        let compressed = compress(&longer[..250_001]).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            decompress(&compressed, 250_000),
+            Err(Error::DecryptionFailed)
+        );
+        assert_eq!(
+            decompress(&compressed, 250_001).map(|v| v.len()),
+            Ok(250_001)
+        );
+    }
+
+    #[test]
+    fn a_zero_bound_rejects_every_stream() {
+        // ADR 0017 §3: "Setting it to 0 rejects every zip token", even one
+        // whose plaintext is empty and so would fit.
+        assert_eq!(decompress(&EMPTY_STREAM, 0), Err(Error::DecryptionFailed));
+        let empty = compress(b"").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(decompress(&empty, 0), Err(Error::DecryptionFailed));
+        assert_eq!(decompress(b"", 0), Err(Error::DecryptionFailed));
+        assert_eq!(decompress(&EMPTY_STREAM, 1).map(|v| v.len()), Ok(0));
+    }
+
+    #[test]
+    fn every_inflate_error_is_decryption_failed() {
+        // ADR 0017 §1, RFC 7516 §11.4: the unit error, whatever the cause.
+        let valid = compress(b"hello hello hello").unwrap_or_else(|e| panic!("{e}"));
+        let malformed: [&[u8]; 6] = [
+            b"",                                // no block at all (RFC 1951 §3.2.3)
+            &[0x07],                            // BTYPE 11, reserved (§3.2.3)
+            &[0x01, 0x05, 0x00, 0x00, 0x00],    // stored, NLEN not ~LEN (§3.2.4)
+            &[0x01, 0x05, 0x00, 0xFA, 0xFF, 1], // stored, LEN past the input
+            &[0x00],                            // BFINAL 0 and then nothing
+            &valid[..valid.len() - 1],          // truncated
+        ];
+        for input in malformed {
+            assert_eq!(
+                decompress(input, 1 << 20),
+                Err(Error::DecryptionFailed),
+                "{input:?}"
+            );
+        }
     }
 }
