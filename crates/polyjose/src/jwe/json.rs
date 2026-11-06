@@ -34,9 +34,7 @@ use super::api::{DecryptPolicy, JsonForm};
 use super::core::{self, JweParts, RecipientParts};
 use crate::header::Header;
 use crate::json::{self, Limits, Object, Value};
-use crate::util::b64url_decode;
-#[cfg(test)]
-use crate::util::b64url_encode;
+use crate::util::{b64url_decode, b64url_encode};
 use crate::{Error, Result};
 
 /// The members of one `recipients` entry (RFC 7516 §7.2.1), which the
@@ -308,14 +306,96 @@ fn object_member(object: &mut Object, name: &str, faults: Faults) -> Result<Opti
     }
 }
 
-/// Writes `parts` in `form` (RFC 7516 §7.2.1, §7.2.2).
+/// Writes `parts` in `form` (RFC 7516 §7.2.1, §7.2.2), with the members in
+/// the order of the RFC's syntax: `protected`, `unprotected`, then
+/// `recipients` (general) or `header` and `encrypted_key` (flattened),
+/// then `aad`, `iv`, `ciphertext` and `tag`.
+///
+/// The protected header is written exactly as the AAD was computed over
+/// (`protected_b64`, §5.1 step 14). Following §7.2.1, a member whose value
+/// is empty is left out: no protected header, an empty unprotected header,
+/// an empty encrypted key (`dir`, ECDH-ES), an empty IV or tag.
+/// `ciphertext` is always written.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidFormat`] for a flattened JWE with other than one
-/// recipient.
-pub(crate) fn serialize(_parts: &JweParts, _form: JsonForm) -> Result<String> {
-    Err(Error::UnsupportedAlgorithm)
+/// recipient, a general JWE with none (§7.2.1, §7.2.2), or an empty JWE
+/// AAD: the AAD was computed with it (§5.1 step 14), but §7.2.1 requires
+/// `aad` to be absent when empty, so the output could not be decrypted.
+/// [`Error::InvalidHeader`] for a header [`Header::to_object`] refuses.
+pub(crate) fn serialize(parts: &JweParts, form: JsonForm) -> Result<String> {
+    let mut out = Object::new();
+    if !parts.protected_b64.is_empty() {
+        out.insert("protected", parts.protected_b64.as_str());
+    }
+    if let Some(shared) = non_empty(parts.shared.as_ref())? {
+        out.insert("unprotected", shared);
+    }
+    match form {
+        JsonForm::Flattened => {
+            let [recipient] = parts.recipients.as_slice() else {
+                return Err(Error::InvalidFormat(
+                    "flattened JWE must have exactly one recipient",
+                ));
+            };
+            write_recipient(&mut out, recipient)?;
+        }
+        JsonForm::General => {
+            if parts.recipients.is_empty() {
+                return Err(Error::InvalidFormat("JWE has no recipients"));
+            }
+            let mut entries = Vec::with_capacity(parts.recipients.len());
+            for recipient in &parts.recipients {
+                let mut entry = Object::new();
+                write_recipient(&mut entry, recipient)?;
+                entries.push(Value::from(entry));
+            }
+            out.insert("recipients", entries);
+        }
+    }
+    match parts.aad.as_deref() {
+        None => {}
+        Some([]) => {
+            return Err(Error::InvalidFormat(
+                "an empty JWE AAD cannot be serialized",
+            ));
+        }
+        Some(aad) => {
+            out.insert("aad", b64url_encode(aad));
+        }
+    }
+    if !parts.iv.is_empty() {
+        out.insert("iv", b64url_encode(&parts.iv));
+    }
+    out.insert("ciphertext", b64url_encode(&parts.ciphertext));
+    if !parts.tag.is_empty() {
+        out.insert("tag", b64url_encode(&parts.tag));
+    }
+    Ok(out.to_json())
+}
+
+/// Appends a recipient's `header` and `encrypted_key` (§7.2.1), each only
+/// when non-empty.
+fn write_recipient(object: &mut Object, recipient: &RecipientParts) -> Result<()> {
+    if let Some(header) = non_empty(recipient.header.as_ref())? {
+        object.insert("header", header);
+    }
+    if !recipient.encrypted_key.is_empty() {
+        object.insert("encrypted_key", b64url_encode(&recipient.encrypted_key));
+    }
+    Ok(())
+}
+
+/// `header` as a JSON object, or `None` if it is absent or has no members.
+fn non_empty(header: Option<&Header>) -> Result<Option<Object>> {
+    match header {
+        None => Ok(None),
+        Some(header) => {
+            let object = header.to_object()?;
+            Ok((!object.is_empty()).then_some(object))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +515,49 @@ mod tests {
         assert_eq!(parts.ciphertext.len(), 32);
         assert_eq!(parts.tag.len(), 16);
         assert!(parts.aad.is_none());
+    }
+
+    #[test]
+    fn parses_rfc_7516_a5_flattened_and_writes_it_back() {
+        let parts = parsed(A5);
+        assert_eq!(parts.recipients.len(), 1);
+        let header = parts.recipients[0].header.as_ref();
+        assert_eq!(header.and_then(|h| h.kid.as_deref()), Some("7"));
+        // Same members in the RFC's order, so the same text.
+        assert_eq!(serialize(&parts, JsonForm::Flattened).as_deref(), Ok(A5));
+    }
+
+    #[test]
+    fn writes_rfc_7516_a4_back_in_the_general_form() {
+        let parts = parsed(A4);
+        assert_eq!(serialize(&parts, JsonForm::General).as_deref(), Ok(A4));
+        // Two recipients cannot be flattened (§7.2.2).
+        assert_eq!(
+            serialize(&parts, JsonForm::Flattened),
+            Err(Error::InvalidFormat(
+                "flattened JWE must have exactly one recipient"
+            ))
+        );
+    }
+
+    #[test]
+    fn flattened_and_general_parse_to_the_same_parts() {
+        // §7.2.2: the flattened form is the general one with the single
+        // `recipients` entry moved to the top level.
+        let flat = parsed(A5);
+        let gen_ = parsed(&object(&[
+            A5_PROTECTED,
+            r#""unprotected":{"jku":"https://server.example.com/keys.jwks"}"#,
+            &format!(r#""recipients":[{}]"#, a5_entry()),
+            A5_IV,
+            A5_CT,
+            A5_TAG,
+        ]));
+        assert_eq!(
+            serialize(&flat, JsonForm::General),
+            serialize(&gen_, JsonForm::General)
+        );
+        assert_eq!(serialize(&gen_, JsonForm::Flattened).as_deref(), Ok(A5));
     }
 
     #[test]
@@ -775,6 +898,95 @@ mod tests {
         }
         let both = a5_with(&[r#""header":{"enc":"A128CBC-HS256"}"#], &["header"]);
         assert_eq!(parse_code(&both), "ok");
+    }
+
+    #[test]
+    fn the_received_protected_encoding_and_aad_are_kept() {
+        // RFC 7516 §5.2 steps 14-15, erratum 8676: the AAD is computed over
+        // the received text, so it is kept byte for byte.
+        let json = "{ \"enc\" : \"A128CBC-HS256\" }";
+        let encoded = b64url_encode(json.as_bytes());
+        let aad = b64url_encode(b"[\"vcard\"]");
+        let jwe = a5_with(
+            &[
+                &format!(r#""protected":"{encoded}""#),
+                &format!(r#""aad":"{aad}""#),
+            ],
+            &["protected"],
+        );
+        let parts = parsed(&jwe);
+        assert_eq!(parts.protected_b64, encoded);
+        assert_eq!(parts.aad.as_deref(), Some(&b"[\"vcard\"]"[..]));
+        let out = serialize(&parts, JsonForm::Flattened).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            out.contains(&format!(r#""protected":"{encoded}""#)),
+            "{out}"
+        );
+        assert!(out.contains(&format!(r#""aad":"{aad}""#)), "{out}");
+    }
+
+    #[test]
+    fn no_protected_header_is_kept_as_empty() {
+        let parts = parsed(&a5_with(&[], &["protected"]));
+        assert!(parts.protected_b64.is_empty() && parts.protected.is_none());
+        let out = serialize(&parts, JsonForm::Flattened).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!out.contains("protected"), "{out}");
+    }
+
+    #[test]
+    fn serialize_leaves_out_empty_members() {
+        let mut parts = parsed(A5);
+        parts.shared = Some(Header::new());
+        parts.recipients[0].header = Some(Header::new());
+        parts.recipients[0].encrypted_key.clear();
+        parts.iv.clear();
+        parts.tag.clear();
+        parts.ciphertext.clear();
+        assert_eq!(
+            serialize(&parts, JsonForm::Flattened).as_deref(),
+            Ok(r#"{"protected":"eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0","ciphertext":""}"#)
+        );
+        assert_eq!(
+            serialize(&parts, JsonForm::General).as_deref(),
+            Ok(
+                r#"{"protected":"eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0","recipients":[{}],"ciphertext":""}"#
+            )
+        );
+    }
+
+    #[test]
+    fn serialize_refuses_what_json_cannot_carry() {
+        let mut none = parsed(A5);
+        none.recipients.clear();
+        assert_eq!(
+            serialize(&none, JsonForm::Flattened).unwrap_err().code(),
+            "InvalidFormat"
+        );
+        assert_eq!(
+            serialize(&none, JsonForm::General).unwrap_err().code(),
+            "InvalidFormat"
+        );
+        // An empty JWE AAD was part of the AAD computation (§5.1 step 14)
+        // but §7.2.1 cannot carry it.
+        let mut empty_aad = parsed(A5);
+        empty_aad.aad = Some(Vec::new());
+        for form in [JsonForm::Flattened, JsonForm::General] {
+            assert_eq!(
+                serialize(&empty_aad, form),
+                Err(Error::InvalidFormat(
+                    "an empty JWE AAD cannot be serialized"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn written_output_parses_back_to_the_same_output() {
+        for (jwe, form) in [(A4, JsonForm::General), (A5, JsonForm::Flattened)] {
+            let once = serialize(&parsed(jwe), form).unwrap_or_else(|e| panic!("{e}"));
+            let twice = serialize(&parsed(&once), form).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(once, twice);
+        }
     }
 
     #[test]
