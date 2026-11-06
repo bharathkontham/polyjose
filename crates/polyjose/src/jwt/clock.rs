@@ -168,15 +168,29 @@ mod tests {
         assert_eq!(clock.now(), Ok(7));
     }
 
-    /// `SystemClock` exists where std has a clock, and is a `Clock`. Its
-    /// `now` is never called: no test reads the wall clock (ADR 0028 §5,
-    /// pipeline rule 8).
+    /// `SystemClock` exists where std has a clock, and is a `Clock`.
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     #[test]
     fn system_clock_is_a_clock() {
         fn is_clock<T: Clock + Default + Copy + core::fmt::Debug>() {}
         is_clock::<SystemClock>();
         assert_eq!(format!("{SystemClock:?}"), "SystemClock");
+    }
+
+    /// `SystemClock::now` reads the host clock and returns a time inside
+    /// the NumericDate range (RFC 7519 §2; ADR 0028 §1–§2).
+    ///
+    /// This is a sanity bound, not a timing assertion: it compares one
+    /// reading with a fixed past instant (2023-11-14T22:13:20Z) and never
+    /// measures elapsed time or compares two readings (pipeline rule 8).
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    #[test]
+    fn system_clock_now_is_after_a_fixed_past_instant() {
+        let now = SystemClock.now();
+        assert!(
+            matches!(now, Ok(secs) if secs > 1_700_000_000 && secs <= MAX_SAFE_INTEGER),
+            "{now:?}"
+        );
     }
 
     /// Every source file of `jwt` other than this one, by name. A new file
