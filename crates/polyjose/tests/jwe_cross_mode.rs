@@ -290,7 +290,7 @@ fn every_gcmkw_size_relabelled_as_dir_is_invalid_header() {
             "ciphertext": seg[1],
             "tag": header.tag,
         });
-        let p = policy(&[alg.clone(), A::Dir], &[enc.clone()]);
+        let p = policy(&[alg.clone(), A::Dir], std::slice::from_ref(&enc));
         let result = decrypt_json(&forged.to_string(), &key, &p);
         assert_eq!(code(&result), "InvalidHeader", "{alg}");
     }
@@ -543,7 +543,7 @@ fn polyjose_protects_a_direct_alg_in_every_serialization() {
             assert!(protected["epk"].is_object(), "{alg}");
         }
         assert_eq!(v["recipients"], json!([{}]), "{alg}");
-        let p = policy(&[alg.clone()], &[E::A128GCM]);
+        let p = policy(std::slice::from_ref(&alg), &[E::A128GCM]);
         let d = decrypt_json(&general, decrypt_key, &p).unwrap_or_else(|e| panic!("{alg}: {e}"));
         assert_eq!(d.plaintext(), b"m", "{alg}");
     }
