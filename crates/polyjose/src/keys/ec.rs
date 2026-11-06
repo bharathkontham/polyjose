@@ -29,10 +29,13 @@
 //! [`Zeroizing`] buffer. Errors are static strings with no input octet.
 
 use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, ToSec1Point};
-use p256::elliptic_curve::{AffinePoint, CurveArithmetic, FieldBytesSize, PublicKey};
+use p256::elliptic_curve::{
+    AffinePoint, CurveArithmetic, FieldBytes, FieldBytesSize, PublicKey, SecretKey,
+};
 use zeroize::Zeroizing;
 
 use super::jwk_build;
+use super::sec1::{self, EcPrivateKey};
 use super::spki;
 use super::types::{AlgId, SpkiParts};
 use crate::error::{Error, Result};
@@ -40,6 +43,12 @@ use crate::jwk::{EcCurve, EcKey, Jwk};
 
 /// Detail for an EC point that the curve crate does not accept.
 const POINT_INVALID: &str = "EC point is invalid";
+/// Detail for a privateKey that is not ⌈log₂(n)/8⌉ octets (RFC 5915 §3).
+const PRIVATE_KEY_LENGTH: &str = "EC privateKey has the wrong length for the curve";
+/// Detail for a private scalar outside [1, n − 1] (SEC 1 v2 §3.2.1).
+const SCALAR_INVALID: &str = "EC private key d is out of range";
+/// Detail for exporting a public key in a private-key format.
+const NOT_PRIVATE: &str = "EC key has no private part";
 
 /// The affine coordinates of a valid point, each the curve's full
 /// coordinate length (RFC 7518 §6.2.1.2–§6.2.1.3). Public values.
@@ -100,6 +109,54 @@ where
     }
 }
 
+/// The private JWK of the scalar `d` on `crv`, with the embedded public
+/// point if the container has one (RFC 5915 §3 `[1]`, RFC 5958 §2 `[1]`).
+///
+/// - `d` must be ⌈log₂(n)/8⌉ octets (RFC 5915 §3), which for all four
+///   curves is the coordinate length the JWK `d` needs (RFC 7518
+///   §6.2.2.1).
+/// - With an embedded point, the point is decoded by the curve crate
+///   ([`decode_point`]; it may be compressed) and passed with `d` to
+///   `jwk_build::ec_jwk`, whose `Jwk::from_object` rejects a `d` out of
+///   range or a point that is not d·G (ADR 0043 §3, ADR 0018 §3
+///   consistency). The comparison is not repeated here.
+/// - Without one, the point is derived from `d` ([`derive_public`]).
+fn private_jwk(crv: EcCurve, d: &[u8], embedded: Option<&[u8]>) -> Result<Jwk> {
+    if d.len() != crv.coordinate_len() {
+        return Err(Error::InvalidKey(PRIVATE_KEY_LENGTH));
+    }
+    let point = match embedded {
+        Some(octets) => decode_point(crv, octets)?,
+        None => derive_public(crv, d)?,
+    };
+    jwk_build::ec_jwk(crv, &point.x, &point.y, Some(d), None)
+}
+
+/// The public point Q = d·G of the scalar `d` on `crv` (SEC 1 v2 §3.2.1).
+/// `SecretKey::from_bytes` rejects 0 and every value ≥ n in constant time,
+/// and `SecretKey::public_key` multiplies in the curve crate's
+/// constant-time arithmetic. The `SecretKey` is wiped on drop.
+fn derive_public(crv: EcCurve, d: &[u8]) -> Result<Coordinates> {
+    match crv {
+        EcCurve::P256 => derive_public_on::<p256::NistP256>(d),
+        EcCurve::P384 => derive_public_on::<p384::NistP384>(d),
+        EcCurve::P521 => derive_public_on::<p521::NistP521>(d),
+        EcCurve::Secp256k1 => derive_public_on::<k256::Secp256k1>(d),
+    }
+}
+
+/// See [`derive_public`], on the curve `C`.
+fn derive_public_on<C>(d: &[u8]) -> Result<Coordinates>
+where
+    C: CurveArithmetic,
+    AffinePoint<C>: FromSec1Point<C> + ToSec1Point<C>,
+    FieldBytesSize<C>: ModulusSize,
+{
+    let d = <&FieldBytes<C>>::try_from(d).map_err(|_| Error::InvalidKey(PRIVATE_KEY_LENGTH))?;
+    let secret = SecretKey::<C>::from_bytes(d).map_err(|_| Error::InvalidKey(SCALAR_INVALID))?;
+    coordinates(&secret.public_key())
+}
+
 /// The uncompressed SEC1 point of `key`: `0x04 ‖ x ‖ y` (SEC 1 v2 §2.3.3),
 /// the only form polyjose writes (RFC 5480 §2.2 "MUST be supported";
 /// ADR 0018 §3). `x` and `y` were validated as full-length coordinates of
@@ -156,6 +213,54 @@ pub(crate) fn to_spki(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
     spki::encode(&SpkiParts {
         alg: AlgId::Ec(key.crv()),
         subject_public_key: &point,
+    })
+}
+
+/// Imports a standalone SEC1 `EC PRIVATE KEY` (RFC 5915 §3, §4) from DER,
+/// as a private JWK with `crv`, `x`, `y` and `d` (RFC 7518 §6.2) and no
+/// `alg`.
+///
+/// - The structure is decoded by `sec1::decode` (version 1, EXPLICIT
+///   `[0]`/`[1]`, DER only).
+/// - The `[0]` namedCurve is required: "Implementations that conform to
+///   this document MUST always include the parameters field" (RFC 5915
+///   §3).
+/// - The privateKey must have the curve's length, and the `[1]` publicKey,
+///   when present, must be d·G; without it the point is derived from d
+///   (see [`private_jwk`]).
+///
+/// # Errors
+///
+/// - [`Error::UnsupportedAlgorithm`] for a namedCurve outside P-256,
+///   P-384, P-521 and secp256k1, or a specifiedCurve (RFC 5480 §2.1.1).
+/// - [`Error::InvalidKey`] for malformed DER, a missing `[0]`, a wrong
+///   version or length, d out of range, an invalid point, or a point that
+///   is not d·G.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
+pub(crate) fn from_sec1(der: &[u8]) -> Result<Jwk> {
+    let key = sec1::decode(der)?;
+    let crv = key.parameters.ok_or(Error::InvalidKey(
+        "EC PRIVATE KEY has no namedCurve parameters",
+    ))?;
+    private_jwk(crv, key.private_key, key.public_key)
+}
+
+/// Exports the private `key` as a DER SEC1 `EC PRIVATE KEY` (RFC 5915 §3)
+/// with the `[0]` namedCurve and the `[1]` uncompressed publicKey
+/// (ADR 0018 §3), byte for byte what OpenSSL 4 writes. The output is
+/// zeroized on drop.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] if `key` has no `d`.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
+pub(crate) fn to_sec1(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
+    let d = key.d().ok_or(Error::InvalidKey(NOT_PRIVATE))?;
+    let point = uncompressed_point(key);
+    sec1::encode(&EcPrivateKey {
+        private_key: d,
+        parameters: Some(key.crv()),
+        public_key: Some(&point),
     })
 }
 
@@ -357,6 +462,212 @@ mod tests {
             let jwk = expected("openssl/expected", "ec-p384-sec1.jwk.json");
             let der = fixtures::load("openssl", "ec-p384-spki.der");
             assert_eq!(*to_spki(ec_key(&jwk)).unwrap(), der);
+        }
+    }
+
+    mod sec1_form {
+        use super::*;
+
+        fn invalid(result: Result<Jwk>) -> &'static str {
+            match result {
+                Err(Error::InvalidKey(detail)) => detail,
+                other => panic!("expected InvalidKey, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn rfc_sec1_vectors_round_trip() {
+            // RFC 7517 App. A.2 (built) and RFC 9500 §2.3 testECCP256/384/521
+            // (verbatim).
+            for (file, json) in [
+                (
+                    "rfc7517-a2-ec-p256-sec1.der",
+                    "rfc7517-a2-ec-p256-sec1.jwk.json",
+                ),
+                (
+                    "rfc9500-testECCP256-sec1.pem",
+                    "rfc9500-testECCP256-sec1.jwk.json",
+                ),
+                (
+                    "rfc9500-testECCP384-sec1.pem",
+                    "rfc9500-testECCP384-sec1.jwk.json",
+                ),
+                (
+                    "rfc9500-testECCP521-sec1.pem",
+                    "rfc9500-testECCP521-sec1.jwk.json",
+                ),
+            ] {
+                let der = fixtures::load("rfc", file);
+                let jwk = from_sec1(&der).unwrap();
+                assert!(!jwk.is_public(), "{file}");
+                assert_same(&jwk, &expected("rfc", json), file);
+                assert_eq!(*to_sec1(ec_key(&jwk)).unwrap(), der, "{file}");
+            }
+        }
+
+        #[test]
+        fn rfc9500_p521_y_is_66_octets() {
+            // research.md §3: RFC 9500's C array shows qy as 65 octets, the
+            // DER point holds 66 (00 F6 2A ...), and RFC 7518 §6.2.1.3 wants
+            // the full coordinate length.
+            let der = fixtures::load("rfc", "rfc9500-testECCP521-sec1.pem");
+            let jwk = from_sec1(&der).unwrap();
+            let key = ec_key(&jwk);
+            assert_eq!((key.x().len(), key.y().len()), (66, 66));
+            assert_eq!(key.y()[..2], [0x00, 0xF6]);
+            assert_eq!(key.d().map(<[u8]>::len), Some(66));
+        }
+
+        #[test]
+        fn openssl_sec1_round_trips_and_nopub_gains_its_public_key() {
+            for (name, _) in CURVES {
+                let der = fixtures::load("openssl", &format!("ec-{name}-sec1.der"));
+                let want = expected("openssl/expected", &format!("ec-{name}-sec1.jwk.json"));
+                let jwk = from_sec1(&der).unwrap();
+                assert_same(&jwk, &want, name);
+                assert_eq!(*to_sec1(ec_key(&jwk)).unwrap(), der, "{name}");
+
+                // Without [1] the point is derived from d, and export always
+                // writes it (ADR 0018 §3).
+                let nopub = fixtures::load("openssl", &format!("ec-{name}-sec1-nopub.pem"));
+                let jwk = from_sec1(&nopub).unwrap();
+                let want_nopub = expected(
+                    "openssl/expected",
+                    &format!("ec-{name}-sec1-nopub.jwk.json"),
+                );
+                assert_same(&jwk, &want_nopub, name);
+                assert_eq!(*to_sec1(ec_key(&jwk)).unwrap(), der, "{name}");
+            }
+        }
+
+        #[test]
+        fn sec1_rejections_are_invalid() {
+            // N40 version 0, N41 d = 0, N42 d = n, N43 31-octet d, N44
+            // [1] ≠ d·G, N45 [0] curve ≠ key curve, N46 no [0], N47 IMPLICIT
+            // [0] (RFC 5915 §3, App. A; SEC 1 v2 §3.2.1; ADR 0043 §3).
+            for id in ["N40", "N41", "N42", "N43", "N44", "N45", "N46", "N47"] {
+                let result = from_sec1(&fixtures::negative(id));
+                assert!(
+                    matches!(result, Err(Error::InvalidKey(_))),
+                    "{id}: {:?}",
+                    result.err()
+                );
+            }
+        }
+
+        #[test]
+        fn each_rejection_fails_for_its_own_reason() {
+            let detail = |id| invalid(from_sec1(&fixtures::negative(id)));
+            assert_eq!(detail("N40"), "ECPrivateKey version is not 1");
+            assert_eq!(detail("N41"), SCALAR_INVALID);
+            assert_eq!(detail("N42"), SCALAR_INVALID);
+            assert_eq!(detail("N43"), PRIVATE_KEY_LENGTH);
+            // N44 flips the last octet of y, which leaves the curve.
+            assert_eq!(detail("N44"), POINT_INVALID);
+            assert_eq!(detail("N45"), PRIVATE_KEY_LENGTH);
+            assert_eq!(detail("N46"), "EC PRIVATE KEY has no namedCurve parameters");
+            assert_eq!(detail("N47"), "DER trailing data");
+        }
+
+        /// SEC1 for `d` on `crv` with an optional embedded point.
+        fn sec1_of(crv: EcCurve, d: &[u8], point: Option<&[u8]>) -> Vec<u8> {
+            sec1::encode(&EcPrivateKey {
+                private_key: d,
+                parameters: Some(crv),
+                public_key: point,
+            })
+            .unwrap()
+            .to_vec()
+        }
+
+        #[test]
+        fn out_of_range_scalars_are_invalid_with_or_without_a_point() {
+            // n − 1 is the largest valid scalar; n and 0xFF…FF are not
+            // (SEC 1 v2 §3.2.1). P-256 n from SEC 2 v2 §2.4.2.
+            let n = [
+                0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2,
+                0xFC, 0x63, 0x25, 0x51,
+            ];
+            let mut n_minus_1 = n;
+            n_minus_1[31] -= 1;
+            let jwk = from_sec1(&sec1_of(EcCurve::P256, &n_minus_1, None)).unwrap();
+            let point = uncompressed_point(ec_key(&jwk));
+            assert!(from_sec1(&sec1_of(EcCurve::P256, &n_minus_1, Some(&point))).is_ok());
+            for d in [n, [0xFF; 32], [0; 32]] {
+                assert_eq!(
+                    invalid(from_sec1(&sec1_of(EcCurve::P256, &d, None))),
+                    SCALAR_INVALID
+                );
+                assert!(matches!(
+                    from_sec1(&sec1_of(EcCurve::P256, &d, Some(&point))),
+                    Err(Error::InvalidKey(_))
+                ));
+            }
+        }
+
+        #[test]
+        fn a_compressed_embedded_point_is_accepted() {
+            // RFC 5915 §3 publicKey is a SEC1 point (RFC 5480 §2.2), which
+            // may be compressed; export writes it uncompressed.
+            let der = fixtures::load("openssl", "ec-p384-sec1.der");
+            let jwk = from_sec1(&der).unwrap();
+            let key = ec_key(&jwk);
+            let compressed = fixtures::load("openssl", "ec-p384-spki-compressed.pem");
+            let point = spki::decode(&compressed)
+                .unwrap()
+                .subject_public_key
+                .to_vec();
+            assert_eq!(point.len(), 49);
+            let rebuilt = sec1_of(EcCurve::P384, key.d().unwrap(), Some(&point));
+            let again = from_sec1(&rebuilt).unwrap();
+            assert_same(&again, &jwk, "compressed [1]");
+            assert_eq!(*to_sec1(ec_key(&again)).unwrap(), der);
+        }
+
+        #[test]
+        fn the_valid_point_of_another_key_is_rejected_by_jwk_rs() {
+            // ADR 0043 §3: the embedded [1] is passed through with d, and
+            // Jwk::from_object rejects the pair. RFC 7517 A.2's d with RFC
+            // 9500 testECCP256's point, both valid P-256 values.
+            let a2 = from_sec1(&fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der")).unwrap();
+            let other = from_sec1(&fixtures::load("rfc", "rfc9500-testECCP256-sec1.pem")).unwrap();
+            let point = uncompressed_point(ec_key(&other));
+            let mixed = sec1_of(EcCurve::P256, ec_key(&a2).d().unwrap(), Some(&point));
+            assert_eq!(
+                invalid(from_sec1(&mixed)),
+                "EC private key d does not match x and y"
+            );
+        }
+
+        #[test]
+        fn bad_embedded_points_are_invalid() {
+            let der = fixtures::load("openssl", "ec-p256-sec1.der");
+            let jwk = from_sec1(&der).unwrap();
+            let d = ec_key(&jwk).d().unwrap().to_vec();
+            let mut identity_or_hybrid = vec![vec![0x00], uncompressed_point(ec_key(&jwk))];
+            identity_or_hybrid[1][0] = 0x06;
+            for point in identity_or_hybrid {
+                assert_eq!(
+                    invalid(from_sec1(&sec1_of(EcCurve::P256, &d, Some(&point)))),
+                    POINT_INVALID
+                );
+            }
+        }
+
+        #[test]
+        fn explicit_parameters_are_unsupported() {
+            let der = fixtures::load("openssl", "reject-ec-p256-explicit-sec1.pem");
+            assert_eq!(from_sec1(&der).unwrap_err(), Error::UnsupportedAlgorithm);
+        }
+
+        #[test]
+        fn a_public_key_has_no_sec1_form() {
+            let jwk = expected("openssl/expected", "ec-p256-spki.jwk.json");
+            assert_eq!(
+                to_sec1(ec_key(&jwk)).unwrap_err(),
+                Error::InvalidKey(NOT_PRIVATE)
+            );
         }
     }
 }
