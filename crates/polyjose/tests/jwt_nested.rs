@@ -1157,3 +1157,120 @@ fn the_pbes2_budget_applies_to_nested_decryption() {
     assert!(run(1_000).is_ok());
     assert!(run(10_000).is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// F02 tester probes: error order and header-only decoding
+// ---------------------------------------------------------------------------
+
+/// ADR 0027 §8 / F02: the documented order (shape, inner `alg`, caller
+/// `cty`, `zip`, encrypt) is exact for every two-fault pairing.
+#[test]
+fn encrypt_nested_error_order_is_exact_for_every_pair() {
+    let good = inner_es256();
+    let hdr = |h: &str| format!("{}.eyJzdWIiOiJ4In0.c2ln", b64url_encode(h.as_bytes()));
+    let none = hdr(r#"{"alg":"none"}"#);
+    let no_alg = hdr("{}");
+    let bad_shape = "a.b".to_string();
+    let bad_cty = || kw(r#"{"cty":"JOSE"}"#);
+    let zipped = || kw(r#"{"zip":"DEF"}"#);
+    let enc_fail = || kw("{}").aad(b"aad".to_vec());
+    let both = |c: &str| kw(&format!(r#"{{"cty":"JOSE","zip":"{c}"}}"#));
+    // (input, encryptor, expected code)
+    let cases: Vec<(&str, Encryptor, &str)> = vec![
+        // shape beats everything
+        (&bad_shape, kw("{}"), "InvalidFormat"),
+        (&bad_shape, bad_cty(), "InvalidFormat"),
+        (&bad_shape, zipped(), "InvalidFormat"),
+        (&bad_shape, enc_fail(), "InvalidFormat"),
+        // inner alg beats cty, zip, encrypt
+        (&none, bad_cty(), "AlgorithmNotAllowed"),
+        (&none, zipped(), "AlgorithmNotAllowed"),
+        (&none, enc_fail(), "AlgorithmNotAllowed"),
+        (&no_alg, bad_cty(), "InvalidHeader"),
+        (&no_alg, zipped(), "InvalidHeader"),
+        // cty beats zip and encrypt
+        (&good, both("DEF"), "InvalidHeader"),
+        (&good, bad_cty().aad(b"x".to_vec()), "InvalidHeader"),
+        // zip beats encrypt
+        (&good, zipped().aad(b"x".to_vec()), "InvalidHeader"),
+        // encrypt last
+        (&good, enc_fail(), "ok_or_other"),
+    ];
+    for (input, e, want) in cases {
+        let got = jwt::encrypt_nested(input, &e);
+        if want == "ok_or_other" {
+            assert!(got.is_err(), "encrypt failure must surface");
+            continue;
+        }
+        assert_eq!(code(got), want, "{input}");
+    }
+    // distinguish the two invalid_header causes
+    assert_eq!(
+        jwt::encrypt_nested(&no_alg, &bad_cty()),
+        Err(Error::InvalidHeader("alg"))
+    );
+    assert_eq!(
+        jwt::encrypt_nested(&good, &both("DEF")),
+        Err(Error::InvalidHeader("cty"))
+    );
+    assert_eq!(
+        jwt::encrypt_nested(&good, &zipped().aad(b"x".to_vec())),
+        Err(Error::InvalidHeader("zip"))
+    );
+    assert_eq!(
+        jwt::encrypt_nested(&none, &zipped()),
+        Err(Error::AlgorithmNotAllowed)
+    );
+}
+
+/// Only the protected header is decoded: a payload part that is not valid
+/// base64url (but is base64url characters) never changes the result.
+#[test]
+fn encrypt_nested_never_decodes_the_payload() {
+    let h = |s: &str| b64url_encode(s.as_bytes());
+    // "A" and "QR" are not canonical base64url quanta; "####" is not chars.
+    for payload in ["A", "QR", "AAAAA", "_-_-_"] {
+        let ok = format!("{}.{payload}.c2ln", h(r#"{"alg":"ES256"}"#));
+        assert_eq!(code(jwt::encrypt_nested(&ok, &kw("{}"))), "ok", "{payload}");
+        let none = format!("{}.{payload}.c2ln", h(r#"{"alg":"none"}"#));
+        assert_eq!(
+            jwt::encrypt_nested(&none, &kw("{}")),
+            Err(Error::AlgorithmNotAllowed),
+            "{payload}"
+        );
+    }
+    // Empty payload part is shape-valid too.
+    let empty = format!("{}..c2ln", h(r#"{"alg":"ES256"}"#));
+    assert_eq!(code(jwt::encrypt_nested(&empty, &kw("{}"))), "ok");
+}
+
+/// Odd inner `alg` spellings: duplicates are a parse error (InvalidFormat,
+/// as documented), null/number/array are `InvalidHeader("alg")`, and an
+/// escaped spelling of `none` is still `none` after JSON unescaping.
+#[test]
+fn encrypt_nested_inner_alg_edge_spellings() {
+    let hdr = |h: &str| format!("{}.eyJ9.c2ln", b64url_encode(h.as_bytes()));
+    for h in [
+        r#"{"alg":"none","alg":"ES256"}"#,
+        r#"{"alg":"ES256","alg":"none"}"#,
+    ] {
+        assert!(
+            matches!(
+                jwt::encrypt_nested(&hdr(h), &kw("{}")),
+                Err(Error::InvalidFormat(_))
+            ),
+            "{h}"
+        );
+    }
+    for h in [r#"{"alg":null}"#, r#"{"alg":1}"#, r#"{"alg":true}"#] {
+        assert_eq!(
+            jwt::encrypt_nested(&hdr(h), &kw("{}")),
+            Err(Error::InvalidHeader("alg")),
+            "{h}"
+        );
+    }
+    assert_eq!(
+        jwt::encrypt_nested(&hdr(r#"{"alg":"none"}"#), &kw("{}")),
+        Err(Error::AlgorithmNotAllowed)
+    );
+}
