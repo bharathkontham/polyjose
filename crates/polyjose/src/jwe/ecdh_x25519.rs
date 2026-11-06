@@ -1,5 +1,28 @@
 //! X25519 (RFC 7748) for ECDH-ES with OKP keys (RFC 8037 §3.2), on
-//! `x25519-dalek`. Filled in by T07.
+//! `x25519-dalek`.
+//!
+//! - [`generate`] makes the ephemeral key pair of one ECDH-ES agreement
+//!   (RFC 7518 §4.6) from 32 bytes of the [`RandomSource`] (RFC 7748 §6.1).
+//! - [`agree`] computes the shared secret Z = X25519(secret, public)
+//!   (RFC 7748 §5, §6.1) and rejects an all-zero Z.
+//!
+//! # Public-key handling (RFC 7748 §5, ADR 0043)
+//!
+//! Every 32-octet string is a valid X25519 public key. As RFC 7748 §5
+//! requires, the most significant bit of the u-coordinate is masked and a
+//! non-canonical value (at or above 2^255 - 19) is reduced mod p, and
+//! points on the twist and points with a torsion component are accepted:
+//! the clamped scalar (`decodeScalar25519`) clears the cofactor. The one
+//! low-order defence is the all-zero shared-secret check of RFC 7748 §6.1,
+//! done in constant time with `SharedSecret::was_contributory`; no
+//! Ed25519-style mixed-order rejection applies here (ADR 0043).
+//!
+//! # Secrets
+//!
+//! `StaticSecret` and `SharedSecret` wipe themselves on drop (the
+//! `zeroize` feature of the pinned `x25519-dalek`), the random bytes of
+//! [`generate`] are held in a [`Zeroizing`] buffer, and Z is returned as a
+//! [`Zeroizing`] array.
 
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -7,28 +30,48 @@ use zeroize::Zeroizing;
 use super::random::RandomSource;
 use crate::{Error, Result};
 
-/// A fresh ephemeral key pair (RFC 7518 §4.6): 32 bytes drawn from `rng`
-/// into `StaticSecret::from` (RFC 7748 §6.1; clamping is the primitive's),
-/// and its public key.
+/// A fresh ephemeral key pair (RFC 7518 §4.6, RFC 8037 §3.2): exactly 32
+/// bytes drawn from `rng` into `StaticSecret::from` (RFC 7748 §6.1: the
+/// private key is 32 random bytes; clamping, §5 `decodeScalar25519`, is
+/// done by the primitive), and its public key X25519(secret, 9).
+///
+/// `StaticSecret` rather than `EphemeralSecret`, because only it can be
+/// built from bytes, which is how the [`RandomSource`] (and so the
+/// `FixedRng` reproductions of RFC 8037 A.6) supplies the secret.
 ///
 /// # Errors
 ///
 /// [`Error::RandomnessUnavailable`] if `rng` fails.
-pub(crate) fn generate(_rng: &mut dyn RandomSource) -> Result<(StaticSecret, PublicKey)> {
-    Err(Error::UnsupportedAlgorithm)
+pub(crate) fn generate(rng: &mut dyn RandomSource) -> Result<(StaticSecret, PublicKey)> {
+    let mut bytes = Zeroizing::new([0u8; 32]);
+    rng.fill(bytes.as_mut_slice())?;
+    let secret = StaticSecret::from(*bytes);
+    let public = PublicKey::from(&secret);
+    Ok((secret, public))
 }
 
-/// The X25519 shared secret of `secret` and `public` (RFC 7748 §6.1),
-/// rejecting an all-zero result (a low-order `public`) in constant time
-/// with `SharedSecret::was_contributory`. Ticks
-/// `test_counters::ecdh_agreements`.
+/// The X25519 shared secret Z of `secret` and `public` (RFC 7748 §6.1;
+/// ECDH-ES uses it as the Concat KDF input Z, RFC 8037 §3.2, RFC 7518
+/// §4.6.2).
+///
+/// An all-zero Z, which a low-order `public` produces, is rejected
+/// (RFC 7748 §6.1 allows the check, RFC 8725 §3.4 asks for it). The test
+/// is `SharedSecret::was_contributory`, a constant-time comparison with
+/// the identity. Ticks `test_counters::ecdh_agreements` (test builds only)
+/// once per agreement computed, the rejected ones included.
 ///
 /// # Errors
 ///
-/// An error for an all-zero shared secret; JWE decrypt maps it to
-/// `DecryptionFailed`.
-pub(crate) fn agree(_secret: &StaticSecret, _public: &PublicKey) -> Result<Zeroizing<[u8; 32]>> {
-    Err(Error::UnsupportedAlgorithm)
+/// [`Error::InvalidKey`] for an all-zero shared secret; JWE decrypt maps
+/// it to `DecryptionFailed` (RFC 7516 §11.5).
+pub(crate) fn agree(secret: &StaticSecret, public: &PublicKey) -> Result<Zeroizing<[u8; 32]>> {
+    #[cfg(test)]
+    crate::test_counters::ecdh_agreements::tick();
+    let shared = secret.diffie_hellman(public);
+    if !shared.was_contributory() {
+        return Err(Error::InvalidKey("X25519 shared secret is all-zero"));
+    }
+    Ok(Zeroizing::new(shared.to_bytes()))
 }
 
 #[cfg(test)]
