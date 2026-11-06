@@ -12,12 +12,19 @@
 //! - a schema-invalid vector fails the run;
 //! - a vector whose `operation` the runner does not implement fails the run,
 //!   whether the schema reserves the operation or not; nothing is skipped;
-//! - an empty or missing vectors directory fails the run.
+//! - an empty or missing vectors directory fails the run;
+//! - for `jws.sign` and `jws.verify` (RFC 7515), the step order of
+//!   conformance/README.md: JWK import, then headers or options, then the
+//!   call, the first error being the outcome; and the round trip of a
+//!   randomized signature (`verify_with`).
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
-//! fails if its operations, member names, member kinds, patterns or error
-//! codes drift from the tables below. Vector files are parsed with
+//! fails if its operations, member names, member kinds, `required` lists,
+//! `allOf` signer rules, patterns or error codes drift from the tables
+//! below. `jws_vectors_are_binding_ready` checks that every JWS vector is
+//! readable unchanged by every binding's JSON parser. Vector files are
+//! parsed with
 //! polyjose's own `json` module, and their inputs reach the library through
 //! it.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
