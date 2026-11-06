@@ -16,27 +16,100 @@ use super::key::RecipientKey;
 use super::keymgmt::{KeyOutput, RecipientOptions};
 use super::random::RandomSource;
 use crate::header::Header;
+use crate::json::{Number, Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
-use crate::util::b64url_decode;
+use crate::util::{b64url_decode, b64url_encode};
 use crate::{Error, Result};
 use sha2::{Sha256, Sha384, Sha512};
 use zeroize::Zeroizing;
 
-/// Key management on encrypt (RFC 7516 §5.1 steps 3–7) for the three PBES2 algorithms.
+/// Key management on encrypt (RFC 7516 §5.1 steps 3–7) for the three PBES2
+/// algorithms: the random CEK wrapped with AES Key Wrap (RFC 3394 §2.2.1)
+/// under the key PBKDF2 derives from the password (RFC 7518 §4.8). The
+/// header parameters are `p2s`, the base64url Salt Input, and `p2c`, the
+/// iteration count (RFC 7518 §4.8.1.1–§4.8.1.2).
+///
+/// - `p2s` is `options.p2s_len` octets (16 by default, at least 8: RFC 7518
+///   §4.8.1.1), drawn from `rng` (ADR 0005; plan.md RNG draw order).
+/// - `p2c` is `options.p2c` (10,000 by default, ADR 0023), at least 1000:
+///   RFC 7518 §4.8.1.2 recommends that minimum, and polyjose enforces it.
+///
+/// Every check runs before anything is drawn or derived.
 ///
 /// # Errors
 ///
-/// An error for a `p2s` shorter than 8 bytes or a `p2c` of 0; `RandomnessUnavailable` if `rng` fails.
+/// - [`Error::UnsupportedAlgorithm`] for an `alg` outside the family or an
+///   unknown `enc`;
+/// - [`Error::KeyAlgorithmMismatch`] for a key that is not a password
+///   (RFC 7518 §4.8, RFC 8725 §3.1);
+/// - [`Error::InvalidKey`] for a `p2c` below 1000, a `p2s` length below 8,
+///   or a CEK that is missing or not the length `enc` requires (RFC 7516
+///   §5.1 step 2);
+/// - [`Error::RandomnessUnavailable`] if `rng` fails.
 pub(super) fn encrypt_key(
-    _alg: &KeyMgmtAlg,
-    _key: &RecipientKey,
-    _enc: &ContentEncAlg,
-    _cek: Option<&Cek>,
-    _options: &RecipientOptions,
-    _rng: &mut dyn RandomSource,
+    alg: &KeyMgmtAlg,
+    key: &RecipientKey,
+    enc: &ContentEncAlg,
+    cek: Option<&Cek>,
+    options: &RecipientOptions,
+    rng: &mut dyn RandomSource,
 ) -> Result<KeyOutput> {
-    Err(Error::UnsupportedAlgorithm)
+    if params(alg).is_none() {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    let RecipientKey::Password(password) = key else {
+        return Err(Error::KeyAlgorithmMismatch);
+    };
+    let cek_len = cek_len(enc)?;
+    let cek = cek
+        .filter(|cek| cek.len() == cek_len)
+        .ok_or(Error::InvalidKey(CEK_SIZE))?;
+    let p2c = options.p2c.unwrap_or(DEFAULT_P2C);
+    if p2c < MIN_P2C {
+        return Err(Error::InvalidKey(P2C_TOO_LOW));
+    }
+    // A u32 is always an exact I-JSON integer (RFC 7493 §2.2); the error
+    // arm is never taken.
+    let p2c_number = Number::from_u64(u64::from(p2c)).ok_or(Error::InvalidKey(P2C_TOO_LOW))?;
+    let p2s_len = options.p2s_len.unwrap_or(DEFAULT_P2S_LEN);
+    if p2s_len < MIN_P2S_LEN {
+        return Err(Error::InvalidKey(P2S_TOO_SHORT));
+    }
+    let mut p2s = vec![0; p2s_len];
+    rng.fill(&mut p2s)?;
+    let kek = derive_kek(alg, password, &p2s, p2c).ok_or(Error::UnsupportedAlgorithm)?;
+    let encrypted_key = aes_kw::wrap(&kek, cek.as_bytes())?;
+    let mut header_params = Object::new();
+    header_params.insert("p2s", b64url_encode(&p2s));
+    header_params.insert("p2c", Value::from(p2c_number));
+    Ok(KeyOutput {
+        encrypted_key,
+        header_params,
+        cek: None,
+    })
 }
+
+/// The encrypt-side default `p2c` (ADR 0023): inside every mainstream
+/// library's default decrypt bound, polyjose's included.
+const DEFAULT_P2C: u32 = 10_000;
+
+/// The smallest `p2c` polyjose encrypts with: the minimum RFC 7518 §4.8.1.2
+/// recommends ("A minimum iteration count of 1000 is RECOMMENDED").
+const MIN_P2C: u32 = 1000;
+
+/// The encrypt-side default Salt Input length in octets (plan.md interface
+/// contract), twice the RFC 7518 §4.8.1.1 minimum.
+const DEFAULT_P2S_LEN: usize = 16;
+
+/// The [`Error::InvalidKey`] detail for a `p2c` below [`MIN_P2C`].
+const P2C_TOO_LOW: &str = "PBES2 p2c must be at least 1000";
+
+/// The [`Error::InvalidKey`] detail for a `p2s` shorter than [`MIN_P2S_LEN`].
+const P2S_TOO_SHORT: &str = "PBES2 p2s must be at least 8 octets";
+
+/// The [`Error::InvalidKey`] detail for a missing CEK or one of the wrong
+/// length.
+const CEK_SIZE: &str = "the CEK must have the length enc requires";
 
 /// Key management on decrypt (RFC 7516 §5.2 steps 6–12) for the three
 /// PBES2 algorithms: the JWE Encrypted Key unwrapped (RFC 3394 §2.2.2) under
@@ -162,6 +235,8 @@ fn derive_kek(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jwe::random::OsRandom;
+    use crate::rng::insecure_test_vectors::FixedRng;
     use crate::test_counters::pbkdf2_derivations;
     use crate::test_support::wycheproof::{self, Outcome};
 
@@ -457,6 +532,230 @@ mod tests {
             let (out, _) = decrypt_counted(&alg, &password(PASSWORD), &enc, &h, ek, &policy());
             assert_eq!(out.map(|_| ()), Err(Error::DecryptionFailed));
         }
+    }
+
+    /// RFC 7517 Appendix C.3: the CEK.
+    const C3_CEK: [u8; 32] = [
+        111, 27, 25, 52, 66, 29, 20, 78, 92, 176, 56, 240, 65, 208, 82, 112, 161, 131, 36, 55, 202,
+        236, 185, 172, 129, 23, 153, 194, 195, 48, 253, 182,
+    ];
+    /// RFC 7517 Appendix C.5: the JWE Encrypted Key.
+    const C5_ENCRYPTED_KEY: [u8; 40] = [
+        78, 186, 151, 59, 11, 141, 81, 240, 213, 245, 83, 211, 53, 188, 134, 188, 66, 125, 36, 200,
+        222, 124, 5, 103, 249, 52, 117, 184, 140, 81, 246, 158, 161, 177, 20, 33, 245, 57, 59, 4,
+    ];
+
+    fn cek_for(enc: &ContentEncAlg) -> Cek {
+        let len = cek_len(enc).unwrap();
+        Cek::new(Zeroizing::new((0..len).map(|i| 0xC0 ^ i as u8).collect()))
+    }
+
+    fn options(p2c: Option<u32>, p2s_len: Option<usize>) -> RecipientOptions {
+        RecipientOptions {
+            p2c,
+            p2s_len,
+            ..RecipientOptions::default()
+        }
+    }
+
+    fn p2c_value(n: u64) -> Value {
+        Value::from(Number::from_u64(n).unwrap())
+    }
+
+    #[test]
+    fn encrypt_key_reproduces_rfc_7517_appendix_c5() {
+        // RFC 7517 Appendix C.2–C.5: p2s drawn from the RNG, p2c 4096.
+        let mut rng = FixedRng::new(C2_P2S.to_vec());
+        let out = encrypt_key(
+            &KeyMgmtAlg::Pbes2Hs256A128KW,
+            &password(C4_PASSWORD),
+            &ContentEncAlg::A128CbcHs256,
+            Some(&Cek::from_slice(&C3_CEK)),
+            &options(Some(4096), None),
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(out.encrypted_key, C5_ENCRYPTED_KEY);
+        assert_eq!(rng.remaining(), 0);
+        assert!(out.cek.is_none());
+        let mut expected = Object::new();
+        expected.insert("p2s", "2WCTcJZ1Rvd_CJuJripQ1w");
+        expected.insert("p2c", p2c_value(4096));
+        assert_eq!(out.header_params, expected);
+    }
+
+    #[test]
+    fn encrypt_defaults_to_16_salt_octets_and_10000_iterations() {
+        // RFC 7518 §4.8.1.1 (p2s ≥ 8 octets; 16 here), ADR 0023 (p2c 10,000).
+        for (alg, _) in &FAMILY {
+            for enc in ContentEncAlg::KNOWN {
+                let cek = cek_for(enc);
+                let mut rng = FixedRng::new(P2S.to_vec());
+                let (out, n) = pbkdf2_derivations::count(|| {
+                    encrypt_key(
+                        alg,
+                        &password(PASSWORD),
+                        enc,
+                        Some(&cek),
+                        &options(None, None),
+                        &mut rng,
+                    )
+                });
+                let out = out.unwrap();
+                assert_eq!((rng.remaining(), n), (0, 1), "{alg} {enc}");
+                assert_eq!(out.header_params.len(), 2);
+                assert_eq!(
+                    out.header_params.get("p2s"),
+                    Some(&Value::from(crate::util::b64url_encode(&P2S))),
+                );
+                assert_eq!(out.header_params.get("p2c"), Some(&p2c_value(10_000)));
+                let h = header(Some(&P2S), Some(10_000));
+                let back = decrypt_key(
+                    alg,
+                    &password(PASSWORD),
+                    enc,
+                    &h,
+                    &out.encrypted_key,
+                    &policy(),
+                );
+                assert_eq!(
+                    back.map(|c| c.as_bytes().to_vec()),
+                    Ok(cek.as_bytes().to_vec())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encrypt_takes_the_callers_count_and_salt_length() {
+        let alg = KeyMgmtAlg::Pbes2Hs384A192KW;
+        let enc = ContentEncAlg::A192GCM;
+        for (p2c, p2s_len) in [(1000, 8), (4096, 9), (20_000, 64)] {
+            let mut rng = FixedRng::new(vec![0x33; p2s_len]);
+            let out = encrypt_key(
+                &alg,
+                &password(PASSWORD),
+                &enc,
+                Some(&cek_for(&enc)),
+                &options(Some(p2c), Some(p2s_len)),
+                &mut rng,
+            )
+            .unwrap();
+            assert_eq!(rng.remaining(), 0);
+            assert_eq!(
+                out.header_params.get("p2c"),
+                Some(&p2c_value(u64::from(p2c)))
+            );
+            let p2s = out
+                .header_params
+                .get("p2s")
+                .and_then(Value::as_str)
+                .unwrap();
+            assert_eq!(
+                crate::util::b64url_decode(p2s).unwrap(),
+                vec![0x33; p2s_len]
+            );
+        }
+    }
+
+    #[test]
+    fn os_random_salt_inputs_differ() {
+        let alg = KeyMgmtAlg::Pbes2Hs256A128KW;
+        let enc = ContentEncAlg::A128GCM;
+        let run = || {
+            let out = encrypt_key(
+                &alg,
+                &password(PASSWORD),
+                &enc,
+                Some(&cek_for(&enc)),
+                &options(Some(1000), None),
+                &mut OsRandom,
+            )
+            .unwrap();
+            (out.header_params.get("p2s").cloned(), out.encrypted_key)
+        };
+        let (a, b) = (run(), run());
+        assert_ne!(a.0, b.0);
+        assert_ne!(a.1, b.1);
+    }
+
+    #[test]
+    fn encrypt_refuses_weak_parameters_before_drawing_or_deriving() {
+        // RFC 7518 §4.8.1.2: "A minimum iteration count of 1000 is
+        // RECOMMENDED"; §4.8.1.1: at least 8 salt input octets.
+        let alg = KeyMgmtAlg::Pbes2Hs256A128KW;
+        let enc = ContentEncAlg::A128GCM;
+        for opts in [
+            options(Some(999), None),
+            options(Some(1), None),
+            options(Some(0), None),
+            options(None, Some(7)),
+            options(None, Some(0)),
+            options(Some(0), Some(0)),
+        ] {
+            let mut rng = FixedRng::new(vec![0; 64]);
+            let (out, n) = pbkdf2_derivations::count(|| {
+                encrypt_key(
+                    &alg,
+                    &password(PASSWORD),
+                    &enc,
+                    Some(&cek_for(&enc)),
+                    &opts,
+                    &mut rng,
+                )
+            });
+            assert!(matches!(out, Err(Error::InvalidKey(_))), "{opts:?}");
+            assert_eq!((rng.remaining(), n), (64, 0), "{opts:?}");
+        }
+    }
+
+    #[test]
+    fn encrypt_refuses_other_keys_algs_and_ceks() {
+        let alg = KeyMgmtAlg::Pbes2Hs256A128KW;
+        let enc = ContentEncAlg::A128GCM;
+        let opts = options(None, None);
+        let mut rng = FixedRng::new(vec![0; 16]);
+        let symmetric = RecipientKey::Symmetric(Zeroizing::new(vec![1; 16]));
+        let cek = cek_for(&enc);
+        assert_eq!(
+            encrypt_key(&alg, &symmetric, &enc, Some(&cek), &opts, &mut rng).map(|_| ()),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        assert_eq!(
+            encrypt_key(
+                &KeyMgmtAlg::A128KW,
+                &password(PASSWORD),
+                &enc,
+                Some(&cek),
+                &opts,
+                &mut rng
+            )
+            .map(|_| ()),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        // RFC 7516 §5.1 step 2: the CEK has the length enc requires.
+        let wrong = cek_for(&ContentEncAlg::A256GCM);
+        for cek in [None, Some(&wrong)] {
+            assert!(matches!(
+                encrypt_key(&alg, &password(PASSWORD), &enc, cek, &opts, &mut rng),
+                Err(Error::InvalidKey(_))
+            ));
+        }
+        assert_eq!(rng.remaining(), 16, "drew before the checks");
+        // An RNG failure is reported, not papered over (ADR 0005).
+        let mut empty = FixedRng::new(Vec::new());
+        assert_eq!(
+            encrypt_key(
+                &alg,
+                &password(PASSWORD),
+                &enc,
+                Some(&cek),
+                &opts,
+                &mut empty
+            )
+            .map(|_| ()),
+            Err(Error::RandomnessUnavailable)
+        );
     }
 
     /// Wycheproof PBKDF2-HMAC-SHA-2 (RFC 8018 §5.2) through
