@@ -14,9 +14,12 @@ use core::fmt;
 use p256::elliptic_curve::{Curve, FieldBytes, SecretKey};
 use zeroize::Zeroizing;
 
-use super::{content, keymgmt};
+use super::content;
+use super::keymgmt::{self, Mode};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
-use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, OctKey, OkpCurve, OkpKey, RsaPublicKey};
+use crate::jwk::{
+    EcCurve, EcKey, Jwk, KeyAlg, KeyMaterial, KeyOp, OctKey, OkpCurve, OkpKey, RsaPublicKey,
+};
 use crate::{Error, Result};
 
 /// Which way a key is used.
@@ -75,10 +78,18 @@ impl RecipientKey {
     ///    encrypt only, ADR 0021; `RSA-OAEP` and `RSA1_5` are not
     ///    implemented, ADRs 0021, 0022), and for `dir` the `enc` must be
     ///    known, since it fixes the key length (RFC 7518 §4.5).
-    /// 2. **Family** → [`Error::KeyAlgorithmMismatch`]: the key's `kty` and
-    ///    `crv` must serve `alg`, by the single table
-    ///    `KeyMaterial::serves_key_mgmt_alg` (RFC 7518 §4.1, RFC 8037 §3.2,
-    ///    RFC 8725 §3.1).
+    /// 2. **Binding** → [`Error::KeyAlgorithmMismatch`] if any of these
+    ///    fails:
+    ///    - the key's `kty` and `crv` serve `alg`, by the single table
+    ///      `KeyMaterial::serves_key_mgmt_alg` (RFC 7518 §4.1, RFC 8037
+    ///      §3.2, RFC 8725 §3.1);
+    ///    - a JWK `alg`, if present, names `alg` (RFC 7517 §4.4; see
+    ///      [`jwk_alg_permits`] for `dir`);
+    ///    - a JWK `use`, if present, is `enc`, and a JWK `key_ops`, if
+    ///      present, contains the operation of [`key_op`] (`Jwk::permits`;
+    ///      RFC 7517 §4.2, §4.3);
+    ///    - the key holds what `direction` needs: decrypting with ECDH-ES
+    ///      needs the private key (RFC 7518 §4.6).
     /// 3. **Size** of an `oct` key: A*KW and A*GCMKW need exactly the AES
     ///    key size the `alg` names (RFC 7518 §4.4, §4.7), and `dir` on
     ///    encrypt needs exactly the CEK length of `enc` (RFC 7518 §4.5,
@@ -106,7 +117,10 @@ impl RecipientKey {
             // RFC 7518 §4.5: the shared key is the CEK of `enc`.
             content::cek_len(enc)?;
         }
-        if !jwk.material().serves_key_mgmt_alg(alg) {
+        let bound = jwk.material().serves_key_mgmt_alg(alg)
+            && jwk_alg_permits(jwk.alg(), alg, enc)
+            && key_op(alg, direction).is_some_and(|op| jwk.permits(&op));
+        if !bound {
             return Err(Error::KeyAlgorithmMismatch);
         }
         match jwk.material() {
@@ -116,6 +130,48 @@ impl RecipientKey {
             KeyMaterial::Rsa(key) => rsa_key(key, direction),
         }
     }
+}
+
+/// Whether a JWK `alg` (RFC 7517 §4.4: "the algorithm intended for use
+/// with the key") allows the key to be used with `alg` and `enc`:
+///
+/// - no JWK `alg`: yes;
+/// - a JWE key management `alg`: only if it is exactly `alg`;
+/// - a JWE `enc`: only for `dir` with that same `enc`, because with `dir`
+///   the key *is* the CEK of `enc` (RFC 7518 §4.5), and JWKs for it name
+///   the `enc` (RFC 7520 §3.6, §5.6.1; `KeyAlg::ContentEnc`);
+/// - a JWS `alg` or an unknown value: never (RFC 8725 §3.1).
+fn jwk_alg_permits(jwk_alg: Option<&KeyAlg>, alg: &KeyMgmtAlg, enc: &ContentEncAlg) -> bool {
+    match jwk_alg {
+        None => true,
+        Some(KeyAlg::KeyMgmt(a)) => a == alg,
+        Some(KeyAlg::ContentEnc(e)) => *alg == KeyMgmtAlg::Dir && e == enc,
+        Some(KeyAlg::Signing(_) | KeyAlg::Unknown(_)) => false,
+    }
+}
+
+/// The RFC 7517 §4.3 `key_ops` value that using a key with `alg` in
+/// `direction` performs, by the key management mode (RFC 7516 §2):
+///
+/// - key encryption and key wrapping (RSA-OAEP-256, A*KW, A*GCMKW, PBES2):
+///   `wrapKey` / `unwrapKey` ("encrypt key" / "decrypt key and validate
+///   decryption");
+/// - direct encryption (`dir`): `encrypt` / `decrypt`, since the key
+///   encrypts the content itself (RFC 7518 §4.5);
+/// - key agreement (ECDH-ES, ECDH-ES+A*KW), both ways: `deriveKey`, since
+///   the agreed secret only feeds the Concat KDF that derives the CEK or
+///   the key wrapping key (RFC 7518 §4.6.2).
+///
+/// `None` for an `alg` without a mode (not implemented).
+fn key_op(alg: &KeyMgmtAlg, direction: Direction) -> Option<KeyOp> {
+    let op = match (keymgmt::mode(alg)?, direction) {
+        (Mode::KeyEncryption | Mode::KeyWrapping, Direction::Encrypt) => KeyOp::WrapKey,
+        (Mode::KeyEncryption | Mode::KeyWrapping, Direction::Decrypt) => KeyOp::UnwrapKey,
+        (Mode::DirectEncryption, Direction::Encrypt) => KeyOp::Encrypt,
+        (Mode::DirectEncryption, Direction::Decrypt) => KeyOp::Decrypt,
+        (Mode::DirectAgreement | Mode::AgreementWithWrapping, _) => KeyOp::DeriveKey,
+    };
+    Some(op)
 }
 
 /// The error for a key of the wrong size or form: [`Error::InvalidKey`]
@@ -727,5 +783,232 @@ mod tests {
             let bound = bind(&rsa_bits(bits), &A::RsaOaep256, &GCM128, Encrypt);
             assert!(matches!(bound, Err(Error::InvalidKey(_))), "{bits}");
         }
+    }
+
+    #[test]
+    fn a_key_of_the_wrong_family_is_a_mismatch() {
+        // RFC 8725 §3.1, RFC 7518 §4.1: each alg names one key family.
+        let cases = [
+            (p521_private(""), A::A128KW),
+            (p521_private(""), A::Dir),
+            (p521_private(""), A::Pbes2Hs256A128KW),
+            (x25519_private(""), A::A256GCMKW),
+            (rsa(""), A::A128KW),
+            (rsa(""), A::EcdhEs),
+            (oct(16, ""), A::EcdhEs),
+            (oct(16, ""), A::EcdhEsA128KW),
+            (oct(256, ""), A::RsaOaep256),
+            (p521(""), A::RsaOaep256),
+        ];
+        for (key, alg) in &cases {
+            for d in [Encrypt, Decrypt] {
+                if *alg == A::RsaOaep256 && d == Decrypt {
+                    continue;
+                }
+                assert_eq!(bind(key, alg, &GCM128, d), Err(MISMATCH), "{alg} {d:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn support_is_checked_before_the_family_and_the_family_before_the_size() {
+        // RSA-OAEP-256 decrypt is not implemented (ADR 0021), whatever the
+        // key; RSA-OAEP and RSA1_5 are not implemented at all (ADRs 0021,
+        // 0022).
+        for key in [rsa(""), p521_private(""), oct(16, "")] {
+            assert_eq!(
+                bind(&key, &A::RsaOaep256, &GCM128, Decrypt),
+                Err(Error::UnsupportedAlgorithm)
+            );
+            for name in ["RSA-OAEP", "RSA1_5"] {
+                for d in [Encrypt, Decrypt] {
+                    let alg = KeyMgmtAlg::from(name);
+                    assert_eq!(
+                        bind(&key, &alg, &GCM128, d),
+                        Err(Error::UnsupportedAlgorithm)
+                    );
+                }
+            }
+        }
+        // A wrong-size key that is also forbidden by its `use` is a
+        // mismatch, not InvalidKey.
+        let key = oct(24, r#","use":"sig""#);
+        assert_eq!(bind(&key, &A::A128KW, &GCM128, Encrypt), Err(MISMATCH));
+        let key = oct(24, r#","alg":"A192KW""#);
+        assert_eq!(bind(&key, &A::A128KW, &GCM128, Encrypt), Err(MISMATCH));
+    }
+
+    #[test]
+    fn the_jwk_alg_must_be_the_requested_alg() {
+        // RFC 7517 §4.4: `alg` "identifies the algorithm intended for use
+        // with the key".
+        let ok = [
+            (oct(16, r#","alg":"A128KW""#), A::A128KW),
+            (oct(16, r#","alg":"A128GCMKW""#), A::A128GCMKW),
+            (
+                oct(16, r#","alg":"PBES2-HS256+A128KW""#),
+                A::Pbes2Hs256A128KW,
+            ),
+            (oct(16, r#","alg":"dir""#), A::Dir),
+            (p521_private(r#","alg":"ECDH-ES""#), A::EcdhEs),
+            (
+                x25519_private(r#","alg":"ECDH-ES+A256KW""#),
+                A::EcdhEsA256KW,
+            ),
+        ];
+        for (key, alg) in &ok {
+            for d in [Encrypt, Decrypt] {
+                assert!(bind(key, alg, &GCM128, d).is_ok(), "{alg} {d:?}");
+            }
+        }
+        assert!(
+            bind(
+                &rsa(r#","alg":"RSA-OAEP-256""#),
+                &A::RsaOaep256,
+                &GCM128,
+                Encrypt
+            )
+            .is_ok()
+        );
+        let mismatched = [
+            (oct(16, r#","alg":"A256KW""#), A::A128KW),
+            (oct(16, r#","alg":"A128KW""#), A::A128GCMKW),
+            (oct(16, r#","alg":"A128KW""#), A::Dir),
+            (oct(16, r#","alg":"A128KW""#), A::Pbes2Hs256A128KW),
+            (oct(16, r#","alg":"PBES2-HS256+A128KW""#), A::A128KW),
+            // RFC 7520 §3.5: a MAC key is not an encryption key.
+            (oct(32, r#","alg":"HS256""#), A::A256KW),
+            (oct(16, r#","alg":"A128GCM""#), A::A128KW),
+            // An unknown JWK alg never matches (RFC 7517 §4.4).
+            (oct(16, r#","alg":"A128KW-ish""#), A::A128KW),
+            (p521_private(r#","alg":"ECDH-ES""#), A::EcdhEsA128KW),
+            (p521_private(r#","alg":"ECDH-ES+A128KW""#), A::EcdhEs),
+            (
+                x25519_private(r#","alg":"ECDH-ES+A128KW""#),
+                A::EcdhEsA256KW,
+            ),
+        ];
+        for (key, alg) in &mismatched {
+            for d in [Encrypt, Decrypt] {
+                assert_eq!(bind(key, alg, &GCM128, d), Err(MISMATCH), "{alg} {d:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_dir_key_may_name_its_enc_as_its_alg() {
+        // RFC 7518 §4.5: with `dir` the key is the CEK of `enc`, so a JWK
+        // may name the `enc` as its `alg`, as RFC 7520 §3.6 and §5.6.1 do.
+        let rfc7520_5_6 = jwk(
+            r#"{"kty":"oct","kid":"77c7e2b8-6e13-45cf-8672-617b5b45243a","use":"enc","alg":"A128GCM","k":"XctOhJAkA-pD9Lh7ZgW_2A"}"#,
+        );
+        for d in [Encrypt, Decrypt] {
+            assert_eq!(
+                bind(&rfc7520_5_6, &A::Dir, &GCM128, d),
+                variant("Symmetric")
+            );
+            let other = ContentEncAlg::A256GCM;
+            assert_eq!(bind(&rfc7520_5_6, &A::Dir, &other, d), Err(MISMATCH));
+        }
+        let rfc7520_3_6 = jwk(
+            r#"{"kty":"oct","kid":"1e571774-2e08-40da-8308-e8d68773842d","use":"enc","alg":"A256GCM","k":"AAPapAv4LbFbiVawEjagUBluYqN5rhna-8nuldDvOx8"}"#,
+        );
+        let enc = ContentEncAlg::A256GCM;
+        assert_eq!(
+            bind(&rfc7520_3_6, &A::Dir, &enc, Encrypt),
+            variant("Symmetric")
+        );
+        assert_eq!(bind(&rfc7520_3_6, &A::A256KW, &enc, Encrypt), Err(MISMATCH));
+    }
+
+    #[test]
+    fn the_jwk_use_must_be_enc() {
+        // RFC 7517 §4.2: `enc` covers encryption, key wrapping and key
+        // agreement; `sig` (as on every RFC 7520 §3.1-§3.5 key) and
+        // unregistered values do not.
+        for (extra, ok) in [
+            (r#","use":"enc""#, true),
+            (r#","use":"sig""#, false),
+            (r#","use":"wrap""#, false),
+        ] {
+            let cases = [
+                (oct(16, extra), A::A128KW),
+                (oct(16, extra), A::Dir),
+                (oct(16, extra), A::Pbes2Hs256A128KW),
+                (p521_private(extra), A::EcdhEs),
+                (x25519_private(extra), A::EcdhEsA128KW),
+            ];
+            for (key, alg) in &cases {
+                for d in [Encrypt, Decrypt] {
+                    let result = bind(key, alg, &GCM128, d);
+                    assert_eq!(result.is_ok(), ok, "{alg} {d:?} {extra}");
+                    assert!(ok || result == Err(MISMATCH));
+                }
+            }
+            let result = bind(&rsa(extra), &A::RsaOaep256, &GCM128, Encrypt);
+            assert_eq!(result.is_ok(), ok, "RSA {extra}");
+        }
+    }
+
+    #[test]
+    fn the_jwk_key_ops_must_contain_the_operation() {
+        // RFC 7517 §4.3: "wrapKey" (encrypt key), "unwrapKey" (decrypt key),
+        // "encrypt"/"decrypt" (content: the `dir` key is the CEK,
+        // RFC 7518 §4.5), "deriveKey" (ECDH-ES derives the CEK or the key
+        // wrapping key with the Concat KDF, RFC 7518 §4.6.2).
+        let ops = |op: &str| format!(r#","key_ops":["{op}"]"#);
+        let wrapping = [A::A128KW, A::A128GCMKW, A::Pbes2Hs256A128KW];
+        let all = [
+            "wrapKey",
+            "unwrapKey",
+            "encrypt",
+            "decrypt",
+            "deriveKey",
+            "deriveBits",
+            "sign",
+        ];
+        for op in all {
+            for alg in &wrapping {
+                let key = oct(16, &ops(op));
+                assert_eq!(
+                    bind(&key, alg, &GCM128, Encrypt).is_ok(),
+                    op == "wrapKey",
+                    "{alg} {op}"
+                );
+                assert_eq!(
+                    bind(&key, alg, &GCM128, Decrypt).is_ok(),
+                    op == "unwrapKey",
+                    "{alg} {op}"
+                );
+            }
+            let key = oct(16, &ops(op));
+            assert_eq!(
+                bind(&key, &A::Dir, &GCM128, Encrypt).is_ok(),
+                op == "encrypt",
+                "dir {op}"
+            );
+            assert_eq!(
+                bind(&key, &A::Dir, &GCM128, Decrypt).is_ok(),
+                op == "decrypt",
+                "dir {op}"
+            );
+            for alg in &ECDH {
+                for key in [p521_private(&ops(op)), x25519_private(&ops(op))] {
+                    for d in [Encrypt, Decrypt] {
+                        let result = bind(&key, alg, &GCM128, d);
+                        assert_eq!(result.is_ok(), op == "deriveKey", "{alg} {op} {d:?}");
+                    }
+                }
+            }
+            let result = bind(&rsa(&ops(op)), &A::RsaOaep256, &GCM128, Encrypt);
+            assert_eq!(result.is_ok(), op == "wrapKey", "RSA-OAEP-256 {op}");
+        }
+        // Several values: the one needed is enough.
+        let key = oct(16, r#","key_ops":["wrapKey","unwrapKey"]"#);
+        assert!(bind(&key, &A::A128KW, &GCM128, Encrypt).is_ok());
+        assert!(bind(&key, &A::A128KW, &GCM128, Decrypt).is_ok());
+        // An empty list allows nothing.
+        let key = oct(16, r#","key_ops":[]"#);
+        assert_eq!(bind(&key, &A::A128KW, &GCM128, Encrypt), Err(MISMATCH));
     }
 }
