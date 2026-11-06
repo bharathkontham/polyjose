@@ -10,7 +10,7 @@ use core::fmt;
 
 use zeroize::ZeroizeOnDrop;
 
-use super::{Jwk, KeyAlg, KeyOp, MemberNames, is_unsupported_key_kind};
+use super::{Jwk, KeyAlg, KeyOp, MemberNames, is_unsupported_key_kind, member};
 use crate::error::{Error, Result};
 use crate::json::{self, Object, Value};
 use crate::jwa::SigningAlg;
@@ -150,12 +150,17 @@ impl JwkSet {
                 None => skipped += 1,
             }
         }
-        let mut other = Object::new();
-        for (name, value) in object {
-            if name != "keys" {
-                other.insert(name, value.clone());
-            }
-        }
+        // RFC 7517 §5: "Additional members can be present"; they are kept.
+        // They are a subset of `object`'s members, whose names are unique,
+        // so they are wrapped as they are: inserting them one by one would
+        // re-check every name, O(n²) on untrusted input.
+        let other = Object::from_unique_members(
+            object
+                .iter()
+                .filter(|(name, _)| *name != "keys")
+                .map(|(name, value)| member(name, value.clone()))
+                .collect(),
+        );
         Ok(JwkSet {
             keys,
             skipped,
