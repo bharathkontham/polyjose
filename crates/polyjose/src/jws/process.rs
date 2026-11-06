@@ -9,7 +9,8 @@
 //! so the two serializations cannot drift apart:
 //!
 //! - step 4's header structure: [`JoseHeader::new`] for one signature,
-//!   [`common_b64`] across signatures.
+//!   [`common_b64`] across signatures;
+//! - the JWS Signing Input: [`signing_input`].
 
 use std::collections::BTreeSet;
 
@@ -18,6 +19,7 @@ use zeroize::Zeroizing;
 use crate::error::{Error, Result};
 use crate::header::Header;
 use crate::json::{Object, Value};
+use crate::util::b64url_encode;
 
 /// One signature's JOSE Header after ADR 0026 §2 step 4: the JWS Protected
 /// and Unprotected Headers as given, and their union, which has passed
@@ -148,6 +150,29 @@ pub(crate) fn common_b64(headers: &[JoseHeader]) -> Result<bool> {
     }
 }
 
+/// The JWS Signing Input (RFC 7515 §5.1 step 5, RFC 7797 §3):
+///
+/// - `b64` true: `ASCII(BASE64URL(UTF8(JWS Protected Header)) || '.' ||
+///   BASE64URL(JWS Payload))`;
+/// - `b64` false: `ASCII(BASE64URL(UTF8(JWS Protected Header)) || '.') ||
+///   JWS Payload`, the payload octets unencoded.
+///
+/// `protected_b64` is the encoded protected header exactly as signed or
+/// received ([`super::ProtectedHeader::encoded`]), or `""` when a JSON
+/// signature has none (RFC 7515 §5.1, RFC 7520 §4.7). `payload` is the
+/// JWS Payload, also for detached content (RFC 7515 Appendix F).
+pub(crate) fn signing_input(protected_b64: &str, payload: &[u8], b64: bool) -> Vec<u8> {
+    let mut input = Vec::with_capacity(protected_b64.len() + 1 + payload.len().div_ceil(3) * 4);
+    input.extend_from_slice(protected_b64.as_bytes());
+    input.push(b'.');
+    if b64 {
+        input.extend_from_slice(b64url_encode(payload).as_bytes());
+    } else {
+        input.extend_from_slice(payload);
+    }
+    input
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +189,51 @@ mod tests {
 
     fn code(r: Result<JoseHeader>) -> &'static str {
         r.err().map_or("ok", |e| e.code())
+    }
+
+    #[test]
+    fn signing_input_rfc7515_a1() {
+        // RFC 7515 Appendix A.1.1: the CRLF header octets and the payload
+        // {"iss":"joe",\r\n "exp":1300819380,\r\n "http://example.com/is_root":true}
+        let payload =
+            b"{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}";
+        let expected = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ";
+        let input = signing_input("eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9", payload, true);
+        assert_eq!(input, expected.as_bytes());
+        // The RFC lists the first and last octets of the ASCII array.
+        assert_eq!(&input[..8], &[101, 121, 74, 48, 101, 88, 65, 105]);
+        assert_eq!(&input[input.len() - 4..], &[86, 108, 102, 81]);
+    }
+
+    #[test]
+    fn signing_input_rfc7797_section_4() {
+        // RFC 7797 §4.1: b64 true, payload "$.02".
+        assert_eq!(
+            signing_input("eyJhbGciOiJIUzI1NiJ9", b"$.02", true),
+            b"eyJhbGciOiJIUzI1NiJ9.JC4wMg"
+        );
+        // RFC 7797 §4.2: b64 false, the payload octets themselves (§3).
+        let protected = "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19";
+        let input = signing_input(protected, b"$.02", false);
+        assert_eq!(
+            input,
+            b"eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19.$.02"
+        );
+        assert_eq!(&input[input.len() - 5..], &[46, 36, 46, 48, 50]);
+    }
+
+    #[test]
+    fn signing_input_edge_cases() {
+        // RFC 7515 §5.1, RFC 7520 §4.7: no protected header, empty first part.
+        assert_eq!(signing_input("", b"$.02", true), b".JC4wMg");
+        // An empty payload (RFC 7515 Appendix F detached content still signs it).
+        assert_eq!(signing_input("e30", b"", true), b"e30.");
+        assert_eq!(signing_input("e30", b"", false), b"e30.");
+        // b64 false keeps any octets, untouched.
+        assert_eq!(
+            signing_input("e30", &[0, 0xff, b'.'], false),
+            b"e30.\x00\xff."
+        );
     }
 
     #[test]
