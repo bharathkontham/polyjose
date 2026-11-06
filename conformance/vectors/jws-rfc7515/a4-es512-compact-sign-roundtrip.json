@@ -1,0 +1,36 @@
+{
+  "source": "RFC 7515 App. A.4",
+  "description": "ES512 compact sign with the A.4 private key, then verify with its public key: ECDSA is randomized, so the output is checked by round trip, not bytes",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "compact",
+    "payload_b64u": "UGF5bG9hZA",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJFUzUxMiJ9",
+        "key": {
+          "kty": "EC",
+          "crv": "P-521",
+          "x": "AekpBQ8ST8a8VcfVOTNl353vSrDCLLJXmPk06wTjxrrjcBpXp5EOnYG_NjFZ6OvLFV1jSfS9tsz4qUxcWceqwQGk",
+          "y": "ADSmRA43Z1DSNx_RvcLI87cdL07l6jQyyBXMoxVg_l2Th-x3S1WDhjDly79ajL4Kkd0AZMaZmh9ubmf63e3kyMj2",
+          "d": "AY5pb7A0UFiB3RELSD64fTLOSV_jazdF7fLYyuTw8lOfRhWg6Y6rUrPAxerEzgdRhajnu0ferB0d53vM9mE15j2C"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "verify_with": {
+      "key": {
+        "kty": "EC",
+        "crv": "P-521",
+        "x": "AekpBQ8ST8a8VcfVOTNl353vSrDCLLJXmPk06wTjxrrjcBpXp5EOnYG_NjFZ6OvLFV1jSfS9tsz4qUxcWceqwQGk",
+        "y": "ADSmRA43Z1DSNx_RvcLI87cdL07l6jQyyBXMoxVg_l2Th-x3S1WDhjDly79ajL4Kkd0AZMaZmh9ubmf63e3kyMj2"
+      },
+      "allowed_algs": [
+        "ES512"
+      ]
+    }
+  }
+}

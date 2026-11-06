@@ -118,16 +118,19 @@ impl JoseHeader {
     }
 
     /// The JWS Protected Header, if any.
+    #[cfg(test)]
     pub(crate) fn protected(&self) -> Option<&Header> {
         self.protected.as_ref()
     }
 
     /// The JWS Unprotected Header, if any (JSON serialization only).
+    #[cfg(test)]
     pub(crate) fn unprotected(&self) -> Option<&Header> {
         self.unprotected.as_ref()
     }
 
     /// The JOSE Header: the union of both (RFC 7515 §5.2 step 4).
+    #[cfg(test)]
     pub(crate) fn union(&self) -> &Header {
         &self.union
     }
@@ -281,6 +284,7 @@ pub(crate) struct SignReady<'k> {
 
 impl SignReady<'_> {
     /// The `alg` the signature will use.
+    #[cfg(test)]
     pub(crate) fn alg(&self) -> &SigningAlg {
         &self.alg
     }

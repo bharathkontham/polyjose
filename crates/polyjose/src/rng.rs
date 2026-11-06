@@ -87,12 +87,12 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 ///   its source variant do not exist otherwise, so no production path can
 ///   select it, and nothing global can switch an `os()` adapter to it.
 ///
-/// Callers that need randomness take `&mut CryptoRngAdapter` (or
-/// `&mut impl TryCryptoRng`) as a parameter; public APIs create
-/// [`CryptoRngAdapter::os`] themselves. Uses: the added entropy of hedged
-/// RFC 6979 ECDSA signing (`ecdsa`'s `try_sign_with_rng`; RFC 7518 §3.4,
-/// RFC 8812 §3.2), which ADR 0005 requires so that a weak RNG cannot leak
-/// the key, and later JWE and key generation.
+/// Callers that need randomness take `&mut CryptoRngAdapter` (or a
+/// `&mut R` generic over `R: TryCryptoRng`) as a parameter; public APIs
+/// create [`CryptoRngAdapter::os`] themselves. Uses: the added entropy of
+/// hedged RFC 6979 ECDSA signing (`ecdsa`'s `try_sign_with_rng`; RFC 7518
+/// §3.4, RFC 8812 §3.2), which ADR 0005 requires so that a weak RNG cannot
+/// leak the key, and later JWE and key generation.
 ///
 /// A failure is [`Error::RandomnessUnavailable`] and leaves no partial
 /// output (the OS path through [`fill_random`], a `FixedRng` by running
@@ -486,6 +486,83 @@ mod tests {
                  in lib.rs directly under #[cfg(test)]"
             );
         }
+    }
+
+    #[test]
+    fn crypto_rng_adapter_is_the_only_rand_core_rng() {
+        // ADR 0005: `CryptoRngAdapter` is the crate's one rand_core RNG, so
+        // `src/**` has exactly one `TryRng` impl and one `TryCryptoRng` impl,
+        // both for it. A second adapter, a wrapper or a blanket impl would
+        // be another source a caller could pass. Comment lines are skipped
+        // (prose may name the traits). The trait names are split so this
+        // test does not match itself.
+        let try_rng = ["Try", "Rng"].concat();
+        let try_crypto_rng = ["Try", "Crypto", "Rng"].concat();
+        // An impl header of `name` for some type: the word `impl` (also
+        // `unsafe impl` or `impl<..>`) and `name for` as consecutive words,
+        // so `impl Foo for X` matches neither name and a path-qualified
+        // trait (`rand_core::` before the name) still matches.
+        let implements = |line: &str, name: &str| {
+            let words: Vec<&str> = line
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|w| !w.is_empty())
+                .collect();
+            words.contains(&"impl") && words.windows(2).any(|w| w[0] == name && w[1] == "for")
+        };
+        let src = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+        // (file, impl line), trimmed.
+        let mut rng_impls = Vec::new();
+        let mut crypto_rng_impls = Vec::new();
+        let mut dirs = vec![src.clone()];
+        let mut scanned = 0;
+        while let Some(dir) = dirs.pop() {
+            let entries = std::fs::read_dir(&dir);
+            assert!(entries.is_ok(), "cannot read {}", dir.display());
+            for entry in entries.into_iter().flatten() {
+                assert!(entry.is_ok(), "cannot list {}", dir.display());
+                let Ok(path) = entry.map(|e| e.path()) else {
+                    continue;
+                };
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path);
+                assert!(text.is_ok(), "cannot read {}", path.display());
+                let text = text.unwrap_or_default();
+                scanned += 1;
+                for line in text.lines().map(str::trim) {
+                    if line.starts_with("//") {
+                        continue;
+                    }
+                    if implements(line, &try_rng) {
+                        rng_impls.push((path.clone(), line.to_owned()));
+                    }
+                    if implements(line, &try_crypto_rng) {
+                        crypto_rng_impls.push((path.clone(), line.to_owned()));
+                    }
+                }
+            }
+        }
+        // Guard against a vacuous pass if the layout changes.
+        assert!(scanned >= 10, "scanned only {scanned} source files");
+
+        let rng_rs = src.join("rng.rs");
+        let header =
+            |name: &str, body: &str| ["impl ", name, " for CryptoRngAdapter<'_> ", body].concat();
+        assert_eq!(
+            rng_impls,
+            [(rng_rs.clone(), header(&try_rng, "{"))],
+            "exactly one {try_rng} impl, for CryptoRngAdapter in rng.rs"
+        );
+        assert_eq!(
+            crypto_rng_impls,
+            [(rng_rs, header(&try_crypto_rng, "{}"))],
+            "exactly one {try_crypto_rng} impl, for CryptoRngAdapter in rng.rs"
+        );
     }
 
     #[test]
