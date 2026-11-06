@@ -66,15 +66,33 @@ jobs:
       # Once setup succeeded, every gate runs even if an earlier gate failed, so one run reports
       # every failure.
       - name: rustfmt
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo fmt --all --check
 
       - name: clippy
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # The workspace-wide steps build polyjose with default features only. These also lint and
+      # test polyjose's off-by-default test-vector feature (ADR 0005), including the FixedRng
+      # doctest in rng.rs. (scripts/check-test-vectors-off.sh forbids naming it here.)
+      - name: clippy (polyjose, all features)
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo clippy -p polyjose --all-targets --all-features --locked -- -D warnings
+
       - name: test
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo test --workspace --locked
+
+      - name: test (polyjose, all features)
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo test -p polyjose --all-features --locked
+
+      # The core and the WASM binding must build for the browser target. The wasm32 standard
+      # library comes from rust-toolchain.toml's target list.
+      - name: build (wasm32-unknown-unknown)
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm --locked
 
       # Enforces ADR 0002 (no OpenSSL, ring, aws-lc, boring or libsodium) and ADR 0003
       # (RUSTSEC-2023-0071 is never ignored). Dev-dependencies are part of the graph, and
@@ -96,13 +114,45 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/check-test-vectors-off.sh
 
+  # Keeps the published `rust-version` honest (ADR 0024): polyjose must build on its MSRV, not
+  # only on the pinned toolchain. One Linux job is enough, because the core has no OS-specific
+  # code, and a separate job keeps the second toolchain (and its build artifacts) out of the
+  # matrix jobs and their cache. `cargo +<version>` bypasses rust-toolchain.toml on purpose, and
+  # the job has no rust-cache step, since that would query (and so install) the pinned toolchain.
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Must equal the workspace `rust-version` (checked below). Feature 0002 raises it to 1.88.
+      MSRV: 1.85.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: rust-version matches MSRV
+        run: |
+          grep -Fx "rust-version = \"${MSRV%.0}\"" Cargo.toml \
+            || { echo "::error file=Cargo.toml::workspace rust-version is not ${MSRV%.0}; update MSRV in ci.yml"; exit 1; }
+
+      - name: Install toolchain (MSRV)
+        run: |
+          rustup toolchain install "$MSRV" --profile minimal
+          cargo "+$MSRV" --version
+
+      # --all-features also covers the off-by-default test-vector code (ADR 0024 specifies the
+      # MSRV check with --all-features).
+      - name: check (polyjose)
+        run: cargo "+$MSRV" check -p polyjose --all-features --locked
+
   # The single required status check for branch protection on main (see git-ops). It needs every
   # gate job, and it fails unless all of them succeeded, so a skipped or cancelled job can never
   # count as green. Add each new job (WASM, Node, Swift, Android) to `needs` as it lands.
   ci-ok:
     name: ci-ok
     if: ${{ always() }}
-    needs: [rust]
+    needs: [rust, msrv]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
