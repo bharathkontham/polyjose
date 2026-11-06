@@ -1,0 +1,23 @@
+{
+  "source": "Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)",
+  "description": "RFC 7518 §4.7, §5.3: a compact A128GCMKW + A128GCM JWE built with OpenSSL (key-wrap IV and tag in the protected header) decrypts to its plaintext",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJBMTI4R0NNS1ciLCJlbmMiOiJBMTI4R0NNIiwiaXYiOiIzbjQ4T0RKcnlRLV9wclJSIiwidGFnIjoiSjVEbzUycVVQTFh4a0FhRS1nUVJLQSJ9.ZO2A2IpVhPQoa5KPbB3Fig.p-LtWnXTIOI2SAF6.sLgfl7iQ9SZYOmUTY4EWA36HBtzObk9XYmc1OA9Ny3dqdBN37K8EjrW8tDFT9FojRRi2DoOwyPpeGrFhOA.NVipJhA2j04wGSWvfqppeA",
+    "key": {
+      "kty": "oct",
+      "k": "WFS5fxgtPNkv5_LgfOOH_w"
+    },
+    "allowed_algs": [
+      "A128GCMKW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "QTEyOEdDTUtXIGludGVyb3A6IGJ1aWx0IHdpdGggT3BlblNTTCwgZGVjcnlwdGVkIGJ5IHBvbHlqb3NlLg",
+    "recipient": 0
+  }
+}

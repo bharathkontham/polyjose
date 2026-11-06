@@ -1,0 +1,23 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.7: encrypting with A128GCMKW and a 256-bit oct key is InvalidKey (A128GCMKW uses a 128-bit key)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "eA",
+    "recipients": [
+      {
+        "alg": "A128GCMKW",
+        "key": {
+          "kty": "oct",
+          "k": "3Bkcbg_s4C-u2I9zCICydsDNj7EqRf-olBwmcUqNXmg"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
