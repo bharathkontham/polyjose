@@ -77,6 +77,8 @@ pub(crate) fn agree(secret: &StaticSecret, public: &PublicKey) -> Result<Zeroizi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jwa::KeyMgmtAlg;
+    use crate::jwk::{Jwk, KeyMaterial, OkpCurve, OkpKey};
     use crate::rng::insecure_test_vectors::FixedRng;
     use crate::test_counters::ecdh_agreements;
     use crate::test_support::wycheproof::{self, Deviation, Outcome, Summary, Test};
@@ -316,5 +318,73 @@ mod tests {
             Outcome::of(&result)
         });
         assert_eq!(summary, XDH_SUMMARY);
+    }
+
+    /// The `OKP` `X25519` key of `jwk`, as T05's `RecipientKey` takes it
+    /// for ECDH-ES: the JWK must serve `ECDH-ES` (RFC 7518 §4.6) and be
+    /// `kty` `OKP` with `crv` `X25519` (RFC 8037 §2, §3.2), so an `EC` key
+    /// is refused even though it serves ECDH-ES on its own curve.
+    fn okp_x25519(jwk: &Jwk) -> Result<&OkpKey> {
+        if !jwk.material().serves_key_mgmt_alg(&KeyMgmtAlg::EcdhEs) {
+            return Err(Error::KeyAlgorithmMismatch);
+        }
+        match jwk.material() {
+            KeyMaterial::Okp(key) if key.crv() == OkpCurve::X25519 => Ok(key),
+            _ => Err(Error::KeyAlgorithmMismatch),
+        }
+    }
+
+    /// A peer public key from JWK JSON text (RFC 8037 §2: `x` is the
+    /// 32-octet u-coordinate).
+    fn public_from_jwk(json: &str) -> Result<PublicKey> {
+        let jwk = Jwk::from_json(json.as_bytes())?;
+        let x = <[u8; 32]>::try_from(okp_x25519(&jwk)?.x())
+            .map_err(|_| Error::InvalidKey("X25519 x is not 32 octets"))?;
+        Ok(PublicKey::from(x))
+    }
+
+    /// A private key from JWK JSON text (RFC 8037 §2: `d` is the 32-octet
+    /// private key), held in wiped buffers on the way to `StaticSecret`.
+    fn secret_from_jwk(json: &str) -> Result<StaticSecret> {
+        let jwk = Jwk::from_json(json.as_bytes())?;
+        let d = okp_x25519(&jwk)?
+            .d()
+            .ok_or(Error::InvalidKey("X25519 d is missing"))?;
+        let d = Zeroizing::new(
+            <[u8; 32]>::try_from(d).map_err(|_| Error::InvalidKey("X25519 d is not 32 octets"))?,
+        );
+        Ok(StaticSecret::from(*d))
+    }
+
+    #[test]
+    fn wycheproof_x25519_jwk() {
+        // The same 518 agreements as `x25519_test.json`, with JWK-encoded
+        // keys, plus 13 `InvalidPublic` JWKs (wrong `kty`, an EC or X448
+        // key, missing members) that must be refused at import, before any
+        // agreement is computed (RFC 8725 §3.4).
+        let suite = wycheproof::load("x25519_jwk");
+        let summary = wycheproof::assert_conforms(&suite, XDH, |_, test| {
+            let (public, private, shared) = test.jwk_agreement();
+            let (result, agreements) = ecdh_agreements::count(|| {
+                let secret = secret_from_jwk(private)?;
+                agree(&secret, &public_from_jwk(public)?)
+            });
+            if test.flags.iter().any(|f| f == "InvalidPublic") {
+                assert!(result.is_err(), "tcId {}: invalid JWK accepted", test.tc_id);
+                assert_eq!(agreements, 0, "tcId {}: agreed before refusing", test.tc_id);
+            } else {
+                assert_eq!(agreements, 1, "tcId {}", test.tc_id);
+                check_agreement(test, &result, shared);
+            }
+            Outcome::of(&result)
+        });
+        assert_eq!(
+            summary,
+            Summary {
+                tests: XDH_SUMMARY.tests + 13,
+                rejected: XDH_SUMMARY.rejected + 13,
+                ..XDH_SUMMARY
+            }
+        );
     }
 }
