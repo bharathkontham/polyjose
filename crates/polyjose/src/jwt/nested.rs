@@ -77,6 +77,15 @@ pub struct VerifiedNestedJwt {
 /// - Nested under a policy with an explicit type (such as
 ///   [`Policy::access_token`]), the outer `typ` must be omitted or match
 ///   that type; see [`decrypt_nested`].
+/// - **Confidentiality, not exclusivity.** The JWE hides the signed JWT
+///   and its signature (RFC 7519 §11.2), but `signed_jwt` stays a valid
+///   signed JWT on its own: the recipient, or anyone who later gets the
+///   plaintext, can present it to [`verify`](fn@super::verify). To have a
+///   token accepted only in nested form, sign it with a `typ` used only
+///   for nested tokens ([`IssueOptions::typ`](super::IssueOptions::typ))
+///   or with an `aud` only the nested verifier accepts, and check that on
+///   the receiving side (RFC 8725 §3.3, §3.11–§3.12; see
+///   [`decrypt_nested`]).
 ///
 /// # Errors
 ///
@@ -241,6 +250,80 @@ fn check_inner_alg(encoded: &str) -> Result<()> {
 /// when this function returns, on success and on every error. No error
 /// carries any of it, and the result's `Debug` prints no claim string:
 /// each prints as `"<redacted>"` (see [`VerifiedNestedJwt`]).
+///
+/// **What success proves** (RFC 7519 §11.2; RFC 8725 §3.3). The outer JWE
+/// gives confidentiality, and the inner signature authenticates the
+/// issuer. Success does not mean that the issuer encrypted the token, or
+/// that the token was never seen in clear text:
+///
+/// - Anyone able to decrypt, the intended recipient included, can take out
+///   the inner JWS and present it to [`verify`](fn@super::verify), which
+///   accepts it like any signed JWT of that issuer.
+/// - Anyone holding a signed JWT of the issuer can wrap it in a JWE for
+///   this recipient when the key management mode lets anyone encrypt:
+///   `ECDH-ES` and `ECDH-ES+A*KW`, `RSA-OAEP-256` to a published key, or
+///   `PBES2-*` with a known password. Only symmetric key management
+///   (`dir`, `A*KW`, `A*GCMKW`) under a key shared solely with the issuer
+///   limits who can produce the outer layer, to the holders of that key.
+///
+/// No forgery follows, since the inner signature, issuer, audience and
+/// times are all still checked. A deployment that must accept a token
+/// only in nested form makes that visible inside the signed claims, and
+/// checks it here (RFC 8725 §3.11–§3.12):
+///
+/// - a distinct explicit `typ` on the inner JWT, put only on the tokens
+///   the issuer nests ([`IssueOptions::typ`](super::IssueOptions::typ)) and
+///   required with [`Policy::expect_typ`]. A signed-JWT policy in
+///   [`TypMode::Default`](super::TypMode::Default) then rejects the
+///   extracted inner token, and a signed JWT the issuer did not nest
+///   fails this policy; or
+/// - a distinct `aud` that only the nested verifier's policy accepts
+///   ([`Policy::audience`]).
+///
+/// A signed-JWT verifier with [`Policy::any_typ`], or one expecting the
+/// same `typ` or `aud`, still accepts the inner token.
+///
+/// ```
+/// use polyjose::Error;
+/// use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
+/// use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient};
+/// use polyjose::jwk::Jwk;
+/// use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, NumericDate, Policy};
+///
+/// // RFC 7515 Appendix A.1.1's HMAC key and RFC 7520 §5.8.1's A128KW key.
+/// let signing_key = Jwk::from_json(br#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#)?;
+/// let kek = Jwk::from_json(br#"{"kty":"oct","k":"GZy6sIZ6wl9NJOKB-jnmVQ"}"#)?;
+/// let encryptor = Encryptor::new(ContentEncAlg::A128GCM)
+///     .recipient(Recipient::new(KeyMgmtAlg::A128KW, &kek));
+/// let decrypt_policy = DecryptPolicy::new(&[KeyMgmtAlg::A128KW], &[ContentEncAlg::A128GCM])?;
+///
+/// let mut claims = Claims::new();
+/// claims.exp = NumericDate::from_secs(1_300_819_380);
+///
+/// // The issuer types the tokens it nests with an application type of its own.
+/// const NESTED_ONLY: &str = "example-nested+jwt";
+/// let inner = jwt::sign(&claims, &IssueOptions::new(SigningAlg::HS256).typ(NESTED_ONLY), &signing_key)?;
+/// let nested = jwt::encrypt_nested(&inner, &encryptor)?;
+///
+/// let clock = FixedClock(1_300_819_320);
+/// let algs = [SigningAlg::HS256];
+/// let nested_policy = Policy::new(&clock, &algs)?.expect_typ(NESTED_ONLY);
+/// let signed_policy = Policy::new(&clock, &algs)?;
+/// let keys = Keys::One(&signing_key);
+///
+/// assert!(jwt::decrypt_nested(&nested, &kek, &decrypt_policy, keys, &nested_policy).is_ok());
+///
+/// // The inner JWS, taken out and presented alone, fails a signed-JWT policy.
+/// let replayed = jwt::verify(&inner, keys, &signed_policy);
+/// assert_eq!(replayed.unwrap_err(), Error::InvalidHeader("typ"));
+///
+/// // A signed JWT the issuer did not nest, wrapped by someone else, fails here.
+/// let plain = jwt::sign(&claims, &IssueOptions::new(SigningAlg::HS256), &signing_key)?;
+/// let wrapped = jwt::encrypt_nested(&plain, &encryptor)?;
+/// let rewrapped = jwt::decrypt_nested(&wrapped, &kek, &decrypt_policy, keys, &nested_policy);
+/// assert_eq!(rewrapped.unwrap_err(), Error::InvalidHeader("typ"));
+/// # Ok::<(), polyjose::Error>(())
+/// ```
 ///
 /// # Errors
 ///
