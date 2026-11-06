@@ -1,0 +1,20 @@
+{
+  "source": "ADR 0026 §2",
+  "description": "Precedence (ADR 0026 §2; the 0002 lead's order: limits and shape, then base64url of protected headers and signatures, then protected-header JSON, then the payload's base64url under the effective b64, then header structure, then steps 5–9): an HS256 JWS with a correct MAC (Python hmac) under a 31-octet key, verified with that key carrying \"alg\": \"HS384\": the alg binding fails before the key-length check (step 8 order)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiJ9.UGF5bG9hZA.baWoLLrn3ibrYy889li-r7wXmhceGSK-5gZhwL1giGU",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLg",
+      "alg": "HS384"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "source": "ADR 0026 §2",
+  "description": "Precedence (ADR 0026 §2; the 0002 lead's order: limits and shape, then base64url of protected headers and signatures, then protected-header JSON, then the payload's base64url under the effective b64, then header structure, then steps 5–9): an HS256 JWS verified with a 31-octet key (step 8) whose MAC is also wrong (first character changed, step 9) fails with the step 8 code",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiJ9.UGF5bG9hZA.BaWoLLrn3ibrYy889li-r7wXmhceGSK-5gZhwL1giGU",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLg"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "source": "ADR 0026 §2",
+  "description": "Precedence (ADR 0026 §2; the 0002 lead's order: limits and shape, then base64url of protected headers and signatures, then protected-header JSON, then the payload's base64url under the effective b64, then header structure, then steps 5–9): a flattened JWS with crit [\"exp\"] (unknown, step 5) whose kid is in both the protected and the unprotected header (structure, step 4), MAC correct (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key), fails with the structure code",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "protected": "eyJhbGciOiJIUzI1NiIsImNyaXQiOlsiZXhwIl0sImV4cCI6MTM2MzI4NDAwMCwia2lkIjoiYSJ9",
+      "header": {
+        "kid": "a"
+      },
+      "signature": "7gFCOpSkjIcR64ofJ777kYqzENIYMq9CVT1LhLWnLKw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}
