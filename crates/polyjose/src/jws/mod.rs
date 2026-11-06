@@ -32,29 +32,40 @@
 //!   ADR 0026 §2). They are returned in [`Verified`] for the caller to use
 //!   as it sees fit.
 //!
-//! # Processing order and errors (ADR 0026 §2)
+//! # Processing order and errors (ADR 0048, clarifying ADR 0026 §2)
 //!
 //! A JWS that is wrong in several ways fails with the error of the first
-//! failing step, identically on every platform:
+//! failing step, identically on every platform. The steps are ADR 0048's
+//! six, with ADR 0049 §3 placing the unprotected header's type checks at
+//! step 3:
 //!
 //! | step | check | error |
 //! |---|---|---|
-//! | 1 | size limits ([`VerifyOptions::max_input_len`], [`VerifyOptions::max_signatures`]) | [`Error::InvalidFormat`] |
-//! | 2 | serialization shape (RFC 7515 §7.1, §7.2); JSON syntax and duplicate members | [`Error::InvalidFormat`]; [`Error::InvalidJson`] |
-//! | 3 | base64url of every part (RFC 7515 §5.2 steps 2, 6, 7) | [`Error::InvalidBase64`] |
-//! | 4 | each protected header is an I-JSON object (duplicate members are [`Error::InvalidJson`], ADR 0041 §1); header structure: registered parameter types, protected/unprotected disjoint, `crit` placement and shape, `b64` rules, `alg` present (RFC 7515 §4.1.11, §5.2 step 4; RFC 7797 §3, §6) | [`Error::InvalidJson`]; [`Error::InvalidHeader`] |
-//! | 5 | `crit` lists only understood names (`b64`) | [`Error::UnknownCritical`] |
-//! | 6 | `alg` is a known JWS algorithm (RFC 7515 §4.1.1) | [`Error::UnsupportedAlgorithm`] |
-//! | 7 | `alg` is in the caller's allow-list; `none` never is (RFC 8725 §3.1) | [`Error::AlgorithmNotAllowed`] |
-//! | 8 | key binding: family, JWK `alg`/`use`/`key_ops`; key strength | [`Error::KeyAlgorithmMismatch`]; [`Error::InvalidKey`] |
-//! | 9 | the signature or MAC (RFC 7515 §5.2 step 8) | [`Error::InvalidSignature`] |
+//! | 1 | shape and limits: [`VerifyOptions::max_input_len`] and [`VerifyOptions::max_signatures`] (ADR 0026 §7); the number of parts (RFC 7515 §7.1) or the JSON serialization members (RFC 7515 §7.2), with JSON syntax and duplicate members | [`Error::InvalidFormat`]; [`Error::InvalidJson`] |
+//! | 2 | base64url of each signature (RFC 7515 §5.2 step 7) | [`Error::InvalidBase64`] |
+//! | 3 | protected-header decoding: base64url (RFC 7515 §5.2 step 2), then one I-JSON object (step 3; a duplicate member is [`Error::InvalidJson`], ADR 0041 §1), then the type of each registered parameter and the syntax of `crit`, a non-empty array of strings naming no registered parameter (RFC 7515 §4.1.11). A JSON serialization's unprotected `header` gets the same type and `crit`-syntax checks here (ADR 0049 §3) | [`Error::InvalidBase64`]; [`Error::InvalidJson`]; [`Error::InvalidHeader`] |
+//! | 4 | base64url of the payload (RFC 7515 §5.2 step 6), skipped when `b64` is `false` (RFC 7797 §3) or the payload is detached | [`Error::InvalidBase64`] |
+//! | 5 | whole-header structure: `crit` lists an absent parameter, `alg` missing, protected and unprotected headers share a name, `crit` or `b64` in the unprotected header, `b64` not listed in `crit`, signatures disagree on `b64` (RFC 7515 §4.1.1, §4.1.11, §5.2 step 4; RFC 7797 §3, §6) | [`Error::InvalidHeader`] |
+//! | 6a | `crit` lists only understood names (`b64`) | [`Error::UnknownCritical`] |
+//! | 6b | `alg` is a known JWS algorithm (RFC 7515 §4.1.1) | [`Error::UnsupportedAlgorithm`] |
+//! | 6c | `alg` is in the caller's allow-list; `none` never is (RFC 8725 §3.1) | [`Error::AlgorithmNotAllowed`] |
+//! | 6d | key binding: family, JWK `alg`/`use`/`key_ops`; key strength | [`Error::KeyAlgorithmMismatch`]; [`Error::InvalidKey`] |
+//! | 6e | the signature or MAC (RFC 7515 §5.2 step 8) | [`Error::InvalidSignature`] |
 //!
-//! With several signatures, [`verify_json`] runs steps 1–4 over all of them
-//! first, then steps 5–9 per signature until one verifies (ADR 0026 §3).
+//! Step 6 is the rest of ADR 0026 §2, unchanged: 6a–6e are its steps 5–9,
+//! which is the numbering comments such as "ADR 0026 §2 step 8" (key
+//! binding) use. The payload waits for step 4 because the protected
+//! header's `b64` decides whether it is base64url at all (RFC 7797 §3).
+//! Steps 2 and 3 both report [`Error::InvalidBase64`] for bad base64url,
+//! so which of the two runs first cannot be observed.
 //!
-//! Signing applies the same header rules (steps 4–8, with `none` refused
-//! at step 7 and RS*/PS* refused with [`Error::UnsupportedAlgorithm`]
-//! before the rest of step 8), then the serialization's payload rules
+//! With several signatures, [`verify_json`] runs steps 1–5 over all of
+//! them first, each step over every signature before the next, then
+//! step 6 per signature until one verifies (ADR 0026 §3).
+//!
+//! Signing applies the same header rules (steps 5 and 6a–6d, with `none`
+//! refused at 6c and RS*/PS* refused with [`Error::UnsupportedAlgorithm`]
+//! before the rest of 6d), then the serialization's payload rules
 //! ([`Error::InvalidFormat`], RFC 7797 §5.2–§5.3), then computes the
 //! signature.
 //!
