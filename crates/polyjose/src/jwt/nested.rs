@@ -266,10 +266,11 @@ fn check_inner_alg(encoded: &str) -> Result<()> {
 ///   (`dir`, `A*KW`, `A*GCMKW`) under a key shared solely with the issuer
 ///   limits who can produce the outer layer, to the holders of that key.
 ///
-/// No forgery follows, since the inner signature, issuer, audience and
-/// times are all still checked. A deployment that must accept a token
-/// only in nested form makes that visible inside the signed claims, and
-/// checks it here (RFC 8725 §3.11–§3.12):
+/// No forgery follows, since the inner signature and every check of
+/// `policy` still apply. A deployment that must accept a token only in
+/// nested form makes that visible inside the signed inner JWT, in its
+/// protected header or its claims, and checks it here (RFC 8725
+/// §3.11–§3.12):
 ///
 /// - a distinct explicit `typ` on the inner JWT, put only on the tokens
 ///   the issuer nests ([`IssueOptions::typ`](super::IssueOptions::typ)) and

@@ -25,9 +25,9 @@
 //! password), anyone can also encrypt a signed JWT of the issuer to the
 //! recipient. Both layers are still validated with the caller's keys
 //! (RFC 8725 §3.3), so nothing is forged. A deployment that must accept a
-//! token only in nested form makes that visible inside the signed claims,
-//! with a distinct explicit `typ` on the inner JWT or a distinct `aud`, and
-//! checks it in the policy (RFC 8725 §3.11–§3.12). See [`decrypt_nested`].
+//! token only in nested form makes that visible inside the signed inner
+//! JWT, with a distinct explicit `typ` or a distinct `aud`, and checks it
+//! in the policy (RFC 8725 §3.11–§3.12). See [`decrypt_nested`].
 //!
 //! [`verify`]: crate::jwt::verify
 //! [`Keys`]: crate::jwt::Keys
