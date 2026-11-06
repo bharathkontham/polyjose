@@ -514,4 +514,159 @@ mod tests {
         let right = oct_member(0x22, 32);
         assert_eq!(selected(&jws, &set(&[&weak, &wrong, &right])), Ok(2));
     }
+
+    // ---- RSA (ADR 0021) ----
+
+    /// RFC 7515 Appendix A.2: the RS256 JWS.
+    const A2_TOKEN: &str = concat!(
+        "eyJhbGciOiJSUzI1NiJ9",
+        ".eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ",
+        ".cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5",
+        "jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb",
+        "1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QO",
+        "YEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw",
+    );
+    /// RFC 7515 Appendix A.2.1: the public members of the RS256 key, with a
+    /// `kid` added.
+    const A2_PUBLIC: &str = concat!(
+        r#"{"kty":"RSA","kid":"rfc7515-a2","e":"AQAB","n":""#,
+        "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4Ql",
+        "L-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUs",
+        "LA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoud",
+        "F8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+        r#""}"#,
+    );
+    /// RFC 7520 §4.1.3 (Figure 13): an RS256 JWS whose protected header
+    /// carries `kid` `bilbo.baggins@hobbiton.example`.
+    const RFC7520_TOKEN: &str = concat!(
+        "eyJhbGciOiJSUzI1NiIsImtpZCI6ImJpbGJvLmJhZ2dpbnNAaG9iYml0b24uZXhhbXBsZSJ9",
+        ".SXTigJlzIGEgZGFuZ2Vyb3VzIGJ1c2luZXNzLCBGcm9kbywgZ29pbmcgb3V0IHlvdXIgZG9vci4gWW91IHN0ZXAgb250byB0",
+        "aGUgcm9hZCwgYW5kIGlmIHlvdSBkb24ndCBrZWVwIHlvdXIgZmVldCwgdGhlcmXigJlzIG5vIGtub3dpbmcgd2hlcmUgeW91",
+        "IG1pZ2h0IGJlIHN3ZXB0IG9mZiB0by4",
+        ".MRjdkly7_-oTPTS3AXP41iQIGKa80A0ZmTuV5MEaHoxnW2e5CZ5NlKtainoFmKZopdHM1O2U4mwzJdQx996ivp83xuglII7P",
+        "NDi84wnB-BDkoBwA78185hX-Es4JIwmDLJK3lfWRa-XtL0RnltuYv746iYTh_qHRD68BNt1uSNCrUCTJDt5aAE6x8wW1Kt9e",
+        "Ro4QPocSadnHXFxnt8Is9UzpERV0ePPQdLuW3IS_de3xyIrDaLGdjluPxUAhb6L2aXic1U12podGU0KLUQSE_oI-ZnmKJ3F4",
+        "uOZDnd6QZWJushZ41Axf_fcIe8u9ipH84ogoree7vjbU5y18kDquDg",
+    );
+    /// RFC 7520 §3.3 (Figure 3): the public RSA key of [`RFC7520_TOKEN`].
+    const RFC7520_PUBLIC: &str = concat!(
+        r#"{"kty":"RSA","kid":"bilbo.baggins@hobbiton.example","use":"sig","e":"AQAB","n":""#,
+        "n4EPtAOCc9AlkeQHPzHStgAbgs7bTZLwUBZdR8_KuKPEHLd4rHVTeT-O-XV2jRojdNhxJWTDvNd7nqQ0VEiZQHz_AJmSCpMa",
+        "JMRBSFKrKb2wqVwGU_NsYOYL-QtiWN2lbzcEe6XC0dApr5ydQLrHqkHHig3RBordaZ6Aj-oBHqFEHYpPe7Tpe-OfVfHd1E6c",
+        "S6M1FZcD1NNLYD5lFHpPI9bTwJlsde3uhGqC0ZCuEHg8lhzwOHrtIQbS0FVbb9k3-tVTU4fg_3L_vniUFAKwuCLqKnS2BYwd",
+        "q_mzSnbLY7h_qixoR7jig3__kRhuaxwUkRz5iaiQkqgc5gHdrNP5zw",
+        r#""}"#,
+    );
+
+    /// ADR 0021: RS256 verifies through a set. The RFC 7515 A.2 token has
+    /// no `kid`, so every RSA member is a candidate and the A.2 key is
+    /// found second; alone in the set it is found first.
+    #[test]
+    fn rfc7515_a2_rs256_verifies_through_a_set_without_a_kid() {
+        let both = set(&[RFC7520_PUBLIC, A2_PUBLIC]);
+        assert_eq!(
+            candidate_indices(A2_TOKEN, &both, &policy()),
+            Ok(vec![0, 1])
+        );
+        let (verified, index) = verify_with_set(A2_TOKEN, &both, &policy()).unwrap();
+        assert_eq!((index, &verified.alg), (1, &A::RS256));
+        assert!(verified.payload.starts_with(br#"{"iss":"joe""#));
+        assert_eq!(selected(A2_TOKEN, &set(&[A2_PUBLIC])), Ok(0));
+        assert_eq!(both.keys()[1].kid(), Some("rfc7515-a2"));
+    }
+
+    /// The same set selects by `kid`: RFC 7520 §4.1's token names its key
+    /// in the protected header, so the A.2 key is not even tried.
+    #[test]
+    fn an_rs256_token_with_a_kid_selects_its_key_by_kid() {
+        let both = set(&[A2_PUBLIC, RFC7520_PUBLIC]);
+        assert_eq!(
+            candidate_indices(RFC7520_TOKEN, &both, &policy()),
+            Ok(vec![1])
+        );
+        assert_eq!(counted(RFC7520_TOKEN, &both, &policy()), (Ok(1), 1, 0));
+        let a2_only = set(&[A2_PUBLIC]);
+        assert_eq!(selected(RFC7520_TOKEN, &a2_only), Err(Error::NoMatchingKey));
+    }
+
+    /// RFC 7517 Appendix A.2's RSA private key, the second member of the
+    /// RFC's set (line breaks inside values removed).
+    const A2_PRIVATE_MEMBER: &str = concat!(
+        r#"{"kty":"RSA","alg":"RS256","kid":"2011-04-29","e":"AQAB","#,
+        r#""n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","#,
+        r#""d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q","#,
+        r#""p":"83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs","#,
+        r#""q":"3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk","#,
+        r#""dp":"G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0","#,
+        r#""dq":"s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk","#,
+        r#""qi":"GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU"}"#,
+    );
+
+    /// ADR 0021, ADR 0029 §3: an RSA private member fails the whole set
+    /// import, so no token can verify against it, even one whose `kid`
+    /// names a different, valid member.
+    #[test]
+    fn a_set_with_an_rsa_private_member_fails_to_import() {
+        let first = p256_member(&KEY_A, r#","kid":"a""#);
+        let json = format!(r#"{{"keys":[{first},{A2_PRIVATE_MEMBER}]}}"#);
+        assert_eq!(
+            JwkSet::from_json(json.as_bytes()).unwrap_err(),
+            Error::UnsupportedAlgorithm
+        );
+        // Without the private member, the same token verifies.
+        let jws = es256(r#"{"alg":"ES256","kid":"a"}"#, &KEY_A);
+        assert_eq!(selected(&jws, &set(&[&first])), Ok(0));
+    }
+
+    /// RFC 7517 §5: members of an unknown `kty` or `crv` are skipped, and
+    /// the rest of the set still verifies.
+    #[test]
+    fn unknown_kty_and_crv_members_are_skipped() {
+        let set = set(&[
+            r#"{"kty":"XYZ","kid":"a"}"#,
+            r#"{"kty":"OKP","crv":"Ed448","x":"AAAA","kid":"a"}"#,
+            r#"{"kty":"EC","crv":"P-192","x":"AAAA","y":"AAAA","kid":"a"}"#,
+            &p256_member(&KEY_A, r#","kid":"a""#),
+        ]);
+        assert_eq!((set.len(), set.skipped()), (1, 3));
+        let jws = es256(r#"{"alg":"ES256","kid":"a"}"#, &KEY_A);
+        assert_eq!(selected(&jws, &set), Ok(0));
+    }
+
+    // A fixed public modulus of 8200 bits (keys.json `rsa-8200`, feature
+    // 0004 T02): only the public key was ever exported (ADR 0021).
+    const MODULUS_8200: &str = concat!(
+        "rTphzws3aF2xHUrDRw7j7R0JuF-6mnSdJxusXRTdeVVx0N1gj3iBWnh7TUe3iRCs3swR_c4sfVx-xhm6wrHBWDQk",
+        "PQnJw6Jtnvd5JgybX_Qbh3LZj4hQrWKCSzXNkjsZ_JpYpWDWwwjut-lVCt1z7uWkTeUVjxcT2fD-JCRa2Fw0lxk4",
+        "TlSy3EivgtjOBpjKdvq60pF8DZa1q0zQ7pt_Evak4d8221qFZ4GKuifRKojcuzjCtJ7AG-9FCXad0lnjObOYwGdm",
+        "d3QOC3J_pHiNsGWMT6y0B7PxRu31HTsaXIPuQKyghhthhsA5XIpj9ByUNcepFPQ4D6o0Bi-nb14xAOMhW3zwbC8I",
+        "kKHVBRYjnP3379DluI8zS7yXup4TIsX-I1U69mHr5TmQGLf6uMTjye8DELEmE2XqywReZGchQN0qhounhXRX1du1",
+        "_af4vQ_dT81Pf8gzoQe5hL3iSDcMeK9pEN2u4vjU9GdlNLH1kvD3BnO6-gyhdSaXcGFW0vUoxqFQ-0aAVrM31dcy",
+        "20aJ9V1tttWVlVT9RYvQRiycKan-Ao5lJlM3APL0bLHPXubd0ugZ6gnZ0OJUIA1c8TU6DnOpr35vPo024JG9Y-95",
+        "TdFR2cwyJs0W7ij3awMzfFKB5IgYmujBRatP7ff8aGjT8634bwCdZNToWWdaxaSDHTW-EgIoLYnb3vc_cKFm48LZ",
+        "uMsLPqoTpXEOxFKsN8s8Yd6sgN2i8_EDUWz2GrUgXS0chIZexXC_O-IsmZyZYsLalcf10Ux7skk08vc2z5lXkIu6",
+        "lSxhh9Z_GDhBU9oEC3C33VS4nSIqkwJhYlS77yPTXD_rBhxrL0tU9sGfgk9a4Wji4HEz1Hew8qsTazW5_a03fUVo",
+        "opAvIwiEZF1NfSM-WcN5jPBitK48PaGp03_oPoa7hFcYElUIJo9CLBONZiWmeXDoOvGDbZizpyytRkQ0qf0ApJaP",
+        "yBOlurmOkSJ2DAa40KWRYTOIETCSWExH2PotJkGsqu5Mer39EAxI6UIzPUSR07OReca9eXmtZmuK438pa1m6KGml",
+        "KIUg4pu1bgEfGQZx_CYqH2R_kL4M61CVZ3l00nCC_qupUJwkMEPSj_c_YB2Uc83qMHvAo5GeTFDgc5MAA7ztE5H5",
+        "pbEs4LI3THcFyoKx2V3zu2k69EWmbtn0wbet1tkJxy5MhmdRVNIckR-teJiGMJ6jerOrewTzncUbF0ywyl7yBwjr",
+        "BcyGRo-L4QCSfwc_PHPmaMrdkH7dnZp9HMWzGz8uunZwZ-GL3_DNOtSZbgHaq0or9ajPQzjBAelNNzts3_Wl4L8s",
+        "ZsCkxEFtc_bRclaPYGA1zZRH6Qs-LxUVsNVivykD366X04M",
+    );
+
+    /// ADR 0041 §2, RFC 7518 §3.3: a member whose modulus is over 8192
+    /// bits is skipped at import, so a set whose only RS256-capable member
+    /// is one gives `NoMatchingKey`.
+    #[test]
+    fn an_oversized_rsa_member_is_skipped_and_gives_no_matching_key() {
+        let oversized = format!(r#"{{"kty":"RSA","n":"{MODULUS_8200}","e":"AQAB"}}"#);
+        let bits = crate::util::b64url_decode(MODULUS_8200).unwrap().len() * 8;
+        assert!(bits > 8192, "{bits}");
+        let set = set(&[&p256_member(&KEY_A, ""), &oversized]);
+        assert_eq!((set.len(), set.skipped()), (1, 1));
+        assert_eq!(
+            counted(A2_TOKEN, &set, &policy()),
+            (Err(Error::NoMatchingKey), 0, 0)
+        );
+    }
 }
