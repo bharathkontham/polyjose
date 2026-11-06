@@ -257,16 +257,18 @@ check_credits_match() {
 #      dalek-build (ADR 0042): rustc_version and semver, curve25519-dalek's build-dependencies,
 #        only below curve25519-dalek.
 #      num-traits-build (ADR 0042): autocfg, num-traits' build-dependency, only below num-traits.
-#    "Below" is checked on the same graph as check 6 (normal and build edges, every target, every
-#    feature): the crate must be unreachable from polyjose once every package named like the
-#    parent is removed. So a second path to it (a direct dependency, or another crate that pulls
-#    it in) fails, and the offending path is printed with `cargo tree ... -i <crate>`.
+#    "Below" is checked on the tree of check 1 (cargo tree, normal and build edges, every target,
+#    every feature): the crate must be unreachable from polyjose once every package named like
+#    the parent is removed. So a second path to it (a direct dependency, or another crate that
+#    pulls it in) fails, and every path to it is printed with `cargo tree ... -i <crate>`.
+#    (Not cargo metadata's resolve graph, as check 6 walks: that graph unifies features across
+#    the whole workspace, so it would also show what only a binding enables.)
 check_group_rules() {
   local group crate
   : >"$work/guarded"
   while read -r group crate; do
     case $group in
-      primitives | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
+      primitives | ecdsa | eddsa | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
       dalek-proc-macro)
         if [ "$crate" = curve25519-dalek-derive ]; then
           echo "$crate curve25519-dalek $group" >>"$work/guarded"
@@ -279,58 +281,69 @@ check_group_rules() {
     esac
   done <"$work/groups"
   [ -s "$work/guarded" ] || return 0
+  # The graph is the tree of check 1 itself, printed with depths so that each line's parent is the
+  # nearest line above it one level up. cargo prints a repeated subtree only once (marked "(*)"),
+  # but every package's own dependencies appear at its first occurrence, so the edges are complete.
+  cargo tree --locked -p "$core_pkg" -e "normal,build" --all-features --target all --prefix depth \
+    >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree --prefix depth failed"; }
   # Prints "<crate> <parent> <group> <path>" for each guarded crate reachable without its parent.
   python3 -I -c '
-import json, os, sys
-meta_path, pkg_name, manifest, guarded_path = sys.argv[1], sys.argv[2], os.path.realpath(sys.argv[3]), sys.argv[4]
+import re, sys
+tree_path, guarded_path = sys.argv[1], sys.argv[2]
 def norm(name):
     return name.lower().replace("_", "-")
-with open(meta_path, encoding="utf-8") as f:
-    meta = json.load(f)
-packages = {p["id"]: p for p in meta["packages"]}
-core = [p["id"] for p in meta["packages"]
-        if p["name"] == pkg_name and os.path.realpath(p["manifest_path"]) == manifest]
-if len(core) != 1:
-    sys.exit("expected exactly one package %s at %s, found %d" % (pkg_name, manifest, len(core)))
-if meta.get("resolve") is None:
-    sys.exit("cargo metadata has no resolve graph")
-nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+line_re = re.compile(r"^([0-9]+)([A-Za-z0-9][A-Za-z0-9_-]*) (v[0-9][^ ]*)")
+edges, stack, root = {}, [], None
+with open(tree_path, encoding="utf-8") as f:
+    for number, line in enumerate(f, 1):
+        m = line_re.match(line)
+        if m is None:
+            sys.exit("unexpected cargo tree line %d: %s" % (number, line.rstrip()))
+        depth, node = int(m.group(1)), (norm(m.group(2)), m.group(3))
+        if depth == 0:
+            if root is not None:
+                sys.exit("cargo tree printed more than one root")
+            root = node
+        elif depth > len(stack):
+            sys.exit("cargo tree line %d skips a level" % number)
+        else:
+            edges.setdefault(stack[depth - 1], set()).add(node)
+        del stack[depth:]
+        stack.append(node)
+if root is None:
+    sys.exit("cargo tree printed nothing")
 with open(guarded_path, encoding="utf-8") as f:
     rules = [line.split() for line in f if line.strip()]
 for crate, parent, group in rules:
-    # Breadth-first walk over normal and build edges that never enters `parent`.
-    prev, todo, hit = {core[0]: None}, [core[0]], None
+    # Breadth-first walk from polyjose that never enters a package named `parent`.
+    prev, todo, hit = {root: None}, [root], None
     while todo and hit is None:
         nxt = []
         for node in todo:
-            for dep in nodes[node]["deps"]:
-                pkg = dep["pkg"]
-                if pkg in prev or norm(packages[pkg]["name"]) == parent:
+            for dep in sorted(edges.get(node, ())):
+                if dep in prev or dep[0] == parent:
                     continue
-                # A missing dep_kinds (cargo older than 1.41) is a KeyError: fail closed.
-                if not any(k["kind"] in (None, "build") for k in dep["dep_kinds"]):
-                    continue
-                prev[pkg] = node
-                if norm(packages[pkg]["name"]) == crate:
-                    hit = pkg
+                prev[dep] = node
+                if dep[0] == crate:
+                    hit = dep
                     break
-                nxt.append(pkg)
+                nxt.append(dep)
             if hit is not None:
                 break
         todo = nxt
     if hit is not None:
         path, node = [], hit
         while node is not None:
-            path.append(packages[node]["name"])
+            path.append(node[0])
             node = prev[node]
-        print("%s %s %s %s" % (crate, parent, group, " -> ".join(reversed(path))))
-' "$work/metadata.json" "$core_pkg" "$core_manifest" "$work/guarded" >"$work/guard-paths" \
-    || die "could not walk $core_pkg's dependency graph for the guarded groups"
-  local parent path
-  while read -r crate parent group path; do
+        print("%s %s %s %s@%s %s" % (crate, parent, group, hit[0], hit[1][1:], " -> ".join(reversed(path))))
+' "$work/tree.depth" "$work/guarded" >"$work/guard-paths" \
+    || die "could not read the dependency graph for the guarded groups (see above)"
+  local parent spec path
+  while read -r crate parent group spec path; do
     fail "$crate (group $group in $allowlist) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
-    echo "  Inverted tree (cargo tree -p $core_pkg -e normal,build --all-features --target all -i $crate):"
-    cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$crate" 2>&1 | sed 's/^/    /' || true
+    echo "  Every path to it (cargo tree -p $core_pkg -e normal,build --all-features --target all -i $spec):"
+    cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$spec" 2>&1 | sed 's/^/    /' || true
   done <"$work/guard-paths"
 }
 
