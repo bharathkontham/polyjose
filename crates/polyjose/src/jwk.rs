@@ -204,6 +204,7 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 use crate::error::{Error, Result};
 use crate::json::{self, Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
+use crate::jwe::x25519_consistency::{X25519_PRIVATE_MISMATCH, x25519_private_matches};
 use crate::util::{b64url_decode, b64url_encode};
 
 mod set;
@@ -1916,12 +1917,13 @@ fn parse_okp(object: &Object, crv: OkpCurve) -> Result<OkpKey> {
     if crv == OkpCurve::Ed25519 && !ed25519_public_is_valid(&x) {
         return Err(Error::InvalidKey(ED25519_PUBLIC_INVALID));
     }
-    // ADR 0043 §3: last, a private key must be the key of its own `x`. An
-    // X25519 `d` is not checked yet: the 0002 tree has no X25519 primitive
-    // to derive `x` with, and feature 0003 adds the check with x25519-dalek
-    // (RFC 7748 §6.1).
+    // ADR 0043 §3: last, a private key must be the key of its own `x`:
+    // Ed25519 per RFC 8032 §5.1.5, X25519 per RFC 7748 §6.1 (x = X25519(d, 9)).
     if crv == OkpCurve::Ed25519 && d.as_ref().is_some_and(|d| !ed25519_private_matches(&x, d)) {
         return Err(Error::InvalidKey(ED25519_PRIVATE_MISMATCH));
+    }
+    if crv == OkpCurve::X25519 && d.as_ref().is_some_and(|d| !x25519_private_matches(&x, d)) {
+        return Err(Error::InvalidKey(X25519_PRIVATE_MISMATCH));
     }
     Ok(OkpKey { crv, x, d })
 }

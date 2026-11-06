@@ -244,16 +244,21 @@ fn binary_members_must_be_canonical_unpadded_base64url() {
 #[test]
 fn okp_accepts_only_ed25519_and_x25519_with_32_octet_members() {
     for (crv, curve) in [("Ed25519", OkpCurve::Ed25519), ("X25519", OkpCurve::X25519)] {
-        // Ed25519 needs a real key pair (RFC 8037 A.1): import rejects
-        // points with a torsion component and a `d` that does not derive
-        // `x` (ADR 0043 §1, §3). Any 32 octets are an X25519 key.
+        // A real key pair: import rejects Ed25519 points with a torsion
+        // component and a `d` that does not derive `x`, for either curve
+        // (ADR 0043 §1, §3). RFC 8037 A.1 for Ed25519, RFC 7748 §6.1 Alice
+        // for X25519; any 32 octets are an X25519 public key.
         let (x, d) = if crv == "Ed25519" {
             (
                 "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
                 "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A".to_owned(),
             )
         } else {
-            (b64(32, 9), b64(32, 8))
+            assert!(ok(&okp(crv, &b64(32, 9), None)).is_public());
+            (
+                "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo".to_owned(),
+                "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo".to_owned(),
+            )
         };
         let key = ok(&okp(crv, &x, Some(&d)));
         let KeyMaterial::Okp(okp_key) = key.material() else {

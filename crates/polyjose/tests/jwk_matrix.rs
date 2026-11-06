@@ -129,22 +129,29 @@ fn ec_and_okp_unknown_or_out_of_scope_curves_are_unsupported() {
 #[test]
 fn okp_x_and_d_must_be_32_octets() {
     for crv in ["Ed25519", "X25519"] {
-        // At 32 octets, the RFC 8037 A.1 key pair: import rejects Ed25519
-        // points with a torsion component and a `d` that does not derive
-        // `x` (ADR 0043 §1, §3). The other lengths fail on length alone.
+        // At 32 octets, a real key pair: import rejects Ed25519 points with
+        // a torsion component and a `d` that does not derive `x` (ADR 0043
+        // §1, §3). RFC 8037 A.1 for Ed25519, RFC 7748 §6.1 Alice for
+        // X25519. The other lengths fail on length alone.
+        let (real_x, real_d) = if crv == "Ed25519" {
+            (
+                "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+                "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+            )
+        } else {
+            (
+                "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+                "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo",
+            )
+        };
         let sized = |len: usize, real: &str| if len == 32 { real.to_owned() } else { b(len) };
         let key = |x: usize, d: Option<usize>| {
             let d = d
-                .map(|d| {
-                    format!(
-                        r#","d":"{}""#,
-                        sized(d, "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A")
-                    )
-                })
+                .map(|d| format!(r#","d":"{}""#, sized(d, real_d)))
                 .unwrap_or_default();
             format!(
                 r#"{{"kty":"OKP","crv":"{crv}","x":"{}"{d}}}"#,
-                sized(x, "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo")
+                sized(x, real_x)
             )
         };
         assert_eq!(code(&key(32, None)), "OK");

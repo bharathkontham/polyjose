@@ -178,6 +178,7 @@ mod random;
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
 )]
 mod rsa_oaep;
+pub(crate) mod x25519_consistency;
 #[allow(
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
