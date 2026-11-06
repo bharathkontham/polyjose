@@ -451,6 +451,17 @@ impl Encryptor {
         self
     }
 
+    /// The extra JWE Protected Header parameters the caller set with
+    /// [`protected_header`](Self::protected_header), if any.
+    ///
+    /// Crate-internal: the nested-JWT issuer reads it to add `cty: "JWT"`
+    /// (RFC 7519 §5.2, §7.1 step 5) to a copy of the caller's encryptor,
+    /// keeping the caller's other parameters; in the compact serialization
+    /// the protected header is the whole JOSE Header (RFC 7516 §7.1).
+    pub(crate) fn protected(&self) -> Option<&Header> {
+        self.protected.as_ref()
+    }
+
     /// The JWE Shared Unprotected Header (RFC 7516 §7.2.1 `unprotected`),
     /// JSON only. Not integrity-protected: the receiver must not trust its
     /// contents (ADR 0050 §3).
