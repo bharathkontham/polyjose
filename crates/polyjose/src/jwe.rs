@@ -14,12 +14,32 @@ pub use api::DecryptPolicy;
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
 )]
+mod aes_gcm_kw;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod aes_kw;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
 mod concat_kdf;
 #[allow(
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
 )]
 mod content;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod dir;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod ecdh_es;
 #[allow(
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
@@ -49,4 +69,19 @@ mod key;
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
 )]
+mod keymgmt;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod pbes2;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
 mod random;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod rsa_oaep;
