@@ -31,7 +31,11 @@ fn values() -> Vec<String> {
 }
 
 fn texts(v: &jwt::VerifiedJwt) -> [String; 3] {
-    [format!("{v:?}"), format!("{v:#?}"), format!("{:?}", v.claims)]
+    [
+        format!("{v:?}"),
+        format!("{v:#?}"),
+        format!("{:?}", v.claims),
+    ]
 }
 
 #[test]
@@ -150,7 +154,11 @@ fn error_display_never_carries_claim_values() {
     }
     // Tampered signature and garbage.
     let bad = format!("{}x", token);
-    if let Err(e) = jwt::verify(&bad, Keys::One(&key()), &Policy::new(&FixedClock(EXP - 60), &algs).unwrap()) {
+    if let Err(e) = jwt::verify(
+        &bad,
+        Keys::One(&key()),
+        &Policy::new(&FixedClock(EXP - 60), &algs).unwrap(),
+    ) {
         assert!(!format!("{e} {e:?}").contains(m));
     }
 }
@@ -159,16 +167,23 @@ fn error_display_never_carries_claim_values() {
 fn header_debug_note() {
     let c = Claims::new();
     let opts = IssueOptions::new(SigningAlg::HS256)
-        .header_param("x-str", Value::from("HDR-STR-MARK")).unwrap();
+        .header_param("x-str", Value::from("HDR-STR-MARK"))
+        .unwrap();
     let mut c = c;
     c.exp = NumericDate::from_secs(EXP);
     let token = jwt::sign(&c, &opts, &key()).unwrap();
     let algs = [SigningAlg::HS256];
     let clock = FixedClock(EXP - 60);
-    let v = jwt::verify(&token, Keys::One(&key()), &Policy::new(&clock, &algs).unwrap());
+    let v = jwt::verify(
+        &token,
+        Keys::One(&key()),
+        &Policy::new(&clock, &algs).unwrap(),
+    );
     if let Ok(v) = v {
         println!("HEADER DEBUG: {:?}", v.header);
-        assert!(!format!("{v:?}").contains(polyjose::util::b64url_encode(OCT_64.as_bytes()).as_str()));
+        assert!(
+            !format!("{v:?}").contains(polyjose::util::b64url_encode(OCT_64.as_bytes()).as_str())
+        );
     } else {
         println!("verify err {:?}", v.err());
     }
