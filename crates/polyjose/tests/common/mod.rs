@@ -12,6 +12,9 @@
     reason = "a shared fixture module; each test crate uses a subset"
 )]
 
+/// The Wycheproof JWE reader (0003 T16's `tests/jwe_wycheproof.rs`).
+pub mod jwe_wycheproof;
+
 /// One EC key pair, base64url of the fixed-length big-endian octets.
 pub struct EcKeyPair {
     pub crv: &'static str,

@@ -36,8 +36,9 @@ UniFFI) are not part of the core crate and are not listed here.
 - **Upstream:** RustCrypto, [RustCrypto/MACs](https://github.com/RustCrypto/MACs)
   ([crates.io](https://crates.io/crates/hmac))
 - **License:** MIT OR Apache-2.0
-- **Used for:** HMAC (RFC 2104) for the JWS algorithms HS256, HS384 and HS512 (RFC 7518 §3.2),
-  including the constant-time tag comparison. Its `zeroize` feature wipes the keyed state on drop.
+- **Used for:** HMAC (RFC 2104) for the JWS algorithms HS256, HS384 and HS512 (RFC 7518 §3.2)
+  and the MAC half of JWE A*CBC-HS* (RFC 7518 §5.2), including the constant-time tag comparison,
+  and under `pbkdf2`. Its `zeroize` feature wipes the keyed state on drop.
 - **Audit status:** no public independent audit found.
 
 ### `digest`
@@ -90,9 +91,11 @@ UniFFI) are not part of the core crate and are not listed here.
 - **Upstream:** RustCrypto, [RustCrypto/utils](https://github.com/RustCrypto/utils)
   ([crates.io](https://crates.io/crates/cpufeatures))
 - **License:** MIT OR Apache-2.0
-- **Used for:** not used directly. `sha2` uses it on aarch64, x86 and x86_64 to detect the SHA CPU
-  extensions at run time, and `curve25519-dalek` on x86_64 to pick its AVX2 backend.
-- **Audit status:** not in the ADR 0019 register; a dependency of `sha2` and `curve25519-dalek`.
+- **Used for:** not used directly. `sha2`, `aes` and `polyval` use it on aarch64, x86 and x86_64 to
+  detect the SHA, AES and carry-less multiply CPU extensions at run time, and `curve25519-dalek`
+  on x86_64 to pick its AVX2 backend.
+- **Audit status:** not in the ADR 0019 register; a dependency of `sha2`, `aes`, `polyval` and
+  `curve25519-dalek`.
 
 ### `ctutils`
 
@@ -100,9 +103,10 @@ UniFFI) are not part of the core crate and are not listed here.
   ([crates.io](https://crates.io/crates/ctutils))
 - **License:** Apache-2.0 OR MIT
 - **Used for:** not used directly. Constant-time comparison and selection helpers: `digest` verifies
-  HMAC tags with them, and `crypto-bigint` and `sec1` use them too.
-- **Audit status:** not in the ADR 0019 register; a dependency of `digest`, `crypto-bigint` and
-  `sec1`.
+  HMAC tags with them, `aes-gcm` its GCM tags, and `crypto-bigint`, `sec1` and `universal-hash` use
+  them too.
+- **Audit status:** not in the ADR 0019 register; a dependency of `digest`, `aes-gcm`,
+  `crypto-bigint`, `sec1` and `universal-hash`.
 
 ### `cmov`
 
@@ -121,6 +125,133 @@ UniFFI) are not part of the core crate and are not listed here.
   `der` and `rsa` (the PKCS#1 v1.5 DigestInfo prefixes).
 - **Audit status:** not in the ADR 0019 register; a dependency of `digest`, `der` and `rsa`.
 
+## Symmetric encryption and key derivation
+
+### `aes`
+
+- **Upstream:** RustCrypto, [RustCrypto/block-ciphers](https://github.com/RustCrypto/block-ciphers)
+  ([crates.io](https://crates.io/crates/aes))
+- **License:** MIT OR Apache-2.0
+- **Used for:** the AES block cipher (FIPS 197) under every JWE AES mode: A*GCM, A*GCMKW, A*KW and
+  the CBC half of A*CBC-HS*. It picks the AES CPU instructions at run time on aarch64, x86 and
+  x86_64 and a constant-time software implementation elsewhere (wasm32). Its `zeroize` feature wipes
+  the key schedules on drop.
+- **Audit status:** not in the ADR 0019 register; the cipher under `aes-gcm`, `aes-kw` and `cbc`.
+
+### `aes-gcm`
+
+- **Upstream:** RustCrypto, [RustCrypto/AEADs](https://github.com/RustCrypto/AEADs)
+  ([crates.io](https://crates.io/crates/aes-gcm))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** AES-GCM for the JWE content encryption algorithms A128GCM, A192GCM and A256GCM
+  (RFC 7518 §5.3) and the key wrapping algorithms A128GCMKW, A192GCMKW and A256GCMKW
+  (RFC 7518 §4.7). It checks the tag in constant time before decrypting.
+- **Audit status:** audited by NCC Group in 2020 (for MobileCoin): no significant findings. The
+  review covered the 0.8 series; polyjose pins 0.11.1, which postdates it.
+
+### `aes-kw`
+
+- **Upstream:** RustCrypto, [RustCrypto/key-wraps](https://github.com/RustCrypto/key-wraps)
+  ([crates.io](https://crates.io/crates/aes-kw))
+- **License:** MIT OR Apache-2.0
+- **Used for:** AES Key Wrap (RFC 3394) for the JWE algorithms A128KW, A192KW and A256KW
+  (RFC 7518 §4.4), and the wrapping step of PBES2 (RFC 7518 §4.8) and ECDH-ES+A*KW
+  (RFC 7518 §4.6). Its `zeroize` feature wipes the key on drop.
+- **Audit status:** no public independent audit found.
+
+### `cbc`
+
+- **Upstream:** RustCrypto, [RustCrypto/block-modes](https://github.com/RustCrypto/block-modes)
+  ([crates.io](https://crates.io/crates/cbc))
+- **License:** MIT OR Apache-2.0
+- **Used for:** AES-CBC with PKCS#7 padding, the encryption half of A128CBC-HS256, A192CBC-HS384 and
+  A256CBC-HS512 (RFC 7518 §5.2). polyjose verifies the HMAC tag before it decrypts
+  (RFC 7518 §5.2.2.2), so the padding check never sees unauthenticated input.
+- **Audit status:** no public independent audit found.
+
+### `pbkdf2`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/password-hashes](https://github.com/RustCrypto/password-hashes)
+  ([crates.io](https://crates.io/crates/pbkdf2))
+- **License:** MIT OR Apache-2.0
+- **Used for:** PBKDF2 (RFC 8018 §5.2) with HMAC-SHA-256/384/512 for the JWE algorithms
+  PBES2-HS256+A128KW, PBES2-HS384+A192KW and PBES2-HS512+A256KW (RFC 7518 §4.8). Only its
+  `hmac` feature is enabled: no password-hash formats.
+- **Audit status:** no public independent audit found.
+
+### `cipher`
+
+- **Upstream:** RustCrypto, [RustCrypto/traits](https://github.com/RustCrypto/traits)
+  ([crates.io](https://crates.io/crates/cipher))
+- **License:** MIT OR Apache-2.0
+- **Used for:** the RustCrypto block-cipher and block-mode traits that `aes`, `cbc`, `ctr` and
+  `aes-kw` implement and polyjose calls AES-CBC through.
+- **Audit status:** not in the ADR 0019 register; a dependency of `aes`, `cbc`, `ctr` and `aes-gcm`.
+
+### `inout`
+
+- **Upstream:** RustCrypto, [RustCrypto/utils](https://github.com/RustCrypto/utils)
+  ([crates.io](https://crates.io/crates/inout))
+- **License:** MIT OR Apache-2.0
+- **Used for:** not used directly. The in-place and in/out buffer types of the `cipher` and `aead`
+  traits.
+- **Audit status:** not in the ADR 0019 register; a dependency of `cipher` and `aead`.
+
+### `block-padding`
+
+- **Upstream:** RustCrypto, [RustCrypto/utils](https://github.com/RustCrypto/utils)
+  ([crates.io](https://crates.io/crates/block-padding))
+- **License:** MIT OR Apache-2.0
+- **Used for:** PKCS#7 padding for AES-CBC (RFC 7518 §5.2.2.1), through `cbc`'s `block-padding`
+  feature.
+- **Audit status:** not in the ADR 0019 register; a dependency of `cipher`.
+
+### `aead`
+
+- **Upstream:** RustCrypto, [RustCrypto/traits](https://github.com/RustCrypto/traits)
+  ([crates.io](https://crates.io/crates/aead))
+- **License:** MIT OR Apache-2.0
+- **Used for:** the RustCrypto AEAD traits that polyjose calls AES-GCM through (detached-tag,
+  in-place encryption and decryption).
+- **Audit status:** not in the ADR 0019 register; a dependency of `aes-gcm`.
+
+### `ctr`
+
+- **Upstream:** RustCrypto, [RustCrypto/block-modes](https://github.com/RustCrypto/block-modes)
+  ([crates.io](https://crates.io/crates/ctr))
+- **License:** MIT OR Apache-2.0
+- **Used for:** not used directly. The counter mode that `aes-gcm` encrypts with.
+- **Audit status:** not in the ADR 0019 register; a dependency of `aes-gcm`.
+
+### `ghash`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/universal-hashes](https://github.com/RustCrypto/universal-hashes)
+  ([crates.io](https://crates.io/crates/ghash))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. GHASH, the authenticator of AES-GCM, inside `aes-gcm`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `aes-gcm` (part of the AES-GCM
+  construction NCC Group reviewed in 2020, see `aes-gcm`).
+
+### `polyval`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/universal-hashes](https://github.com/RustCrypto/universal-hashes)
+  ([crates.io](https://crates.io/crates/polyval))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. The POLYVAL field arithmetic that `ghash` is computed with, using
+  the carry-less multiply CPU instructions where available.
+- **Audit status:** not in the ADR 0019 register; a dependency of `ghash`.
+
+### `universal-hash`
+
+- **Upstream:** RustCrypto, [RustCrypto/traits](https://github.com/RustCrypto/traits)
+  ([crates.io](https://crates.io/crates/universal-hash))
+- **License:** MIT OR Apache-2.0
+- **Used for:** not used directly. The universal-hash traits `ghash` and `polyval` implement.
+- **Audit status:** not in the ADR 0019 register; a dependency of `ghash` and `polyval`.
+
 ## ECDSA
 
 ### `p256`
@@ -129,8 +260,9 @@ UniFFI) are not part of the core crate and are not listed here.
   [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
   ([crates.io](https://crates.io/crates/p256))
 - **License:** Apache-2.0 OR MIT
-- **Used for:** the P-256 curve: ES256 (RFC 7518 §3.4) and the on-curve and scalar-range checks of
-  `crv` `P-256` JWKs (ADR 0041 §4).
+- **Used for:** the P-256 curve: ES256 (RFC 7518 §3.4), the Diffie-Hellman of JWE ECDH-ES
+  (RFC 7518 §4.6, its `ecdh` feature) and the on-curve and scalar-range checks of `crv` `P-256`
+  JWKs (ADR 0041 §4).
 - **Audit status:** no public independent audit found.
 
 ### `p384`
@@ -139,8 +271,8 @@ UniFFI) are not part of the core crate and are not listed here.
   [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
   ([crates.io](https://crates.io/crates/p384))
 - **License:** Apache-2.0 OR MIT
-- **Used for:** the P-384 curve: ES384 (RFC 7518 §3.4) and the on-curve and scalar-range checks of
-  `crv` `P-384` JWKs.
+- **Used for:** the P-384 curve: ES384 (RFC 7518 §3.4), the Diffie-Hellman of JWE ECDH-ES
+  (RFC 7518 §4.6) and the on-curve and scalar-range checks of `crv` `P-384` JWKs.
 - **Audit status:** no public independent audit found.
 
 ### `p521`
@@ -149,8 +281,8 @@ UniFFI) are not part of the core crate and are not listed here.
   [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
   ([crates.io](https://crates.io/crates/p521))
 - **License:** Apache-2.0 OR MIT
-- **Used for:** the P-521 curve: ES512 (RFC 7518 §3.4) and the on-curve and scalar-range checks of
-  `crv` `P-521` JWKs.
+- **Used for:** the P-521 curve: ES512 (RFC 7518 §3.4), the Diffie-Hellman of JWE ECDH-ES
+  (RFC 7518 §4.6) and the on-curve and scalar-range checks of `crv` `P-521` JWKs.
 - **Audit status:** no public independent audit found.
 
 ### `k256`
@@ -314,6 +446,16 @@ UniFFI) are not part of the core crate and are not listed here.
 - **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`, `crypto-bigint`,
   `signature`, `rsa` and others.
 
+### `hkdf`
+
+- **Upstream:** RustCrypto, [RustCrypto/KDFs](https://github.com/RustCrypto/KDFs)
+  ([crates.io](https://crates.io/crates/hkdf))
+- **License:** MIT OR Apache-2.0
+- **Used for:** not used directly. HKDF (RFC 5869), which `elliptic-curve`'s `ecdh` feature brings
+  for its shared-secret type. JWE derives keys with the Concat KDF instead (RFC 7518 §4.6.2), which
+  polyjose writes on `sha2`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve` (with `ecdh`).
+
 ## RSA (public-key operations only)
 
 ### `rsa`
@@ -363,15 +505,28 @@ UniFFI) are not part of the core crate and are not listed here.
 - **Used for:** not used directly. The Ed25519 signature type that `ed25519-dalek` uses.
 - **Audit status:** not in the ADR 0019 register; a dependency of `ed25519-dalek`.
 
+### `x25519-dalek`
+
+- **Upstream:** dalek-cryptography,
+  [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
+  ([crates.io](https://crates.io/crates/x25519-dalek))
+- **License:** BSD-3-Clause
+- **Used for:** X25519 (RFC 7748) for the OKP `X25519` curve (RFC 8037 §2): deriving the public `x`
+  of a generated key (RFC 7748 §6.1) and, for JWE, ECDH-ES key agreement (RFC 8037 §3.2). Its
+  `static_secrets` feature provides the reusable private key a JWK holds, and `zeroize` wipes it on
+  drop.
+- **Audit status:** audited by Quarkslab in 2019 (for Tari), together with `curve25519-dalek`, but
+  reviewed only marginally. polyjose pins 3.0.0, which postdates the audit.
+
 ### `curve25519-dalek`
 
 - **Upstream:** dalek-cryptography,
   [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
   ([crates.io](https://crates.io/crates/curve25519-dalek))
 - **License:** BSD-3-Clause
-- **Used for:** not used directly. The Curve25519 group and field arithmetic under `ed25519-dalek`.
-  Its build script picks the arithmetic backend from the target and the compiler version, and on
-  x86_64 it generates its SIMD backends with `curve25519-dalek-derive`.
+- **Used for:** not used directly. The Curve25519 group and field arithmetic under `ed25519-dalek`
+  and `x25519-dalek`. Its build script picks the arithmetic backend from the target and the compiler
+  version, and on x86_64 it generates its SIMD backends with `curve25519-dalek-derive`.
 - **Audit status:** audited by Quarkslab in 2019 (for Tari): minor issues only. polyjose pins 5.0.0,
   which postdates the audit.
 

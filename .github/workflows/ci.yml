@@ -80,8 +80,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # The workspace-wide steps build polyjose with default features only. These also lint and
-      # test polyjose's off-by-default test-vector feature (ADR 0005), including the FixedRng
-      # doctest in rng.rs. (scripts/check-test-vectors-off.sh forbids naming it here.)
+      # test polyjose's off-by-default features: the test-vector feature (ADR 0005), including the
+      # FixedRng doctest in rng.rs, and JWE `deflate` (ADR 0017). (scripts/check-test-vectors-off.sh
+      # forbids naming the test-vector feature here.)
       - name: clippy (polyjose, all features)
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo clippy -p polyjose --all-targets --all-features --locked -- -D warnings
@@ -99,6 +100,11 @@ jobs:
       - name: build (wasm32-unknown-unknown)
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm --locked
+
+      # Again with JWE `zip: DEF`, polyjose's own DEFLATE codec (ADR 0017), off by default.
+      - name: build (wasm32-unknown-unknown, deflate)
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm --features polyjose/deflate --locked
 
       # Enforces ADR 0002 (no OpenSSL, ring, aws-lc, boring or libsodium) and ADR 0021: the RSA
       # timing advisory RUSTSEC-2023-0071 fails this step unless deny.toml ignores it for RSA
