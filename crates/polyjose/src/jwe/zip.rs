@@ -4,6 +4,13 @@
 //! (`crate::deflate`, ADR 0017). Only with the off-by-default `deflate`
 //! feature; without it both functions fail with
 //! [`Error::UnsupportedAlgorithm`].
+//!
+//! RFC 8725 §3.6: compressing data before encrypting it can reveal
+//! information about the plaintext through the ciphertext length, so
+//! `Encryptor::compress` is off by default and should be used only for data
+//! an attacker cannot influence. Decryption accepts `zip` only from the
+//! protected header (RFC 7516 §4.1.3), which `core` checks before this
+//! module is reached.
 
 use zeroize::Zeroizing;
 
@@ -44,6 +51,23 @@ pub(crate) fn compress(_plaintext: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
 /// The bound is inclusive: exactly `max_len` bytes inflate, one more fails.
 /// `max_len == 0` rejects every compressed JWE (ADR 0017 §3), even one
 /// whose plaintext is empty, without starting inflation.
+///
+/// **`max_len` is also the up-front allocation.** `deflate::inflate`
+/// allocates its single output buffer before decoding, with capacity
+/// min(`max_len`, 1,032 × `compressed.len()`), and never grows it, so one
+/// JWE costs at most `max_len` bytes of plaintext buffer however far its
+/// stream claims to expand (the LZ77 window lives inside that buffer;
+/// ADR 0017 §1 allows the bound plus 32 KiB). `max_len` is therefore passed
+/// on unchanged, never widened (say, to `usize::MAX`), and a caller who
+/// raises `DecryptPolicy::max_decompressed_len` raises the memory one
+/// authenticated JWE can claim by the same amount. The returned buffer is
+/// that allocation, not shrunk (a shrink would reallocate and leave an
+/// unwiped copy of the plaintext behind), and is wiped on drop.
+///
+/// Inflation runs only on authenticated data, but the sender can be anyone
+/// holding the recipient's public key (ECDH-ES, RSA-OAEP-256), so the
+/// stream is still untrusted (ADR 0017 context; CVE-2024-28180,
+/// CVE-2024-28176, CVE-2024-29371).
 ///
 /// # Errors
 ///
