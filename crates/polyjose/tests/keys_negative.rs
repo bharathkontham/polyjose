@@ -269,21 +269,46 @@ fn der_in_another_format_than_named_is_never_imported() {
             let der = read(dir, &file);
             let own = named_format(&file).unwrap();
             for format in FORMATS.into_iter().filter(|f| *f != own) {
+                // SPKI as PKCS#8 has its own test, below.
+                if own == KeyFormat::Spki && format == KeyFormat::Pkcs8 {
+                    continue;
+                }
                 let result = Jwk::from_der(&der, format);
-                // An SPKI starts SEQUENCE { SEQUENCE { … } }, the shape of an
-                // EncryptedPrivateKeyInfo (RFC 5958 §3), which pkcs8::decode
-                // refuses as unsupported before reading further. Every other
-                // mismatch is malformed for the named structure.
-                let want_unsupported = own == KeyFormat::Spki && format == KeyFormat::Pkcs8;
-                let ok = if want_unsupported {
-                    result.as_ref().err() == Some(&Error::UnsupportedAlgorithm)
-                } else {
-                    matches!(result, Err(Error::InvalidKey(_)))
-                };
-                assert!(ok, "{dir}/{file} as {format:?}: {:?}", result.err());
+                assert!(
+                    matches!(result, Err(Error::InvalidKey(_))),
+                    "{dir}/{file} as {format:?}: {:?}",
+                    result.err()
+                );
             }
         }
     }
+}
+
+/// Pins today's code for SPKI DER passed as `KeyFormat::Pkcs8`:
+/// `UnsupportedAlgorithm`, because `pkcs8::decode` reads a leading inner
+/// SEQUENCE as an EncryptedPrivateKeyInfo (RFC 5958 §3), and an SPKI starts
+/// `SEQUENCE { SEQUENCE { … } }` too. It fails closed either way. A planned
+/// `pkcs8.rs` fix makes this `InvalidKey` (the SPKI is malformed as PKCS#8),
+/// and flips this test.
+#[test]
+fn spki_as_pkcs8_is_unsupported_algorithm_until_the_pkcs8_fix() {
+    let mut checked = 0;
+    for dir in ["openssl", "rfc"] {
+        for file in files(dir)
+            .into_iter()
+            .filter(|f| f.ends_with(".der") && !f.starts_with("reject-"))
+            .filter(|f| named_format(f) == Some(KeyFormat::Spki))
+        {
+            let result = Jwk::from_der(&read(dir, &file), KeyFormat::Pkcs8);
+            assert_eq!(
+                result.as_ref().err(),
+                Some(&Error::UnsupportedAlgorithm),
+                "{dir}/{file}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 10, "{checked} SPKI fixtures");
 }
 
 // ---------------------------------------------------------------------------
