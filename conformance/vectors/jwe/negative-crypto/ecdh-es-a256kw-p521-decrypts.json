@@ -1,0 +1,26 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.6: the untampered compact ECDH-ES+A256KW + A256GCM JWE to the P-521 test key (conformance/tools/jwe/t13-p521-key.json) that the P-521 \"epk\" vectors start from decrypts; its epk x has a zero first octet (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8), independently of polyjose)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00iLCJlcGsiOnsia3R5IjoiRUMiLCJjcnYiOiJQLTUyMSIsIngiOiJBQTd3YWpKd21HYTFwTWtrd2xOZ2dVT2Mzblp0cXRELUU4cWp2cTBzTmlFZk5lTmdPZHNPZ3NXX0VMSnVTUXdUQ0QzVUlqY2FsTkQ5Z1FHRU9ja2JaeFF0IiwieSI6IkFKX0E5dHpaVmNjM25CRlpNWkcyNmJTS0cyMnhXRnhPRGFBaC1DNXpsZnhTbEdkeEgxMkxvLXRJbm5rTnlRYXM5eW1fNWtmTWljbzE3a21EUG1uSjVReVcifX0.TzqLQI4lAi1bAw1eAuoKaShMU9osmSSgoAEVvhn7aM4cyG_SdcOBxg.yPizQk8hCE5mCwPc.dp8Unqo0_YVef9z8RQzJzZfI1We2DukN3NacWaU-WQnYABRH5kQiR9zIJs_7fAwxz3IJh7gOpJpv4QtUM683bQykbgRA5oZEG8O9GGhimSLFrpi8q7-ZG67WXA.bz5zvVyW1dktPGjkizHeFg",
+    "key": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AQgPCmwvTq-Kc6aJTUqEzAqdCSpbj6m1ZXWVTcjKC9yNaLL7Rj0d2EZQHSwDueBw_bNg7gJIkyvZPBeUagxxCsWq",
+      "y": "AYL3pbw7G2TiJtgJQEt7lozdY0iXK7EPyxyGOv-aeS6ykLtI7-kuS4ShWjI-6POOzLMWb-uxleEvlPEKb1D7IISw",
+      "d": "AJEhLbh3NK7njT9yn0hgDie98hTZGPZhVjjrtzU18RiqXFDbcRavq1bAgS92NDHSdlJY2tXh14UUGVhN-76ImmzZ"
+    },
+    "allowed_algs": [
+      "ECDH-ES+A256KW"
+    ],
+    "allowed_enc": [
+      "A256GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "UkZDIDc1MTggwqc0LjYgb24gUC01MjE6IHRoZSBlcGhlbWVyYWwgcHVibGljIGtleSBtdXN0IGJlIGEgZnVsbC1sZW5ndGggcG9pbnQgb24gdGhlIGN1cnZlLg",
+    "recipient": 0
+  }
+}

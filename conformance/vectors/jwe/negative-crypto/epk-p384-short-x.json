@@ -1,0 +1,27 @@
+{
+  "source": "RFC 7520 §5.4",
+  "description": "RFC 7518 §6.2.1.2 (\"MUST be the full size of a coordinate\"): the RFC 7520 §5.4 \"epk\" with its x cut to 47 octets in the RFC 7520 §5.4 JWE is DecryptionFailed with the §5.4 recipient key, before any key agreement result is used (generated from the ietf-jose cookbook)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTK0ExMjhLVyIsImtpZCI6InBlcmVncmluLnRvb2tAdHVja2Jvcm91Z2guZXhhbXBsZSIsImVwayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMzg0IiwieCI6IkdqaVFjX0RxUnVQSG1YVEdqQ3QzLWhqTUdaclA0WW9WbTdqRUFVV1J0aUphQzYwUXJxSzRRT3hEckExMDJEYyIsInkiOiJzcDNwNVNHaFpWQzJmYVh1bUktZTlKVTJNbzhLcG9ZckZEcjV5UE5WdFc0UGdFd1pPeVFUQS1KZGFZOHRiN0UwIn0sImVuYyI6IkExMjhHQ00ifQ.0DJjBXri_kBcC46IkU5_Jk9BqaQeHdv2.mH-G2zVqgztUtnW_.tkZuOO9h95OgHJmkkrfLBisku8rGf6nzVxhRM3sVOhXgz5NJ76oID7lpnAi_cPWJRCjSpAaUZ5dOR3Spy7QuEkmKx8-3RCMhSYMzsXaEwDdXta9Mn5B7cCBoJKB0IgEnj_qfo1hIi-uEkUpOZ8aLTZGHfpl05jMwbKkTe2yK3mjF6SBAsgicQDVCkcY9BLluzx1RmC3ORXaM0JaHPB93YcdSDGgpgBWMVrNU1ErkjcMqMoT_wtCex3w03XdLkjXIuEr2hWgeP-nkUZTPU9EoGSPj6fAS-bSz87RCPrxZdj_iVyC6QWcqAu07WNhjzJEPc4jVntRJ6K53NgPQ5p99l3Z408OUqj4ioYezbS6vTPlQ.WuGzxmcreYjpHGJoa17EBg",
+    "key": {
+      "kty": "EC",
+      "kid": "peregrin.took@tuckborough.example",
+      "use": "enc",
+      "crv": "P-384",
+      "x": "YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2",
+      "y": "A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP",
+      "d": "iTx2pk7wW-GqJkHcEkFQb2EFyYcO7RugmaW3mRrQVAOUiPommT0IdnYK2xDlZh-j"
+    },
+    "allowed_algs": [
+      "ECDH-ES+A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

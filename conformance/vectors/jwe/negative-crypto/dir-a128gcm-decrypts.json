@@ -1,0 +1,23 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.2, RFC 7518 §4.5 and RFC 7518 §5.3: the untampered compact dir + A128GCM JWE the tamper vectors of this enc start from decrypts (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8), independently of polyjose)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIn0..hOzkLRaLydUUSKLg.60t_eG04wAecM31wmprUsBNaNbqttmaRR_rsWFppOcLzlrF4AW-9xgs9DQTLYfPw6StozUp7l14UOHJzzu8_wHfbvm8z7QN9CAXewVXl8HIy_hB2Fegt-ExqhizrLkQUPFoZWTyz0A.L9kShPnkp16wjjqnPgOI0Q",
+    "key": {
+      "kty": "oct",
+      "k": "X7sAQVy4W464PeiNXb4MRA"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "UkZDIDc1MTYgwqc1LjIgd2l0aCBkaXIgKyBBMTI4R0NNOiBhbnkgY2hhbmdlIHRvIHRoZSBJViwgdGhlIGNpcGhlcnRleHQgb3IgdGhlIHRhZyBpcyBEZWNyeXB0aW9uRmFpbGVkLg",
+    "recipient": 0
+  }
+}

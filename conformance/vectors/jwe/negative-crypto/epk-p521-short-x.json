@@ -1,0 +1,25 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §6.2.1.2 (\"MUST be the full size of a coordinate\"): the \"epk\" of ecdh-es-a256kw-p521-decrypts with its zero first octet dropped, so x is the same number in 65 octets instead of 66 is DecryptionFailed with the P-521 recipient key (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8), independently of polyjose)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00iLCJlcGsiOnsia3R5IjoiRUMiLCJjcnYiOiJQLTUyMSIsIngiOiJEdkJxTW5DWVpyV2t5U1RDVTJDQlE1emVkbTJxMFA0VHlxTy1yU3cySVI4MTQyQTUydzZDeGI4UXNtNUpEQk1JUGRRaU54cVUwUDJCQVlRNXlSdG5GQzAiLCJ5IjoiQUpfQTl0elpWY2MzbkJGWk1aRzI2YlNLRzIyeFdGeE9EYUFoLUM1emxmeFNsR2R4SDEyTG8tdElubmtOeVFhczl5bV81a2ZNaWNvMTdrbURQbW5KNVF5VyJ9fQ.TzqLQI4lAi1bAw1eAuoKaShMU9osmSSgoAEVvhn7aM4cyG_SdcOBxg.yPizQk8hCE5mCwPc.dp8Unqo0_YVef9z8RQzJzZfI1We2DukN3NacWaU-WQnYABRH5kQiR9zIJs_7fAwxz3IJh7gOpJpv4QtUM683bQykbgRA5oZEG8O9GGhimSLFrpi8q7-ZG67WXA.bz5zvVyW1dktPGjkizHeFg",
+    "key": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AQgPCmwvTq-Kc6aJTUqEzAqdCSpbj6m1ZXWVTcjKC9yNaLL7Rj0d2EZQHSwDueBw_bNg7gJIkyvZPBeUagxxCsWq",
+      "y": "AYL3pbw7G2TiJtgJQEt7lozdY0iXK7EPyxyGOv-aeS6ykLtI7-kuS4ShWjI-6POOzLMWb-uxleEvlPEKb1D7IISw",
+      "d": "AJEhLbh3NK7njT9yn0hgDie98hTZGPZhVjjrtzU18RiqXFDbcRavq1bAgS92NDHSdlJY2tXh14UUGVhN-76ImmzZ"
+    },
+    "allowed_algs": [
+      "ECDH-ES+A256KW"
+    ],
+    "allowed_enc": [
+      "A256GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

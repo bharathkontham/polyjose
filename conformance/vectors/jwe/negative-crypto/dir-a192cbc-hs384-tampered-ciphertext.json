@@ -1,0 +1,22 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §5.2 step 16, §11.5 and RFC 7518 §5.2.2.2: the dir + A192CBC-HS384 JWE of dir-a192cbc-hs384-decrypts with one bit of its ciphertext flipped is DecryptionFailed, the one detail-free error (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8), independently of polyjose)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTkyQ0JDLUhTMzg0In0..kOR8RgcRjBdTb8ASlBJyUA.pukSR6G6qXVZhk9442Z2e-61Xmh6VsXV-sjvlP1e2DbCTYhnoka1fYFLXAYrYGBOWLTmS970aKNEOkqz85vphnOxLbZog3uZNsh5iZeP8brZEZtdXxwt-cScWRSlLPkhAUHTpC_TjdRgFlgynp7NWw.Nl-U-yTOrke7-gzPf81DoerpBd7a4z-l",
+    "key": {
+      "kty": "oct",
+      "k": "5ydhHfSTBMtJAeF0S3VrTPmqzKEDnxcm3oSc4MAJYThNglhNkh8S2cJLnY4Cyf_C"
+    },
+    "allowed_algs": [
+      "dir"
+    ],
+    "allowed_enc": [
+      "A192CBC-HS384"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}
