@@ -52,7 +52,7 @@ use super::{aes_kw, concat_kdf, ecdh_nist, ecdh_x25519};
 use crate::header::Header;
 use crate::json::{Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
-use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, OkpCurve};
+use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, KeyType, OkpCurve};
 use crate::util::{b64url_decode, b64url_encode};
 use crate::{Error, Result};
 
@@ -343,10 +343,18 @@ fn agree_with_imported_epk(
     if PRIVATE_MEMBERS.iter().any(|name| epk.contains(name)) {
         return Err(Error::DecryptionFailed);
     }
+    // RFC 7518 §4.6, RFC 8725 §3.4, ADR 0050: the ephemeral key must be of
+    // the recipient's family and on its curve. Checked on the raw `kty` and
+    // `crv`, before import, so a wrong-family or wrong-curve epk never
+    // reaches point decoding, the on-curve check or an agreement.
+    if !raw_epk_is_on_recipient_curve(key, epk) {
+        return Err(Error::DecryptionFailed);
+    }
     // ADR 0041 §4: the JWK import checks (lengths, on-curve, identity).
     let epk = import(epk).map_err(|_| Error::DecryptionFailed)?;
-    // RFC 7518 §4.6, RFC 8725 §3.4: the ephemeral key must be on the
-    // recipient's curve.
+    // RFC 7518 §4.6, RFC 8725 §3.4: the imported key is matched on its
+    // curve once more, so each arm gets the key material it needs; after
+    // the raw check above, a mismatch here cannot happen.
     match (key, epk.material()) {
         (RecipientKey::P256Secret(secret), KeyMaterial::Ec(e)) if e.crv() == EcCurve::P256 => {
             nist_decrypt(secret, e)
@@ -367,6 +375,28 @@ fn agree_with_imported_epk(
         }
         _ => Err(Error::DecryptionFailed),
     }
+}
+
+/// Whether the raw `epk` object's `kty` and `crv` are exactly those of the
+/// recipient's private `key` (RFC 7518 §4.6: the agreement is on the
+/// recipient's curve; RFC 8725 §3.4; ADR 0050).
+///
+/// Both members must be JSON strings equal, octet for octet, to the
+/// registered names (RFC 7517 §4.1 and RFC 7518 §6.2.1.1 for `EC`,
+/// RFC 8037 §2 for `OKP`), which is how [`Jwk::from_object`] reads them, so
+/// every `epk` refused here would also have failed import or the curve
+/// match after it. A `key` that is not an ECDH-ES private key matches
+/// nothing.
+fn raw_epk_is_on_recipient_curve(key: &RecipientKey, epk: &Object) -> bool {
+    let (kty, crv) = match key {
+        RecipientKey::P256Secret(_) => (KeyType::Ec.as_str(), EcCurve::P256.as_str()),
+        RecipientKey::P384Secret(_) => (KeyType::Ec.as_str(), EcCurve::P384.as_str()),
+        RecipientKey::P521Secret(_) => (KeyType::Ec.as_str(), EcCurve::P521.as_str()),
+        RecipientKey::X25519Secret(_) => (KeyType::Okp.as_str(), OkpCurve::X25519.as_str()),
+        _ => return false,
+    };
+    let member = |name| epk.get(name).and_then(Value::as_str);
+    member("kty") == Some(kty) && member("crv") == Some(crv)
 }
 
 /// Z of the recipient's `secret` and the imported `epk` on the same NIST
@@ -890,6 +920,72 @@ mod tests {
                     decrypt(&A::EcdhEs, &secret, &E::A128GCM, &header, &[])
                 });
                 assert_eq!((result, ticks), (Err(Error::DecryptionFailed), 0), "{epk}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_epk_of_the_wrong_kty_or_crv_never_reaches_import() {
+        // ADR 0050, RFC 7518 §4.6, RFC 8725 §3.4: the raw `kty` and `crv`
+        // are compared with the recipient's key before `Jwk::from_object`,
+        // so a wrong-family or wrong-curve epk is never imported (no point
+        // decoding, no on-curve check) and never agreed with. Each case is
+        // the raw epk and the (kty, crv) of the one recipient it may reach
+        // import for, if any. Contents past `kty` and `crv` do not matter
+        // to a refused case, so most are labels only.
+        let x25519_epk =
+            r#"{"kty":"OKP","crv":"X25519","x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"}"#;
+        let cases: &[(&str, Option<(&str, &str)>)] = &[
+            (app_c::ALICE_EPK, Some(("EC", "P-256"))),
+            (P384_EPK, Some(("EC", "P-384"))),
+            (r#"{"kty":"EC","crv":"P-521"}"#, Some(("EC", "P-521"))),
+            (x25519_epk, Some(("OKP", "X25519"))),
+            (SECP256K1_EPK, None),
+            (
+                r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#,
+                None,
+            ),
+            (r#"{"kty":"OKP","crv":"P-256"}"#, None),
+            (r#"{"kty":"EC","crv":"X25519"}"#, None),
+            (r#"{"kty":"ec","crv":"p-256"}"#, None),
+            (r#"{"kty":"EC","crv":"P-256 "}"#, None),
+            (r#"{"kty":"EC"}"#, None),
+            (r#"{"crv":"P-256"}"#, None),
+            (r#"{"kty":"EC","crv":256}"#, None),
+            (r#"{"kty":["EC"],"crv":"P-256"}"#, None),
+            (r#"{"kty":"oct"}"#, None),
+            (r#"{"kty":"RSA","n":"AQAB","e":"AQAB"}"#, None),
+            (r#"{}"#, None),
+        ];
+        for key in recipients() {
+            let secret = bind(&key, &A::EcdhEs, &E::A128GCM, Direction::Decrypt);
+            let own = match &secret {
+                RecipientKey::P256Secret(_) => ("EC", "P-256"),
+                RecipientKey::P384Secret(_) => ("EC", "P-384"),
+                RecipientKey::P521Secret(_) => ("EC", "P-521"),
+                RecipientKey::X25519Secret(_) => ("OKP", "X25519"),
+                _ => panic!("not an ECDH-ES private key"),
+            };
+            for (epk, reaches) in cases {
+                let imported = core::cell::Cell::new(false);
+                let (result, ticks) = ecdh_agreements::count(|| {
+                    agree_with_imported_epk(&secret, &object(epk), |o| {
+                        imported.set(true);
+                        Jwk::from_object(o)
+                    })
+                });
+                if *reaches == Some(own) {
+                    // The positive control: the matching family and curve
+                    // is imported.
+                    assert!(imported.get(), "{own:?} {epk}");
+                } else {
+                    assert!(!imported.get(), "{own:?} {epk} reached import");
+                    assert_eq!(
+                        (result.map(|_| ()), ticks),
+                        (Err(Error::DecryptionFailed), 0),
+                        "{own:?} {epk}"
+                    );
+                }
             }
         }
     }
