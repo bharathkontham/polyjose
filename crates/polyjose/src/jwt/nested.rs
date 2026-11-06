@@ -150,7 +150,7 @@ fn check_compact_jws_shape(token: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// First the JWE errors of [`decrypt_compact`](crate::jwe::decrypt_compact)
+/// First the JWE errors of [`decrypt_compact`]
 /// (every failure after key management is [`Error::DecryptionFailed`]);
 /// then [`Error::InvalidHeader`] for the outer `cty`/`typ`; then every
 /// error of [`verify`](fn@super::verify) for the inner token; then

@@ -45,36 +45,14 @@
 
 mod claims;
 mod clock;
+mod keyset;
 mod nested;
 mod numeric_date;
-mod sign;
-mod verify;
-// The pipeline modules below are wired together by the later tasks of
-// feature 0004; until verify (T07) and nested (T09) call them, their
-// crate-internal items have no caller. `allow`, not `expect`: each task
-// fills in its own file and must not edit this one, and an `expect` would
-// become an error as soon as the item is used. Remove these attributes
-// once the feature's last code task has landed (as 0003 did in a5b789b).
-#[allow(
-    dead_code,
-    reason = "the JWT skeleton (0004 T01): called once verify (T07) lands"
-)]
-mod keyset;
-#[allow(
-    dead_code,
-    reason = "the JWT skeleton (0004 T01): read once validate (T06) and verify (T07) land"
-)]
 mod policy;
-#[allow(
-    dead_code,
-    reason = "the JWT skeleton (0004 T01): called once verify (T07) and nested (T09) land"
-)]
+mod sign;
 pub mod typ;
-#[allow(
-    dead_code,
-    reason = "the JWT skeleton (0004 T01): called once verify (T07) lands"
-)]
 mod validate;
+mod verify;
 
 pub use claims::{Audience, Claims};
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
@@ -93,7 +71,7 @@ mod tests {
     use crate::header::Header;
     use crate::jwe::{DecryptPolicy, Encryptor};
     use crate::jwk::{Jwk, JwkSet};
-    use crate::jws::Verified;
+    use crate::jws::{CompactPrechecked, Verified};
 
     /// The signatures frozen by 0004 T01. Later tasks fill in the bodies
     /// only; changing a signature here is a contract change for every
@@ -109,8 +87,8 @@ mod tests {
         let _: fn(&Header, Option<&Header>, &Policy<'_>, typ::Layer) -> Result<()> =
             typ::check_jwt_header;
         let _: fn(&str, &str) -> bool = typ::media_type_eq;
-        let _: fn(&str, &JwkSet, &Policy<'_>) -> Result<(Verified, usize)> =
-            keyset::verify_with_set;
+        let _: fn(&CompactPrechecked<'_>, &JwkSet, &Policy<'_>) -> Result<(Verified, usize)> =
+            keyset::select_and_verify;
         let _: fn(&Claims, &Policy<'_>) -> Result<()> = validate::validate_claims;
         let _: fn(&[u8]) -> Result<Claims> = Claims::from_json;
         let _: fn(&Claims) -> String = Claims::to_json;

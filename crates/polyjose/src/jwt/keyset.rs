@@ -4,60 +4,25 @@
 
 use crate::error::{Error, Result};
 use crate::jwk::{Jwk, JwkSet};
-use crate::jws::{
-    CompactPrechecked, FAMILIES, Families, Verified, finish_compact, furthest, precheck_compact,
-};
+use crate::jws::{CompactPrechecked, FAMILIES, Families, Verified, finish_compact, furthest};
 
 use super::Policy;
 
-/// Verifies the compact JWS `token` against the members of `set`
-/// (ADR 0029 §2–§4), returning the verified JWS and the selected
-/// member's index in [`JwkSet::keys`] (its position in the set as
-/// parsed, skipped members not counted).
+/// Verifies a compact JWS that already passed ADR 0026 §2 steps 1–7
+/// ([`precheck_compact`](crate::jws::precheck_compact), with the policy's
+/// allow-list and input limit, [`Policy::verify_options`]) against the
+/// members of `set` (ADR 0029 §2–§4), returning the verified JWS and the
+/// selected member's index in [`JwkSet::keys`] (its position in the set
+/// as parsed, skipped members not counted). The JWT pipeline calls it
+/// after its own header rules, which ADR 0027 §9 puts between step 7 and
+/// key selection, so the token is parsed only once.
 ///
-/// This is [`precheck_compact`] (ADR 0026 §2 steps 1–7, with the policy's
-/// allow-list and input limit, [`Policy::verify_options`]) followed by
-/// [`select_and_verify`]. Only the compact serialization is accepted
-/// (RFC 7519 §1), so there is no unprotected header: `alg` and `kid` come
-/// from the JWS Protected Header (ADR 0049 §2).
-///
-/// The key always comes from `set`. A `jwk`, `jku`, `x5u` or `x5c` header
-/// parameter never selects, supplies or fetches one (ADR 0026 §2,
-/// RFC 8725 §3.10; CVE-2018-0114), and nothing here does any I/O
-/// (ADR 0029 §5).
-///
-/// # Errors
-///
-/// - Steps 1–7, before any key is looked at: [`Error::InvalidFormat`],
-///   [`Error::InvalidBase64`], [`Error::InvalidJson`],
-///   [`Error::InvalidHeader`], [`Error::UnknownCritical`],
-///   [`Error::UnsupportedAlgorithm`], [`Error::AlgorithmNotAllowed`].
-/// - Then [`select_and_verify`]'s errors.
-pub(crate) fn verify_with_set(
-    token: &str,
-    set: &JwkSet,
-    p: &Policy<'_>,
-) -> Result<(Verified, usize)> {
-    verify_with_set_using(&FAMILIES, token, set, p)
-}
-
-/// [`verify_with_set`] with the signature primitives taken from
-/// `families` (the test seam of `jws/alg.rs`).
-fn verify_with_set_using(
-    families: &Families,
-    token: &str,
-    set: &JwkSet,
-    p: &Policy<'_>,
-) -> Result<(Verified, usize)> {
-    let opts = p.verify_options();
-    let pre = precheck_compact(token, &opts)?;
-    select_and_verify_using(families, &pre, set, p)
-}
-
-/// The key-selection half of [`verify_with_set`], on a compact JWS that
-/// already passed ADR 0026 §2 steps 1–7 ([`precheck_compact`]). The JWT
-/// pipeline calls it after its own header rules, which ADR 0027 §9 puts
-/// between step 7 and key selection, so the token is parsed only once.
+/// Only the compact serialization is accepted (RFC 7519 §1), so there is
+/// no unprotected header: `alg` and `kid` come from the JWS Protected
+/// Header (ADR 0049 §2). The key always comes from `set`. A `jwk`, `jku`,
+/// `x5u` or `x5c` header parameter never selects, supplies or fetches one
+/// (ADR 0026 §2, RFC 8725 §3.10; CVE-2018-0114), and nothing here does
+/// any I/O (ADR 0029 §5).
 ///
 /// 1. **Select** the candidates: [`JwkSet::verification_candidates`] for
 ///    the header `alg` and the protected header's `kid` (ADR 0029 §2:
@@ -138,6 +103,7 @@ fn candidates<'a>(
 mod tests {
     use super::*;
     use crate::jwa::SigningAlg as A;
+    use crate::jws::precheck_compact;
     use crate::jws::{ProtectedHeader, SignOptions, sign_compact};
     use crate::jwt::FixedClock;
     use crate::test_counters::{jws_family_signs as signs, jws_family_verifies as verifies};
@@ -278,6 +244,27 @@ mod tests {
         let ((result, verify_calls), sign_calls) =
             signs::count(|| verifies::count(|| verify_with_set_using(&COUNTING, token, set, p)));
         (result.map(|(_, index)| index), verify_calls, sign_calls)
+    }
+
+    /// The whole of ADR 0029 on a token, as the tests drive it:
+    /// [`precheck_compact`] (ADR 0026 §2 steps 1–7, with the policy's
+    /// allow-list and input limit) followed by [`select_and_verify`], the
+    /// order the JWT pipeline runs them in (ADR 0027 §9).
+    fn verify_with_set(token: &str, set: &JwkSet, p: &Policy<'_>) -> Result<(Verified, usize)> {
+        verify_with_set_using(&FAMILIES, token, set, p)
+    }
+
+    /// [`verify_with_set`] with the signature primitives taken from
+    /// `families` (the test seam of `jws/alg.rs`).
+    fn verify_with_set_using(
+        families: &Families,
+        token: &str,
+        set: &JwkSet,
+        p: &Policy<'_>,
+    ) -> Result<(Verified, usize)> {
+        let opts = p.verify_options();
+        let pre = precheck_compact(token, &opts)?;
+        select_and_verify_using(families, &pre, set, p)
     }
 
     fn selected(token: &str, set: &JwkSet) -> Result<usize> {

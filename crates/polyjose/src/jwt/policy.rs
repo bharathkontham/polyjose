@@ -53,7 +53,7 @@ pub enum TypMode {
 /// | JWK Set candidates | at most 8 (ADR 0029 §4) | [`max_key_candidates`](Self::max_key_candidates) |
 ///
 /// The policy borrows its clock and allow-list, like
-/// [`VerifyOptions`](crate::jws::VerifyOptions) borrows its allow-list
+/// [`VerifyOptions`] borrows its allow-list
 /// (ADR 0028 §3). There is no `Default`: a policy without a clock or
 /// algorithms cannot exist (ADR 0028 §3, RFC 8725 §3.1).
 ///
@@ -141,7 +141,7 @@ impl<'a> Policy<'a> {
     /// - `iss` must equal one of `issuers` and `aud` contain one of
     ///   `audiences` (RFC 9068 §4);
     /// - every claim of
-    ///   [`ACCESS_TOKEN_REQUIRED_CLAIMS`](super::typ::ACCESS_TOKEN_REQUIRED_CLAIMS)
+    ///   [`ACCESS_TOKEN_REQUIRED_CLAIMS`]
     ///   must be present (RFC 9068 §2.2);
     /// - the signature is always verified, and `none` is never accepted
     ///   (RFC 9068 §2.1, §4).
@@ -293,6 +293,11 @@ impl<'a> Policy<'a> {
     /// any signature is computed, which bounds the work an unauthenticated
     /// token can cause (ADR 0029 §4). Default
     /// [`DEFAULT_MAX_KEY_CANDIDATES`](Self::DEFAULT_MAX_KEY_CANDIDATES).
+    ///
+    /// `0` allows no candidate at all, so every verification against a JWK
+    /// Set ([`Keys::Set`](super::Keys::Set)) fails with
+    /// [`Error::NoMatchingKey`] (ADR 0029 §4). A single key
+    /// ([`Keys::One`](super::Keys::One)) is not a set and is unaffected.
     pub fn max_key_candidates(mut self, n: usize) -> Self {
         self.max_key_candidates = n;
         self
@@ -327,7 +332,9 @@ impl<'a> Policy<'a> {
         self.jws
     }
 
-    /// The allowed JWS algorithms, as given (RFC 8725 §3.1).
+    /// The allowed JWS algorithms, as given (RFC 8725 §3.1). Test-only:
+    /// the pipeline reads them through [`verify_options`](Self::verify_options).
+    #[cfg(test)]
     pub(crate) fn allowed_algs(&self) -> &'a [SigningAlg] {
         self.jws.allowed_algs()
     }
