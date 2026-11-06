@@ -1,0 +1,25 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "A EdDSA JWT (RFC 8037 §3.1) with key ed25519 verifies under an allow-list of [\"EdDSA\"] (RFC 7519 §7.2, ADR 0027 §9)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODE5MzgwfQ.aWRaYuMk0rZoJpACtAJc544XQ1dn0SstvmY9ccX7Q9JFdTg306y41GoolM51DN_7PDc6mPa3AV194kix3wysBQ",
+    "now": 1300819320,
+    "allowed_algs": [
+      "EdDSA"
+    ],
+    "key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300819380
+    },
+    "alg": "EdDSA"
+  }
+}

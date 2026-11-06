@@ -1436,6 +1436,317 @@
           "exp": 1300819380
         }
       }
+    },
+    {
+      "file": "alg-hs256.json",
+      "description": "A HS256 JWT (RFC 7518 §3.2) with key oct-32 verifies under an allow-list of [\"HS256\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "HS256"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "key": "oct-32",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-hs384.json",
+      "description": "A HS384 JWT (RFC 7518 §3.2) with key oct-48 verifies under an allow-list of [\"HS384\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS384"
+        ],
+        "key": {
+          "$key": "oct-48"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "HS384"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS384",
+          "typ": "JWT"
+        },
+        "key": "oct-48",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-hs512.json",
+      "description": "A HS512 JWT (RFC 7518 §3.2) with key oct-64 verifies under an allow-list of [\"HS512\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS512"
+        ],
+        "key": {
+          "$key": "oct-64"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "HS512"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS512",
+          "typ": "JWT"
+        },
+        "key": "oct-64",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-es256.json",
+      "description": "A ES256 JWT (RFC 7518 §3.4) with key p256 verifies under an allow-list of [\"ES256\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-es384.json",
+      "description": "A ES384 JWT (RFC 7518 §3.4) with key p384 verifies under an allow-list of [\"ES384\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES384"
+        ],
+        "key": {
+          "$public": "p384"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES384"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES384",
+          "typ": "JWT"
+        },
+        "key": "p384",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-es512.json",
+      "description": "A ES512 JWT (RFC 7518 §3.4) with key p521 verifies under an allow-list of [\"ES512\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES512"
+        ],
+        "key": {
+          "$public": "p521"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES512"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES512",
+          "typ": "JWT"
+        },
+        "key": "p521",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-eddsa.json",
+      "description": "A EdDSA JWT (RFC 8037 §3.1) with key ed25519 verifies under an allow-list of [\"EdDSA\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "EdDSA"
+        ],
+        "key": {
+          "$public": "ed25519"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "EdDSA"
+      },
+      "jws": {
+        "header": {
+          "alg": "EdDSA",
+          "typ": "JWT"
+        },
+        "key": "ed25519",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-ed25519.json",
+      "description": "A Ed25519 JWT (RFC 9864 §2.2) with key ed25519 verifies under an allow-list of [\"Ed25519\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "Ed25519"
+        ],
+        "key": {
+          "$public": "ed25519"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "Ed25519"
+      },
+      "jws": {
+        "header": {
+          "alg": "Ed25519",
+          "typ": "JWT"
+        },
+        "key": "ed25519",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-rs256-jwks-first-of-mixed.json",
+      "source": "RFC 7515 App. A.2",
+      "description": "The RFC 7515 A.2 RS256 JWT (passed through, not re-signed: no RSA signing, ADR 0021) through a JWK Set whose first member is the A.2 public key, followed by oct, P-256 and Ed25519 members: key_index 0 next to other members (RFC 7519 App. A.2 claims, ADR 0029 §2.1, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw",
+        "now": 1300819320,
+        "allowed_algs": [
+          "RS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "rsa-2048-rfc7515-a2"
+            },
+            {
+              "$key": "oct-64"
+            },
+            {
+              "$public": "p256"
+            },
+            {
+              "$public": "ed25519"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "joe",
+          "exp": 1300819380,
+          "http://example.com/is_root": true
+        },
+        "alg": "RS256",
+        "key_index": 0
+      }
     }
   ]
 }
