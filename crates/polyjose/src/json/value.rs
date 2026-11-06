@@ -742,6 +742,119 @@ mod tests {
         }
     }
 
+    /// Secret text for the `Debug` tests; a leak would contain it.
+    const SECRET: &str = "MARKERsecret";
+
+    #[test]
+    fn debug_prints_strings_as_a_placeholder() {
+        let v = Value::from(SECRET);
+        assert_eq!(format!("{v:?}"), r#"String("<redacted>")"#);
+        assert_eq!(format!("{v:#?}"), "String(\n    \"<redacted>\",\n)");
+        // The placeholder is the same whatever the length: no length leaks.
+        assert_eq!(format!("{:?}", Value::from("")), format!("{v:?}"));
+    }
+
+    #[test]
+    fn debug_prints_null_bools_and_numbers() {
+        assert_eq!(format!("{:?}", Value::Null), "Null");
+        assert_eq!(format!("{:?}", Value::Bool(true)), "Bool(true)");
+        // Numbers are not secret in JOSE (`exp`, `p2c`, ...); `Number`'s own
+        // Debug is used.
+        let Some(n) = Number::from_i64(3) else {
+            unreachable!("3 is an exact integer")
+        };
+        assert_eq!(format!("{:?}", Value::Number(n)), format!("Number({n:?})"));
+    }
+
+    #[test]
+    fn debug_prints_object_names_and_structure_but_no_string() {
+        let mut inner = Object::new();
+        inner.insert("d", SECRET);
+        let mut o = Object::new();
+        o.insert("kty", "EC");
+        o.insert("ok", true);
+        o.insert("keys", vec![Value::from(inner), Value::from(SECRET)]);
+        assert_eq!(
+            format!("{o:?}"),
+            r#"{"kty": String("<redacted>"), "ok": Bool(true), "keys": Array([Object({"d": String("<redacted>")}), String("<redacted>")])}"#
+        );
+        let v = Value::from(o);
+        let debug = format!("{v:?}");
+        assert!(debug.starts_with(r#"Object({"kty": "#), "{debug}");
+        let pretty = format!("{v:#?}");
+        assert!(!pretty.contains(SECRET), "{pretty}");
+        assert!(pretty.contains("\"d\": String(\n"), "{pretty}");
+        assert_eq!(format!("{:?}", Object::new()), "{}");
+    }
+
+    #[test]
+    fn debug_of_the_iterators_is_redacted() {
+        let mut o = Object::new();
+        o.insert("k", SECRET);
+        let mut iter = o.iter();
+        assert_eq!(format!("{iter:?}"), r#"Iter({"k": String("<redacted>")})"#);
+        assert!(iter.next().is_some());
+        assert_eq!(format!("{iter:?}"), "Iter({})");
+        assert_eq!(
+            format!("{:?}", o.into_iter()),
+            r#"IntoIter({"k": String("<redacted>")})"#
+        );
+    }
+
+    /// An array nested `depth` times around a string, built without
+    /// recursion.
+    fn nested_arrays(depth: usize) -> Value {
+        let mut v = Value::from(SECRET);
+        for _ in 0..depth {
+            v = Value::Array(vec![v]);
+        }
+        v
+    }
+
+    /// Takes `v` apart one level at a time, so dropping a value deeper than
+    /// the stack allows does not recurse.
+    fn dismantle(mut v: Value) {
+        while let Value::Array(mut items) = v {
+            v = items.pop().unwrap_or(Value::Null);
+        }
+    }
+
+    #[test]
+    fn debug_prints_everything_the_parser_can_produce() {
+        // The parser accepts at most `MAX_DEPTH_CEILING` nested containers.
+        let ceiling = super::super::Limits::MAX_DEPTH_CEILING;
+        let v = nested_arrays(ceiling);
+        let debug = format!("{v:?}");
+        assert_eq!(debug.matches("Array(").count(), ceiling);
+        assert!(debug.contains("String(\"<redacted>\")"), "{debug}");
+        assert!(!debug.contains("<too deep>"));
+        dismantle(v);
+    }
+
+    #[test]
+    fn debug_of_a_deep_hand_built_value_is_bounded() {
+        // Hand-built values have no depth limit. Debug stops at the parser's
+        // ceiling instead of recursing, so it cannot overflow the stack.
+        let ceiling = super::super::Limits::MAX_DEPTH_CEILING;
+        let v = nested_arrays(100_000);
+        for debug in [format!("{v:?}"), format!("{v:#?}")] {
+            assert_eq!(debug.matches("Array(").count(), ceiling);
+            assert_eq!(debug.matches("<too deep>").count(), 1);
+            assert!(!debug.contains(SECRET));
+        }
+        dismantle(v);
+
+        let mut o = Object::new();
+        for _ in 0..200 {
+            let mut outer = Object::new();
+            outer.insert("x", o);
+            o = outer;
+        }
+        let debug = format!("{o:?}");
+        assert_eq!(debug.matches("Object(").count(), ceiling - 1);
+        assert_eq!(debug.matches("<too deep>").count(), 1);
+    }
+
     #[test]
     fn replaced_and_removed_members_come_back_zeroizing() {
         let mut o = sample();

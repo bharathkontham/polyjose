@@ -604,6 +604,36 @@ mod tests {
         );
     }
 
+    /// `Debug` of a header never prints the strings of `jwk`, `epk` or a
+    /// Private Header Parameter (RFC 7515 §4.3), which may hold private key
+    /// members (RFC 7517 §4, RFC 7518 §6.2.2.1, §6.4.1), but does print the
+    /// registered parameters, which travel in the clear (RFC 7515 §4,
+    /// RFC 7516 §4).
+    #[test]
+    fn debug_redacts_jwk_epk_and_private_parameter_strings() {
+        const SECRET: &str = "MARKERsecretMARKERsecretMARKERsecretMARKERs";
+        let jwk = format!(r#"{{"kty":"EC","crv":"P-256","x":"AA","y":"AA","d":"{SECRET}"}}"#);
+        let epk = format!(r#"{{"kty":"OKP","crv":"X25519","x":"AA","d":"{SECRET}"}}"#);
+        let oct = format!(r#"{{"kty":"oct","k":"{SECRET}"}}"#);
+        let input = format!(
+            r#"{{"alg":"ECDH-ES","enc":"A128GCM","kid":"k1","p2s":"c2FsdA","jwk":{jwk},"epk":{epk},"x-key":{oct},"x-secret":"{SECRET}","x-n":7}}"#
+        );
+        let h = Header::from_json(input.as_bytes()).unwrap();
+        for debug in [format!("{h:?}"), format!("{h:#?}")] {
+            assert!(!debug.contains("MARKER"), "{debug}");
+            assert!(debug.contains("\"<redacted>\""), "{debug}");
+            assert!(debug.contains("\"d\""), "names print: {debug}");
+        }
+        let debug = format!("{h:?}");
+        assert!(debug.contains(r#"alg: Some("ECDH-ES")"#), "{debug}");
+        assert!(debug.contains(r#"kid: Some("k1")"#), "{debug}");
+        assert!(debug.contains(r#"p2s: Some("c2FsdA")"#), "{debug}");
+        assert!(
+            debug.contains(r#""x-secret": String("<redacted>")"#),
+            "{debug}"
+        );
+    }
+
     #[test]
     fn rfc7515_a1_header_parses() {
         // RFC 7515 Appendix A.1.1: {"typ":"JWT",\r\n "alg":"HS256"}
