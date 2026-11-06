@@ -184,10 +184,15 @@ mod tests {
     /// fails otherwise.
     const OTHER_SOURCES: &[(&str, &str)] = &[
         ("claims.rs", include_str!("claims.rs")),
+        ("keyset.rs", include_str!("keyset.rs")),
         ("mod.rs", include_str!("mod.rs")),
+        ("nested.rs", include_str!("nested.rs")),
         ("numeric_date.rs", include_str!("numeric_date.rs")),
         ("policy.rs", include_str!("policy.rs")),
+        ("sign.rs", include_str!("sign.rs")),
         ("typ.rs", include_str!("typ.rs")),
+        ("validate.rs", include_str!("validate.rs")),
+        ("verify.rs", include_str!("verify.rs")),
     ];
 
     /// Names of platform time sources that must not appear outside this
