@@ -800,4 +800,86 @@ mod tests {
             );
         }
     }
+
+    mod wycheproof {
+        //! Wycheproof `ecdsa_*_p1363` suites (ADR 0008 layer 1): R‖S
+        //! signatures, the JOSE form (RFC 7518 §3.4, RFC 8812 §3.2). No
+        //! test deviates: every `valid` one verifies, high-S included
+        //! (ADR 0026 §5), and every `invalid` one fails. The deviation lists
+        //! are empty on purpose; an entry needs an RFC or ADR reason.
+
+        use super::*;
+        use crate::test_support::wycheproof::{self, Deviation, Expected, Outcome, Summary};
+
+        const P256: &[Deviation] = &[];
+        const P384: &[Deviation] = &[];
+        const P521: &[Deviation] = &[];
+        const SECP256K1: &[Deviation] = &[];
+
+        /// Runs `suite` through the family's `verify` with each group's
+        /// JWK (`publicKeyJwk`, or one rebuilt from `wx`/`wy`), checks that
+        /// every rejection is a signature or key error, and returns the
+        /// summary and the number of valid high-S signatures accepted.
+        fn run(suite: &str, alg: SigningAlg, deviations: &[Deviation]) -> (Summary, usize) {
+            let suite = wycheproof::load(suite);
+            let mut high_s = 0;
+            let summary = wycheproof::assert_conforms(&suite, deviations, |group, test| {
+                let (msg, sig) = test.signature();
+                let result = Jwk::from_json(group.verification_jwk().as_bytes())
+                    .and_then(|key| verify(&alg, &key, msg, sig));
+                match &result {
+                    Ok(()) if test.result == Expected::Valid => {
+                        high_s += usize::from(!low_s_and_twin(&alg, sig).0);
+                    }
+                    Ok(()) => {}
+                    Err(e) => assert!(
+                        matches!(e, Error::InvalidSignature | Error::InvalidKey(_)),
+                        "tcId {}: {e:?}",
+                        test.tc_id
+                    ),
+                }
+                Outcome::of(&result)
+            });
+            (summary, high_s)
+        }
+
+        fn summary(tests: usize, accepted: usize) -> Summary {
+            Summary {
+                tests,
+                accepted,
+                rejected: tests - accepted,
+                deviations: 0,
+            }
+        }
+
+        #[test]
+        fn p256() {
+            let (s, high_s) = run("ecdsa_secp256r1_sha256_p1363", A::ES256, P256);
+            assert_eq!(s, summary(262, 173));
+            assert!(high_s > 0, "no high-S valid test exercised");
+        }
+
+        #[test]
+        fn p384() {
+            let (s, high_s) = run("ecdsa_secp384r1_sha384_p1363", A::ES384, P384);
+            assert_eq!(s, summary(280, 193));
+            assert!(high_s > 0, "no high-S valid test exercised");
+        }
+
+        #[test]
+        fn p521() {
+            let (s, high_s) = run("ecdsa_secp521r1_sha512_p1363", A::ES512, P521);
+            assert_eq!(s, summary(318, 231));
+            assert!(high_s > 0, "no high-S valid test exercised");
+        }
+
+        #[test]
+        fn secp256k1() {
+            // k256 alone rejects high-S by default; polyjose normalizes
+            // first, so Wycheproof's valid high-S cases verify (ADR 0026 §5).
+            let (s, high_s) = run("ecdsa_secp256k1_sha256_p1363", A::ES256K, SECP256K1);
+            assert_eq!(s, summary(252, 167));
+            assert!(high_s > 0, "no high-S valid test exercised");
+        }
+    }
 }
