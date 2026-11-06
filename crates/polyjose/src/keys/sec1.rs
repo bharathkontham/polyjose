@@ -12,7 +12,9 @@
 
 use core::fmt;
 
-use super::der::{self, Reader};
+use zeroize::Zeroizing;
+
+use super::der::{self, Reader, Writer};
 use super::oid;
 use crate::error::{Error, Result};
 use crate::jwk::EcCurve;
@@ -153,6 +155,50 @@ fn read_parameters(contents: &[u8]) -> Result<EcCurve> {
     };
     inner.finish()?;
     curve
+}
+
+/// Encodes an ECPrivateKey (RFC 5915 §3) in DER: version 1, `privateKey`,
+/// then the EXPLICIT `[0]` namedCurve when `key.parameters` is set and the
+/// EXPLICIT `[1]` publicKey BIT STRING when `key.public_key` is set, in the
+/// layout OpenSSL 4 emits (ADR 0018 §3).
+///
+/// Standalone SEC1 is written with both (RFC 5915 §3: parameters "MUST
+/// always" and publicKey "SHOULD always" be included); the ECPrivateKey
+/// inside PKCS#8 without `[0]` (RFC 5915 erratum 5008). The fields are
+/// written as given: their lengths and consistency are the caller's. The
+/// output is zeroized on drop.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] only if the encoding would exceed
+/// [`der::MAX_INPUT_LEN`].
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "called by ec.rs, which the facade (T08) calls")
+)]
+pub(crate) fn encode(key: &EcPrivateKey<'_>) -> Result<Zeroizing<Vec<u8>>> {
+    let version = [EC_PRIVKEY_VER1];
+    let named = key.parameters.map(oid::named_curve);
+    let parameters_len = named.map_or(0, |named| der::encoded_len(named.len()));
+    let public_key_len = key.public_key.map_or(0, |point| {
+        der::encoded_len(der::bit_string_len(point.len()))
+    });
+    let body = der::unsigned_integer_len(&version)
+        + der::encoded_len(key.private_key.len())
+        + parameters_len
+        + public_key_len;
+    let mut writer = Writer::new(der::encoded_len(body))?;
+    writer.header(der::SEQUENCE, body)?;
+    writer.unsigned_integer(&version)?;
+    writer.element(der::OCTET_STRING, key.private_key)?;
+    if let Some(named) = named {
+        writer.element(der::CONTEXT_0, named)?;
+    }
+    if let Some(point) = key.public_key {
+        writer.header(der::CONTEXT_1, der::bit_string_len(point.len()))?;
+        writer.bit_string(der::BIT_STRING, point)?;
+    }
+    writer.finish()
 }
 
 #[cfg(test)]
@@ -308,6 +354,77 @@ mod tests {
         implicit.extend_from_slice(&der[at..]);
         implicit[1] -= 2;
         assert!(matches!(decode(&implicit), Err(Error::InvalidKey(_))));
+    }
+
+    #[test]
+    fn encode_reproduces_every_committed_sec1_file() {
+        // Standalone SEC1 with [0] and [1] (RFC 9500 §2.3, RFC 7517 A.2
+        // built, OpenSSL `pkey -traditional`), and without [1] (OpenSSL
+        // `ec -no_public`): decode then encode is the identity.
+        let mut files = vec![
+            ("rfc", "rfc7517-a2-ec-p256-sec1.der".to_owned()),
+            ("rfc", "rfc9500-testECCP256-sec1.pem".to_owned()),
+            ("rfc", "rfc9500-testECCP384-sec1.pem".to_owned()),
+            ("rfc", "rfc9500-testECCP521-sec1.pem".to_owned()),
+        ];
+        for name in ["p256", "p384", "p521", "secp256k1"] {
+            files.push(("openssl", format!("ec-{name}-sec1.der")));
+            files.push(("openssl", format!("ec-{name}-sec1-nopub.pem")));
+        }
+        for (dir, file) in files {
+            let der = fixtures::load(dir, &file);
+            let key = decode(&der).unwrap();
+            assert_eq!(*encode(&key).unwrap(), der, "{file}");
+        }
+    }
+
+    #[test]
+    fn encode_reproduces_the_pkcs8_inner_keys() {
+        // Inside PKCS#8 the ECPrivateKey has [1] but no [0] (RFC 7468
+        // Fig. 12, OpenSSL 4; RFC 5915 erratum 5008).
+        let mut files = vec![
+            ("rfc", "rfc7468-fig12-secp256k1-pkcs8.pem".to_owned()),
+            ("rfc", "rfc7517-a2-ec-p256-pkcs8.der".to_owned()),
+        ];
+        for name in ["p256", "p384", "p521", "secp256k1"] {
+            files.push(("openssl", format!("ec-{name}-pkcs8.der")));
+        }
+        for (dir, file) in files {
+            let der = fixtures::load(dir, &file);
+            let parts = super::super::pkcs8::decode(&der).unwrap();
+            let key = decode(parts.private_key).unwrap();
+            assert_eq!(key.parameters, None, "{file}");
+            assert!(key.public_key.is_some(), "{file}");
+            assert_eq!(*encode(&key).unwrap(), parts.private_key, "{file}");
+        }
+    }
+
+    #[test]
+    fn encode_matches_the_sec1_oracle() {
+        // Differential check against the RustCrypto `sec1` crate (a
+        // dev-dependency oracle only, ADR 0016 §5, ADR 0018 §1).
+        use sec1::der::Decode as _;
+        let der = fixtures::load("openssl", "ec-p521-sec1.der");
+        let oracle = sec1::EcPrivateKey::from_der(&der).unwrap();
+        let key = decode(&der).unwrap();
+        assert_eq!(key.private_key, oracle.private_key);
+        assert_eq!(key.public_key, oracle.public_key);
+        assert_eq!(
+            oracle
+                .parameters
+                .and_then(|p| p.named_curve())
+                .map(|o| o.to_string()),
+            Some("1.3.132.0.35".to_owned())
+        );
+    }
+
+    #[test]
+    fn encode_writes_long_form_lengths() {
+        // A P-521 SEC1 body exceeds 127 octets, so the outer length is long
+        // form (X.690 §8.1.3.5); the inner [0], [1] stay short form.
+        let der = fixtures::load("rfc", "rfc9500-testECCP521-sec1.pem");
+        let encoded = encode(&decode(&der).unwrap()).unwrap();
+        assert_eq!(encoded[..3], [0x30, 0x81, 0xDC]);
     }
 
     #[test]
