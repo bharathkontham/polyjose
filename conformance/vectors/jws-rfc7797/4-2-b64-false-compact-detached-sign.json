@@ -1,0 +1,23 @@
+{
+  "source": "RFC 7797 §4.2",
+  "description": "HS256 compact sign with {\"alg\":\"HS256\",\"b64\":false,\"crit\":[\"b64\"]} and a detached payload (the unencoded \"$.02\" contains a period, §5.2), signing the raw payload octets (§3) with the RFC 7515 A.1 key, giving the §4.2 compact JWS byte for byte",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "compact",
+    "payload_b64u": "JC4wMg",
+    "detached": true,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19",
+        "key": {
+          "kty": "oct",
+          "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "jws": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..A5dxf2s96_n5FLueVuW1Z_vh161FwXZC4YLPff6dmDY"
+  }
+}
