@@ -146,9 +146,66 @@ pub(crate) mod inflate_calls {
     }
 }
 
+/// JWS Signatures checked through the counting `Families` double of
+/// `jws/compact.rs`'s tests (feature 0004, T05a): `precheck_compact` must
+/// leave it at 0, and `finish_compact` reaches it once per key that passed
+/// key binding (ADR 0026 §2 steps 8–9, ADR 0027 §9).
+pub(crate) mod jws_family_verifies {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of ticks on this
+    /// thread while it ran.
+    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
+}
+
+/// JWS Signatures computed through the same double: verification must
+/// leave it at 0.
+pub(crate) mod jws_family_signs {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of ticks on this
+    /// thread while it ran.
+    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jws_counters_count_only_their_own_ticks_while_f_runs() {
+        let ((), n) = jws_family_verifies::count(|| {
+            jws_family_verifies::tick();
+            jws_family_signs::tick();
+        });
+        assert_eq!(n, 1);
+        assert_eq!(jws_family_signs::count(jws_family_signs::tick).1, 1);
+        assert_eq!(jws_family_signs::count(jws_family_verifies::tick).1, 0);
+    }
 
     #[test]
     fn jwe_counters_count_only_their_own_ticks_while_f_runs() {
