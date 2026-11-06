@@ -968,3 +968,217 @@ mod tests {
         }
     }
 }
+
+/// Adversarial checks added by the tester (T02): length boundaries, the
+/// 64 KiB cap through the containers, and `finish()` at every nesting level.
+#[cfg(test)]
+mod tester_adversarial {
+    use super::super::oid;
+    use super::super::spki;
+    use super::*;
+
+    fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
+        let len = contents.len();
+        let mut out = vec![tag];
+        match len {
+            0..=0x7F => out.push(len as u8),
+            0x80..=0xFF => out.extend_from_slice(&[0x81, len as u8]),
+            _ => out.extend_from_slice(&[0x82, (len >> 8) as u8, len as u8]),
+        }
+        out.extend_from_slice(contents);
+        out
+    }
+
+    /// v1 Ed25519 PKCS#8 whose privateKey OCTET STRING holds `key_len` octets.
+    fn ed25519_with_key_len(key_len: usize) -> Vec<u8> {
+        let body = [
+            &[0x02, 0x01, 0x00][..],
+            oid::ALG_ED25519,
+            &tlv(0x04, &vec![0x5A; key_len]),
+        ]
+        .concat();
+        tlv(0x30, &body)
+    }
+
+    #[test]
+    fn length_forms_at_the_short_and_long_boundaries() {
+        // X.690 §10.1: 127 is short form, 128 and 255 one long-form octet,
+        // 256 two. Each is accepted in its minimal form only.
+        for key_len in [100, 105, 106, 107, 108, 120, 200, 247, 248, 249, 300, 1000] {
+            let der = ed25519_with_key_len(key_len);
+            let parts = decode(&der).unwrap();
+            assert_eq!(parts.private_key.len(), key_len);
+            assert_eq!(encode(&parts).unwrap().as_slice(), &der[..], "{key_len}");
+        }
+        // The privateKey OCTET STRING at exactly 127, 128, 255, 256 octets.
+        for key_len in [127usize, 128, 255, 256] {
+            let der = ed25519_with_key_len(key_len);
+            assert_eq!(decode(&der).unwrap().private_key.len(), key_len);
+        }
+        // Non-minimal spellings of 128 and 256 for the OCTET STRING length.
+        for (header, key_len) in [
+            (vec![0x04, 0x82, 0x00, 0x80], 128usize),
+            (vec![0x04, 0x83, 0x00, 0x01, 0x00], 256),
+            (vec![0x04, 0x81, 0x7F], 127),
+        ] {
+            let body = [
+                &[0x02, 0x01, 0x00][..],
+                oid::ALG_ED25519,
+                &header,
+                &vec![0x5A; key_len],
+            ]
+            .concat();
+            let der = tlv(0x30, &body);
+            assert!(
+                matches!(
+                    decode(&der),
+                    Err(Error::InvalidKey("DER length not minimal"))
+                ),
+                "{header:02x?}"
+            );
+        }
+        // 0x80 0x81 as the outer length: indefinite / a zero long-form count.
+        let good = ed25519_with_key_len(32);
+        let mut indefinite = good.clone();
+        indefinite[1] = 0x80;
+        assert!(matches!(decode(&indefinite), Err(Error::InvalidKey(_))));
+        let mut leading = vec![0x30, 0x81, 0x00];
+        leading.extend_from_slice(&good[2..]);
+        assert!(matches!(decode(&leading), Err(Error::InvalidKey(_))));
+    }
+
+    #[test]
+    fn the_64_kib_boundary_through_pkcs8() {
+        // 4 (outer header) + 3 + 7 + 4 (OCTET header) + 65,518 = 65,536.
+        let at_cap = ed25519_with_key_len(65_518);
+        assert_eq!(at_cap.len(), der::MAX_INPUT_LEN);
+        assert_eq!(decode(&at_cap).unwrap().private_key.len(), 65_518);
+        assert_eq!(encode(&decode(&at_cap).unwrap()).unwrap().len(), 65_536);
+        let over = ed25519_with_key_len(65_519);
+        assert_eq!(over.len(), der::MAX_INPUT_LEN + 1);
+        assert!(matches!(
+            decode(&over),
+            Err(Error::InvalidKey("DER input too large"))
+        ));
+        // The writer refuses to produce what the reader would refuse.
+        let parts = Pkcs8Parts {
+            version: 0,
+            alg: AlgId::Ed25519,
+            private_key: &vec![0u8; 65_519],
+            public_key: None,
+        };
+        assert!(matches!(encode(&parts), Err(Error::InvalidKey(_))));
+    }
+
+    /// Re-wraps `fields` as a PKCS#8 SEQUENCE.
+    fn pkcs8_of(fields: &[&[u8]]) -> Vec<u8> {
+        tlv(0x30, &fields.concat())
+    }
+
+    #[test]
+    fn leftovers_are_rejected_at_every_nesting_level() {
+        let version = [0x02, 0x01, 0x00];
+        let key = tlv(0x04, &tlv(0x04, &[0x5A; 32]));
+        // Level 1: a byte inside the outer SEQUENCE after privateKey.
+        let der = pkcs8_of(&[&version, oid::ALG_ED25519, &key, &[0x00]]);
+        assert!(matches!(decode(&der), Err(Error::InvalidKey(_))));
+        // Level 2: a byte inside the AlgorithmIdentifier, after a NULL.
+        let alg = tlv(
+            0x30,
+            &[&[0x06, 0x03, 0x2B, 0x65, 0x70][..], &[0x05, 0x00, 0x00]].concat(),
+        );
+        let der = pkcs8_of(&[&version, &alg, &key]);
+        assert!(matches!(decode(&der), Err(Error::InvalidKey(_))));
+        // Level 2, unsupported OID: a second parameters element is malformed.
+        let alg = tlv(
+            0x30,
+            &[oid::OID_ED448, &[0x05, 0x00][..], &[0x05, 0x00]].concat(),
+        );
+        let der = pkcs8_of(&[&version, &alg, &key]);
+        assert!(matches!(decode(&der), Err(Error::InvalidKey(_))));
+        // Level 2, supported curve: a second parameters element.
+        let alg = tlv(
+            0x30,
+            &[
+                oid::OID_EC_PUBLIC_KEY,
+                oid::named_curve(crate::jwk::EcCurve::P256),
+                &[0x05, 0x00],
+            ]
+            .concat(),
+        );
+        let der = pkcs8_of(&[&version, &alg, &key]);
+        assert!(matches!(decode(&der), Err(Error::InvalidKey(_))));
+        // Level 3: a byte inside an Attribute, after its SET of values.
+        let attribute = tlv(
+            0x30,
+            &[&[0x06, 0x01, 0x2A][..], &[0x31, 0x00], &[0x05, 0x00]].concat(),
+        );
+        let attrs = tlv(0xA0, &attribute);
+        let der = pkcs8_of(&[
+            &[0x02, 0x01, 0x01],
+            oid::ALG_ED25519,
+            &key,
+            &attrs,
+            &tlv(0x81, &[&[0x00][..], &[0x5A; 32]].concat()),
+        ]);
+        assert!(matches!(decode(&der), Err(Error::InvalidKey(_))));
+        // The same Attribute without the leftover is accepted.
+        let attribute = tlv(0x30, &[&[0x06, 0x01, 0x2A][..], &[0x31, 0x00]].concat());
+        let attrs = tlv(0xA0, &attribute);
+        let der = pkcs8_of(&[
+            &[0x02, 0x01, 0x01],
+            oid::ALG_ED25519,
+            &key,
+            &attrs,
+            &tlv(0x81, &[&[0x00][..], &[0x5A; 32]].concat()),
+        ]);
+        assert!(decode(&der).is_ok());
+        // SPKI: level 1 and level 2.
+        let bits = [0x03, 0x02, 0x00, 0x5A];
+        let der = tlv(0x30, &[oid::ALG_X25519, &bits, &[0x00]].concat());
+        assert!(matches!(spki::decode(&der), Err(Error::InvalidKey(_))));
+        let alg = tlv(
+            0x30,
+            &[&[0x06, 0x03, 0x2B, 0x65, 0x6E][..], &[0x00]].concat(),
+        );
+        let der = tlv(0x30, &[&alg[..], &bits].concat());
+        assert!(matches!(spki::decode(&der), Err(Error::InvalidKey(_))));
+        // A second element after the BIT STRING inside the SPKI.
+        let der = tlv(0x30, &[oid::ALG_X25519, &bits, &bits].concat());
+        assert!(matches!(spki::decode(&der), Err(Error::InvalidKey(_))));
+    }
+
+    #[test]
+    fn parameter_nesting_is_capped_at_the_stack_depth() {
+        // Unsupported-algorithm parameters are walked iteratively: exactly
+        // MAX_DEPTH levels of SEQUENCE around a NULL are well-formed (and the
+        // OID is then unsupported), one more is InvalidKey, never a panic.
+        let nest = |levels: usize| {
+            let mut v = vec![0x05, 0x00];
+            for _ in 0..levels {
+                v = tlv(0x30, &v);
+            }
+            v
+        };
+        for (levels, ok) in [
+            (der::MAX_DEPTH, true),
+            (der::MAX_DEPTH + 1, false),
+            (3_000, false),
+        ] {
+            let alg = tlv(0x30, &[oid::OID_ED448, &nest(levels)[..]].concat());
+            let der = tlv(0x30, &[&alg[..], &[0x03, 0x01, 0x00]].concat());
+            let result = spki::decode(&der);
+            if ok {
+                assert!(
+                    matches!(result, Err(Error::UnsupportedAlgorithm)),
+                    "{levels}: {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(Error::InvalidKey("DER nesting too deep"))),
+                    "{levels}"
+                );
+            }
+        }
+    }
+}
