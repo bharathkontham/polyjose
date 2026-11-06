@@ -1,0 +1,9 @@
+Public-Key: (521 bit field, 256 bit security level)
+pub:
+    03:01:d6:10:0e:35:29:5c:47:e9:0e:58:81:3e:b4:ac:
+    58:02:86:2b:89:f9:4e:60:63:9e:08:92:d2:39:78:cc:
+    54:d8:e0:9a:3c:87:bd:53:c1:5b:ca:3f:d1:5d:6c:80:
+    a6:7a:77:2a:ad:ab:e4:78:b4:ad:33:49:43:a5:10:36:
+    af:9b:17
+ASN1 OID: secp521r1
+NIST CURVE: P-521

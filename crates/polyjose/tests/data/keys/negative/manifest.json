@@ -1,0 +1,533 @@
+[
+  {
+    "id": "A01",
+    "file": "A01-accept-crlf.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "CRLF line endings",
+    "expect": "ok",
+    "jwk": "rfc8037-a1-ed25519-pkcs8.jwk.json",
+    "cite": "RFC 7468 \u00a73 (eol may be CRLF, CR or LF)"
+  },
+  {
+    "id": "A02",
+    "file": "A02-accept-no-final-newline.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "no newline after END line",
+    "expect": "ok",
+    "jwk": "rfc8037-a1-ed25519-pkcs8.jwk.json",
+    "cite": "RFC 7468 \u00a73"
+  },
+  {
+    "id": "A03",
+    "file": "A03-accept-surrounding-whitespace.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "blank lines before and after",
+    "expect": "ok",
+    "jwk": "rfc8037-a1-ed25519-pkcs8.jwk.json",
+    "cite": "ADR 0018: only whitespace may surround the block"
+  },
+  {
+    "id": "N01",
+    "file": "N01-len-long-form-for-short.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "outer length 0x2e written as 81 2e",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a710.1 (DER: definite form, minimum number of length octets)"
+  },
+  {
+    "id": "N02",
+    "file": "N02-len-leading-zero.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "outer length written as 82 00 2e",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a710.1 (DER: definite form, minimum number of length octets)"
+  },
+  {
+    "id": "N03",
+    "file": "N03-len-indefinite.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "indefinite length with end-of-contents",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a710.1, \u00a78.1.3.6 (indefinite form is BER only)"
+  },
+  {
+    "id": "N04",
+    "file": "N04-int-version-nonminimal.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "version INTEGER 0 encoded as 02 02 00 00",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a78.3.2 (INTEGER minimal octets)"
+  },
+  {
+    "id": "N05",
+    "file": "N05-octet-string-constructed.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "privateKey OCTET STRING split into a constructed (0x24) BER string",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a710.2 (DER: string types use the primitive form)"
+  },
+  {
+    "id": "N06",
+    "file": "N06-trailing-zero-byte.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "one 0x00 byte after the outer SEQUENCE",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a78.1.1 / RFC 5958 \u00a72: exactly one PrivateKeyInfo; no data may follow"
+  },
+  {
+    "id": "N07",
+    "file": "N07-trailing-second-key.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "the whole key repeated twice",
+    "expect": "InvalidKey",
+    "cite": "RFC 5958 \u00a72: exactly one OneAsymmetricKey"
+  },
+  {
+    "id": "N08",
+    "file": "N08-truncated.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "last content byte removed",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a78.1.3: length exceeds the available content"
+  },
+  {
+    "id": "N09",
+    "file": "N09-len-exceeds-input.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "outer length one larger than the content",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a78.1.3"
+  },
+  {
+    "id": "N10",
+    "file": "N10-high-tag-number.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "outer tag in high-tag-number form (0x3f 0x10)",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a78.1.2.4 (only SEQUENCE 0x30 is valid here)"
+  },
+  {
+    "id": "N11",
+    "file": "N11-len-five-octets.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "length in 5 octets",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a710.1 (DER: definite form, minimum number of length octets)"
+  },
+  {
+    "id": "N12",
+    "file": "N12-empty.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "zero bytes",
+    "expect": "InvalidKey",
+    "cite": "RFC 5958 \u00a72"
+  },
+  {
+    "id": "N20",
+    "file": "N20-ed25519-params-null.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "AlgorithmIdentifier for id-Ed25519 carries NULL parameters",
+    "expect": "InvalidKey",
+    "cite": "RFC 8410 \u00a73: parameters MUST be absent"
+  },
+  {
+    "id": "N21",
+    "file": "N21-oid-ed448.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "OID changed to id-Ed448 (1.3.101.113)",
+    "expect": "UnsupportedAlgorithm",
+    "cite": "ADR 0006: Ed448 out of scope; RFC 8410 \u00a73"
+  },
+  {
+    "id": "N22",
+    "file": "N22-oid-nonminimal-subid.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "OID 1.3.101.112 with subidentifier 101 encoded as 80 65",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a78.19.2 (subidentifier uses the fewest octets; 0x80 lead byte forbidden)"
+  },
+  {
+    "id": "N23",
+    "file": "N23-version-2.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "version 2",
+    "expect": "InvalidKey",
+    "cite": "RFC 5958 \u00a72: version is v1(0) or v2(1)"
+  },
+  {
+    "id": "N24",
+    "file": "N24-v1-with-public-key.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "version 0 but [1] publicKey present",
+    "expect": "InvalidKey",
+    "cite": "RFC 5958 \u00a72: publicKey only in v2"
+  },
+  {
+    "id": "N25",
+    "file": "N25-curve-private-31-bytes.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "CurvePrivateKey of 31 octets",
+    "expect": "InvalidKey",
+    "cite": "RFC 8410 \u00a77; RFC 8032 \u00a75.1.5 (32 octets)"
+  },
+  {
+    "id": "N26",
+    "file": "N26-curve-private-not-octet-string.der",
+    "base": "rfc8037-a1-ed25519-pkcs8.der",
+    "mutation": "CurvePrivateKey wrapped in INTEGER instead of OCTET STRING",
+    "expect": "InvalidKey",
+    "cite": "RFC 8410 \u00a77: CurvePrivateKey ::= OCTET STRING"
+  },
+  {
+    "id": "N27",
+    "file": "N27-v2-public-key-mismatch.der",
+    "base": "rfc8410-10.3-ed25519-pkcs8-v2-attr-pub.pem",
+    "mutation": "last byte of the v2 [1] publicKey flipped",
+    "expect": "InvalidKey",
+    "cite": "RFC 5958 \u00a72 (publicKey is the key's public half); ADR 0018 consistency check"
+  },
+  {
+    "id": "N30",
+    "file": "N30-bitstring-unused-bits.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "subjectPublicKey BIT STRING with 1 unused bit",
+    "expect": "InvalidKey",
+    "cite": "RFC 5480 \u00a72.2 / X.690 \u00a711.2.1 (key is a whole number of octets)"
+  },
+  {
+    "id": "N31",
+    "file": "N31-point-off-curve.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "last byte of y flipped",
+    "expect": "InvalidKey",
+    "cite": "RFC 8725 \u00a73.4; SEC 1 v2 \u00a73.2.2.1 (point must be on the curve)"
+  },
+  {
+    "id": "N32",
+    "file": "N32-ec-no-parameters.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "id-ecPublicKey without namedCurve",
+    "expect": "InvalidKey",
+    "cite": "RFC 5480 \u00a72.1.1: parameters MUST be present"
+  },
+  {
+    "id": "N33",
+    "file": "N33-curve-secp224r1.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "namedCurve changed to secp224r1 (1.3.132.0.33)",
+    "expect": "UnsupportedAlgorithm",
+    "cite": "ADR 0006 curve set; IANA JOSE EC registry"
+  },
+  {
+    "id": "N34",
+    "file": "N34-point-short.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "uncompressed point one byte short",
+    "expect": "InvalidKey",
+    "cite": "SEC 1 v2 \u00a72.3.3 (uncompressed point is 1 + 2*32 octets)"
+  },
+  {
+    "id": "N35",
+    "file": "N35-point-hybrid-prefix.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "point prefix 0x06 (hybrid form)",
+    "expect": "InvalidKey",
+    "cite": "RFC 5480 \u00a72.2 (only uncompressed and compressed forms)"
+  },
+  {
+    "id": "N36",
+    "file": "N36-point-identity.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "point at infinity (single 0x00)",
+    "expect": "InvalidKey",
+    "cite": "SEC 1 v2 \u00a72.3.3; RFC 8725 \u00a73.4"
+  },
+  {
+    "id": "N37",
+    "file": "N37-params-null-for-ec.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "id-ecPublicKey with NULL parameters",
+    "expect": "InvalidKey",
+    "cite": "RFC 5480 \u00a72.1.1 (implicitCurve NULL MUST NOT be used)"
+  },
+  {
+    "id": "N38",
+    "file": "N38-spki-trailing-field.der",
+    "base": "rfc7517-a1-ec-p256-spki.der",
+    "mutation": "extra NULL after subjectPublicKey",
+    "expect": "InvalidKey",
+    "cite": "RFC 5280 \u00a74.1.2.7 (exactly two fields)"
+  },
+  {
+    "id": "N40",
+    "file": "N40-sec1-version-0.der",
+    "base": "rfc7517-a2-ec-p256-sec1.der",
+    "mutation": "version 0",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73: version ecPrivkeyVer1(1)"
+  },
+  {
+    "id": "N41",
+    "file": "N41-sec1-d-zero.der",
+    "base": "rfc7517-a2-ec-p256-sec1.der",
+    "mutation": "private key 0 (publicKey dropped)",
+    "expect": "InvalidKey",
+    "cite": "SEC 1 v2 \u00a73.2.1: d in [1, n-1]"
+  },
+  {
+    "id": "N42",
+    "file": "N42-sec1-d-equals-n.der",
+    "base": "rfc7517-a2-ec-p256-sec1.der",
+    "mutation": "private key = group order n",
+    "expect": "InvalidKey",
+    "cite": "SEC 1 v2 \u00a73.2.1: d in [1, n-1]"
+  },
+  {
+    "id": "N43",
+    "file": "N43-sec1-d-31-bytes.der",
+    "base": "rfc7517-a2-ec-p256-sec1.der",
+    "mutation": "privateKey of 31 octets",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73: ceiling(log2(n)/8) octets"
+  },
+  {
+    "id": "N44",
+    "file": "N44-sec1-public-mismatch.der",
+    "base": "rfc7517-a2-ec-p256-sec1.der",
+    "mutation": "[1] publicKey y last byte flipped",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73 (publicKey is d*G); ADR 0018 consistency check"
+  },
+  {
+    "id": "N45",
+    "file": "N45-sec1-params-p384.der",
+    "base": "rfc7517-a2-ec-p256-sec1.der",
+    "mutation": "[0] namedCurve says P-384 for a P-256 key",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73; RFC 5480 \u00a72.1.1"
+  },
+  {
+    "id": "N46",
+    "file": "N46-sec1-no-params.der",
+    "base": "rfc7517-a2-ec-p256-sec1.der",
+    "mutation": "standalone EC PRIVATE KEY without [0] parameters",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73: implementations MUST always include the parameters field"
+  },
+  {
+    "id": "N47",
+    "file": "N47-sec1-params-implicit-tag.der",
+    "base": "rfc7517-a2-ec-p256-sec1.der",
+    "mutation": "[0] tagged IMPLICIT instead of EXPLICIT",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73 / App. A (EXPLICIT tags)"
+  },
+  {
+    "id": "N50",
+    "file": "N50-pkcs8-ec-inner-params-disagree.der",
+    "base": "rfc7517-a2-ec-p256-pkcs8.der",
+    "mutation": "AlgorithmIdentifier says P-256, inner ECPrivateKey [0] says P-384",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a71 a); RFC 5480 \u00a72.1.1"
+  },
+  {
+    "id": "N51",
+    "file": "N51-pkcs8-ec-oid-with-ed25519-body.der",
+    "base": "rfc7517-a2-ec-p256-pkcs8.der",
+    "mutation": "id-ecPublicKey AlgorithmIdentifier with an RFC 8410 CurvePrivateKey body",
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73 (privateKey must hold an ECPrivateKey)"
+  },
+  {
+    "id": "N60",
+    "file": "N60-rsa-params-absent.der",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "rsaEncryption without the NULL parameters",
+    "expect": "InvalidKey",
+    "cite": "RFC 3279 \u00a72.3.1 (MUST be NULL); RFC 8017 App. A.1 (SHALL be NULL)"
+  },
+  {
+    "id": "N61",
+    "file": "N61-rsa-modulus-negative.der",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "modulus without its leading 0x00, so it reads as negative",
+    "expect": "InvalidKey",
+    "cite": "RFC 8017 App. A.1.1 (n is a positive INTEGER); X.690 \u00a78.3.3"
+  },
+  {
+    "id": "N62",
+    "file": "N62-rsa-modulus-nonminimal.der",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "modulus with a redundant extra 0x00",
+    "expect": "InvalidKey",
+    "cite": "X.690 \u00a78.3.2"
+  },
+  {
+    "id": "N63",
+    "file": "N63-rsa-exponent-one.der",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "publicExponent 1",
+    "expect": "InvalidKey",
+    "cite": "RFC 8017 \u00a73.1 (3 <= e <= n-1, odd)"
+  },
+  {
+    "id": "N64",
+    "file": "N64-rsa-modulus-1024.der",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "modulus cut to 1024 bits",
+    "expect": "InvalidKey",
+    "cite": "RFC 7518 \u00a73.3/\u00a74.2 and ADR 0007 (RSA >= 2048 bits)"
+  },
+  {
+    "id": "N65",
+    "file": "N65-rsa-pkcs1-pub-extra-field.der",
+    "base": "rfc7517-a1-rsa-pkcs1-pub.der",
+    "mutation": "RSAPublicKey with a third INTEGER",
+    "expect": "InvalidKey",
+    "cite": "RFC 8017 App. A.1.1 (exactly modulus, publicExponent)"
+  },
+  {
+    "id": "N66",
+    "file": "N66-rsa-oid-with-ec-point.der",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "rsaEncryption AlgorithmIdentifier with an EC point as the key",
+    "expect": "InvalidKey",
+    "cite": "RFC 3279 \u00a72.3.1 (key MUST be an RSAPublicKey)"
+  },
+  {
+    "id": "N67",
+    "file": "N67-rsa-private-pkcs8-minimal.der",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "PKCS#8 with rsaEncryption (any RSA private key)",
+    "expect": "UnsupportedAlgorithm",
+    "cite": "ADR 0021: RSA private keys are not supported in 0.1.0"
+  },
+  {
+    "id": "P01",
+    "file": "P01-label-mismatch.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "END label differs from BEGIN label",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a72 (labels must match)"
+  },
+  {
+    "id": "P02",
+    "file": "P02-header-line.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "RFC 1421-style header inside the block",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a72 (no headers; stricttextualmsg)"
+  },
+  {
+    "id": "P03",
+    "file": "P03-line-65-chars.pem",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "base64 lines wrapped at 65 characters",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a73 strict grammar (64-character lines)"
+  },
+  {
+    "id": "P04",
+    "file": "P04-line-48-chars.pem",
+    "base": "rfc7517-a1-rsa-spki.der",
+    "mutation": "base64 lines wrapped at 48 characters",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a73 strict grammar (64-character lines; only the last may be shorter)"
+  },
+  {
+    "id": "P05",
+    "file": "P05-missing-padding.pem",
+    "base": "rfc7517-a1-ec-p256-spki.pem",
+    "mutation": "trailing == padding removed",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a73; RFC 4648 \u00a74 (padding required)"
+  },
+  {
+    "id": "P06",
+    "file": "P06-text-after-end.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "non-whitespace text after the END line",
+    "expect": "InvalidKey",
+    "cite": "ADR 0018 strict parser (RFC 7468 \u00a72 permits explanatory text; we reject it)"
+  },
+  {
+    "id": "P07",
+    "file": "P07-text-before-begin.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "explanatory text before the BEGIN line",
+    "expect": "InvalidKey",
+    "cite": "ADR 0018 strict parser (RFC 7468 \u00a72 permits it; we reject it)"
+  },
+  {
+    "id": "P08",
+    "file": "P08-two-blocks.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "two PEM blocks",
+    "expect": "InvalidKey",
+    "cite": "ADR 0018: exactly one block"
+  },
+  {
+    "id": "P09",
+    "file": "P09-space-in-base64.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "space inside a base64 line",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a73 strict grammar"
+  },
+  {
+    "id": "P10",
+    "file": "P10-lowercase-label.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "label in lower case",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a72 / \u00a73 (label characters)"
+  },
+  {
+    "id": "P11",
+    "file": "P11-four-dashes.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "BEGIN line with four dashes",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a72"
+  },
+  {
+    "id": "P12",
+    "file": "P12-empty-body.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "no base64 body",
+    "expect": "InvalidKey",
+    "cite": "RFC 5958 \u00a72 (empty is not a key)"
+  },
+  {
+    "id": "P13",
+    "file": "P13-label-dsa.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "label DSA PRIVATE KEY",
+    "expect": "UnsupportedAlgorithm",
+    "cite": "unsupported label (ADR 0018 label table)"
+  },
+  {
+    "id": "P14",
+    "file": "P14-label-public-key-body-pkcs8.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "PUBLIC KEY label around a PKCS#8 body",
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a713 (PUBLIC KEY is SubjectPublicKeyInfo)"
+  },
+  {
+    "id": "P15",
+    "file": "P15-noncanonical-pad-bits.pem",
+    "base": "rfc7517-a1-ec-p256-spki.pem",
+    "mutation": "last base64 char before == changed so an unused bit is 1",
+    "expect": "InvalidKey",
+    "cite": "RFC 4648 \u00a73.5 (canonical encoding); ADR 0018"
+  },
+  {
+    "id": "P16",
+    "file": "P16-trailing-der-garbage.pem",
+    "base": "rfc8037-a1-ed25519-pkcs8.pem",
+    "mutation": "valid PEM armor around DER with a trailing 0x00",
+    "expect": "InvalidKey",
+    "cite": "RFC 5958 \u00a72; X.690 \u00a78.1.1"
+  }
+]
