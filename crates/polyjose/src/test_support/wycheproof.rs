@@ -1,6 +1,7 @@
 //! Loader for the vendored Wycheproof vectors (ADR 0008 layer 1).
 #![cfg(test)]
 
+use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use sha2::{Digest, Sha256};
@@ -353,6 +354,102 @@ pub(crate) enum PublicKey {
     },
     /// An EdDSA key: `curve` (`"edwards25519"`) and the encoded point `pk`.
     Eddsa { curve: String, pk: Vec<u8> },
+}
+
+impl PublicKey {
+    /// The key as a public JWK, as JSON text, with only the members that
+    /// define the key (no `alg`, `kid` or `use`):
+    ///
+    /// - RSA: `kty`, `n`, `e`, unsigned big-endian with leading zero octets
+    ///   removed (RFC 7518 §6.3.1.1, §6.3.1.2).
+    /// - EC: `kty`, `crv`, `x`, `y`, each coordinate left-padded to the full
+    ///   field size (RFC 7518 §6.2.1.2, §6.2.1.3). `secp256r1`, `secp384r1`
+    ///   and `secp521r1` are `P-256`, `P-384` and `P-521` (RFC 7518
+    ///   §6.2.1.1); `secp256k1` keeps its name (RFC 8812 §3.1).
+    /// - EdDSA: `kty: OKP`, `crv: Ed25519`, `x` = the 32-byte `pk`
+    ///   (RFC 8037 §2).
+    ///
+    /// Fails on an unknown curve, a coordinate wider than the field, or a
+    /// `pk` that is not 32 bytes.
+    pub(crate) fn to_jwk(&self) -> Result<String, String> {
+        let b64 = |bytes: &[u8]| Base64UrlUnpadded::encode_string(bytes);
+        let jwk = match self {
+            PublicKey::Rsa {
+                modulus,
+                public_exponent,
+            } => serde_json::json!({
+                "kty": "RSA",
+                "n": b64(strip_leading_zeros(modulus)),
+                "e": b64(strip_leading_zeros(public_exponent)),
+            }),
+            PublicKey::Ec { curve, wx, wy } => {
+                let (crv, size) = match curve.as_str() {
+                    "secp256r1" => ("P-256", 32),
+                    "secp384r1" => ("P-384", 48),
+                    "secp521r1" => ("P-521", 66),
+                    "secp256k1" => ("secp256k1", 32),
+                    other => return Err(format!("no JWK curve for {other:?}")),
+                };
+                serde_json::json!({
+                    "kty": "EC",
+                    "crv": crv,
+                    "x": b64(&to_field_size(wx, size)?),
+                    "y": b64(&to_field_size(wy, size)?),
+                })
+            }
+            PublicKey::Eddsa { curve, pk } => {
+                if curve != "edwards25519" || pk.len() != 32 {
+                    return Err(format!("no JWK for a {}-byte {curve:?} key", pk.len()));
+                }
+                serde_json::json!({ "kty": "OKP", "crv": "Ed25519", "x": b64(pk) })
+            }
+        };
+        json_text(&jwk)
+    }
+}
+
+/// `bytes` without leading zero octets.
+fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
+    let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    &bytes[start..]
+}
+
+/// The big-endian integer `bytes` as exactly `size` octets.
+fn to_field_size(bytes: &[u8], size: usize) -> Result<Vec<u8>, String> {
+    let digits = strip_leading_zeros(bytes);
+    if digits.len() > size {
+        return Err(format!(
+            "{}-byte coordinate for a {size}-byte field",
+            digits.len()
+        ));
+    }
+    let mut out = vec![0; size - digits.len()];
+    out.extend_from_slice(digits);
+    Ok(out)
+}
+
+impl Group {
+    /// The JWK to verify this group's tests with, as JSON text:
+    ///
+    /// - signature schemas: [`Group::key_jwk`] when the file has one, else
+    ///   [`PublicKey::to_jwk`] of [`Group::public_key`];
+    /// - `JsonWebSignature`: the `public` JWK, else the `private` one (an
+    ///   `oct` key is both).
+    ///
+    /// Panics for `Mac` groups, whose keys are per test ([`Test::mac`]), and
+    /// if the raw key has no JWK form.
+    pub(crate) fn verification_jwk(&self) -> String {
+        if let Some(jwk) = &self.key_jwk {
+            return jwk.clone();
+        }
+        if let Some(keys) = &self.jws_keys {
+            return keys.public.clone().unwrap_or_else(|| keys.private.clone());
+        }
+        match &self.public_key {
+            Some(key) => key.to_jwk().unwrap_or_else(|e| panic!("{e}")),
+            None => panic!("a MAC group has no group key; use Test::mac"),
+        }
+    }
 }
 
 /// The keys of a `JsonWebSignature` group, as JWK JSON text.
@@ -842,16 +939,9 @@ mod tests {
         assert_eq!(to_hex(&[0x00, 0x0f, 0xa5, 0xff]), "000fa5ff");
     }
 
-    use base64ct::{Base64UrlUnpadded, Encoding};
-
     fn jwk_value(text: Option<&str>) -> serde_json::Value {
         let text = text.unwrap_or_else(|| panic!("no JWK"));
         serde_json::from_str(text).unwrap_or_else(|e| panic!("bad JWK text: {e}"))
-    }
-
-    fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
-        let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
-        &bytes[start..]
     }
 
     /// `(name, digest bits)` from a name such as `rsa_pss_2048_sha256_mgf1_32`.
@@ -1226,5 +1316,108 @@ mod tests {
     fn load_rejects_unknown_names() {
         assert!(std::panic::catch_unwind(|| load("hmac_sha1")).is_err());
         assert!(std::panic::catch_unwind(|| names("nope")).is_err());
+    }
+
+    /// The members of `rebuilt` that are also in the file's JWK.
+    fn assert_same_key(what: &str, file_jwk: &str, rebuilt: &str) {
+        let file_jwk = jwk_value(Some(file_jwk));
+        let rebuilt = jwk_value(Some(rebuilt));
+        let members = rebuilt.as_object().map(|m| m.len()).unwrap_or_default();
+        assert!(members >= 3, "{what}: {rebuilt}");
+        for (name, value) in rebuilt.as_object().into_iter().flatten() {
+            assert_eq!(&file_jwk[name], value, "{what}: member {name}");
+        }
+    }
+
+    #[test]
+    fn rebuilt_jwks_match_every_upstream_jwk() {
+        let mut compared = 0;
+        let mut rebuilt_only = 0;
+        for name in names("rsa_")
+            .into_iter()
+            .chain(names("ecdsa_"))
+            .chain(names("ed25519"))
+        {
+            let suite = load(name);
+            for group in &suite.groups {
+                let key = group
+                    .public_key
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{name}: no key"));
+                let rebuilt = key.to_jwk().unwrap_or_else(|e| panic!("{name}: {e}"));
+                match &group.key_jwk {
+                    Some(file_jwk) => {
+                        assert_same_key(name, file_jwk, &rebuilt);
+                        assert_eq!(&group.verification_jwk(), file_jwk);
+                        compared += 1;
+                    }
+                    None => {
+                        assert_eq!(group.verification_jwk(), rebuilt);
+                        rebuilt_only += 1;
+                    }
+                }
+            }
+        }
+        // 9 ECDSA groups per curve and 33 Ed25519 groups have no JWK.
+        assert_eq!(rebuilt_only, 4 * 9 + 33);
+        assert!(compared > 400, "{compared}");
+    }
+
+    #[test]
+    fn jws_groups_verify_with_the_public_jwk_or_the_oct_key() {
+        let suite = load("json_web_signature");
+        for group in &suite.groups {
+            let keys = group.jws_keys.as_ref().unwrap_or_else(|| panic!("no keys"));
+            let jwk = group.verification_jwk();
+            match &keys.public {
+                Some(public) => assert_eq!(&jwk, public),
+                None => {
+                    assert_eq!(jwk, keys.private);
+                    assert_eq!(jwk_value(Some(&jwk))["kty"], "oct");
+                }
+            }
+        }
+        let hmac = load("hmac_sha256");
+        let group = &hmac.groups[0];
+        assert!(std::panic::catch_unwind(|| group.verification_jwk()).is_err());
+    }
+
+    #[test]
+    fn to_jwk_pads_coordinates_and_rejects_what_has_no_jwk_form() {
+        let ec = |curve: &str, wx: Vec<u8>| PublicKey::Ec {
+            curve: curve.to_owned(),
+            wx,
+            wy: vec![0x00, 0x01],
+        };
+        let jwk = ec("secp256r1", vec![0x00, 0xff])
+            .to_jwk()
+            .unwrap_or_default();
+        let jwk = jwk_value(Some(&jwk));
+        assert_eq!(jwk["crv"], "P-256");
+        let x = Base64UrlUnpadded::decode_vec(jwk["x"].as_str().unwrap_or_default());
+        let mut expected = vec![0; 31];
+        expected.push(0xff);
+        assert_eq!(x.ok(), Some(expected));
+        assert!(ec("secp256r1", vec![1; 33]).to_jwk().is_err());
+        assert!(
+            ec("secp256r1", [vec![0], vec![1; 32]].concat())
+                .to_jwk()
+                .is_ok()
+        );
+        assert!(ec("brainpoolP256r1", vec![1]).to_jwk().is_err());
+        let ed = |curve: &str, len: usize| PublicKey::Eddsa {
+            curve: curve.to_owned(),
+            pk: vec![9; len],
+        };
+        assert!(ed("edwards25519", 32).to_jwk().is_ok());
+        assert!(ed("edwards25519", 31).to_jwk().is_err());
+        assert!(ed("edwards448", 57).to_jwk().is_err());
+        let rsa = PublicKey::Rsa {
+            modulus: vec![0x00, 0xc1],
+            public_exponent: vec![0x01, 0x00, 0x01],
+        };
+        let rsa = jwk_value(rsa.to_jwk().ok().as_deref());
+        assert_eq!(rsa["n"], "wQ");
+        assert_eq!(rsa["e"], "AQAB");
     }
 }
