@@ -138,6 +138,28 @@ mod tests {
         );
     }
 
+    /// An independent reference: the RFC 7518 §4.6.2 layout spelled out
+    /// field by field, hashed with one explicit SHA-256 call per block and a
+    /// literal big-endian counter (NIST SP 800-56A §5.8.1.1).
+    fn reference(z: &[u8], alg_id: &str, apu: &[u8], apv: &[u8], bits: u32) -> Vec<u8> {
+        let be32 = |n: usize| u32::try_from(n).unwrap().to_be_bytes();
+        let info = [
+            &be32(alg_id.len())[..],
+            alg_id.as_bytes(),
+            &be32(apu.len()),
+            apu,
+            &be32(apv.len()),
+            apv,
+            &bits.to_be_bytes(),
+        ]
+        .concat();
+        let k1 = Sha256::digest([&[0, 0, 0, 1][..], z, &info].concat());
+        let k2 = Sha256::digest([&[0, 0, 0, 2][..], z, &info].concat());
+        let mut both = [k1.as_slice(), k2.as_slice()].concat();
+        both.truncate(usize::try_from(bits / 8).unwrap());
+        both
+    }
+
     /// RFC 7518 Appendix C: the ECDH-ES shared secret Z of the printed
     /// P-256 keys (Alice's ephemeral `d` with Bob's public key).
     const APPENDIX_C_Z: [u8; 32] = [
@@ -186,5 +208,83 @@ mod tests {
             ]
             .concat()
         );
+    }
+
+    /// 512 bits (direct ECDH-ES with A256CBC-HS512) take two SHA-256 blocks,
+    /// K(1) || K(2), with the counter incremented as a big-endian integer.
+    #[test]
+    fn derive_512_bits_concatenates_two_blocks_with_big_endian_counter() {
+        let z = [0x5a; 32];
+        let k = derive(&z, "A256CBC-HS512", b"Alice", b"Bob", 512).unwrap();
+        assert_eq!(k.len(), 64);
+        assert_eq!(
+            k.as_slice(),
+            reference(&z, "A256CBC-HS512", b"Alice", b"Bob", 512)
+        );
+        assert_ne!(k[..32], k[32..]);
+
+        // The second block is keyed by 00 00 00 02, not a little-endian 2.
+        let info = other_info("A256CBC-HS512", b"Alice", b"Bob", 512).unwrap();
+        let be = Sha256::digest([&[0, 0, 0, 2][..], &z, &info].concat());
+        let le = Sha256::digest([&[2, 0, 0, 0][..], &z, &info].concat());
+        assert_eq!(&k[32..], be.as_slice());
+        assert_ne!(&k[32..], le.as_slice());
+    }
+
+    /// 384 bits (A192CBC-HS384) truncate the second block to its leftmost
+    /// 16 octets (NIST SP 800-56A §5.8.1.1 step 6).
+    #[test]
+    fn derive_384_bits_truncates_the_second_block() {
+        let z = [0xa5; 48];
+        let k = derive(&z, "A192CBC-HS384", b"", b"", 384).unwrap();
+        assert_eq!(k.len(), 48);
+        assert_eq!(k.as_slice(), reference(&z, "A192CBC-HS384", b"", b"", 384));
+    }
+
+    /// 256 bits are exactly K(1).
+    #[test]
+    fn derive_256_bits_is_one_block() {
+        let z = [7; 66];
+        let k = derive(&z, "ECDH-ES+A256KW", b"u", b"v", 256).unwrap();
+        let info = other_info("ECDH-ES+A256KW", b"u", b"v", 256).unwrap();
+        let k1 = Sha256::digest([&[0, 0, 0, 1][..], &z, &info].concat());
+        assert_eq!(k.as_slice(), k1.as_slice());
+    }
+
+    /// Every allowed length, 8 to 512 bits in steps of 8, matches the
+    /// reference and has keydatalen / 8 octets.
+    #[test]
+    fn derive_matches_reference_for_every_allowed_length() {
+        let z: Vec<u8> = (0u8..32).collect();
+        for bits in (8..=512).step_by(8) {
+            let k = derive(&z, "A128GCM", b"Alice", b"Bob", bits).unwrap();
+            assert_eq!(k.len(), usize::try_from(bits / 8).unwrap(), "{bits}");
+            assert_eq!(
+                k.as_slice(),
+                reference(&z, "A128GCM", b"Alice", b"Bob", bits),
+                "{bits}"
+            );
+        }
+    }
+
+    /// keydatalen is part of OtherInfo (SuppPubInfo), so a shorter key is
+    /// not a prefix of a longer one (RFC 7518 §4.6.2).
+    #[test]
+    fn derive_binds_keydatalen() {
+        let z = [1; 32];
+        let short = derive(&z, "A128GCM", b"", b"", 128).unwrap();
+        let long = derive(&z, "A128GCM", b"", b"", 256).unwrap();
+        assert_ne!(short[..], long[..16]);
+    }
+
+    /// Absent `apu`/`apv` (empty slices) derive the same key as the
+    /// zero-length layout, and a different key from a present value.
+    #[test]
+    fn derive_with_absent_apu_apv() {
+        let z = APPENDIX_C_Z;
+        let k = derive(&z, "A128GCM", b"", b"", 128).unwrap();
+        assert_eq!(k.as_slice(), reference(&z, "A128GCM", b"", b"", 128));
+        assert_ne!(k, derive(&z, "A128GCM", b"Alice", b"", 128).unwrap());
+        assert_ne!(k, derive(&z, "A128GCM", b"", b"Bob", 128).unwrap());
     }
 }
