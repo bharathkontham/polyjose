@@ -16,13 +16,6 @@
 //! (secp256k1), RFC 8410 §3, RFC 8017 App. A.1 / RFC 3279 §2.3.1, RFC 4055
 //! §3.1 and RFC 5639 §4.1 (brainpoolP256r1). Each is checked against the
 //! committed OpenSSL fixtures.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the PKCS#8/SPKI classifier and the key exporters use these templates"
-    )
-)]
 
 use super::types::AlgId;
 use crate::jwk::EcCurve;
