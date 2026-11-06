@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 
 use super::der::{self, Reader, Writer};
 use super::oid;
+use super::pkcs1;
 use super::spki;
 use super::types::{AlgId, Pkcs8Parts};
 use crate::error::{Error, Result};
@@ -47,8 +48,16 @@ const V2: u8 = 1;
 ///   then ignored (ADR 0018 §3).
 /// - privateKey and publicKey are returned as sub-slices of `der`, whose
 ///   buffer the caller must zeroize; the publicKey has no unused bits.
+/// - Input that fails this parse but is a PKCS#1 RSAPrivateKey (RFC 8017
+///   App. A.1.2), such as one under a `PRIVATE KEY` label, is
+///   `UnsupportedAlgorithm`: an RSA private key in any format (ADR 0018
+///   §3, ADR 0021). It is recognized by framing only
+///   (`pkcs1::relabel_rsa_private_key`), with no private INTEGER's
+///   contents read.
 pub(crate) fn decode(der: &[u8]) -> Result<Pkcs8Parts<'_>> {
-    decode_with_attributes(der).map(|(parts, _)| parts)
+    decode_with_attributes(der)
+        .map(|(parts, _)| parts)
+        .map_err(|error| pkcs1::relabel_rsa_private_key(der, error))
 }
 
 /// [`decode`], also returning the whole `[0]` attributes element, so tests
@@ -431,6 +440,80 @@ mod tests {
         let mut der = vec![0x30, u8::try_from(body.len()).unwrap()];
         der.extend_from_slice(&body);
         assert!(is_unsupported(&decode(&der)));
+    }
+
+    /// `SEQUENCE { version, field × count }` with a one-octet long-form
+    /// length where needed.
+    fn version_then(version: &[u8], field: &[u8], count: usize) -> Vec<u8> {
+        let mut body = version.to_vec();
+        for _ in 0..count {
+            body.extend_from_slice(field);
+        }
+        let mut der = vec![0x30];
+        match u8::try_from(body.len()).unwrap() {
+            len @ 0..=0x7F => der.push(len),
+            len => der.extend_from_slice(&[0x81, len]),
+        }
+        der.extend_from_slice(&body);
+        der
+    }
+
+    #[test]
+    fn a_pkcs1_rsa_private_key_read_as_pkcs8_is_unsupported() {
+        // ADR 0018 §3 "RSA private, any format": a PKCS#1 RSAPrivateKey
+        // (RFC 8017 App. A.1.2) given as PKCS#8 fails the RFC 5958 §2
+        // parse at the AlgorithmIdentifier and is then recognized by its
+        // framing alone (pkcs1::is_rsa_private_key_der, ADR 0021).
+        for (dir, file) in [
+            ("openssl", "reject-rsa2048-private-pkcs1.der"),
+            ("openssl", "reject-rsa2048-3prime-private-pkcs1.pem"),
+            ("rfc", "reject-rfc9500-testRSA2048-private-pkcs1.pem"),
+        ] {
+            let der = fixtures::load(dir, file);
+            let result = decode(&der);
+            assert!(is_unsupported(&result), "{file}: {:?}", result.err());
+        }
+    }
+
+    #[test]
+    fn the_rsa_private_integers_are_not_parsed_on_the_pkcs8_path() {
+        // Garbage contents in the eight INTEGERs (empty, X.690 §8.3.1;
+        // not minimal, §8.3.2) do not change the result: only their
+        // identifier and length octets are read.
+        let two_prime: &[u8] = &[0x02, 0x01, 0x00];
+        let multi: &[u8] = &[0x02, 0x01, 0x01];
+        for (version, field) in [
+            (two_prime, &[0x02, 0x00][..]),
+            (multi, &[0x02, 0x02, 0x00, 0x01][..]),
+            (two_prime, &[0x02, 0x02, 0xFF, 0x80][..]),
+        ] {
+            let der = version_then(version, field, 8);
+            let result = decode(&der);
+            assert!(is_unsupported(&result), "{:?}", result.err());
+        }
+    }
+
+    #[test]
+    fn near_rsa_private_shapes_stay_invalid_pkcs8() {
+        // Not an RSAPrivateKey (RFC 8017 App. A.1.2), so plain malformed
+        // PKCS#8 (ADR 0018 §4): too few INTEGERs, a version outside 0/1,
+        // a non-INTEGER field, trailing data.
+        let two_prime: &[u8] = &[0x02, 0x01, 0x00];
+        let small: &[u8] = &[0x02, 0x01, 0x05];
+        let mut trailing = version_then(two_prime, small, 8);
+        trailing.push(0x00);
+        let mut octet_last = version_then(two_prime, small, 7);
+        octet_last[1] += 3;
+        octet_last.extend_from_slice(&[0x04, 0x01, 0x00]);
+        for (what, der) in [
+            ("version alone", version_then(two_prime, small, 0)),
+            ("seven INTEGERs", version_then(two_prime, small, 7)),
+            ("version 2", version_then(&[0x02, 0x01, 0x02], small, 8)),
+            ("an OCTET STRING as the eighth", octet_last),
+            ("trailing data", trailing),
+        ] {
+            assert!(is_invalid(&decode(&der)), "{what}");
+        }
     }
 
     #[test]
