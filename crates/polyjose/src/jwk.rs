@@ -1428,6 +1428,31 @@ impl fmt::Debug for MemberNames<'_> {
 /// wiped on drop.
 impl ZeroizeOnDrop for Jwk {}
 
+#[cfg(test)]
+impl Jwk {
+    /// Test builds only: an `OKP` key that skips every import check, so a
+    /// family can prove its own defence-in-depth checks on a key import
+    /// would refuse (ADR 0043 §3: signing keeps its own check).
+    pub(crate) fn okp_unchecked(crv: OkpCurve, x: &[u8], d: Option<&[u8]>) -> Jwk {
+        Jwk {
+            material: KeyMaterial::Okp(OkpKey {
+                crv,
+                x: x.to_vec(),
+                d: d.map(|d| Zeroizing::new(d.to_vec())),
+            }),
+            key_use: None,
+            key_ops: None,
+            alg: None,
+            kid: None,
+            x5u: None,
+            x5c: None,
+            x5t: None,
+            x5t_s256: None,
+            other: Object::new(),
+        }
+    }
+}
+
 /// One JSON object member. The name is a [`Zeroizing<String>`] like every
 /// name an [`Object`] owns; a `String` value moves into the [`Value`]
 /// without a copy.
@@ -1695,6 +1720,8 @@ const EC_SCALAR_INVALID: &str = "EC private key d is out of range";
 const EC_PRIVATE_MISMATCH: &str = "EC private key d does not match x and y";
 /// Detail for an `OKP` `Ed25519` `x` that is not a usable public key.
 const ED25519_PUBLIC_INVALID: &str = "Ed25519 public key is invalid";
+/// Detail for an `OKP` `Ed25519` `d` whose public key is not `x`.
+const ED25519_PRIVATE_MISMATCH: &str = "Ed25519 private key d does not match x";
 
 /// Whether (`x`, `y`) is a point of `crv` other than the identity
 /// (ADR 0041 §4, ADR 0007; SEC 1 v2 §3.2.2.1 public key validation).
@@ -1832,6 +1859,23 @@ fn ed25519_public_is_valid(x: &[u8]) -> bool {
     canonical && !key.is_weak() && point.is_torsion_free()
 }
 
+/// Whether the 32-octet seed `d` is the private key of the Ed25519 public
+/// key `x` (RFC 8037 §2: `d` is the private key of `x`; RFC 8032 §5.1.5
+/// derives the public key from the seed). A mismatched pair would sign for
+/// a key other than the published one, the root of RUSTSEC-2022-0093
+/// (ADR 0043 §3). ed25519-dalek derives the key (`SigningKey::from_bytes`,
+/// `SigningKey::verifying_key`); the `SigningKey` is wiped on drop (its
+/// `zeroize` feature), `d` is borrowed from its wiped-on-drop buffer, and
+/// the comparison uses `subtle`'s constant-time equality, since the
+/// derived key is computed from the secret.
+fn ed25519_private_matches(x: &[u8], d: &[u8]) -> bool {
+    let Ok(seed) = <&ed25519_dalek::SecretKey>::try_from(d) else {
+        return false;
+    };
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(seed);
+    bool::from(signing_key.verifying_key().as_bytes()[..].ct_eq(x))
+}
+
 /// `kty` `OKP` (RFC 8037 §2).
 fn parse_okp(object: &Object, crv: OkpCurve) -> Result<OkpKey> {
     let len = crv.key_len();
@@ -1862,6 +1906,13 @@ fn parse_okp(object: &Object, crv: OkpCurve) -> Result<OkpKey> {
     // one (RFC 7748 §6.1, feature 0003).
     if crv == OkpCurve::Ed25519 && !ed25519_public_is_valid(&x) {
         return Err(Error::InvalidKey(ED25519_PUBLIC_INVALID));
+    }
+    // ADR 0043 §3: last, a private key must be the key of its own `x`. An
+    // X25519 `d` is not checked yet: the 0002 tree has no X25519 primitive
+    // to derive `x` with, and feature 0003 adds the check with x25519-dalek
+    // (RFC 7748 §6.1).
+    if crv == OkpCurve::Ed25519 && d.as_ref().is_some_and(|d| !ed25519_private_matches(&x, d)) {
+        return Err(Error::InvalidKey(ED25519_PRIVATE_MISMATCH));
     }
     Ok(OkpKey { crv, x, d })
 }

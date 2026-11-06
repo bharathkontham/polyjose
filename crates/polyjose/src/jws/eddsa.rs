@@ -453,9 +453,19 @@ mod tests {
     fn a_private_key_that_does_not_match_x_is_an_invalid_key() {
         // RFC 8037 §2: `d` is the private key of the public key `x`. A
         // mismatched pair would emit signatures that never verify under the
-        // published `x`, so signing fails closed instead.
+        // published `x`, so signing fails closed instead. JWK import refuses
+        // such a pair first (ADR 0043 §3), so the key is built unchecked to
+        // reach the family's own check.
+        let mismatched = Jwk::okp_unchecked(OkpCurve::Ed25519, &a1_x(), Some(&[7u8; 32]));
         let other_d = crate::util::b64url_encode(&[7u8; 32]);
-        let mismatched = keys::ed25519(&format!(r#","d":"{other_d}""#));
+        let json = format!(
+            r#"{{"kty":"OKP","crv":"Ed25519","x":"{}","d":"{other_d}"}}"#,
+            keys::ED25519_X
+        );
+        assert!(matches!(
+            Jwk::from_json(json.as_bytes()),
+            Err(Error::InvalidKey(_))
+        ));
         assert_eq!(
             sign(&A::EdDSA, &mismatched, A4_SIGNING_INPUT),
             Err(Error::InvalidKey("Ed25519 d does not match x"))
