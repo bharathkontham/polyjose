@@ -75,7 +75,6 @@ rsa = { version = "=0.10.0-rc.20", default-features = false }
 # stays off, as for ed25519-dalek. It reuses ed25519-dalek's curve25519-dalek, so it adds only itself
 # to the tree.
 x25519-dalek = { version = "=3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
-# Still to come with their features: aes-gcm 0.11, aes-kw 0.3, cbc 0.2, pbkdf2 0.13 (feature 0003).
 # JWE primitives (feature 0003, ADR 0002), exact pins (ADR 0019 §4), default features off
 # (ADR 0016 §3).
 # AES (FIPS 197), the block cipher under AES-GCM, AES Key Wrap and AES-CBC. 0.9.4 is the latest and
