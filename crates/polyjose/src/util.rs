@@ -315,6 +315,143 @@ fn decoded_len(encoded_len: usize) -> usize {
     encoded_len / 4 * 3 + (encoded_len % 4) * 3 / 4
 }
 
+// ---------------------------------------------------------------------------
+// Standard base64 (RFC 4648 §4: Table 1 alphabet, `=` padding), for the
+// RFC 7468 PEM codec in `keys/pem.rs` (RFC 7468 §2: "base64 encoding
+// [RFC4648]"). The same constant-time arithmetic as base64url above, with
+// the `+`/`/` alphabet and padding. Crate-internal: JOSE itself only ever
+// uses base64url (RFC 7515 §2).
+// ---------------------------------------------------------------------------
+
+/// RFC 4648 §4 Table 1, "The Base 64 Alphabet": `+` and `/`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
+)]
+const STANDARD: Alphabet = Alphabet {
+    c62: b'+',
+    c63: b'/',
+};
+
+/// The pad character (RFC 4648 §3.2, §4).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
+)]
+const PAD: u8 = b'=';
+
+/// Length of the padded standard base64 encoding of `len` octets:
+/// 4·⌈len/3⌉ characters (RFC 4648 §4). It cannot overflow for the length
+/// of any slice, which is at most `isize::MAX`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
+)]
+pub(crate) fn b64_encoded_len(len: usize) -> usize {
+    len / 3 * 4 + if len.is_multiple_of(3) { 0 } else { 4 }
+}
+
+/// Appends the padded standard base64 encoding of `data` (RFC 4648 §4) to
+/// `out`.
+///
+/// A final group of 1 or 2 octets gives 2 or 3 symbols followed by `==` or
+/// `=` (RFC 4648 §4 cases (2) and (3)), and its pad bits are zero (§3.5), so
+/// the output is the canonical encoding that [`b64_decode_into`] accepts.
+/// The caller reserves [`b64_encoded_len`] characters first, so that the
+/// string never reallocates and leaves a copy of a secret behind.
+///
+/// # Constant time
+///
+/// `data` may be a private key (a PKCS#8 or SEC1 body, RFC 7468 §10), so
+/// the running time depends only on `data.len()`, which is public. Every
+/// 6-bit value goes through `encode_symbol_in`, branch-free and table-free
+/// arithmetic over Table 1's five contiguous runs (the same mapping as
+/// base64url, with `+` and `/` for 62 and 63). The number of `=` characters
+/// depends only on `data.len() % 3`. Every character is ASCII, so
+/// `String::push` takes the same one-byte path for every input.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
+)]
+pub(crate) fn b64_encode_append(data: &[u8], out: &mut String) {
+    encode_groups(data, STANDARD, out);
+    for _ in 0..(3 - data.len() % 3) % 3 {
+        out.push(char::from(PAD));
+    }
+}
+
+/// Strictly decodes padded standard base64 (RFC 4648 §4) into `out`.
+///
+/// `out` is resized to the decoded length, allocated once at exactly that
+/// length; pass an empty buffer that wipes on drop (`Zeroizing`). The empty
+/// input decodes to no octets (RFC 4648 §10). Everything that is not the
+/// canonical encoding of some octet string fails with
+/// [`Error::InvalidBase64`](crate::Error::InvalidBase64):
+///
+/// - a length that is not a multiple of 4, so missing padding (RFC 4648
+///   §3.2, §4: the output is always a whole number of 4-character quanta);
+/// - `=` anywhere except as the last one or two characters (§3.2, §4);
+/// - `-` and `_` (base64url, §5), whitespace, line breaks and every other
+///   byte outside Table 1 (§3.3). Line breaks are the PEM codec's job;
+/// - non-zero pad bits in the final quantum (§3.5: decoders MAY reject
+///   them; we do, so that each octet string has exactly one encoding).
+///
+/// On failure every decoded octet is wiped from `out` before returning, so
+/// a rejected private-key body leaves no partial key behind.
+///
+/// # Constant time
+///
+/// The running time and memory access pattern depend only on `input.len()`
+/// and on the number of trailing `=` characters, both public: the padding is
+/// fixed by the decoded length modulo 3 (RFC 4648 §4), and that length is
+/// the size of the output.
+///
+/// - Each symbol goes through `decode_symbol_in`, which maps it with
+///   arithmetic range masks: no branch and no table index depends on it.
+/// - A bad symbol or non-zero pad bits do not stop decoding. They are folded
+///   into one `subtle::Choice`, checked once at the end, so the work done
+///   does not reveal where the first fault is.
+/// - The only other branches look at whether each of the last two characters
+///   is `=`, which is the padding length.
+///
+/// The error carries no input bytes (ADR 0007).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
+)]
+pub(crate) fn b64_decode_into(input: &[u8], out: &mut Vec<u8>) -> crate::Result<()> {
+    use zeroize::Zeroize;
+
+    // RFC 4648 §4: a padded encoding is a whole number of quanta.
+    if !input.len().is_multiple_of(4) {
+        return Err(crate::Error::InvalidBase64);
+    }
+    // RFC 4648 §4 cases (2) and (3): the final quantum ends in "==" or "=".
+    // Any other `=` stays in `body` and fails as a non-alphabet byte.
+    let pad = match input {
+        [.., a, b] if *a == PAD && *b == PAD => 2,
+        [.., b] if *b == PAD => 1,
+        _ => 0,
+    };
+    // The body's length is 0, 2 or 3 modulo 4, never 1, as decode_into_in
+    // requires.
+    let body = &input[..input.len() - pad];
+    let len = decoded_len(body.len());
+    // Wipe anything the caller left in `out`, then allocate it once at the
+    // exact length so no reallocation copies decoded octets.
+    out.zeroize();
+    out.reserve_exact(len);
+    out.resize(len, 0);
+    let valid = decode_into_in(body, out, STANDARD);
+    if bool::from(valid) {
+        Ok(())
+    } else {
+        // Every quantum has been written: wipe them all.
+        out.as_mut_slice().zeroize();
+        Err(crate::Error::InvalidBase64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,6 +745,163 @@ mod tests {
                     prop_assert_eq!(b64url_encode(&bytes), s);
                 }
             }
+        }
+    }
+}
+
+/// Tests of the standard-alphabet, padded base64 (RFC 4648 §4) that the
+/// RFC 7468 PEM codec uses. Kept apart from the base64url tests above.
+#[cfg(test)]
+mod standard_tests {
+    use super::*;
+
+    /// Encodes with [`b64_encode_append`] into a fresh string.
+    fn encode(data: &[u8]) -> String {
+        let mut out = String::with_capacity(b64_encoded_len(data.len()));
+        b64_encode_append(data, &mut out);
+        out
+    }
+
+    /// Decodes with [`b64_decode_into`] into a fresh buffer.
+    fn decode(s: &str) -> crate::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        b64_decode_into(s.as_bytes(), &mut out).map(|()| out)
+    }
+
+    /// RFC 4648 §10 test vectors, verbatim (standard alphabet, padded).
+    const RFC4648_SECTION_10: [(&[u8], &str); 7] = [
+        (b"", ""),
+        (b"f", "Zg=="),
+        (b"fo", "Zm8="),
+        (b"foo", "Zm9v"),
+        (b"foob", "Zm9vYg=="),
+        (b"fooba", "Zm9vYmE="),
+        (b"foobar", "Zm9vYmFy"),
+    ];
+
+    #[test]
+    fn rfc4648_section_10_vectors_encode() {
+        for (bytes, encoded) in RFC4648_SECTION_10 {
+            assert_eq!(encode(bytes), encoded, "encode {bytes:?}");
+            assert_eq!(b64_encoded_len(bytes.len()), encoded.len());
+        }
+    }
+
+    #[test]
+    fn rfc4648_section_10_vectors_decode() {
+        for (bytes, encoded) in RFC4648_SECTION_10 {
+            assert_eq!(decode(encoded), Ok(bytes.to_vec()), "decode {encoded:?}");
+        }
+    }
+
+    /// RFC 4648 §4 Table 1 ("The Base 64 Alphabet"), written out
+    /// independently of the codec under test.
+    const TABLE_1: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    /// Every 6-bit value encodes as `TABLE_1[v]`, first and last in a
+    /// quantum, through the same arithmetic mapping as base64url.
+    #[test]
+    fn encode_maps_every_value_per_table_1() {
+        for (v, &symbol) in (0u8..).zip(TABLE_1.iter()) {
+            assert_eq!(encode_symbol_in(v, STANDARD), symbol, "value {v}");
+            assert_eq!(encode_symbol_in(v | 0xc0, STANDARD), symbol, "value {v}");
+            assert_eq!(encode(&[0, 0, v]).as_bytes(), [b'A', b'A', b'A', symbol]);
+        }
+        // 0xFB 0xFF = values 62, 63, 60 (RFC 4648 §4): "+/8=".
+        assert_eq!(encode(&[0xfb, 0xff]), "+/8=");
+    }
+
+    /// Every byte 0x00..=0xFF decodes to its Table 1 value if it is in the
+    /// alphabet and is rejected otherwise (RFC 4648 §3.3), so `-` and `_`
+    /// (base64url, §5) are rejected.
+    #[test]
+    fn decode_maps_every_byte_per_table_1() {
+        for b in 0u8..=0xff {
+            let (value, valid) = decode_symbol_in(b, STANDARD);
+            let mut out = Vec::new();
+            // First in the quantum, where `=` is never valid either.
+            let result = b64_decode_into(&[b, b'A', b'A', b'A'], &mut out);
+            match TABLE_1.iter().position(|&s| s == b) {
+                Some(v) => {
+                    assert_eq!(usize::from(value), v, "byte {b:#04x}");
+                    assert!(bool::from(valid));
+                    assert_eq!(result, Ok(()));
+                    assert_eq!(usize::from(out[0] >> 2), v);
+                }
+                None => {
+                    assert_eq!(value, 0, "byte {b:#04x} must contribute no bits");
+                    assert!(!bool::from(valid), "byte {b:#04x} must be invalid");
+                    assert_eq!(result, Err(crate::Error::InvalidBase64), "{b:#04x}");
+                }
+            }
+        }
+    }
+
+    fn assert_all_rejected(inputs: &[&str]) {
+        for input in inputs {
+            assert_eq!(
+                decode(input),
+                Err(crate::Error::InvalidBase64),
+                "{input:?} must be rejected"
+            );
+        }
+    }
+
+    /// RFC 4648 §3.2 and §4: the encoding is padded to a multiple of 4
+    /// characters, with `=` only at the end and at most two of them.
+    #[test]
+    fn rejects_missing_or_misplaced_padding() {
+        assert_all_rejected(&[
+            "Zg", "Zg=", "Zm8", "Zm9vYg", "Zm9vYg=", "Zm9vYmE", "Z", "Zm9vY", "=", "==", "===",
+            "====", "Z===", "Zg==Zg==", "Zm=v", "=m9v", "Zg==\n", "Zm9v====",
+        ]);
+    }
+
+    /// RFC 4648 §4: `-` and `_` are base64url (§5), not base64.
+    #[test]
+    fn rejects_url_alphabet_and_whitespace() {
+        assert_all_rejected(&["-_8=", "+_8=", "-/8=", "Zm9v YmFy", "Zm9v\nYmFy", " Zg=="]);
+    }
+
+    /// RFC 4648 §3.5: non-zero pad bits are rejected, so each octet string
+    /// has one encoding. "QQ==" is 0x41; "QR==" differs only in those bits.
+    #[test]
+    fn rejects_non_canonical_pad_bits() {
+        assert_eq!(decode("QQ=="), Ok(vec![0x41]));
+        assert_eq!(decode("QUE="), Ok(vec![0x41, 0x41]));
+        assert_all_rejected(&["QR==", "QS==", "Q/==", "QUF=", "QUH=", "Zh==", "Zm9vYmF="]);
+    }
+
+    /// A rejected decode leaves no decoded octets behind: the caller's
+    /// buffer is read back as all zeros, at its full decoded length, after
+    /// both a bad symbol and bad pad bits (workspace CLAUDE.md: key material
+    /// is zeroized).
+    #[test]
+    fn rejected_decode_wipes_the_output_buffer() {
+        for input in ["Zm9vYmFy*AAA", "Zm9vYmFyQR==", "Zm9vYmFyZm9v-A=="] {
+            let mut out = Vec::new();
+            assert_eq!(
+                b64_decode_into(input.as_bytes(), &mut out),
+                Err(crate::Error::InvalidBase64)
+            );
+            assert!(!out.is_empty(), "{input:?}: the buffer was written");
+            assert!(out.iter().all(|&b| b == 0), "{input:?}: {out:?}");
+        }
+    }
+
+    /// The output is allocated once at its exact length, so no reallocation
+    /// leaves a copy of decoded octets in freed memory; an encode into a
+    /// string reserved with [`b64_encoded_len`] never grows it either.
+    #[test]
+    fn buffers_are_sized_exactly() {
+        for n in 0..=50usize {
+            let data = vec![0xa5; n];
+            let encoded = encode(&data);
+            assert_eq!(encoded.len(), b64_encoded_len(n));
+            let mut out = Vec::new();
+            assert_eq!(b64_decode_into(encoded.as_bytes(), &mut out), Ok(()));
+            assert_eq!(out, data);
+            assert_eq!(out.capacity(), n, "{n} octets");
         }
     }
 }
