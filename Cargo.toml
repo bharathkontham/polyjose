@@ -32,6 +32,17 @@ zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 # Default features (std, i128) off (ADR 0016 §3): polyjose uses only Choice and ConstantTimeEq on u32,
 # which need neither.
 subtle = { version = "2.6", default-features = false }
+# Dev-only test oracles for the keys module's own DER and PEM codecs (ADR 0016 §5, ADR 0018 §1):
+# the RustCrypto formats crates differential-test what polyjose parses and writes. ADR 0018 and
+# ADR 0020 keep them out of [dependencies]; `cargo tree -e normal` never shows them. They match the
+# der/sec1 versions the curve crates already use, and none of them enables a feature of `rsa`
+# (scripts/check-deps.sh, check 11).
+der = { version = "0.8.3", default-features = false, features = ["alloc", "oid", "pem"] }
+spki = { version = "0.8.1", default-features = false, features = ["alloc", "pem"] }
+pkcs8 = { version = "0.11.0", default-features = false, features = ["alloc", "pem"] }
+sec1 = { version = "0.8.1", default-features = false, features = ["alloc", "der", "point", "pem"] }
+pkcs1 = { version = "0.8.0", default-features = false, features = ["alloc", "pem"] }
+pem-rfc7468 = { version = "1.0.0", default-features = false, features = ["alloc"] }
 # Dev-only: property tests (ADR 0008 layer 2).
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 # OS CSPRNG: the only source of randomness (ADR 0005). Default features off (ADR 0016); polyjose uses
