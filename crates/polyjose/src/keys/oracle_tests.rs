@@ -1926,3 +1926,316 @@ mod pem_properties {
         assert!(accepted.get() >= 50, "only {} accepted", accepted.get());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Secret hygiene
+// ---------------------------------------------------------------------------
+
+/// What carries a private key between the codecs is either borrowed or
+/// wiped on drop (CLAUDE.md secrets rule, ADR 0018 §5), checked at compile
+/// time:
+///
+/// - the owned buffers every decoder and encoder returns are `Zeroizing`
+///   (`ZeroizeOnDrop`): the DER of `pem::decode`, and the DER and PEM of
+///   every private-key encoder;
+/// - the intermediate views `Pkcs8Parts` and `sec1::EcPrivateKey` are
+///   `Copy`, so they cannot own a buffer: they only borrow the caller's
+///   zeroizing one (T02 contract);
+/// - the JWK types that hold `d` are `ZeroizeOnDrop`.
+const _: () = {
+    const fn zeroize_on_drop<T: zeroize::ZeroizeOnDrop + ?Sized>() {}
+    const fn borrowed_view<T: Copy>() {}
+    zeroize_on_drop::<zeroize::Zeroizing<Vec<u8>>>();
+    zeroize_on_drop::<zeroize::Zeroizing<String>>();
+    zeroize_on_drop::<Jwk>();
+    zeroize_on_drop::<KeyMaterial>();
+    zeroize_on_drop::<crate::jwk::EcKey>();
+    zeroize_on_drop::<crate::jwk::OkpKey>();
+    borrowed_view::<super::types::Pkcs8Parts<'_>>();
+    borrowed_view::<super::sec1::EcPrivateKey<'_>>();
+};
+
+/// The signatures that tie those types to the functions: each function
+/// that returns private-key octets returns them `Zeroizing`.
+type Secret = Result<zeroize::Zeroizing<Vec<u8>>>;
+type LabelledSecret = Result<(Label, zeroize::Zeroizing<Vec<u8>>)>;
+const _: fn(&str) -> LabelledSecret = super::pem::decode;
+const _: fn(Label, &[u8]) -> Result<zeroize::Zeroizing<String>> = super::pem::encode;
+const _: fn(&super::types::Pkcs8Parts<'_>) -> Secret = super::pkcs8::encode;
+const _: fn(&super::sec1::EcPrivateKey<'_>) -> Secret = super::sec1::encode;
+const _: fn(&crate::jwk::EcKey) -> Secret = super::ec::to_pkcs8;
+const _: fn(&crate::jwk::EcKey) -> Secret = super::ec::to_sec1;
+const _: fn(&crate::jwk::OkpKey) -> Secret = super::okp::to_pkcs8;
+
+/// An ASCII marker: it would show in output verbatim, in hex, or as the
+/// decimal list of a derived `Debug`.
+const MARKER: &[u8; 16] = b"POLYJOSE-MARKER!";
+
+/// A private scalar or seed of `len` octets made of the marker. For P-521
+/// (66 octets) it starts `00 01`, below the group order; every other
+/// marker value starts with 0x50, below n for all four curves.
+fn marker_secret(len: usize) -> Vec<u8> {
+    let (prefix, rest): (&[u8], usize) = if len == 66 {
+        (&[0x00, 0x01], 64)
+    } else {
+        (&[], len)
+    };
+    [prefix, &MARKER.repeat(rest.div_ceil(16))[..rest]].concat()
+}
+
+/// Every way a secret could show up in text: the marker; for each 8-octet
+/// window, its lower- and upper-case hex, the decimal and hex lists of a
+/// derived `Debug`, and the ASCII text; and every 11-character window of
+/// its base64url and base64 encodings (8 octets are under 11 characters).
+fn leak_forms(secret: &[u8]) -> Vec<String> {
+    use core::fmt::Write as _;
+    let mut forms = vec![String::from_utf8_lossy(MARKER).into_owned()];
+    for window in secret.windows(8) {
+        let mut lower = String::new();
+        for octet in window {
+            write!(lower, "{octet:02x}").unwrap();
+        }
+        forms.push(lower.to_uppercase());
+        forms.push(lower);
+        let decimal = format!("{window:?}");
+        forms.push(decimal[1..decimal.len() - 1].to_owned());
+        let hex = format!("{window:02x?}");
+        forms.push(hex[1..hex.len() - 1].to_owned());
+        if window.iter().all(u8::is_ascii_graphic) {
+            forms.push(String::from_utf8_lossy(window).into_owned());
+        }
+    }
+    let base64url = crate::util::b64url_encode(secret);
+    let mut base64 = String::new();
+    crate::util::b64_encode_append(secret, &mut base64);
+    for encoded in [base64url, base64] {
+        let chars: Vec<char> = encoded.chars().collect();
+        for window in chars.windows(11) {
+            forms.push(window.iter().collect());
+        }
+    }
+    forms
+}
+
+/// Runs `der` through every DER decoder and key mapper and adds the
+/// `Debug` and `Display` text of every error, and the `Debug` text of every
+/// decoded view and JWK, to `out`. `import` limits the key mappers, which
+/// do curve arithmetic, to the one container (all four if `None`).
+fn render_der(der: &[u8], import: Option<Kind>, out: &mut std::collections::BTreeSet<String>) {
+    fn push<T>(
+        out: &mut std::collections::BTreeSet<String>,
+        result: &Result<T>,
+        ok: Option<String>,
+    ) {
+        match result {
+            Err(error) => {
+                out.insert(format!("{error:?}"));
+                out.insert(format!("{error}"));
+            }
+            Ok(_) => {
+                out.extend(ok);
+            }
+        }
+    }
+    let pkcs8 = super::pkcs8::decode(der);
+    push(
+        out,
+        &pkcs8,
+        pkcs8.as_ref().ok().map(|parts| format!("{parts:?}")),
+    );
+    if let Ok(parts) = &pkcs8 {
+        let inner = super::sec1::decode(parts.private_key);
+        push(
+            out,
+            &inner,
+            inner.as_ref().ok().map(|key| format!("{key:?}")),
+        );
+    }
+    let spki = super::spki::decode(der);
+    push(
+        out,
+        &spki,
+        spki.as_ref().ok().map(|parts| format!("{parts:?}")),
+    );
+    let sec1 = super::sec1::decode(der);
+    push(out, &sec1, sec1.as_ref().ok().map(|key| format!("{key:?}")));
+    push(out, &super::pkcs1::decode(der), None);
+    push(out, &super::pkcs1::decode_public(der), None);
+    let kinds: Vec<Kind> = import.map_or(Kind::ALL.to_vec(), |kind| vec![kind]);
+    for kind in kinds {
+        let jwk = our_import(kind, der);
+        push(out, &jwk, jwk.as_ref().ok().map(|jwk| format!("{jwk:?}")));
+    }
+}
+
+/// `text` through `pem::decode`, rendered as [`render_der`] does.
+fn render_pem(text: &[u8], out: &mut std::collections::BTreeSet<String>) {
+    if let Ok(text) = core::str::from_utf8(text) {
+        match super::pem::decode(text) {
+            Err(error) => {
+                out.insert(format!("{error:?}"));
+                out.insert(format!("{error}"));
+            }
+            Ok((label, der)) => {
+                out.insert(format!("{label:?}"));
+                if let Some(kind) = Kind::of_label(label) {
+                    render_der(&der, Some(kind), out);
+                }
+            }
+        }
+    }
+}
+
+/// The private key of a DER container, as polyjose imports it.
+fn private_key_of(kind: Kind, der: &[u8]) -> Option<Vec<u8>> {
+    match values_of(&our_import(kind, der).ok()?) {
+        Values::Ec { d, .. } | Values::Okp { d, .. } => d,
+        Values::Rsa { .. } => None,
+    }
+}
+
+/// Valid private keys whose secret is the marker: Ed25519 and X25519
+/// PKCS#8 v1 and v2, and EC SEC1 and PKCS#8 on the four curves, each with
+/// its secret.
+fn marker_keys() -> Vec<(Kind, Vec<u8>, Vec<u8>)> {
+    let mut keys = Vec::new();
+    for alg in [AlgId::Ed25519, AlgId::X25519] {
+        let d = marker_secret(32);
+        let curve_private_key = tlv(super::der::OCTET_STRING, &d);
+        let v1 = super::pkcs8::encode(&super::types::Pkcs8Parts {
+            version: 0,
+            alg,
+            private_key: &curve_private_key,
+            public_key: None,
+        })
+        .unwrap();
+        let Values::Okp { x, .. } = values_of(&our_import(Kind::Pkcs8, &v1).unwrap()) else {
+            panic!("an OKP key")
+        };
+        let v2 = super::pkcs8::encode(&super::types::Pkcs8Parts {
+            version: 1,
+            alg,
+            private_key: &curve_private_key,
+            public_key: Some(&x),
+        })
+        .unwrap();
+        keys.push((Kind::Pkcs8, v1.to_vec(), d.clone()));
+        keys.push((Kind::Pkcs8, v2.to_vec(), d));
+    }
+    for crv in [
+        EcCurve::P256,
+        EcCurve::P384,
+        EcCurve::P521,
+        EcCurve::Secp256k1,
+    ] {
+        let d = marker_secret(crv.coordinate_len());
+        let bare = super::sec1::encode(&super::sec1::EcPrivateKey {
+            private_key: &d,
+            parameters: Some(crv),
+            public_key: None,
+        })
+        .unwrap();
+        let jwk = super::ec::from_sec1(&bare).unwrap();
+        let KeyMaterial::Ec(key) = jwk.material() else {
+            panic!("an EC key")
+        };
+        keys.push((
+            Kind::Sec1,
+            super::ec::to_sec1(key).unwrap().to_vec(),
+            d.clone(),
+        ));
+        keys.push((Kind::Pkcs8, super::ec::to_pkcs8(key).unwrap().to_vec(), d));
+    }
+    keys
+}
+
+/// No error and no decoded view reachable from the key fixtures, the
+/// negative vectors, the marker keys, every truncation of them and every
+/// one-bit flip of the marker keys and negative vectors, through
+/// `pem::decode`, `pkcs8::decode`, `spki::decode`, `sec1::decode`,
+/// `pkcs1::decode` and the `okp`, `ec` and `rsa` mappers, shows the marker
+/// or any 8-octet window of the input's private key in its `Debug` or
+/// `Display` text (CLAUDE.md: key material never in errors or `Debug`).
+#[test]
+fn no_error_or_debug_output_shows_private_key_octets() {
+    use std::collections::BTreeSet;
+
+    // (container, DER, its private key if known, flip every bit too); no
+    // container means PEM text.
+    type Input = (Option<Kind>, Vec<u8>, Option<Vec<u8>>, bool);
+    let mut inputs: Vec<Input> = Vec::new();
+    for (kind, der, d) in marker_keys() {
+        let text = super::pem::encode(
+            if kind == Kind::Sec1 {
+                Label::EcPrivateKey
+            } else {
+                Label::PrivateKey
+            },
+            &der,
+        )
+        .unwrap();
+        inputs.push((None, text.as_bytes().to_vec(), Some(d.clone()), false));
+        inputs.push((Some(kind), der, Some(d), true));
+    }
+    for (dir, name) in positive_fixtures() {
+        let kind = Kind::of_file(&name);
+        let der = load_positive(dir, &name);
+        let d = private_key_of(kind, &der);
+        if name.ends_with(".pem") {
+            inputs.push((None, raw(dir, &name), d.clone(), false));
+        }
+        inputs.push((Some(kind), der, d, false));
+    }
+    for entry in negative_entries() {
+        let bytes = raw("negative", &entry.file);
+        let base_kind = Kind::of_file(&entry.base);
+        let d = private_key_of(base_kind, &load_positive("rfc", &entry.base));
+        if entry.file.ends_with(".pem") {
+            inputs.push((None, bytes, d, false));
+        } else {
+            inputs.push((Some(negative_kind(&entry)), bytes, d, true));
+        }
+    }
+    for dir in ["openssl", "rfc"] {
+        for name in fixtures::files(dir, |name| name.starts_with("reject-")) {
+            let bytes = raw(dir, &name);
+            let kind = (!name.ends_with(".pem")).then(|| Kind::of_file(&name));
+            inputs.push((kind, bytes, None, false));
+        }
+    }
+
+    // Rendered text, grouped by the secret it must not show.
+    let mut rendered: Vec<(Vec<u8>, BTreeSet<String>)> = Vec::new();
+    let mut details = BTreeSet::new();
+    for (kind, bytes, secret, flip) in &inputs {
+        let mut out = BTreeSet::new();
+        let mut variants: Vec<Vec<u8>> = (0..=bytes.len()).map(|n| bytes[..n].to_vec()).collect();
+        if *flip {
+            for i in 0..bytes.len() {
+                for bit in [0x01, 0x80] {
+                    let mut flipped = bytes.clone();
+                    flipped[i] ^= bit;
+                    variants.push(flipped);
+                }
+            }
+        }
+        for variant in &variants {
+            match kind {
+                Some(kind) => render_der(variant, Some(*kind), &mut out),
+                None => render_pem(variant, &mut out),
+            }
+        }
+        details.extend(out.iter().filter(|s| s.starts_with("invalid key")).cloned());
+        rendered.push((secret.clone().unwrap_or_default(), out));
+    }
+    for (secret, texts) in &rendered {
+        let forms = leak_forms(secret);
+        for text in texts {
+            for form in &forms {
+                assert!(!text.contains(form.as_str()), "{text:?} shows {form:?}");
+            }
+        }
+    }
+    // Not vacuous: the inputs reach many distinct error paths.
+    assert!(details.len() >= 40, "{details:#?}");
+}
