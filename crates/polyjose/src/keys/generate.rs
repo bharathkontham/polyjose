@@ -35,6 +35,7 @@ use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, ToSec1Point};
 use p256::elliptic_curve::{
     AffinePoint, CurveArithmetic, FieldBytesSize, Generate, NonZeroScalar, SecretKey,
 };
+use x25519_dalek::StaticSecret;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::jwk_build;
@@ -172,25 +173,72 @@ pub(crate) fn generate_okp<R: TryCryptoRng + ?Sized>(crv: OkpCurve, rng: &mut R)
     okp_key(crv, None, rng)
 }
 
-/// [`generate_okp`] with the optional `alg` member (RFC 7517 §4.4). The
-/// 32-octet seed is drawn straight into a [`Zeroizing`] buffer. The public
-/// key comes from ed25519-dalek's `SigningKey::from_bytes`, which borrows
-/// the seed, or from `okp::x25519_public`, the crate's one X25519
-/// derivation, which wipes its own copy. Both are best-effort about the
-/// temporaries inside the dalek crates; see `okp::x25519_public` and
-/// `okp::ed25519_public`.
+/// Draws a fresh X25519 private key from `rng`: exactly 32 random bytes
+/// (RFC 7748 §6.1: "Alice generates 32 random bytes"), kept unclamped, as
+/// RFC 7748 §5 `decodeScalar25519` clamps them in every scalar
+/// multiplication, which x25519-dalek does.
+///
+/// **This is the crate-wide X25519 entry point** (F08, ADR 0050; the
+/// counterpart of [`generate_ec_secret`]), with a stable signature, and the
+/// one place the crate builds an X25519 `StaticSecret` from random bytes:
+/// [`generate_okp`] builds its JWK from it, and JWE's
+/// `jwe::ecdh_x25519::generate` passes `RandomSource::crypto_rng()` for the
+/// ephemeral key of every X25519 ECDH-ES operation (RFC 8037 §3.2,
+/// RFC 7518 §4.6.1). It consumes exactly 32 bytes of `rng`, the draw order
+/// of `jwe::random` relies on that.
+///
+/// # Secrets
+///
+/// The bytes are drawn straight into a [`Zeroizing`] buffer, and the
+/// returned `StaticSecret` wipes itself on drop (x25519-dalek's `zeroize`
+/// feature). x25519-dalek 3.0.0 builds a `StaticSecret` only by value
+/// (`impl From<[u8; 32]> for StaticSecret`), so the one copy out of reach
+/// is the by-value argument of that call, if the compiler materializes one
+/// (best-effort, as `okp::x25519_public` documents).
+///
+/// # Errors
+///
+/// [`Error::RandomnessUnavailable`] if `rng` fails, whatever its error
+/// type; no key is returned (ADR 0005).
+pub(crate) fn generate_x25519_secret<R: TryCryptoRng + ?Sized>(
+    rng: &mut R,
+) -> Result<StaticSecret> {
+    let mut bytes = Zeroizing::new([0u8; 32]);
+    fill(rng, bytes.as_mut_slice())?;
+    Ok(StaticSecret::from(*bytes))
+}
+
+/// [`generate_okp`] with the optional `alg` member (RFC 7517 §4.4).
+///
+/// - Ed25519: the 32-octet seed is drawn straight into a [`Zeroizing`]
+///   buffer, and the public key comes from ed25519-dalek's
+///   `SigningKey::from_bytes`, which borrows it.
+/// - X25519: the secret comes from [`generate_x25519_secret`], and `d` is
+///   borrowed from it (`StaticSecret::as_bytes`), so no further copy is
+///   made here. The public key comes from `okp::x25519_public`, the crate's
+///   one X25519 derivation, which wipes its own copy.
+///
+/// Both are best-effort about the temporaries inside the dalek crates; see
+/// `okp::x25519_public` and `okp::ed25519_public`.
 fn okp_key<R: TryCryptoRng + ?Sized>(crv: OkpCurve, alg: Option<&str>, rng: &mut R) -> Result<Jwk> {
-    let mut d = Zeroizing::new([0u8; 32]);
-    fill(rng, d.as_mut_slice())?;
-    let x = match crv {
-        // RFC 8032 §5.1.5 steps 1–4: A = [s]B from SHA-512(d).
-        OkpCurve::Ed25519 => ed25519_dalek::SigningKey::from_bytes(&d)
-            .verifying_key()
-            .to_bytes(),
-        // RFC 7748 §6.1: the public key is X25519(d, 9).
-        OkpCurve::X25519 => super::okp::x25519_public(&d),
-    };
-    jwk_build::okp_jwk(crv, &x, Some(d.as_slice()), alg)
+    match crv {
+        OkpCurve::Ed25519 => {
+            let mut d = Zeroizing::new([0u8; 32]);
+            fill(rng, d.as_mut_slice())?;
+            // RFC 8032 §5.1.5 steps 1–4: A = [s]B from SHA-512(d).
+            let x = ed25519_dalek::SigningKey::from_bytes(&d)
+                .verifying_key()
+                .to_bytes();
+            jwk_build::okp_jwk(crv, &x, Some(d.as_slice()), alg)
+        }
+        OkpCurve::X25519 => {
+            let secret = generate_x25519_secret(rng)?;
+            let d = secret.as_bytes();
+            // RFC 7748 §6.1: the public key is X25519(d, 9).
+            let x = super::okp::x25519_public(d);
+            jwk_build::okp_jwk(crv, &x, Some(d.as_slice()), alg)
+        }
+    }
 }
 
 /// [`generate_ec`] with the optional `alg` member (RFC 7517 §4.4).
@@ -769,6 +817,44 @@ mod tests {
     }
 
     #[test]
+    fn x25519_secret_is_the_d_of_generate_okp() {
+        // F08 (ADR 0050): one X25519 generation path. generate_okp(X25519)
+        // is generate_x25519_secret plus the JWK, so the same FixedRng
+        // bytes give the same d, exactly the 32 bytes drawn (RFC 7748 §6.1,
+        // RFC 8037 §2), and x = X25519(d, 9).
+        let counting: Vec<u8> = (0u8..32).collect();
+        for bytes in [okp_d(&published_okp_key(OkpCurve::X25519)), counting] {
+            let mut fixed = FixedRng::new(bytes.as_slice());
+            let secret = generate_x25519_secret(&mut CryptoRngAdapter::fixed(&mut fixed)).unwrap();
+            assert_eq!(fixed.remaining(), 0);
+            assert_eq!(&secret.as_bytes()[..], &bytes[..]);
+
+            let mut fixed = FixedRng::new(bytes.as_slice());
+            let jwk =
+                generate_okp(OkpCurve::X25519, &mut CryptoRngAdapter::fixed(&mut fixed)).unwrap();
+            assert_eq!(fixed.remaining(), 0);
+            assert_eq!(okp_d(&jwk), bytes);
+            let public = x25519_dalek::PublicKey::from(&secret);
+            assert_eq!(okp_key(&jwk).x(), public.as_bytes());
+        }
+    }
+
+    #[test]
+    fn x25519_secret_fails_closed_on_rng_failure() {
+        // ADR 0005: RandomnessUnavailable and no key, for an OS failure and
+        // for a FixedRng one byte short of the 32-byte secret.
+        assert!(matches!(
+            generate_x25519_secret(&mut CryptoRngAdapter::failing(getrandom::Error::UNEXPECTED)),
+            Err(Error::RandomnessUnavailable)
+        ));
+        let mut fixed = FixedRng::new([0x5Au8; 31]);
+        assert!(matches!(
+            generate_x25519_secret(&mut CryptoRngAdapter::fixed(&mut fixed)),
+            Err(Error::RandomnessUnavailable)
+        ));
+    }
+
+    #[test]
     fn a_generated_ed25519_key_signs_and_verifies() {
         // Sanity check through ed25519-dalek (RFC 8032 §5.1.6, §5.1.7).
         use ed25519_dalek::{Signer, Verifier};
@@ -1041,5 +1127,22 @@ mod tests {
         // No RNG impl here: rng.rs holds the crate's only one. The needle
         // is joined at run time so this file stays out of the audit grep.
         assert!(!production.contains(&["impl", "TryCryptoRng"].join(" ")));
+    }
+
+    #[test]
+    fn x25519_secrets_are_built_from_random_bytes_in_one_place() {
+        // F08 (ADR 0050): the production half of this file builds an
+        // X25519 `StaticSecret` exactly once, inside
+        // generate_x25519_secret. The needle is joined at run time so this
+        // test is not itself a match.
+        let source = include_str!("generate.rs");
+        let production = &source[..source.find("#[cfg(test)]").unwrap()];
+        let needle = ["StaticSecret", "::from("].concat();
+        assert_eq!(production.matches(needle.as_str()).count(), 1);
+        let body = &production[production
+            .find("pub(crate) fn generate_x25519_secret")
+            .unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert!(body.contains(needle.as_str()));
     }
 }
