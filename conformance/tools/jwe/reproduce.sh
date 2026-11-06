@@ -114,4 +114,8 @@ for d in rfc7520-multi negative-crypto json zip gcmkw; do
   compare "t18-cross-family.mjs ($d/)" "$tmp/t18/conformance/vectors/jwe/$d" "$vectors/$d"
 done
 
+# F06: negative-cross-mode/ (ADR 0050 §1).
+node "$here/f06-cross-mode.mjs" "$tmp/f06" > /dev/null
+compare "f06-cross-mode.mjs (negative-cross-mode/)" "$tmp/f06" "$vectors/negative-cross-mode"
+
 exit "$status"
