@@ -175,7 +175,7 @@ fn upstream_duplicates_verify_like_their_valid_twin() {
     for (index, test) in &removed {
         let verified = verify(&suite.groups[*index], test)
             .unwrap_or_else(|e| panic!("tcId {}: {e}", test.tc_id));
-        assert_eq!(verified.payload, b"Test", "tcId {}", test.tc_id);
+        assert_eq!(*verified.payload, b"Test", "tcId {}", test.tc_id);
         assert_eq!(verified.alg, SigningAlg::HS256);
     }
 }
@@ -326,7 +326,7 @@ fn json_serialization_case_through_verify_json() {
     let error = verify_json(test.jws(), &key, &opts).map(drop).unwrap_err();
     assert_eq!(error.code(), "InvalidJson");
     let verified = verify_json(&format!("{}]}}", test.jws()), &key, &opts).unwrap();
-    assert_eq!(verified.payload, b"foo");
+    assert_eq!(*verified.payload, b"foo");
     assert_eq!(verified.alg, SigningAlg::HS256);
     assert_eq!(verified.signature_index, 0);
     assert!(verified.unprotected.unwrap().contains("unknown"));

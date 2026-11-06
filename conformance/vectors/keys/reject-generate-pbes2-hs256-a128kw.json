@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"PBES2-HS256+A128KW\": a PBES2 key is a password (RFC 7518 §4.8), which polyjose does not generate.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "PBES2-HS256+A128KW"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

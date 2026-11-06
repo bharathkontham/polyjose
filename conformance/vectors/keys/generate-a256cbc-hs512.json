@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §5.2.5",
+  "description": "Key generation for an algorithm: an A256CBC-HS512 key is 64 octets (RFC 7518 §5.2.5); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A256CBC-HS512"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A256CBC-HS512",
+      "k_octets": 64
+    }
+  }
+}

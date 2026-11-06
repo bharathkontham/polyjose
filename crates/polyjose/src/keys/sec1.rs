@@ -15,7 +15,7 @@ use core::fmt;
 use zeroize::Zeroizing;
 
 use super::der::{self, Reader, Writer};
-use super::oid;
+use super::{oid, pkcs1};
 use crate::error::{Error, Result};
 use crate::jwk::EcCurve;
 
@@ -117,6 +117,25 @@ pub(crate) fn decode(der: &[u8]) -> Result<EcPrivateKey<'_>> {
         parameters,
         public_key,
     })
+}
+
+/// Decodes a standalone SEC1 `EC PRIVATE KEY` (RFC 5915 §3, §4) as
+/// [`decode`] does, for `KeyFormat::Sec1` and the `EC PRIVATE KEY` label.
+///
+/// Input that fails that parse but is a PKCS#1 RSAPrivateKey (RFC 8017
+/// App. A.1.2) is `UnsupportedAlgorithm`, an RSA private key in any format
+/// (ADR 0018 §3, ADR 0021). It is recognized by framing only
+/// (`pkcs1::relabel_rsa_private_key`), with no private INTEGER's contents
+/// read. The ECPrivateKey inside a PKCS#8 privateKey is decoded with
+/// [`decode`] instead: there an RSAPrivateKey is an inconsistent body for
+/// id-ecPublicKey, whose privateKey holds an ECPrivateKey (RFC 5915 §1),
+/// and stays `InvalidKey`.
+///
+/// # Errors
+///
+/// Those of [`decode`], with the re-labelling above.
+pub(crate) fn decode_standalone(der: &[u8]) -> Result<EcPrivateKey<'_>> {
+    decode(der).map_err(|error| pkcs1::relabel_rsa_private_key(der, error))
 }
 
 /// Reads the contents of the EXPLICIT `[0]`: exactly one ECParameters
@@ -252,6 +271,92 @@ mod tests {
             invalid(decode(&fixtures::negative("N40"))),
             "ECPrivateKey version is not 1"
         );
+    }
+
+    /// `SEQUENCE { version, field × 8 }`: the RSAPrivateKey framing (RFC
+    /// 8017 App. A.1.2) around arbitrary INTEGER encodings `field`.
+    fn rsa_private_shape(version: u8, field: &[u8]) -> Vec<u8> {
+        let mut body = vec![0x02, 0x01, version];
+        for _ in 0..8 {
+            body.extend_from_slice(field);
+        }
+        let mut der = vec![0x30, u8::try_from(body.len()).unwrap()];
+        der.extend_from_slice(&body);
+        der
+    }
+
+    #[test]
+    fn a_pkcs1_rsa_private_key_read_as_standalone_sec1_is_unsupported() {
+        // ADR 0018 §3 "RSA private, any format" (ADR 0021): version 0
+        // fails RFC 5915 §3 at the version, version 1 (multi) at the
+        // privateKey OCTET STRING; both are then recognized by framing.
+        for (dir, file) in [
+            ("openssl", "reject-rsa2048-private-pkcs1.der"),
+            ("openssl", "reject-rsa2048-3prime-private-pkcs1.pem"),
+            ("rfc", "reject-rfc9500-testRSA4096-private-pkcs1.pem"),
+        ] {
+            let der = fixtures::load(dir, file);
+            let result = super::super::ec::from_sec1(&der);
+            assert_eq!(result.err(), Some(Error::UnsupportedAlgorithm), "{file}");
+        }
+        // Garbage INTEGER contents (empty, X.690 §8.3.1; redundant 0xFF,
+        // §8.3.2) are never parsed, so they change nothing.
+        for (version, field) in [(0, &[0x02, 0x00][..]), (1, &[0x02, 0x02, 0xFF, 0x80][..])] {
+            let der = rsa_private_shape(version, field);
+            let result = super::super::ec::from_sec1(&der);
+            assert_eq!(result.err(), Some(Error::UnsupportedAlgorithm));
+        }
+    }
+
+    #[test]
+    fn only_the_standalone_decoder_relabels_an_rsa_private_key() {
+        // `decode` itself, which also reads the ECPrivateKey inside PKCS#8,
+        // keeps InvalidKey (RFC 5915 §3 version / privateKey).
+        let rsa = fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der");
+        assert_eq!(invalid(decode(&rsa)), "ECPrivateKey version is not 1");
+        assert_eq!(
+            decode_standalone(&rsa).err(),
+            Some(Error::UnsupportedAlgorithm)
+        );
+        // An id-ecPublicKey PKCS#8 whose privateKey holds that
+        // RSAPrivateKey is an inconsistent body (RFC 5915 §1), not an RSA
+        // private key container: InvalidKey, as N51 for an RFC 8410 body.
+        let ec = fixtures::load("rfc", "rfc7517-a2-ec-p256-pkcs8.der");
+        let alg = &ec[6..27]; // after 30 81 87 02 01 00: the P-256 AlgorithmIdentifier
+        assert_eq!(&alg[..2], &[0x30, 0x13]);
+        let mut body = vec![0x02, 0x01, 0x00];
+        body.extend_from_slice(alg);
+        body.extend_from_slice(&[0x04, 0x82]);
+        body.extend_from_slice(&u16::try_from(rsa.len()).unwrap().to_be_bytes());
+        body.extend_from_slice(&rsa);
+        let mut der = vec![0x30, 0x82];
+        der.extend_from_slice(&u16::try_from(body.len()).unwrap().to_be_bytes());
+        der.extend_from_slice(&body);
+        let parts = super::super::pkcs8::decode(&der).unwrap();
+        let result = super::super::ec::from_pkcs8(parts);
+        assert!(
+            matches!(result, Err(Error::InvalidKey(_))),
+            "{:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn standalone_sec1_keys_and_their_errors_are_unchanged() {
+        // Every non-RSA input gives what `decode` gives (RFC 5915 §3).
+        let mut inputs = vec![
+            fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der"),
+            fixtures::load("openssl", "ec-p384-sec1.der"),
+        ];
+        for id in ["N40", "N41", "N43", "N45", "N46", "N47"] {
+            inputs.push(fixtures::negative(id));
+        }
+        for der in &inputs {
+            assert_eq!(
+                format!("{:?}", decode_standalone(der)),
+                format!("{:?}", decode(der))
+            );
+        }
     }
 
     #[test]

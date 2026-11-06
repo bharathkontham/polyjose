@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §3.4",
+  "description": "Key generation for an algorithm: ES512 uses the P-521 curve (RFC 7518 §3.4); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "ES512"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "EC",
+      "crv": "P-521",
+      "alg": "ES512"
+    }
+  }
+}

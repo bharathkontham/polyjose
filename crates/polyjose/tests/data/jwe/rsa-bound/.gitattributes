@@ -1,0 +1,2 @@
+# Fixtures are pinned byte for byte by SHA256SUMS: never convert their line endings.
+* -text

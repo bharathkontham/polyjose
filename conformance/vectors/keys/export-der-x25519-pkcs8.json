@@ -1,0 +1,18 @@
+{
+  "source": "RFC 8037 App. A.6",
+  "description": "DER export of the RFC 8037 A.6 X25519 private key as PKCS#8 v1 (RFC 8410 §7).",
+  "operation": "keys.export_der",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+      "d": "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo"
+    },
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "der_b64u": "MC4CAQAwBQYDK2VuBCIEIHcHbQpzGKV9PBbBclGyZkXfTC-H68CZKrF3-6UduSwq"
+  }
+}

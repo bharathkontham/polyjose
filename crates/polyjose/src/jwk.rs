@@ -46,8 +46,9 @@
 //! Validation is structural, plus the curve checks the primitives provide
 //! (ADR 0041 §4, ADR 0043, ADR 0007): EC points must be on their curve, EC
 //! private scalars in range, Ed25519 public keys valid, and a private key
-//! must be the key of its own public part. The 8192-bit RSA ceiling is
-//! enforced where an RSA key is used (ADR 0026 §2 step 8).
+//! must be the key of its own public part. An RSA modulus must be
+//! 2048..=8192 bits (RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8), so every
+//! RSA key, from JSON, PEM or DER, is in range when it is imported.
 //!
 //! - **`kty`** must be present and is case-sensitive (RFC 7517 §4.1).
 //!   `oct`, `RSA`, `EC` and `OKP` are supported.
@@ -72,11 +73,11 @@
 //!   (RFC 7748 §6.1, RFC 8037 §2; ADR 0043 §3).
 //! - **`RSA`**, public keys only (RFC 7518 §6.3.1, ADR 0021): `n` and `e`
 //!   are minimal Base64urlUInt values, non-empty with no leading zero octet
-//!   (RFC 7518 §2, §6.3.1.1); `n` is odd (RFC 8017 §3.1) and at least
-//!   2048 bits (RFC 7518 §3.3, ADR 0007); `e` is odd with 3 ≤ e < n
-//!   (RFC 8017 §3.1). A key with **any** private member (`d`, `p`, `q`,
-//!   `dp`, `dq`, `qi`, `oth`, RFC 7518 §6.3.2) is rejected before anything
-//!   else is read.
+//!   (RFC 7518 §2, §6.3.1.1); `n` is odd (RFC 8017 §3.1) and 2048 to
+//!   8192 bits (RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8); `e` is odd
+//!   with 3 ≤ e < n (RFC 8017 §3.1). A key with **any** private member
+//!   (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, RFC 7518 §6.3.2) is rejected
+//!   before anything else is read.
 //! - **`oct`** (RFC 7518 §6.4): `k` is present and not empty.
 //! - Every binary member is canonical unpadded base64url (RFC 7515 §2),
 //!   so each key has one encoding and re-serializes to the same strings.
@@ -191,6 +192,7 @@
 
 use core::cmp::Ordering;
 use core::fmt;
+use core::ops::RangeInclusive;
 use std::collections::BTreeSet;
 
 use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, Sec1Point, ToSec1Point};
@@ -615,16 +617,25 @@ impl fmt::Debug for OctKey {
 /// The only secret, `k`, is a [`Zeroizing`] buffer.
 impl ZeroizeOnDrop for OctKey {}
 
+/// The RSA modulus sizes polyjose accepts, in bits: at least 2048
+/// (RFC 7518 §3.3, §3.5 and, for RSA-OAEP-256, §4.3: "A key of size 2048
+/// bits or larger MUST be used"; ADR 0007) and at most 8192, the `rsa`
+/// crate's own maximum (ADR 0026 §2 step 8).
+///
+/// This is the crate's one definition. JWK import checks it, so every RSA
+/// key (JSON, PEM or DER) is in range at the trust boundary, and the JWS
+/// RSA family passes it to the `rsa` crate when it builds a key.
+pub(crate) const RSA_MODULUS_BITS: RangeInclusive<usize> = 2048..=8192;
+
 /// An RSA public key (`kty` `RSA`, RFC 7518 §6.3.1).
 ///
 /// RSA private keys are not supported in 0.1.0: a JWK with any private
 /// member is rejected with [`Error::UnsupportedAlgorithm`] (ADR 0021).
 ///
 /// Validation is structural: `n` and `e` are minimal Base64urlUInt values
-/// (RFC 7518 §2), `n` is odd and at least 2048 bits (RFC 8017 §3.1,
-/// RFC 7518 §3.3, ADR 0007), and `e` is odd with 3 ≤ e < n
-/// (RFC 8017 §3.1). The modulus upper bound of 8192 bits is enforced
-/// where the key is used (ADR 0026 §2 step 8).
+/// (RFC 7518 §2), `n` is odd (RFC 8017 §3.1) and 2048 to 8192 bits
+/// (RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8), and `e` is odd with
+/// 3 ≤ e < n (RFC 8017 §3.1).
 #[derive(Clone)]
 pub struct RsaPublicKey {
     n: Vec<u8>,
@@ -644,12 +655,9 @@ impl RsaPublicKey {
         &self.e
     }
 
-    /// The size of the modulus in bits (at least 2048).
+    /// The size of the modulus in bits (2048 to 8192).
     pub fn modulus_bits(&self) -> usize {
-        // `n` is non-empty with a non-zero first octet (checked on import),
-        // so this is 8 bits per octet minus the first octet's leading zeros.
-        let top = self.n.first().copied().unwrap_or(0);
-        (self.n.len() * 8).saturating_sub(top.leading_zeros() as usize)
+        bit_len(&self.n)
     }
 }
 
@@ -1621,7 +1629,26 @@ fn required_uint(
     }
 }
 
+/// The bit length of the big-endian unsigned integer `octets`: 8 bits per
+/// octet minus the leading zeros of the first (RFC 8017 §4.2 OS2IP). Zero
+/// for no octets. Saturates rather than overflows, so an input too long to
+/// count (on a 32-bit target) reads as at least `usize::MAX - 7` bits.
+fn bit_len(octets: &[u8]) -> usize {
+    let top = octets.first().copied().unwrap_or(0);
+    octets
+        .len()
+        .saturating_mul(8)
+        .saturating_sub(top.leading_zeros() as usize)
+}
+
 /// `kty` `RSA`, public keys only (RFC 7518 §6.3.1, ADR 0021).
+///
+/// # Errors
+///
+/// [`Error::UnsupportedAlgorithm`] for any RSA private member (ADR 0021);
+/// [`Error::InvalidKey`], with a static detail and no input, for a modulus
+/// outside [`RSA_MODULUS_BITS`] (RFC 7518 §3.3, ADR 0007, ADR 0026 §2
+/// step 8) and every other check below.
 fn parse_rsa(object: &Object) -> Result<RsaPublicKey> {
     // ADR 0021: an RSA private JWK is not supported in 0.1.0. Any private
     // member (RFC 7518 §6.3.2), whatever its value, rejects the key before
@@ -1636,14 +1663,19 @@ fn parse_rsa(object: &Object) -> Result<RsaPublicKey> {
         "n must be a string",
         "n is not a minimal Base64urlUInt",
     )?;
-    // RFC 7518 §3.3/§4.2 and ADR 0007: at least 2048 bits. `n` has no
-    // leading zero octet, so 256 octets is 2048 bits exactly when the top
-    // bit is set. RFC 8017 §3.1: n is a product of odd primes, so odd.
-    let (Some(&first), Some(&last)) = (n.first(), n.last()) else {
+    // RFC 7518 §3.3/§4.2 and ADR 0007: at least 2048 bits; ADR 0026 §2
+    // step 8: at most 8192, the `rsa` crate's maximum. Checked on `n`
+    // alone, before `e` is read: a length comparison, no arithmetic.
+    // RFC 8017 §3.1: n is a product of odd primes, so odd.
+    let Some(&last) = n.last() else {
         return Err(Error::InvalidKey("n is not a minimal Base64urlUInt"));
     };
-    if n.len() < 256 || (n.len() == 256 && first < 0x80) {
+    let bits = bit_len(&n);
+    if bits < *RSA_MODULUS_BITS.start() {
         return Err(Error::InvalidKey("RSA modulus is shorter than 2048 bits"));
+    }
+    if bits > *RSA_MODULUS_BITS.end() {
+        return Err(Error::InvalidKey("RSA modulus is longer than 8192 bits"));
     }
     if last & 1 == 0 {
         return Err(Error::InvalidKey("RSA modulus must be odd"));
@@ -1853,8 +1885,8 @@ fn scalar_in_range<C: Curve>(d: &[u8]) -> bool {
 ///   of prime order L (`EdwardsPoint::is_torsion_free`, ADR 0043 §1). A
 ///   mixed-order key passes RFC 8032 §5.1.7 and `verify_strict`, but
 ///   implementations disagree on it and honest keys (RFC 8032 §5.1.5:
-///   A = [s]B) never have one.
-fn ed25519_public_is_valid(x: &[u8]) -> bool {
+///   A = \[s\]B) never have one.
+pub(crate) fn ed25519_public_is_valid(x: &[u8]) -> bool {
     let Ok(bytes) = <&[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]>::try_from(x) else {
         return false;
     };
@@ -2619,5 +2651,36 @@ mod tests {
             e: vec![3],
         };
         assert_eq!(n.modulus_bits(), 17);
+    }
+
+    #[test]
+    fn bit_len_counts_from_the_top_set_bit() {
+        assert_eq!(bit_len(&[]), 0);
+        assert_eq!(bit_len(&[0]), 0);
+        assert_eq!(bit_len(&[1]), 1);
+        assert_eq!(bit_len(&[0x80, 0]), 16);
+        assert_eq!(bit_len(&[0x01, 0, 0]), 17);
+    }
+
+    #[test]
+    fn the_rsa_modulus_details_match_rsa_modulus_bits() {
+        // The details are static strings (ADR 0007), so they spell the
+        // bounds out; this pins them to the constant.
+        assert_eq!(RSA_MODULUS_BITS, 2048..=8192);
+        let key = |n: &[u8]| {
+            let n = b64url_encode(n);
+            Jwk::from_json(format!(r#"{{"kty":"RSA","n":"{n}","e":"AQAB"}}"#).as_bytes())
+        };
+        let mut n = vec![0xff; 1024];
+        assert!(key(&n).is_ok(), "8192 bits");
+        n.insert(0, 0x01);
+        assert_eq!(
+            key(&n).err(),
+            Some(Error::InvalidKey("RSA modulus is longer than 8192 bits"))
+        );
+        assert_eq!(
+            key(&[0xff; 255]).err(),
+            Some(Error::InvalidKey("RSA modulus is shorter than 2048 bits"))
+        );
     }
 }

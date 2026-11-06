@@ -1,0 +1,19 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "DER import of a P-384 private key as PKCS#8 (RFC 5958 §2); expected JWK from openssl pkey -text.",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDBPSgtlqRoNzNvUEiS6vFsD6MOysnJcMcXbFVfH-fbqm8ecvpd5GqsAeO0qpZIdZbmhZANiAARkBMC4qn7fyI884Pr3_istLLfUBcs0uBrD8k7xV_niwqA8bGId_DBVg_Ur56N4VLHMWlN4Eo45pKbw_H9z-v9EqDorVdx-wqfyfuBFdPRxt60FhGFF0yMZXeIY6-bhPXE",
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-384",
+      "x": "ZATAuKp-38iPPOD69_4rLSy31AXLNLgaw_JO8Vf54sKgPGxiHfwwVYP1K-ejeFSx",
+      "y": "zFpTeBKOOaSm8Px_c_r_RKg6K1XcfsKn8n7gRXT0cbetBYRhRdMjGV3iGOvm4T1x",
+      "d": "T0oLZakaDczb1BIkurxbA-jDsrJyXDHF2xVXx_n26pvHnL6XeRqrAHjtKqWSHWW5"
+    }
+  }
+}

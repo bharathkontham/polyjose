@@ -1,0 +1,19 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "DER import of a secp256k1 private key (RFC 8812 §3.1) as SEC1 (RFC 5915 §3); expected JWK from openssl pkey -text.",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MHQCAQEEIEzqKKk46u8d6TYC_O1SyHuzN5Pjsr2q0kT0cIwMJbtkoAcGBSuBBAAKoUQDQgAEKsgpxz5Gnh7fudPko_CBJQB91PsO1rPVyp3KtiRk_OJijr4Qaa6yzxlJ0Yz4Rkbb5SDS2cKyKF2Iw65_TBxQAg",
+    "format": "sec1"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "secp256k1",
+      "x": "Ksgpxz5Gnh7fudPko_CBJQB91PsO1rPVyp3KtiRk_OI",
+      "y": "Yo6-EGmuss8ZSdGM-EZG2-Ug0tnCsihdiMOuf0wcUAI",
+      "d": "TOooqTjq7x3pNgL87VLIe7M3k-OyvarSRPRwjAwlu2Q"
+    }
+  }
+}

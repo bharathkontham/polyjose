@@ -112,14 +112,19 @@ impl Jwk {
     ///   - **encrypted keys are out of scope**: `ENCRYPTED PRIVATE KEY`
     ///     (RFC 5958 §3, RFC 7468 §11) and legacy `Proc-Type: 4,ENCRYPTED`
     ///     PEM (RFC 1421 §4.6.1.1), refused before the body is decoded;
-    ///   - RSA private keys in any form (`RSA PRIVATE KEY`, or rsaEncryption
-    ///     inside `PRIVATE KEY`; ADR 0021);
+    ///   - RSA private keys in any form (ADR 0018 §3, ADR 0021): `RSA
+    ///     PRIVATE KEY`, rsaEncryption inside `PRIVATE KEY`, and a PKCS#1
+    ///     RSAPrivateKey (RFC 8017 App. A.1.2) body under `PRIVATE KEY` or
+    ///     `EC PRIVATE KEY`, recognized by its framing alone once the
+    ///     PKCS#8 or SEC1 parse has failed;
     ///   - other labels such as `CERTIFICATE` (RFC 7468 §5);
     ///   - id-RSASSA-PSS, Ed448/X448, specifiedCurve and non-JOSE curves.
     /// - [`Error::InvalidKey`] for malformed or non-canonical PEM or DER
     ///   (BER, trailing data, a label around the wrong structure), and for
     ///   keys that fail JWK validation (off-curve points, out-of-range
-    ///   scalars, inconsistent embedded public keys, RSA under 2048 bits).
+    ///   scalars, inconsistent embedded public keys, an RSA modulus outside
+    ///   2048–8192 bits: `jwk::RSA_MODULUS_BITS`, RFC 7518 §3.3, ADR 0026
+    ///   §2 step 8).
     ///
     /// Error details are static strings and never contain input bytes.
     pub fn from_pem(pem: &str) -> Result<Jwk> {
@@ -155,14 +160,19 @@ impl Jwk {
     ///
     /// As [`Jwk::from_pem`]: [`Error::UnsupportedAlgorithm`] for encrypted
     /// PKCS#8 (RFC 5958 §3; **encrypted keys are out of scope**), RSA
-    /// private keys (ADR 0021) and unsupported algorithms or curves;
+    /// private keys in any format (ADR 0018 §3, ADR 0021; a PKCS#1
+    /// RSAPrivateKey given as [`KeyFormat::Pkcs8`] or [`KeyFormat::Sec1`]
+    /// included) and unsupported algorithms or curves;
     /// [`Error::InvalidKey`] for everything malformed or invalid, including
-    /// DER of another format than `format`.
+    /// DER of another format than `format` and an RSA modulus outside
+    /// 2048–8192 bits (`jwk::RSA_MODULUS_BITS`; RFC 7518 §3.3, ADR 0026 §2
+    /// step 8).
     pub fn from_der(der: &[u8], format: KeyFormat) -> Result<Jwk> {
         match format {
             KeyFormat::Pkcs8 => {
                 // Encrypted PKCS#8 and rsaEncryption fail inside decode,
-                // before privateKey is opened (ADR 0018 §4, ADR 0021).
+                // before privateKey is opened (ADR 0018 §4, ADR 0021), and
+                // so does a PKCS#1 RSAPrivateKey body (by framing only).
                 let parts = pkcs8::decode(der)?;
                 match parts.alg {
                     AlgId::Ec(_) => ec::from_pkcs8(parts),
@@ -178,6 +188,8 @@ impl Jwk {
                     AlgId::RsaEncryption => super::rsa::from_spki(parts),
                 }
             }
+            // A PKCS#1 RSAPrivateKey body fails inside from_sec1 as
+            // UnsupportedAlgorithm (sec1::decode_standalone, ADR 0021).
             KeyFormat::Sec1 => ec::from_sec1(der),
             KeyFormat::Pkcs1 => super::rsa::from_pkcs1(der),
         }
@@ -277,5 +289,34 @@ mod tests {
         for label in [Label::EncryptedPrivateKey, Label::RsaPrivate, Label::Other] {
             assert_eq!(label_format(label), None, "{label:?}");
         }
+    }
+
+    #[test]
+    fn a_pkcs1_rsa_private_key_is_unsupported_under_every_label_and_format() {
+        // ADR 0018 §3 "RSA private, any format" (ADR 0021): the PKCS#1
+        // RSAPrivateKey (RFC 8017 App. A.1.2) DER relabelled as PKCS#8
+        // (RFC 7468 §10) or SEC1 (RFC 5915 §4), and given to from_der as
+        // either format.
+        let der = super::super::der::fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der");
+        for format in [KeyFormat::Pkcs8, KeyFormat::Sec1, KeyFormat::Pkcs1] {
+            assert_eq!(
+                Jwk::from_der(&der, format).err(),
+                Some(Error::UnsupportedAlgorithm),
+                "{format:?}"
+            );
+        }
+        for label in [Label::PrivateKey, Label::EcPrivateKey] {
+            let text = pem::encode(label, &der).unwrap();
+            assert_eq!(
+                Jwk::from_pem(&text).err(),
+                Some(Error::UnsupportedAlgorithm),
+                "{label:?}"
+            );
+        }
+        // As SPKI (RFC 5280 §4.1.2.7) it is simply not one: InvalidKey.
+        assert!(matches!(
+            Jwk::from_der(&der, KeyFormat::Spki),
+            Err(Error::InvalidKey(_))
+        ));
     }
 }

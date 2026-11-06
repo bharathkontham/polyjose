@@ -1,0 +1,30 @@
+{
+  "source": "ADR 0049 §2",
+  "description": "A valid flattened HS256 JWS (protected {\"alg\":\"HS256\"}, payload \"Payload\", HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key) re-wrapped by an attacker with an unprotected \"header\" setting typ, kid and jku verifies, because the JWS Unprotected Header is not integrity-protected (RFC 7515 §7.2.1) and kid/jku never select the key (ADR 0026 §2): ADR 0049 §2 makes this the contract, so callers must treat Verified.unprotected as attacker data and the JWT layer (0004) reads typ, cty, kid and crit only from the protected header and rejects an unprotected typ or cty",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "protected": "eyJhbGciOiJIUzI1NiJ9",
+      "header": {
+        "typ": "JWT",
+        "kid": "attacker",
+        "jku": "https://attacker.example/jwks.json"
+      },
+      "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "UGF5bG9hZA",
+    "alg": "HS256",
+    "signature_index": 0
+  }
+}

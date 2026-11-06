@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §4.7",
+  "description": "Key generation for an algorithm: an A256GCMKW key is a 256-bit AES key (RFC 7518 §4.7); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A256GCMKW"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A256GCMKW",
+      "k_octets": 32
+    }
+  }
+}

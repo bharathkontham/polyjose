@@ -109,7 +109,8 @@ fn manifest() -> Vec<Row> {
 }
 
 /// The format a DER vector holds: the one its own name states (N40–N47
-/// `-sec1-`, N50–N52 and N67 `-pkcs8-`, N65 `-pkcs1-`, N38 `-spki-`),
+/// and N69 `-sec1`, N50–N52, N67 and N68 `-pkcs8`, N65 `-pkcs1-`, N38
+/// `-spki-`; `-pkcs8` and `-sec1` are looked for before `-pkcs1`),
 /// otherwise its base file's. N67 is the one vector whose structure is not
 /// its base's: a minimal PKCS#8 with rsaEncryption, built from the RSA SPKI
 /// (its mutation says so, and its name says `pkcs8`).
@@ -122,7 +123,7 @@ fn row_format(row: &Row) -> KeyFormat {
 #[test]
 fn every_manifest_row_gives_its_expected_result() {
     let rows = manifest();
-    assert_eq!(rows.len(), 67, "64 must-reject and 3 must-accept vectors");
+    assert_eq!(rows.len(), 71, "68 must-reject and 3 must-accept vectors");
     let mut failures = Vec::new();
     for row in &rows {
         let bytes = read("negative", &row.file);

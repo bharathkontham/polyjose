@@ -1,0 +1,13 @@
+{
+  "source": "polyjose",
+  "description": "DER import rejects the RFC 8037 A.1 Ed25519 PKCS#8 followed by one 0x00 octet: no data may follow the outermost element (X.690 §8.1.1, RFC 5958 §2).",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v_VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9gAA",
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

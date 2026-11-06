@@ -6,6 +6,9 @@
 //! OpenSSL's `EC PRIVATE KEY` (RFC 5915 §4), `RSA PUBLIC KEY` and
 //! `RSA PRIVATE KEY` (RFC 9500 §2.1).
 //!
+//! Input longer than [`MAX_INPUT_LEN`] (about 96 KiB, derived from the
+//! 64 KiB DER cap) is refused first, before any allocation or parse.
+//!
 //! The decoder classifies the label from the BEGIN line before it reads the
 //! body (ADR 0018 §2). A label that names no key structure, `ENCRYPTED
 //! PRIVATE KEY` (ADR 0018 §4) and `RSA PRIVATE KEY` (ADR 0021) fail at once
@@ -20,6 +23,7 @@
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
+use super::der;
 use super::types::Label;
 use crate::util::{b64_decode_into, b64_encode_append, b64_encoded_len};
 use crate::{Error, Result};
@@ -39,6 +43,49 @@ const LINE_OCTETS: usize = LINE_WIDTH / 4 * 3;
 /// The RFC 1421 §4.6.1.1 header that starts an encrypted legacy block
 /// (`Proc-Type: 4,ENCRYPTED`, as OpenSSL writes it).
 const PROC_TYPE: &[u8] = b"Proc-Type:";
+
+/// The longest label the decoder classifies, `ENCRYPTED PRIVATE KEY`
+/// (RFC 7468 §11): 21 characters. Every other known label is shorter.
+const LONGEST_LABEL: usize = "ENCRYPTED PRIVATE KEY".len();
+/// Room within [`MAX_INPUT_LEN`] for the whitespace around the block, which
+/// the grammar does not bound (ADR 0018 §2): 8 KiB.
+const SURROUNDING_WHITESPACE: usize = 8 * 1024;
+/// The base64 characters of the largest DER the reader accepts (RFC 4648 §4:
+/// 4 characters per started 3-octet group): 87,384 for 64 KiB.
+const MAX_BODY_CHARS: usize = der::MAX_INPUT_LEN.div_ceil(3) * 4;
+/// The lines of that body at 64 characters each (RFC 7468 §2): 1,366.
+const MAX_BODY_LINES: usize = MAX_BODY_CHARS.div_ceil(LINE_WIDTH);
+
+/// The largest PEM input [`decode`] reads: 98,384 octets (about 96 KiB).
+///
+/// It is the longest strict RFC 7468 block (§3 `stricttextualmsg`) that can
+/// hold a [`der::MAX_INPUT_LEN`] (64 KiB) body, plus whitespace around it:
+///
+/// ```text
+///   base64 body            4 * ceil(65,536 / 3)          = 87,384
+/// + line endings           2 (CRLF) * (1,366 body lines
+///                                      + BEGIN + END)    =  2,736
+/// + armor, longest label   "-----BEGIN " 11 + 21 + 5
+///                          + "-----END "  9 + 21 + 5     =     72
+/// + surrounding whitespace 8 KiB                         =  8,192
+///                                                          ------
+///                                                          98,384
+/// ```
+///
+/// So every block whose DER the reader could accept fits, with CRLF line
+/// endings and any label, and a larger DER is still rejected by the DER cap
+/// rather than by this one unless its text is also over this size. Longer
+/// input is rejected before any allocation or parse (ADR 0018 §2 bounds
+/// the work done on untrusted key text).
+pub(crate) const MAX_INPUT_LEN: usize = MAX_BODY_CHARS
+    + 2 * (MAX_BODY_LINES + 2)
+    + BEGIN.len()
+    + LONGEST_LABEL
+    + DASHES.len()
+    + END.len()
+    + LONGEST_LABEL
+    + DASHES.len()
+    + SURROUNDING_WHITESPACE;
 
 /// Decodes one strict RFC 7468 block into its label and DER octets.
 ///
@@ -66,6 +113,12 @@ const PROC_TYPE: &[u8] = b"Proc-Type:";
 ///
 /// # Errors
 ///
+/// In this order:
+///
+/// - [`Error::InvalidKey`]`("PEM input too large")` for `text` longer than
+///   [`MAX_INPUT_LEN`] octets. This is checked first, before any allocation
+///   or parse, so an oversize input gives this error whatever its label,
+///   including the unsupported ones below, or its content.
 /// - [`Error::UnsupportedAlgorithm`], checked from the BEGIN line before
 ///   the body is read, so whatever the body holds, for a well-formed label
 ///   that names no supported structure (ADR 0018 §2, §4):
@@ -101,6 +154,11 @@ pub(crate) fn decode(text: &str) -> Result<(Label, Zeroizing<Vec<u8>>)> {
 /// wiped on success too, so a test can read them back. They keep their
 /// lengths, and the caller's `Zeroizing` wipes their whole capacity on drop.
 fn decode_into(text: &[u8], body: &mut Vec<u8>, der: &mut Vec<u8>) -> Result<Label> {
+    // First, before any allocation or parse: the length is public, so this
+    // branch leaks nothing, and nothing is collected that needs wiping.
+    if text.len() > MAX_INPUT_LEN {
+        return Err(Error::InvalidKey("PEM input too large"));
+    }
     let result = parse(text, body).and_then(|label| {
         b64_decode_into(body, der)
             .map_err(|_| Error::InvalidKey("PEM body is not canonical padded base64"))?;
@@ -359,9 +417,11 @@ mod tests {
     // ---- negative/ vectors (manifest.json) ----------------------------
 
     /// Every P vector in `negative/manifest.json` fails with the code the
-    /// manifest gives, except P14 and P16: their armor is valid and the DER
-    /// inside is what is wrong, which the container parsers reject (here the
-    /// PEM layer must return the label and the decoded body).
+    /// manifest gives, except P14, P16, P17 and P18: their armor is valid
+    /// and the DER inside is what is wrong, which the container parsers
+    /// reject (here the PEM layer must return the label and the decoded
+    /// body). P17 and P18 wrap a PKCS#1 RSAPrivateKey (ADR 0021), so only
+    /// the label is compared and the body is not looked at.
     #[test]
     fn negative_pem_vectors_fail_with_the_manifest_code() {
         let manifest =
@@ -382,11 +442,13 @@ mod tests {
                     der.push(0);
                     assert_eq!(got, Ok((Label::PrivateKey, der)), "{id}");
                 }
+                "P17" => assert_eq!(got.map(|(label, _)| label), Ok(Label::PrivateKey), "{id}"),
+                "P18" => assert_eq!(got.map(|(label, _)| label), Ok(Label::EcPrivateKey), "{id}"),
                 _ => assert_eq!(got.map(|_| ()), Err(expect), "{id} {file}"),
             }
             checked.push(id.to_owned());
         }
-        let expected: Vec<String> = (1..=16).map(|n| format!("P{n:02}")).collect();
+        let expected: Vec<String> = (1..=18).map(|n| format!("P{n:02}")).collect();
         assert_eq!(checked, expected);
     }
 
@@ -835,6 +897,11 @@ mod tests {
     /// text (a private key's encoding) and the decoded octets. Read back
     /// after the failure, both are all zeros. On success the base64 copy is
     /// wiped too and only the DER is kept.
+    ///
+    /// The read-back sees the buffers' live length only; that they never
+    /// reallocated (and so left no copy in freed memory) is checked by
+    /// `check_planned_capacity`. Neither can see by-value stack copies or
+    /// copies the caller makes of the input text.
     #[test]
     fn buffers_are_wiped_on_every_error_path() {
         let b = ED25519_BODY;
@@ -887,6 +954,69 @@ mod tests {
         assert_eq!(der, ed25519_der());
     }
 
+    /// The capacity `parse` reserves for the body: everything after the
+    /// BEGIN line's `eol` (CRLF, CR or LF; RFC 7468 §3), worked out here
+    /// independently of the decoder.
+    fn planned_body_capacity(text: &[u8]) -> usize {
+        let start = text
+            .iter()
+            .position(|&c| !matches!(c, b' ' | b'\t' | b'\r' | b'\n'))
+            .unwrap_or(text.len());
+        let begin = &text[start..];
+        let Some(eol) = begin.iter().position(|&c| c == b'\r' || c == b'\n') else {
+            return 0;
+        };
+        let eol_len = if begin[eol..].starts_with(b"\r\n") {
+            2
+        } else {
+            1
+        };
+        begin.len() - eol - eol_len
+    }
+
+    /// [`decode_into`] with fresh buffers, then reads back their capacity:
+    /// the body buffer has either never been allocated (the input failed
+    /// before the body) or has exactly the capacity `parse` reserved, and
+    /// the DER buffer exactly its decoded length. So "one allocation, never
+    /// regrown" holds and no reallocation left a copy of a secret in freed
+    /// memory (F05). Returns the outcome.
+    fn check_planned_capacity(text: &[u8]) -> Result<Label> {
+        let mut body = Vec::new();
+        let mut der = Vec::new();
+        let result = decode_into(text, &mut body, &mut der);
+        let planned = planned_body_capacity(text);
+        let what = String::from_utf8_lossy(&text[..text.len().min(60)]).into_owned();
+        assert!(
+            body.capacity() == 0 || body.capacity() == planned,
+            "{what:?}: body capacity {} != planned {planned}",
+            body.capacity()
+        );
+        if result.is_ok() {
+            assert_eq!(body.capacity(), planned, "{what:?}");
+            assert!(body.len() <= planned, "{what:?}");
+        }
+        assert_eq!(der.capacity(), der.len(), "{what:?}: DER buffer regrew");
+        result
+    }
+
+    /// The planned capacities hold for every PEM fixture: the OpenSSL and
+    /// RFC keys, and the negative P/A vectors, accepted or not.
+    #[test]
+    fn buffers_keep_their_planned_capacity_across_the_corpus() {
+        let mut accepted = 0;
+        let mut checked = 0;
+        for dir in ["openssl", "rfc", "negative"] {
+            for name in pem_files(dir) {
+                let text = fs::read(data_dir(dir).join(&name)).unwrap();
+                accepted += usize::from(check_planned_capacity(&text).is_ok());
+                checked += 1;
+            }
+        }
+        // Not vacuous: most of the corpus is valid keys.
+        assert!(checked >= 90, "{checked} fixtures");
+        assert!(accepted >= 60, "only {accepted} of {checked} accepted");
+    }
+
     /// Errors carry no input text (ADR 0007, ADR 0018 §4): a marker placed in
     /// the label, the body, a header and the surrounding text never shows up
     /// in an error's `Debug` or `Display`.
@@ -916,6 +1046,162 @@ mod tests {
                     "{shown}"
                 );
             }
+        }
+    }
+
+    // ---- size cap -----------------------------------------------------
+
+    /// The error for input over [`MAX_INPUT_LEN`].
+    const TOO_LARGE: Error = Error::InvalidKey("PEM input too large");
+
+    /// A block of `der_len` octets under `label`, with CRLF line endings
+    /// and 64-character lines, built by hand so that any label works.
+    fn crlf_block(label: &str, der_len: usize) -> (String, Vec<u8>) {
+        let der: Vec<u8> = (0..der_len).map(|i| (i * 31 + 7) as u8).collect();
+        let mut b64 = String::new();
+        b64_encode_append(&der, &mut b64);
+        let mut text = format!("-----BEGIN {label}-----\r\n");
+        for line in b64.as_bytes().chunks(LINE_WIDTH) {
+            text.push_str(core::str::from_utf8(line).unwrap());
+            text.push_str("\r\n");
+        }
+        text.push_str(&format!("-----END {label}-----\r\n"));
+        (text, der)
+    }
+
+    /// `text` with whitespace appended until it is `len` octets long.
+    fn padded(mut text: String, len: usize) -> String {
+        assert!(text.len() <= len);
+        let fill = len - text.len();
+        text.extend(core::iter::repeat_n(' ', fill));
+        text
+    }
+
+    /// The cap's formula is the size of a real block: a 64 KiB DER with CRLF
+    /// line endings and the longest label is exactly the cap less the
+    /// whitespace allowance, and no known label is longer (RFC 7468 §3).
+    #[test]
+    fn cap_is_the_largest_crlf_block_plus_whitespace() {
+        assert_eq!(MAX_INPUT_LEN, 98_384);
+        let (largest, _) = crlf_block("ENCRYPTED PRIVATE KEY", der::MAX_INPUT_LEN);
+        assert_eq!(largest.len() + SURROUNDING_WHITESPACE, MAX_INPUT_LEN);
+        for label in [
+            Label::PrivateKey,
+            Label::PublicKey,
+            Label::EcPrivateKey,
+            Label::RsaPublic,
+            Label::RsaPrivate,
+            Label::EncryptedPrivateKey,
+        ] {
+            assert!(label.as_str().unwrap().len() <= LONGEST_LABEL, "{label:?}");
+        }
+    }
+
+    /// Exactly [`MAX_INPUT_LEN`] octets is read: the largest 64 KiB block
+    /// with CRLF endings decodes, padded with whitespace to the cap, and the
+    /// longest label is rejected for its label, not its size. One more octet
+    /// is too large, whatever the block holds.
+    #[test]
+    fn input_at_the_cap_is_read_and_one_more_octet_is_not() {
+        for label in ["EC PRIVATE KEY", "RSA PUBLIC KEY", "PRIVATE KEY"] {
+            let (text, der) = crlf_block(label, der::MAX_INPUT_LEN);
+            let at_cap = padded(text, MAX_INPUT_LEN);
+            let (got_label, got) = decode(&at_cap).unwrap();
+            assert_eq!(got_label.as_str(), Some(label));
+            assert_eq!(*got, der, "{label}");
+            let over = padded(at_cap, MAX_INPUT_LEN + 1);
+            assert_eq!(decode(&over).map(|_| ()), Err(TOO_LARGE), "{label}");
+        }
+        let (text, _) = crlf_block("ENCRYPTED PRIVATE KEY", der::MAX_INPUT_LEN);
+        let at_cap = padded(text, MAX_INPUT_LEN);
+        assert_eq!(
+            decode(&at_cap).map(|_| ()),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        let over = padded(at_cap, MAX_INPUT_LEN + 1);
+        assert_eq!(decode(&over).map(|_| ()), Err(TOO_LARGE));
+    }
+
+    /// A DER just over its own cap still fits the PEM cap with LF endings,
+    /// so the PEM layer returns it and the DER reader reports the size
+    /// (`der::MAX_INPUT_LEN`): this cap never hides that error.
+    #[test]
+    fn a_der_over_its_cap_gets_through_the_pem_layer() {
+        let der: Vec<u8> = (0..=der::MAX_INPUT_LEN).map(|i| i as u8).collect();
+        let text = encode(Label::PublicKey, &der).unwrap();
+        assert!(text.len() < MAX_INPUT_LEN);
+        assert_eq!(outcome(&text), Ok((Label::PublicKey, der)));
+    }
+
+    /// A 65 MiB input fails with the size error before any work: read back
+    /// afterwards, both working buffers were never allocated, so no body was
+    /// collected or decoded. The well-formed private-key block would
+    /// otherwise reserve its whole body, and the `RSA PRIVATE KEY` one would
+    /// be classified as unsupported (ADR 0021).
+    #[test]
+    fn a_65_mib_input_is_rejected_without_allocating() {
+        const LEN: usize = 65 * 1024 * 1024;
+        let lines = |label: &str| {
+            let mut text = format!("-----BEGIN {label}-----\n");
+            let line = format!("{ED25519_BODY}\n");
+            while text.len() + line.len() <= LEN {
+                text.push_str(&line);
+            }
+            padded(text, LEN)
+        };
+        for text in [
+            lines("PRIVATE KEY"),
+            lines("RSA PRIVATE KEY"),
+            " ".repeat(LEN),
+        ] {
+            assert_eq!(text.len(), LEN);
+            let mut body = Vec::new();
+            let mut der = Vec::new();
+            assert_eq!(
+                decode_into(text.as_bytes(), &mut body, &mut der),
+                Err(TOO_LARGE)
+            );
+            assert_eq!((body.capacity(), der.capacity()), (0, 0));
+            assert_eq!(decode(&text).map(|_| ()), Err(TOO_LARGE));
+        }
+    }
+
+    /// The size check runs before everything else, so an oversize input
+    /// gives the size error whatever its label or content: one the BEGIN
+    /// line would classify as unsupported (ADR 0018 §2, ADR 0021), a
+    /// malformed label, a valid block, or no PEM at all.
+    #[test]
+    fn oversize_input_gives_the_size_error_whatever_its_label() {
+        let b = ED25519_BODY;
+        let over = |text: String| padded(text, MAX_INPUT_LEN + 1);
+        let texts = [
+            over(block("PRIVATE KEY", b)),
+            over(block("PUBLIC KEY", b)),
+            over(block("EC PRIVATE KEY", b)),
+            over(block("RSA PUBLIC KEY", b)),
+            over(block("RSA PRIVATE KEY", b)),
+            over(block("ENCRYPTED PRIVATE KEY", b)),
+            over(block("CERTIFICATE", b)),
+            over(block("private key", b)),
+            over(format!(
+                "-----BEGIN EC PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\n{b}\n-----END EC PRIVATE KEY-----\n"
+            )),
+            over(format!("-----BEGIN PRIVATE KEY-----\n{b}\n")),
+            over("not PEM".to_owned()),
+            over(String::new()),
+            "x".repeat(MAX_INPUT_LEN + 1),
+        ];
+        for text in &texts {
+            assert_eq!(text.len(), MAX_INPUT_LEN + 1);
+            let mut body = Vec::new();
+            let mut der = Vec::new();
+            assert_eq!(
+                decode_into(text.as_bytes(), &mut body, &mut der),
+                Err(TOO_LARGE),
+                "{:?}",
+                &text[..text.len().min(40)]
+            );
+            assert_eq!((body.capacity(), der.capacity()), (0, 0));
         }
     }
 
@@ -992,6 +1278,38 @@ mod tests {
                     prop_assert_eq!(Some(oracle_label), got_label.as_str());
                     prop_assert_eq!(&oracle, &*got);
                 }
+            }
+
+            /// The planned capacities of `check_planned_capacity` (F05)
+            /// hold for encoded blocks of any length with LF, CRLF or CR
+            /// line endings and whitespace around them, and for the same
+            /// blocks with one character replaced or inserted.
+            #[test]
+            fn buffers_keep_their_planned_capacity(
+                label in known_label(),
+                der in proptest::collection::vec(any::<u8>(), 1..1500),
+                eol in prop::sample::select(vec!["\n", "\r\n", "\r"]),
+                around in prop::sample::select(vec!["", " ", "\n", "\r\n\t "]),
+                mutation in proptest::option::of((
+                    any::<prop::sample::Index>(),
+                    prop::sample::select("AQgw+/=-_ \t\r\n.:".chars().collect::<Vec<char>>()),
+                    any::<bool>(),
+                )),
+            ) {
+                let pem = encode(label, &der).unwrap().replace('\n', eol);
+                let text = format!("{around}{pem}{around}");
+                let Some((at, with, insert)) = mutation else {
+                    let got = super::check_planned_capacity(text.as_bytes());
+                    prop_assert_eq!(got, Ok(label));
+                    return Ok(());
+                };
+                let i = at.index(text.len());
+                let mutated = if insert {
+                    format!("{}{with}{}", &text[..i], &text[i..])
+                } else {
+                    format!("{}{with}{}", &text[..i], &text[i + 1..])
+                };
+                let _ = super::check_planned_capacity(mutated.as_bytes());
             }
         }
     }

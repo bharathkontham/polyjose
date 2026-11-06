@@ -411,6 +411,22 @@
     "cite": "ADR 0021: RSA private keys are not supported in 0.1.0"
   },
   {
+    "id": "N68",
+    "file": "N68-rsa-private-pkcs1-as-pkcs8.der",
+    "base": "reject-rsa2048-private-pkcs1.der",
+    "mutation": "the PKCS#1 RSAPrivateKey bytes unchanged, read as PKCS#8",
+    "expect": "UnsupportedAlgorithm",
+    "cite": "ADR 0018 \u00a73 (RSA private, any format: UnsupportedAlgorithm); ADR 0021; RFC 8017 App. A.1.2"
+  },
+  {
+    "id": "N69",
+    "file": "N69-rsa-private-pkcs1-as-sec1.der",
+    "base": "reject-rsa2048-private-pkcs1.der",
+    "mutation": "the PKCS#1 RSAPrivateKey bytes unchanged, read as SEC1",
+    "expect": "UnsupportedAlgorithm",
+    "cite": "ADR 0018 \u00a73 (RSA private, any format: UnsupportedAlgorithm); ADR 0021; RFC 8017 App. A.1.2"
+  },
+  {
     "id": "P01",
     "file": "P01-label-mismatch.pem",
     "base": "rfc8037-a1-ed25519-pkcs8.pem",
@@ -537,5 +553,21 @@
     "mutation": "valid PEM armor around DER with a trailing 0x00",
     "expect": "InvalidKey",
     "cite": "RFC 5958 \u00a72; X.690 \u00a78.1.1"
+  },
+  {
+    "id": "P17",
+    "file": "P17-label-private-key-body-rsa-pkcs1.pem",
+    "base": "reject-rsa2048-private-pkcs1.der",
+    "mutation": "PRIVATE KEY label around a PKCS#1 RSAPrivateKey body",
+    "expect": "UnsupportedAlgorithm",
+    "cite": "ADR 0018 \u00a73 (RSA private, any format); ADR 0021; RFC 7468 \u00a710 names PKCS#8, RFC 8017 App. A.1.2"
+  },
+  {
+    "id": "P18",
+    "file": "P18-label-ec-private-key-body-rsa-pkcs1.pem",
+    "base": "reject-rsa2048-private-pkcs1.der",
+    "mutation": "EC PRIVATE KEY label around a PKCS#1 RSAPrivateKey body",
+    "expect": "UnsupportedAlgorithm",
+    "cite": "ADR 0018 \u00a73 (RSA private, any format); ADR 0021; RFC 5915 \u00a74 names SEC1, RFC 8017 App. A.1.2"
   }
 ]

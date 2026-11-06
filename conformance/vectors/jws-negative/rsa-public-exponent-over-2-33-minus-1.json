@@ -1,0 +1,20 @@
+{
+  "source": "polyjose",
+  "description": "A valid RS256 JWS over \"Payload\" whose 2048-bit key has the odd public exponent e = 2^33 + 1 < n (key generated with OpenSSL 4.1.0 genpkey rsa_keygen_pubexp:8589934593, signed and checked with node:crypto, Node v24.21.0, OpenSSL 3.5.8): RFC 8017 §3.1 allows any odd e < n, but polyjose bounds e at 2^33 − 1 through the rsa crate (RsaPublicKey::new_with_size_limits) against RSA verification DoS, so the key is weak (ADR 0026 §2 step 8)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzI1NiJ9.UGF5bG9hZA.raAlEAQNhzUxJvC6-P4Kae0-2al80AyTtosDbwEsvdDkeRAwUgZY4I_HkPPj_whZtHbjihEDxqf_cHY28VRvk_aVBrVGdYg3GmVQFmPpHeej7q7hJOJAYTJpjbSFKI0PpdvV3vRL99dhwHQ_xk6sxXNbp5zjuuhxe3d_srCPLOk5xi5mXjZcUVGIQoLY7KUv4Ux0hziYmeYEo-eyZABFbcLUs7F7mdx5AP0Y0INSeOwJlP7pJQ77MKch-ONOIa1Ub1wYJP2O4DGAt2loB56mz-B3cDUJs1UzWmv4xFXU18SHRzjUUk4Kn9N4Lq3GLz0G-_yaJou8dtgyAnVZY62S7A",
+    "key": {
+      "kty": "RSA",
+      "n": "x4AoTglIPk2ohQk5x16oDsrVhXswhrJuJTzE0IZKddRaJeJ4-TuzoALE01yspGXlssaYf4uxvNeBB472oj8ZlBR8TcagwgKsUX0JgTgvQQwU5Hq8nwl9O92t7uL-R5Nd-CBasSz5P9dKYR03RE57AVRpMlfvkO13FgFhsisFPv6-4eUS2PyiwFpmKFLzOA3P0Ce-C8U8s1wimd581leYrXUYxq4KQzYIegj7bl5N9rMgCfHHoO5SykLViCBt5XuDnyjOMculMfIcuoUH7OliYfEPm6BS_v9dNx_gI0J1nbsqpQ6vwwsO1ilpPymO6nyKYvaCSw2zY9XbPo4lWf0fKw",
+      "e": "AgAAAAE"
+    },
+    "allowed_algs": [
+      "RS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

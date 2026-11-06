@@ -1,0 +1,18 @@
+{
+  "source": "RFC 7517 App. A.1",
+  "description": "DER import of the RFC 7517 A.1 P-256 public key as SPKI (RFC 5480 §2); the PEM was built from the published JWK and checked with OpenSSL.",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D7gS2XpJFbZiItSs3m9-9Ue6GnvHw_GW2ZZaVtszggXIw",
+    "format": "spki"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §5.2.3",
+  "description": "Key generation for an algorithm: an A128CBC-HS256 key is 32 octets, MAC_KEY then ENC_KEY (RFC 7518 §5.2.3); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A128CBC-HS256"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A128CBC-HS256",
+      "k_octets": 32
+    }
+  }
+}

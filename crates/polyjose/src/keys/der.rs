@@ -358,8 +358,20 @@ pub(crate) const MAX_DEPTH: usize = 16;
 ///   RELATIVE-OID subidentifiers minimal (§8.19.2, §8.20.2);
 /// - a BIT STRING has an initial octet of at most 7 (§8.6.2.2), 0 when no
 ///   octet follows (§8.6.2.3), and zero unused bits (§11.2.1);
-/// - SET and SET OF components are in ascending order (§11.6; for a SET
-///   this matches the tag order of §10.3, since tags are low-number).
+/// - the components of every SET are in SET OF order: their whole
+///   encodings ascending as octet strings (§11.6).
+///
+/// A SET and a SET OF have the same tag, UNIVERSAL 17 (X.690 §8.11.1,
+/// §8.12.1), and this walk has no schema to tell them apart, so every
+/// nested SET is checked as a SET OF. The SET rule of §10.3 orders by tag
+/// instead (X.680 §8.6: class, then number), and the two orders are not
+/// the same: the identifier octet puts the P/C bit (bit 6, §8.1.2.5)
+/// between the class (bits 8-7) and the number (bits 5-1) (§8.1.2.2), so
+/// a primitive `[1]` (0x81) sorts before a constructed `[0]` (0xA0) as
+/// octets but after it by tag. A DER SET whose components are in tag
+/// order but not in octet order is therefore rejected. This fails closed
+/// on values polyjose ignores; the SETs a PKCS#8 attribute is built from,
+/// Attributes (RFC 5958 §2) and attrValues (RFC 5652 §5.3), are SET OFs.
 pub(crate) fn check_well_formed(contents: &[u8], set_of: bool) -> Result<()> {
     #[derive(Clone, Copy)]
     struct Level<'a> {
@@ -1205,6 +1217,60 @@ mod tests {
         check_well_formed(&[0x04, 0x00, 0x04, 0x01, 0x00], true).unwrap();
         assert_eq!(
             invalid(check_well_formed(&[0x04, 0x01, 0x00, 0x04, 0x00], true)),
+            "DER SET OF not sorted"
+        );
+    }
+
+    #[test]
+    fn pkcs8_attributes_are_ordered_by_whole_encoding_not_by_tag() {
+        // `Attributes ::= SET OF Attribute` (RFC 5958 §2) is ordered by
+        // X.690 §11.6. Every Attribute is a SEQUENCE (0x30), so a tag
+        // order (X.690 §10.3, X.680 §8.6) would accept both orders; the
+        // octet comparison does not. The shorter attribute sorts first by
+        // its length octet (0x0A < 0x0B) although its OID is the larger.
+        let short = wrap(
+            0x30,
+            &[
+                &[0x06, 0x03, 0x55, 0x04, 0x0A][..],
+                &wrap(0x31, &[0x0C, 0x01, 0x61]),
+            ]
+            .concat(),
+        );
+        let long = wrap(
+            0x30,
+            &[
+                &[0x06, 0x03, 0x55, 0x04, 0x03][..],
+                &wrap(0x31, &[0x0C, 0x02, 0x61, 0x62]),
+            ]
+            .concat(),
+        );
+        check_well_formed(&[&short[..], &long].concat(), true).unwrap();
+        assert_eq!(
+            invalid(check_well_formed(&[&long[..], &short].concat(), true)),
+            "DER SET OF not sorted"
+        );
+    }
+
+    #[test]
+    fn nested_sets_are_checked_as_set_of_even_where_tag_order_disagrees() {
+        // The identifier octet is class (bits 8-7), P/C (bit 6), number
+        // (bits 5-1) (X.690 §8.1.2.2, §8.1.2.5), so as octets [1]
+        // primitive (0x81) sorts before [0] constructed (0xA0), while the
+        // tag order of a SET (§10.3, X.680 §8.6: class, then number) puts
+        // [0] first. A SET and a SET OF share UNIVERSAL 17, and without a
+        // schema every nested SET is checked as a SET OF (§11.6), here the
+        // attrValues of an Attribute (RFC 5652 §5.3).
+        let attribute = |values: &[u8]| {
+            wrap(
+                0x30,
+                &[&[0x06, 0x03, 0x55, 0x04, 0x03][..], &wrap(0x31, values)].concat(),
+            )
+        };
+        let octet_order = [0x81, 0x01, 0x00, 0xA0, 0x00];
+        let tag_order = [0xA0, 0x00, 0x81, 0x01, 0x00];
+        check_well_formed(&attribute(&octet_order), true).unwrap();
+        assert_eq!(
+            invalid(check_well_formed(&attribute(&tag_order), true)),
             "DER SET OF not sorted"
         );
     }
