@@ -4,26 +4,30 @@
 //! A compact JWS is `BASE64URL(UTF8(JWS Protected Header)) '.'
 //! BASE64URL(JWS Payload) '.' BASE64URL(JWS Signature)` (RFC 7515 §3.1,
 //! §7.1): one signature, and the protected header is the whole JOSE
-//! Header. This file owns the serialization's own rules, ADR 0026 §2
-//! steps 1–3, and hands everything else to the shared rules in
-//! `jws/process.rs`, which `json.rs` uses too:
+//! Header. This file owns the serialization's own rules, steps 1–4 of
+//! ADR 0048 (which clarifies ADR 0026 §2), and hands everything else to
+//! the shared rules in `jws/process.rs`, which `json.rs` uses too:
 //!
 //! | step | compact rule | error |
 //! |---|---|---|
-//! | 1 | the input is at most [`VerifyOptions::max_input_len`] octets, a detached payload not counted (ADR 0026 §7) | [`Error::InvalidFormat`] |
-//! | 2 | exactly two `.` (RFC 7515 §5.2 step 1); with a detached payload, an empty payload part (Appendix F) | [`Error::InvalidFormat`] |
-//! | 3 | strict base64url of the protected header, the signature and, unless `b64` is `false`, the payload part (RFC 7515 §2, §5.2 steps 2, 6, 7; RFC 7797 §3) | [`Error::InvalidBase64`] |
-//! | 4 | the protected header is one I-JSON object, duplicate members included (RFC 7515 §5.2 step 3; ADR 0041 §1), then `JoseHeader::new` | [`Error::InvalidJson`]; [`Error::InvalidHeader`] |
-//! | 5–9 | `verify_signature` over the received header encoding (RFC 7515 §5.2 steps 5, 8) | as in the [module table](crate::jws) |
+//! | 1 | the input is at most [`VerifyOptions::max_input_len`] octets, a detached payload not counted (ADR 0026 §7); exactly two `.` (RFC 7515 §5.2 step 1); with a detached payload, an empty payload part (Appendix F) | [`Error::InvalidFormat`] |
+//! | 2 | strict base64url of the signature (RFC 7515 §2, §5.2 step 7) | [`Error::InvalidBase64`] |
+//! | 3 | the protected header: strict base64url (§5.2 step 2), one I-JSON object, duplicate members included (§5.2 step 3; ADR 0041 §1), registered parameter types and `crit` syntax (`Header::from_json`, RFC 7515 §4.1.11) | [`Error::InvalidBase64`]; [`Error::InvalidJson`]; [`Error::InvalidHeader`] |
+//! | 4 | strict base64url of the payload part, unless `b64` is `false` or the payload is detached (§5.2 step 6; RFC 7797 §3) | [`Error::InvalidBase64`] |
+//! | 5 | `JoseHeader::new`: the whole-header structure rules | [`Error::InvalidHeader`] |
+//! | 6 | `verify_signature` over the received header encoding (RFC 7515 §5.2 steps 5, 8; ADR 0026 §2 steps 5–9) | as in the [module table](crate::jws) |
 //!
-//! Step 3 for the payload part needs the protected header's `b64`, so it
-//! runs as soon as that header has parsed as JSON and before its structure
-//! rules: a token with an unparsable header and a bad payload part is
-//! [`Error::InvalidJson`], while one with a parsable header missing `alg`
-//! and a bad payload part is [`Error::InvalidBase64`].
+//! Step 4 needs the protected header's `b64`, so it runs once that header
+//! has parsed and its parameters have their types, and before its
+//! structure rules (ADR 0048): a token with an unparsable header, or one
+//! whose `alg` is not a string, and a bad payload part is
+//! [`Error::InvalidJson`] or [`Error::InvalidHeader`], while one with a
+//! parsable header missing `alg` and a bad payload part is
+//! [`Error::InvalidBase64`].
 //!
-//! Signing runs `JoseHeader::new` and `prepare_sign` (steps 4–8), then the
-//! RFC 7797 §5.2 payload rule, then the family.
+//! Signing runs `JoseHeader::new` and `prepare_sign` (steps 5 and 6a–6d of
+//! the module table), then the RFC 7797 §5.2 payload rule, then the
+//! family.
 //!
 //! The public functions call their `*_with` twins with the real
 //! [`FAMILIES`]; tests call the twins with a fake table (see `jws/alg.rs`,
@@ -148,23 +152,28 @@ fn is_unencoded_octet(octet: u8) -> bool {
 ///
 /// # Errors
 ///
-/// The first failing step of ADR 0026 §2 decides (see the
-/// [module docs](crate::jws)):
+/// The first failing step of ADR 0048 (clarifying ADR 0026 §2) decides
+/// (see the [module docs](crate::jws)):
 ///
-/// - Steps 1–2, [`Error::InvalidFormat`]: longer than
+/// - Step 1, [`Error::InvalidFormat`]: longer than
 ///   [`VerifyOptions::max_input_len`] (a detached payload not counted),
 ///   not three parts, or a payload part present against the detached mode.
-/// - Step 3, [`Error::InvalidBase64`]: a part is not strict base64url
-///   (padding, `+`, `/` or whitespace, RFC 7515 §2). The payload part is
-///   checked once the protected header has parsed, since its `b64` decides
-///   whether the part is base64url at all (RFC 7797 §3).
-/// - Step 4, [`Error::InvalidJson`] (including a duplicate header member,
-///   ADR 0041 §1) or [`Error::InvalidHeader`].
-/// - Step 5, [`Error::UnknownCritical`].
-/// - Step 6, [`Error::UnsupportedAlgorithm`].
-/// - Step 7, [`Error::AlgorithmNotAllowed`], always for `none`.
-/// - Step 8, [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`].
-/// - Step 9, [`Error::InvalidSignature`].
+/// - Step 2, [`Error::InvalidBase64`]: the signature part is not strict
+///   base64url (padding, `+`, `/` or whitespace, RFC 7515 §2).
+/// - Step 3, the protected header: [`Error::InvalidBase64`] as for step 2,
+///   [`Error::InvalidJson`] (including a duplicate header member,
+///   ADR 0041 §1), or [`Error::InvalidHeader`] for a registered parameter
+///   of the wrong type or a malformed `crit`.
+/// - Step 4, [`Error::InvalidBase64`]: the payload part, checked once the
+///   protected header has parsed, since its `b64` decides whether the
+///   part is base64url at all (RFC 7797 §3).
+/// - Step 5, [`Error::InvalidHeader`]: the whole-header structure rules
+///   (`alg` missing, `crit` naming an absent parameter, `b64` rules).
+/// - Step 6a, [`Error::UnknownCritical`].
+/// - Step 6b, [`Error::UnsupportedAlgorithm`].
+/// - Step 6c, [`Error::AlgorithmNotAllowed`], always for `none`.
+/// - Step 6d, [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`].
+/// - Step 6e, [`Error::InvalidSignature`].
 pub fn verify_compact(jws: &str, key: &Jwk, opts: &VerifyOptions<'_>) -> Result<Verified> {
     verify_compact_with(&FAMILIES, jws, key, opts)
 }
@@ -176,26 +185,28 @@ pub(crate) fn verify_compact_with(
     key: &Jwk,
     opts: &VerifyOptions<'_>,
 ) -> Result<Verified> {
-    // Step 1 (ADR 0026 §7): the serialized JWS only, not a detached
-    // payload, before any parsing.
+    // Step 1 (ADR 0048; the limit is ADR 0026 §7): the serialized JWS
+    // only, not a detached payload, before any parsing.
     if jws.len() > opts.max_input_len {
         return Err(Error::InvalidFormat("compact JWS exceeds max_input_len"));
     }
-    // Step 2 (RFC 7515 §5.2 step 1, §7.1; Appendix F).
+    // Step 1, the shape (RFC 7515 §5.2 step 1, §7.1; Appendix F).
     let (protected_b64, payload_part, signature_b64) = split(jws)?;
     if opts.detached_payload.is_some() && !payload_part.is_empty() {
         return Err(Error::InvalidFormat(
             "compact payload part must be empty with a detached payload",
         ));
     }
-    // Step 3 (RFC 7515 §5.2 steps 2 and 7): the protected header and the
-    // signature.
+    // Steps 3 and 2, base64url (RFC 7515 §5.2 steps 2 and 7): the
+    // protected header and the signature. Both fail as InvalidBase64, so
+    // their order is not observable.
     let protected_json = Zeroizing::new(b64url_decode(protected_b64)?);
     let signature = b64url_decode(signature_b64)?;
-    // Step 4, I-JSON (RFC 7515 §5.2 step 3; a duplicate member is
-    // InvalidJson, ADR 0041 §1).
+    // Step 3, I-JSON (RFC 7515 §5.2 step 3; a duplicate member is
+    // InvalidJson, ADR 0041 §1), then the parameter types and `crit`
+    // syntax (InvalidHeader, ADR 0048).
     let protected = Header::from_json(&protected_json)?;
-    // Step 3 for the payload part (RFC 7515 §5.2 step 6). Whether it is
+    // Step 4, the payload part (RFC 7515 §5.2 step 6). Whether it is
     // base64url at all is the protected header's `b64` (RFC 7797 §3), so
     // it runs once that header has parsed, and before its structure rules.
     let b64 = protected.b64 != Some(false);
@@ -204,10 +215,10 @@ pub(crate) fn verify_compact_with(
         None if b64 => Some(Zeroizing::new(b64url_decode(payload_part)?)),
         _ => None,
     };
-    // Step 4, header structure (RFC 7515 §5.2 step 4, §7.1: the protected
+    // Step 5, header structure (RFC 7515 §5.2 step 4, §7.1: the protected
     // header is the whole JOSE Header).
     let header = JoseHeader::new(Some(protected), None)?;
-    // Steps 5-9 (RFC 7515 §5.2 steps 5 and 8), over the received encoding.
+    // Step 6 (RFC 7515 §5.2 steps 5 and 8), over the received encoding.
     // Attached, the payload part is already in its signing-input form,
     // BASE64URL(JWS Payload) or the unencoded octets (RFC 7797 §3), and
     // strict decoding makes the received text the only encoding of the

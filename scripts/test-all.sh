@@ -51,8 +51,9 @@ for p in "${platforms[@]}"; do
       # The core and the WASM binding build for the browser target, as in CI.
       if have cargo; then run wasm32-build cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm
       else record wasm32-build "SKIPPED (cargo missing)"; fi
-      # polyjose builds on its MSRV, the workspace rust-version (ADR 0024). CI always runs this;
-      # locally it needs that toolchain installed, and is never auto-installed here.
+      # polyjose builds on its MSRV, the workspace rust-version (1.89 since 0003 Gate 1, ADR 0024
+      # as amended). CI always runs this; locally it needs that toolchain installed, and is never
+      # auto-installed here.
       msrv="$(sed -n 's/^rust-version = "\([0-9]*\.[0-9]*\)"$/\1/p' Cargo.toml).0"
       toolchains="$(rustup toolchain list 2>/dev/null || true)"
       if ! have cargo || ! have rustup; then record msrv "SKIPPED (cargo or rustup missing; CI runs it)"
@@ -68,6 +69,11 @@ for p in "${platforms[@]}"; do
       # The core's runtime tree matches deps-allowlist.txt and CREDITS.md (ADR 0016, ADR 0020).
       if have cargo; then run deps scripts/check-deps.sh
       else record deps "SKIPPED (cargo missing)"; fi
+      # The same ADR 0021 rule on compiled output (ADR 0049 §1), after the builds above and the
+      # text scan in deps: polyjose's and each binding's own object code holds no RSA private-key,
+      # signing or decryption symbol. Needs ar and nm (best: rustup component add llvm-tools).
+      if have cargo; then run rsa-symbols scripts/check-rsa-symbols.sh
+      else record rsa-symbols "SKIPPED (cargo missing)"; fi
       # The gate scripts' own negative tests (scripts/tests/*/*.sh), e.g. that check-deps.sh
       # still rejects RSA private-key use and the guarded groups' second paths.
       if have cargo; then run_negative_tests
