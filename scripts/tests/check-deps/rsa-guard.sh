@@ -87,6 +87,53 @@ new_case binding-new-file
 append_to bindings/ffi/src/sign/rsa.rs 'pub fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
 expect_fail "rsa SigningKey in a new binding file" "bindings/ffi/src/sign/rsa.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
 
+# --- Check 9: paths split across lines, by whitespace or by a comment ------------------------------
+# Rust lets whitespace and comments sit between the tokens of a path, so `rsa`, `::` and the item
+# can be on different lines; none of these needs rustfmt to have run (or survives it).
+new_case split-newline
+append_to "$jws" $'fn s(k: rsa\n    ::pkcs1v15::SigningKey<Sha256>) {}'
+expect_fail "rsa / newline / ::pkcs1v15::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-spaces-private-key
+append_to "$jws" 'fn k() -> rsa :: RsaPrivateKey { todo!() }'
+expect_fail "rsa :: RsaPrivateKey" "$jws:[0-9]+: RsaPrivateKey" "$src_fail"
+
+new_case split-spaces-signing-key
+append_to "$jws" 'type K = rsa :: pss :: SigningKey<Sha256>;'
+expect_fail "rsa :: pss :: SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-block-comment
+append_to "$jws" 'type K = rsa /* not the crate */ ::pss::SigningKey<Sha256>;'
+expect_fail "rsa /* comment */ ::pss::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-line-comment
+append_to "$jws" $'type K = rsa // not the crate\n    ::pss::SigningKey<Sha256>;'
+expect_fail "rsa // comment / newline / ::pss::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-leading-colons
+append_to "$jws" $'type K = ::\n    rsa\n    ::pss::SigningKey<Sha256>;'
+expect_fail ":: / rsa / ::pss::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-use-alias
+append_to crates/polyjose/src/jwk.rs $'use\n    rsa as r;'
+expect_fail "use / newline / rsa as r" "crates/polyjose/src/jwk.rs:[0-9]+: use rsa / use rsa as" "$src_fail"
+
+new_case split-pub-use
+append_to crates/polyjose/src/jwk.rs $'pub(crate)\n    use rsa::pkcs1v15;'
+expect_fail "pub(crate) / newline / use rsa::..." "crates/polyjose/src/jwk.rs:[0-9]+: pub use rsa" "$src_fail"
+
+new_case split-extern-crate
+append_to crates/polyjose/src/jwk.rs $'extern crate\n    rsa;'
+expect_fail "extern crate / newline / rsa" "crates/polyjose/src/jwk.rs:[0-9]+: extern crate rsa" "$src_fail"
+
+new_case split-decrypt-call
+append_to crates/polyjose/src/jwe.rs $'fn d<K>(k: &K, ek: &[u8]) { let _cek = k.decrypt\n    (rsa::Oaep::<rsa::sha2::Sha256>::new(), ek); }'
+expect_fail "decrypt / newline / (Oaep...)" "crates/polyjose/src/jwe.rs:[0-9]+: a decrypt call in a file that uses the rsa crate" "$src_fail"
+
+new_case split-binding
+append_to bindings/node/src/lib.rs $'pub fn s(k: rsa /* x */\n    :: pkcs1v15 :: SigningKey<Sha256>) {}'
+expect_fail "split rsa path in a binding" "bindings/node/src/lib.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
 # Look-alikes that are not RSA private-key use.
 new_case look-alikes
 append_to crates/polyjose/src/jws/ecdsa.rs 'fn s(k: &p256::ecdsa::SigningKey) {}'
