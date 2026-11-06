@@ -345,6 +345,14 @@ mod tests {
         jwe_aad: Option<Vec<u8>>,
         /// `BASE64URL(JWE AAD)` as the RFC prints it.
         jwe_aad_b64: Option<String>,
+        /// The CEK: `generated.cek`, or the `dir` key itself (§5.6).
+        cek: Vec<u8>,
+        iv: Vec<u8>,
+        /// The bytes that are encrypted: the plaintext, or for `zip: DEF`
+        /// the RFC's compressed bytes (§5.9, erratum 7680).
+        plaintext: Vec<u8>,
+        ciphertext: Vec<u8>,
+        tag: Vec<u8>,
     }
 
     fn b64(text: &str) -> Vec<u8> {
@@ -360,6 +368,18 @@ mod tests {
             protected_b64: content.get("protected_b64u").map(text).unwrap_or_default(),
             jwe_aad: doc["input"].get("aad").map(|v| text(v).into_bytes()),
             jwe_aad_b64: doc["generated"].get("aad_b64u").map(text),
+            cek: b64(doc["generated"]
+                .get("cek")
+                .unwrap_or(&doc["input"]["key"]["k"])
+                .as_str()
+                .unwrap()),
+            iv: b64(doc["generated"]["iv"].as_str().unwrap()),
+            plaintext: match doc["generated"].get("plaintext_c") {
+                Some(compressed) => b64(compressed.as_str().unwrap()),
+                None => text(&doc["input"]["plaintext"]).into_bytes(),
+            },
+            ciphertext: b64(content["ciphertext"].as_str().unwrap()),
+            tag: b64(content["tag"].as_str().unwrap()),
         }
     }
 
@@ -369,6 +389,78 @@ mod tests {
     const RFC7520_5_12: &str = include_str!(
         "../../tests/third_party/ietf-jose-cookbook/jwe/5_12.protecting_content_only.json"
     );
+
+    /// Every RFC 7520 §5 example whose `enc` is A*GCM.
+    const RFC7520_GCM: [(&str, &str); 8] = [
+        (
+            "§5.2",
+            include_str!(
+                "../../tests/third_party/ietf-jose-cookbook/jwe/5_2.key_encryption_using_rsa-oaep_with_aes-gcm.json"
+            ),
+        ),
+        (
+            "§5.4",
+            include_str!(
+                "../../tests/third_party/ietf-jose-cookbook/jwe/5_4.key_agreement_with_key_wrapping_using_ecdh-es_and_aes-keywrap_with_aes-gcm.json"
+            ),
+        ),
+        (
+            "§5.6",
+            include_str!(
+                "../../tests/third_party/ietf-jose-cookbook/jwe/5_6.direct_encryption_using_aes-gcm.json"
+            ),
+        ),
+        (
+            "§5.8",
+            include_str!(
+                "../../tests/third_party/ietf-jose-cookbook/jwe/5_8.key_wrap_using_aes-keywrap_with_aes-gcm.json"
+            ),
+        ),
+        (
+            "§5.9",
+            include_str!(
+                "../../tests/third_party/ietf-jose-cookbook/jwe/5_9.compressed_content.json"
+            ),
+        ),
+        ("§5.10", RFC7520_5_10),
+        (
+            "§5.11",
+            include_str!(
+                "../../tests/third_party/ietf-jose-cookbook/jwe/5_11.protecting_specific_header_fields.json"
+            ),
+        ),
+        ("§5.12", RFC7520_5_12),
+    ];
+
+    #[test]
+    fn gcm_reproduces_the_rfc_7520_content_encryption() {
+        // RFC 7520 §5.x.4/§5.x.5: from the printed CEK, IV and AAD, the
+        // content layer gives the printed ciphertext and tag byte for
+        // byte, and decrypts them back (RFC 7516 §5.1 step 15, §5.2
+        // step 16). The key-management layer is not involved.
+        let mut seen = Vec::new();
+        for (section, json) in RFC7520_GCM {
+            let ex = cookbook(json);
+            assert!(GCM.contains(&ex.enc), "{section}: {}", ex.enc);
+            seen.push(ex.enc.clone());
+            let cek = Cek::from_slice(&ex.cek);
+            let full_aad = aad(&ex.protected_b64, ex.jwe_aad.as_deref());
+            let sealed = encrypt(&ex.enc, &cek, &ex.iv, &full_aad, &ex.plaintext).unwrap();
+            assert_eq!(sealed, (ex.ciphertext.clone(), ex.tag.clone()), "{section}");
+            let opened =
+                decrypt(&ex.enc, &cek, &ex.iv, &full_aad, &ex.ciphertext, &ex.tag).unwrap();
+            assert_eq!(opened.as_slice(), ex.plaintext, "{section}");
+            // The AAD is bound: another JWE AAD (or one added) fails.
+            let other = aad(&ex.protected_b64, Some(b"x"));
+            assert_eq!(
+                decrypt(&ex.enc, &cek, &ex.iv, &other, &ex.ciphertext, &ex.tag),
+                Err(Error::DecryptionFailed),
+                "{section}"
+            );
+        }
+        assert!(seen.contains(&ContentEncAlg::A128GCM));
+        assert!(seen.contains(&ContentEncAlg::A256GCM));
+    }
 
     #[test]
     fn aad_matches_rfc_7520_5_10() {
