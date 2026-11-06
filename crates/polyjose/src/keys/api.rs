@@ -122,7 +122,9 @@ impl Jwk {
     /// - [`Error::InvalidKey`] for malformed or non-canonical PEM or DER
     ///   (BER, trailing data, a label around the wrong structure), and for
     ///   keys that fail JWK validation (off-curve points, out-of-range
-    ///   scalars, inconsistent embedded public keys, RSA under 2048 bits).
+    ///   scalars, inconsistent embedded public keys, an RSA modulus outside
+    ///   2048–8192 bits: `jwk::RSA_MODULUS_BITS`, RFC 7518 §3.3, ADR 0026
+    ///   §2 step 8).
     ///
     /// Error details are static strings and never contain input bytes.
     pub fn from_pem(pem: &str) -> Result<Jwk> {
@@ -162,7 +164,9 @@ impl Jwk {
     /// RSAPrivateKey given as [`KeyFormat::Pkcs8`] or [`KeyFormat::Sec1`]
     /// included) and unsupported algorithms or curves;
     /// [`Error::InvalidKey`] for everything malformed or invalid, including
-    /// DER of another format than `format`.
+    /// DER of another format than `format` and an RSA modulus outside
+    /// 2048–8192 bits (`jwk::RSA_MODULUS_BITS`; RFC 7518 §3.3, ADR 0026 §2
+    /// step 8).
     pub fn from_der(der: &[u8], format: KeyFormat) -> Result<Jwk> {
         match format {
             KeyFormat::Pkcs8 => {

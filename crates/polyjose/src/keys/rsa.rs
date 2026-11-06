@@ -20,8 +20,11 @@
 //! This module never uses the rsa crate: an RSA public key is two DER
 //! INTEGERs, and [`Jwk::from_object`](crate::jwk::Jwk::from_object), reached
 //! through `jwk_build::rsa_public_jwk`, checks that they are a usable key
-//! (at least 2048 bits, RFC 7518 §3.3, §4.2, ADR 0007; odd `n`; odd `e` with
-//! 3 ≤ e < n, RFC 8017 §3.1).
+//! (a modulus of 2048–8192 bits, [`RSA_MODULUS_BITS`]: at least 2048 by
+//! RFC 7518 §3.3, §4.2 and ADR 0007, at most 8192 by ADR 0026 §2 step 8;
+//! odd `n`; odd `e` with 3 ≤ e < n, RFC 8017 §3.1).
+//!
+//! [`RSA_MODULUS_BITS`]: crate::jwk::RSA_MODULUS_BITS
 
 use zeroize::Zeroizing;
 
@@ -45,8 +48,10 @@ use crate::jwk::{Jwk, RsaPublicKey};
 /// [`Error::InvalidKey`] when `parts` is not an rsaEncryption key, when the
 /// subjectPublicKey is not a well-formed RSAPublicKey (a negative or
 /// non-minimal INTEGER, an extra field, an EC point), and for whatever
-/// [`Jwk::from_object`] refuses: a modulus under 2048 bits, an even
-/// modulus, an exponent that is even or outside 3 ≤ e < n.
+/// [`Jwk::from_object`] refuses: a modulus outside 2048–8192 bits
+/// ([`RSA_MODULUS_BITS`](crate::jwk::RSA_MODULUS_BITS); RFC 7518 §3.3,
+/// ADR 0026 §2 step 8), an even modulus, an exponent that is even or
+/// outside 3 ≤ e < n.
 pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
     if parts.alg != AlgId::RsaEncryption {
         return Err(Error::InvalidKey("the key is not an RSA key"));

@@ -1964,6 +1964,18 @@ mod pem_properties {
 // ---------------------------------------------------------------------------
 // Secret hygiene
 // ---------------------------------------------------------------------------
+//
+// The audit below checks types at compile time and error and `Debug` text
+// at run time. What it cannot detect: by-value stack copies of a secret
+// (an array or `FieldBytes` moved or passed by value, a spilled register),
+// which leave nothing a test can read back, and copies made inside the
+// upstream curve and dalek crates, which polyjose cannot reach. Those are
+// documented as best-effort where they arise (`okp::x25519_public`,
+// `okp::ed25519_public`, `ec::public_key`, `generate::generate_ec_secret`)
+// and reviewed, not tested. The oracle derivations in this file call the
+// upstream crates directly (`x25519_dalek::StaticSecret::from` included)
+// and are deliberately not routed through polyjose's own helpers, so they
+// stay independent of the code under test.
 
 /// What carries a private key between the codecs is either borrowed or
 /// wiped on drop (CLAUDE.md secrets rule, ADR 0018 §5), checked at compile

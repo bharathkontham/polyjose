@@ -23,8 +23,12 @@
 //! Every key is built by `keys::jwk_build`, so it passes exactly the
 //! [`Jwk::from_object`] validation of a JWK read from JSON (lengths, EC
 //! points on their curve, scalars in range, Ed25519 decoding, `alg`
-//! binding; ADR 0041 §4) before it is returned. Secret bytes are held only
-//! in [`Zeroizing`] buffers on the way.
+//! binding; ADR 0041 §4) before it is returned. On the way, the secret
+//! bytes polyjose holds are in [`Zeroizing`] buffers or local copies that
+//! are zeroized before return. Copies made inside the curve and dalek
+//! crates (sampling candidates, by-value conversions) are best-effort:
+//! [`generate_ec_secret`], `ec_jwk_from_secret`, `okp::x25519_public` and
+//! `okp::ed25519_public` name each upstream API.
 
 use p256::elliptic_curve::rand_core::TryCryptoRng;
 use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, ToSec1Point};
@@ -111,7 +115,9 @@ pub(crate) fn generate_ec<R: TryCryptoRng + ?Sized>(crv: EcCurve, rng: &mut R) -
 
 /// Samples a private EC scalar d ∈ [1, n − 1] for the curve `C` from `rng`
 /// (SEC 1 v2 §3.2.1), as the curve crate's `SecretKey`, which is wiped on
-/// drop.
+/// drop. The sampled `NonZeroScalar` is zeroized; the candidate buffer
+/// inside the curve crate's `try_random` is not (best-effort, see the
+/// body).
 ///
 /// **This is the crate's one EC sampling path,** with a stable signature:
 /// [`generate_ec`] builds its JWK from it, and JWE takes the `SecretKey`
@@ -134,6 +140,13 @@ where
     // 0; this one draws a scalar below n by rejection sampling and redraws
     // on 0, so d ∈ [1, n − 1] (SEC 1 v2 §3.2.1, Key Pair Generation
     // Primitive step 1).
+    //
+    // Best-effort: the RNG writes each candidate into a local `FieldBytes`
+    // of the curve crate's `Field::try_random` (p256 0.14.0, k256 0.14.0)
+    // or primefield 0.14.0's `MontyFieldElement::try_random` (P-384,
+    // P-521). That buffer is not wiped, so the accepted candidate, the
+    // encoding of d, stays in that stack frame. polyjose cannot reach it.
+    // What it can wipe, it does: the `NonZeroScalar` below.
     let mut scalar =
         NonZeroScalar::<C>::try_generate_from_rng(rng).map_err(|_| Error::RandomnessUnavailable)?;
     let secret = SecretKey::from(&scalar);
@@ -160,8 +173,12 @@ pub(crate) fn generate_okp<R: TryCryptoRng + ?Sized>(crv: OkpCurve, rng: &mut R)
 }
 
 /// [`generate_okp`] with the optional `alg` member (RFC 7517 §4.4). The
-/// 32-octet seed lives only in a [`Zeroizing`] buffer, and the dalek key
-/// types built from it are wiped on drop (their `zeroize` feature).
+/// 32-octet seed is drawn straight into a [`Zeroizing`] buffer. The public
+/// key comes from ed25519-dalek's `SigningKey::from_bytes`, which borrows
+/// the seed, or from `okp::x25519_public`, the crate's one X25519
+/// derivation, which wipes its own copy. Both are best-effort about the
+/// temporaries inside the dalek crates; see `okp::x25519_public` and
+/// `okp::ed25519_public`.
 fn okp_key<R: TryCryptoRng + ?Sized>(crv: OkpCurve, alg: Option<&str>, rng: &mut R) -> Result<Jwk> {
     let mut d = Zeroizing::new([0u8; 32]);
     fill(rng, d.as_mut_slice())?;
@@ -171,9 +188,7 @@ fn okp_key<R: TryCryptoRng + ?Sized>(crv: OkpCurve, alg: Option<&str>, rng: &mut
             .verifying_key()
             .to_bytes(),
         // RFC 7748 §6.1: the public key is X25519(d, 9).
-        OkpCurve::X25519 => {
-            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*d)).to_bytes()
-        }
+        OkpCurve::X25519 => super::okp::x25519_public(&d),
     };
     jwk_build::okp_jwk(crv, &x, Some(d.as_slice()), alg)
 }
@@ -199,21 +214,43 @@ fn ec_key<R: TryCryptoRng + ?Sized>(crv: EcCurve, alg: Option<&str>, rng: &mut R
 /// The JWK of `secret` on `crv`: the affine coordinates of Q = d·G
 /// (SEC 1 v2 §3.2.1 step 2) from the uncompressed SEC 1 encoding
 /// (§2.3.3), and d as big-endian bytes of the full field length
-/// (RFC 7518 §6.2.2.1), held in a [`Zeroizing`] buffer.
+/// (RFC 7518 §6.2.2.1).
+///
+/// Q comes from `ec::public_key`, which wipes its scalar copy. d is a
+/// local copy (`SecretKey::to_bytes` returns `FieldBytes` by value) that
+/// [`ec_jwk_from_copy`] wipes once the JWK holds it. Best-effort: the
+/// `FieldBytes` that elliptic-curve 0.14.3's `field::uint_to_bytes` builds
+/// inside `to_bytes`, and its by-value return, are upstream copies that
+/// are not wiped.
 fn ec_jwk_from_secret<C>(crv: EcCurve, secret: &SecretKey<C>, alg: Option<&str>) -> Result<Jwk>
 where
     C: CurveArithmetic,
     AffinePoint<C>: FromSec1Point<C> + ToSec1Point<C>,
     FieldBytesSize<C>: ModulusSize,
 {
-    let point = secret.public_key().to_sec1_point(false);
+    let point = super::ec::public_key(secret).to_sec1_point(false);
     // d ≠ 0 and G has order n, so Q is never the identity, which is the
     // only point without coordinates.
     let (Some(x), Some(y)) = (point.x(), point.y()) else {
         return Err(Error::InvalidKey("EC public key is the identity"));
     };
-    let d = Zeroizing::new(secret.to_bytes());
-    jwk_build::ec_jwk(crv, x, y, Some(&d), alg)
+    let mut d = secret.to_bytes();
+    ec_jwk_from_copy(crv, x, y, &mut d, alg)
+}
+
+/// `jwk_build::ec_jwk` with `d` taken from `copy`, which is wiped
+/// (`zeroize`) before this returns, on success and on error alike, so it
+/// reads back as zeros.
+fn ec_jwk_from_copy(
+    crv: EcCurve,
+    x: &[u8],
+    y: &[u8],
+    copy: &mut [u8],
+    alg: Option<&str>,
+) -> Result<Jwk> {
+    let jwk = jwk_build::ec_jwk(crv, x, y, Some(copy), alg);
+    copy.zeroize();
+    jwk
 }
 
 /// Generates a new private key for the algorithm `alg` from the OS CSPRNG
@@ -547,6 +584,44 @@ mod tests {
             assert_eq!(ec_key(&public).d(), None);
             assert_eq!(ec_key(&public).x(), key.x());
         }
+    }
+
+    /// `ec_jwk_from_copy` wipes the field bytes of d it builds the JWK from
+    /// (F05): read back after the call they are all zeros, on success and
+    /// when `jwk_build::ec_jwk` refuses the key, and the JWK carries the
+    /// original d. `ec_jwk_from_secret` builds the published key from its
+    /// `SecretKey`.
+    fn check_ec_jwk_wipes_d<C>(crv: EcCurve)
+    where
+        C: CurveArithmetic,
+        AffinePoint<C>: FromSec1Point<C> + ToSec1Point<C>,
+        FieldBytesSize<C>: ModulusSize,
+    {
+        let published = published_ec_key(crv);
+        let key = ec_key(&published);
+        let secret = SecretKey::<C>::from_slice(key.d().unwrap()).unwrap();
+        let built = ec_jwk_from_secret(crv, &secret, None).unwrap();
+        assert_eq!(ec_key(&built).x(), key.x(), "{crv:?}");
+        assert_eq!(ec_key(&built).y(), key.y(), "{crv:?}");
+        assert_eq!(ec_d(&built), ec_d(&published), "{crv:?}");
+
+        let mut copy = secret.to_bytes();
+        let built = ec_jwk_from_copy(crv, key.x(), key.y(), &mut copy, None).unwrap();
+        assert_eq!(ec_d(&built), ec_d(&published), "{crv:?}");
+        assert!(copy.iter().all(|&b| b == 0), "{crv:?}: d is wiped");
+
+        // x and y swapped: no longer d·G, so ec_jwk refuses (ADR 0043 §3).
+        let mut copy = secret.to_bytes();
+        assert!(ec_jwk_from_copy(crv, key.y(), key.x(), &mut copy, None).is_err());
+        assert!(copy.iter().all(|&b| b == 0), "{crv:?}: d is wiped on error");
+    }
+
+    #[test]
+    fn ec_jwk_from_secret_wipes_its_field_bytes() {
+        check_ec_jwk_wipes_d::<p256::NistP256>(EcCurve::P256);
+        check_ec_jwk_wipes_d::<p384::NistP384>(EcCurve::P384);
+        check_ec_jwk_wipes_d::<p521::NistP521>(EcCurve::P521);
+        check_ec_jwk_wipes_d::<k256::Secp256k1>(EcCurve::Secp256k1);
     }
 
     #[test]

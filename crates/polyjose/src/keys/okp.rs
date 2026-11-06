@@ -14,10 +14,13 @@
 //! emits (ADR 0018 §3), so a round trip of an OpenSSL or RFC key is
 //! byte-identical. Every JWK is built by [`jwk_build::okp_jwk`] and so
 //! validated by [`Jwk::from_object`] (ADR 0041 §4, ADR 0043). The private
-//! key is held only in zeroizing buffers, and no error carries key octets.
+//! key is held in zeroizing buffers, and no error carries key octets. The
+//! public-key derivations wipe what polyjose owns; the temporaries inside
+//! the dalek crates are best-effort, as [`x25519_public`] and
+//! [`ed25519_public`] document.
 
 use subtle::ConstantTimeEq as _;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use super::der::{self, Reader, Writer};
 use super::jwk_build;
@@ -75,8 +78,17 @@ fn curve_private_key(private_key: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
 }
 
 /// The Ed25519 public key of the seed `d`: `A = [s]B` from SHA-512(`d`)
-/// (RFC 8032 §5.1.5), computed by ed25519-dalek. The `SigningKey` is wiped
-/// on drop (its `zeroize` feature).
+/// (RFC 8032 §5.1.5), computed by ed25519-dalek.
+///
+/// # Secrets (best-effort)
+///
+/// `SigningKey::from_bytes` borrows `d`, so polyjose makes no copy. The
+/// `SigningKey` and the `ExpandedSecretKey` it derives wipe themselves on
+/// drop (`impl Drop for SigningKey`, `impl Drop for ExpandedSecretKey`).
+/// Inside ed25519-dalek 3.0.0's `impl From<&SecretKey> for
+/// ExpandedSecretKey`, the SHA-512 output, and the `scalar_bytes` local
+/// that `ExpandedSecretKey::from_bytes` passes by value to
+/// `clamp_integer`, are not wiped and are out of polyjose's reach.
 fn ed25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
     ed25519_dalek::SigningKey::from_bytes(d)
         .verifying_key()
@@ -85,10 +97,37 @@ fn ed25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
 
 /// The X25519 public key of the scalar `d`: X25519(`d`, 9) (RFC 7748 §6.1;
 /// x25519-dalek clamps the scalar as RFC 7748 §5 requires).
-/// `StaticSecret` is built only from a `[u8; 32]` by value; that copy is
-/// moved into it, and it is wiped on drop (its `zeroize` feature).
-fn x25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
-    let secret = x25519_dalek::StaticSecret::from(*d);
+///
+/// **This is the crate's one X25519 public-key derivation:** PKCS#8 import
+/// ([`from_pkcs8`]) and key generation (`generate::okp_key`) both call it.
+/// It works from a local copy of `d`, which [`x25519_public_from_copy`]
+/// wipes.
+///
+/// # Secrets (best-effort)
+///
+/// x25519-dalek 3.0.0 builds a `StaticSecret` only by value, through
+/// `impl From<[u8; 32]> for StaticSecret`, so the scalar has to be copied.
+/// What polyjose can wipe, it does: its own named copy, and the
+/// `StaticSecret`, which wipes itself on drop (`impl Drop for StaticSecret`,
+/// its `zeroize` feature). Two copies are out of reach and are **not**
+/// wiped:
+///
+/// - the by-value argument of `StaticSecret::from`, if the compiler
+///   materializes one for the call;
+/// - inside `impl From<&StaticSecret> for PublicKey`, the bytes passed by
+///   value to curve25519-dalek 5.0.0's `EdwardsPoint::mul_base_clamped`,
+///   and the clamped `Scalar` it builds with `clamp_integer`. `Scalar` has
+///   no `Drop`, so neither is wiped.
+pub(super) fn x25519_public(d: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
+    let mut copy = *d;
+    x25519_public_from_copy(&mut copy)
+}
+
+/// [`x25519_public`] of the scalar in `copy`, which is wiped (`zeroize`)
+/// as soon as the `StaticSecret` holds it, so it reads back as zeros.
+fn x25519_public_from_copy(copy: &mut [u8; KEY_LEN]) -> [u8; KEY_LEN] {
+    let secret = x25519_dalek::StaticSecret::from(*copy);
+    copy.zeroize();
     x25519_dalek::PublicKey::from(&secret).to_bytes()
 }
 
@@ -709,6 +748,37 @@ mod tests {
             import_spki(&relabel(&x, ALG_X25519, ALG_ED25519)).unwrap_err(),
             Error::InvalidKey("Ed25519 public key is invalid")
         );
+    }
+
+    /// RFC 7748 §6.1: Alice's private key and public key.
+    const ALICE_D: [u8; KEY_LEN] = [
+        0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d, 0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66,
+        0x45, 0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a, 0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9,
+        0x2c, 0x2a,
+    ];
+    const ALICE_X: [u8; KEY_LEN] = [
+        0x85, 0x20, 0xf0, 0x09, 0x89, 0x30, 0xa7, 0x54, 0x74, 0x8b, 0x7d, 0xdc, 0xb4, 0x3e, 0xf7,
+        0x5a, 0x0d, 0xbf, 0x3a, 0x0d, 0x26, 0x38, 0x1a, 0xf4, 0xeb, 0xa4, 0xa9, 0x8e, 0xaa, 0x9b,
+        0x4e, 0x6a,
+    ];
+
+    /// The one X25519 derivation (F05) gives RFC 7748 §6.1's public key,
+    /// leaves the caller's scalar as it was, and wipes the copy it works
+    /// from: read back after the call, the copy is all zeros.
+    #[test]
+    fn x25519_public_wipes_its_copy_of_the_scalar() {
+        let mut copy = ALICE_D;
+        assert_eq!(x25519_public_from_copy(&mut copy), ALICE_X);
+        assert_eq!(copy, [0u8; KEY_LEN]);
+
+        let d = ALICE_D;
+        assert_eq!(x25519_public(&d), ALICE_X);
+        assert_eq!(d, ALICE_D);
+        // x25519-dalek's RFC 7748 §5 function as the oracle, on more inputs.
+        for d in [[0u8; KEY_LEN], [0xff; KEY_LEN], ALICE_X] {
+            let oracle = x25519_dalek::x25519(d, x25519_dalek::X25519_BASEPOINT_BYTES);
+            assert_eq!(x25519_public(&d), oracle);
+        }
     }
 
     /// The private key is read only into a `Zeroizing<[u8; 32]>`.

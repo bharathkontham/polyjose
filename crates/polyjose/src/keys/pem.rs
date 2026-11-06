@@ -897,6 +897,11 @@ mod tests {
     /// text (a private key's encoding) and the decoded octets. Read back
     /// after the failure, both are all zeros. On success the base64 copy is
     /// wiped too and only the DER is kept.
+    ///
+    /// The read-back sees the buffers' live length only; that they never
+    /// reallocated (and so left no copy in freed memory) is checked by
+    /// `check_planned_capacity`. Neither can see by-value stack copies or
+    /// copies the caller makes of the input text.
     #[test]
     fn buffers_are_wiped_on_every_error_path() {
         let b = ED25519_BODY;
@@ -947,6 +952,69 @@ mod tests {
         );
         assert!(!body.is_empty() && body.iter().all(|&x| x == 0));
         assert_eq!(der, ed25519_der());
+    }
+
+    /// The capacity `parse` reserves for the body: everything after the
+    /// BEGIN line's `eol` (CRLF, CR or LF; RFC 7468 §3), worked out here
+    /// independently of the decoder.
+    fn planned_body_capacity(text: &[u8]) -> usize {
+        let start = text
+            .iter()
+            .position(|&c| !matches!(c, b' ' | b'\t' | b'\r' | b'\n'))
+            .unwrap_or(text.len());
+        let begin = &text[start..];
+        let Some(eol) = begin.iter().position(|&c| c == b'\r' || c == b'\n') else {
+            return 0;
+        };
+        let eol_len = if begin[eol..].starts_with(b"\r\n") {
+            2
+        } else {
+            1
+        };
+        begin.len() - eol - eol_len
+    }
+
+    /// [`decode_into`] with fresh buffers, then reads back their capacity:
+    /// the body buffer has either never been allocated (the input failed
+    /// before the body) or has exactly the capacity `parse` reserved, and
+    /// the DER buffer exactly its decoded length. So "one allocation, never
+    /// regrown" holds and no reallocation left a copy of a secret in freed
+    /// memory (F05). Returns the outcome.
+    fn check_planned_capacity(text: &[u8]) -> Result<Label> {
+        let mut body = Vec::new();
+        let mut der = Vec::new();
+        let result = decode_into(text, &mut body, &mut der);
+        let planned = planned_body_capacity(text);
+        let what = String::from_utf8_lossy(&text[..text.len().min(60)]).into_owned();
+        assert!(
+            body.capacity() == 0 || body.capacity() == planned,
+            "{what:?}: body capacity {} != planned {planned}",
+            body.capacity()
+        );
+        if result.is_ok() {
+            assert_eq!(body.capacity(), planned, "{what:?}");
+            assert!(body.len() <= planned, "{what:?}");
+        }
+        assert_eq!(der.capacity(), der.len(), "{what:?}: DER buffer regrew");
+        result
+    }
+
+    /// The planned capacities hold for every PEM fixture: the OpenSSL and
+    /// RFC keys, and the negative P/A vectors, accepted or not.
+    #[test]
+    fn buffers_keep_their_planned_capacity_across_the_corpus() {
+        let mut accepted = 0;
+        let mut checked = 0;
+        for dir in ["openssl", "rfc", "negative"] {
+            for name in pem_files(dir) {
+                let text = fs::read(data_dir(dir).join(&name)).unwrap();
+                accepted += usize::from(check_planned_capacity(&text).is_ok());
+                checked += 1;
+            }
+        }
+        // Not vacuous: most of the corpus is valid keys.
+        assert!(checked >= 90, "{checked} fixtures");
+        assert!(accepted >= 60, "only {accepted} of {checked} accepted");
     }
 
     /// Errors carry no input text (ADR 0007, ADR 0018 §4): a marker placed in
@@ -1210,6 +1278,38 @@ mod tests {
                     prop_assert_eq!(Some(oracle_label), got_label.as_str());
                     prop_assert_eq!(&oracle, &*got);
                 }
+            }
+
+            /// The planned capacities of `check_planned_capacity` (F05)
+            /// hold for encoded blocks of any length with LF, CRLF or CR
+            /// line endings and whitespace around them, and for the same
+            /// blocks with one character replaced or inserted.
+            #[test]
+            fn buffers_keep_their_planned_capacity(
+                label in known_label(),
+                der in proptest::collection::vec(any::<u8>(), 1..1500),
+                eol in prop::sample::select(vec!["\n", "\r\n", "\r"]),
+                around in prop::sample::select(vec!["", " ", "\n", "\r\n\t "]),
+                mutation in proptest::option::of((
+                    any::<prop::sample::Index>(),
+                    prop::sample::select("AQgw+/=-_ \t\r\n.:".chars().collect::<Vec<char>>()),
+                    any::<bool>(),
+                )),
+            ) {
+                let pem = encode(label, &der).unwrap().replace('\n', eol);
+                let text = format!("{around}{pem}{around}");
+                let Some((at, with, insert)) = mutation else {
+                    let got = super::check_planned_capacity(text.as_bytes());
+                    prop_assert_eq!(got, Ok(label));
+                    return Ok(());
+                };
+                let i = at.index(text.len());
+                let mutated = if insert {
+                    format!("{}{with}{}", &text[..i], &text[i..])
+                } else {
+                    format!("{}{with}{}", &text[..i], &text[i + 1..])
+                };
+                let _ = super::check_planned_capacity(mutated.as_bytes());
             }
         }
     }

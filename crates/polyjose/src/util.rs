@@ -892,6 +892,79 @@ mod standard_tests {
         }
     }
 
+    /// The decoded length `b64_decode_into` plans for `input` (a multiple of
+    /// 4 characters), worked out independently: 3 octets per quantum, less
+    /// one per trailing `=` (RFC 4648 §4 cases (2) and (3)).
+    fn planned_len(input: &[u8]) -> usize {
+        let pad = input
+            .iter()
+            .rev()
+            .take(2)
+            .take_while(|&&c| c == PAD)
+            .count();
+        input.len() / 4 * 3 - pad
+    }
+
+    /// [`b64_decode_into`] into `out`, then reads back its capacity
+    /// (F05): it is the capacity reserved before decoding, the larger of
+    /// what `out` already had and the planned length, so the buffer never
+    /// regrew while it held decoded octets. Returns the outcome.
+    fn check_planned_capacity(input: &[u8], out: &mut Vec<u8>) -> crate::Result<()> {
+        assert!(input.len().is_multiple_of(4));
+        let before = out.capacity();
+        let result = b64_decode_into(input, out);
+        let planned = planned_len(input);
+        assert_eq!(out.len(), planned);
+        assert_eq!(out.capacity(), before.max(planned), "{} octets", planned);
+        result
+    }
+
+    /// The capacity read-back over the key fixture corpus
+    /// (`tests/data/keys`): the DER of every `.der` file and every `.pem`
+    /// file that `pem-rfc7468` (dev-dependency oracle) decodes, encoded,
+    /// then decoded into a fresh buffer, a buffer with room to spare and a
+    /// used buffer that is too small.
+    #[test]
+    fn output_keeps_its_planned_capacity_across_the_key_corpus() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/keys");
+        let mut checked = 0;
+        for dir in ["openssl", "rfc", "negative"] {
+            for entry in std::fs::read_dir(root.join(dir)).unwrap() {
+                let path = entry.unwrap().path();
+                let der = match path.extension().and_then(|e| e.to_str()) {
+                    Some("der") => std::fs::read(&path).unwrap(),
+                    Some("pem") => match pem_rfc7468::decode_vec(&std::fs::read(&path).unwrap()) {
+                        Ok((_, der)) => der,
+                        Err(_) => continue,
+                    },
+                    _ => continue,
+                };
+                let encoded = encode(&der);
+                let mut fresh = Vec::new();
+                assert_eq!(
+                    check_planned_capacity(encoded.as_bytes(), &mut fresh),
+                    Ok(())
+                );
+                assert_eq!(fresh, der, "{}", path.display());
+                assert_eq!(fresh.capacity(), der.len(), "{}", path.display());
+
+                let mut roomy = Vec::with_capacity(der.len() + 100);
+                assert_eq!(
+                    check_planned_capacity(encoded.as_bytes(), &mut roomy),
+                    Ok(())
+                );
+                let mut used = vec![0xa5; der.len() / 2];
+                assert_eq!(
+                    check_planned_capacity(encoded.as_bytes(), &mut used),
+                    Ok(())
+                );
+                assert_eq!(used, der, "{}", path.display());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 100, "only {checked} fixtures");
+    }
+
     /// Exhaustive comparison with `base64ct::Base64` (dev-dependency oracle,
     /// ADR 0016 §5) over every string of up to three characters, and every
     /// four-character string over a reduced alphabet, on accept/reject and
@@ -919,7 +992,7 @@ mod standard_tests {
     }
 
     mod properties {
-        use super::{decode, encode};
+        use super::{check_planned_capacity, decode, encode};
         use base64ct::{Base64, Encoding};
         use proptest::prelude::*;
 
@@ -962,6 +1035,36 @@ mod standard_tests {
                 ]
             ) {
                 prop_assert_eq!(decode(&s).ok(), Base64::decode_vec(&s).ok(), "{:?}", s);
+            }
+
+            /// `check_planned_capacity` (F05) for any encoding, valid or
+            /// with one character replaced, decoded into a buffer that
+            /// already holds `prior` octets with `spare` more capacity: the
+            /// capacity is what was reserved before decoding, and a rejected
+            /// decode leaves only zeros.
+            #[test]
+            fn output_keeps_its_planned_capacity(
+                bytes in proptest::collection::vec(any::<u8>(), 0..600),
+                prior in proptest::collection::vec(any::<u8>(), 0..700),
+                spare in 0usize..64,
+                mutation in proptest::option::of((
+                    any::<prop::sample::Index>(),
+                    prop::sample::select("AQgw+/=-_ *".chars().collect::<Vec<char>>()),
+                )),
+            ) {
+                let mut encoded = encode(&bytes);
+                let mutated = mutation.is_some() && !encoded.is_empty();
+                if let (Some((at, with)), true) = (mutation, mutated) {
+                    let i = at.index(encoded.len());
+                    encoded.replace_range(i..=i, with.encode_utf8(&mut [0; 4]));
+                }
+                let mut out = prior;
+                out.reserve_exact(spare);
+                match check_planned_capacity(encoded.as_bytes(), &mut out) {
+                    Ok(()) if !mutated => prop_assert_eq!(out, bytes),
+                    Ok(()) => {}
+                    Err(_) => prop_assert!(out.iter().all(|&b| b == 0)),
+                }
             }
         }
     }
