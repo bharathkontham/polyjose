@@ -89,6 +89,24 @@
     {
       "if": {
         "required": ["operation"],
+        "properties": { "operation": { "const": "jws.sign" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/jws_sign_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/jws_sign_exact" },
+              { "$ref": "#/$defs/jws_sign_roundtrip" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
         "properties": { "operation": { "const": "jws.verify" } }
       },
       "then": {
@@ -221,6 +239,101 @@
         "ok": { "const": true },
         "thumbprint": { "$ref": "#/$defs/base64url" },
         "thumbprint_uri": { "type": "string" }
+      }
+    },
+    "jws_signer": {
+      "description": "One signature to compute: its JWS Protected Header as exact octets (RFC 7515 §5.1 step 3; the runner signs over them verbatim), its JWS Unprotected Header (RFC 7515 §7.2.1), and its key. The runner imports key, then parses protected_b64u, then header; the first error is the outcome.",
+      "type": "object",
+      "required": ["key"],
+      "additionalProperties": false,
+      "properties": {
+        "protected_b64u": {
+          "description": "BASE64URL(UTF8(JWS Protected Header)), kept verbatim for the signing input (e.g. RFC 7515 A.1's CRLF header).",
+          "$ref": "#/$defs/base64url"
+        },
+        "header": {
+          "description": "The JWS Unprotected Header as a JSON object (JSON serializations only). Unconstrained: header errors are under test.",
+          "type": "object"
+        },
+        "key": {
+          "description": "The signing JWK (RFC 7517 §4) as a JSON object, imported with the library's JWK import. Unconstrained: an import error is the vector's outcome.",
+          "type": "object"
+        }
+      }
+    },
+    "jws_sign_input": {
+      "description": "Sign a payload (RFC 7515 §5.1) in one serialization, with one signer (compact, flattened) or several (general, in order), attached or detached (RFC 7515 Appendix F).",
+      "type": "object",
+      "required": ["serialization", "payload_b64u", "detached", "signers"],
+      "additionalProperties": false,
+      "properties": {
+        "serialization": {
+          "description": "compact (RFC 7515 §7.1), flattened (§7.2.2) or general (§7.2.1).",
+          "enum": ["compact", "flattened", "general"]
+        },
+        "payload_b64u": {
+          "description": "The JWS Payload octets, canonical base64url; the runner decodes them (with b64:false, RFC 7797, the octets themselves are signed).",
+          "$ref": "#/$defs/base64url"
+        },
+        "detached": {
+          "description": "Leave the payload out of the output (RFC 7515 Appendix F).",
+          "type": "boolean"
+        },
+        "signers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/jws_signer" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "serialization": { "const": "compact" } } },
+          "then": {
+            "properties": {
+              "signers": {
+                "maxItems": 1,
+                "items": {
+                  "required": ["protected_b64u"],
+                  "properties": { "header": false }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "serialization": { "const": "flattened" } } },
+          "then": { "properties": { "signers": { "maxItems": 1 } } }
+        }
+      ]
+    },
+    "jws_sign_exact": {
+      "description": "A deterministic signature (HMAC, EdDSA): the exact output. A compact JWS is compared as a string; a JSON JWS is compared as a JSON value, so member order does not matter (RFC 8259 §4) but every octet of every string does.",
+      "type": "object",
+      "required": ["ok", "jws"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "jws": { "$ref": "#/$defs/jws" }
+      }
+    },
+    "jws_verify_with": {
+      "description": "The key and allow-list a runner verifies its own randomized output with.",
+      "type": "object",
+      "required": ["key", "allowed_algs"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "object" },
+        "allowed_algs": { "$ref": "#/$defs/alg_list" }
+      }
+    },
+    "jws_sign_roundtrip": {
+      "description": "A randomized signature (ECDSA): the runner checks that its output has the requested serialization's shape, verifies it with verify_with (passing the payload separately when detached), and checks the verified payload equals payload_b64u. Any failure there fails the vector.",
+      "type": "object",
+      "required": ["ok", "verify_with"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "verify_with": { "$ref": "#/$defs/jws_verify_with" }
       }
     },
     "jws_verify_input": {

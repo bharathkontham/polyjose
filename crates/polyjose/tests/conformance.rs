@@ -27,10 +27,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 use polyjose::Error;
+use polyjose::header::Header;
 use polyjose::json::{self, Number, Object, Value};
 use polyjose::jwa::SigningAlg;
 use polyjose::jwk::Jwk;
-use polyjose::jws::{self, VerifyOptions};
+use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
 use polyjose::util::{b64url_decode, b64url_encode};
 
 /// Top-level members of a vector; all required (schema `required`).
@@ -80,6 +81,12 @@ enum Kind {
     Jws,
     /// `{"$ref": "#/$defs/alg_list"}`: an array of strings
     AlgList,
+    /// `{"type": "boolean"}`
+    Bool,
+    /// `{"$ref": "#/$defs/<def>"}` of a closed object definition
+    Nested(&'static Shape),
+    /// `{"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/<def>"}}`
+    List(&'static Shape),
 }
 
 impl Kind {
@@ -91,7 +98,8 @@ impl Kind {
             Kind::Count => Some("count"),
             Kind::Jws => Some("jws"),
             Kind::AlgList => Some("alg_list"),
-            Kind::String | Kind::Object | Kind::Enum(_) => None,
+            Kind::Nested(shape) => Some(shape.def),
+            Kind::String | Kind::Object | Kind::Enum(_) | Kind::Bool | Kind::List(_) => None,
         }
     }
 }
@@ -124,12 +132,32 @@ const fn opt(name: &'static str, kind: Kind) -> Member {
 }
 
 /// A closed object definition in `$defs` (`additionalProperties: false`):
-/// the listed members, no others.
+/// the listed members, no others, and its `allOf` rules.
 #[derive(Debug)]
 struct Shape {
     /// Its name under `$defs`.
     def: &'static str,
     members: &'static [Member],
+    /// Per-serialization signer rules (`jws_sign_input` only).
+    rules: &'static [SignerRule],
+}
+
+/// One `allOf` rule of `jws_sign_input`: when `serialization` is
+/// `serialization`, `signers` has at most `max_signers` entries, each with
+/// every `requires` member and none of the `forbids` members. In the
+/// schema:
+///
+/// ```json
+/// {"if": {"properties": {"serialization": {"const": "compact"}}},
+///  "then": {"properties": {"signers": {"maxItems": 1,
+///    "items": {"required": ["protected_b64u"], "properties": {"header": false}}}}}}
+/// ```
+#[derive(Debug)]
+struct SignerRule {
+    serialization: &'static str,
+    max_signers: usize,
+    requires: &'static [&'static str],
+    forbids: &'static [&'static str],
 }
 
 /// The input and success shapes of an operation (schema `$defs`).
@@ -148,19 +176,23 @@ struct OpSpec {
 const B64URL_ENCODE_INPUT: Shape = Shape {
     def: "b64url_encode_input",
     members: &[req("bytes_hex", Kind::Hex)],
+    rules: &[],
 };
 const B64URL_ENCODE_OK: Shape = Shape {
     def: "b64url_encode_ok",
     members: &[req("b64u", Kind::Base64url)],
+    rules: &[],
 };
 // RFC 7515 §2 decoding; non-canonical input is rejected (RFC 4648 §3.5).
 const B64URL_DECODE_INPUT: Shape = Shape {
     def: "b64url_decode_input",
     members: &[req("b64u", Kind::String)],
+    rules: &[],
 };
 const B64URL_DECODE_OK: Shape = Shape {
     def: "b64url_decode_ok",
     members: &[req("bytes_hex", Kind::Hex)],
+    rules: &[],
 };
 // RFC 7638 §3 JWK Thumbprint and RFC 9278 §3 JWK Thumbprint URI.
 const JWK_THUMBPRINT_INPUT: Shape = Shape {
@@ -169,6 +201,7 @@ const JWK_THUMBPRINT_INPUT: Shape = Shape {
         req("jwk", Kind::Object),
         req("hash", Kind::Enum(&["sha-256"])),
     ],
+    rules: &[],
 };
 const JWK_THUMBPRINT_OK: Shape = Shape {
     def: "jwk_thumbprint_ok",
@@ -176,6 +209,7 @@ const JWK_THUMBPRINT_OK: Shape = Shape {
         req("thumbprint", Kind::Base64url),
         req("thumbprint_uri", Kind::String),
     ],
+    rules: &[],
 };
 
 // RFC 7515 §5.2 validation through `jws::verify_compact` (a string `jws`,
@@ -191,6 +225,7 @@ const JWS_VERIFY_INPUT: Shape = Shape {
         opt("max_input_len", Kind::Count),
         opt("max_signatures", Kind::Count),
     ],
+    rules: &[],
 };
 const JWS_VERIFY_OK: Shape = Shape {
     def: "jws_verify_ok",
@@ -199,6 +234,71 @@ const JWS_VERIFY_OK: Shape = Shape {
         req("alg", Kind::String),
         req("signature_index", Kind::Count),
     ],
+    rules: &[],
+};
+
+/// The signer of a `jws.sign` vector: its JWS Protected Header as exact
+/// octets (RFC 7515 §5.1 step 3; RFC 7515 A.1's CRLF header can only be
+/// given this way), its JWS Unprotected Header (§7.2.1), and its key.
+const JWS_SIGNER: Shape = Shape {
+    def: "jws_signer",
+    members: &[
+        opt("protected_b64u", Kind::Base64url),
+        opt("header", Kind::Object),
+        req("key", Kind::Object),
+    ],
+    rules: &[],
+};
+// RFC 7515 §5.1 through `jws::sign_compact` (§7.1), `jws::sign_flattened`
+// (§7.2.2) or `jws::sign_general` (§7.2.1), attached or detached
+// (Appendix F).
+const JWS_SIGN_INPUT: Shape = Shape {
+    def: "jws_sign_input",
+    members: &[
+        req(
+            "serialization",
+            Kind::Enum(&["compact", "flattened", "general"]),
+        ),
+        req("payload_b64u", Kind::Base64url),
+        req("detached", Kind::Bool),
+        req("signers", Kind::List(&JWS_SIGNER)),
+    ],
+    rules: &[
+        // RFC 7515 §7.1: one signature over a JWS Protected Header only.
+        SignerRule {
+            serialization: "compact",
+            max_signers: 1,
+            requires: &["protected_b64u"],
+            forbids: &["header"],
+        },
+        // RFC 7515 §7.2.2: one signature.
+        SignerRule {
+            serialization: "flattened",
+            max_signers: 1,
+            requires: &[],
+            forbids: &[],
+        },
+    ],
+};
+/// A deterministic signature's exact output: a string for compact, an
+/// object for JSON, compared as JSON values (member order ignored,
+/// RFC 8259 §4).
+const JWS_SIGN_EXACT: Shape = Shape {
+    def: "jws_sign_exact",
+    members: &[req("jws", Kind::Jws)],
+    rules: &[],
+};
+const JWS_VERIFY_WITH: Shape = Shape {
+    def: "jws_verify_with",
+    members: &[req("key", Kind::Object), req("allowed_algs", Kind::AlgList)],
+    rules: &[],
+};
+/// A randomized signature (ECDSA): the runner verifies its own output with
+/// `verify_with` and checks the payload, instead of comparing bytes.
+const JWS_SIGN_ROUND_TRIP: Shape = Shape {
+    def: "jws_sign_roundtrip",
+    members: &[req("verify_with", Kind::Nested(&JWS_VERIFY_WITH))],
+    rules: &[],
 };
 
 /// The operations this runner implements.
@@ -219,6 +319,12 @@ const SPECS: &[OpSpec] = &[
         name: "jwk.thumbprint",
         input: &JWK_THUMBPRINT_INPUT,
         ok: &[&JWK_THUMBPRINT_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "jws.sign",
+        input: &JWS_SIGN_INPUT,
+        ok: &[&JWS_SIGN_EXACT, &JWS_SIGN_ROUND_TRIP],
         can_fail: true,
     },
     OpSpec {
@@ -296,6 +402,22 @@ fn exact_members(object: &Object, allowed: &[&str], pointer: &str) -> Result<(),
 }
 
 fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
+    match (kind, value) {
+        (Kind::Nested(shape), Value::Object(object)) => {
+            return check_shape(object, shape, false, pointer);
+        }
+        (Kind::List(shape), Value::Array(items)) if !items.is_empty() => {
+            for (i, item) in items.iter().enumerate() {
+                let at = format!("{pointer}/{i}");
+                let object = item
+                    .as_object()
+                    .ok_or_else(|| violation(&at, "must be an object"))?;
+                check_shape(object, shape, false, &at)?;
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     let ok = match kind {
         Kind::Object => value.as_object().is_some(),
         Kind::String => value.as_str().is_some(),
@@ -307,6 +429,9 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
         Kind::AlgList => value
             .as_array()
             .is_some_and(|items| items.iter().all(|item| item.as_str().is_some())),
+        Kind::Bool => value.as_bool().is_some(),
+        // Matched above when the value has the right type.
+        Kind::Nested(_) | Kind::List(_) => false,
     };
     if ok {
         Ok(())
@@ -320,6 +445,9 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
             Kind::Count => format!("an integer from 0 to {COUNT_MAX}"),
             Kind::Jws => "a string (compact) or an object (JSON serialization)".to_owned(),
             Kind::AlgList => "an array of strings".to_owned(),
+            Kind::Bool => "a boolean".to_owned(),
+            Kind::Nested(shape) => format!("an object ({})", shape.def),
+            Kind::List(shape) => format!("a non-empty array of objects ({})", shape.def),
         };
         Err(violation(pointer, format!("must be {wanted}")))
     }
@@ -343,6 +471,47 @@ fn check_shape(object: &Object, shape: &Shape, ok: bool, pointer: &str) -> Resul
             Some(value) => check_kind(value, member.kind, &at)?,
             None if member.required => return Err(violation(&at, "required member is missing")),
             None => {}
+        }
+    }
+    for rule in shape.rules {
+        check_rule(object, rule, pointer)?;
+    }
+    Ok(())
+}
+
+/// Applies a [`SignerRule`] to a `jws_sign_input` whose members are valid.
+fn check_rule(object: &Object, rule: &SignerRule, pointer: &str) -> Result<(), String> {
+    if object.get("serialization").and_then(Value::as_str) != Some(rule.serialization) {
+        return Ok(());
+    }
+    let signers = object
+        .get("signers")
+        .and_then(Value::as_array)
+        .expect("checked as a member");
+    let what = format!("a {} JWS", rule.serialization);
+    if signers.len() > rule.max_signers {
+        return Err(violation(
+            &format!("{pointer}/signers"),
+            format!("{what} has at most {} signer", rule.max_signers),
+        ));
+    }
+    for (i, signer) in signers.iter().enumerate() {
+        let signer = signer.as_object().expect("checked as a member");
+        for name in rule.requires {
+            if !signer.contains(name) {
+                return Err(violation(
+                    &format!("{pointer}/signers/{i}/{name}"),
+                    format!("required for {what}"),
+                ));
+            }
+        }
+        for name in rule.forbids {
+            if signer.contains(name) {
+                return Err(violation(
+                    &format!("{pointer}/signers/{i}/{name}"),
+                    format!("not allowed in {what}"),
+                ));
+            }
         }
     }
     Ok(())
@@ -517,6 +686,176 @@ fn input_algs(object: &Object) -> Vec<SigningAlg> {
         .collect()
 }
 
+/// One signer's inputs, built from the vector.
+struct SignerParts {
+    key: Jwk,
+    protected: Option<ProtectedHeader>,
+    unprotected: Option<Header>,
+}
+
+/// Builds each signer, in order: import `key`, then decode and parse
+/// `protected_b64u` (RFC 7515 §5.1 step 3, kept verbatim), then parse
+/// `header` (§7.2.1). The first error is the outcome.
+fn signer_parts(input: &Object) -> Result<Vec<SignerParts>, Error> {
+    let signers = input
+        .get("signers")
+        .and_then(Value::as_array)
+        .expect("validated");
+    let mut parts = Vec::with_capacity(signers.len());
+    for signer in signers {
+        let signer = signer.as_object().expect("validated");
+        let key = Jwk::from_object(input_object(signer, "key"))?;
+        let protected = match signer.get("protected_b64u").and_then(Value::as_str) {
+            Some(encoded) => Some(ProtectedHeader::from_encoded(encoded)?),
+            None => None,
+        };
+        let unprotected = match signer.get("header") {
+            Some(header) => Some(Header::from_json(header.to_json().as_bytes())?),
+            None => None,
+        };
+        parts.push(SignerParts {
+            key,
+            protected,
+            unprotected,
+        });
+    }
+    Ok(parts)
+}
+
+/// `jws.sign` (RFC 7515 §5.1): build the signers (see [`signer_parts`]),
+/// then sign in the requested serialization. An exact expectation gets the
+/// output as `jws` (a string for compact; JSON output parsed, so it is
+/// compared as a JSON value). A round-trip expectation is checked here
+/// (see [`check_round_trip`]) and echoed back on success.
+fn run_jws_sign(
+    input: &Object,
+    expect: &Expect,
+    out: &mut Object,
+) -> Result<Result<(), Error>, String> {
+    let serialization = input_str(input, "serialization");
+    let payload = input_bytes(input, "payload_b64u")?;
+    let detached = input
+        .get("detached")
+        .and_then(Value::as_bool)
+        .expect("validated");
+    let parts = match signer_parts(input) {
+        Ok(parts) => parts,
+        Err(e) => return Ok(Err(e)),
+    };
+    let opts = SignOptions::new().detached(detached);
+    let signed = if serialization == "compact" {
+        // Schema: exactly one signer, with a protected header.
+        let only = &parts[0];
+        let protected = only.protected.as_ref().expect("validated");
+        jws::sign_compact(protected, &payload, &only.key, &opts)
+    } else {
+        let signers: Vec<Signer<'_>> = parts
+            .iter()
+            .map(|part| {
+                let mut signer = Signer::new(&part.key);
+                if let Some(protected) = &part.protected {
+                    signer = signer.protected(protected.clone());
+                }
+                if let Some(unprotected) = &part.unprotected {
+                    signer = signer.unprotected(unprotected.clone());
+                }
+                signer
+            })
+            .collect();
+        if serialization == "flattened" {
+            jws::sign_flattened(&signers[0], &payload, &opts)
+        } else {
+            jws::sign_general(&signers, &payload, &opts)
+        }
+    };
+    let text = match signed {
+        Ok(text) => text,
+        Err(e) => return Ok(Err(e)),
+    };
+    let jws = if serialization == "compact" {
+        Value::from(text.as_str())
+    } else {
+        json::parse(text.as_bytes())
+            .map_err(|e| format!("the signed JSON JWS does not parse: {}", e.code()))?
+    };
+    let verify_with = match expect {
+        Expect::Ok(want) => want.get("verify_with").and_then(Value::as_object),
+        Expect::Err(_) => None,
+    };
+    match verify_with {
+        Some(verify_with) => {
+            check_round_trip(
+                serialization,
+                &jws,
+                &text,
+                &payload,
+                detached,
+                parts.len(),
+                verify_with,
+            )?;
+            out.insert("verify_with", verify_with.clone());
+        }
+        None => {
+            out.insert("jws", jws);
+        }
+    }
+    Ok(Ok(()))
+}
+
+/// Checks a randomized signature by round trip: the output has the shape
+/// of the requested serialization (RFC 7515 §7.1, §7.2.1, §7.2.2), verifies
+/// with `verify_with` (with the payload supplied separately when detached,
+/// Appendix F), and yields the signed payload. Any failure is the vector's.
+fn check_round_trip(
+    serialization: &str,
+    jws: &Value,
+    text: &str,
+    payload: &[u8],
+    detached: bool,
+    signers: usize,
+    verify_with: &Object,
+) -> Result<(), String> {
+    let shape_ok = match serialization {
+        "compact" => text.split('.').count() == 3,
+        "flattened" => jws.get("signature").is_some() && jws.get("signatures").is_none(),
+        _ => jws
+            .get("signatures")
+            .and_then(Value::as_array)
+            .is_some_and(|all| all.len() == signers),
+    };
+    if !shape_ok {
+        return Err(format!(
+            "round trip: the output is not a {serialization} JWS with {signers} signature(s)"
+        ));
+    }
+    let key = Jwk::from_object(input_object(verify_with, "key"))
+        .map_err(|e| format!("round trip: verify_with.key does not import ({})", e.code()))?;
+    let algs = input_algs(verify_with);
+    let mut opts = VerifyOptions::new(&algs).map_err(|e| {
+        format!(
+            "round trip: verify_with.allowed_algs is refused ({})",
+            e.code()
+        )
+    })?;
+    if detached {
+        opts = opts.detached_payload(payload);
+    }
+    let verified = match jws.as_str() {
+        Some(compact) => jws::verify_compact(compact, &key, &opts),
+        None => jws::verify_json(text, &key, &opts),
+    }
+    .map_err(|e| {
+        format!(
+            "round trip: the signed JWS does not verify with verify_with ({})",
+            e.code()
+        )
+    })?;
+    if verified.payload != payload {
+        return Err("round trip: the verified payload is not the signed one".to_owned());
+    }
+    Ok(())
+}
+
 /// `jws.verify` (RFC 7515 §5.2). The steps run in the order
 /// conformance/README.md fixes for every runner, and the first error is
 /// the outcome: import `key` (RFC 7517), build the options from
@@ -595,6 +934,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
                     out.insert("thumbprint_uri", key.thumbprint_uri_sha256());
                 }
                 Err(e) => return Ok(Err(e)),
+            }
+        }
+        "jws.sign" => {
+            if let Err(e) = run_jws_sign(input, &vector.expect, &mut out)? {
+                return Ok(Err(e));
             }
         }
         "jws.verify" => {
@@ -827,9 +1171,14 @@ fn schema_kind(kind: Kind) -> Value {
         return parse(&format!(r##"{{"$ref":"#/$defs/{def}"}}"##));
     }
     match kind {
-        Kind::Hex | Kind::Base64url | Kind::Count | Kind::Jws | Kind::AlgList => {
+        Kind::Hex | Kind::Base64url | Kind::Count | Kind::Jws | Kind::AlgList | Kind::Nested(_) => {
             unreachable!("a $ref kind")
         }
+        Kind::Bool => parse(r#"{"type":"boolean"}"#),
+        Kind::List(shape) => parse(&format!(
+            r##"{{"type":"array","minItems":1,"items":{{"$ref":"#/$defs/{}"}}}}"##,
+            shape.def
+        )),
         Kind::String => parse(r#"{"type":"string"}"#),
         Kind::Object => parse(r#"{"type":"object"}"#),
         Kind::Enum(values) => {
@@ -841,6 +1190,28 @@ fn schema_kind(kind: Kind) -> Value {
             Value::from(object)
         }
     }
+}
+
+/// How a [`SignerRule`] is spelled in the schema's `allOf`.
+fn schema_rule(rule: &SignerRule) -> Value {
+    let mut signers = format!(r#""maxItems":{}"#, rule.max_signers);
+    if !rule.requires.is_empty() || !rule.forbids.is_empty() {
+        let required: Vec<Value> = rule.requires.iter().map(|n| Value::from(*n)).collect();
+        let forbidden: Vec<String> = rule
+            .forbids
+            .iter()
+            .map(|n| format!(r#""{n}":false"#))
+            .collect();
+        signers.push_str(&format!(
+            r#","items":{{"required":{},"properties":{{{}}}}}"#,
+            Value::from(required).to_json(),
+            forbidden.join(",")
+        ));
+    }
+    parse(&format!(
+        r#"{{"if":{{"properties":{{"serialization":{{"const":"{}"}}}}}},"then":{{"properties":{{"signers":{{{signers}}}}}}}}}"#,
+        rule.serialization
+    ))
 }
 
 /// `$ref` target name of `{"$ref": "#/$defs/<name>"}`.
@@ -858,11 +1229,13 @@ fn check_def(defs: &Value, shape: &Shape, ok: bool, used: &mut Vec<String>) {
     let name = shape.def;
     used.push(name.to_owned());
     let def = at(defs, &[name]);
-    assert_eq!(
-        member_names(&annotated(def)),
-        ["type", "required", "additionalProperties", "properties"],
-        "{name}: keywords"
-    );
+    let mut keywords = vec!["type", "required", "additionalProperties", "properties"];
+    if !shape.rules.is_empty() {
+        keywords.push("allOf");
+        let rules: Vec<Value> = shape.rules.iter().map(schema_rule).collect();
+        assert_eq!(*at(def, &["allOf"]), Value::from(rules), "{name}: allOf");
+    }
+    assert_eq!(member_names(&annotated(def)), keywords, "{name}: keywords");
     let mut names: Vec<&str> = shape.members.iter().map(|m| m.name).collect();
     let mut required: Vec<&str> = shape
         .members
@@ -889,6 +1262,9 @@ fn check_def(defs: &Value, shape: &Shape, ok: bool, used: &mut Vec<String>) {
     assert_eq!(member_names(at(def, &["properties"])), names, "{name}");
     for member in shape.members {
         used.extend(member.kind.def().map(str::to_owned));
+        if let Kind::Nested(inner) | Kind::List(inner) = member.kind {
+            check_def(defs, inner, false, used);
+        }
         let property = at(def, &["properties", member.name]);
         assert_eq!(
             annotated(property),
@@ -1179,7 +1555,7 @@ fn unknown_operation_fails() {
 /// implement fails the run too; it is never skipped.
 #[test]
 fn reserved_but_unimplemented_operations_fail() {
-    for op in ["jws.sign", "jwe.encrypt", "jwe.decrypt", "jwt.validate"] {
+    for op in ["jwe.encrypt", "jwe.decrypt", "jwt.validate"] {
         let json = vector(op, r#"{"token":"a.b.c"}"#, r#"{"ok":true}"#);
         fails_naming_source("reserved-op.json", &json, "not implemented");
     }
@@ -1816,6 +2192,401 @@ fn jws_verify_mismatches_fail() {
                 r#"{"ok":false,"error":"InvalidBase64"}"#,
             ),
             "detached_payload_b64u",
+        ),
+    ];
+    for (what, json, needle) in cases {
+        fails_naming_source(&format!("failing ({what}).json"), &json, needle);
+    }
+}
+
+/// RFC 7515 A.3 P-256 private key.
+const A3_PRIVATE: &str = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","d":"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"}"#;
+/// Another P-256 public key (RFC 7517 A.1), which verifies nothing A.3 signs.
+const OTHER_P256: &str = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#;
+
+fn sign_input(serialization: &str, detached: bool, signers: &[String]) -> String {
+    format!(
+        r#"{{"serialization":"{serialization}","payload_b64u":"{PAYLOAD}","detached":{detached},"signers":[{}]}}"#,
+        signers.join(",")
+    )
+}
+
+fn signer(protected: Option<&str>, header: Option<&str>, key: &str) -> String {
+    let mut members = Vec::new();
+    if let Some(protected) = protected {
+        members.push(format!(r#""protected_b64u":"{protected}""#));
+    }
+    if let Some(header) = header {
+        members.push(format!(r#""header":{header}"#));
+    }
+    members.push(format!(r#""key":{key}"#));
+    format!("{{{}}}", members.join(","))
+}
+
+fn signed(jws: &str) -> String {
+    format!(r#"{{"ok":true,"jws":{jws}}}"#)
+}
+
+fn round_trip(key: &str, algs: &str) -> String {
+    format!(r#"{{"ok":true,"verify_with":{{"key":{key},"allowed_algs":{algs}}}}}"#)
+}
+
+/// Every `jws.sign` form runs: exact and round-trip expectations, all three
+/// serializations, several signers, unprotected headers, detached output,
+/// and errors from JWK import and header parsing.
+#[test]
+fn jws_sign_vectors_pass() {
+    let hs256 = signer(Some(A1_PROTECTED), None, A1_KEY);
+    let es256 = signer(Some(A3_PROTECTED), None, A3_PRIVATE);
+    let fails = |code: &str| format!(r#"{{"ok":false,"error":"{code}"}}"#);
+    assert_passes(&[
+        vector(
+            "jws.sign",
+            &sign_input("compact", false, std::slice::from_ref(&hs256)),
+            &signed(&quoted(&a1_compact())),
+        ),
+        // Appendix F: the payload part is empty.
+        vector(
+            "jws.sign",
+            &sign_input("compact", true, std::slice::from_ref(&hs256)),
+            &signed(&quoted(&format!("{A1_PROTECTED}..{A1_SIGNATURE}"))),
+        ),
+        // JSON output is compared as JSON: member order does not matter.
+        vector(
+            "jws.sign",
+            &sign_input("flattened", false, std::slice::from_ref(&hs256)),
+            &signed(&format!(
+                r#"{{"signature":"{A1_SIGNATURE}","protected":"{A1_PROTECTED}","payload":"{PAYLOAD}"}}"#
+            )),
+        ),
+        // Two signers; the unprotected header is not signed, so both MACs
+        // are A.1's.
+        vector(
+            "jws.sign",
+            &sign_input(
+                "general",
+                false,
+                &[
+                    hs256.clone(),
+                    signer(Some(A1_PROTECTED), Some(r#"{"kid":"k2"}"#), A1_KEY),
+                ],
+            ),
+            &signed(&format!(
+                r#"{{"payload":"{PAYLOAD}","signatures":[{{"protected":"{A1_PROTECTED}","signature":"{A1_SIGNATURE}"}},{{"protected":"{A1_PROTECTED}","header":{{"kid":"k2"}},"signature":"{A1_SIGNATURE}"}}]}}"#
+            )),
+        ),
+        vector(
+            "jws.sign",
+            &sign_input("compact", false, std::slice::from_ref(&es256)),
+            &round_trip(A3_PUBLIC, r#"["ES256"]"#),
+        ),
+        vector(
+            "jws.sign",
+            &sign_input("flattened", true, std::slice::from_ref(&es256)),
+            &round_trip(A3_PUBLIC, r#"["ES256"]"#),
+        ),
+        // A multi-signer round trip verifies the signature the key fits.
+        vector(
+            "jws.sign",
+            &sign_input("general", false, &[hs256.clone(), es256.clone()]),
+            &round_trip(A3_PUBLIC, r#"["ES256"]"#),
+        ),
+        // No protected header (RFC 7515 §7.2.1; RFC 7520 §4.7).
+        vector(
+            "jws.sign",
+            &sign_input(
+                "flattened",
+                false,
+                &[signer(None, Some(r#"{"alg":"HS256"}"#), A1_KEY)],
+            ),
+            &round_trip(A1_KEY, r#"["HS256"]"#),
+        ),
+        // A JWK import error is the vector's outcome (ADR 0021).
+        vector(
+            "jws.sign",
+            &sign_input(
+                "compact",
+                false,
+                &[signer(Some(A1_PROTECTED), None, RSA_PRIVATE)],
+            ),
+            &fails("UnsupportedAlgorithm"),
+        ),
+        // So are header errors: "foo" is not a JSON object, and kid must be
+        // a string (RFC 7515 §4.1.4).
+        vector(
+            "jws.sign",
+            &sign_input("compact", false, &[signer(Some("Zm9v"), None, A1_KEY)]),
+            &fails("InvalidJson"),
+        ),
+        vector(
+            "jws.sign",
+            &sign_input(
+                "flattened",
+                false,
+                &[signer(Some(A1_PROTECTED), Some(r#"{"kid":5}"#), A1_KEY)],
+            ),
+            &fails("InvalidHeader"),
+        ),
+        // Without a protected header, alg is missing.
+        vector(
+            "jws.sign",
+            &sign_input("general", false, &[signer(None, None, A1_KEY)]),
+            &fails("InvalidHeader"),
+        ),
+    ]);
+}
+
+/// A `jws.sign` vector that breaks the schema, including its
+/// per-serialization rules, fails the run.
+#[test]
+fn jws_sign_schema_violations_fail() {
+    let hs256 = signer(Some(A1_PROTECTED), None, A1_KEY);
+    let one = |serialization: &str| sign_input(serialization, false, std::slice::from_ref(&hs256));
+    let ok = signed(&quoted(&a1_compact()));
+    let cases: Vec<(&str, String, &str)> = vec![
+        (
+            "compact with two signers",
+            vector(
+                "jws.sign",
+                &sign_input("compact", false, &[hs256.clone(), hs256.clone()]),
+                &ok,
+            ),
+            "/input/signers: a compact JWS has at most 1 signer",
+        ),
+        (
+            "flattened with two signers",
+            vector(
+                "jws.sign",
+                &sign_input("flattened", false, &[hs256.clone(), hs256.clone()]),
+                &ok,
+            ),
+            "/input/signers: a flattened JWS has at most 1 signer",
+        ),
+        (
+            "compact with only a key",
+            vector(
+                "jws.sign",
+                &sign_input("compact", false, &[signer(None, None, A1_KEY)]),
+                &ok,
+            ),
+            "/input/signers/0/protected_b64u: required for a compact JWS",
+        ),
+        (
+            "compact with an unprotected header",
+            vector(
+                "jws.sign",
+                &sign_input(
+                    "compact",
+                    false,
+                    &[signer(Some(A1_PROTECTED), Some("{}"), A1_KEY)],
+                ),
+                &ok,
+            ),
+            "/input/signers/0/header: not allowed in a compact JWS",
+        ),
+        (
+            "no signers",
+            vector("jws.sign", &sign_input("general", false, &[]), &ok),
+            "/input/signers",
+        ),
+        (
+            "signers not an array",
+            vector(
+                "jws.sign",
+                &one("general").replace(&format!("[{hs256}]"), &hs256),
+                &ok,
+            ),
+            "/input/signers",
+        ),
+        (
+            "signer not an object",
+            vector(
+                "jws.sign",
+                &sign_input("general", false, &[quoted(A1_PROTECTED)]),
+                &ok,
+            ),
+            "/input/signers/0",
+        ),
+        (
+            "misspelled signer member",
+            vector(
+                "jws.sign",
+                &one("compact").replace("protected_b64u", "protected"),
+                &ok,
+            ),
+            "/input/signers/0/protected: unknown member",
+        ),
+        (
+            "signer without a key",
+            vector(
+                "jws.sign",
+                &one("compact").replace(&format!(r#","key":{A1_KEY}"#), ""),
+                &ok,
+            ),
+            "/input/signers/0/key: required member is missing",
+        ),
+        (
+            "padded protected header",
+            vector(
+                "jws.sign",
+                &one("compact").replace(A1_PROTECTED, "eyJhbGciOiJIUzI1NiJ9=="),
+                &ok,
+            ),
+            "/input/signers/0/protected_b64u",
+        ),
+        (
+            "unknown serialization",
+            vector("jws.sign", &one("json"), &ok),
+            "/input/serialization",
+        ),
+        (
+            "detached a string",
+            vector(
+                "jws.sign",
+                &one("compact").replace(r#""detached":false"#, r#""detached":"false""#),
+                &ok,
+            ),
+            "/input/detached",
+        ),
+        (
+            "detached missing",
+            vector(
+                "jws.sign",
+                &one("compact").replace(r#""detached":false,"#, ""),
+                &ok,
+            ),
+            "/input/detached: required member is missing",
+        ),
+        (
+            "misspelled input member",
+            vector(
+                "jws.sign",
+                &one("compact").replace("payload_b64u", "payload"),
+                &ok,
+            ),
+            "/input/payload: unknown member",
+        ),
+        (
+            "both success forms",
+            vector(
+                "jws.sign",
+                &one("compact"),
+                &round_trip(A1_KEY, r#"["HS256"]"#).replace(
+                    r#""ok":true"#,
+                    &format!(r#""ok":true,"jws":"{}""#, a1_compact()),
+                ),
+            ),
+            "matches none of the success forms",
+        ),
+        (
+            "neither success form",
+            vector("jws.sign", &one("compact"), r#"{"ok":true}"#),
+            "matches none of the success forms",
+        ),
+        (
+            "misspelled verify_with member",
+            vector(
+                "jws.sign",
+                &one("compact"),
+                &round_trip(A1_KEY, r#"["HS256"]"#).replace("allowed_algs", "allowed_alg"),
+            ),
+            "/expect/verify_with/allowed_alg: unknown member",
+        ),
+        (
+            "verify_with without allowed_algs",
+            vector(
+                "jws.sign",
+                &one("compact"),
+                &format!(r#"{{"ok":true,"verify_with":{{"key":{A1_KEY}}}}}"#),
+            ),
+            "/expect/verify_with/allowed_algs: required member is missing",
+        ),
+        (
+            "jws a number",
+            vector("jws.sign", &one("compact"), &signed("7")),
+            "/expect/jws",
+        ),
+        (
+            "failure with an output",
+            vector(
+                "jws.sign",
+                &one("compact"),
+                &format!(
+                    r#"{{"ok":false,"error":"InvalidKey","jws":"{}"}}"#,
+                    a1_compact()
+                ),
+            ),
+            "/expect/jws: unknown member",
+        ),
+    ];
+    for (what, json, needle) in cases {
+        fails_naming_source(&format!("invalid ({what}).json"), &json, needle);
+    }
+}
+
+/// A `jws.sign` vector the library does not meet fails, naming the file and
+/// the source; so does a round trip whose verification fails.
+#[test]
+fn jws_sign_mismatches_fail() {
+    let hs256 = sign_input(
+        "compact",
+        false,
+        &[signer(Some(A1_PROTECTED), None, A1_KEY)],
+    );
+    let es256 = sign_input(
+        "compact",
+        false,
+        &[signer(Some(A3_PROTECTED), None, A3_PRIVATE)],
+    );
+    let cases = [
+        (
+            "wrong signature",
+            vector(
+                "jws.sign",
+                &hs256,
+                &signed(&quoted(&a1_compact().replace('d', "e"))),
+            ),
+            "`jws`",
+        ),
+        (
+            "flattened output expected for compact",
+            vector(
+                "jws.sign",
+                &hs256,
+                &signed(&format!(
+                    r#"{{"payload":"{PAYLOAD}","protected":"{A1_PROTECTED}","signature":"{A1_SIGNATURE}"}}"#
+                )),
+            ),
+            "`jws`",
+        ),
+        (
+            "round trip with another key",
+            vector("jws.sign", &es256, &round_trip(OTHER_P256, r#"["ES256"]"#)),
+            "round trip",
+        ),
+        (
+            "round trip with another algorithm",
+            vector("jws.sign", &es256, &round_trip(A3_PUBLIC, r#"["ES384"]"#)),
+            "AlgorithmNotAllowed",
+        ),
+        (
+            "round trip with a key that does not import",
+            vector("jws.sign", &es256, &round_trip(RSA_PRIVATE, r#"["ES256"]"#)),
+            "verify_with",
+        ),
+        (
+            "expected an error, got success",
+            vector("jws.sign", &hs256, r#"{"ok":false,"error":"InvalidKey"}"#),
+            "succeeded",
+        ),
+        (
+            "payload that does not decode",
+            vector(
+                "jws.sign",
+                &hs256.replace(PAYLOAD, "Zh"),
+                &signed(&quoted(&a1_compact())),
+            ),
+            "payload_b64u",
         ),
     ];
     for (what, json, needle) in cases {
