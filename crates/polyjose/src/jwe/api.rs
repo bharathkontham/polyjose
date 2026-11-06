@@ -97,15 +97,30 @@ impl DecryptPolicy {
         })
     }
 
-    /// The largest PBES2 iteration count `p2c` accepted (RFC 7518 §4.8.1.2).
-    /// A JWE over the bound fails with [`Error::DecryptionFailed`] before
-    /// any PBKDF2 work (ADR 0023).
+    /// The PBES2 iteration budget (RFC 7518 §4.8.1.2 `p2c`) **per token,
+    /// summed over all PBES2 candidates tried** in one decrypt call
+    /// (ADR 0050 §2, amending ADR 0023).
+    ///
+    /// Each PBES2 recipient that is a candidate for the key spends its `p2c`
+    /// from the budget just before its PBKDF2 derivation runs. A candidate
+    /// whose `p2c` exceeds what is left fails, without any PBKDF2 work, and
+    /// the next candidate is tried; if none decrypts, the result is
+    /// [`Error::DecryptionFailed`], as for any other cause. So a JWE with 16
+    /// PBES2 recipients of `p2c` 1,000 and no `kid` runs at most 10
+    /// derivations under the default, and its 16th recipient decrypts only
+    /// with a budget of 16,000 or more. A `kid` on the key and the
+    /// recipients narrows the candidates (RFC 7516 §4.1.6).
     ///
     /// The default is [`DEFAULT_MAX_PBES2_COUNT`](Self::DEFAULT_MAX_PBES2_COUNT)
     /// (10,000). A value above
     /// [`MAX_PBES2_COUNT_CEILING`](Self::MAX_PBES2_COUNT_CEILING) (1,000,000)
     /// is clamped to it: the ceiling bounds the CPU one token can cost
     /// (ADR 0023). Prefer high-entropy secrets over high iteration counts.
+    ///
+    /// ECDH-ES has the same up-to-[`max_recipients`](Self::max_recipients)
+    /// multiplier: each candidate ECDH-ES recipient costs one scalar
+    /// multiplication. That is cheap next to PBKDF2, so it is bounded only
+    /// by the recipient count, not budgeted (ADR 0050 §2).
     #[must_use]
     pub fn max_pbes2_count(mut self, n: u32) -> Self {
         self.max_pbes2_count = n.min(Self::MAX_PBES2_COUNT_CEILING);
