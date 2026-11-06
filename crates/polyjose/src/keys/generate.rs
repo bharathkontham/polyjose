@@ -160,8 +160,12 @@ pub(crate) fn generate_okp<R: TryCryptoRng + ?Sized>(crv: OkpCurve, rng: &mut R)
 }
 
 /// [`generate_okp`] with the optional `alg` member (RFC 7517 §4.4). The
-/// 32-octet seed lives only in a [`Zeroizing`] buffer, and the dalek key
-/// types built from it are wiped on drop (their `zeroize` feature).
+/// 32-octet seed is drawn straight into a [`Zeroizing`] buffer. The public
+/// key comes from ed25519-dalek's `SigningKey::from_bytes`, which borrows
+/// the seed, or from `okp::x25519_public`, the crate's one X25519
+/// derivation, which wipes its own copy. Both are best-effort about the
+/// temporaries inside the dalek crates; see `okp::x25519_public` and
+/// `okp::ed25519_public`.
 fn okp_key<R: TryCryptoRng + ?Sized>(crv: OkpCurve, alg: Option<&str>, rng: &mut R) -> Result<Jwk> {
     let mut d = Zeroizing::new([0u8; 32]);
     fill(rng, d.as_mut_slice())?;
@@ -171,9 +175,7 @@ fn okp_key<R: TryCryptoRng + ?Sized>(crv: OkpCurve, alg: Option<&str>, rng: &mut
             .verifying_key()
             .to_bytes(),
         // RFC 7748 §6.1: the public key is X25519(d, 9).
-        OkpCurve::X25519 => {
-            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*d)).to_bytes()
-        }
+        OkpCurve::X25519 => super::okp::x25519_public(&d),
     };
     jwk_build::okp_jwk(crv, &x, Some(d.as_slice()), alg)
 }
