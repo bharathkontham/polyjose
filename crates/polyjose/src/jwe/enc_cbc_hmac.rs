@@ -765,6 +765,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_keyed_cipher_and_mac_states_are_wiped_on_drop() {
+        // CLAUDE.md secrets rule. The AES-CBC modes hold the ENC_KEY
+        // schedule (`cbc` and `aes` with `zeroize`), and HMAC holds two
+        // keyed SHA-2 cores (RFC 2104 §2) that `sha2`'s `zeroize` feature
+        // wipes; `Hmac<D>` has no marker of its own, so the cores are
+        // checked, as for JWS HMAC.
+        use hmac::EagerHash;
+        use zeroize::ZeroizeOnDrop;
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<cbc::Encryptor<Aes128>>();
+        assert_zeroize_on_drop::<cbc::Encryptor<Aes192>>();
+        assert_zeroize_on_drop::<cbc::Encryptor<Aes256>>();
+        assert_zeroize_on_drop::<cbc::Decryptor<Aes128>>();
+        assert_zeroize_on_drop::<cbc::Decryptor<Aes192>>();
+        assert_zeroize_on_drop::<cbc::Decryptor<Aes256>>();
+        assert_zeroize_on_drop::<<Sha256 as EagerHash>::Core>();
+        assert_zeroize_on_drop::<<Sha384 as EagerHash>::Core>();
+        assert_zeroize_on_drop::<<Sha512 as EagerHash>::Core>();
+        // The plaintext comes back in a buffer that wipes itself.
+        assert_zeroize_on_drop::<Zeroizing<Vec<u8>>>();
+        // No error carries key or plaintext octets.
+        let k = key(32);
+        let (e, t) = encrypt(&ContentEncAlg::A128CbcHs256, &k, &IV, AAD, PLAINTEXT).unwrap();
+        let errors = [
+            encrypt(&ContentEncAlg::A128CbcHs256, &k[..31], &IV, AAD, PLAINTEXT).unwrap_err(),
+            decrypt(&ContentEncAlg::A128CbcHs256, &k, &IV, AAD, &e, &t[1..]).unwrap_err(),
+        ];
+        for text in errors
+            .iter()
+            .flat_map(|e| [format!("{e}"), format!("{e:?}")])
+        {
+            assert!(!text.contains("Live long"), "{text}");
+            assert!(!text.chars().any(|c| c.is_ascii_digit()), "{text}");
+        }
+    }
+
     mod properties {
         use proptest::prelude::*;
 
