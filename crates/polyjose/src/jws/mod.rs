@@ -142,6 +142,14 @@ mod wycheproof_jose;
 pub use compact::{sign_compact, verify_compact};
 pub use json::{sign_flattened, sign_general, verify_json};
 
+// Crate-internal seams for the JWT layer (feature 0004): verifying a
+// compact JWS against a JWK Set runs steps 1–7 once, chooses the candidate
+// keys, then runs steps 8–9 per candidate and ranks the failures
+// (ADR 0026 §2–§3, ADR 0027 §9, ADR 0029 §4).
+pub(crate) use alg::{FAMILIES, Families};
+pub(crate) use compact::{CompactPrechecked, finish_compact, precheck_compact};
+pub(crate) use process::furthest;
+
 /// A JWS Protected Header together with its exact base64url encoding,
 /// `BASE64URL(UTF8(JWS Protected Header))` (RFC 7515 §2, §5.1 step 3).
 ///
