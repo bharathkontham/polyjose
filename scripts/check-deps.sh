@@ -274,24 +274,71 @@ check_credits_match() {
 #    pulls it in) fails, and every path to it is printed with `cargo tree ... -i <crate>`.
 #    (Not cargo metadata's resolve graph, as check 6 walks: that graph unifies features across
 #    the whole workspace, so it would also show what only a binding enables.)
+#    The members of each guarded group are fixed in guarded_group_members below, not read from
+#    deps-allowlist.txt (ADR 0049 §5), so the allowlist alone cannot grow a guarded group or move a
+#    crate out of one. The rules run on every crate of that table, whatever the allowlist says, and
+#    the allowlist must agree with it:
+#      - a crate the allowlist lists in a guarded group must be a member of that group here, so a
+#        crate added to a group (e.g. libm, which num-traits' `libm` feature pulls in below
+#        num-traits, where the path rule alone would accept it) fails until this script and an ADR
+#        add it (ADR 0042 §5);
+#      - a member listed by the allowlist in any other group (e.g. syn under primitives) fails;
+#      - a member in the core's tree that the allowlist does not list fails (check 1 also fails);
+#      - a member in neither the tree nor the allowlist passes: the primitive dropped it, which only
+#        shrinks the tree. Check 2 makes the allowlist entry go when the tree loses the crate; the
+#        row here can then go too, and the rules still hold for it if the crate ever comes back.
+#    A table row is "<group> <crate> <required parent>".
+
+# The guarded groups' members (ADR 0025, ADR 0042 §1, ADR 0049 §5). Growing a group, or adding
+# one, is a change here and needs an ADR (ADR 0042 §5).
+guarded_group_members() {
+  cat <<'EOF'
+dalek-proc-macro curve25519-dalek-derive curve25519-dalek
+dalek-proc-macro syn curve25519-dalek-derive
+dalek-proc-macro quote curve25519-dalek-derive
+dalek-proc-macro proc-macro2 curve25519-dalek-derive
+dalek-proc-macro unicode-ident curve25519-dalek-derive
+dalek-build rustc_version curve25519-dalek
+dalek-build semver curve25519-dalek
+num-traits-build autocfg num-traits
+EOF
+}
+
+# guarded_membership_rules: checks deps-allowlist.txt's groups against guarded_group_members, as the
+# comment of check 5 describes. Reads "$work/guard-table", "$work/groups" and "$work/tree".
+guarded_membership_rules() {
+  local group crate parent listed
+  while read -r group crate; do
+    if awk -v g="$group" '$1 == g { found = 1 } END { exit !found }' "$work/guard-table"; then
+      awk -v g="$group" -v c="$crate" '$1 == g && $2 == c { found = 1 } END { exit !found }' "$work/guard-table" \
+        || fail "$crate is listed in guarded group $group in $allowlist but is not a member of it in scripts/check-deps.sh (ADR 0049 §5; growing a guarded group needs an ADR, ADR 0042 §5)"
+    else
+      case $group in
+        primitives | ecdsa | eddsa | rsa | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
+        *) fail "$allowlist group '$group' (crate $crate) has no rule in check_group_rules (scripts/check-deps.sh)" ;;
+      esac
+    fi
+  done <"$work/groups"
+  while read -r group crate parent; do
+    listed=$(awk -v c="$crate" '$2 == c { print $1 }' "$work/groups")
+    if [ -n "$listed" ] && [ "$listed" != "$group" ]; then
+      fail "$crate is a member of guarded group $group (scripts/check-deps.sh) but $allowlist lists it in group $listed (ADR 0049 §5)"
+    elif [ -z "$listed" ] && grep -qxF -- "$crate" "$work/tree"; then
+      fail "$crate is a member of guarded group $group (scripts/check-deps.sh) and in the core's tree, but $allowlist does not list it (ADR 0049 §5)"
+    fi
+  done <"$work/guard-table"
+}
+
 check_group_rules() {
   local group crate
-  : >"$work/guarded"
-  while read -r group crate; do
-    case $group in
-      primitives | ecdsa | eddsa | rsa | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
-      dalek-proc-macro)
-        if [ "$crate" = curve25519-dalek-derive ]; then
-          echo "$crate curve25519-dalek $group" >>"$work/guarded"
-        else
-          echo "$crate curve25519-dalek-derive $group" >>"$work/guarded"
-        fi ;;
-      dalek-build) echo "$crate curve25519-dalek $group" >>"$work/guarded" ;;
-      num-traits-build) echo "$crate num-traits $group" >>"$work/guarded" ;;
-      *) fail "$allowlist group '$group' (crate $crate) has no rule in check_group_rules (scripts/check-deps.sh)" ;;
-    esac
-  done <"$work/groups"
-  [ -s "$work/guarded" ] || return 0
+  # The table, with crate names normalized like the allowlist's and the tree's. Fails closed on a
+  # malformed row.
+  guarded_group_members | normalize >"$work/guard-table"
+  awk 'NF != 3 || $1 !~ /^[a-z0-9][a-z0-9-]*$/ { bad = 1 } END { exit bad || NR == 0 }' "$work/guard-table" \
+    || die "guarded_group_members in scripts/check-deps.sh is malformed"
+  guarded_membership_rules
+  # "<crate> <parent> <group>" for the path walk below.
+  awk '{ print $2, $3, $1 }' "$work/guard-table" >"$work/guarded"
   # The graph is the tree of check 1 itself, printed with depths so that each line's parent is the
   # nearest line above it one level up. cargo prints a repeated subtree only once (marked "(*)"),
   # but every package's own dependencies appear at its first occurrence, so the edges are complete.
@@ -353,7 +400,7 @@ for crate, parent, group in rules:
     || die "could not read the dependency graph for the guarded groups (see above)"
   local parent spec path
   while read -r crate parent group spec path; do
-    fail "$crate (group $group in $allowlist) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
+    fail "$crate (guarded group $group) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
     echo "  Every path to it (cargo tree -p $core_pkg -e normal,build --all-features --target all -i $spec):"
     cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$spec" </dev/null 2>&1 | sed 's/^/    /' || true
   done <"$work/guard-paths"

@@ -40,17 +40,17 @@ expect_pass "unchanged tree"
 new_case semver
 add_core_dependency 'semver = { version = "1", default-features = false }'
 expect_fail "direct core dependency on semver" \
-  "FAIL: semver \\(group dalek-build in deps-allowlist.txt\\) $guard curve25519-dalek .*: polyjose -> semver$" "$guard"
+  "FAIL: semver \\(guarded group dalek-build\\) $guard curve25519-dalek .*: polyjose -> semver$" "$guard"
 
 new_case syn
 add_core_dependency 'syn = { version = "2", default-features = false }'
 expect_fail "syn reached outside curve25519-dalek-derive" \
-  "FAIL: syn \\(group dalek-proc-macro in deps-allowlist.txt\\) $guard curve25519-dalek-derive .*: polyjose -> syn$" "$guard"
+  "FAIL: syn \\(guarded group dalek-proc-macro\\) $guard curve25519-dalek-derive .*: polyjose -> syn$" "$guard"
 
 new_case autocfg
 add_core_dependency 'autocfg = { version = "1", default-features = false }'
 expect_fail "autocfg reached outside num-traits" \
-  "FAIL: autocfg \\(group num-traits-build in deps-allowlist.txt\\) $guard num-traits .*: polyjose -> autocfg$" "$guard"
+  "FAIL: autocfg \\(guarded group num-traits-build\\) $guard num-traits .*: polyjose -> autocfg$" "$guard"
 
 # --- Membership rule --------------------------------------------------------------------------------
 
