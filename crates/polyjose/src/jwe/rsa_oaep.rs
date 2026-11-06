@@ -12,6 +12,10 @@ use super::random::RandomSource;
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
 use crate::{Error, Result};
 
+/// hLen of SHA-256 in octets: the length of the OAEP seed (RFC 8017
+/// §7.1.1 step 2.d).
+const SEED_LEN: usize = 32;
+
 /// Key management on encrypt (RFC 7516 §5.1 steps 3–7) for RSA-OAEP-256.
 ///
 /// # Errors
@@ -26,4 +30,199 @@ pub(super) fn encrypt_key(
     _rng: &mut dyn RandomSource,
 ) -> Result<KeyOutput> {
     Err(Error::UnsupportedAlgorithm)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::random::OsRandom;
+    use super::*;
+    use crate::rng::insecure_test_vectors::FixedRng;
+
+    const F4: &[u8] = &[1, 0, 1];
+
+    /// An odd modulus of exactly `bits` bits (all ones). It is no product
+    /// of two primes, but RSAEP (RFC 8017 §5.1.1) only needs n and e.
+    fn modulus(bits: usize) -> Vec<u8> {
+        let mut n = vec![0xff; bits.div_ceil(8)];
+        n[0] >>= (8 - bits % 8) % 8;
+        n
+    }
+
+    fn key(bits: usize) -> RecipientKey {
+        RecipientKey::RsaPublic {
+            n: modulus(bits),
+            e: F4.to_vec(),
+        }
+    }
+
+    fn cek(enc: &ContentEncAlg) -> Cek {
+        let len = super::super::content::cek_len(enc).unwrap();
+        Cek::from_slice(&vec![0x5a; len])
+    }
+
+    fn seed() -> FixedRng {
+        FixedRng::new([0x42u8; SEED_LEN])
+    }
+
+    fn run(
+        key: &RecipientKey,
+        enc: &ContentEncAlg,
+        cek: Option<&Cek>,
+        rng: &mut dyn RandomSource,
+    ) -> Result<KeyOutput> {
+        encrypt_key(
+            &KeyMgmtAlg::RsaOaep256,
+            key,
+            enc,
+            cek,
+            &RecipientOptions::default(),
+            rng,
+        )
+    }
+
+    #[test]
+    fn the_encrypted_key_is_k_octets_and_defines_no_header_parameter() {
+        // RFC 8017 §7.1.1 step 3.c: the ciphertext C is an octet string of
+        // length k, the modulus length; RFC 7518 §4.3 adds no parameter.
+        for bits in [2048, 3072, 4096, 4097, 8192] {
+            for enc in ContentEncAlg::KNOWN {
+                let cek = cek(enc);
+                let mut rng = seed();
+                let out = run(&key(bits), enc, Some(&cek), &mut rng).unwrap();
+                assert_eq!(out.encrypted_key.len(), bits.div_ceil(8), "{bits} {enc}");
+                assert!(out.header_params.is_empty(), "{bits} {enc}");
+                assert!(out.cek.is_none(), "{bits} {enc}: the random CEK is used");
+            }
+        }
+    }
+
+    #[test]
+    fn the_oaep_seed_is_one_draw_of_hlen_octets() {
+        // RFC 8017 §7.1.1 step 2.d: a random octet string seed of length
+        // hLen (32 for SHA-256), drawn through `crypto_rng` from the same
+        // stream as the CEK and IV (the `jwe::random` draw order).
+        let enc = ContentEncAlg::A128GCM;
+        let cek = cek(&enc);
+        let mut rng = FixedRng::new([0x42u8; SEED_LEN + 3]);
+        run(&key(2048), &enc, Some(&cek), &mut rng).unwrap();
+        assert_eq!(rng.remaining(), 3);
+    }
+
+    #[test]
+    fn the_same_seed_gives_the_same_encrypted_key_and_another_seed_another() {
+        // RSAES-OAEP is deterministic given the seed (RFC 8017 §7.1.1), so
+        // `FixedRng` vectors are byte-exact; any seed change changes C.
+        let enc = ContentEncAlg::A256CbcHs512;
+        let cek = cek(&enc);
+        let first = run(&key(2048), &enc, Some(&cek), &mut seed()).unwrap();
+        let again = run(&key(2048), &enc, Some(&cek), &mut seed()).unwrap();
+        assert_eq!(first.encrypted_key, again.encrypted_key);
+        let mut other = [0x42u8; SEED_LEN];
+        other[SEED_LEN - 1] ^= 1;
+        let other = run(&key(2048), &enc, Some(&cek), &mut FixedRng::new(other)).unwrap();
+        assert_ne!(first.encrypted_key, other.encrypted_key);
+    }
+
+    #[test]
+    fn the_os_source_gives_a_fresh_seed_each_time() {
+        // ADR 0005: production draws the seed from the OS CSPRNG, so two
+        // encryptions of one CEK differ (equal seeds: a 2^-256 event).
+        let enc = ContentEncAlg::A128GCM;
+        let cek = cek(&enc);
+        let a = run(&key(2048), &enc, Some(&cek), &mut OsRandom).unwrap();
+        let b = run(&key(2048), &enc, Some(&cek), &mut OsRandom).unwrap();
+        assert_eq!(a.encrypted_key.len(), 256);
+        assert_ne!(a.encrypted_key, b.encrypted_key);
+    }
+
+    #[test]
+    fn a_short_source_fails_closed() {
+        // ADR 0005: a source that cannot supply the whole seed is
+        // RandomnessUnavailable, never a short or padded seed.
+        let enc = ContentEncAlg::A128GCM;
+        let cek = cek(&enc);
+        let mut rng = FixedRng::new([0x42u8; SEED_LEN - 1]);
+        let out = run(&key(2048), &enc, Some(&cek), &mut rng);
+        assert_eq!(out.err(), Some(Error::RandomnessUnavailable));
+    }
+
+    #[test]
+    fn a_modulus_under_2048_bits_is_an_invalid_key() {
+        // RFC 7518 §4.3: "A key of size 2048 bits or larger MUST be used
+        // with these algorithms." Import refuses such a JWK already; this
+        // holds for any `RecipientKey` too, and draws nothing.
+        let enc = ContentEncAlg::A128GCM;
+        let cek = cek(&enc);
+        for bits in [512, 1024, 2047] {
+            let mut rng = seed();
+            let out = run(&key(bits), &enc, Some(&cek), &mut rng);
+            assert!(matches!(out, Err(Error::InvalidKey(_))), "{bits}");
+            assert_eq!(rng.remaining(), SEED_LEN, "{bits}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_public_key_is_an_invalid_key() {
+        // RFC 8017 §3.1: n is odd and 1 < e < n, e odd.
+        let enc = ContentEncAlg::A128GCM;
+        let cek = cek(&enc);
+        let mut even = modulus(2048);
+        *even.last_mut().unwrap() &= 0xfe;
+        let cases = [
+            (even, F4.to_vec()),
+            (modulus(2048), vec![2]),
+            (modulus(2048), vec![1]),
+            (modulus(2048), Vec::new()),
+            (Vec::new(), F4.to_vec()),
+        ];
+        for (n, e) in cases {
+            let key = RecipientKey::RsaPublic { n, e };
+            let out = run(&key, &enc, Some(&cek), &mut seed());
+            assert!(matches!(out, Err(Error::InvalidKey(_))), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_missing_or_wrong_size_cek_is_an_invalid_key() {
+        // RFC 7516 §5.1 step 2: the CEK has the length `enc` requires.
+        let enc = ContentEncAlg::A128GCM;
+        assert!(matches!(
+            run(&key(2048), &enc, None, &mut seed()),
+            Err(Error::InvalidKey(_))
+        ));
+        let long = Cek::from_slice(&[0x5a; 32]);
+        assert!(matches!(
+            run(&key(2048), &enc, Some(&long), &mut seed()),
+            Err(Error::InvalidKey(_))
+        ));
+    }
+
+    #[test]
+    fn only_an_rsa_public_key_serves_and_only_rsa_oaep_256() {
+        // RFC 8725 §3.1 and RFC 7518 §4.3: the alg names one key family;
+        // RSA-OAEP (SHA-1) is not implemented (ADR 0022).
+        let enc = ContentEncAlg::A128GCM;
+        let cek = cek(&enc);
+        let oct = RecipientKey::Symmetric(zeroize::Zeroizing::new(vec![0u8; 16]));
+        assert_eq!(
+            run(&oct, &enc, Some(&cek), &mut seed()).err(),
+            Some(Error::KeyAlgorithmMismatch)
+        );
+        for alg in [KeyMgmtAlg::from("RSA-OAEP"), KeyMgmtAlg::A128KW] {
+            let out = encrypt_key(
+                &alg,
+                &key(2048),
+                &enc,
+                Some(&cek),
+                &RecipientOptions::default(),
+                &mut seed(),
+            );
+            assert_eq!(out.err(), Some(Error::UnsupportedAlgorithm), "{alg}");
+        }
+        let unknown = ContentEncAlg::from("A128CTR");
+        assert_eq!(
+            run(&key(2048), &unknown, Some(&cek), &mut seed()).err(),
+            Some(Error::UnsupportedAlgorithm)
+        );
+    }
 }
