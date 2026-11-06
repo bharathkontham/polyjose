@@ -13,6 +13,8 @@
 #      polyjose itself, a git source or another registry (an allowlisted name is not enough when
 #      the code behind it can be swapped);
 #   7. the workspace root Cargo.toml has a [patch] or [replace] section;
+#   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
+#      build-dependency ([build-dependencies] or [target.*.build-dependencies]).
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
 # runtime dependencies and the build-dependencies of every crate in it (a build script or a
@@ -294,6 +296,44 @@ check_no_patch_or_replace() {
   fi
 }
 
+# 8. The core has no build script and no build-dependencies: it is plain Rust, and code that runs on
+#    the builder's machine is audit surface it does not need. This is about crates/polyjose's own
+#    manifest only; build scripts and build-dependencies of crates in its tree are covered by
+#    checks 1, 2 and 6 like any other dependency.
+check_core_no_build_script() {
+  local core_dir=${core_manifest%/Cargo.toml}
+  if [ -e "$core_dir/build.rs" ]; then
+    fail "$core_dir/build.rs exists; the core must not have a build script"
+  fi
+  python3 -I -c "$toml_keys_py" "$core_manifest" package.build >"$work/build-key" || die "could not read $core_manifest"
+  if [ -s "$work/build-key" ]; then
+    fail "$core_manifest sets a build script; the core must not have one:"
+    sed 's/^/  - /' "$work/build-key"
+  fi
+  python3 -I -c '
+import json, os, sys
+meta_path, pkg_name, manifest = sys.argv[1], sys.argv[2], os.path.realpath(sys.argv[3])
+with open(meta_path, encoding="utf-8") as f:
+    meta = json.load(f)
+pkgs = [p for p in meta["packages"]
+        if p["name"] == pkg_name and os.path.realpath(p["manifest_path"]) == manifest]
+if len(pkgs) != 1:
+    sys.exit("expected exactly one package %s at %s, found %d" % (pkg_name, manifest, len(pkgs)))
+for target in pkgs[0]["targets"]:
+    if "custom-build" in target["kind"]:
+        print("build script %s" % target["src_path"])
+for dep in pkgs[0]["dependencies"]:
+    if dep["kind"] == "build":
+        where = "[target.%s.build-dependencies]" % dep["target"] if dep.get("target") else "[build-dependencies]"
+        print("%s in %s" % (dep["name"], where))
+' "$work/metadata.json" "$core_pkg" "$core_manifest" >"$work/core-build" \
+    || die "could not read $core_pkg's targets from cargo metadata"
+  if [ -s "$work/core-build" ]; then
+    fail "$core_manifest must have no build script and no build-dependencies:"
+    sed 's/^/  - /' "$work/core-build"
+  fi
+}
+
 check_tree_allowlisted
 check_allowlist_not_stale
 check_default_features_off
@@ -301,6 +341,7 @@ check_credits_match
 check_group_rules
 check_sources_crates_io
 check_no_patch_or_replace
+check_core_no_build_script
 
 if [ "$failed" -ne 0 ]; then
   echo "check-deps: FAILED"
