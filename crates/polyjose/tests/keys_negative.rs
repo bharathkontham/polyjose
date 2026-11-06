@@ -10,14 +10,16 @@
 //!   `UnsupportedAlgorithm`;
 //! - the export format matrix (plan.md, ADR 0018 §3);
 //! - **no input ever yields an `oct` JWK** (RFC 8725 §2.1: the key-confusion
-//!   class of CVE-2015-9235, CVE-2017-11424, CVE-2023-48223).
+//!   class of CVE-2015-9235, CVE-2017-11424, CVE-2023-48223);
+//! - no error's `Debug` or `Display` contains input bytes (ADR 0007,
+//!   ADR 0018 §4).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 use std::path::{Path, PathBuf};
 
 use polyjose::Error;
 use polyjose::json::{self, Value};
-use polyjose::jwk::{Jwk, KeyType};
+use polyjose::jwk::{EcCurve, Jwk, KeyType, OkpCurve};
 use polyjose::keys::{KeyFormat, KeySpec, generate};
 use proptest::prelude::*;
 
@@ -448,5 +450,191 @@ proptest! {
         for jwk in every_import(&der) {
             prop_assert_ne!(jwk.key_type(), KeyType::Oct);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Error hygiene: no input bytes in Debug or Display (ADR 0007, ADR 0018 §4)
+// ---------------------------------------------------------------------------
+
+/// Renderings of `input` that would reveal it in a message: for every
+/// 6-octet window, its lowercase and uppercase hex, its `Debug` list of
+/// decimals, and its standard and URL-safe base64.
+fn leaks(message: &str, input: &[u8]) -> Option<String> {
+    for window in input.windows(6) {
+        if window.iter().all(|b| *b == window[0]) {
+            continue; // runs such as 00 00 00 … say nothing about the key
+        }
+        let hex: String = window.iter().map(|b| format!("{b:02x}")).collect();
+        let decimal = format!("{window:?}");
+        let decimal = &decimal[1..decimal.len() - 1];
+        let b64 = std_b64(window);
+        let b64url = b64.replace('+', "-").replace('/', "_");
+        for needle in [
+            hex.clone(),
+            hex.to_uppercase(),
+            decimal.to_owned(),
+            b64,
+            b64url,
+        ] {
+            if message.contains(&needle) {
+                return Some(needle);
+            }
+        }
+    }
+    // Lines of a PEM body, which is base64 text already.
+    if let Ok(text) = std::str::from_utf8(input) {
+        for line in text
+            .lines()
+            .filter(|l| l.len() >= 8 && !l.starts_with("-----"))
+        {
+            for window in line.as_bytes().windows(8) {
+                let needle = std::str::from_utf8(window).unwrap();
+                if message.contains(needle) {
+                    return Some(needle.to_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// RFC 4648 §4 base64 of 6 octets (two whole quanta, so no padding).
+fn std_b64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    bytes
+        .chunks(3)
+        .flat_map(|c| {
+            let n = u32::from(c[0]) << 16 | u32::from(c[1]) << 8 | u32::from(c[2]);
+            (0..4)
+                .rev()
+                .map(move |i| ALPHABET[(n >> (6 * i) & 63) as usize] as char)
+        })
+        .collect()
+}
+
+#[test]
+fn the_leak_detector_finds_every_rendering() {
+    let input = [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05];
+    for message in [
+        "invalid key: 302e02010030",
+        "invalid key: 302E02010030",
+        "InvalidKey([48, 46, 2, 1, 0, 48])",
+        "x MC4CAQAw y",
+        "the last window 2e0201003005",
+    ] {
+        assert!(leaks(message, &input).is_some(), "{message}");
+    }
+    let url = [0xfb, 0xff, 0xbf, 0x01, 0x02, 0x03];
+    assert!(leaks("+/+/AQID", &url).is_some());
+    assert!(leaks("-_-_AQID", &url).is_some());
+    let pem = b"-----BEGIN X-----\nMCowBQYDK2VwAyEAGb9ECWmEzf6FQbrB\n-----END X-----\n";
+    assert!(leaks("in MCowBQYD body", pem).is_some());
+    assert_eq!(leaks("invalid key: DER input too large", &input), None);
+}
+
+fn assert_no_leak(err: &Error, input: &[u8], what: &str) {
+    for message in [format!("{err:?}"), format!("{err:#?}"), err.to_string()] {
+        assert!(
+            message.len() < 160,
+            "{what}: suspiciously long message {message:?}"
+        );
+        if let Some(needle) = leaks(&message, input) {
+            panic!("{what}: {message:?} contains input bytes ({needle})");
+        }
+    }
+}
+
+#[test]
+fn no_error_over_the_negative_suite_contains_input_bytes() {
+    let mut errors = 0;
+    for (name, input) in every_fixture_input() {
+        if let Ok(text) = std::str::from_utf8(&input)
+            && let Err(e) = Jwk::from_pem(text)
+        {
+            assert_no_leak(&e, &input, &name);
+            errors += 1;
+        }
+        for format in FORMATS {
+            if let Err(e) = Jwk::from_der(&input, format) {
+                assert_no_leak(&e, &input, &format!("{name} as {format:?}"));
+                errors += 1;
+            }
+        }
+    }
+    assert!(errors > 500, "{errors} errors checked");
+}
+
+/// The marker 0xA5 (165, `pQ`/`pa`/`paWl` in base64) in the key octets.
+const MARKER: u8 = 0xA5;
+
+fn overwrite(mut der: Vec<u8>, from: usize, len: usize) -> Vec<u8> {
+    der[from..from + len].fill(MARKER);
+    der
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .unwrap()
+}
+
+#[test]
+fn marker_key_octets_never_reach_an_error() {
+    let spki = read("rfc", "rfc7517-a1-ec-p256-spki.der");
+    let sec1 = read("rfc", "rfc7517-a2-ec-p256-sec1.der");
+    let pkcs8 = read("rfc", "rfc8037-a1-ed25519-pkcs8.der");
+    let rsa = read("rfc", "rfc7517-a1-rsa-spki.der");
+    let n = find(&rsa, &[0x02, 0x82, 0x01, 0x01]) + 4;
+    let cases = [
+        // x and y off the curve.
+        (
+            KeyFormat::Spki,
+            overwrite(spki.clone(), spki.len() - 64, 64),
+        ),
+        // d replaced: the [1] publicKey no longer matches (RFC 5915 §3).
+        (KeyFormat::Sec1, overwrite(sec1, 7, 32)),
+        // A 32-octet marker in a 31-octet-shortened CurvePrivateKey slot.
+        (KeyFormat::Pkcs8, {
+            let mut der = overwrite(pkcs8.clone(), pkcs8.len() - 32, 32);
+            der.pop();
+            der
+        }),
+        // A negative modulus (X.690 §8.3.3).
+        (KeyFormat::Spki, overwrite(rsa, n, 257)),
+    ];
+    for (format, der) in cases {
+        let err = Jwk::from_der(&der, format).unwrap_err();
+        let pem = pem_rfc7468::encode_string(
+            match format {
+                KeyFormat::Sec1 => "EC PRIVATE KEY",
+                KeyFormat::Pkcs8 => "PRIVATE KEY",
+                _ => "PUBLIC KEY",
+            },
+            pem_rfc7468::LineEnding::LF,
+            &der,
+        )
+        .unwrap();
+        let pem_err = Jwk::from_pem(&pem).unwrap_err();
+        for (err, input) in [(&err, der.as_slice()), (&pem_err, pem.as_bytes())] {
+            for message in [format!("{err:?}"), err.to_string()] {
+                for needle in ["165", "a5a5", "A5A5", "paWl", "pQ"] {
+                    assert!(!message.contains(needle), "{message:?} has {needle}");
+                }
+            }
+            assert_no_leak(err, input, &format!("{format:?} marker"));
+        }
+    }
+}
+
+#[test]
+fn generated_private_keys_never_reach_an_error_on_export() {
+    // A public-only format refusal reports a static detail, not the key.
+    for spec in [KeySpec::Ec(EcCurve::P256), KeySpec::Okp(OkpCurve::X25519)] {
+        let key = generate(spec).unwrap();
+        let err = key.to_der(KeyFormat::Pkcs1).unwrap_err();
+        let der = key.to_der(KeyFormat::Pkcs8).unwrap();
+        assert_no_leak(&err, &der, "export");
     }
 }
