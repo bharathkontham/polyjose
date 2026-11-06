@@ -22,6 +22,8 @@
 //! Every `enc`: A128CBC-HS256, A192CBC-HS384, A256CBC-HS512 (RFC 7518
 //! §5.2), A128GCM, A192GCM, A256GCM (§5.3). `zip: DEF` (RFC 7516 §4.1.3)
 //! only with the off-by-default `deflate` feature (ADR 0017).
+//! [`Encryptor::compress`] exists in every build (ADR 0030 §4); without
+//! `deflate`, encrypting with it is [`Error::UnsupportedAlgorithm`].
 //!
 //! # Misuse resistance (RFC 8725, ADR 0007)
 //!
@@ -62,6 +64,7 @@
 //! carry (RFC 7516 §7.1) or a `dir`/ECDH-ES message with more than one
 //! recipient.
 //!
+//! [`Encryptor::compress`]: crate::jwe::Encryptor::compress
 //! [`Encryptor::encrypt_compact`]: crate::jwe::Encryptor::encrypt_compact
 //! [`Encryptor::encrypt_json`]: crate::jwe::Encryptor::encrypt_json
 //! [`decrypt_compact`]: crate::jwe::decrypt_compact
