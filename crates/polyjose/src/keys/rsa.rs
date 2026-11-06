@@ -75,10 +75,6 @@ fn to_jwk(key: RsaPublicParts<'_>) -> Result<Jwk> {
 /// §4.1.2.7): the rsaEncryption + NULL AlgorithmIdentifier (RFC 3279
 /// §2.3.1) and the RSAPublicKey in a BIT STRING with no unused bits, the
 /// layout OpenSSL 4 emits (ADR 0018 §3).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn to_spki(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
     let rsa_public_key = to_pkcs1(key)?;
     spki::encode(&SpkiParts {
@@ -89,10 +85,6 @@ pub(crate) fn to_spki(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
 
 /// Exports an RSA public key as a DER PKCS#1 RSAPublicKey (RFC 8017
 /// App. A.1.1), the body of OpenSSL's `RSA PUBLIC KEY` PEM block.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn to_pkcs1(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
     pkcs1::encode_public(key.n(), key.e())
 }

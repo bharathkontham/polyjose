@@ -159,10 +159,6 @@ pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
 /// # Errors
 ///
 /// [`Error::InvalidKey`]`("private key required")` for a public key.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn to_pkcs8(key: &OkpKey) -> Result<Zeroizing<Vec<u8>>> {
     let d = key.d().ok_or(Error::InvalidKey("private key required"))?;
     let mut writer = Writer::new(der::encoded_len(d.len()))?;
@@ -209,10 +205,6 @@ pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
 ///
 /// None in practice: [`Error::InvalidKey`] only if the DER writer's planned
 /// length were wrong.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the PEM/DER facade (T08)")
-)]
 pub(crate) fn to_spki(key: &OkpKey) -> Result<Zeroizing<Vec<u8>>> {
     spki::encode(&SpkiParts {
         alg: alg_id(key.crv()),

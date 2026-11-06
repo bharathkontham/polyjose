@@ -164,10 +164,6 @@ fn read_parameters(contents: &[u8]) -> Result<EcCurve> {
 ///
 /// [`Error::InvalidKey`] only if the encoding would exceed
 /// [`der::MAX_INPUT_LEN`].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by ec.rs, which the facade (T08) calls")
-)]
 pub(crate) fn encode(key: &EcPrivateKey<'_>) -> Result<Zeroizing<Vec<u8>>> {
     let version = [EC_PRIVKEY_VER1];
     let named = key.parameters.map(oid::named_curve);

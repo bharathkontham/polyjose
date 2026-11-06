@@ -224,7 +224,6 @@ pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
 /// # Errors
 ///
 /// None in practice; [`Error::InvalidKey`] only if the DER writer refuses.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn to_spki(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
     let point = uncompressed_point(key);
     spki::encode(&SpkiParts {
@@ -269,7 +268,6 @@ pub(crate) fn from_sec1(der: &[u8]) -> Result<Jwk> {
 /// # Errors
 ///
 /// [`Error::InvalidKey`] if `key` has no `d`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn to_sec1(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
     let d = key.d().ok_or(Error::InvalidKey(NOT_PRIVATE))?;
     let point = uncompressed_point(key);
@@ -336,7 +334,6 @@ pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
 /// # Errors
 ///
 /// [`Error::InvalidKey`] if `key` has no `d`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by the facade (T08)"))]
 pub(crate) fn to_pkcs8(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
     let d = key.d().ok_or(Error::InvalidKey(NOT_PRIVATE))?;
     let point = uncompressed_point(key);

@@ -125,13 +125,6 @@ fn read_public(mut fields: Reader<'_>) -> Result<RsaPublicParts<'_>> {
 /// magnitudes `n` and `e`: each a minimal INTEGER with a 0x00 sign octet
 /// where the top bit is set (X.690 §8.3.2, §8.3.3), the layout OpenSSL 4
 /// emits (ADR 0018 §3).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by rsa.rs, which the PEM/DER facade (T08) calls"
-    )
-)]
 pub(crate) fn encode_public(n: &[u8], e: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let body = der::unsigned_integer_len(n) + der::unsigned_integer_len(e);
     let mut writer = Writer::new(der::encoded_len(body))?;

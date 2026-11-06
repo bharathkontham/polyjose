@@ -117,13 +117,6 @@ fn check_attributes(contents: &[u8]) -> Result<()> {
 /// `parts.version` must agree with `parts.public_key` (RFC 5958 §2), and RSA
 /// private keys are never written (ADR 0021). The output is zeroized on
 /// drop.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the key mappers (T05, T06) and the facade (T08)"
-    )
-)]
 pub(crate) fn encode(parts: &Pkcs8Parts<'_>) -> Result<Zeroizing<Vec<u8>>> {
     encode_with_attributes(parts, None)
 }
