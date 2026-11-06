@@ -29,6 +29,15 @@
 //!   RFC 7518 §7.1 registry, and a generated key, being random, is compared
 //!   by its shape, after the runner checks it is private, has exactly the
 //!   RFC members plus `alg`, and imports back unchanged;
+//! - for `jwt.validate` and `jwt.issue` (RFC 7519), a fixed clock built
+//!   from `now` and no other (ADR 0028 §4); the step order of
+//!   conformance/README.md (`decrypt.key`, `decrypt`'s lists, `key` or
+//!   `jwks`, the policy; or `key`, `claims`, `encrypt.key`, sign, encrypt),
+//!   the first error, a JWK or JWK Set import error included, being the
+//!   outcome; claims compared as JSON values; and an issued token checked
+//!   exactly, or by validating it with `validate`;
+//! - a success expectation lists exactly the outputs, so an optional one
+//!   (`key_index`) can't be left out unnoticed;
 //! - a vector whose optional top-level `features` names a cargo feature
 //!   this build does not enable is reported **SKIPPED**, with the feature
 //!   names; it is never counted as passing.
@@ -37,8 +46,9 @@
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
 //! fails if its operations, member names, member kinds, `required` lists,
 //! `allOf` signer rules, patterns or error codes drift from the tables
-//! below. `jws_and_keys_vectors_are_binding_ready` checks that every JWS and
-//! keys vector is readable unchanged by every binding's JSON parser. Vector files are
+//! below. `jws_and_keys_vectors_are_binding_ready`, `jwe_vectors_are_binding_ready`
+//! and `jwt_vectors_are_binding_ready` check that every JWS, JWE, keys and
+//! JWT vector is readable unchanged by every binding's JSON parser. Vector files are
 //! parsed with
 //! polyjose's own `json` module, and their inputs reach the library through
 //! it.
