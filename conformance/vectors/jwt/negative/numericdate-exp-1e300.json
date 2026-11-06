@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §2; RFC 7493 §2.2; ADR 0027 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "exp is 1e300, finite but far outside ±(2^53 − 1); written in the signed payload octets: InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjFlMzAwfQ.wW_tamyogH6kdKUWw_zsQsxeaF0CB2eZErIPkXejpRo",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}
