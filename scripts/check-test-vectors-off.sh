@@ -24,6 +24,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$(pwd); root_physical=$(pwd -P)
+# The checks parse cargo's output; CI sets CARGO_TERM_COLOR=always, so turn colour off here.
+export CARGO_TERM_COLOR=never
 
 feature=insecure-test-vectors
 # How cargo prints the feature when it is enabled, in a `-e features` tree.
