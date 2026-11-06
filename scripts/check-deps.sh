@@ -8,7 +8,10 @@
 #      [target.*.…] forms) does not use `default-features = false` (ADR 0016 §3);
 #   4. a crate in deps-allowlist.txt is not credited in CREDITS.md, or CREDITS.md credits a crate
 #      that is not in deps-allowlist.txt (ADR 0020 §5);
-#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below.
+#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below;
+#   6. a package in the core's tree does not come from crates.io: a path package other than
+#      polyjose itself, a git source or another registry (an allowlisted name is not enough when
+#      the code behind it can be swapped);
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
 # runtime dependencies and the build-dependencies of every crate in it (a build script or a
@@ -188,18 +191,62 @@ check_group_rules() {
   done <"$work/groups"
 }
 
+# 6. Every package in the core's tree comes from crates.io. The walk follows normal and build
+#    edges from polyjose through cargo metadata's resolve graph (all features, all targets), the
+#    same set as the tree above. A `[patch]`, `[replace]` or `.cargo/config.toml` patch shows up
+#    here as a path or git source. cargo-deny's [sources] check (deny.toml) covers git and other
+#    registries for the whole workspace, but not path packages.
+check_sources_crates_io() {
+  python3 -I -c '
+import json, os, sys
+meta_path, pkg_name, manifest = sys.argv[1], sys.argv[2], os.path.realpath(sys.argv[3])
+CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
+with open(meta_path, encoding="utf-8") as f:
+    meta = json.load(f)
+packages = {p["id"]: p for p in meta["packages"]}
+core = [p["id"] for p in meta["packages"]
+        if p["name"] == pkg_name and os.path.realpath(p["manifest_path"]) == manifest]
+if len(core) != 1:
+    sys.exit("expected exactly one package %s at %s, found %d" % (pkg_name, manifest, len(core)))
+if meta.get("resolve") is None:
+    sys.exit("cargo metadata has no resolve graph")
+nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+seen, todo = set(core), list(core)
+while todo:
+    for dep in nodes[todo.pop()]["deps"]:
+        if dep["pkg"] in seen:
+            continue
+        # A missing dep_kinds (cargo older than 1.41) is a KeyError: fail closed.
+        if any(k["kind"] in (None, "build") for k in dep["dep_kinds"]):
+            seen.add(dep["pkg"])
+            todo.append(dep["pkg"])
+for pkg_id in sorted(seen - set(core)):
+    p = packages[pkg_id]
+    if p["source"] != CRATES_IO:
+        where = p["source"] or "path " + os.path.dirname(p["manifest_path"])
+        print("%s %s from %s" % (p["name"], p["version"], where))
+' "$work/metadata.json" "$core_pkg" "$core_manifest" >"$work/sources" \
+    || die "could not walk $core_pkg's dependency graph in cargo metadata"
+  if [ -s "$work/sources" ]; then
+    fail "packages in the core's tree that do not come from crates.io (registry+https://github.com/rust-lang/crates.io-index):"
+    sed 's/^/  - /' "$work/sources"
+    echo "  Depend on the published crates.io release; remove any [patch], [replace] or git/path/registry source."
+  fi
+}
+
 check_tree_allowlisted
 check_allowlist_not_stale
 check_default_features_off
 check_credits_match
 check_group_rules
+check_sources_crates_io
 
 if [ "$failed" -ne 0 ]; then
   echo "check-deps: FAILED"
   exit 1
 fi
 
-echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits"
+echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
 exit 0
