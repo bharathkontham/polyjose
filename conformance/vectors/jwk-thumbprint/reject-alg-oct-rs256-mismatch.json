@@ -1,0 +1,17 @@
+{
+  "source": "polyjose",
+  "description": "The RFC 7517 A.3 HMAC key with \"alg\": \"RS256\": RS256 needs an RSA key (RFC 7518 §3.3, ADR 0026 §2 step 8), so the JWK alg names an algorithm its key cannot serve (RFC 7517 §4.4, RFC 8725 §3.1)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
+      "alg": "RS256"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

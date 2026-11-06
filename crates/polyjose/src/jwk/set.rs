@@ -10,7 +10,7 @@ use core::fmt;
 
 use zeroize::ZeroizeOnDrop;
 
-use super::{Jwk, KeyAlg, KeyOp, MemberNames, is_unsupported_key_kind, member};
+use super::{Jwk, KeyAlg, KeyOp, MemberNames, is_rsa_private_key, is_unsupported_key_kind, member};
 use crate::error::{Error, Result};
 use crate::json::{self, Object, Value};
 use crate::jwa::SigningAlg;
@@ -35,6 +35,7 @@ const NO_KEYS_ARRAY: &str = "a JWK Set must have a keys member that is an array"
 /// | a valid, supported JWK | kept, in document order |
 /// | unsupported `kty`, or `EC`/`OKP` `crv` (`XYZ`, `Ed448`, `P-192`, ...) | skipped (RFC 7517 §5, ADR 0029 §3) |
 /// | otherwise invalid (not an object, missing or mistyped members, wrong lengths, bad base64url, RSA modulus under 2048 bits, ...) | skipped (RFC 7517 §5) |
+/// | an `alg` of `RSA1_5` or `RSA-OAEP`, or one the key's family cannot serve (`oct` with `RS256`, `EC` `P-256` with `ES384`, ...) | skipped (RFC 7517 §4.4, §5; ADRs 0021, 0022) |
 /// | an RSA private key | the whole set fails, [`Error::UnsupportedAlgorithm`] (ADR 0021) |
 ///
 /// Skipping invalid entries, rather than failing the set, follows the
@@ -121,8 +122,10 @@ impl JwkSet {
     ///   object, missing required members, wrong lengths, non-canonical
     ///   base64url, an RSA modulus under 2048 bits, and so on (RFC 7517 §5:
     ///   "SHOULD ignore JWKs ... that are missing required members, or for
-    ///   which values are out of the supported ranges"). Skipping can only
-    ///   remove verification candidates, never add one.
+    ///   which values are out of the supported ranges"), or if its `alg` is
+    ///   rejected (`RSA1_5`, `RSA-OAEP`, or a family mismatch, RFC 7517
+    ///   §4.4). Skipping can only remove verification candidates, never add
+    ///   one.
     /// - It **fails the whole set** with [`Error::UnsupportedAlgorithm`]
     ///   if it is an RSA private key (any RFC 7518 §6.3.2 member), whatever
     ///   else it holds (ADR 0021, ADR 0029 §3): a verification set never
@@ -284,15 +287,16 @@ fn import_member(member: &Value) -> Result<Option<Jwk>> {
     if is_unsupported_key_kind(object) {
         return Ok(None);
     }
-    match Jwk::from_object(object) {
-        Ok(jwk) => Ok(Some(jwk)),
-        // With `kty` and `crv` supported, the only `UnsupportedAlgorithm`
-        // left in `Jwk::from_object` is an RSA private key (ADR 0021), which
-        // fails the set. Should another case ever appear, it fails the set
-        // too: fail closed.
-        Err(Error::UnsupportedAlgorithm) => Err(Error::UnsupportedAlgorithm),
-        Err(_) => Ok(None),
+    // ADR 0021, ADR 0029 §3: an RSA private key fails the set, checked
+    // before anything else in the entry so no other defect can hide it.
+    if is_rsa_private_key(object) {
+        return Err(Error::UnsupportedAlgorithm);
     }
+    // Every other failure is skipped (RFC 7517 §5 "SHOULD ignore"),
+    // including a JWK `alg` that is not supported (`RSA1_5`, `RSA-OAEP`)
+    // or that the key cannot serve (RFC 7517 §4.4): such a key could never
+    // be used, so leaving it out removes no usable candidate.
+    Ok(Jwk::from_object(object).ok())
 }
 
 /// Prints each key's own `Debug` (private members redacted), the skipped

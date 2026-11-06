@@ -1,0 +1,17 @@
+{
+  "source": "polyjose",
+  "description": "An oct key with an empty \"k\" (RFC 7518 §6.4.1) and a mismatched \"alg\": \"RS256\": structural errors are reported before the alg checks, so the code is InvalidKey, not KeyAlgorithmMismatch",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "k": "",
+      "alg": "RS256"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
