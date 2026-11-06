@@ -1,0 +1,26 @@
+{
+  "source": "RFC 7515 §7.2.2",
+  "description": "A flattened JWS with protected {\"alg\":\"HS256\"} and an empty unprotected \"header\": {}, MAC correct over \"Payload\" (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key): an empty JWS Unprotected Header adds no parameters, so the JOSE Header is the protected one and the JWS is accepted (RFC 7515 §5.2 step 4, §7.2.1; the T05 behaviour)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "protected": "eyJhbGciOiJIUzI1NiJ9",
+      "header": {},
+      "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "UGF5bG9hZA",
+    "alg": "HS256",
+    "signature_index": 0
+  }
+}
