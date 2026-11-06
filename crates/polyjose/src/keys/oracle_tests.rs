@@ -678,13 +678,23 @@ fn negative_entries() -> Vec<NegativeEntry> {
 }
 
 /// The container a negative DER vector is, from the fixture it mutates.
-/// N67 turns the RFC 7517 RSA SPKI into a PKCS#8 with rsaEncryption.
+/// N67 turns the RFC 7517 RSA SPKI into a PKCS#8 with rsaEncryption; N68
+/// and N69 are a PKCS#1 RSAPrivateKey read as PKCS#8 and as SEC1 (ADR 0018
+/// §3, ADR 0021).
 fn negative_kind(entry: &NegativeEntry) -> Kind {
-    if entry.id == "N67" {
-        Kind::Pkcs8
-    } else {
-        Kind::of_file(&entry.base)
+    match entry.id.as_str() {
+        "N67" | "N68" => Kind::Pkcs8,
+        "N69" => Kind::Sec1,
+        _ => Kind::of_file(&entry.base),
     }
+}
+
+/// Whether a negative vector's base is an RSA private key fixture in
+/// `openssl/` (N68, N69, P17, P18): such a vector has no private key the
+/// marker test could look for, and its octets are checked by
+/// `rsa_private_key_octets_never_reach_an_error` instead.
+fn has_rsa_private_base(entry: &NegativeEntry) -> bool {
+    entry.base.starts_with("reject-rsa") && entry.base.contains("-private-")
 }
 
 /// Whether `result` is the error code a manifest `expect` names.
@@ -773,7 +783,7 @@ const NEGATIVE_STRICTER_THAN_ORACLE: &[(&str, &str)] = &[
     ),
 ];
 
-/// Every `negative/` DER vector (48, N01–N67) is rejected by polyjose's import
+/// Every `negative/` DER vector (50, N01–N69) is rejected by polyjose's import
 /// path with its manifest error code; the ones the oracle accepts are
 /// exactly [`NEGATIVE_STRICTER_THAN_ORACLE`].
 #[test]
@@ -805,8 +815,8 @@ fn negative_vectors_are_rejected_and_every_oracle_acceptance_is_listed() {
         .collect();
     let accepted: Vec<&str> = oracle_accepts.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(accepted, listed, "{oracle_accepts:?}");
-    // N01–N12, N20–N27, N30–N38, N40–N47, N50–N52, N60–N67.
-    assert_eq!(count, 48);
+    // N01–N12, N20–N27, N30–N38, N40–N47, N50–N52, N60–N69.
+    assert_eq!(count, 50);
 }
 
 /// polyjose's verdict on a `reject-*` fixture through the whole path: PEM
@@ -1741,7 +1751,7 @@ fn check_pem(text: &[u8]) {
 }
 
 /// How polyjose and `pem-rfc7468` disagree on the PEM vectors (`negative/`
-/// P01–P16 and A01–A03, the RFC 8410 rejection files): (vector, polyjose
+/// P01–P18 and A01–A03, the RFC 8410 rejection files): (vector, polyjose
 /// accepts, `pem-rfc7468` accepts, reason). Every other vector gets the
 /// same verdict from both, and the same label and octets where both
 /// accept.
@@ -1807,8 +1817,8 @@ fn pem_vectors_differ_from_pem_rfc7468_only_as_listed() {
         .map(|(id, ours, theirs, _)| ((*id).to_owned(), *ours, *theirs))
         .collect();
     assert_eq!(differences, listed);
-    // A01–A03, P01–P16 and the two RFC 8410 files.
-    assert_eq!(vectors.len(), 21);
+    // A01–A03, P01–P18 and the two RFC 8410 files.
+    assert_eq!(vectors.len(), 23);
 }
 
 mod pem_properties {
@@ -2211,6 +2221,9 @@ fn no_error_or_debug_output_shows_private_key_octets() {
         inputs.push((Some(kind), der, d, false));
     }
     for entry in negative_entries() {
+        if has_rsa_private_base(&entry) {
+            continue;
+        }
         let bytes = raw("negative", &entry.file);
         let base_kind = Kind::of_file(&entry.base);
         let d = private_key_of(base_kind, &load_positive("rfc", &entry.base));
