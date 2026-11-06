@@ -185,8 +185,10 @@ fn check_strength(alg: &SigningAlg, material: &KeyMaterial) -> Result<()> {
             Ok(())
         }
         KeyMaterial::Rsa(k) => {
-            // RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8. The range is the
-            // crate's one definition, shared with JWK import.
+            // RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8. JWK import enforces
+            // the same range, so no validly imported `Jwk` fails here; the
+            // check stays as defence in depth, should a key ever reach
+            // binding by another route.
             if RSA_MODULUS_BITS.contains(&k.modulus_bits()) {
                 Ok(())
             } else {
@@ -356,6 +358,7 @@ mod tests {
     }
 
     use super::test_keys as keys;
+    use crate::util::b64url_encode;
     use Operation::{Sign, Verify};
     use SigningAlg as A;
 
@@ -473,11 +476,14 @@ mod tests {
     #[test]
     fn binding_enforces_the_rsa_modulus_range() {
         // RFC 7518 §3.3, §3.5 and ADR 0026 §2 step 8: 2048..=8192 bits.
-        // (Under 2048 bits never imports, ADR 0007.)
-        let huge = keys::rsa(8200);
+        // Outside that range a key never imports (ADR 0007, F02), so an
+        // 8200-bit key cannot reach binding at all.
+        let mut n = vec![0xff; 8200 / 8];
+        n[0] = 0x7f;
+        let n = b64url_encode(&n);
         assert_eq!(
-            bind_key(&A::RS256, &huge, Verify).map_err(|e| e.code()),
-            Err("InvalidKey")
+            Jwk::from_json(format!(r#"{{"kty":"RSA","n":"{n}","e":"AQAB"}}"#).as_bytes()).err(),
+            Some(Error::InvalidKey("RSA modulus is longer than 8192 bits"))
         );
         assert_eq!(bind_key(&A::PS256, &keys::rsa(8192), Verify), Ok(()));
     }
@@ -485,9 +491,21 @@ mod tests {
     #[test]
     fn binding_refuses_rsa_signing_before_anything_else() {
         // ADR 0021 / ADR 0026 §2 step 8: UnsupportedAlgorithm even when the
-        // key would fail the other checks.
+        // key would fail the other checks. The key that fails binding is a
+        // 2048-bit RSA key whose `key_ops` allow only `encrypt` (it was an
+        // 8200-bit key, which JWK import now refuses, F02).
+        let encrypt_only = {
+            let n = b64url_encode(&[0xff; 256]);
+            keys::jwk(&format!(
+                r#"{{"kty":"RSA","n":"{n}","e":"AQAB","key_ops":["encrypt"]}}"#
+            ))
+        };
+        assert_eq!(
+            bind_key(&A::RS256, &encrypt_only, Verify),
+            Err(Error::KeyAlgorithmMismatch)
+        );
         for alg in [A::RS256, A::RS384, A::RS512, A::PS256, A::PS384, A::PS512] {
-            for key in [keys::rsa(2048), keys::oct(64, ""), keys::rsa(8200)] {
+            for key in [keys::rsa(2048), keys::oct(64, ""), encrypt_only.clone()] {
                 assert_eq!(
                     bind_key(&alg, &key, Sign),
                     Err(Error::UnsupportedAlgorithm),
