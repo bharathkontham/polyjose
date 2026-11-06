@@ -83,6 +83,17 @@ impl Clock for SystemClock {
     }
 }
 
+/// Reads `clock`, rejecting a time outside ±(2^53 − 1) whatever the
+/// clock's implementation (ADR 0028 §1). Validation reads the time only
+/// through this.
+///
+/// # Errors
+///
+/// [`Error::InvalidClaim`]`("clock")`, or the clock's own error.
+pub(crate) fn now_checked(clock: &dyn Clock) -> Result<i64> {
+    in_range(clock.now()?)
+}
+
 /// `secs` if it is within ±(2^53 − 1) (ADR 0028 §1, RFC 7493 §2.2).
 fn in_range(secs: i64) -> Result<i64> {
     if secs.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() {
@@ -95,6 +106,24 @@ fn in_range(secs: i64) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A clock whose source returns any value, for the range check.
+    struct Raw(i64);
+
+    impl Clock for Raw {
+        fn now(&self) -> Result<i64> {
+            Ok(self.0)
+        }
+    }
+
+    /// A clock whose source fails, as a binding callback might.
+    struct Failing;
+
+    impl Clock for Failing {
+        fn now(&self) -> Result<i64> {
+            Err(Error::InvalidClaim("clock"))
+        }
+    }
 
     #[test]
     fn fixed_clock_returns_its_instant() {
@@ -114,6 +143,21 @@ mod tests {
         ] {
             assert_eq!(FixedClock(t).now(), Err(Error::InvalidClaim("clock")));
         }
+    }
+
+    #[test]
+    fn now_checked_bounds_any_clock() {
+        assert_eq!(now_checked(&Raw(42)), Ok(42));
+        assert_eq!(now_checked(&Raw(MAX_SAFE_INTEGER)), Ok(MAX_SAFE_INTEGER));
+        assert_eq!(
+            now_checked(&Raw(MAX_SAFE_INTEGER + 1)),
+            Err(Error::InvalidClaim("clock"))
+        );
+        assert_eq!(
+            now_checked(&Raw(i64::MIN)),
+            Err(Error::InvalidClaim("clock"))
+        );
+        assert_eq!(now_checked(&Failing), Err(Error::InvalidClaim("clock")));
     }
 
     #[test]
@@ -141,6 +185,8 @@ mod tests {
     const OTHER_SOURCES: &[(&str, &str)] = &[
         ("mod.rs", include_str!("mod.rs")),
         ("numeric_date.rs", include_str!("numeric_date.rs")),
+        ("policy.rs", include_str!("policy.rs")),
+        ("typ.rs", include_str!("typ.rs")),
     ];
 
     /// Names of platform time sources that must not appear outside this
