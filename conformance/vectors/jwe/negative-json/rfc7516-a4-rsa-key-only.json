@@ -1,0 +1,48 @@
+{
+  "source": "RFC 7516 App. A.4",
+  "description": "RFC 7516 App. A.4.7 with only the A.2 RSA public key: RSA1_5 is UnsupportedAlgorithm (ADRs 0021, 0022) and the A128KW recipient cannot use an RSA key (KeyAlgorithmMismatch), which ranks lower (plan.md recipient selection): UnsupportedAlgorithm",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+      "unprotected": {
+        "jku": "https://server.example.com/keys.jwks"
+      },
+      "recipients": [
+        {
+          "header": {
+            "alg": "RSA1_5",
+            "kid": "2011-04-29"
+          },
+          "encrypted_key": "UGhIOguC7IuEvf_NPVaXsGMoLOmwvc1GyqlIKOK1nN94nHPoltGRhWhw7Zx0-kFm1NJn8LE9XShH59_i8J0PH5ZZyNfGy2xGdULU7sHNF6Gp2vPLgNZ__deLKxGHZ7PcHALUzoOegEI-8E66jX2E4zyJKx-YxzZIItRzC5hlRirb6Y5Cl_p-ko3YvkkysZIFNPccxRU7qve1WYPxqbb2Yw8kZqa2rMWI5ng8OtvzlV7elprCbuPhcCdZ6XDP0_F8rkXds2vE4X-ncOIM8hAYHHi29NX0mcKiRaD0-D-ljQTP-cFPgwCp6X-nZZd9OHBv-B3oWh2TbqmScqXMR4gp_A"
+        },
+        {
+          "header": {
+            "alg": "A128KW",
+            "kid": "7"
+          },
+          "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ"
+        }
+      ],
+      "iv": "AxY8DCtDaGlsbGljb3RoZQ",
+      "ciphertext": "KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY",
+      "tag": "Mz-VPPyU4RlcuYv1IwIvzw"
+    },
+    "key": {
+      "kty": "RSA",
+      "n": "sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4Dy1WlUzewbgBHod5pcM9H95GQRV3JDXboIRROSBigeC5yjU1hGzHHyXss8UDprecbAYxknTcQkhslANGRUZmdTOQ5qTRsLAt6BTYuyvVRdhS8exSZEy_c4gs_7svlJJQ4H9_NxsiIoLwAEk7-Q3UXERGYw_75IDrGA84-lA_-Ct4eTlXHBIY2EaV7t7LjJaynVJCpkv4LKjTTAumiGUIuQhrNhZLuF_RJLqHpM2kgWFLU7-VTdL1VbC2tejvcI2BlMkEpk1BzBZI0KQB0GaDWFLN-aEAw3vRw",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "RSA1_5",
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

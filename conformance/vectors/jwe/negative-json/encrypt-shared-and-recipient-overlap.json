@@ -1,0 +1,29 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §7.2.1: the shared and per-recipient headers must be disjoint (kid in both): InvalidHeader",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "general",
+    "enc": "A128GCM",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "EREREREREREREREREREREQ"
+        },
+        "header": {
+          "kid": "a"
+        }
+      }
+    ],
+    "unprotected": {
+      "kid": "a"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

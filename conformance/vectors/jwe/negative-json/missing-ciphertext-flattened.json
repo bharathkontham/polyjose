@@ -1,0 +1,34 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7516 §7.2.1, §7.2.2: the ciphertext member MUST be present (RFC 7516 A.5 without it): InvalidFormat",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0",
+      "unprotected": {
+        "jku": "https://server.example.com/keys.jwks"
+      },
+      "header": {
+        "alg": "A128KW",
+        "kid": "7"
+      },
+      "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ",
+      "iv": "AxY8DCtDaGlsbGljb3RoZQ",
+      "tag": "Mz-VPPyU4RlcuYv1IwIvzw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128CBC-HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}
