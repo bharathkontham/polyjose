@@ -179,3 +179,49 @@ fn explicit_curve_keys_round_trip_with_ecdh_es_a128kw() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// X25519 low-order recipient keys on encrypt (RFC 7748 §6.1, ADR 0043 §2)
+// ---------------------------------------------------------------------------
+
+/// Low-order X25519 public keys `x` (base64url of the 32-octet
+/// little-endian u-coordinate, RFC 7748 §5): u = 0, and the point of
+/// order 8, u = e0eb7a7c…5f49b800, a Wycheproof `LowOrderPublic` case
+/// (`tests/third_party/wycheproof/x25519_test.json`). X25519 with either
+/// gives the all-zero shared secret for every clamped scalar.
+const LOW_ORDER_X: [(&str, &str); 2] = [
+    ("all-zero", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+    ("order 8", "4Ot6fDtBuK4WVuP68Z_EatoJjeucMrH9hmIFFl9JuAA"),
+];
+
+/// ADR 0043 §2: a low-order X25519 public key imports, since every
+/// 32-octet string is a valid X25519 input (RFC 7748 §5). Encrypting to it
+/// is refused: RFC 7748 §6.1, "Both [parties] MAY check, without leaking
+/// extra information about the value of K, whether K is the all-zero value
+/// and abort if so", and polyjose always checks. Both ECDH-ES and
+/// ECDH-ES+A128KW give `InvalidKey`, since the caller's recipient key is
+/// unusable (plan.md error contract).
+///
+/// The decrypt side, a low-order or all-zero `epk` in the header, is
+/// covered by the conformance vectors
+/// `conformance/vectors/jwe/ecdh-es/x25519-epk-zero.json` and
+/// `conformance/vectors/jwe/ecdh-es/x25519-epk-low-order.json` (both
+/// `DecryptionFailed`), and is not repeated here.
+#[test]
+fn encrypt_to_a_low_order_x25519_key_is_invalid_key() {
+    for (label, x) in LOW_ORDER_X {
+        let json = format!(r#"{{"kty":"OKP","crv":"X25519","x":"{x}"}}"#);
+        let key = Jwk::from_json(json.as_bytes()).unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert!(key.is_public(), "{label}");
+        for alg in [A::EcdhEs, A::EcdhEsA128KW] {
+            let err = encrypt(&alg, &key, &E::A128GCM, b"x")
+                .map(|_| ())
+                .expect_err(label);
+            assert!(
+                matches!(err, Error::InvalidKey(_)),
+                "{label} {alg}: {err:?}"
+            );
+            assert_eq!(err.code(), "InvalidKey", "{label} {alg}");
+        }
+    }
+}
