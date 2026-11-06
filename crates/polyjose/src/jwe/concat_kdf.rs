@@ -333,4 +333,23 @@ mod tests {
         assert!(derive(&z, "A128GCM", b"", b"", 8).is_ok());
         assert!(derive(&z, "A128GCM", b"", b"", 512).is_ok());
     }
+
+    /// The hasher's buffered block holds Z, so it must wipe itself on drop:
+    /// this fails to compile if `sha2`'s `zeroize` feature is ever dropped
+    /// from the workspace manifest.
+    #[test]
+    fn sha256_state_is_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<Sha256>();
+    }
+
+    /// The output is `Zeroizing` and is allocated once at its final size: a
+    /// reallocation would leave an unwiped copy of key bytes behind.
+    #[test]
+    fn derive_output_is_zeroizing_and_never_reallocated() {
+        for bits in [8, 128, 256, 264, 384, 512] {
+            let k: Zeroizing<Vec<u8>> = derive(&[3; 32], "A128GCM", b"", b"", bits).unwrap();
+            assert_eq!(k.capacity(), k.len(), "{bits}");
+        }
+    }
 }
