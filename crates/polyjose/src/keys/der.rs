@@ -15,6 +15,8 @@
     )
 )]
 
+use zeroize::Zeroizing;
+
 use crate::error::{Error, Result};
 
 /// The largest DER input the reader accepts: 64 KiB. A 4096-bit RSA SPKI is
@@ -452,6 +454,145 @@ fn check_universal(element: Element<'_>) -> Result<()> {
         5 => Err(Error::InvalidKey("DER NULL not empty")),
         6 | 13 => check_oid(contents),
         _ => Ok(()),
+    }
+}
+
+/// The length of an element's identifier and length octets for
+/// `content_len` contents octets: one identifier octet (low-tag-number
+/// form) and the fewest length octets (X.690 §10.1, §8.1.3.4, §8.1.3.5).
+fn header_len(content_len: usize) -> usize {
+    if content_len < 0x80 {
+        2
+    } else {
+        2 + length_octets(content_len)
+    }
+}
+
+/// How many octets the long form needs for `len` (X.690 §8.1.3.5).
+fn length_octets(len: usize) -> usize {
+    let bits = usize::BITS - len.leading_zeros();
+    bits.div_ceil(8) as usize
+}
+
+/// The length of a whole element with `content_len` contents octets.
+pub(crate) fn encoded_len(content_len: usize) -> usize {
+    header_len(content_len) + content_len
+}
+
+/// The length of a BIT STRING element (or an IMPLICIT one) carrying
+/// `octets_len` octets after its initial octet (X.690 §8.6.2).
+pub(crate) fn bit_string_len(octets_len: usize) -> usize {
+    encoded_len(1 + octets_len)
+}
+
+/// The non-negative INTEGER `magnitude` (big-endian, leading zero octets
+/// allowed) in its minimal two's-complement contents (X.690 §8.3.2, §8.3.3):
+/// leading zeros dropped, zero as one 0x00 octet, and whether a 0x00 must be
+/// prefixed to keep the sign bit clear.
+fn minimal_unsigned(magnitude: &[u8]) -> (&[u8], bool) {
+    let start = magnitude
+        .iter()
+        .position(|&octet| octet != 0)
+        .unwrap_or(magnitude.len());
+    match magnitude.get(start..) {
+        Some(digits @ [first, ..]) => (digits, first & 0x80 != 0),
+        _ => (&[0x00], false),
+    }
+}
+
+/// The length of the INTEGER element [`Writer::unsigned_integer`] writes for
+/// `magnitude`.
+pub(crate) fn unsigned_integer_len(magnitude: &[u8]) -> usize {
+    let (digits, pad) = minimal_unsigned(magnitude);
+    encoded_len(digits.len() + usize::from(pad))
+}
+
+/// A DER writer into a [`Zeroizing`] buffer of a length planned up front.
+///
+/// Callers compute the exact output length with [`encoded_len`] and friends
+/// and write each header before its contents, so the buffer is allocated
+/// once and never grows: a reallocation would free an unzeroized copy of
+/// whatever secret octets were already written. A write past the plan, or a
+/// [`Writer::finish`] short of it, fails instead of reallocating.
+pub(crate) struct Writer {
+    buf: Zeroizing<Vec<u8>>,
+    planned: usize,
+}
+
+impl Writer {
+    /// A writer for exactly `planned` octets, at most [`MAX_INPUT_LEN`] so
+    /// that everything written can be read back.
+    pub(crate) fn new(planned: usize) -> Result<Self> {
+        if planned > MAX_INPUT_LEN {
+            return Err(Error::InvalidKey("DER output too large"));
+        }
+        Ok(Writer {
+            buf: Zeroizing::new(Vec::with_capacity(planned)),
+            planned,
+        })
+    }
+
+    /// Appends `bytes` as they are, such as a template from `oid.rs`.
+    pub(crate) fn raw(&mut self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() > self.planned - self.buf.len() {
+            return Err(Error::InvalidKey("DER output length mismatch"));
+        }
+        self.buf.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    /// Writes the identifier octet `tag` and the length octets for
+    /// `content_len`, in the fewest octets (X.690 §10.1); the caller then
+    /// writes exactly `content_len` contents octets.
+    pub(crate) fn header(&mut self, tag: u8, content_len: usize) -> Result<()> {
+        let mut header = [0u8; 2 + core::mem::size_of::<usize>()];
+        header[0] = tag;
+        let used = if content_len < 0x80 {
+            header[1] = content_len as u8;
+            2
+        } else {
+            let count = length_octets(content_len);
+            header[1] = 0x80 | count as u8;
+            let be = content_len.to_be_bytes();
+            header[2..2 + count].copy_from_slice(&be[be.len() - count..]);
+            2 + count
+        };
+        self.raw(&header[..used])
+    }
+
+    /// Writes a whole element: `tag`, the length and `contents`.
+    pub(crate) fn element(&mut self, tag: u8, contents: &[u8]) -> Result<()> {
+        self.header(tag, contents.len())?;
+        self.raw(contents)
+    }
+
+    /// Writes a primitive BIT STRING under `tag` (BIT_STRING or an IMPLICIT
+    /// tag) with an initial octet of 0: `octets` are a whole number of
+    /// octets (X.690 §8.6.2.2, §11.2.1).
+    pub(crate) fn bit_string(&mut self, tag: u8, octets: &[u8]) -> Result<()> {
+        self.header(tag, 1 + octets.len())?;
+        self.raw(&[0x00])?;
+        self.raw(octets)
+    }
+
+    /// Writes the non-negative INTEGER `magnitude` (big-endian) in minimal
+    /// two's complement (X.690 §8.3.2, §8.3.3).
+    pub(crate) fn unsigned_integer(&mut self, magnitude: &[u8]) -> Result<()> {
+        let (digits, pad) = minimal_unsigned(magnitude);
+        self.header(INTEGER, digits.len() + usize::from(pad))?;
+        if pad {
+            self.raw(&[0x00])?;
+        }
+        self.raw(digits)
+    }
+
+    /// The finished encoding, which must be exactly the planned length.
+    pub(crate) fn finish(self) -> Result<Zeroizing<Vec<u8>>> {
+        if self.buf.len() == self.planned {
+            Ok(self.buf)
+        } else {
+            Err(Error::InvalidKey("DER output length mismatch"))
+        }
     }
 }
 
@@ -1003,6 +1144,134 @@ mod tests {
         assert_eq!(
             invalid(check_well_formed(&wrap(0x30, &shallow), false)),
             "DER nesting too deep"
+        );
+    }
+
+    #[test]
+    fn writer_lengths_are_minimal() {
+        // X.690 §10.1: short form to 127, then the fewest long-form octets.
+        for (len, header) in [
+            (0usize, &[0x04, 0x00][..]),
+            (0x7F, &[0x04, 0x7F]),
+            (0x80, &[0x04, 0x81, 0x80]),
+            (0xFF, &[0x04, 0x81, 0xFF]),
+            (0x100, &[0x04, 0x82, 0x01, 0x00]),
+            (0xFFFB, &[0x04, 0x82, 0xFF, 0xFB]),
+        ] {
+            let contents = vec![0xA5; len];
+            assert_eq!(encoded_len(len), header.len() + len);
+            let mut writer = Writer::new(encoded_len(len)).unwrap();
+            writer.element(OCTET_STRING, &contents).unwrap();
+            let out = writer.finish().unwrap();
+            assert_eq!(&out[..header.len()], header, "{len}");
+            // What the writer emits, the reader accepts.
+            assert_eq!(read_all(&out, Reader::octet_string).unwrap(), &contents[..]);
+        }
+    }
+
+    #[test]
+    fn writer_unsigned_integers_are_minimal_and_positive() {
+        // X.690 §8.3.2 minimal; §8.3.3 a 0x00 octet keeps the sign bit clear.
+        for (magnitude, encoding) in [
+            (&[][..], &[0x02, 0x01, 0x00][..]),
+            (&[0x00], &[0x02, 0x01, 0x00]),
+            (&[0x00, 0x00, 0x05], &[0x02, 0x01, 0x05]),
+            (&[0x7F], &[0x02, 0x01, 0x7F]),
+            (&[0x80], &[0x02, 0x02, 0x00, 0x80]),
+            (&[0x00, 0xFF, 0x01], &[0x02, 0x03, 0x00, 0xFF, 0x01]),
+            (&[0x01, 0x00, 0x01], &[0x02, 0x03, 0x01, 0x00, 0x01]),
+        ] {
+            assert_eq!(unsigned_integer_len(magnitude), encoding.len());
+            let mut writer = Writer::new(encoding.len()).unwrap();
+            writer.unsigned_integer(magnitude).unwrap();
+            let out = writer.finish().unwrap();
+            assert_eq!(&out[..], encoding, "{magnitude:02x?}");
+            let read = read_all(&out, Reader::unsigned_integer).unwrap();
+            let expected: &[u8] = match magnitude.iter().position(|&b| b != 0) {
+                Some(i) => &magnitude[i..],
+                None => &[0x00],
+            };
+            assert_eq!(read, expected);
+        }
+    }
+
+    #[test]
+    fn writer_bit_strings_have_no_unused_bits() {
+        let mut writer = Writer::new(bit_string_len(2)).unwrap();
+        writer
+            .bit_string(CONTEXT_1_PRIMITIVE, &[0xAB, 0xCD])
+            .unwrap();
+        let out = writer.finish().unwrap();
+        assert_eq!(&out[..], &[0x81, 0x03, 0x00, 0xAB, 0xCD]);
+    }
+
+    #[test]
+    fn writer_builds_nested_structures_from_planned_lengths() {
+        // SEQUENCE { INTEGER 0, NULL, [0] { OCTET STRING 01 } }
+        let inner = encoded_len(1);
+        let body = unsigned_integer_len(&[0]) + 2 + encoded_len(inner);
+        let mut writer = Writer::new(encoded_len(body)).unwrap();
+        writer.header(SEQUENCE, body).unwrap();
+        writer.unsigned_integer(&[0]).unwrap();
+        writer.raw(&[0x05, 0x00]).unwrap();
+        writer.header(CONTEXT_0, inner).unwrap();
+        writer.element(OCTET_STRING, &[0x01]).unwrap();
+        let out = writer.finish().unwrap();
+        assert_eq!(
+            &out[..],
+            &[
+                0x30, 0x0A, 0x02, 0x01, 0x00, 0x05, 0x00, 0xA0, 0x03, 0x04, 0x01, 0x01
+            ]
+        );
+    }
+
+    #[test]
+    fn writer_rejects_writes_past_or_short_of_the_plan() {
+        let mut writer = Writer::new(2).unwrap();
+        assert_eq!(
+            invalid(writer.element(OCTET_STRING, &[0x00])),
+            "DER output length mismatch"
+        );
+        let mut writer = Writer::new(3).unwrap();
+        writer.raw(&[0x05, 0x00]).unwrap();
+        assert_eq!(invalid(writer.finish()), "DER output length mismatch");
+        assert_eq!(
+            invalid(Writer::new(MAX_INPUT_LEN + 1)),
+            "DER output too large"
+        );
+    }
+
+    #[test]
+    fn writer_output_is_zeroizing() {
+        fn zeroizing(_: &zeroize::Zeroizing<Vec<u8>>) {}
+        let mut writer = Writer::new(2).unwrap();
+        writer.raw(&[0x05, 0x00]).unwrap();
+        let out = writer.finish().unwrap();
+        zeroizing(&out);
+        // Planned exactly, so the buffer never reallocated (which would leave
+        // an unzeroized copy behind).
+        assert!(out.capacity() >= 2);
+    }
+
+    #[test]
+    fn an_explicit_tag_wraps_a_complete_inner_encoding() {
+        // RFC 5915 §3 (EXPLICIT TAGS): publicKey [1] BIT STRING is A1 len
+        // followed by the whole BIT STRING element (X.690 §8.14.2 c).
+        let input = [CONTEXT_1, 0x04, BIT_STRING, 0x02, 0x00, 0x04];
+        let point = read_all(&input, |r| {
+            let mut tagged = r.explicit(CONTEXT_1)?;
+            let point = tagged.bit_string()?;
+            tagged.finish()?;
+            Ok(point)
+        })
+        .unwrap();
+        assert_eq!(point, &[0x04]);
+        // An IMPLICIT [1] (0x81) is not the EXPLICIT form.
+        assert_eq!(
+            invalid(read_all(&[0x81, 0x02, 0x00, 0x04], |r| r
+                .explicit(CONTEXT_1)
+                .map(|_| ()))),
+            "DER unexpected tag"
         );
     }
 }
