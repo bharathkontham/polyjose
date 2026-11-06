@@ -9,14 +9,18 @@
 # code that uses rsa's private-key, signing or decryption items leaves their symbols in the object
 # code of the crate that uses them, so this check reads that object code instead.
 #
-# What is built (each a configuration that ships, built in the dev profile, where no call is
-# inlined away):
+# What is built (each a configuration that ships), first in the dev profile and then again with
+# --release:
 #   1. polyjose --lib --all-features (so feature-gated code is in);
 #   2. every other workspace member (the bindings), each on its own with its own feature
 #      unification, as an rlib (`cargo rustc --crate-type rlib`, so its objects are kept even when
 #      it ships as a cdylib or staticlib), on the host;
 #   3. polyjose-wasm the same way for wasm32-unknown-unknown, its shipping target (polyjose alone
 #      does not build there: getrandom needs the binding's `wasm_js` backend).
+# The dev profile inlines no call away, so a reference to an rsa item stays a symbol. The release
+# profile is what ships, and it compiles code the dev profile never does: anything under
+# `cfg(not(debug_assertions))`. It can inline a call away, so it adds to the dev pass and never
+# replaces it. Both fail and fail closed the same way.
 # What is read: the object members of the rlibs of polyjose and of the binding of each build (the
 # codegen-unit files `<crate>-<hash>.<cgu>.rcgu.o`, extracted with ar), never a dependency's
 # rlib. Generic code is monomorphized in the crate that instantiates it, and code shared with an
@@ -48,15 +52,20 @@
 # Residual risk: code compiled only for a target that is not built here (the Android and Apple
 # targets of rust-toolchain.toml) is seen by the text scan only, until those binding jobs add
 # their target to this check. Code that is never compiled (unreachable private code) ships nothing
-# and has no symbol; the text scan covers it.
+# and has no symbol; the text scan covers it. Public code that polyjose never codegens (an uncalled
+# `#[inline] pub fn`, a generic `pub fn` it never instantiates) has no symbol here either, yet a
+# downstream crate can call it and compile it there: the text scan covers it, its macro rule
+# included, which catches the `k!(rsa)` spelling that hides the path from its other rules (ADR 0049
+# §1).
 #
 # Usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]...
 #   --target-dir DIR  cargo's build directory (default: cargo's own, target/)
 #   --dump DIR        also write every scanned symbol, demangled, to DIR/<config>.<crate>.txt
 #   --only CONFIG     build and read only this configuration (repeatable): polyjose-all-features,
-#                     a binding's package name, or polyjose-wasm-wasm32-unknown-unknown. For the
-#                     negative tests, which need one build per case; the gate itself (test-all.sh,
-#                     CI) always runs every configuration, and the result line names a narrowed run.
+#                     a binding's package name, or polyjose-wasm-wasm32-unknown-unknown, each with
+#                     a -release suffix for its release build. For the negative tests, which need
+#                     one build per case; the gate itself (test-all.sh, CI) always runs every
+#                     configuration, and the result line names a narrowed run.
 # Exit status: 0 clean, 1 an RSA private-key, signing or decryption symbol was found, 2 the check
 # could not run. Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
@@ -261,14 +270,19 @@ bindings = [n for n in names if n != CORE]
 if WASM_BINDING not in bindings:
     die("the workspace has no %s package, whose %s build this check reads" % (WASM_BINDING, WASM_TARGET))
 
-# (label, file-name id, cargo arguments, crates whose objects are read)
-configs = [("%s --all-features (host)" % CORE, "%s-all-features" % CORE,
-            ["build", "-p", CORE, "--lib", "--all-features"], [CORE])]
+# (what, target, file-name id, cargo arguments, crates whose objects are read), each built in the
+# dev profile and again in the release profile (see the top of this file).
+builds = [("%s --all-features" % CORE, "host", "%s-all-features" % CORE,
+           ["build", "-p", CORE, "--lib", "--all-features"], [CORE])]
 for b in bindings:
-    configs.append(("%s (host)" % b, b, ["rustc", "-p", b, "--lib", "--crate-type", "rlib"], [CORE, b]))
-configs.append(("%s (%s)" % (WASM_BINDING, WASM_TARGET), "%s-%s" % (WASM_BINDING, WASM_TARGET),
-                ["rustc", "-p", WASM_BINDING, "--lib", "--crate-type", "rlib", "--target", WASM_TARGET],
-                [CORE, WASM_BINDING]))
+    builds.append((b, "host", b, ["rustc", "-p", b, "--lib", "--crate-type", "rlib"], [CORE, b]))
+builds.append((WASM_BINDING, WASM_TARGET, "%s-%s" % (WASM_BINDING, WASM_TARGET),
+               ["rustc", "-p", WASM_BINDING, "--lib", "--crate-type", "rlib", "--target", WASM_TARGET],
+               [CORE, WASM_BINDING]))
+# (label, file-name id, cargo arguments, crates whose objects are read)
+configs = [("%s (%s)" % (what, where), file_id, args, crates) for what, where, file_id, args, crates in builds]
+configs += [("%s --release (%s)" % (what, where), file_id + "-release", args + ["--release"], crates)
+            for what, where, file_id, args, crates in builds]
 
 if only:
     known = [c[1] for c in configs]
