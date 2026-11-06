@@ -1122,6 +1122,252 @@ mod tests {
         assert!(!err.to_string().contains(MARKER));
     }
 
+    // ---- The split: precheck_compact (steps 1-7), finish_compact (8-9) ----
+
+    use crate::test_counters::{jws_family_signs as signs, jws_family_verifies as verifies};
+
+    /// [`FAKE`], counting every call into the family (ADR 0026 §2 step 9,
+    /// and `sign`, which verification must never reach).
+    const COUNTING: Families = Families {
+        sign: |alg, key, input| {
+            signs::tick();
+            (FAKE.sign)(alg, key, input)
+        },
+        verify: |alg, key, input, signature| {
+            verifies::tick();
+            (FAKE.verify)(alg, key, input, signature)
+        },
+    };
+
+    /// Runs `f`, returning its result and the number of family `sign` and
+    /// `verify` calls it made on this thread.
+    fn family_calls<R>(f: impl FnOnce() -> R) -> (R, u64, u64) {
+        let ((result, verify_calls), sign_calls) = signs::count(|| verifies::count(f));
+        (result, sign_calls, verify_calls)
+    }
+
+    /// An `oct` key of 32 octets other than [`hs_key`]'s.
+    fn other_hs_key() -> Jwk {
+        keys::jwk(&format!(
+            r#"{{"kty":"oct","k":"{}"}}"#,
+            b64url_encode(&[0x33; 32])
+        ))
+    }
+
+    /// One token per failure class of ADR 0026 §2 / ADR 0048 steps 1-7,
+    /// with the options it fails under and its expected code.
+    fn step_1_to_7_failures() -> Vec<(String, VerifyOptions<'static>, &'static str)> {
+        let jws = forge(&A::HS256, HS256, b"hello", false);
+        let [p, l, s] = parts(&jws);
+        let opts = VerifyOptions::new(ALLOW_HS256).unwrap();
+        let header = |json: &str| forge(&A::HS256, json, b"hi", false);
+        let no_alg = b64url_encode(br#"{"typ":"JWT"}"#);
+        let bad_json = b64url_encode(br#"{"alg":"HS256""#);
+        let detached = opts.detached_payload(b"hello");
+        vec![
+            // Step 1: the limit, the shape, the detached mode.
+            (
+                jws.clone(),
+                opts.max_input_len(jws.len() - 1),
+                "InvalidFormat",
+            ),
+            ("a.b".to_owned(), opts, "InvalidFormat"),
+            (format!("{jws}.{s}"), opts, "InvalidFormat"),
+            (jws.clone(), detached, "InvalidFormat"),
+            // Step 2: the signature's base64url.
+            (format!("{p}.{l}.{s}="), opts, "InvalidBase64"),
+            // Step 3: the protected header's base64url, JSON, types, crit.
+            (format!("{p}=.{l}.{s}"), opts, "InvalidBase64"),
+            (format!("{bad_json}.{l}.{s}"), opts, "InvalidJson"),
+            (
+                header(r#"{"alg":"HS256","alg":"HS256"}"#),
+                opts,
+                "InvalidJson",
+            ),
+            (header(r#"{"alg":1}"#), opts, "InvalidHeader"),
+            (
+                header(r#"{"alg":"HS256","crit":[]}"#),
+                opts,
+                "InvalidHeader",
+            ),
+            (
+                format!(
+                    "{}.$02.",
+                    b64url_encode(br#"{"alg":"HS256","b64":0,"crit":["b64"]}"#)
+                ),
+                opts,
+                "InvalidHeader",
+            ),
+            // Step 4: the payload's base64url.
+            (format!("{p}.{l}=.{s}"), opts, "InvalidBase64"),
+            (format!("{no_alg}.{l}=.{s}"), opts, "InvalidBase64"),
+            // Step 5 (ADR 0048): the whole-header structure.
+            (header(r#"{"typ":"JWT"}"#), opts, "InvalidHeader"),
+            (
+                header(r#"{"alg":"HS256","b64":false}"#),
+                opts,
+                "InvalidHeader",
+            ),
+            (
+                header(r#"{"alg":"HS256","crit":["x-a"]}"#),
+                opts,
+                "InvalidHeader",
+            ),
+            // ADR 0026 §2 steps 5-7.
+            (
+                header(r#"{"alg":"HS256","crit":["x-a"],"x-a":1}"#),
+                opts,
+                "UnknownCritical",
+            ),
+            (header(r#"{"alg":"HS1"}"#), opts, "UnsupportedAlgorithm"),
+            (header(r#"{"alg":"HS384"}"#), opts, "AlgorithmNotAllowed"),
+            (A5_NONE.to_owned(), opts, "AlgorithmNotAllowed"),
+        ]
+    }
+
+    #[test]
+    fn precheck_gives_verify_compacts_error_for_each_step_1_to_7() {
+        // The first failing step decides (ADR 0026 §2, ADR 0048), whether
+        // it runs alone or inside verify_compact, whatever the key.
+        let candidate_keys = [hs_key(), keys::p384(), keys::p256(""), keys::ed25519("")];
+        for (jws, opts, code) in step_1_to_7_failures() {
+            let (pre, sign_calls, verify_calls) = family_calls(|| precheck_compact(&jws, &opts));
+            let err = pre.map(drop).unwrap_err();
+            assert_eq!(err.code(), code, "{jws}");
+            assert_eq!((sign_calls, verify_calls), (0, 0), "{jws}");
+            for key in &candidate_keys {
+                assert_eq!(verify_compact(&jws, key, &opts), Err(err.clone()), "{jws}");
+                assert_eq!(
+                    verify_compact_with(&COUNTING, &jws, key, &opts),
+                    Err(err.clone()),
+                    "{jws}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn step_8_and_9_failures_pass_precheck_and_fail_in_finish() {
+        // ADR 0026 §2 steps 8-9 need a key, so precheck_compact accepts the
+        // token and finish_compact gives verify_compact's code.
+        let opts = VerifyOptions::new(ALLOW_HS256).unwrap();
+        let good = forge(&A::HS256, HS256, b"hello", false);
+        let [p, _, s] = parts(&good);
+        let tampered = format!("{p}.{}.{s}", b64url_encode(b"hellO"));
+        let detached = forge(&A::HS256, HS256, b"hello", true);
+        let wrong_detached = opts.detached_payload(b"hellO");
+        let cases: [(&str, VerifyOptions<'_>, Jwk, &str, u64); 8] = [
+            // Step 8: key binding, before any signature check.
+            (&good, opts, keys::ed25519(""), "KeyAlgorithmMismatch", 0),
+            (&good, opts, keys::p256(""), "KeyAlgorithmMismatch", 0),
+            (
+                &good,
+                opts,
+                keys::oct(32, r#","alg":"HS512""#),
+                "KeyAlgorithmMismatch",
+                0,
+            ),
+            (
+                &good,
+                opts,
+                keys::oct(32, r#","use":"enc""#),
+                "KeyAlgorithmMismatch",
+                0,
+            ),
+            (
+                &good,
+                opts,
+                keys::oct(32, r#","key_ops":["sign"]"#),
+                "KeyAlgorithmMismatch",
+                0,
+            ),
+            (&good, opts, keys::oct(31, ""), "InvalidKey", 0),
+            // Step 9: the signature.
+            (&tampered, opts, hs_key(), "InvalidSignature", 1),
+            (&detached, wrong_detached, hs_key(), "InvalidSignature", 1),
+        ];
+        for (jws, opts, key, code, expected_verifies) in cases {
+            let (pre, _, verify_calls) = family_calls(|| precheck_compact(jws, &opts));
+            assert_eq!(verify_calls, 0);
+            let pre = pre.unwrap();
+            let (finished, sign_calls, verify_calls) =
+                family_calls(|| finish_compact(&COUNTING, &pre, &key));
+            let err = finished.unwrap_err();
+            assert_eq!(err.code(), code, "{jws} {code}");
+            assert_eq!((sign_calls, verify_calls), (0, expected_verifies), "{code}");
+            assert_eq!(verify_compact_with(&COUNTING, jws, &key, &opts), Err(err));
+        }
+    }
+
+    #[test]
+    fn finish_matches_verify_compact_on_success() {
+        // Every attached, detached and b64:false shape: the same Verified.
+        let b64_false = forge(&A::HS256, HS256_B64_FALSE, b"$02", false);
+        let rfc7797_detached = forge(&A::HS256, HS256_B64_FALSE, b"$.02", true);
+        let attached = forge(
+            &A::HS256,
+            r#"{"alg":"HS256","typ":"JWT","kid":"k1"}"#,
+            b"hi",
+            false,
+        );
+        let detached = forge(&A::HS256, HS256, b"\x00\xff", true);
+        let empty = forge(&A::HS256, HS256, b"", false);
+        let opts = VerifyOptions::new(ALLOW_HS256).unwrap();
+        for (jws, opts) in [
+            (&attached, opts),
+            (&empty, opts),
+            (&b64_false, opts),
+            (&detached, opts.detached_payload(b"\x00\xff")),
+            (&rfc7797_detached, opts.detached_payload(b"$.02")),
+        ] {
+            let pre = precheck_compact(jws, &opts).unwrap();
+            let (v, sign_calls, verify_calls) =
+                family_calls(|| finish_compact(&COUNTING, &pre, &hs_key()));
+            assert_eq!((sign_calls, verify_calls), (0, 1));
+            assert_eq!(
+                v,
+                verify_compact_with(&FAKE, jws, &hs_key(), &opts),
+                "{jws}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_precheck_finishes_against_several_keys() {
+        // ADR 0027 §9, ADR 0029 §1: steps 1-7 once, then steps 8-9 per
+        // candidate, here with the real HMAC (RFC 7518 §3.2).
+        let right = hs_key();
+        let header = protected(r#"{"alg":"HS256","typ":"JWT","kid":"k1"}"#);
+        let jws = sign_compact(&header, b"payload", &right, &SignOptions::new()).unwrap();
+        let opts = VerifyOptions::new(&[A::HS256, A::ES256]).unwrap();
+        let pre = precheck_compact(&jws, &opts).unwrap();
+        // What the JWT layer reads between steps 7 and 8 (ADR 0049 §2:
+        // only from the protected header).
+        assert_eq!(pre.alg(), &A::HS256);
+        assert_eq!(pre.header(), header.header());
+        assert_eq!(pre.header().kid.as_deref(), Some("k1"));
+        assert_eq!(pre.header().typ.as_deref(), Some("JWT"));
+        let expected = verify_compact(&jws, &right, &opts).unwrap();
+        assert_eq!(
+            finish_compact(&FAMILIES, &pre, &keys::p256("")),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        assert_eq!(
+            finish_compact(&FAMILIES, &pre, &other_hs_key()),
+            Err(Error::InvalidSignature)
+        );
+        assert_eq!(
+            finish_compact(&FAMILIES, &pre, &right),
+            Ok(expected.clone())
+        );
+        // Finishing again, and after another failure, changes nothing.
+        assert_eq!(
+            finish_compact(&FAMILIES, &pre, &other_hs_key()),
+            Err(Error::InvalidSignature)
+        );
+        assert_eq!(finish_compact(&FAMILIES, &pre, &right), Ok(expected));
+    }
+
     #[test]
     fn public_functions_use_the_real_families() {
         // Only outcomes decided before any family runs, so these hold
