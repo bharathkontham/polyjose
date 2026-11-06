@@ -1,0 +1,27 @@
+{
+  "source": "RFC 7797 §4.1",
+  "description": "HS256 flattened JSON sign of the \"$.02\" payload under {\"alg\":\"HS256\"} with the RFC 7515 A.1 key, giving the §4.1 flattened JWS",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "flattened",
+    "payload_b64u": "JC4wMg",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJIUzI1NiJ9",
+        "key": {
+          "kty": "oct",
+          "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "jws": {
+      "protected": "eyJhbGciOiJIUzI1NiJ9",
+      "payload": "JC4wMg",
+      "signature": "5mvfOroL-g7HyqJoozehmsaqmvTYGEq5jTI1gVvoEoQ"
+    }
+  }
+}
