@@ -4,12 +4,19 @@
 
 use zeroize::Zeroizing;
 
+use super::jwk_build;
+use super::spki;
 use super::types::{AlgId, SpkiParts};
 use crate::error::{Error, Result};
 use crate::jwk::{Jwk, OkpCurve, OkpKey};
 
+/// The length of an Ed25519 or X25519 public or private key: 32 octets
+/// (RFC 8032 §5.1.5, RFC 7748 §5; RFC 8037 §2).
+const KEY_LEN: usize = 32;
+
 /// The curve an RFC 8410 §3 AlgorithmIdentifier names: id-Ed25519 or
-/// id-X25519. The container's classified algorithm alone decides `crv`.
+/// id-X25519. The container's classified algorithm alone decides `crv`, so
+/// a key labelled id-X25519 is never read as Ed25519, or the reverse.
 fn curve(alg: AlgId) -> Result<OkpCurve> {
     match alg {
         AlgId::Ed25519 => Ok(OkpCurve::Ed25519),
@@ -18,24 +25,60 @@ fn curve(alg: AlgId) -> Result<OkpCurve> {
     }
 }
 
-/// Imports a SubjectPublicKeyInfo of an Ed25519 or X25519 public key.
+/// The RFC 8410 §3 AlgorithmIdentifier of `crv`.
+fn alg_id(crv: OkpCurve) -> AlgId {
+    match crv {
+        OkpCurve::Ed25519 => AlgId::Ed25519,
+        OkpCurve::X25519 => AlgId::X25519,
+    }
+}
+
+/// Imports a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7) that `spki::decode`
+/// classified as id-Ed25519 or id-X25519 (RFC 8410 §3), as a public OKP
+/// JWK (RFC 8037 §2) with `crv` from the AlgorithmIdentifier and `x` the
+/// subjectPublicKey.
+///
+/// RFC 8410 §4: "The public key value is the BIT STRING
+/// subjectPublicKey", the raw key of RFC 8032 §5.1.5 (Ed25519) or RFC 7748
+/// §5 (X25519), 32 octets. The JWK is built through
+/// [`jwk_build::okp_jwk`], so an Ed25519 key must also decode canonically,
+/// not be of small order and have no torsion component (RFC 8032 §5.1.3;
+/// ADR 0041 §4, ADR 0043 §1).
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] if the key is not 32 octets, is an invalid Ed25519
+/// key, or `parts` is not an OKP key.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "called by the PEM/DER facade (T08)")
 )]
 pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
-    let _ = curve(parts.alg)?;
-    Err(Error::InvalidKey("not implemented"))
+    let crv = curve(parts.alg)?;
+    if parts.subject_public_key.len() != KEY_LEN {
+        return Err(Error::InvalidKey("OKP subjectPublicKey is not 32 octets"));
+    }
+    jwk_build::okp_jwk(crv, parts.subject_public_key, None, None)
 }
 
-/// Exports the public key of an Ed25519 or X25519 key as SPKI.
+/// Exports the public key `x` of an Ed25519 or X25519 key (private or
+/// public) as a DER SubjectPublicKeyInfo: the RFC 8410 §3 AlgorithmIdentifier
+/// with parameters absent and `x` as the BIT STRING (RFC 8410 §4), the
+/// layout of RFC 8410 §10.1 and OpenSSL 4 (ADR 0018 §3).
+///
+/// # Errors
+///
+/// None in practice: [`Error::InvalidKey`] only if the DER writer's planned
+/// length were wrong.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "called by the PEM/DER facade (T08)")
 )]
 pub(crate) fn to_spki(key: &OkpKey) -> Result<Zeroizing<Vec<u8>>> {
-    let _ = key;
-    Err(Error::InvalidKey("not implemented"))
+    spki::encode(&SpkiParts {
+        alg: alg_id(key.crv()),
+        subject_public_key: key.x(),
+    })
 }
 
 #[cfg(test)]
@@ -43,7 +86,6 @@ mod tests {
     use super::*;
     use crate::jwk::KeyMaterial;
     use crate::keys::der::fixtures;
-    use crate::keys::spki;
 
     /// The JWK of a committed `.jwk.json` fixture.
     fn jwk_fixture(dir: &str, file: &str) -> Jwk {
@@ -85,7 +127,11 @@ mod tests {
             let stem = name.rsplit_once('.').unwrap().0;
             let jwk = import_spki(&der).unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert!(jwk.is_public(), "{name}");
-            assert_same_key(&jwk, &jwk_fixture("rfc", &format!("{stem}.jwk.json")), &name);
+            assert_same_key(
+                &jwk,
+                &jwk_fixture("rfc", &format!("{stem}.jwk.json")),
+                &name,
+            );
             assert_eq!(*to_spki(okp(&jwk)).unwrap(), der, "{name}");
         }
     }
