@@ -8,7 +8,7 @@
 | Node.js | `@polyjose/node` on npm | napi-rs |
 | Web / edge (WASM) | `@polyjose/wasm` on npm | wasm-bindgen |
 | Android, Kotlin, Java | `dev.polyjose:polyjose` on Maven Central | UniFFI + cargo-ndk |
-| iOS, iPadOS, macOS, tvOS, watchOS, visionOS | Swift Package `Polyjose` | UniFFI + XCFramework |
+| Swift (iOS; also iPadOS, macOS, tvOS, watchOS, visionOS) | Swift Package `Polyjose` | UniFFI + XCFramework |
 
 > Status: **pre-alpha**. Nothing is published yet. Don't use it in production.
 
@@ -25,7 +25,7 @@ bindings/node/     napi-rs addon
 bindings/wasm/     wasm-bindgen package
 bindings/ffi/      UniFFI cdylib/staticlib → Kotlin + Swift
 platforms/android/ Gradle library (AAR) + tests
-platforms/apple/   Swift Package + XCTest
+platforms/swift/   Swift Package + XCTest (iOS first)
 conformance/       shared test vectors, consumed by every platform's test suite
 scripts/           test-all.sh and build helpers
 ```
