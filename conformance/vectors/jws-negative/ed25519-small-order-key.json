@@ -1,0 +1,20 @@
+{
+  "source": "ADR 0026 §6",
+  "description": "The RFC 8037 A.4 EdDSA JWS verified with an Ed25519 point of order 8 (c7176a70…ac037a, as in jwk-thumbprint/reject-ed25519-x-small-order) as the key: small-order public keys are rejected at JWK import (ADR 0041 §4; RFC 8037 §2)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg",
+    "key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "xxdqcD1N2E-6PAt2DRBnDyogU_osOczGTsf9d5KsA3o"
+    },
+    "allowed_algs": [
+      "EdDSA"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "source": "RFC 8037 §3.1",
+  "description": "The RFC 8037 A.4 EdDSA JWS verified with the RFC 8037 A.6 X25519 public JWK: X25519 is an ECDH-ES key (RFC 8037 §3.2) and never serves EdDSA (ADR 0026 §2 step 8)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg",
+    "key": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"
+    },
+    "allowed_algs": [
+      "EdDSA"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

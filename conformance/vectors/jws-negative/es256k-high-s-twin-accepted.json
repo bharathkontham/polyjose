@@ -1,0 +1,23 @@
+{
+  "source": "ADR 0026 §5",
+  "description": "An ES256K JWS signed by node:crypto (OpenSSL) with a secp256k1 key, its S replaced by the high form n − S (computed with BigInt; OpenSSL verifies both), is accepted: verify normalizes S on every curve (RFC 8812 §3.2 and RFC 7518 §3.4 are silent; Wycheproof P1363 marks high-S valid)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFUzI1NksifQ.UGF5bG9hZA.Zby1G8ukNE4QzBE9iEcHdF6FHkUx9SX-DYsqVJ2HaFmh8aNkOMnZ1_s1PDVQjN4BXFGDfzUe5866ABTbkpKQyA",
+    "key": {
+      "kty": "EC",
+      "x": "d4Vkbb2e4LJlL75F3Syj8UKaCOuq6gQkyn2mDepZXHI",
+      "y": "2epVEOtMp-kKZtEk-f2wlehv_VPl6eZHSMEPC_WbwFs",
+      "crv": "secp256k1"
+    },
+    "allowed_algs": [
+      "ES256K"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "UGF5bG9hZA",
+    "alg": "ES256K",
+    "signature_index": 0
+  }
+}

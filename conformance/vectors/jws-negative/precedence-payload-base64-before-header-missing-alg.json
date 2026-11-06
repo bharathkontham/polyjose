@@ -1,0 +1,19 @@
+{
+  "source": "ADR 0048",
+  "description": "Precedence (ADR 0026 §2 as clarified by ADR 0048: shape and limits, then signature base64url, then protected-header decoding (base64url, JSON, then per-parameter types and crit syntax), then the payload's base64url under the effective b64, then whole-header structure, then ADR 0026 §2 steps 5–9): a compact JWS whose protected header has no alg (whole-header structure, ADR 0048 step 5) and whose payload is padded (payload base64url, step 4) fails with the base64url code",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJ0eXAiOiJKV1QifQ.UGF5bG9hZA==.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

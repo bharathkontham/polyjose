@@ -1,0 +1,20 @@
+{
+  "source": "ADR 0043 §1",
+  "description": "The RFC 8037 A.4 EdDSA JWS verified with a mixed-order Ed25519 key (Wycheproof ed25519_test.json tcId 160's 15deb307…b2c23b, as in jwk-thumbprint/reject-ed25519-x-mixed-order: canonical, not small-order, not torsion-free) is rejected at JWK import",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg",
+    "key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "Fd6zBynrPkZciPEbV9DI026w9nDDsi0vgOpgSe6ywjs"
+    },
+    "allowed_algs": [
+      "EdDSA"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

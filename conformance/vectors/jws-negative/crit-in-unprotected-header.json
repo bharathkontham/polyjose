@@ -1,0 +1,28 @@
+{
+  "source": "RFC 7515 §4.1.11",
+  "description": "A flattened JWS whose protected header is {\"alg\":\"HS256\",\"x-a\":1} and whose unprotected header carries crit [\"x-a\"], MAC correct (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key): crit must be integrity protected (ADR 0026 §2 step 4)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "protected": "eyJhbGciOiJIUzI1NiIsIngtYSI6MX0",
+      "header": {
+        "crit": [
+          "x-a"
+        ]
+      },
+      "signature": "oshRn5z-BTzitI9ZzgslXDOovTjleoPIHl_w0DirQdc"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

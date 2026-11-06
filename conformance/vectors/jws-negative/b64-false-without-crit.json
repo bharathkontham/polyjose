@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7797 §6",
+  "description": "A compact JWS with protected header {\"alg\":\"HS256\",\"b64\":false} and no crit; the payload \"test\" is canonical base64url that re-encodes to itself, so the MAC (Python hmac, A.1 key) is correct whether b64 is read as false or true: b64 must be listed in crit (ADR 0026 §2 step 4, §4)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2V9.test.P4kSdqHd5Fd0IKYBMi7AaNMMjk5KeIBA5CxKNLvbUoc",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

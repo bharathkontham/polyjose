@@ -1,0 +1,31 @@
+{
+  "source": "RFC 7797 §3",
+  "description": "A general JWS whose first signature has b64 false (listed in crit) and whose second has no b64 (true); each MAC correct, the payload \"test\" is canonical base64url that re-encodes to itself, so the MAC (Python hmac, A.1 key) is correct whether b64 is read as false or true: b64 must be the same for every signature (ADR 0026 §2 step 4, §3)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "test",
+      "signatures": [
+        {
+          "protected": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19",
+          "signature": "rMshf0sMCiJ0FHV1MKjyS76-TdrK_rMikz9PSl92Rp4"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "H9zJ_U9Gw5ILVHWVkyHUm2DYEEjN6bYdZFlipGnTiO4"
+        }
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

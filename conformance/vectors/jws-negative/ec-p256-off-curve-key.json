@@ -1,0 +1,21 @@
+{
+  "source": "ADR 0041 §4",
+  "description": "The RFC 7515 A.3 ES256 JWS verified with an off-curve P-256 key, (Gx, Gy XOR 1) as in jwk-thumbprint/reject-p256-off-curve: rejected at JWK import (SEC 1 v2 §3.2.2.1; RFC 8725 §3.4)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q",
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+      "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfQ"
+    },
+    "allowed_algs": [
+      "ES256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
