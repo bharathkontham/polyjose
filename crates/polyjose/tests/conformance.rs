@@ -19,7 +19,9 @@
 //!   randomized signature (`verify_with`);
 //! - for `keys.import_pem` and `keys.export_pem` (ADR 0018 §3), the PEM
 //!   import gives the expected JWK, and the export, after the JWK import,
-//!   gives the exact PEM text.
+//!   gives the exact PEM text;
+//! - for `keys.import_der`, `der_b64u` is decoded (a non-canonical value is
+//!   a broken vector, never an outcome) and imported in the named `format`.
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
@@ -59,6 +61,7 @@ const OPERATIONS: &[&str] = &[
     "jws.verify",
     "keys.import_pem",
     "keys.export_pem",
+    "keys.import_der",
     "jwe.encrypt",
     "jwe.decrypt",
     "jwt.validate",
@@ -327,7 +330,7 @@ const KEYS_IMPORT_PEM_OK: Shape = Shape {
     members: &[req("jwk", Kind::Object)],
     rules: &[],
 };
-/// The `format` names of `keys.export_pem`, in schema order, and the
+/// The `format` names of the keys.* operations, in schema order, and the
 /// library format each selects.
 const KEY_FORMATS: &[(&str, KeyFormat)] = &[
     ("pkcs8", KeyFormat::Pkcs8),
@@ -335,12 +338,14 @@ const KEY_FORMATS: &[(&str, KeyFormat)] = &[
     ("spki", KeyFormat::Spki),
     ("pkcs1", KeyFormat::Pkcs1),
 ];
+/// The `format` enum of the keys.* operations: the names of [`KEY_FORMATS`].
+const KEY_FORMAT_NAMES: &[&str] = &["pkcs8", "sec1", "spki", "pkcs1"];
 // ADR 0018 §3 PEM export through `Jwk::from_object` then `Jwk::to_pem`.
 const KEYS_EXPORT_PEM_INPUT: Shape = Shape {
     def: "keys_export_pem_input",
     members: &[
         req("jwk", Kind::Object),
-        req("format", Kind::Enum(&["pkcs8", "sec1", "spki", "pkcs1"])),
+        req("format", Kind::Enum(KEY_FORMAT_NAMES)),
     ],
     rules: &[],
 };
@@ -348,6 +353,23 @@ const KEYS_EXPORT_PEM_INPUT: Shape = Shape {
 const KEYS_EXPORT_PEM_OK: Shape = Shape {
     def: "keys_export_pem_ok",
     members: &[req("pem", Kind::String)],
+    rules: &[],
+};
+// ADR 0018 §3 DER import through `Jwk::from_der`: the caller names the
+// structure, there is no format sniffing (ADR 0007), and the key type comes
+// from the DER (ADR 0018 §2).
+const KEYS_IMPORT_DER_INPUT: Shape = Shape {
+    def: "keys_import_der_input",
+    members: &[
+        req("der_b64u", Kind::Base64url),
+        req("format", Kind::Enum(KEY_FORMAT_NAMES)),
+    ],
+    rules: &[],
+};
+/// The imported JWK, compared as a JSON value (member order ignored).
+const KEYS_IMPORT_DER_OK: Shape = Shape {
+    def: "keys_import_der_ok",
+    members: &[req("jwk", Kind::Object)],
     rules: &[],
 };
 
@@ -393,6 +415,12 @@ const SPECS: &[OpSpec] = &[
         name: "keys.export_pem",
         input: &KEYS_EXPORT_PEM_INPUT,
         ok: &[&KEYS_EXPORT_PEM_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "keys.import_der",
+        input: &KEYS_IMPORT_DER_INPUT,
+        ok: &[&KEYS_IMPORT_DER_OK],
         can_fail: true,
     },
 ];
@@ -966,31 +994,48 @@ fn run_jws_verify(input: &Object, out: &mut Object) -> Result<Result<(), Error>,
     Ok(Ok(()))
 }
 
-/// `keys.import_pem`: `Jwk::from_pem`, and the JWK as an object. An `oct`
-/// result fails the vector whatever it expects: PEM never carries one
+/// The library format a validated `format` member names.
+fn input_format(input: &Object) -> KeyFormat {
+    let name = input_str(input, "format");
+    KEY_FORMATS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
+        .expect("validated")
+}
+
+/// The outcome of a PEM or DER import: the JWK as an object. An `oct`
+/// result fails the vector whatever it expects: PEM and DER never carry one
 /// (RFC 8725 §2.1, ADR 0018 §3).
-fn run_keys_import_pem(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
-    let key = match Jwk::from_pem(input_str(input, "pem")) {
+fn imported(result: Result<Jwk, Error>, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let key = match result {
         Ok(key) => key,
         Err(e) => return Ok(Err(e)),
     };
     let jwk = key.to_object();
     if jwk.get("kty").and_then(Value::as_str) == Some("oct") {
-        return Err("a PEM import returned an oct key (RFC 8725 §2.1)".to_owned());
+        return Err("a PEM or DER import returned an oct key (RFC 8725 §2.1)".to_owned());
     }
     out.insert("jwk", Value::from(jwk));
     Ok(Ok(()))
 }
 
+/// `keys.import_pem`: `Jwk::from_pem`, and the JWK as an object.
+fn run_keys_import_pem(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    imported(Jwk::from_pem(input_str(input, "pem")), out)
+}
+
+/// `keys.import_der`: decode `der_b64u` (a broken vector if it is not
+/// canonical), then `Jwk::from_der` in `format`, and the JWK as an object.
+fn run_keys_import_der(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let der = input_bytes(input, "der_b64u")?;
+    imported(Jwk::from_der(&der, input_format(input)), out)
+}
+
 /// `keys.export_pem`: the JWK import (`Jwk::from_object`), whose error is
 /// the outcome, then `Jwk::to_pem` in `format`.
 fn run_keys_export_pem(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
-    let name = input_str(input, "format");
-    let format = KEY_FORMATS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, f)| *f)
-        .expect("validated");
+    let format = input_format(input);
     let key = match Jwk::from_object(input_object(input, "jwk")) {
         Ok(key) => key,
         Err(e) => return Ok(Err(e)),
@@ -1053,6 +1098,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
         }
         "keys.export_pem" => {
             if let Err(e) = run_keys_export_pem(input, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "keys.import_der" => {
+            if let Err(e) = run_keys_import_der(input, &mut out)? {
                 return Ok(Err(e));
             }
         }
@@ -1668,6 +1718,17 @@ fn valid_vectors_pass() {
             r#"{"format":"pkcs8","jwk":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}}"#,
             r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
         ),
+        vector(
+            "keys.import_der",
+            &format!(r#"{{"format":"spki","der_b64u":"{RFC8410_10_1_DER}"}}"#),
+            r#"{"ok":true,"jwk":{"x":"Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE","crv":"Ed25519","kty":"OKP"}}"#,
+        ),
+        // RFC 5958 §2: an SPKI is not a OneAsymmetricKey.
+        vector(
+            "keys.import_der",
+            &format!(r#"{{"format":"pkcs8","der_b64u":"{RFC8410_10_1_DER}"}}"#),
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+        ),
     ];
     for json in cases {
         assert!(
@@ -1680,6 +1741,8 @@ fn valid_vectors_pass() {
 
 /// RFC 8410 §10.1, the Ed25519 public key as SPKI.
 const RFC8410_10_1_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PUBLIC KEY-----\n";
+/// The DER of [`RFC8410_10_1_PEM`], as canonical base64url.
+const RFC8410_10_1_DER: &str = "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE";
 
 /// The keys.* vectors are checked like every other: a wrong expectation,
 /// a format outside the enum and a missing member all fail the run.
@@ -1732,6 +1795,56 @@ fn keys_vectors_fail_when_wrong_or_malformed() {
                 r#"{"ok":true,"pem":"-----BEGIN PUBLIC KEY-----\n"}"#,
             ),
             "`pem`",
+        ),
+        (
+            "import-der-wrong-jwk.json",
+            vector(
+                "keys.import_der",
+                &format!(r#"{{"der_b64u":"{RFC8410_10_1_DER}","format":"spki"}}"#),
+                r#"{"ok":true,"jwk":{"kty":"OKP","crv":"X25519","x":"Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE"}}"#,
+            ),
+            "`jwk`",
+        ),
+        (
+            "import-der-padded.json",
+            vector(
+                "keys.import_der",
+                &format!(r#"{{"der_b64u":"{RFC8410_10_1_DER}=","format":"spki"}}"#),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            "/input/der_b64u",
+        ),
+        (
+            // The last character carries non-zero pad bits (RFC 4648 §3.5):
+            // the runner cannot decode it, so the vector is broken.
+            "import-der-non-canonical.json",
+            vector(
+                "keys.import_der",
+                &format!(
+                    r#"{{"der_b64u":"{}F","format":"spki"}}"#,
+                    &RFC8410_10_1_DER[..RFC8410_10_1_DER.len() - 1]
+                ),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            "not canonical base64url",
+        ),
+        (
+            "import-der-no-format.json",
+            vector(
+                "keys.import_der",
+                &format!(r#"{{"der_b64u":"{RFC8410_10_1_DER}"}}"#),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            "/input/format",
+        ),
+        (
+            "import-der-pem-member.json",
+            vector(
+                "keys.import_der",
+                &format!(r#"{{"pem":{pem},"format":"spki"}}"#),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            "/input/pem",
         ),
         (
             "import-extra-member.json",

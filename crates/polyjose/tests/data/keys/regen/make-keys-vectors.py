@@ -5,7 +5,10 @@ vectors, from the committed key fixtures in this directory's siblings
 Expected JWKs are the committed .jwk.json files (OpenSSL's own text dumps or
 the RFCs) and expected PEM texts the committed fixture files, so nothing comes
 from polyjose. DER-only negative vectors are wrapped in PEM here with the
-label of the structure they hold (RFC 7468 §2: 64-column base64, LF).
+label of the structure they hold (RFC 7468 §2: 64-column base64, LF). The
+keys.*_der vectors carry the same fixtures' DER, the body of each PEM file
+decoded here, as canonical base64url (der_b64u), with the format its label
+names.
 
 Run from anywhere: python3 -I make-keys-vectors.py
 It deletes every *.json in conformance/vectors/keys/ first, so the directory
@@ -28,7 +31,22 @@ def wrap(label, der):
     b = base64.b64encode(der).decode()
     lines = [b[i:i+64] for i in range(0, len(b), 64)]
     return f'-----BEGIN {label}-----\n' + '\n'.join(lines) + f'\n-----END {label}-----\n'
-def neg_pem(f, label): return wrap(label, open(os.path.join(data, 'negative', f), 'rb').read())
+def neg_der(f): return open(os.path.join(data, 'negative', f), 'rb').read()
+def neg_pem(f, label): return wrap(label, neg_der(f))
+def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+# The structure each RFC 7468 label names, as a keys.* format.
+# An EncryptedPrivateKeyInfo is offered where a PKCS#8 is expected (RFC 5958 §3).
+FORMATS = {'ENCRYPTED PRIVATE KEY': 'pkcs8', 'PRIVATE KEY': 'pkcs8', 'EC PRIVATE KEY': 'sec1', 'PUBLIC KEY': 'spki', 'RSA PUBLIC KEY': 'pkcs1'}
+def unwrap(pem):
+    """The label and DER of a single strict PEM block (RFC 7468 §3)."""
+    lines = pem.split('\n')
+    assert lines[-1] == '' and lines[0].startswith('-----BEGIN ') and lines[0].endswith('-----'), pem[:40]
+    label = lines[0][len('-----BEGIN '):-len('-----')]
+    assert lines[-2] == f'-----END {label}-----', pem[-40:]
+    return label, base64.b64decode(''.join(lines[1:-2]), validate=True)
+def der_input(pem, fmt=None):
+    label, der = unwrap(pem)
+    return {'der_b64u': b64u(der), 'format': fmt or FORMATS[label]}
 
 OSSL = 'OpenSSL 4.1.0 (polyjose key fixtures)'
 n = 0
@@ -117,4 +135,22 @@ negs = [
 ]
 for name, src, pem, code, what in negs:
     write(name, src, 'PEM import rejects ' + what + '.', 'keys.import_pem', {'pem': pem}, {'ok': False, 'error': code})
+
+# --- DER imports: the same fixtures, as DER in the format of their label ---
+for name, source, d, pem, jd, jf, what in imports:
+    write(name.replace('import-', 'import-der-', 1), source, 'DER import of ' + what + '.', 'keys.import_der', der_input(text(d, pem)), {'ok': True, 'jwk': jwk(jd, jf)})
+
+# --- DER import negatives: the import negatives whose fault is in the DER --
+der_negs = {
+  'reject-pkcs8-encrypted': 'an EncryptedPrivateKeyInfo (RFC 5958 §3, made by OpenSSL 4.1.0 with PBES2/AES-256-CBC) as pkcs8: encrypted keys are out of scope (ADR 0018 §4)',
+  'reject-rsa-private-pkcs8': 'a PKCS#8 with rsaEncryption, i.e. an RSA private key: refused from the AlgorithmIdentifier (ADR 0021)',
+  'reject-ber-indefinite-length': 'the RFC 8037 A.1 Ed25519 PKCS#8 with an indefinite outer length, a BER-only encoding (X.690 §10.1, §8.1.3.6; ADR 0018 §2)',
+  'reject-trailing-der-garbage': 'the RFC 8037 A.1 Ed25519 PKCS#8 followed by one 0x00 octet: no data may follow the outermost element (X.690 §8.1.1, RFC 5958 §2)',
+  'reject-ec-point-off-curve': 'the RFC 7517 A.1 P-256 SPKI with the last octet of y flipped, a point not on the curve (RFC 8725 §3.4, ADR 0041 §4)',
+  'reject-rsa-1024-bits': 'a 1024-bit RSA SPKI made by OpenSSL 4.1.0: RSA keys must be at least 2048 bits (RFC 7518 §3.3, §4.2; ADR 0007)',
+  'reject-ed448': 'an Ed448 PKCS#8 (id-Ed448, RFC 8410 §3) made by OpenSSL 4.1.0: Ed448 is not supported (ADR 0006)',
+}
+for name, src, pem, code, what in negs:
+    if name in der_negs:
+        write(name.replace('reject-', 'reject-der-', 1), src, 'DER import rejects ' + der_negs[name] + '.', 'keys.import_der', der_input(pem), {'ok': False, 'error': code})
 print(n, 'vectors written')

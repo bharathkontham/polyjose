@@ -1,0 +1,18 @@
+{
+  "source": "RFC 8410 §10.3",
+  "description": "DER import of the RFC 8410 §10.3 v2 key with an attribute (ignored) and a publicKey that must match d (RFC 5958 §2).",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp-K06_nwoy_HU--CXqI9EdVhCoB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE",
+      "d": "1O5y2_kTWErVttjx92n4rTr-fCjL8dT74Jeoj0R1WEI"
+    }
+  }
+}
