@@ -6,10 +6,45 @@
 
 use zeroize::Zeroizing;
 
-use super::types::Pkcs8Parts;
+use super::der::{self, Reader, Writer};
+use super::oid;
+use super::spki;
+use super::types::{AlgId, Pkcs8Parts};
 use crate::error::{Error, Result};
 
-/// Decodes a DER OneAsymmetricKey (RFC 5958 §2).
+/// `version` v1(0): PrivateKeyInfo, no publicKey (RFC 5958 §2, RFC 5208
+/// §5).
+const V1: u8 = 0;
+/// `version` v2(1): OneAsymmetricKey with a publicKey (RFC 5958 §2).
+const V2: u8 = 1;
+
+/// Decodes a DER OneAsymmetricKey (RFC 5958 §2):
+///
+/// ```text
+/// OneAsymmetricKey ::= SEQUENCE {
+///   version                   Version,
+///   privateKeyAlgorithm       PrivateKeyAlgorithmIdentifier,
+///   privateKey                PrivateKey,          -- OCTET STRING
+///   attributes            [0] Attributes OPTIONAL, -- IMPLICIT SET OF
+///   ...,
+///   [[2: publicKey        [1] PublicKey OPTIONAL ]], -- IMPLICIT BIT STRING
+///   ... }
+/// ```
+///
+/// - One element, no trailing data (X.690 §8.1.1), and no fields beyond
+///   publicKey: polyjose knows no later version.
+/// - An EncryptedPrivateKeyInfo (RFC 5958 §3) starts with a SEQUENCE where
+///   this starts with the version INTEGER. It is unsupported (ADR 0018 §4)
+///   and nothing inside it is parsed.
+/// - `version` is v1(0) or v2(1), and "If publicKey is present, then version
+///   is set to v2 else version is set to v1" (RFC 5958 §2).
+/// - The algorithm is classified first (`spki::read_algorithm_identifier`,
+///   ADR 0018 §4). rsaEncryption means an RSA private key, unsupported
+///   before privateKey is opened (ADR 0021).
+/// - The attributes must be well-formed DER (a SET OF Attribute) and are
+///   then ignored (ADR 0018 §3).
+/// - privateKey and publicKey are returned as sub-slices of `der`, whose
+///   buffer the caller must zeroize; the publicKey has no unused bits.
 #[cfg_attr(
     not(test),
     expect(
@@ -21,12 +56,74 @@ pub(crate) fn decode(der: &[u8]) -> Result<Pkcs8Parts<'_>> {
     decode_with_attributes(der).map(|(parts, _)| parts)
 }
 
+/// [`decode`], also returning the whole `[0]` attributes element, so tests
+/// can check that the codec is canonical for keys that carry attributes.
 fn decode_with_attributes(der: &[u8]) -> Result<(Pkcs8Parts<'_>, Option<&[u8]>)> {
-    let _ = der;
-    Err(Error::InvalidKey("not implemented"))
+    let mut outer = Reader::new(der)?;
+    let mut fields = outer.sequence()?;
+    outer.finish()?;
+    // EncryptedPrivateKeyInfo ::= SEQUENCE { encryptionAlgorithm
+    // AlgorithmIdentifier, encryptedData OCTET STRING } (RFC 5958 §3).
+    if fields.peek_tag() == Some(der::SEQUENCE) {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    let version = fields.small_unsigned()?;
+    if version != V1 && version != V2 {
+        return Err(Error::InvalidKey("PKCS#8 version is not v1 or v2"));
+    }
+    let alg = spki::read_algorithm_identifier(&mut fields)?;
+    if alg == AlgId::RsaEncryption {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    let private_key = fields.octet_string()?;
+    let attributes = fields.optional(der::CONTEXT_0)?;
+    if let Some(attributes) = attributes {
+        check_attributes(attributes.contents)?;
+    }
+    let public_key = if fields.peek_tag() == Some(der::CONTEXT_1_PRIMITIVE) {
+        Some(fields.implicit_bit_string(der::CONTEXT_1_PRIMITIVE)?)
+    } else {
+        None
+    };
+    fields.finish()?;
+    if (version == V2) != public_key.is_some() {
+        return Err(Error::InvalidKey(
+            "PKCS#8 version does not match the publicKey",
+        ));
+    }
+    let parts = Pkcs8Parts {
+        version,
+        alg,
+        private_key,
+        public_key,
+    };
+    Ok((parts, attributes.map(|attributes| attributes.encoding)))
 }
 
-/// Encodes a OneAsymmetricKey (RFC 5958 §2) in DER.
+/// Checks the contents of `[0] Attributes`, an IMPLICIT `SET OF Attribute`
+/// (RFC 5958 §2), where `Attribute ::= SEQUENCE { attrType OBJECT
+/// IDENTIFIER, attrValues SET OF AttributeValue }` (RFC 5652 §5.3). Every
+/// value must be well-formed DER (`der::check_well_formed`), and the SET
+/// OF sorted (X.690 §11.6). The attributes are then ignored (ADR 0018 §3).
+fn check_attributes(contents: &[u8]) -> Result<()> {
+    der::check_well_formed(contents, true)?;
+    let mut set = Reader::new(contents)?;
+    while !set.is_empty() {
+        let mut attribute = set.sequence()?;
+        attribute.oid()?;
+        attribute.expect(der::SET)?;
+        attribute.finish()?;
+    }
+    Ok(())
+}
+
+/// Encodes a OneAsymmetricKey (RFC 5958 §2) in DER, without attributes:
+/// v1 without a publicKey, or v2 with one, in the layout OpenSSL 4 emits
+/// (ADR 0018 §3).
+///
+/// `parts.version` must agree with `parts.public_key` (RFC 5958 §2), and RSA
+/// private keys are never written (ADR 0021). The output is zeroized on
+/// drop.
 #[cfg_attr(
     not(test),
     expect(
@@ -38,12 +135,41 @@ pub(crate) fn encode(parts: &Pkcs8Parts<'_>) -> Result<Zeroizing<Vec<u8>>> {
     encode_with_attributes(parts, None)
 }
 
+/// [`encode`], with `attributes` (a whole `[0]` element as
+/// [`decode_with_attributes`] returns it) written after privateKey.
 fn encode_with_attributes(
     parts: &Pkcs8Parts<'_>,
     attributes: Option<&[u8]>,
 ) -> Result<Zeroizing<Vec<u8>>> {
-    let _ = (parts, attributes);
-    Err(Error::InvalidKey("not implemented"))
+    if parts.alg == AlgId::RsaEncryption {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    let version = if parts.public_key.is_some() { V2 } else { V1 };
+    if parts.version != version {
+        return Err(Error::InvalidKey(
+            "PKCS#8 version does not match the publicKey",
+        ));
+    }
+    let algorithm = oid::algorithm_identifier(parts.alg);
+    let attributes = attributes.unwrap_or(&[]);
+    let public_key_len = parts
+        .public_key
+        .map_or(0, |key| der::bit_string_len(key.len()));
+    let body = der::unsigned_integer_len(&[version])
+        + algorithm.len()
+        + der::encoded_len(parts.private_key.len())
+        + attributes.len()
+        + public_key_len;
+    let mut writer = Writer::new(der::encoded_len(body))?;
+    writer.header(der::SEQUENCE, body)?;
+    writer.unsigned_integer(&[version])?;
+    writer.raw(algorithm)?;
+    writer.element(der::OCTET_STRING, parts.private_key)?;
+    writer.raw(attributes)?;
+    if let Some(key) = parts.public_key {
+        writer.bit_string(der::CONTEXT_1_PRIMITIVE, key)?;
+    }
+    writer.finish()
 }
 
 #[cfg(test)]

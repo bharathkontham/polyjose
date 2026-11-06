@@ -184,10 +184,6 @@ impl Label {
 /// It borrows `private_key` from the caller's buffer, which must be a
 /// zeroizing one. `Debug` prints neither key: `private_key` is redacted and
 /// `public_key` shows only its length.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "built by pkcs8.rs and read by the key mappers")
-)]
 #[derive(Clone, Copy)]
 pub(crate) struct Pkcs8Parts<'a> {
     /// `version`: v1(0), or v2(1) when `public_key` is present (RFC 5958 §2).
