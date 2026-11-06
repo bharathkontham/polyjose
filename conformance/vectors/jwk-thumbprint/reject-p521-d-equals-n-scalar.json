@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "A P-521 private key d equal to the group order n is outside [1, n − 1] (SEC 1 v2 §3.2.1, RFC 7518 §6.2.2.1; ADR 0041 §4). The public point is the valid generator G, so only d is wrong",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AMaFjga3BATpzZ4-y2YjlbRCnGSBOQU_tSH4KK9ga009uqFLXnfv51ko_h3BJ6L_qN4zSLPBhWpCm_l-fjHC5b1m",
+      "y": "ARg5KWp4mjvABFyKX7QsfRvZmPVESVebRGgXr70XJz5mLJfucple9CZAxVC5AT-tB2E1PHCGonLCQIi-lHaf0WZQ",
+      "d": "Af__________________________________________-lGGh4O_L5Zrf8wBSPcJpdA7tcm4iZxHrrtvtx6ROGQJ"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

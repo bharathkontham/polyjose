@@ -1,0 +1,17 @@
+{
+  "source": "polyjose",
+  "description": "An Ed25519 point of order 8 (c7176a70…ac037a, in the curve's 8-torsion subgroup) decodes but is a small-order public key, rejected at import by policy (ADR 0026 §6, ADR 0041 §4; RFC 8037 §2)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "xxdqcD1N2E-6PAt2DRBnDyogU_osOczGTsf9d5KsA3o"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

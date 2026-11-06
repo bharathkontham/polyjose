@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "A P-384 private key d equal to the group order n is outside [1, n − 1] (SEC 1 v2 §3.2.1, RFC 7518 §6.2.2.1; ADR 0041 §4). The public point is the valid generator G, so only d is wrong",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-384",
+      "x": "qofKIr6LBTeOscce8yCtdG4dO2KLp5uYWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3",
+      "y": "NhfeSpYmLG9dnpi_kpLcKfj0Hb0omhR86doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f",
+      "d": "________________________________x2NNgfQ3Ld9YGg2ySLCneuzsGWrMxSlz"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "The P-521 generator with the lowest bit of y flipped, (Gx, Gy XOR 1), does not satisfy the curve equation (SEC 1 v2 §3.2.2.1, RFC 7518 §6.2.1; ADR 0041 §4). Gy is the SEC 2 value; checked off-curve with Python big integers",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AMaFjga3BATpzZ4-y2YjlbRCnGSBOQU_tSH4KK9ga009uqFLXnfv51ko_h3BJ6L_qN4zSLPBhWpCm_l-fjHC5b1m",
+      "y": "ARg5KWp4mjvABFyKX7QsfRvZmPVESVebRGgXr70XJz5mLJfucple9CZAxVC5AT-tB2E1PHCGonLCQIi-lHaf0WZR"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}
