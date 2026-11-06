@@ -5,42 +5,146 @@
 
 use zeroize::Zeroizing;
 
-use super::der::{Element, Reader};
+use super::der::{self, Element, Reader, Writer};
+use super::oid;
 use super::types::{AlgId, SpkiParts};
 use crate::error::{Error, Result};
+use crate::jwk::EcCurve;
 
-/// Reads an AlgorithmIdentifier (RFC 5280 §4.1.1.2) and classifies it.
+/// The EC curves polyjose supports (RFC 7518 §6.2.1.1, RFC 8812 §3.1).
+const CURVES: [EcCurve; 4] = [
+    EcCurve::P256,
+    EcCurve::P384,
+    EcCurve::P521,
+    EcCurve::Secp256k1,
+];
+
+/// Reads an AlgorithmIdentifier (RFC 5280 §4.1.1.2) and classifies it; see
+/// [`classify`].
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "used by pkcs8.rs and spki.rs decoders")
+    expect(
+        dead_code,
+        reason = "called by pkcs8.rs once the key mappers (T05-T07) call pkcs8::decode"
+    )
 )]
 pub(crate) fn read_algorithm_identifier(reader: &mut Reader<'_>) -> Result<AlgId> {
-    classify(reader.expect(super::der::SEQUENCE)?)
+    classify(reader.expect(der::SEQUENCE)?)
 }
 
+/// Classifies an AlgorithmIdentifier (RFC 5280 §4.1.1.2:
+/// `SEQUENCE { algorithm OBJECT IDENTIFIER, parameters ANY OPTIONAL }`).
+///
+/// It is accepted only if its whole encoding equals one of the templates in
+/// `oid.rs` byte for byte (ADR 0018 §2). Otherwise it is parsed only to
+/// choose the error, in the order of ADR 0018 §4:
+///
+/// 0. Not a well-formed AlgorithmIdentifier: an OID that breaks X.690
+///    §8.19.2, more than one parameters element, or parameters that are not
+///    DER: `InvalidKey`.
+/// 1. An OID polyjose does not support, such as id-Ed448 or id-X448
+///    (RFC 8410 §3), id-RSASSA-PSS (RFC 4055 §3.1) or DSA:
+///    `UnsupportedAlgorithm`.
+/// 2. id-ecPublicKey with a specifiedCurve (a SEQUENCE; RFC 5480 §2.1.1
+///    says it "MUST NOT be used in PKIX") or a namedCurve outside the JOSE
+///    set, such as brainpoolP256r1 (RFC 5639 §4.1) or secp224r1:
+///    `UnsupportedAlgorithm`.
+/// 3. A supported OID whose parameters differ from its template: NULL or
+///    anything else on id-Ed25519/id-X25519, where "the parameters MUST be
+///    absent" (RFC 8410 §3); anything but NULL on rsaEncryption, where they
+///    "MUST have ASN.1 type NULL" (RFC 3279 §2.3.1); absent or NULL
+///    (implicitCurve) EC parameters, which "MUST always be present" as a
+///    namedCurve (RFC 5480 §2.1.1): `InvalidKey`.
 fn classify(element: Element<'_>) -> Result<AlgId> {
-    let _ = element;
-    Err(Error::InvalidKey("not implemented"))
+    if let Some((alg, _)) = oid::ALGORITHM_IDENTIFIERS
+        .iter()
+        .find(|(_, template)| *template == element.encoding)
+    {
+        return Ok(*alg);
+    }
+    let mut fields = Reader::new(element.contents)?;
+    let algorithm = fields.oid()?;
+    let parameters = if fields.is_empty() {
+        None
+    } else {
+        Some(fields.element()?)
+    };
+    fields.finish()?;
+    if let Some(parameters) = parameters {
+        der::check_well_formed(parameters.encoding, false)?;
+    }
+    let mismatch = Err(Error::InvalidKey(
+        "AlgorithmIdentifier parameters do not match the algorithm",
+    ));
+    match algorithm {
+        oid::OID_EC_PUBLIC_KEY => match parameters {
+            // specifiedCurve (step 2).
+            Some(curve) if curve.tag == der::SEQUENCE => Err(Error::UnsupportedAlgorithm),
+            Some(curve) if curve.tag == der::OID => match curve.encoding {
+                // A namedCurve outside the JOSE set (step 2):
+                // brainpoolP256r1, secp224r1, ...
+                oid::OID_BRAINPOOL_P256R1 => Err(Error::UnsupportedAlgorithm),
+                named if CURVES.iter().any(|crv| oid::named_curve(*crv) == named) => mismatch,
+                _ => Err(Error::UnsupportedAlgorithm),
+            },
+            // Absent, NULL (implicitCurve) or any other type (step 3).
+            _ => mismatch,
+        },
+        oid::OID_ED25519 | oid::OID_X25519 | oid::OID_RSA_ENCRYPTION => mismatch,
+        // Step 1: the unsupported OIDs polyjose knows by name, and every
+        // other one.
+        oid::OID_ED448 | oid::OID_X448 | oid::OID_RSASSA_PSS => Err(Error::UnsupportedAlgorithm),
+        _ => Err(Error::UnsupportedAlgorithm),
+    }
 }
 
-/// Decodes a DER SubjectPublicKeyInfo (RFC 5280 §4.1.2.7).
+/// Decodes a DER SubjectPublicKeyInfo (RFC 5280 §4.1.2.7):
+/// `SEQUENCE { algorithm AlgorithmIdentifier, subjectPublicKey BIT STRING }`,
+/// one element with no trailing data (X.690 §8.1.1).
+///
+/// The algorithm is classified ([`classify`]) before the key is read. The
+/// key must be whole octets (RFC 5480 §2.2, RFC 8410 §4, RFC 3279 §2.3.1;
+/// X.690 §8.6.2.2) and is returned as a sub-slice of `der`. Its contents
+/// (an EC point, an Ed25519/X25519 key, an RSAPublicKey) are left to the
+/// key mappers.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "called by the key mappers (T05-T07)")
+    expect(
+        dead_code,
+        reason = "called by the key mappers (T05-T07) and the facade (T08)"
+    )
 )]
 pub(crate) fn decode(der: &[u8]) -> Result<SpkiParts<'_>> {
-    let _ = der;
-    Err(Error::InvalidKey("not implemented"))
+    let mut outer = Reader::new(der)?;
+    let mut fields = outer.sequence()?;
+    outer.finish()?;
+    let alg = read_algorithm_identifier(&mut fields)?;
+    let subject_public_key = fields.bit_string()?;
+    fields.finish()?;
+    Ok(SpkiParts {
+        alg,
+        subject_public_key,
+    })
 }
 
-/// Encodes a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7) in DER.
+/// Encodes a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7) in DER: the
+/// `oid.rs` template of `parts.alg` and the key in a BIT STRING with no
+/// unused bits, the layout OpenSSL 4 emits (ADR 0018 §3).
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "called by the key mappers (T05-T07)")
+    expect(
+        dead_code,
+        reason = "called by the key mappers (T05-T07) and the facade (T08)"
+    )
 )]
 pub(crate) fn encode(parts: &SpkiParts<'_>) -> Result<Zeroizing<Vec<u8>>> {
-    let _ = parts;
-    Err(Error::InvalidKey("not implemented"))
+    let algorithm = oid::algorithm_identifier(parts.alg);
+    let body = algorithm.len() + der::bit_string_len(parts.subject_public_key.len());
+    let mut writer = Writer::new(der::encoded_len(body))?;
+    writer.header(der::SEQUENCE, body)?;
+    writer.raw(algorithm)?;
+    writer.bit_string(der::BIT_STRING, parts.subject_public_key)?;
+    writer.finish()
 }
 
 #[cfg(test)]
