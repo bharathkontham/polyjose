@@ -1462,12 +1462,41 @@ fn parse_key_ops(object: &Object) -> Result<Option<Vec<KeyOp>>> {
         let op = KeyOp::from(item.as_str().ok_or(Error::InvalidKey(NOT_STRINGS))?);
         // RFC 7517 §4.3: "Duplicate key operation values MUST NOT be
         // present in the array." Values compare as exact strings.
-        if ops.contains(&op) {
+        if ops.iter().any(|seen| {
+            #[cfg(test)]
+            key_op_comparisons::tick();
+            *seen == op
+        }) {
             return Err(Error::InvalidKey("key_ops must not contain duplicates"));
         }
         ops.push(op);
     }
     Ok(Some(ops))
+}
+
+/// Test-only, per-thread count of the value comparisons the `key_ops`
+/// duplicate check makes, so a regression test can bound its work on
+/// untrusted input deterministically, without wall-clock timing. Not
+/// compiled into non-test builds.
+#[cfg(test)]
+mod key_op_comparisons {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of comparisons
+    /// made on this thread while it ran.
+    pub(super) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
 }
 
 /// `x5c` (RFC 7517 §4.7): an array of strings. The certificates are not
@@ -1812,6 +1841,19 @@ mod tests {
         for json in kept {
             assert!(!is_unsupported_key_kind(&object(json)), "{json}");
         }
+    }
+
+    #[test]
+    fn the_key_op_counter_sees_the_duplicate_check() {
+        let two = object(r#"{"kty":"oct","k":"AA","key_ops":["sign","verify"]}"#);
+        let (ops, count) = key_op_comparisons::count(|| parse_key_ops(&two));
+        assert_eq!(ops, Ok(Some(vec![KeyOp::Sign, KeyOp::Verify])));
+        assert!(count >= 1, "the second value is checked against the first");
+        let none = object(r#"{"kty":"oct","k":"AA"}"#);
+        assert_eq!(
+            key_op_comparisons::count(|| parse_key_ops(&none)),
+            (Ok(None), 0)
+        );
     }
 
     #[test]
