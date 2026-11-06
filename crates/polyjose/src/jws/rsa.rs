@@ -498,6 +498,132 @@ mod tests {
         assert!(invalid_key(public_key(&[], F4)));
     }
 
+    /// PS384 signatures over the RFC 7520 §4.2 signing input (Figure 18)
+    /// with the RFC 7520 §3.4 key, SHA-384 and MGF1-SHA-384, made with
+    /// salt lengths of 0, 32, 48 and 64 octets. RFC 7518 §3.5 requires 48,
+    /// the SHA-384 output size. Generated outside polyjose (which cannot
+    /// sign RSA, ADR 0021) with OpenSSL 4.1.0, from the published RFC 7520
+    /// test key:
+    ///
+    /// ```text
+    /// openssl dgst -sha384 -sign rfc7520-3.4.pem -sigopt rsa_padding_mode:pss \
+    ///   -sigopt rsa_pss_saltlen:<len> -sigopt rsa_mgf1_md:sha384 figure18.txt
+    /// ```
+    ///
+    /// and checked with `openssl dgst -verify` at the same salt length.
+    const PS384_BY_SALT_LEN: [(usize, &str); 4] = [
+        (
+            0,
+            concat!(
+                "bwOrJVMBUJZNZngSHWOOjFVnnjqrCv2_Er81PVCpbNMqr6lo29plwjD8Wm0lS6wN",
+                "3VzO72xj-PzEC4sD06E4_SiPTW-RF6DqqEUyF1sy-x2iGwew4hzunBxyFp8dXBGS",
+                "sZy2GbDaGnPyB2En4y7GCuFVpe1EiTjQvs4ULbHmzbyvgDjY6Xwr9ZdN268ASVIt",
+                "Sw7dCI0i8bf3A2tOf203ZHNR6Xd-bptVbn-IM7KzWUWR0mBU-JwRM9a3yV6DwzfD",
+                "D6wEfdTEVjFcll1bXtOJLa9ZOCRzk2MtbuJgCIHKog0uVoQShqeIuwNOGvgaLEn5",
+                "N-BWXJsxr0ZQIn-6uLK0Og",
+            ),
+        ),
+        (
+            32,
+            concat!(
+                "JoCU0sMfLp6T4nyDkpJsmSgCMNJKW-WHazl8i2vt0x7vcIDIuawU9ou-drJ7qKt-",
+                "sbTqPL-96TwA1pSGnwvU0lww3COp1vEOh5KuZ877HXdniuCEYozbW-f1ECGroqd9",
+                "A648TgNXTAtkLkiKBzQEs7LJI6dSPLX3Wlz7_VrZuUWX4VI0WJop6oFIdS9YGepe",
+                "0OnfndWz06wW6ovP3hwtoS_zsGm03LOHPkAIr9seG4KOOOliyDFMnqqYYr6fw2Vk",
+                "E5fQLIYp_wQTqX-Tt0DzvpQbGA-YsnyehiFDJ7gxHDT-qkAEPMTBBmLPEoICFMqC",
+                "ELJDhIrknJnrgD-OHGTpmQ",
+            ),
+        ),
+        (
+            48,
+            concat!(
+                "L7eXQx4TvNcA9eCsTaNGtvw724PAlPWU82288GS8RKCJ3_LaEq3Hg_qBLAGkBFUC",
+                "yL3ayaURuZ336a3jrEK5W_TrVplZ-cYTfwsAzKk1FtiQ4K6hHKeBXWSOeQfEExdL",
+                "sW6KBecWWoSegaLpByWR0ZdhvtIBFe6vJosjIkleVrM5pHDe8V8YQ3Rdfkxe73XX",
+                "1Y6dx9GYKReHN1BdJuoUneNUqEVU-rUSSLfHjLxVAnAO3ODVeE_y7fAwN8huguoa",
+                "TVcdpHFY94mBpKdcb5VK0GHbkPpcDGnL8YogoQJ8Up4_ShhhD7LUX01289bbZ0yw",
+                "uYWJy4d1Ez1y7Bh-qIpYAw",
+            ),
+        ),
+        (
+            64,
+            concat!(
+                "A5Ahut2wt26zbNYt3DG2pAVoOyAzMpDX3JRiG_U6SsuvB_IzW1jZLEfzJPmFUnrW",
+                "VBOziLxYquDapdsChviOVJFNsRMiGscLWKS3B1K18hr0-dP1NZ9R5F8kr7b7wZP7",
+                "paKEafmn-8hM3TqtvfrYyYCNeZAhKM4dK8rES02qnyHIjGmZ3evqQ-DkFylP0rju",
+                "Kko6JswxTT_ABW3V3uphvuNouGmyxMVWJvOAnj-ukukoDy42DjtJsIKZ7ENSLd4H",
+                "vqFeht4FbOwU6gCzs7SecUi5OMdlVa0Jj9mOcYOduO0xg9EPmQEcnMPVI-6NXQIR",
+                "ZWAI_cmMUppgSPURVU0YTA",
+            ),
+        ),
+    ];
+
+    #[test]
+    fn pss_accepts_only_a_salt_as_long_as_the_hash() {
+        // RFC 7518 §3.5; RFC 8017 §9.1.2 step 10. The 48-octet control
+        // shows the fixtures are sound PS384 signatures.
+        let key = rsa_jwk(RFC7520_N);
+        let input = signing_input(RFC7520_4_2_PROTECTED, RFC7520_PAYLOAD);
+        for (salt_len, sig) in PS384_BY_SALT_LEN {
+            let sig = b64url_decode(sig).unwrap();
+            let expected = if salt_len == 48 {
+                Ok(())
+            } else {
+                Err(Error::InvalidSignature)
+            };
+            assert_eq!(
+                verify(&A::PS384, &key, &input, &sig),
+                expected,
+                "salt {salt_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_signature_must_be_exactly_the_modulus_length() {
+        // RFC 8017 §8.1.2 step 1, §8.2.2 step 1: S has exactly k octets.
+        // Wycheproof's valid tests whose signature has a leading zero
+        // octet: stripping it leaves the same integer in k - 1 octets.
+        for (name, tc_id) in [
+            ("rsa_signature_2048_sha256", 258),
+            ("rsa_pss_2048_sha384_mgf1_48", 64),
+        ] {
+            let suite = wycheproof::load(name);
+            let (group, test) = suite.tests().find(|(_, test)| test.tc_id == tc_id).unwrap();
+            let alg = group_alg(&suite, group);
+            let key = Jwk::from_json(group.verification_jwk().as_bytes()).unwrap();
+            let (msg, sig) = test.signature();
+            assert_eq!(sig.len(), 256, "{name} {tc_id}");
+            assert_eq!(sig[0], 0, "{name} {tc_id}");
+            assert_eq!(verify(&alg, &key, msg, sig), Ok(()), "{name} {tc_id}");
+            assert_eq!(
+                verify(&alg, &key, msg, &sig[1..]),
+                Err(Error::InvalidSignature),
+                "{name} {tc_id}: leading zero stripped"
+            );
+        }
+        // Other lengths of a valid RFC 7515 A.2 signature.
+        let Vector {
+            alg,
+            key,
+            input,
+            sig,
+            ..
+        } = rfc_vectors().remove(0);
+        let mut padded = vec![0];
+        padded.extend_from_slice(&sig);
+        let mut long = sig.clone();
+        long.resize(1025, 0);
+        for bad in [&padded[..], &sig[..255], &long[..], &[]] {
+            assert_eq!(
+                verify(&alg, &key, &input, bad),
+                Err(Error::InvalidSignature),
+                "{} octets",
+                bad.len()
+            );
+        }
+    }
+
     /// Where polyjose's outcome differs from, or picks a side of,
     /// Wycheproof's `result` in every `rsa_signature_*` suite.
     const PKCS1V15_DEVIATIONS: &[Deviation] = &[Deviation::tests(
