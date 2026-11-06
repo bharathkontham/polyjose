@@ -11,3 +11,4 @@ polyjose is a cryptographic library, so we treat security reports as top priorit
   - importing RSA public keys.
 
   polyjose does not sign or decrypt with RSA or generate RSA keys, and importing an RSA private JWK fails with `UnsupportedAlgorithm`. `RSA1_5` is not implemented in either direction (RFC 8725 discourages it), and no feature flag turns it on. `RSA-OAEP` is not implemented either, because it uses SHA-1, and polyjose contains no SHA-1; use `RSA-OAEP-256` or ECDH-ES instead. `cargo deny` checks the advisory on every change: it may be ignored only for this public-key-only use, together with a check that rejects any RSA private-key call in polyjose's code.
+- **No SHA-1.** polyjose does not implement `RSA-OAEP` (SHA-1); use `RSA-OAEP-256` or ECDH-ES.
