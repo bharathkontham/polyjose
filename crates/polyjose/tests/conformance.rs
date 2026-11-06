@@ -57,7 +57,7 @@ const TEXT_PATTERN: &str = "\\S";
 
 /// What a member's value must be. Each kind maps to one schema spelling
 /// (see `schema_kind`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 enum Kind {
     /// `{"$ref": "#/$defs/hex"}`
     Hex,
@@ -71,42 +71,97 @@ enum Kind {
     Enum(&'static [&'static str]),
 }
 
-/// The input and success shape of an operation (schema `$defs`). Every
-/// listed member is required and no other member is allowed.
+/// One member of a [`Shape`].
+#[derive(Debug)]
+struct Member {
+    name: &'static str,
+    kind: Kind,
+    /// Listed in the definition's `required`.
+    required: bool,
+}
+
+/// A required member.
+const fn req(name: &'static str, kind: Kind) -> Member {
+    Member {
+        name,
+        kind,
+        required: true,
+    }
+}
+
+/// A closed object definition in `$defs` (`additionalProperties: false`):
+/// the listed members, no others.
+#[derive(Debug)]
+struct Shape {
+    /// Its name under `$defs`.
+    def: &'static str,
+    members: &'static [Member],
+}
+
+/// The input and success shapes of an operation (schema `$defs`).
 #[derive(Debug)]
 struct OpSpec {
     name: &'static str,
-    input: &'static [(&'static str, Kind)],
-    /// Members of a success expectation besides `"ok": true`.
-    ok: &'static [(&'static str, Kind)],
+    input: &'static Shape,
+    /// The success expectations; `"ok": true` is implicit in each. With
+    /// more than one, a vector matches exactly one (schema `oneOf`).
+    ok: &'static [&'static Shape],
     /// Whether `{"ok": false, "error": <code>}` is allowed.
     can_fail: bool,
 }
 
+// RFC 7515 §2 base64url encoding (RFC 4648 §5, no padding).
+const B64URL_ENCODE_INPUT: Shape = Shape {
+    def: "b64url_encode_input",
+    members: &[req("bytes_hex", Kind::Hex)],
+};
+const B64URL_ENCODE_OK: Shape = Shape {
+    def: "b64url_encode_ok",
+    members: &[req("b64u", Kind::Base64url)],
+};
+// RFC 7515 §2 decoding; non-canonical input is rejected (RFC 4648 §3.5).
+const B64URL_DECODE_INPUT: Shape = Shape {
+    def: "b64url_decode_input",
+    members: &[req("b64u", Kind::String)],
+};
+const B64URL_DECODE_OK: Shape = Shape {
+    def: "b64url_decode_ok",
+    members: &[req("bytes_hex", Kind::Hex)],
+};
+// RFC 7638 §3 JWK Thumbprint and RFC 9278 §3 JWK Thumbprint URI.
+const JWK_THUMBPRINT_INPUT: Shape = Shape {
+    def: "jwk_thumbprint_input",
+    members: &[
+        req("jwk", Kind::Object),
+        req("hash", Kind::Enum(&["sha-256"])),
+    ],
+};
+const JWK_THUMBPRINT_OK: Shape = Shape {
+    def: "jwk_thumbprint_ok",
+    members: &[
+        req("thumbprint", Kind::Base64url),
+        req("thumbprint_uri", Kind::String),
+    ],
+};
+
 /// The operations this runner implements.
 const SPECS: &[OpSpec] = &[
-    // RFC 7515 §2 base64url encoding (RFC 4648 §5, no padding).
     OpSpec {
         name: "b64url.encode",
-        input: &[("bytes_hex", Kind::Hex)],
-        ok: &[("b64u", Kind::Base64url)],
+        input: &B64URL_ENCODE_INPUT,
+        ok: &[&B64URL_ENCODE_OK],
         can_fail: false,
     },
-    // RFC 7515 §2 decoding; non-canonical input is rejected (RFC 4648 §3.5).
     OpSpec {
         name: "b64url.decode",
-        input: &[("b64u", Kind::String)],
-        ok: &[("bytes_hex", Kind::Hex)],
+        input: &B64URL_DECODE_INPUT,
+        ok: &[&B64URL_DECODE_OK],
         can_fail: true,
     },
-    // RFC 7638 §3 JWK Thumbprint and RFC 9278 §3 JWK Thumbprint URI.
     OpSpec {
         name: "jwk.thumbprint",
-        input: &[("jwk", Kind::Object), ("hash", Kind::Enum(&["sha-256"]))],
-        ok: &[
-            ("thumbprint", Kind::Base64url),
-            ("thumbprint_uri", Kind::String),
-        ],
+        input: &JWK_THUMBPRINT_INPUT,
+        ok: &[&JWK_THUMBPRINT_OK],
         can_fail: true,
     },
 ];
@@ -194,23 +249,58 @@ fn check_kind(value: &Value, kind: Kind, pointer: &str) -> Result<(), String> {
     }
 }
 
-fn check_members(
-    object: &Object,
-    members: &[(&str, Kind)],
-    implicit: &[&str],
-    pointer: &str,
-) -> Result<(), String> {
-    let names: Vec<&str> = implicit
-        .iter()
-        .copied()
-        .chain(members.iter().map(|(n, _)| *n))
-        .collect();
-    exact_members(object, &names, pointer)?;
-    for (name, kind) in members {
-        let value = object.get(name).expect("checked by exact_members");
-        check_kind(value, *kind, &format!("{pointer}/{name}"))?;
+/// Checks `object` against `shape`, plus `"ok"` when `ok` is set (a
+/// success expectation, whose `ok` is already known to be `true`).
+fn check_shape(object: &Object, shape: &Shape, ok: bool, pointer: &str) -> Result<(), String> {
+    for (name, _) in object {
+        let known = (ok && name == "ok") || shape.members.iter().any(|m| m.name == name);
+        if !known {
+            return Err(violation(
+                &format!("{pointer}/{name}"),
+                "unknown member (additionalProperties is false)",
+            ));
+        }
+    }
+    for member in shape.members {
+        let at = format!("{pointer}/{}", member.name);
+        match object.get(member.name) {
+            Some(value) => check_kind(value, member.kind, &at)?,
+            None if member.required => return Err(violation(&at, "required member is missing")),
+            None => {}
+        }
     }
     Ok(())
+}
+
+/// Checks a success expectation against the operation's success shapes:
+/// it must match exactly one (schema `oneOf`).
+fn check_ok(expect: &Object, spec: &OpSpec) -> Result<(), String> {
+    if let [shape] = spec.ok {
+        return check_shape(expect, shape, true, "/expect");
+    }
+    let results: Vec<(&str, Result<(), String>)> = spec
+        .ok
+        .iter()
+        .map(|shape| (shape.def, check_shape(expect, shape, true, "/expect")))
+        .collect();
+    match results.iter().filter(|(_, r)| r.is_ok()).count() {
+        1 => Ok(()),
+        0 => Err(violation(
+            "/expect",
+            format!(
+                "matches none of the success forms: {}",
+                results
+                    .iter()
+                    .map(|(def, r)| format!("{def} ({})", r.as_ref().unwrap_err()))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        )),
+        _ => Err(violation(
+            "/expect",
+            "matches more than one success form (oneOf)",
+        )),
+    }
 }
 
 /// The vector's `source`, if it is usable, for failure messages.
@@ -269,9 +359,9 @@ fn validate(value: &Value) -> Result<Vector, String> {
         None if ok => Expect::Ok(outputs),
         None => Expect::Err(String::new()),
         Some(spec) => {
-            check_members(input, spec.input, &[], "/input")?;
+            check_shape(input, spec.input, false, "/input")?;
             if ok {
-                check_members(expect, spec.ok, &["ok"], "/expect")?;
+                check_ok(expect, spec)?;
                 Expect::Ok(outputs)
             } else if !spec.can_fail {
                 return Err(violation(
@@ -588,13 +678,28 @@ fn def_ref<'a>(value: &'a Value, used: &mut Vec<String>) -> &'a str {
     name
 }
 
-/// A `$defs` object definition: closed, every member required, and the
-/// members (after `ok: {"const": true}` when `ok` is set) match `members`.
-fn check_def(defs: &Value, name: &str, ok: bool, members: &[(&str, Kind)]) {
+/// A `$defs` object definition: exactly the keywords checked here, closed,
+/// and its members (after `ok: {"const": true}` when `ok` is set) are
+/// `shape`'s, in order, with the same kinds and the same `required` list.
+fn check_def(defs: &Value, shape: &Shape, ok: bool, used: &mut Vec<String>) {
+    let name = shape.def;
+    used.push(name.to_owned());
     let def = at(defs, &[name]);
-    let mut expected_names: Vec<&str> = members.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        member_names(&annotated(def)),
+        ["type", "required", "additionalProperties", "properties"],
+        "{name}: keywords"
+    );
+    let mut names: Vec<&str> = shape.members.iter().map(|m| m.name).collect();
+    let mut required: Vec<&str> = shape
+        .members
+        .iter()
+        .filter(|m| m.required)
+        .map(|m| m.name)
+        .collect();
     if ok {
-        expected_names.insert(0, "ok");
+        names.insert(0, "ok");
+        required.insert(0, "ok");
         assert_eq!(
             *at(def, &["properties", "ok"]),
             parse(r#"{"const":true}"#),
@@ -607,15 +712,16 @@ fn check_def(defs: &Value, name: &str, ok: bool, members: &[(&str, Kind)]) {
         Some(false),
         "{name}"
     );
-    assert_eq!(strings(at(def, &["required"])), expected_names, "{name}");
-    assert_eq!(
-        member_names(at(def, &["properties"])),
-        expected_names,
-        "{name}"
-    );
-    for (member, kind) in members {
-        let property = at(def, &["properties", member]);
-        assert_eq!(annotated(property), schema_kind(*kind), "{name}/{member}");
+    assert_eq!(strings(at(def, &["required"])), required, "{name}");
+    assert_eq!(member_names(at(def, &["properties"])), names, "{name}");
+    for member in shape.members {
+        let property = at(def, &["properties", member.name]);
+        assert_eq!(
+            annotated(property),
+            schema_kind(member.kind),
+            "{name}/{}",
+            member.name
+        );
     }
 }
 
@@ -724,19 +830,32 @@ fn schema_and_runner_agree() {
         assert_eq!(member_names(then), ["properties"], "{}", spec.name);
         assert_eq!(member_names(at(then, &["properties"])), ["input", "expect"]);
         let input = def_ref(at(then, &["properties", "input"]), &mut used);
-        check_def(defs, input, false, spec.input);
+        assert_eq!(input, spec.input.def, "{}", spec.name);
+        check_def(defs, spec.input, false, &mut used);
+
+        // The success forms, then `failure` if the operation can fail: one
+        // `$ref`, or a `oneOf` of them in that order.
+        let mut alternatives: Vec<&str> = spec.ok.iter().map(|s| s.def).collect();
+        if spec.can_fail {
+            alternatives.push("failure");
+        }
         let expect = at(then, &["properties", "expect"]);
-        let ok = if spec.can_fail {
-            let one_of = at(expect, &["oneOf"]).as_array().unwrap();
-            assert_eq!(member_names(expect), ["oneOf"], "{}", spec.name);
-            assert_eq!(one_of.len(), 2, "{}", spec.name);
-            assert_eq!(def_ref(&one_of[1], &mut used), "failure", "{}", spec.name);
-            def_ref(&one_of[0], &mut used)
-        } else {
+        let refs: Vec<&str> = if alternatives.len() == 1 {
             assert_eq!(member_names(expect), ["$ref"], "{}", spec.name);
-            def_ref(expect, &mut used)
+            vec![def_ref(expect, &mut used)]
+        } else {
+            assert_eq!(member_names(expect), ["oneOf"], "{}", spec.name);
+            at(expect, &["oneOf"])
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|alternative| def_ref(alternative, &mut used))
+                .collect()
         };
-        check_def(defs, ok, true, spec.ok);
+        assert_eq!(refs, alternatives, "{}", spec.name);
+        for shape in spec.ok {
+            check_def(defs, shape, true, &mut used);
+        }
     }
 
     // No stale definitions.
