@@ -1,0 +1,53 @@
+{
+  "source": "RFC 7519 §7.2; RFC 7517 §5; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Nested JWT whose inner ES256 JWS (kid b) is verified from a JWK Set [kid a, kid b]: valid, key_index 1 (ADR 0029 §2-§4, ADR 0027 §7)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0.L1CH9PNe12PKmeGc7DZ9gOZ5b0rKvi7W.dr1v9zk7P69G1NN_.FmEYJppZYd_hw5a1B12RAYOwqIjEAGBaA7AsiT_RRSQ7ML6z6iLgdfSGgNd80Div72BWIhfr4UgAl3mY5weHcWj_Da1CJHvS8tNgjVthjBRyGEs9uiLyfOkCJmeVatj845WXhEBa9Era0ND4D9dgD_nXTiT_8Yyp-OIsRaQ9XXsv8FYNVEU5j6fwF6umbIlyfmVf_PRtdKxVbN_kD2lasY58tWp5CkvQpPsDP02Rc8iIAFyGgGgfDi9Aw91yNxAaGz9jVpToXbNqyAcJGxImYbtrRhhPw15tAhI9owjOiKpTn-H1eOe7DcO7feeZynoDdfCyPqk.Z4wIl9cb8fCjf2SN28_qCg",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "9k4oxJo3yFhw4XvUDFOFlmhgwqGrC25aBd7xhpkFB6Y",
+          "y": "zE-06UddsK2b0rpGKPXn9gz55y3tneIwQbTHPYn4o_I",
+          "kid": "a"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "kYUQsFzddzDVWQ2zrOHzLvP5Xh0vfUGlmngWR9XMJTw",
+          "y": "8uWP4BrVkuiNMETAGTs-RXFQpR9p5DtW6MzL2D6yXX8",
+          "kid": "b"
+        }
+      ]
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "alice",
+      "iat": 1300819200,
+      "exp": 1300819380
+    },
+    "alg": "ES256",
+    "key_index": 1
+  }
+}

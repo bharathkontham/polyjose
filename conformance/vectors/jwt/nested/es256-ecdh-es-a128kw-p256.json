@@ -1,0 +1,43 @@
+{
+  "source": "RFC 7519 §5.2, §7.2, §11.2; RFC 7518 §4.6; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Nested JWT: an ES256 inner JWS in an ECDH-ES+A128KW (P-256) + A128GCM compact JWE (cty JWT), decrypted with the recipient's P-256 private key: valid, with the exact inner claims (ADR 0027 §7)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFQ0RILUVTK0ExMjhLVyIsImVuYyI6IkExMjhHQ00iLCJlcGsiOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiJKQ2todG45RkpfUTF6TDJGQVVDcVlOYTZaclZwWkotR3Z5X2lkMUdlaXVzIiwieSI6Inl6c19VSDlHOVZCZF9QS3Bnd1FuS3dId1RTOFN0RFpPY0RpMkEyZGswaXcifSwiY3R5IjoiSldUIn0.Wp8iO8MDKPLh_GFENEof2VBdkUOd927K.KD2iEWww3z46GTdT.ejC-FbPE-EafIMMQa-aTZGIDlobtTGEUPLMIP625yDfsQ4ywWfxBRG45VdQAVIWcQkWDQcYo9m0gmztLM0Om7nD-JER67KRirDhtUK1Ay8b4lPApo7wO0_LQs3CbQgV6nhcmln9MCJWPdVi-esX0uiRd0cEFHRJLFVYOufniY7F8S6-vv5aEtbzowXPTvmtd1qG6motj6FAkuC4dQ3Gq_aJSx2qPN8CjduaEn-zo0Ivy8pkIEE9izGWRGwf-QBDB9Ys6A5CX5kVhl_kgOdtRv-4_8ws15juZy21ZLilXSgfXQUn83n2_.7gIOShxOSaYmkhK7KKCffA",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "5FxKAdx2QOg6I41sPlVcn19PKg0OcgfyFiKe8ISqRlg",
+        "y": "crIh0z2HqMDizKTzRQPncgE0V6NPoS5vNOP615m_Glc",
+        "d": "bn4q3styftzgYI3NAQiWLyBeTGeYIkEpozs0fK8f6O0"
+      },
+      "allowed_algs": [
+        "ECDH-ES+A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "alice",
+      "iat": 1300819200,
+      "exp": 1300819380
+    },
+    "alg": "ES256"
+  }
+}
