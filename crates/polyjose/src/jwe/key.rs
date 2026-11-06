@@ -11,11 +11,12 @@
 
 use core::fmt;
 
+use p256::elliptic_curve::{Curve, FieldBytes, SecretKey};
 use zeroize::Zeroizing;
 
 use super::{content, keymgmt};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
-use crate::jwk::{Jwk, KeyMaterial, OctKey};
+use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, OctKey};
 use crate::{Error, Result};
 
 /// Which way a key is used.
@@ -110,6 +111,7 @@ impl RecipientKey {
         }
         match jwk.material() {
             KeyMaterial::Oct(key) => oct_key(key, alg, enc, direction),
+            KeyMaterial::Ec(key) => ec_key(key, direction),
             _ => Err(Error::UnsupportedAlgorithm),
         }
     }
@@ -171,6 +173,64 @@ fn oct_key(
             None => Err(Error::KeyAlgorithmMismatch),
         },
     }
+}
+
+/// Detail for an EC key the curve crate refuses although import accepted
+/// it (not expected: import ran the same checks, ADR 0041 §4).
+const EC_KEY_UNUSABLE: &str = "EC key is not usable for ECDH-ES";
+
+/// An `EC` key (RFC 7518 §6.2) for ECDH-ES (RFC 7518 §4.6), on P-256,
+/// P-384 or P-521 (the curves `serves_key_mgmt_alg` admits).
+///
+/// - **Encrypt** uses the recipient's public key, so a public key, or the
+///   public part (`x`, `y`) of a private key, gives `P*Public`. The point
+///   is the uncompressed SEC 1 encoding `0x04 ‖ x ‖ y` (SEC 1 v2 §2.3.3) of
+///   the full-length coordinates (RFC 7518 §6.2.1.2–§6.2.1.3), decoded by
+///   `PublicKey::from_sec1_bytes`.
+/// - **Decrypt** needs the private key `d` (RFC 7518 §6.2.2.1), so a
+///   public key is [`Error::KeyAlgorithmMismatch`]; `d` gives `P*Secret`
+///   through `SecretKey::from_bytes`.
+fn ec_key(key: &EcKey, direction: Direction) -> Result<RecipientKey> {
+    let unusable = || unusable(direction, EC_KEY_UNUSABLE);
+    match direction {
+        Direction::Encrypt => {
+            let point = [&[0x04][..], key.x(), key.y()].concat();
+            match key.crv() {
+                EcCurve::P256 => p256::PublicKey::from_sec1_bytes(&point)
+                    .map(RecipientKey::P256Public)
+                    .map_err(|_| unusable()),
+                EcCurve::P384 => p384::PublicKey::from_sec1_bytes(&point)
+                    .map(RecipientKey::P384Public)
+                    .map_err(|_| unusable()),
+                EcCurve::P521 => p521::PublicKey::from_sec1_bytes(&point)
+                    .map(RecipientKey::P521Public)
+                    .map_err(|_| unusable()),
+                _ => Err(Error::KeyAlgorithmMismatch),
+            }
+        }
+        Direction::Decrypt => {
+            let d = key.d().ok_or(Error::KeyAlgorithmMismatch)?;
+            match key.crv() {
+                EcCurve::P256 => secret::<p256::NistP256>(d)
+                    .map(RecipientKey::P256Secret)
+                    .ok_or_else(unusable),
+                EcCurve::P384 => secret::<p384::NistP384>(d)
+                    .map(RecipientKey::P384Secret)
+                    .ok_or_else(unusable),
+                EcCurve::P521 => secret::<p521::NistP521>(d)
+                    .map(RecipientKey::P521Secret)
+                    .ok_or_else(unusable),
+                _ => Err(Error::KeyAlgorithmMismatch),
+            }
+        }
+    }
+}
+
+/// `SecretKey::from_bytes` on `d`, exactly the field length
+/// (RFC 7518 §6.2.2.1). The result wipes itself on drop.
+fn secret<C: Curve>(d: &[u8]) -> Option<SecretKey<C>> {
+    let d = <&FieldBytes<C>>::try_from(d).ok()?;
+    SecretKey::<C>::from_bytes(d).ok()
 }
 
 impl fmt::Debug for RecipientKey {
@@ -354,5 +414,157 @@ mod tests {
         let debug = format!("{key:?}");
         assert_eq!(debug, "RecipientKey::X25519Secret(<redacted>)");
         assert!(!debug.contains("197"));
+    }
+
+    /// RFC 7520 §3.2 (Figure 2), the P-521 private key, without its
+    /// `use: sig`.
+    const RFC7520_P521: &str = r#""kty":"EC","kid":"bilbo.baggins@hobbiton.example","crv":"P-521","x":"AHKZLLOsCOzz5cY97ewNUajB957y-C-U88c3v13nmGZx6sYl_oJXu9A5RkTKqjqvjyekWF-7ytDyRXYgCF5cj0Kt","y":"AdymlHvOiLxXkEhayXQnNCvDX4h9htZaCJN34kfmC6pV5OhQHiraVySsUdaQkAgDPrwQrJmbnX9cwlGfP-HqHZR1""#;
+    const RFC7520_P521_D: &str =
+        "AAhRON2r9cqXX1hg-RoI6R1tX5p2rUAYdmpHZoC1XNM56KtscrX6zbKipQrCW9CGZH3T4ubpnoTKLDYJ_fF3_rJt";
+
+    fn p521(extra: &str) -> Jwk {
+        jwk(&format!("{{{RFC7520_P521}{extra}}}"))
+    }
+
+    fn p521_private(extra: &str) -> Jwk {
+        p521(&format!(r#","d":"{RFC7520_P521_D}"{extra}"#))
+    }
+
+    /// RFC 7520 §3.3 (Figure 3), the RSA 2048-bit public key, without its
+    /// `use: sig`.
+    fn rsa(extra: &str) -> Jwk {
+        jwk(&format!(
+            r#"{{"kty":"RSA","kid":"bilbo.baggins@hobbiton.example","n":"n4EPtAOCc9AlkeQHPzHStgAbgs7bTZLwUBZdR8_KuKPEHLd4rHVTeT-O-XV2jRojdNhxJWTDvNd7nqQ0VEiZQHz_AJmSCpMaJMRBSFKrKb2wqVwGU_NsYOYL-QtiWN2lbzcEe6XC0dApr5ydQLrHqkHHig3RBordaZ6Aj-oBHqFEHYpPe7Tpe-OfVfHd1E6cS6M1FZcD1NNLYD5lFHpPI9bTwJlsde3uhGqC0ZCuEHg8lhzwOHrtIQbS0FVbb9k3-tVTU4fg_3L_vniUFAKwuCLqKnS2BYwdq_mzSnbLY7h_qixoR7jig3__kRhuaxwUkRz5iaiQkqgc5gHdrNP5zw","e":"AQAB"{extra}}}"#
+        ))
+    }
+
+    /// RFC 7748 §6.1 Bob's X25519 key pair (RFC 8037 §A.6 uses its public
+    /// key).
+    const X25519_BOB: &str =
+        r#""kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08""#;
+    const X25519_BOB_D: &str = "XasIfmJKikt54X-Lg4AO5m87sSkmGLb9HC-LJ_-I4Os";
+
+    fn x25519(extra: &str) -> Jwk {
+        jwk(&format!("{{{X25519_BOB}{extra}}}"))
+    }
+
+    fn x25519_private(extra: &str) -> Jwk {
+        x25519(&format!(r#","d":"{X25519_BOB_D}"{extra}"#))
+    }
+
+    const ECDH: [KeyMgmtAlg; 4] = [A::EcdhEs, A::EcdhEsA128KW, A::EcdhEsA192KW, A::EcdhEsA256KW];
+
+    /// RFC 7520 §5.5.1 (Figure 108), the P-256 key of the ECDH-ES example.
+    const RFC7520_P256: &str = r#""kty":"EC","kid":"meriadoc.brandybuck@buckland.example","use":"enc","crv":"P-256","x":"Ze2loSV3wrroKUN_4zhwGhCqo3Xhu1td4QjeQ5wIVR0","y":"HlLtdXARY_f55A3fnzQbPcm6hgr34Mp8p-nuzQCE0Zw""#;
+    const RFC7520_P256_D: &str = "r_kHyZ-a06rmxM3yESK84r1otSg-aQcVStkRhA-iCM8";
+    /// RFC 7520 §5.4.1 (Figure 72), the P-384 key of the ECDH-ES+A128KW
+    /// example.
+    const RFC7520_P384: &str = r#""kty":"EC","kid":"peregrin.took@tuckborough.example","use":"enc","crv":"P-384","x":"YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2","y":"A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP""#;
+    const RFC7520_P384_D: &str = "iTx2pk7wW-GqJkHcEkFQb2EFyYcO7RugmaW3mRrQVAOUiPommT0IdnYK2xDlZh-j";
+
+    /// The JWK, its uncompressed SEC 1 point and its `d`, for each curve.
+    fn ec_cases() -> [(Jwk, Jwk, Vec<u8>, Vec<u8>); 3] {
+        let case = |members: &str, d: &str| {
+            let public = jwk(&format!("{{{members}}}"));
+            let private = jwk(&format!(r#"{{{members},"d":"{d}"}}"#));
+            let KeyMaterial::Ec(ec) = public.material() else {
+                panic!("not EC")
+            };
+            let point = [&[0x04][..], ec.x(), ec.y()].concat();
+            let d = crate::util::b64url_decode(d).unwrap_or_default();
+            (public, private, point, d)
+        };
+        [
+            case(RFC7520_P256, RFC7520_P256_D),
+            case(RFC7520_P384, RFC7520_P384_D),
+            case(RFC7520_P521, RFC7520_P521_D),
+        ]
+    }
+
+    /// The curve, whether the variant is secret, and its uncompressed SEC 1
+    /// point (public) or `d` (secret).
+    fn ec_parts(key: &RecipientKey) -> (&'static str, bool, Vec<u8>) {
+        use p256::elliptic_curve::sec1::ToSec1Point;
+        match key {
+            RecipientKey::P256Public(k) => {
+                ("P-256", false, k.to_sec1_point(false).as_bytes().to_vec())
+            }
+            RecipientKey::P384Public(k) => {
+                ("P-384", false, k.to_sec1_point(false).as_bytes().to_vec())
+            }
+            RecipientKey::P521Public(k) => {
+                ("P-521", false, k.to_sec1_point(false).as_bytes().to_vec())
+            }
+            RecipientKey::P256Secret(k) => ("P-256", true, k.to_bytes().to_vec()),
+            RecipientKey::P384Secret(k) => ("P-384", true, k.to_bytes().to_vec()),
+            RecipientKey::P521Secret(k) => ("P-521", true, k.to_bytes().to_vec()),
+            _ => ("other", false, Vec::new()),
+        }
+    }
+
+    #[test]
+    fn an_ec_key_encrypts_to_its_public_point_and_decrypts_with_d() {
+        for ((public, private, point, d), crv) in ec_cases().iter().zip(["P-256", "P-384", "P-521"])
+        {
+            for alg in &ECDH {
+                // A public key, or a private key through its public part
+                // (RFC 7518 §4.6: the sender needs only the recipient's
+                // public key).
+                for key in [public, private] {
+                    let bound = RecipientKey::from_jwk(key, alg, &GCM128, Encrypt);
+                    let bound = bound.unwrap_or_else(|e| panic!("{crv} {alg}: {e}"));
+                    assert_eq!(ec_parts(&bound), (crv, false, point.clone()), "{alg}");
+                }
+                let bound = RecipientKey::from_jwk(private, alg, &GCM128, Decrypt);
+                let bound = bound.unwrap_or_else(|e| panic!("{crv} {alg}: {e}"));
+                assert_eq!(ec_parts(&bound), (crv, true, d.clone()), "{alg}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_ec_secret_derives_the_jwk_point() {
+        // A fixture check: the RFC 7520 key pairs are consistent, so the
+        // secret variant and the public variant describe the same key.
+        use p256::elliptic_curve::sec1::ToSec1Point;
+        for (_, private, point, _) in &ec_cases() {
+            let derived = match RecipientKey::from_jwk(private, &A::EcdhEs, &GCM128, Decrypt) {
+                Ok(RecipientKey::P256Secret(k)) => {
+                    k.public_key().to_sec1_point(false).as_bytes().to_vec()
+                }
+                Ok(RecipientKey::P384Secret(k)) => {
+                    k.public_key().to_sec1_point(false).as_bytes().to_vec()
+                }
+                Ok(RecipientKey::P521Secret(k)) => {
+                    k.public_key().to_sec1_point(false).as_bytes().to_vec()
+                }
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(&derived, point);
+        }
+    }
+
+    #[test]
+    fn a_public_ec_key_cannot_decrypt() {
+        // RFC 7518 §4.6: the recipient needs its private key.
+        for (public, ..) in &ec_cases() {
+            for alg in &ECDH {
+                assert_eq!(bind(public, alg, &GCM128, Decrypt), Err(MISMATCH), "{alg}");
+            }
+        }
+    }
+
+    #[test]
+    fn secp256k1_does_not_serve_ecdh_es() {
+        // RFC 8812 §3.3 leaves secp256k1 key agreement undefined, and
+        // RFC 7518 §4.6 lists P-256, P-384 and P-521 only.
+        let k256 = jwk(
+            r#"{"kty":"EC","crv":"secp256k1","x":"eb5mfvncu6xVoGKVzocLBwKb_NstzijZWfKBWxb4F5g","y":"SDradyajxGVdpPv8DhEIqP0XtEimhVQZnEfQj_sQ1Lg","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"}"#,
+        );
+        for alg in &ECDH {
+            for d in [Encrypt, Decrypt] {
+                assert_eq!(bind(&k256, alg, &GCM128, d), Err(MISMATCH), "{alg}");
+            }
+        }
     }
 }
