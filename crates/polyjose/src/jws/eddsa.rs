@@ -522,4 +522,95 @@ mod tests {
         assert_eq!(summary.accepted, 117 + 21);
         assert_eq!(summary.rejected, 64 + 8);
     }
+
+    /// RFC 8037 §A.4: the complete compact JWS.
+    const A4_JWS: &str = "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.\
+                          hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg";
+
+    #[test]
+    fn rfc8037_a4_and_a5_end_to_end_through_compact() {
+        use crate::jws::{
+            ProtectedHeader, SignOptions, VerifyOptions, sign_compact, verify_compact,
+        };
+
+        // RFC 8037 §A.4: sign over the published protected header octets.
+        let protected = ProtectedHeader::from_encoded("eyJhbGciOiJFZERTQSJ9").unwrap();
+        let jws = sign_compact(
+            &protected,
+            b"Example of Ed25519 signing",
+            &keys::ed25519_private(""),
+            &SignOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(jws, A4_JWS);
+        // RFC 8037 §A.5: verify with the public key.
+        let opts = VerifyOptions::new(&[A::EdDSA]).unwrap();
+        let verified = verify_compact(A4_JWS, &keys::ed25519(""), &opts).unwrap();
+        assert_eq!(verified.alg, A::EdDSA);
+        assert_eq!(verified.payload, b"Example of Ed25519 signing");
+        // A changed signature fails (ADR 0026 §2 step 9).
+        let tampered = A4_JWS.replace("hgyY", "hgyZ");
+        assert_eq!(
+            verify_compact(&tampered, &keys::ed25519(""), &opts).err(),
+            Some(Error::InvalidSignature)
+        );
+        // RFC 9864 §2.2 and ADR 0026 §6: `EdDSA` and `Ed25519` are separate
+        // allow-list entries.
+        let only_ed25519 = VerifyOptions::new(&[A::Ed25519]).unwrap();
+        assert_eq!(
+            verify_compact(A4_JWS, &keys::ed25519(""), &only_ed25519).err(),
+            Some(Error::AlgorithmNotAllowed)
+        );
+    }
+
+    #[test]
+    fn ed25519_end_to_end_through_compact() {
+        use crate::header::Header;
+        use crate::jws::{
+            ProtectedHeader, SignOptions, VerifyOptions, sign_compact, verify_compact,
+        };
+
+        let mut header = Header::new();
+        header.alg = Some("Ed25519".into());
+        let protected = ProtectedHeader::new(header).unwrap();
+        let payload = b"Example of Ed25519 signing";
+        let private = keys::ed25519_private(r#","alg":"Ed25519""#);
+        let jws = sign_compact(&protected, payload, &private, &SignOptions::new()).unwrap();
+
+        // RFC 9864 §2.2: the same signature octets as `EdDSA` over the same
+        // signing input.
+        let parts: Vec<&str> = jws.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let input = format!("{}.{}", parts[0], parts[1]);
+        let expected = sign(&A::EdDSA, &keys::ed25519_private(""), input.as_bytes()).unwrap();
+        assert_eq!(b64url_decode(parts[2]).unwrap(), expected);
+
+        let opts = VerifyOptions::new(&[A::Ed25519]).unwrap();
+        let public = keys::ed25519(r#","alg":"Ed25519""#);
+        let verified = verify_compact(&jws, &public, &opts).unwrap();
+        assert_eq!(verified.alg, A::Ed25519);
+        assert_eq!(verified.payload, payload);
+        // RFC 9864 §7, ADR 0026 §2 step 8: a key bound to `EdDSA` does not
+        // verify an `Ed25519` JWS.
+        let eddsa_key = keys::ed25519(r#","alg":"EdDSA""#);
+        assert_eq!(
+            verify_compact(&jws, &eddsa_key, &opts).err(),
+            Some(Error::KeyAlgorithmMismatch)
+        );
+        // Detached (RFC 7515 Appendix F).
+        let detached = sign_compact(
+            &protected,
+            payload,
+            &private,
+            &SignOptions::new().detached(true),
+        )
+        .unwrap();
+        let opts = VerifyOptions::new(&[A::Ed25519])
+            .unwrap()
+            .detached_payload(payload);
+        assert_eq!(
+            verify_compact(&detached, &public, &opts).unwrap().payload,
+            payload
+        );
+    }
 }
