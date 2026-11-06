@@ -29,8 +29,6 @@
 //! [`FAMILIES`]; tests call the twins with a fake table (see `jws/alg.rs`,
 //! "The test seam").
 
-use std::borrow::Cow;
-
 use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
@@ -39,7 +37,9 @@ use crate::jwk::Jwk;
 use crate::util::{b64url_decode, b64url_encode};
 
 use super::alg::{FAMILIES, Families};
-use super::process::{JoseHeader, prepare_sign, signing_input, verify_signature};
+use super::process::{
+    JoseHeader, prepare_sign, signing_input, signing_input_from_part, verify_signature,
+};
 use super::{ProtectedHeader, SignOptions, Verified, VerifyOptions};
 
 /// Signs `payload` in the JWS Compact Serialization (RFC 7515 §5.1, §7.1):
@@ -104,26 +104,24 @@ pub(crate) fn sign_compact_with(
             "b64:false compact payload must be printable ASCII without '.'",
         ));
     }
+    // The payload as the signing input and the serialization carry it:
+    // BASE64URL(JWS Payload), encoded once and wiped on drop (ADR 0049 §4),
+    // or with `b64: false` the octets themselves (RFC 7797 §3, §5.2).
+    let encoded = b64.then(|| Zeroizing::new(b64url_encode(payload)));
+    let payload_part = encoded.as_ref().map_or(payload, |e| e.as_bytes());
     // RFC 7515 §5.1 steps 5-6, over the header's exact encoding.
-    let input = signing_input(protected.encoded(), payload, b64);
+    let input = signing_input_from_part(protected.encoded(), payload_part);
     let signature = b64url_encode(&ready.sign(families, &input)?);
 
     // RFC 7515 §5.1 step 8, §7.1; Appendix F leaves the payload part empty.
-    let payload_len = match (opts.detached, b64) {
-        (true, _) => 0,
-        (false, true) => payload.len().div_ceil(3) * 4,
-        (false, false) => payload.len(),
-    };
+    let carried = if opts.detached { &[][..] } else { payload_part };
     let mut jws =
-        String::with_capacity(protected.encoded().len() + payload_len + signature.len() + 2);
+        String::with_capacity(protected.encoded().len() + carried.len() + signature.len() + 2);
     jws.push_str(protected.encoded());
     jws.push('.');
-    match (opts.detached, b64) {
-        (true, _) => {}
-        (false, true) => jws.push_str(&b64url_encode(payload)),
-        // Checked above: every octet is ASCII, so each is one `char`.
-        (false, false) => jws.extend(payload.iter().copied().map(char::from)),
-    }
+    // Base64url, or checked above to be printable ASCII: each octet is one
+    // `char`.
+    jws.extend(carried.iter().copied().map(char::from));
     jws.push('.');
     jws.push_str(&signature);
     Ok(jws)
@@ -201,23 +199,38 @@ pub(crate) fn verify_compact_with(
     // base64url at all is the protected header's `b64` (RFC 7797 §3), so
     // it runs once that header has parsed, and before its structure rules.
     let b64 = protected.b64 != Some(false);
-    let payload: Cow<'_, [u8]> = match opts.detached_payload {
-        Some(detached) => Cow::Borrowed(detached),
-        None if b64 => Cow::Owned(b64url_decode(payload_part)?),
-        None => Cow::Borrowed(payload_part.as_bytes()),
+    // The decoded payload may be secret: wiped on drop (ADR 0049 §4).
+    let decoded = match opts.detached_payload {
+        None if b64 => Some(Zeroizing::new(b64url_decode(payload_part)?)),
+        _ => None,
     };
     // Step 4, header structure (RFC 7515 §5.2 step 4, §7.1: the protected
     // header is the whole JOSE Header).
     let header = JoseHeader::new(Some(protected), None)?;
     // Steps 5-9 (RFC 7515 §5.2 steps 5 and 8), over the received encoding.
-    let input = signing_input(protected_b64, &payload, header.b64());
+    // Attached, the payload part is already in its signing-input form,
+    // BASE64URL(JWS Payload) or the unencoded octets (RFC 7797 §3), and
+    // strict decoding makes the received text the only encoding of the
+    // payload, so it is used as received. Detached, it is computed from the
+    // supplied octets (RFC 7515 Appendix F).
+    let input = match opts.detached_payload {
+        Some(detached) => signing_input(protected_b64, detached, header.b64()),
+        None => signing_input_from_part(protected_b64, payload_part.as_bytes()),
+    };
     let alg = verify_signature(families, &header, key, opts, &input, &signature)?;
     let (protected, _) = header.into_parts();
+    // Only a verified payload is copied out.
+    let mut payload = match (decoded, opts.detached_payload) {
+        (Some(decoded), _) => decoded,
+        (None, Some(detached)) => Zeroizing::new(detached.to_vec()),
+        (None, None) => Zeroizing::new(payload_part.as_bytes().to_vec()),
+    };
     Ok(Verified {
         alg,
         protected,
         unprotected: None,
-        payload: payload.into_owned(),
+        // `Verified.payload` becomes `Zeroizing` in the next step.
+        payload: core::mem::take(&mut *payload),
         signature_index: 0,
     })
 }
@@ -361,6 +374,21 @@ mod tests {
                 assert_eq!(verify(&jws), Err(Error::InvalidBase64), "{jws:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_non_canonical_payload_part_never_reaches_the_signature() {
+        // Verify signs the received payload part as is, which equals
+        // re-encoding the payload only because decoding is canonical
+        // (RFC 4648 §3.5): "QR" would also read as 0x41, but is rejected,
+        // even when signed exactly as received.
+        let protected = b64url_encode(HS256.as_bytes());
+        let sig = fake_signature(&A::HS256, format!("{protected}.QR").as_bytes());
+        let jws = format!("{protected}.QR.{}", b64url_encode(&sig));
+        assert_eq!(verify(&jws), Err(Error::InvalidBase64));
+        let canonical = forge(&A::HS256, HS256, &[0x41], false);
+        assert_eq!(parts(&canonical)[1], "QQ");
+        assert_eq!(verify(&canonical).unwrap().payload, [0x41]);
     }
 
     #[test]
