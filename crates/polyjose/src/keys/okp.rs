@@ -788,4 +788,60 @@ mod tests {
             }
         }
     }
+
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// Any 32 octets are an Ed25519 seed and an X25519 scalar
+            /// (RFC 8032 §5.1.5, RFC 7748 §5). Each private JWK exports
+            /// to exactly the RFC 8410 §10.3 v1 layout around `d` and the
+            /// §10.1 SPKI layout around `x`, and both import back to the
+            /// same key; a v2 key carrying the derived `x` does too.
+            #[test]
+            fn every_key_round_trips(d in any::<[u8; KEY_LEN]>()) {
+                for (crv, oid_last) in [(OkpCurve::Ed25519, 0x70), (OkpCurve::X25519, 0x6E)] {
+                    let x = match crv {
+                        OkpCurve::Ed25519 => ed25519_public(&d),
+                        OkpCurve::X25519 => x25519_public(&d),
+                    };
+                    let jwk = jwk_build::okp_jwk(crv, &x, Some(&d), None).unwrap();
+                    let key = okp(&jwk);
+
+                    let pkcs8_der = to_pkcs8(key).unwrap();
+                    let mut expected = vec![
+                        0x30, 0x2E, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2B, 0x65,
+                        oid_last, 0x04, 0x22, 0x04, 0x20,
+                    ];
+                    expected.extend_from_slice(&d);
+                    prop_assert_eq!(&pkcs8_der[..], &expected[..]);
+                    let back = import_pkcs8(&pkcs8_der).unwrap();
+                    prop_assert_eq!(&*back.to_json(), &*jwk.to_json());
+
+                    let v2 = pkcs8::encode(&Pkcs8Parts {
+                        version: 1,
+                        public_key: Some(&x),
+                        ..pkcs8::decode(&pkcs8_der).unwrap()
+                    })
+                    .unwrap();
+                    let back = import_pkcs8(&v2).unwrap();
+                    prop_assert_eq!(&*back.to_json(), &*jwk.to_json());
+
+                    let spki_der = to_spki(key).unwrap();
+                    let mut expected = vec![
+                        0x30, 0x2A, 0x30, 0x05, 0x06, 0x03, 0x2B, 0x65, oid_last, 0x03, 0x21,
+                        0x00,
+                    ];
+                    expected.extend_from_slice(&x);
+                    prop_assert_eq!(&spki_der[..], &expected[..]);
+                    let public = import_spki(&spki_der).unwrap();
+                    prop_assert_eq!(&*public.to_json(), &*jwk.to_public().unwrap().to_json());
+                }
+            }
+        }
+    }
 }
