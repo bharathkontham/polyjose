@@ -29,12 +29,16 @@ for p in "${platforms[@]}"; do
       if have cargo; then run rust bash -c 'cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
       else record rust "SKIPPED (cargo missing)"; fi
       # The workspace run above uses default features; this one also covers polyjose's
-      # off-by-default test-vector feature (ADR 0005), as CI does.
+      # off-by-default features, the test-vector source (ADR 0005) and JWE `deflate` (ADR 0017),
+      # as CI does.
       if have cargo; then run rust-all-features bash -c 'cargo clippy -p polyjose --all-targets --all-features -- -D warnings && cargo test -p polyjose --all-features'
       else record rust-all-features "SKIPPED (cargo missing)"; fi
       # The core and the WASM binding build for the browser target, as in CI.
       if have cargo; then run wasm32-build cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm
       else record wasm32-build "SKIPPED (cargo missing)"; fi
+      # Again with JWE `zip: DEF`, polyjose's own DEFLATE codec (ADR 0017), which is off by default.
+      if have cargo; then run wasm32-build-deflate cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm --features polyjose/deflate
+      else record wasm32-build-deflate "SKIPPED (cargo missing)"; fi
       # polyjose builds on its MSRV, the workspace rust-version (ADR 0024). CI always runs this;
       # locally it needs that toolchain installed, and is never auto-installed here.
       msrv="$(sed -n 's/^rust-version = "\([0-9]*\.[0-9]*\)"$/\1/p' Cargo.toml).0"
