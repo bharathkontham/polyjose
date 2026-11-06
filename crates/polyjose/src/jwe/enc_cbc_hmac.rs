@@ -417,4 +417,196 @@ mod tests {
             assert_eq!(&plaintext[..], &p[..], "{} P", case.enc);
         }
     }
+
+    use crate::test_counters::cbc_hmac_decryptions;
+
+    /// The three `enc` values with their K and T lengths (RFC 7518
+    /// §5.2.3–§5.2.5).
+    const ENCS: [(ContentEncAlg, usize, usize); 3] = [
+        (ContentEncAlg::A128CbcHs256, 32, 16),
+        (ContentEncAlg::A192CbcHs384, 48, 24),
+        (ContentEncAlg::A256CbcHs512, 64, 32),
+    ];
+
+    /// A distinct, non-trivial K of `len` octets.
+    fn key(len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| (i as u8).wrapping_mul(29).wrapping_add(7))
+            .collect()
+    }
+
+    const IV: [u8; 16] = [0x5A; 16];
+    const AAD: &[u8] = b"eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0";
+    const PLAINTEXT: &[u8] = b"Live long and prosper.";
+
+    /// `decrypt`, with the number of CBC decryptions it started.
+    fn decrypt_counted(
+        enc: &ContentEncAlg,
+        k: &[u8],
+        iv: &[u8],
+        aad: &[u8],
+        e: &[u8],
+        t: &[u8],
+    ) -> (Result<Zeroizing<Vec<u8>>>, u64) {
+        cbc_hmac_decryptions::count(|| decrypt(enc, k, iv, aad, e, t))
+    }
+
+    #[test]
+    fn a_valid_message_reaches_the_cipher_exactly_once() {
+        for (enc, k_len, t_len) in ENCS {
+            let k = key(k_len);
+            let (e, t) = encrypt(&enc, &k, &IV, AAD, PLAINTEXT).unwrap();
+            assert_eq!(t.len(), t_len, "{enc}");
+            // PKCS #7 always pads, by 1 to 16 octets (RFC 7518 §5.2.2.1
+            // step 3).
+            assert_eq!(e.len(), PLAINTEXT.len().next_multiple_of(16), "{enc}");
+            let (plaintext, n) = decrypt_counted(&enc, &k, &IV, AAD, &e, &t);
+            assert_eq!(&plaintext.unwrap()[..], PLAINTEXT, "{enc}");
+            assert_eq!(n, 1, "{enc}");
+        }
+    }
+
+    #[test]
+    fn a_tampered_tag_never_reaches_the_cipher() {
+        // RFC 7518 §5.2.2.2 step 2: on a MAC mismatch the operation halts
+        // before E is decrypted, so no padding check ever runs on
+        // unauthenticated data (RFC 7516 §11.5).
+        for (enc, k_len, _) in ENCS {
+            let k = key(k_len);
+            let (e, t) = encrypt(&enc, &k, &IV, AAD, PLAINTEXT).unwrap();
+            for byte in 0..t.len() {
+                for bit in [0x01, 0x80] {
+                    let mut bad = t.clone();
+                    bad[byte] ^= bit;
+                    let (result, n) = decrypt_counted(&enc, &k, &IV, AAD, &e, &bad);
+                    assert_eq!(result, Err(Error::DecryptionFailed), "{enc} T[{byte}]");
+                    assert_eq!(n, 0, "{enc} T[{byte}] reached the cipher");
+                }
+            }
+            // The tag covers A, IV and E (RFC 7518 §5.2.2.1 step 5), and the
+            // key: a change to any of them fails before decryption too.
+            let mut bad_e = e.clone();
+            bad_e[0] ^= 1;
+            let mut bad_iv = IV;
+            bad_iv[15] ^= 1;
+            let mut bad_k = k.clone();
+            bad_k[0] ^= 1;
+            let mut short_aad = AAD.to_vec();
+            short_aad.pop();
+            for (what, k, iv, aad, e) in [
+                ("E", &k, &IV[..], AAD, &bad_e[..]),
+                ("IV", &k, &bad_iv[..], AAD, &e[..]),
+                ("A", &k, &IV[..], &short_aad[..], &e[..]),
+                ("A empty", &k, &IV[..], &[][..], &e[..]),
+                ("MAC_KEY", &bad_k, &IV[..], AAD, &e[..]),
+            ] {
+                let (result, n) = decrypt_counted(&enc, k, iv, aad, e, &t);
+                assert_eq!(result, Err(Error::DecryptionFailed), "{enc} {what}");
+                assert_eq!(n, 0, "{enc} {what} reached the cipher");
+            }
+        }
+    }
+
+    #[test]
+    fn a_tag_of_any_other_length_fails_even_as_a_true_prefix() {
+        // `Mac::verify_truncated_left` accepts any non-empty prefix of M; T
+        // must be exactly T_LEN octets (RFC 7518 §5.2.2.1 step 5,
+        // §5.2.3–§5.2.5), so a prefix of the right tag, or the right tag
+        // with an extra octet, fails before the MAC is even computed.
+        for (enc, k_len, t_len) in ENCS {
+            let k = key(k_len);
+            let (e, t) = encrypt(&enc, &k, &IV, AAD, PLAINTEXT).unwrap();
+            let m = full_mac(&enc, &k, &IV, AAD, &e);
+            assert_eq!(&m[..t_len], &t[..], "{enc}");
+            let mut longer = t.clone();
+            longer.push(m[t_len]);
+            for (what, bad) in [
+                ("empty", &[][..]),
+                ("1 octet", &t[..1]),
+                ("T_LEN - 1", &t[..t_len - 1]),
+                ("T_LEN + 1 (a prefix of M)", &longer[..]),
+                ("all of M", &m[..]),
+            ] {
+                let (result, n) = decrypt_counted(&enc, &k, &IV, AAD, &e, bad);
+                assert_eq!(result, Err(Error::DecryptionFailed), "{enc} {what}");
+                assert_eq!(n, 0, "{enc} {what} reached the cipher");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cek_or_iv_of_the_wrong_length_fails_before_any_primitive() {
+        // RFC 7518 §5.2.2.1 step 1: K is exactly MAC_KEY_LEN + ENC_KEY_LEN
+        // octets; step 2: the IV is 128 bits.
+        for (enc, k_len, _) in ENCS {
+            let k = key(k_len);
+            let (e, t) = encrypt(&enc, &k, &IV, AAD, PLAINTEXT).unwrap();
+            let other_k = [0, 16, 24, 31, 32, 33, 47, 48, 49, 63, 64, 65, 128];
+            for len in other_k.into_iter().filter(|&len| len != k_len) {
+                // A K one octet longer or shorter still holds a valid-length
+                // MAC_KEY prefix; it must be refused, not split.
+                let wrong = key(len);
+                assert_eq!(
+                    encrypt(&enc, &wrong, &IV, AAD, PLAINTEXT),
+                    Err(Error::InvalidKey(CEK_LEN)),
+                    "{enc} K of {len}"
+                );
+                let (result, n) = decrypt_counted(&enc, &wrong, &IV, AAD, &e, &t);
+                assert_eq!(result, Err(Error::DecryptionFailed), "{enc} K of {len}");
+                assert_eq!(n, 0, "{enc} K of {len}");
+            }
+            for len in [0, 8, 12, 15, 17, 32] {
+                let iv = vec![0x5A; len];
+                assert_eq!(
+                    encrypt(&enc, &k, &iv, AAD, PLAINTEXT),
+                    Err(Error::InvalidFormat(IV_LEN_MISMATCH)),
+                    "{enc} IV of {len}"
+                );
+                let (result, n) = decrypt_counted(&enc, &k, &iv, AAD, &e, &t);
+                assert_eq!(result, Err(Error::DecryptionFailed), "{enc} IV of {len}");
+                assert_eq!(n, 0, "{enc} IV of {len}");
+            }
+        }
+    }
+
+    #[test]
+    fn another_enc_is_unsupported_not_a_decryption_failure() {
+        // The dispatcher (`content`) sends only A*CBC-HS* here; anything
+        // else is a call against its contract (RFC 7516 §4.1.2).
+        for enc in [
+            ContentEncAlg::A128GCM,
+            ContentEncAlg::A256GCM,
+            ContentEncAlg::from("A128CBC-HS512"),
+        ] {
+            let k = key(32);
+            assert_eq!(
+                encrypt(&enc, &k, &IV, AAD, PLAINTEXT),
+                Err(Error::UnsupportedAlgorithm),
+                "{enc}"
+            );
+            let (result, n) = decrypt_counted(&enc, &k, &IV, AAD, &[0; 16], &[0; 16]);
+            assert_eq!(result, Err(Error::UnsupportedAlgorithm), "{enc}");
+            assert_eq!(n, 0, "{enc}");
+        }
+    }
+
+    /// M, the full HMAC output over A || IV || E || AL (RFC 7518 §5.2.2.1
+    /// step 5), for forging test inputs under a known K.
+    fn full_mac(enc: &ContentEncAlg, k: &[u8], iv: &[u8], a: &[u8], e: &[u8]) -> Vec<u8> {
+        fn run<M: Mac + KeyInit>(mac_key: &[u8], iv: &[u8], a: &[u8], e: &[u8]) -> Vec<u8> {
+            let al = al(a.len()).unwrap();
+            mac::<M>(mac_key, a, iv, e, &al)
+                .unwrap()
+                .finalize()
+                .into_bytes()
+                .to_vec()
+        }
+        let half = &k[..k.len() / 2];
+        match enc {
+            ContentEncAlg::A128CbcHs256 => run::<Hmac<Sha256>>(half, iv, a, e),
+            ContentEncAlg::A192CbcHs384 => run::<Hmac<Sha384>>(half, iv, a, e),
+            ContentEncAlg::A256CbcHs512 => run::<Hmac<Sha512>>(half, iv, a, e),
+            _ => panic!("not A*CBC-HS*: {enc}"),
+        }
+    }
 }
