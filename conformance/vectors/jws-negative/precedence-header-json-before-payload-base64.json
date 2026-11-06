@@ -1,6 +1,6 @@
 {
-  "source": "ADR 0026 §2",
-  "description": "Precedence (ADR 0026 §2; the 0002 lead's order: limits and shape, then base64url of protected headers and signatures, then protected-header JSON, then the payload's base64url under the effective b64, then header structure, then steps 5–9): a compact JWS whose protected header decodes to the unterminated {\"alg\":\"HS256\" (JSON) and whose payload is padded (payload base64url) fails with the JSON code",
+  "source": "ADR 0048",
+  "description": "Precedence (ADR 0026 §2 as clarified by ADR 0048: shape and limits, then signature base64url, then protected-header decoding (base64url, JSON, then per-parameter types and crit syntax), then the payload's base64url under the effective b64, then whole-header structure, then ADR 0026 §2 steps 5–9): a compact JWS whose protected header decodes to the unterminated {\"alg\":\"HS256\" (JSON) and whose payload is padded (payload base64url) fails with the JSON code",
   "operation": "jws.verify",
   "input": {
     "jws": "eyJhbGciOiJIUzI1NiI.UGF5bG9hZA==.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
