@@ -37,15 +37,6 @@ pub(crate) const INTEGER: u8 = 0x02;
 pub(crate) const BIT_STRING: u8 = 0x03;
 /// UNIVERSAL 4, primitive: OCTET STRING (X.690 §8.7, §10.2).
 pub(crate) const OCTET_STRING: u8 = 0x04;
-/// UNIVERSAL 5: NULL (X.690 §8.8).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "a NULL is only read inside the rsaEncryption template so far"
-    )
-)]
-pub(crate) const NULL: u8 = 0x05;
 /// UNIVERSAL 6: OBJECT IDENTIFIER (X.690 §8.19).
 pub(crate) const OID: u8 = 0x06;
 /// UNIVERSAL 16, constructed: SEQUENCE and SEQUENCE OF (X.690 §8.9, §8.10).
@@ -262,14 +253,15 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a NULL (X.690 §8.8), whose contents must be empty (§8.8.2).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "a NULL is only read inside the rsaEncryption template so far"
-        )
-    )]
+    ///
+    /// Test-only: the one NULL in a supported key structure, the
+    /// rsaEncryption parameters (RFC 3279 §2.3.1), is matched as part of a
+    /// whole AlgorithmIdentifier template (`oid.rs`), and `check_well_formed`
+    /// checks a NULL inside values polyjose ignores.
+    #[cfg(test)]
     pub(crate) fn null(&mut self) -> Result<()> {
+        /// UNIVERSAL 5: NULL (X.690 §8.8).
+        const NULL: u8 = 0x05;
         if self.expect(NULL)?.contents.is_empty() {
             Ok(())
         } else {
