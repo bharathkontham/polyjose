@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 const MARKER: &str = "pj-SECRET-marker-9c1d";
 
-const AC_CODES: [&str; 14] = [
+const AC_CODES: [&str; 15] = [
     "InvalidBase64",
     "InvalidJson",
     "InvalidHeader",
@@ -29,6 +29,7 @@ const AC_CODES: [&str; 14] = [
     "TokenNotYetValid",
     "InvalidClaim",
     "RandomnessUnavailable",
+    "InvalidFormat",
 ];
 
 #[test]
@@ -57,6 +58,7 @@ fn code_is_reachable_for_every_code_via_public_api() {
         Error::TokenNotYetValid,
         Error::InvalidClaim("x"),
         Error::RandomnessUnavailable,
+        Error::InvalidFormat("x"),
     ];
     let mut codes: Vec<&str> = all.iter().map(Error::code).collect();
     codes.sort_unstable();
