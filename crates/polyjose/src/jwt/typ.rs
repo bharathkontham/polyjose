@@ -9,7 +9,7 @@
 use crate::error::{Error, Result};
 use crate::header::Header;
 
-use super::Policy;
+use super::{Policy, TypMode};
 
 /// `JWT`, the `typ` RFC 7519 §5.1 recommends for a generic JWT.
 ///
@@ -123,13 +123,196 @@ pub(crate) fn check_jwt_header(
     p: &Policy<'_>,
     layer: Layer,
 ) -> Result<()> {
-    let _ = (protected, unprotected, p, layer);
-    Err(Error::UnsupportedAlgorithm)
+    let _ = unprotected;
+    match layer {
+        Layer::Signed => {
+            // RFC 7797 §7: "JSON Web Tokens MUST NOT use "b64" with a
+            // "false" value", even when `crit` lists it (ADR 0027 §6).
+            if protected.b64 == Some(false) {
+                return Err(Error::InvalidHeader("b64"));
+            }
+            // ADR 0027 §5, §7: `cty: JWT` on a JWS would nest a JWS in a
+            // JWS (RFC 7519 §5.2), which is not supported. Any other `cty`
+            // is ignored.
+            if protected
+                .cty
+                .as_deref()
+                .is_some_and(|cty| media_type_eq(cty, JWT))
+            {
+                return Err(Error::InvalidHeader("cty"));
+            }
+            check_typ(protected.typ.as_deref(), p.typ_mode())
+        }
+        Layer::Outer => Err(Error::UnsupportedAlgorithm),
+    }
+}
+
+/// The `typ` policy of ADR 0027 §5 on the `typ` of one layer.
+///
+/// - [`TypMode::Default`]: absent or `JWT` (RFC 7519 §5.1) is accepted;
+///   any other value is an explicit type that must not pass generic
+///   validation (RFC 8725 §3.12) → [`Error::InvalidHeader`].
+/// - [`TypMode::Exact`]: `typ` must be present and equal (RFC 8725 §3.11,
+///   RFC 9068 §4) → else `InvalidHeader`.
+/// - [`TypMode::Any`]: no check.
+///
+/// Equality is [`media_type_eq`] (RFC 7515 §4.1.9).
+fn check_typ(typ: Option<&str>, mode: &TypMode) -> Result<()> {
+    let accepted = match mode {
+        TypMode::Default => typ.is_none_or(|t| media_type_eq(t, JWT)),
+        TypMode::Exact(expected) => typ.is_some_and(|t| media_type_eq(t, expected)),
+        TypMode::Any => true,
+    };
+    if accepted {
+        Ok(())
+    } else {
+        Err(Error::InvalidHeader("typ"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jwa::SigningAlg;
+    use crate::jwt::FixedClock;
+
+    const CLOCK: FixedClock = FixedClock(1_300_819_380);
+    const ES256: &[SigningAlg] = &[SigningAlg::ES256];
+
+    fn default_policy() -> Policy<'static> {
+        Policy::new(&CLOCK, ES256).unwrap()
+    }
+
+    /// A header from JSON; `alg` is added so every value parses as a JWS
+    /// or JWE header would.
+    fn header(members: &str) -> Header {
+        let json = if members.is_empty() {
+            r#"{"alg":"ES256"}"#.to_owned()
+        } else {
+            format!(r#"{{"alg":"ES256",{members}}}"#)
+        };
+        Header::from_json(json.as_bytes()).unwrap()
+    }
+
+    fn with_typ(typ: Option<&str>) -> Header {
+        match typ {
+            Some(t) => header(&format!(r#""typ":"{t}""#)),
+            None => header(""),
+        }
+    }
+
+    fn signed(h: &Header, p: &Policy<'_>) -> Result<()> {
+        check_jwt_header(h, None, p, Layer::Signed)
+    }
+
+    fn is_invalid_header(r: Result<()>) -> bool {
+        matches!(r, Err(Error::InvalidHeader(_)))
+    }
+
+    #[test]
+    fn default_mode_accepts_only_absent_or_jwt() {
+        // ADR 0027 §5 (d2); RFC 8725 §3.12: an explicitly typed token is
+        // kept out of generic validation.
+        let p = default_policy();
+        for ok in [
+            None,
+            Some("JWT"),
+            Some("jwt"),
+            Some("application/jwt"),
+            Some("Application/JWT"),
+        ] {
+            assert_eq!(signed(&with_typ(ok), &p), Ok(()), "{ok:?}");
+        }
+        for bad in [
+            "at+jwt",
+            "secevent+jwt",
+            "JOSE",
+            "JOSE+JSON",
+            "jwt ",
+            "",
+            "text/jwt",
+        ] {
+            assert!(
+                is_invalid_header(signed(&with_typ(Some(bad)), &p)),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_mode_requires_an_equal_typ() {
+        // ADR 0027 §5; RFC 8725 §3.11; RFC 9068 §2.1, §4.
+        let p = default_policy().expect_typ(AT_JWT);
+        for ok in [
+            "at+jwt",
+            "application/at+jwt",
+            "at+JWT",
+            "Application/AT+JWT",
+        ] {
+            assert_eq!(signed(&with_typ(Some(ok)), &p), Ok(()), "{ok:?}");
+        }
+        assert!(is_invalid_header(signed(&with_typ(None), &p)));
+        for bad in ["JWT", "jwt", "secevent+jwt", "at+jwt;v=1", "at+jwt "] {
+            assert!(
+                is_invalid_header(signed(&with_typ(Some(bad)), &p)),
+                "{bad:?}"
+            );
+        }
+        let p = default_policy().expect_typ("application/secevent+jwt");
+        assert_eq!(signed(&with_typ(Some("secevent+jwt")), &p), Ok(()));
+    }
+
+    #[test]
+    fn any_mode_accepts_every_typ() {
+        let p = default_policy().any_typ();
+        for typ in [
+            None,
+            Some("JWT"),
+            Some("at+jwt"),
+            Some("JOSE"),
+            Some(""),
+            Some("x/y;z"),
+        ] {
+            assert_eq!(signed(&with_typ(typ), &p), Ok(()), "{typ:?}");
+        }
+    }
+
+    #[test]
+    fn access_token_policy_expects_at_jwt() {
+        // RFC 9068 §4: the resource server MUST check `typ` is `at+jwt`.
+        let p = Policy::access_token(&CLOCK, ES256, &["https://as"], &["https://rs"]).unwrap();
+        assert_eq!(signed(&with_typ(Some("application/at+jwt")), &p), Ok(()));
+        assert!(is_invalid_header(signed(&with_typ(Some(JWT)), &p)));
+        assert!(is_invalid_header(signed(&with_typ(None), &p)));
+    }
+
+    #[test]
+    fn signed_layer_rejects_unencoded_payloads() {
+        // RFC 7797 §7: JWTs MUST NOT use "b64" with a "false" value.
+        for p in [default_policy(), default_policy().any_typ()] {
+            let h = header(r#""b64":false,"crit":["b64"]"#);
+            assert_eq!(signed(&h, &p), Err(Error::InvalidHeader("b64")));
+            let h = header(r#""b64":true,"crit":["b64"]"#);
+            assert_eq!(signed(&h, &p), Ok(()));
+        }
+    }
+
+    #[test]
+    fn signed_layer_rejects_jws_in_jws_nesting() {
+        // ADR 0027 §5–§7: `cty: JWT` on a JWS means JWS-in-JWS nesting,
+        // which is not supported; other `cty` values are ignored (RFC 7519
+        // §5.2 makes them NOT RECOMMENDED, not forbidden).
+        for p in [default_policy(), default_policy().any_typ()] {
+            for cty in ["JWT", "jwt", "application/jwt", "APPLICATION/Jwt"] {
+                let h = header(&format!(r#""cty":"{cty}""#));
+                assert_eq!(signed(&h, &p), Err(Error::InvalidHeader("cty")), "{cty:?}");
+            }
+            for cty in ["text/plain", "JOSE", "jwt;v=1", "at+jwt"] {
+                let h = header(&format!(r#""cty":"{cty}""#));
+                assert_eq!(signed(&h, &p), Ok(()), "{cty:?}");
+            }
+        }
+    }
 
     #[track_caller]
     fn assert_eq_both_ways(a: &str, b: &str) {
