@@ -81,6 +81,11 @@ for p in "${platforms[@]}"; do
       elif ! has_wasm_suite; then record wasm "SKIPPED (no wasm test suite yet: no wasm-bindgen-test dev-dependency in bindings/wasm/Cargo.toml)"
       else run wasm bash -c 'cd bindings/wasm && wasm-pack test --node && wasm-pack test --headless --chrome'; fi ;;
     node)
+      # The independent RSA-OAEP-256 oracle (feature 0003 T11, ADR 0021): Node's built-in crypto
+      # alone (no npm packages) checks every RSA-OAEP-256 conformance vector against its test-only
+      # private key, which no Rust code reads. It needs only node, not the binding's toolchain.
+      if have node; then run rsa-oaep-oracle node conformance/tools/rsa-oaep-oracle.mjs
+      else record rsa-oaep-oracle "SKIPPED (node missing)"; fi
       # `npm pkg get` prints {} for a missing key; an unreadable package.json is not skipped, so it FAILs.
       if ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"
       elif [ ! -f bindings/node/package-lock.json ]; then record node "SKIPPED (no node test suite yet: bindings/node/package-lock.json missing)"
