@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 
 use super::{content, keymgmt};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
-use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, OctKey};
+use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, OctKey, OkpCurve, OkpKey};
 use crate::{Error, Result};
 
 /// Which way a key is used.
@@ -112,6 +112,7 @@ impl RecipientKey {
         match jwk.material() {
             KeyMaterial::Oct(key) => oct_key(key, alg, enc, direction),
             KeyMaterial::Ec(key) => ec_key(key, direction),
+            KeyMaterial::Okp(key) => okp_key(key, direction),
             _ => Err(Error::UnsupportedAlgorithm),
         }
     }
@@ -231,6 +232,43 @@ fn ec_key(key: &EcKey, direction: Direction) -> Result<RecipientKey> {
 fn secret<C: Curve>(d: &[u8]) -> Option<SecretKey<C>> {
     let d = <&FieldBytes<C>>::try_from(d).ok()?;
     SecretKey::<C>::from_bytes(d).ok()
+}
+
+/// Detail for an X25519 key of the wrong length (not expected: import
+/// checks it, RFC 8037 §2).
+const X25519_KEY_UNUSABLE: &str = "X25519 key is not 32 octets";
+
+/// An `OKP` key (RFC 8037 §2) for ECDH-ES: `X25519` only (RFC 8037 §3.2;
+/// `Ed25519` "MUST NOT be used for ECDH-ES" and never reaches here).
+///
+/// - **Encrypt** uses the recipient's 32-octet public key `x`
+///   (RFC 7748 §5), also from a private key, giving `X25519Public`.
+/// - **Decrypt** needs the 32-octet private key `d`, giving
+///   `X25519Secret`; a public key is [`Error::KeyAlgorithmMismatch`].
+///
+/// Every 32-octet `x` is a valid input (RFC 7748 §5), and a small-order one
+/// is caught as an all-zero shared secret where ECDH-ES computes it
+/// (RFC 7748 §6.1, ADR 0043 §2), so nothing more is checked here.
+fn okp_key(key: &OkpKey, direction: Direction) -> Result<RecipientKey> {
+    if key.crv() != OkpCurve::X25519 {
+        return Err(Error::KeyAlgorithmMismatch);
+    }
+    let unusable = || unusable(direction, X25519_KEY_UNUSABLE);
+    match direction {
+        Direction::Encrypt => {
+            let x = <[u8; 32]>::try_from(key.x()).map_err(|_| unusable())?;
+            Ok(RecipientKey::X25519Public(x25519_dalek::PublicKey::from(x)))
+        }
+        Direction::Decrypt => {
+            let d = key.d().ok_or(Error::KeyAlgorithmMismatch)?;
+            // The copy is wiped when it goes out of scope; the
+            // `StaticSecret` wipes its own on drop (`zeroize` feature).
+            let d = Zeroizing::new(<[u8; 32]>::try_from(d).map_err(|_| unusable())?);
+            Ok(RecipientKey::X25519Secret(
+                x25519_dalek::StaticSecret::from(*d),
+            ))
+        }
+    }
 }
 
 impl fmt::Debug for RecipientKey {
@@ -564,6 +602,55 @@ mod tests {
         for alg in &ECDH {
             for d in [Encrypt, Decrypt] {
                 assert_eq!(bind(&k256, alg, &GCM128, d), Err(MISMATCH), "{alg}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_x25519_key_encrypts_to_x_and_decrypts_with_d() {
+        let x = crate::util::b64url_decode("3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08")
+            .unwrap_or_default();
+        let d = crate::util::b64url_decode(X25519_BOB_D).unwrap_or_default();
+        for alg in &ECDH {
+            for key in [x25519(""), x25519_private("")] {
+                let bound = RecipientKey::from_jwk(&key, alg, &GCM128, Encrypt);
+                assert!(
+                    matches!(bound, Ok(RecipientKey::X25519Public(ref p)) if p.as_bytes()[..] == x[..]),
+                    "{alg}"
+                );
+            }
+            let bound = RecipientKey::from_jwk(&x25519_private(""), alg, &GCM128, Decrypt);
+            let Ok(RecipientKey::X25519Secret(secret)) = bound else {
+                panic!("{alg}: {bound:?}")
+            };
+            assert_eq!(secret.to_bytes()[..], d[..], "{alg}");
+            // RFC 7748 §6.1: Bob's private key gives Bob's public key.
+            let public = x25519_dalek::PublicKey::from(&secret);
+            assert_eq!(public.as_bytes()[..], x[..], "{alg}");
+        }
+    }
+
+    #[test]
+    fn a_public_x25519_key_cannot_decrypt() {
+        for alg in &ECDH {
+            assert_eq!(
+                bind(&x25519(""), alg, &GCM128, Decrypt),
+                Err(MISMATCH),
+                "{alg}"
+            );
+        }
+    }
+
+    #[test]
+    fn ed25519_does_not_serve_ecdh_es() {
+        // RFC 8037 §3.2: "The Ed25519 and Ed448 subtypes MUST NOT be used
+        // for ECDH-ES".
+        let ed25519 = jwk(
+            r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"}"#,
+        );
+        for alg in &ECDH {
+            for d in [Encrypt, Decrypt] {
+                assert_eq!(bind(&ed25519, alg, &GCM128, d), Err(MISMATCH), "{alg}");
             }
         }
     }
