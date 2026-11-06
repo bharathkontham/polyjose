@@ -73,7 +73,8 @@ pub(crate) fn derive(
         // K(1) || … || K(reps); only the last block is truncated.
         let take = (keydatalen - out.len()).min(HASH_LEN);
         out.extend_from_slice(&block[..take]);
-        counter = counter.checked_add(1).ok_or(Error::UnsupportedAlgorithm)?;
+        // At most two blocks (MAX_KEYDATALEN_BITS), so this never overflows.
+        counter += 1;
     }
     Ok(out)
 }
