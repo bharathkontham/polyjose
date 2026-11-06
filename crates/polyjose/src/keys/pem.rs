@@ -859,4 +859,82 @@ mod tests {
             }
         }
     }
+
+    // ---- differential (pem-rfc7468, dev-dependency oracle) -------------
+
+    mod properties {
+        use super::super::*;
+        use proptest::prelude::*;
+
+        /// The labels the encoder writes.
+        fn known_label() -> impl Strategy<Value = Label> {
+            prop::sample::select(vec![
+                Label::PrivateKey,
+                Label::PublicKey,
+                Label::EcPrivateKey,
+                Label::RsaPublic,
+                Label::RsaPrivate,
+                Label::EncryptedPrivateKey,
+            ])
+        }
+
+        proptest! {
+            // ADR 0008 layer 2: at most 1,000 cases per property.
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            /// Our encoder's output decodes with `pem-rfc7468` to the same
+            /// label and bytes, equals that crate's own LF encoding, and
+            /// decodes with ours.
+            #[test]
+            fn encoder_output_decodes_with_pem_rfc7468(
+                label in known_label(),
+                der in proptest::collection::vec(any::<u8>(), 1..400),
+            ) {
+                let text = label.as_str().unwrap();
+                let ours = encode(label, &der).unwrap();
+                let (oracle_label, oracle_der) = pem_rfc7468::decode_vec(ours.as_bytes()).unwrap();
+                prop_assert_eq!(oracle_label, text);
+                prop_assert_eq!(&oracle_der, &der);
+                let oracle_text =
+                    pem_rfc7468::encode_string(text, pem_rfc7468::LineEnding::LF, &der).unwrap();
+                prop_assert_eq!(ours.as_str(), oracle_text.as_str());
+                let (back_label, back) = decode(&ours).unwrap();
+                prop_assert_eq!(back_label, label);
+                prop_assert_eq!(&*back, &der);
+            }
+
+            /// Our decoder is stricter than `pem-rfc7468`, never looser:
+            /// whatever we accept from a mutated block, it accepts with the
+            /// same label and bytes. The one deliberate difference is the
+            /// whitespace around the block (ADR 0018 §2), which that crate
+            /// treats differently after the END line, so the oracle gets the
+            /// block with it trimmed and a final LF; everything between the
+            /// boundaries is compared as is.
+            #[test]
+            fn accepted_input_is_accepted_by_pem_rfc7468(
+                label in known_label(),
+                der in proptest::collection::vec(any::<u8>(), 1..150),
+                at in any::<prop::sample::Index>(),
+                with in prop::sample::select(
+                    "AQgw+/=-_ \t\r\n.:Pz".chars().collect::<Vec<char>>()
+                ),
+                insert in any::<bool>(),
+            ) {
+                let pem = encode(label, &der).unwrap();
+                let i = at.index(pem.len());
+                let mutated = if insert {
+                    format!("{}{with}{}", &pem[..i], &pem[i..])
+                } else {
+                    format!("{}{with}{}", &pem[..i], &pem[i + 1..])
+                };
+                if let Ok((got_label, got)) = decode(&mutated) {
+                    let trimmed = format!("{}\n", mutated.trim_matches([' ', '\t', '\r', '\n']));
+                    let (oracle_label, oracle) = pem_rfc7468::decode_vec(trimmed.as_bytes())
+                        .map_err(|e| TestCaseError::fail(format!("{e:?} for {mutated:?}")))?;
+                    prop_assert_eq!(Some(oracle_label), got_label.as_str());
+                    prop_assert_eq!(&oracle, &*got);
+                }
+            }
+        }
+    }
 }
