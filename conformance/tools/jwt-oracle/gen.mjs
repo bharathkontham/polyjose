@@ -637,7 +637,13 @@ if (isMain) {
     process.stderr.write("usage: node gen.mjs <spec.json> <out.json>\n");
     process.exit(2);
   }
-  const out = run(args[0], args[1]);
+  let out;
+  try {
+    out = run(args[0], args[1]);
+  } catch (err) {
+    process.stderr.write(`jwt-oracle: ${err.message}\nnothing was written\n`);
+    process.exit(1);
+  }
   const count = Array.isArray(out) ? out.length : Array.isArray(out.vectors) ? out.vectors.length : 1;
   process.stdout.write(`wrote ${count} vector(s) to ${args[1]}\n`);
 }
