@@ -26,7 +26,9 @@ serde_json = "1"
 base64ct = { version = "1.8", features = ["alloc"] }
 # Default features off (ADR 0016 §3). No `derive` (it pulls syn, quote and proc-macro2): Zeroize and
 # Drop are written by hand. `alloc` provides Zeroize for the String and Vec<u8> inside Zeroizing<_>.
-zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
+# 1.9.1 is the floor: it fixes an uninitialized read in 1.9.0. polyjose's redacting Debug output does
+# not depend on zeroize's own Debug impls (which 1.9.0 and 1.9.1 print differently).
+zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 # Default features (std, i128) off (ADR 0016 §3): polyjose uses only Choice and ConstantTimeEq on u32,
 # which need neither.
 subtle = { version = "2.6", default-features = false }
