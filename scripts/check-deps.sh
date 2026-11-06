@@ -296,9 +296,10 @@ line_re = re.compile(r"^([0-9]+)([A-Za-z0-9][A-Za-z0-9_-]*) (v[0-9][^ ]*)")
 edges, stack, root = {}, [], None
 with open(tree_path, encoding="utf-8") as f:
     for number, line in enumerate(f, 1):
+        line = line.rstrip("\r\n")
         m = line_re.match(line)
         if m is None:
-            sys.exit("unexpected cargo tree line %d: %s" % (number, line.rstrip()))
+            sys.exit("unexpected cargo tree line %d: %s" % (number, line))
         depth, node = int(m.group(1)), (norm(m.group(2)), m.group(3))
         if depth == 0:
             if root is not None:
@@ -343,7 +344,7 @@ for crate, parent, group in rules:
   while read -r crate parent group spec path; do
     fail "$crate (group $group in $allowlist) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
     echo "  Every path to it (cargo tree -p $core_pkg -e normal,build --all-features --target all -i $spec):"
-    cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$spec" 2>&1 | sed 's/^/    /' || true
+    cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$spec" </dev/null 2>&1 | sed 's/^/    /' || true
   done <"$work/guard-paths"
 }
 
