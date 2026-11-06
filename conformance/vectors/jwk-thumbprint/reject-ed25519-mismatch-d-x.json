@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "An Ed25519 private key whose d (RFC 8037 Appendix A.1) does not derive its x (the RFC 8032 §7.1 TEST 2 public key 3d4017c3…f4660c, itself a valid key) is rejected at import (ADR 0043 §3, amending ADR 0041 §4; RFC 8037 §2, RFC 8032 §5.1.5; the class behind RUSTSEC-2022-0093). Derived independently of polyjose with the RFC 8032 §5.1.5 key derivation in pure Python (hashlib SHA-512 and Edwards arithmetic): the A.1 d derives the A.1 x 11qYAYKx…cHURo, not this x",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+      "x": "PUAXw-hDiVqStwqnTRt-vJyYLM8uxJaMwM1V8Sr0Zgw"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

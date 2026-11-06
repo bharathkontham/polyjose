@@ -61,8 +61,15 @@ fn private_equals_public_for_every_private_form() {
     let p384 = r#""kty":"EC","crv":"P-384","x":"qofKIr6LBTeOscce8yCtdG4dO2KLp5uYWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3","y":"NhfeSpYmLG9dnpi_kpLcKfj0Hb0omhR86doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f""#;
     let k256 = r#""kty":"EC","crv":"secp256k1","x":"eb5mfvncu6xVoGKVzocLBwKb_NstzijZWfKBWxb4F5g","y":"SDradyajxGVdpPv8DhEIqP0XtEimhVQZnEfQj_sQ1Lg""#;
     let p521 = r#""kty":"EC","crv":"P-521","x":"AHKZLLOsCOzz5cY97ewNUajB957y-C-U88c3v13nmGZx6sYl_oJXu9A5RkTKqjqvjyekWF-7ytDyRXYgCF5cj0Kt","y":"AdymlHvOiLxXkEhayXQnNCvDX4h9htZaCJN34kfmC6pV5OhQHiraVySsUdaQkAgDPrwQrJmbnX9cwlGfP-HqHZR1""#;
+    // Each `d` is the private key of its point, since import checks the
+    // pair (ADR 0043 §3): RFC 8037 A.1, RFC 7517 A.2, d = 1 for the
+    // generators, RFC 7520 §3.2. X25519 pairs are not checked yet (feature
+    // 0003); the RFC 7748 §6.1 key pair is used anyway.
     let d32 = "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY";
-    let d48 = "MDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5f";
+    let ed_d = "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A";
+    let p256_d = "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE";
+    let one32 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE";
+    let one48 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB";
     let d66 =
         "AAhRON2r9cqXX1hg-RoI6R1tX5p2rUAYdmpHZoC1XNM56KtscrX6zbKipQrCW9CGZH3T4ubpnoTKLDYJ_fF3_rJt";
     let cases = [
@@ -71,10 +78,10 @@ fn private_equals_public_for_every_private_form() {
             d32,
             "giQqigT_IKcuzHl0FVJ3k5ts3_TWNAxvsC08UZsfcM8",
         ),
-        (ed_pub, d32, "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"),
-        (p256, d32, "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s"),
-        (p384, d48, "-W6Wzot_wuerYbKBVKfGEks3iY2EALna-hBqObnPuJE"),
-        (k256, d32, "2JF8vg9etJzjFwZwmkvhBLLZ0bfMVVOPivYR5lFtcec"),
+        (ed_pub, ed_d, "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"),
+        (p256, p256_d, "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s"),
+        (p384, one48, "-W6Wzot_wuerYbKBVKfGEks3iY2EALna-hBqObnPuJE"),
+        (k256, one32, "2JF8vg9etJzjFwZwmkvhBLLZ0bfMVVOPivYR5lFtcec"),
         (p521, d66, "dHri3SADZkrush5HU_50AoRhcKFryN-PI6jPBtPL55M"),
     ];
     for (public, d, expected) in cases {
@@ -173,10 +180,18 @@ fn decode(s: &str) -> Vec<u8> {
 /// type or curve have another thumbprint.
 #[test]
 fn kty_and_crv_are_part_of_the_input() {
+    // The same 32 octets as an X25519 and as an Ed25519 key: RFC 8037 A.2's
+    // `x`, a valid key of both kinds (ADR 0043 §1 rejects Ed25519 points
+    // with a torsion component, such as RFC 8037 A.6 Bob's X25519 octets).
+    let both = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
+    let as_x25519 = jwk(&format!(r#"{{"kty":"OKP","crv":"X25519","x":"{both}"}}"#));
+    let as_ed25519 = jwk(&format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{both}"}}"#));
+    assert_ne!(
+        as_x25519.thumbprint_sha256(),
+        as_ed25519.thumbprint_sha256()
+    );
     let x = "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08";
     let a = jwk(&format!(r#"{{"kty":"OKP","crv":"X25519","x":"{x}"}}"#));
-    let b = jwk(&format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}"#));
-    assert_ne!(a.thumbprint_sha256(), b.thumbprint_sha256());
     assert_eq!(
         a.thumbprint_sha256(),
         "giQqigT_IKcuzHl0FVJ3k5ts3_TWNAxvsC08UZsfcM8"

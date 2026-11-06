@@ -176,13 +176,14 @@ fn ed448_is_unsupported_at_import() {
 
 #[test]
 fn mismatched_d_and_wrong_length_fail_with_fixed_strings_not_key_bytes() {
+    // ADR 0043 §3: a mismatched pair now fails at JWK import, before it
+    // could reach `sign_compact` (whose own check stays, tested in
+    // jws::eddsa); the error is the same code with a fixed detail.
     let d2 = b64url_encode(&[7u8; 32]);
-    let k = Jwk::from_json(
+    let e = Jwk::from_json(
         format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{X}","d":"{d2}"}}"#).as_bytes(),
     )
-    .unwrap();
-    let protected = ProtectedHeader::from_encoded("eyJhbGciOiJFZERTQSJ9").unwrap();
-    let e = sign_compact(&protected, b"p", &k, &SignOptions::new()).unwrap_err();
+    .unwrap_err();
     assert_eq!(e.code(), "InvalidKey");
     let shown = format!("{e} {e:?}");
     assert!(!shown.contains(&d2) && !shown.contains(D) && !shown.contains(X));

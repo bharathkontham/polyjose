@@ -25,17 +25,20 @@ const SECRET: &str = "MARKERsecretMARKERsecretMARKERsecretMARKERs";
 /// re-wrapped copy is caught as well.
 const MARKER: &str = "MARKERsecret";
 
-/// RFC 7517 Appendix A.2, the P-256 private key, with `d` replaced.
+/// A P-256 private key whose `d` is the secret; (x, y) = d·G, derived
+/// independently in Python (SEC 1 §2.2.1 arithmetic), since import checks
+/// the pair (ADR 0043 §3). Shaped like RFC 7517 Appendix A.2.
 fn ec_private_jwk() -> String {
     format!(
-        r#"{{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"{SECRET}","use":"enc","kid":"1"}}"#
+        r#"{{"kty":"EC","crv":"P-256","x":"Qm0_Y3iAhrDndVQ247skVXv2bFfwnTvlLUyup22HGDM","y":"MXHhtkN4vHVS87SCP6IfVsIXSeUWHsOjnuQIgzhWL6Q","d":"{SECRET}","use":"enc","kid":"1"}}"#
     )
 }
 
-/// RFC 8037 Appendix A.1, the Ed25519 private key, with `d` replaced.
+/// An Ed25519 private key whose seed `d` is the secret; `x` derived
+/// independently in Python (RFC 8032 §5.1.5).
 fn okp_private_jwk() -> String {
     format!(
-        r#"{{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"{SECRET}"}}"#
+        r#"{{"kty":"OKP","crv":"Ed25519","x":"TrgjJgt_upZmFJb7d22T8iGZ_57PzgtlGh4Tq4b-tkc","d":"{SECRET}"}}"#
     )
 }
 
