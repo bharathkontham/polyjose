@@ -22,6 +22,11 @@
 //!   `verify_strict` and RFC 8032 §5.1.7 accept them: implementations
 //!   disagree on such keys. JWK import refuses them first; `verify`
 //!   re-checks.
+//! - **One public-key check.** `verify` runs JWK import's own Ed25519 check
+//!   (`jwk::ed25519_public_is_valid`, ADR 0041 §4): length, decoding, the
+//!   re-encode round trip that refuses a non-canonical y ≥ p (RFC 8032
+//!   §5.1.3 step 1), small order and torsion. The two cannot drift apart,
+//!   and a refused key gets the same [`Error::InvalidKey`] either way.
 
 use ed25519_dalek::{
     PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, Signature, Signer as _, SigningKey, VerifyingKey,
@@ -31,7 +36,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
-use crate::jwk::{Jwk, KeyMaterial, OkpCurve, OkpKey};
+use crate::jwk::{Jwk, KeyMaterial, OkpCurve, OkpKey, ed25519_public_is_valid};
 
 /// Signs `signing_input` with Ed25519 (RFC 8032 §5.1.6; RFC 8037 §3.1,
 /// RFC 9864 §2.2), returning the 64-octet signature `R || S`.
@@ -83,8 +88,9 @@ pub(crate) fn sign(alg: &SigningAlg, key: &Jwk, signing_input: &[u8]) -> Result<
 /// # Errors
 ///
 /// - [`Error::InvalidKey`] if `x` is not 32 octets (RFC 8037 §2, RFC 8032
-///   §5.1.5), does not decode to a point (RFC 8032 §5.1.3), is of small
-///   order (ADR 0026 §6), or has a torsion component (ADR 0043 §1).
+///   §5.1.5), does not decode canonically to a point (RFC 8032 §5.1.3), is
+///   of small order (ADR 0026 §6), or has a torsion component
+///   (ADR 0043 §1): JWK import's own check (ADR 0041 §4).
 /// - [`Error::InvalidSignature`] if the signature is not 64 octets
 ///   (RFC 8032 §5.1.6 step 6), has a small-order or non-canonical R, or
 ///   s ≥ L (RFC 8032 §5.1.7 step 1), or does not validate (RFC 8032 §5.1.7
@@ -125,32 +131,40 @@ fn ed25519_key<'k>(alg: &SigningAlg, key: &'k Jwk) -> Result<&'k OkpKey> {
     }
 }
 
+/// The [`Error::InvalidKey`] message for an `x` that fails
+/// [`ed25519_public_is_valid`]: the same text JWK import uses, so a key
+/// refused at verify reads exactly as it would have at import.
+const ED25519_PUBLIC_INVALID: &str = "Ed25519 public key is invalid";
+
 /// The public key `x` (RFC 8037 §2) as a point that strict verification
 /// accepts.
 ///
+/// The key passes exactly the check JWK import applies
+/// ([`ed25519_public_is_valid`], ADR 0041 §4), so the two cannot drift
+/// apart:
+///
 /// - `x` is 32 octets (RFC 8037 §2, RFC 8032 §5.1.5) and decodes to a point
-///   (RFC 8032 §5.1.3);
+///   (RFC 8032 §5.1.3 steps 2–4);
+/// - the encoding is canonical (RFC 8032 §5.1.3 step 1: "If the resulting
+///   y >= p, decoding fails"), by a re-encode round trip, since
+///   `VerifyingKey::from_bytes` follows ZIP-215 and accepts y ≥ p;
 /// - the point is not of small order (`is_weak`, ADR 0026 §6): a
 ///   small-order key admits signatures valid for almost every message;
 /// - the point has no torsion component (`is_torsion_free`, ADR 0043 §1):
 ///   implementations disagree on mixed-order keys, which `verify_strict`
 ///   and RFC 8032 §5.1.7 accept.
 ///
-/// JWK import already rejects all of these (ADR 0041 §4, ADR 0043 §1);
-/// this is defence in depth, so the family never relies on how a key was
-/// built.
+/// JWK import already rejects all of these; this is defence in depth, so
+/// the family never relies on how a key was built.
 fn verifying_key(x: &[u8]) -> Result<VerifyingKey> {
+    if !ed25519_public_is_valid(x) {
+        return Err(Error::InvalidKey(ED25519_PUBLIC_INVALID));
+    }
+    // Both steps succeeded inside the check; mapping their errors keeps
+    // this free of panics all the same.
     let x = <&[u8; PUBLIC_KEY_LENGTH]>::try_from(x)
-        .map_err(|_| Error::InvalidKey("Ed25519 x must be 32 octets"))?;
-    let public = VerifyingKey::from_bytes(x)
-        .map_err(|_| Error::InvalidKey("Ed25519 x is not a valid point"))?;
-    if public.is_weak() {
-        return Err(Error::InvalidKey("Ed25519 x is of small order"));
-    }
-    if !public.to_edwards().is_torsion_free() {
-        return Err(Error::InvalidKey("Ed25519 x has a torsion component"));
-    }
-    Ok(public)
+        .map_err(|_| Error::InvalidKey(ED25519_PUBLIC_INVALID))?;
+    VerifyingKey::from_bytes(x).map_err(|_| Error::InvalidKey(ED25519_PUBLIC_INVALID))
 }
 
 #[cfg(test)]
@@ -218,7 +232,7 @@ mod tests {
         let zero = [0u8; 64];
         assert_eq!(
             verify_ed25519(&IDENTITY, b"any message", &zero),
-            Err(Error::InvalidKey("Ed25519 x is of small order"))
+            Err(Error::InvalidKey(ED25519_PUBLIC_INVALID))
         );
         // The same with the identity as R (encoded as IDENTITY) and s = 0.
         let mut identity_r = [0u8; 64];
@@ -254,13 +268,48 @@ mod tests {
         assert!(!key.is_weak());
         assert_eq!(
             verify_ed25519(&x, A4_SIGNING_INPUT, &a4_signature()),
-            Err(Error::InvalidKey("Ed25519 x has a torsion component"))
+            Err(Error::InvalidKey(ED25519_PUBLIC_INVALID))
         );
         let jwk = format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{MIXED_ORDER}"}}"#);
         assert!(matches!(
             Jwk::from_json(jwk.as_bytes()),
             Err(Error::InvalidKey(_))
         ));
+    }
+
+    /// An Ed25519 `x` encoding y = p + 3 with sign bit 0, where
+    /// p = 2^255 − 19 (RFC 8032 §5.1): the same octets as the conformance
+    /// vector `jwk-thumbprint/reject-ed25519-x-non-canonical.json`.
+    const NON_CANONICAL: &str = "8P_______________________________________38";
+
+    #[test]
+    fn a_non_canonical_key_is_refused_at_verify_as_at_import() {
+        // RFC 8032 §5.1.3 step 1: "If the resulting y >= p, decoding
+        // fails". ed25519-dalek's `from_bytes` follows ZIP-215 and accepts
+        // y ≥ p, so only the re-encode round trip catches this. JWK import
+        // refuses the key (ADR 0041 §4); the key is built unchecked to show
+        // verify makes the same call instead of relying on import. Every
+        // y ≥ p that decodes gives a point of small order or with a torsion
+        // component (checked with RFC 8032 §5.1 arithmetic in Python), so
+        // the torsion check also stops this key; the point here is that
+        // verify and import share one check and answer identically.
+        let x = b64url_decode(NON_CANONICAL).unwrap();
+        assert!(
+            VerifyingKey::from_bytes(&<[u8; 32]>::try_from(&x[..]).unwrap()).is_ok(),
+            "the probe needs a key that ZIP-215 decoding accepts"
+        );
+        let jwk = format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{NON_CANONICAL}"}}"#);
+        let import = Jwk::from_json(jwk.as_bytes()).err();
+        assert!(matches!(import, Some(Error::InvalidKey(_))), "{import:?}");
+
+        let key = Jwk::okp_unchecked(OkpCurve::Ed25519, &x, None);
+        for alg in [A::EdDSA, A::Ed25519] {
+            assert_eq!(
+                verify(&alg, &key, A4_SIGNING_INPUT, &a4_signature()).err(),
+                import,
+                "{alg}"
+            );
+        }
     }
 
     #[test]
@@ -599,7 +648,7 @@ mod tests {
         let opts = VerifyOptions::new(&[A::EdDSA]).unwrap();
         let verified = verify_compact(A4_JWS, &keys::ed25519(""), &opts).unwrap();
         assert_eq!(verified.alg, A::EdDSA);
-        assert_eq!(verified.payload, b"Example of Ed25519 signing");
+        assert_eq!(*verified.payload, b"Example of Ed25519 signing");
         // A changed signature fails (ADR 0026 §2 step 9).
         let tampered = A4_JWS.replace("hgyY", "hgyZ");
         assert_eq!(
@@ -641,7 +690,7 @@ mod tests {
         let public = keys::ed25519(r#","alg":"Ed25519""#);
         let verified = verify_compact(&jws, &public, &opts).unwrap();
         assert_eq!(verified.alg, A::Ed25519);
-        assert_eq!(verified.payload, payload);
+        assert_eq!(*verified.payload, payload);
         // RFC 9864 §7, ADR 0026 §2 step 8: a key bound to `EdDSA` does not
         // verify an `Ed25519` JWS.
         let eddsa_key = keys::ed25519(r#","alg":"EdDSA""#);
@@ -661,7 +710,7 @@ mod tests {
             .unwrap()
             .detached_payload(payload);
         assert_eq!(
-            verify_compact(&detached, &public, &opts).unwrap().payload,
+            *verify_compact(&detached, &public, &opts).unwrap().payload,
             payload
         );
     }

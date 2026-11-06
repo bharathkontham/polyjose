@@ -1,0 +1,27 @@
+{
+  "source": "RFC 7797 §4.2",
+  "description": "HS256 flattened JSON sign with {\"alg\":\"HS256\",\"b64\":false,\"crit\":[\"b64\"]} and a non-detached payload, which is carried unencoded as \"payload\":\"$.02\" (§5.3), giving the §4.2 flattened JWS",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "flattened",
+    "payload_b64u": "JC4wMg",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19",
+        "key": {
+          "kty": "oct",
+          "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "jws": {
+      "protected": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19",
+      "payload": "$.02",
+      "signature": "A5dxf2s96_n5FLueVuW1Z_vh161FwXZC4YLPff6dmDY"
+    }
+  }
+}

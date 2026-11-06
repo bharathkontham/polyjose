@@ -1,0 +1,22 @@
+{
+  "source": "RFC 7797 §4.2",
+  "description": "HS256 verify of the §4.2 detached compact JWS ({\"alg\":\"HS256\",\"b64\":false,\"crit\":[\"b64\"]}) against the unencoded payload \"$.02\" supplied separately, with the RFC 7515 A.1 key",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..A5dxf2s96_n5FLueVuW1Z_vh161FwXZC4YLPff6dmDY",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ],
+    "detached_payload_b64u": "JC4wMg"
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "JC4wMg",
+    "alg": "HS256",
+    "signature_index": 0
+  }
+}

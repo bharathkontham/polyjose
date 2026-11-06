@@ -1,0 +1,89 @@
+{
+  "source": "ADR 0026 §7",
+  "description": "Boundary control next to jws-negative/general-17-signatures.json: a general JWS with 16 copies of one valid HS256 signature over \"Payload\" (HMAC computed with Python hmac/hashlib under the RFC 7515 A.1 key), exactly the default 16-signature limit with no max_signatures given, is accepted and the first signature verifies (ADR 0026 §3)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "signatures": [
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        }
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "UGF5bG9hZA",
+    "alg": "HS256",
+    "signature_index": 0
+  }
+}

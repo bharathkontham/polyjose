@@ -689,7 +689,7 @@ mod tests {
         for (jws, key, alg, payload) in &cases {
             let verified = jws::verify_compact(jws, key, &opts).unwrap();
             assert_eq!(verified.alg, *alg);
-            assert_eq!(verified.payload, *payload);
+            assert_eq!(*verified.payload, *payload);
             assert_eq!(verified.signature_index, 0);
             // The last signature octet changed. 256 octets end on a
             // character whose low 2 bits are padding and must be zero

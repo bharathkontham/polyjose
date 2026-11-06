@@ -1,0 +1,23 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "ES256K compact verify of the high-S twin of es256k-compact-verify-low-s.json (same R, S replaced by n - S, which node:crypto also verifies): polyjose normalizes S before verifying, so it is valid (ADR 0026 §5; RFC 8812 §3.2 is silent on the S form)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJFUzI1NksifQ.RXhhbXBsZSBvZiBFUzI1Nksgc2lnbmluZw.fMahu1RdLUtMRHUYFcglISE8p0vLly6w26el4lzrcvKhTO5dPaw0Ujnv8pMYKVvGApfkd1oj5xwrHSgA6DFZ8g",
+    "key": {
+      "kty": "EC",
+      "crv": "secp256k1",
+      "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+      "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g"
+    },
+    "allowed_algs": [
+      "ES256K"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "RXhhbXBsZSBvZiBFUzI1Nksgc2lnbmluZw",
+    "alg": "ES256K",
+    "signature_index": 0
+  }
+}

@@ -183,7 +183,8 @@ Every vector under `jws-*/`, `third_party/**/jws/` and `keys/`, and every `jws.*
 
 Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 
-- load every `*.json` file under `vectors/`, recursively, `third_party/` included;
+- load every `*.json` file under `vectors/`, recursively (a glob of `conformance/vectors/**`, never a list of directories), `third_party/` included, so a new directory such as `jws-limits/` is picked up without a runner change;
+- parse vector files with an input limit of at least 4 MiB, or with the platform's native JSON parser. Vector files are trusted test data, and a vector of a JWS just over the library's 1 MiB default `max_input_len` (ADR 0026 §7) is itself over 1 MiB. The library under test keeps its own defaults;
 - **fail** on a file that is not schema-valid, including a misspelled or unknown member anywhere: every object the schema defines is closed;
 - **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. Nothing is skipped;
 - **fail** when it finds no vector files, so a wrong path can't pass vacuously;
@@ -214,7 +215,7 @@ When a binding's runner lands it implements every family it binds, and the never
   - The RSA modulus-bound keys are built by the generator, which also writes their JWK.
 
   `source` names the RFC, OpenSSL for a generated key, or `polyjose` for a rule the description cites. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them all (`python3 -I`); edit the script, not the files. **Until features 0006–0009 bind the keys API, test reports list WASM, Node, Kotlin and Swift as `SKIPPED (API not yet bound)` for them (see [Binding runners](#binding-runners)). Each binding's runner implements `keys.*` when it binds the API, and the never-skip rule above then applies.**
-- JWS vectors are grouped by origin: `jws-rfc7515/` (RFC 7515 Appendix A and F; `source` "RFC 7515 App. A.x" or "RFC 7515 App. F"), `jws-rfc7797/`, `jws-rfc8037/`, `jws-oracle/` (generated independently of polyjose; `source` names the tool and its versions), `jws-negative/` (`source` names the RFC section, CVE or ADR enforced), and `third_party/rfc7520/jws/` (the RFC 7520 §4 cookbook).
+- JWS vectors are grouped by origin: `jws-rfc7515/` (RFC 7515 Appendix A and F; `source` "RFC 7515 App. A.x" or "RFC 7515 App. F"), `jws-rfc7797/`, `jws-rfc8037/`, `jws-oracle/` (generated independently of polyjose; `source` names the tool and its versions), `jws-negative/` (`source` names the RFC section, CVE or ADR enforced), `jws-limits/` (the default ADR 0026 §7 limits, at and just over each), and `third_party/rfc7520/jws/` (the RFC 7520 §4 cookbook).
 - Check every expected value against the RFC text yourself. If the RFC doesn't print the value, derive it independently of polyjose (for example with Python's `hashlib` over the hand-built input) and say so in `description`.
 - **Deterministic algorithms** (HMAC, EdDSA) also have `sign` vectors with an exact expected output. **Randomized ones** (ECDSA, JWE) are checked by round trip (`verify_with`) plus a `verify`/`decrypt` vector of the RFC's published output. RS\*/PS\* are verify-only (ADR 0021): only `verify` vectors, and `sign` vectors that expect `UnsupportedAlgorithm`.
 - **Negative vectors are mandatory:** tampered signatures, `alg: none`, alg/key mismatch, wrong `crit`, expired JWTs, invalid curve points, non-canonical encodings.

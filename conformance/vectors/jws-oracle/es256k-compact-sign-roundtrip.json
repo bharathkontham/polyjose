@@ -1,0 +1,36 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "ES256K (RFC 8812 §3.2) compact sign with the generator's fixed secp256k1 key (d = SHA-256 of a label, x and y derived by node:crypto), then verify with its public key: ECDSA is randomized, so the output is checked by round trip, not bytes",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "compact",
+    "payload_b64u": "RXhhbXBsZSBvZiBFUzI1Nksgc2lnbmluZw",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJFUzI1NksifQ",
+        "key": {
+          "kty": "EC",
+          "crv": "secp256k1",
+          "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+          "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g",
+          "d": "EE9oTP04ShCl38a3KQRRUczSgnx0bTgrXNm5oGf9xhk"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "verify_with": {
+      "key": {
+        "kty": "EC",
+        "crv": "secp256k1",
+        "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+        "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g"
+      },
+      "allowed_algs": [
+        "ES256K"
+      ]
+    }
+  }
+}

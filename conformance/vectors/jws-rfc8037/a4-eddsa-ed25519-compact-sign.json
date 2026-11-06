@@ -1,0 +1,25 @@
+{
+  "source": "RFC 8037 App. A.4",
+  "description": "EdDSA compact sign over {\"alg\":\"EdDSA\"} and the payload \"Example of Ed25519 signing\" with the A.1 Ed25519 private key; EdDSA is deterministic, so the output is the A.4 JWS byte for byte",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "compact",
+    "payload_b64u": "RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJFZERTQSJ9",
+        "key": {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+          "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "jws": "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "Ed25519 (RFC 9864 §2.2) compact sign with the RFC 8037 A.1 private key over header {\"alg\":\"Ed25519\"} and the RFC 8037 A.4 payload; EdDSA is deterministic, so the expected JWS is node:crypto's exact output (the generator first checks that node:crypto reproduces RFC 8037 A.4)",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "compact",
+    "payload_b64u": "RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJFZDI1NTE5In0",
+        "key": {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+          "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "jws": "eyJhbGciOiJFZDI1NTE5In0.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc.UxhIYLHGg39NVCLpQAVD_UcfOmnGSCzLFZoXYkLiIbFccmOb_qObsgjzLKsfJw-4NlccUgvYrEHrRbNV0HcZAQ"
+  }
+}
