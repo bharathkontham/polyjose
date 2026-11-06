@@ -79,6 +79,26 @@ const NOT_AN_OBJECT: &str = "expected a JSON object";
 /// assert_eq!(h.to_json()?, r#"{"alg":"HS256","typ":"JWT","x-tenant":"a"}"#);
 /// # Ok::<(), polyjose::Error>(())
 /// ```
+///
+/// # Debug
+///
+/// `Debug` never prints key material, following the same split as a
+/// [`Jwk`](crate::jwk::Jwk)'s `Debug`:
+///
+/// - `jwk`, `epk` and [`other_params`](Header::other_params) are JSON
+///   objects and print through [`Object`]'s redacting `Debug`: member names
+///   and structure show, every string prints as `"<redacted>"`. A `jwk` or
+///   `epk` should be a public key (RFC 7515 §4.1.3, RFC 7516 §4.1.5,
+///   RFC 7518 §4.6.1.1), but a sender may wrongly include a private member
+///   such as `d` or `k` (RFC 7517 §4, RFC 7518 §6), and a Private Header
+///   Parameter (RFC 7515 §4.3) can hold anything.
+/// - The typed registered parameters (`alg`, `kid`, `typ`, `p2s`, `iv`,
+///   `x5c`, …) print in full. None is secret: every header parameter
+///   travels in the clear: base64url-encoded or as plain JSON, integrity
+///   protected at most, never encrypted (RFC 7515 §3.1 and §7.2.1,
+///   RFC 7516 §2 and §3.1), and they are what a reader needs to
+///   diagnose a failure. They may be attacker-chosen; `Debug` escapes
+///   control characters, so they cannot forge log lines.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct Header {
