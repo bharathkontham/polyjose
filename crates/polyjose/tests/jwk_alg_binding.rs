@@ -383,7 +383,7 @@ fn jwk_set_still_fails_on_rsa_private_and_json_errors() {
             "{alg}"
         );
     }
-    let duplicate = format!(r#"{{"keys":[{{"kty":"oct","k":"AA","alg":"RS256","alg":"RS256"}}]}}"#);
+    let duplicate = r#"{"keys":[{"kty":"oct","k":"AA","alg":"RS256","alg":"RS256"}]}"#;
     assert!(matches!(
         JwkSet::from_json(duplicate.as_bytes()),
         Err(Error::InvalidJson(_))
