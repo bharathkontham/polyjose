@@ -469,3 +469,200 @@ describe("gen.mjs: JWS negative-vector features", () => {
     assert.equal(s, hmacB64u("sha256", unb64u(KEYS["oct-32"].jwk.k), `${h}.${p}`));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Generator: nested JWT as a JWE (RFC 7519 §5.2, §11.2; RFC 7516)
+// ---------------------------------------------------------------------------
+
+/**
+ * RFC 7518 §4.6.2 Concat KDF, written here independently of gen.mjs: one
+ * SHA-256 round per 256 bits of output over
+ * counter || Z || AlgorithmID || PartyUInfo || PartyVInfo || SuppPubInfo.
+ */
+function concatKdfIndependent(z, algId, apu, apv, keyBits) {
+  const field = (bytes) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(bytes.length, 0);
+    return [len, bytes];
+  };
+  const supp = Buffer.alloc(4);
+  supp.writeUInt32BE(keyBits, 0);
+  const otherInfo = Buffer.concat([...field(Buffer.from(algId, "ascii")), ...field(apu), ...field(apv), supp]);
+  const rounds = Math.ceil(keyBits / 256);
+  const chunks = [];
+  for (let counter = 1; counter <= rounds; counter += 1) {
+    const c = Buffer.alloc(4);
+    c.writeUInt32BE(counter, 0);
+    chunks.push(createHash("sha256").update(c).update(z).update(otherInfo).digest());
+  }
+  return Buffer.concat(chunks).subarray(0, keyBits / 8);
+}
+
+const KW_IV = Buffer.alloc(8, 0xa6); // RFC 3394 §2.2.3.1 default IV
+
+/** Decrypts a JWE independently: header, CEK recovery, AES-GCM with AAD = ASCII(protected b64u). */
+function decryptIndependent({ protectedB64, ek, iv, ct, tag }, recipientName) {
+  const header = JSON.parse(unb64u(protectedB64));
+  const encBits = { A128GCM: 128, A192GCM: 192, A256GCM: 256 }[header.enc];
+  assert.ok(encBits, `enc ${header.enc}`);
+  const own = KEYS[recipientName].jwk;
+  let cek;
+  if (header.alg === "dir") {
+    cek = unb64u(own.k);
+    assert.equal(unb64u(ek).length, 0, "dir has an empty encrypted key (RFC 7518 §4.5)");
+  } else if (/^A\d{3}KW$/.test(header.alg)) {
+    const kek = unb64u(own.k);
+    const d = createDecipheriv(`id-aes${kek.length * 8}-wrap`, kek, KW_IV);
+    cek = Buffer.concat([d.update(unb64u(ek)), d.final()]);
+  } else if (/^ECDH-ES\+A\d{3}KW$/.test(header.alg)) {
+    const z = diffieHellman({
+      privateKey: createPrivateKey({ key: own, format: "jwk" }),
+      publicKey: createPublicKey({ key: header.epk, format: "jwk" }),
+    });
+    const bits = Number(header.alg.slice(9, 12));
+    const apu = header.apu === undefined ? Buffer.alloc(0) : unb64u(header.apu);
+    const apv = header.apv === undefined ? Buffer.alloc(0) : unb64u(header.apv);
+    const kek = concatKdfIndependent(z, header.alg, apu, apv, bits);
+    const d = createDecipheriv(`id-aes${bits}-wrap`, kek, KW_IV);
+    cek = Buffer.concat([d.update(unb64u(ek)), d.final()]);
+  } else {
+    assert.fail(`alg ${header.alg}`);
+  }
+  assert.equal(cek.length * 8, encBits, "CEK size matches enc");
+  const d = createDecipheriv(`aes-${encBits}-gcm`, cek, unb64u(iv), { authTagLength: 16 });
+  d.setAAD(Buffer.from(protectedB64, "ascii"));
+  d.setAuthTag(unb64u(tag));
+  return { header, plaintext: Buffer.concat([d.update(unb64u(ct)), d.final()]).toString("utf8") };
+}
+
+const compactJwe = (token) => {
+  const p = token.split(".");
+  assert.equal(p.length, 5, "a compact JWE has five parts (RFC 7516 §7.1)");
+  const [protectedB64, ek, iv, ct, tag] = p;
+  return { protectedB64, ek, iv, ct, tag };
+};
+
+const INNER = { header: { alg: "ES256", typ: "JWT" }, payload: '{"iss":"joe","exp":1300819380}', key: "p256" };
+const nested = (jwe, jws = INNER) => generate(entry({ jws, jwe }), keys).input.token;
+
+function assertInnerEs256(plaintext) {
+  const [h, p, s] = parts(plaintext);
+  assert.equal(unb64u(p).toString(), INNER.payload);
+  const ok = verify("sha256", Buffer.from(`${h}.${p}`, "ascii"), { key: pub("p256"), dsaEncoding: "ieee-p1363" }, unb64u(s));
+  assert.ok(ok, "the inner ES256 JWS verifies");
+}
+
+describe("gen.mjs: nested JWE", () => {
+  it("ECDH-ES+A128KW on P-256 decrypts with an independent diffieHellman + Concat KDF + id-aes128-wrap path", () => {
+    const token = nested({ alg: "ECDH-ES+A128KW", enc: "A128GCM", key: "p256-ecdh" });
+    const { header, plaintext } = decryptIndependent(compactJwe(token), "p256-ecdh");
+    assert.equal(header.cty, "JWT", "RFC 7519 §5.2: cty JWT on the outer header");
+    assert.equal(header.epk.kty, "EC");
+    assert.equal(header.epk.crv, "P-256");
+    assert.equal(header.epk.d, undefined);
+    assertInnerEs256(plaintext);
+  });
+
+  it("uses apu and apv from the protected header in the Concat KDF (RFC 7518 §4.6.1.2–§4.6.1.3)", () => {
+    const token = nested({
+      alg: "ECDH-ES+A128KW",
+      enc: "A256GCM",
+      key: "p256-ecdh",
+      header: { apu: b64u("Alice"), apv: b64u("Bob") },
+    });
+    const { header, plaintext } = decryptIndependent(compactJwe(token), "p256-ecdh");
+    assert.equal(header.apu, b64u("Alice"));
+    assertInnerEs256(plaintext);
+  });
+
+  it("dir + A256GCM uses the oct key as the CEK (RFC 7518 §4.5)", () => {
+    const token = nested({ alg: "dir", enc: "A256GCM", key: "oct-32" });
+    const { header, plaintext } = decryptIndependent(compactJwe(token), "oct-32");
+    assert.deepEqual(Object.keys(header), ["alg", "enc", "cty"]);
+    assertInnerEs256(plaintext);
+  });
+
+  it("A128KW + A128GCM wraps a random CEK (RFC 7518 §4.4)", () => {
+    const token = nested({ alg: "A128KW", enc: "A128GCM", key: "oct-16" });
+    assertInnerEs256(decryptIndependent(compactJwe(token), "oct-16").plaintext);
+  });
+
+  it("lets the spec override cty, drop it with null, and add members (iss replication)", () => {
+    const lower = decryptIndependent(compactJwe(nested({ alg: "dir", enc: "A256GCM", key: "oct-32", header: { cty: "jwt" } })), "oct-32");
+    assert.equal(lower.header.cty, "jwt");
+    const none = decryptIndependent(compactJwe(nested({ alg: "dir", enc: "A256GCM", key: "oct-32", header: { cty: null } })), "oct-32");
+    assert.equal("cty" in none.header, false);
+    const iss = decryptIndependent(compactJwe(nested({ alg: "dir", enc: "A256GCM", key: "oct-32", header: { iss: "joe", kid: "k1" } })), "oct-32");
+    assert.equal(iss.header.iss, "joe");
+    assert.equal(iss.header.kid, "k1");
+    for (const m of ["alg", "enc", "epk"]) {
+      assert.throws(() => nested({ alg: "dir", enc: "A256GCM", key: "oct-32", header: { [m]: "x" } }), new RegExp(m));
+    }
+  });
+
+  it("encrypts a given plaintext when there is no jws (encrypt-only, or a non-JWT inner)", () => {
+    const v = generate(entry({ jwe: { alg: "dir", enc: "A256GCM", key: "oct-32", plaintext: '{"iss":"joe"}' } }), keys);
+    assert.equal(decryptIndependent(compactJwe(v.input.token), "oct-32").plaintext, '{"iss":"joe"}');
+    assert.throws(() => nested({ alg: "dir", enc: "A256GCM", key: "oct-32", plaintext: "x" }), /plaintext/);
+  });
+
+  it("applies an array of layers in order: a JWE inside a JWE", () => {
+    const token = nested([
+      { alg: "dir", enc: "A256GCM", key: "oct-32" },
+      { alg: "A128KW", enc: "A128GCM", key: "oct-16" },
+    ]);
+    const outer = decryptIndependent(compactJwe(token), "oct-16");
+    const inner = decryptIndependent(compactJwe(outer.plaintext), "oct-32");
+    assertInnerEs256(inner.plaintext);
+  });
+
+  it("writes a flattened JWE with cty only in the shared unprotected header (ADR 0050 §3)", () => {
+    const v = generate(
+      entry(
+        {
+          jws: INNER,
+          jwe: {
+            alg: "ECDH-ES+A128KW",
+            enc: "A128GCM",
+            key: "p256-ecdh",
+            serialization: "flattened",
+            header: { cty: null },
+            unprotected: { cty: "JWT" },
+          },
+        },
+        { expect: { ok: false, error: "InvalidFormat", obj: "$token_json" } },
+      ),
+      keys,
+    );
+    const obj = JSON.parse(v.input.token);
+    // RFC 7516 §7.2.2 members.
+    assert.deepEqual(Object.keys(obj), ["protected", "unprotected", "encrypted_key", "iv", "ciphertext", "tag"]);
+    assert.deepEqual(obj.unprotected, { cty: "JWT" });
+    assert.deepEqual(v.expect.obj, obj);
+    const { header, plaintext } = decryptIndependent(
+      { protectedB64: obj.protected, ek: obj.encrypted_key, iv: obj.iv, ct: obj.ciphertext, tag: obj.tag },
+      "p256-ecdh",
+    );
+    assert.equal("cty" in header, false);
+    assertInnerEs256(plaintext);
+    const dir = JSON.parse(nested({ alg: "dir", enc: "A256GCM", key: "oct-32", serialization: "flattened", recipient_header: { kid: "r" } }));
+    assert.equal("encrypted_key" in dir, false, "RFC 7516 §7.2.1: an empty encrypted key is omitted");
+    assert.deepEqual(dir.header, { kid: "r" });
+    assert.throws(() => nested({ alg: "dir", enc: "A256GCM", key: "oct-32", unprotected: { cty: "JWT" } }), /flattened/);
+  });
+
+  it("corrupts the tag or the ciphertext so decryption fails", () => {
+    for (const corrupt of ["tag", "ciphertext"]) {
+      const token = nested({ alg: "dir", enc: "A256GCM", key: "oct-32", corrupt });
+      assert.throws(() => decryptIndependent(compactJwe(token), "oct-32"), /authenticate/, corrupt);
+    }
+  });
+
+  it("refuses mismatched keys and unsupported algorithms", () => {
+    assert.throws(() => nested({ alg: "dir", enc: "A128GCM", key: "oct-32" }), /16/);
+    assert.throws(() => nested({ alg: "A128KW", enc: "A128GCM", key: "oct-32" }), /16/);
+    assert.throws(() => nested({ alg: "ECDH-ES+A128KW", enc: "A128GCM", key: "oct-32" }), /EC/);
+    assert.throws(() => nested({ alg: "RSA-OAEP-256", enc: "A128GCM", key: "rsa-2048" }), /unsupported/);
+    assert.throws(() => nested({ alg: "dir", enc: "A128CBC-HS256", key: "oct-32" }), /unsupported/);
+  });
+});
