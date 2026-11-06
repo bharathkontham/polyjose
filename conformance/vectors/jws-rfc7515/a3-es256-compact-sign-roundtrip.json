@@ -1,0 +1,36 @@
+{
+  "source": "RFC 7515 App. A.3",
+  "description": "ES256 compact sign with the A.3 private key, then verify with its public key: ECDSA is randomized, so the output is checked by round trip, not bytes",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "compact",
+    "payload_b64u": "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJFUzI1NiJ9",
+        "key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+          "d": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "verify_with": {
+      "key": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+      },
+      "allowed_algs": [
+        "ES256"
+      ]
+    }
+  }
+}
