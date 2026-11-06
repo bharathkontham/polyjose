@@ -1,0 +1,13 @@
+{
+  "source": "polyjose",
+  "description": "DER import rejects the RFC 7517 A.1 P-256 SPKI with the last octet of y flipped, a point not on the curve (RFC 8725 §3.4, ADR 0041 §4).",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D7gS2XpJFbZiItSs3m9-9Ue6GnvHw_GW2ZZaVtszggXIg",
+    "format": "spki"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

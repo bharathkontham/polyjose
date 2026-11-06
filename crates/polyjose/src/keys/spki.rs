@@ -75,7 +75,9 @@ fn classify(element: Element<'_>) -> Result<AlgId> {
             Some(curve) if curve.tag == der::SEQUENCE => Err(Error::UnsupportedAlgorithm),
             Some(curve) if curve.tag == der::OID => match curve.encoding {
                 // A namedCurve outside the JOSE set (step 2):
-                // brainpoolP256r1, secp224r1, ...
+                // brainpoolP256r1, secp224r1, ... The named arm returns
+                // what the wildcard does; it is kept on purpose (see the
+                // step 1 arms below).
                 oid::OID_BRAINPOOL_P256R1 => Err(Error::UnsupportedAlgorithm),
                 named if CURVES.iter().any(|crv| oid::named_curve(*crv) == named) => mismatch,
                 _ => Err(Error::UnsupportedAlgorithm),
@@ -85,7 +87,12 @@ fn classify(element: Element<'_>) -> Result<AlgId> {
         },
         oid::OID_ED25519 | oid::OID_X25519 | oid::OID_RSA_ENCRYPTION => mismatch,
         // Step 1: the unsupported OIDs polyjose knows by name, and every
-        // other one.
+        // other one. The named arm and the wildcard give the same result
+        // and stay separate on purpose: the named arms list the refusals
+        // of ADR 0018 §4 (Ed448/X448, RFC 8410 §3; id-RSASSA-PSS, RFC 4055
+        // §3.1; brainpool above), each pinned by an oid.rs fixture, and a
+        // version that supports one changes only its arm. Merged into the
+        // wildcard, the OIDs would be used only by tests.
         oid::OID_ED448 | oid::OID_X448 | oid::OID_RSASSA_PSS => Err(Error::UnsupportedAlgorithm),
         _ => Err(Error::UnsupportedAlgorithm),
     }

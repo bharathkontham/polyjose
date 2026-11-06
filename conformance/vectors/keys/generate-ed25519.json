@@ -1,0 +1,16 @@
+{
+  "source": "RFC 9864",
+  "description": "Key generation for an algorithm: the fully-specified Ed25519 algorithm uses the Ed25519 curve (RFC 9864); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "Ed25519"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "Ed25519"
+    }
+  }
+}

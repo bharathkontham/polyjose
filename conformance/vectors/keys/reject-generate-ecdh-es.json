@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"ECDH-ES\": ECDH-ES works on several curves (RFC 7518 §4.6), so a key for it needs a curve, and polyjose never picks one for the caller (ADR 0018 §5).",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "ECDH-ES"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

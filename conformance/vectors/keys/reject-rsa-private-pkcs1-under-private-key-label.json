@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects a PRIVATE KEY label around a 2048-bit PKCS#1 RSAPrivateKey body (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0): an RSA private key under any label is UnsupportedAlgorithm (ADR 0018 §3, ADR 0021).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMIIEowIBAAKCAQEApTAElx1S4Jsf0MD53+bHKYAj7cbKUA/avvDzTf1y1ScdDULq\nqIcjnXPp4EMXBFaphbkFU7S5jNDHVVkt5PgvLhccro7cSL6eldcMvu0kCER4rcSL\nfzC92wlozxW74ZHkb0wFzcWdVPbfXZLtTO1nfgf2rm6IEyklP3yc8qpVSbq26EUu\nOBxWOcocssykiJ1sQm01WCOLPS160fX+1sBDb80sRk8Liy8ZrDq0ATrFnPoxWLkh\ngdKRKqmMPhZHA9lRQfr4cSa3eFO7FxX1N7D1y4W5IWbUPATzDTKqgpvccXoZKQDm\nc4LmRPNXDowvdgxODWugYfbvjPm6WEhpkFEDawIDAQABAoIBAAwj3cp/WLZyICH2\n9MZMTynRJZLVj8vXhnOPAMqkDFr2/28YkmdlWyw4tyEIvTnP5rCRuv7+Yr6jH2s5\n3SIdTVZdU3nOvQjJnZ0Ui3bCtem3oojez4O/AM0GwYGqrr6yuq+lTi3jzp7Ob/cQ\nE8maDweXrTz/mZeS6A5k6aH5+7+pz1hyojeQvy4dxqgDM6dfjbToNenAej8Mhjsg\nxb80YJLpaAoh1J1NQQMi/oHBOWJ336TxN/GXg0nqQ2Aj/gYvHW2xEq+qZGggPu3G\nIzgQKjtZp5lmpWRd/5iOw4eWSmza4gmACK9Es/uwW1cujPddod2oR0fgbGR32lKA\nbyNK29UCgYEA5mNuoiY2ABWvqDCm45iaD3wVvOX7SeobaRyRv0H/SbnYAedRyFnB\nohqG7IIZ8I8GbNQPtr0GyMUoWn4HLGvDnVnfjzhM0x7ixSwvGtRGh57V6yD1T/qr\nXCnqtqv47C3pGDXb03lBBFTIDlAjhWEBuh1KZ6RaNCXjSEj324IoR2cCgYEAt40N\nC1rncImflTvdAhiiwcNX01XjDZuG7rozmHoJ/VYTMr1/frb5vdBCnSzrJIfyHS7p\nGPrhDKVPKgWdFkeN3s87hT8QyvFCBpRKDyEyPAawqGULZhCkqqgoj/nwI6BTD/iW\nx7NBC50u0S3stZEyKaysiGDu6kmMqeb8fWFrdV0CgYBOyXowIXkeFkx37Atmke09\nlmWor817vX+aNpbxHRS8lb11CTJCnc9GLGQvxV4xkffUh8DH8WS8jA/8wlSZsFC5\nIt79D3fWSx2p6C5DsoxcHMlzG1ZI/6RSZFNMHQuHWTv5d5GxhCnj3Up8+pLrLf11\nNEcZom7mnn5XXfzFKIG1yQKBgDxQRgwIJ+rL3jtse1f3/mtLJC3WmBBdnb4OQ2wE\nFgo/4XkX2bAqse/UYj9BhlbvsPgz9PZ3YcIFA/lb9N1gT9b6I6XKLltxYW/GBHvq\nPZaJ4DzFTzSPnXxSW1nMGEOsp/6kge9HEMWfNcYYoCKdfm1BR0RdDcTAvE8MDsWo\nYGYlAoGBAI+aIap6As6UgbzaAYsX3S+nMiRVBjTgQbzaO8ftfkZ9CTRnYgB5AP+O\n+dafKCvQwIoI6PO3JIuFYpB4lEnJSreaEowADsi/OnkfOpczQHa32zP57FRsjdUu\nnVQjbmbkgj/GUQVl3PETWSZbIkRGC9ouUV826p7BIZFZndc+8jHs\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}
