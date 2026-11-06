@@ -26,6 +26,9 @@
 # deny.toml (cargo-deny) is the second layer: it bans C/C++ build tooling (cc, cmake) and git or
 # non-crates.io registry sources for the whole workspace, bindings included.
 #
+# Before any of that, scripts/check-no-cargo-config.sh must pass: a cargo config file in the
+# repository could replace sources or wrap rustc for every cargo command below (see check 6).
+#
 # Fails closed: if cargo or python3 is missing, or any command errors, it exits non-zero.
 # Runs on macOS /bin/bash 3.2 and on Linux bash, so no associative arrays or mapfile.
 set -euo pipefail
@@ -33,6 +36,16 @@ set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
 root=$(pwd); root_physical=$(pwd -P)
+
+# No cargo config file in the repository, checked before cargo runs at all, so a planted config
+# cannot change what the cargo commands below resolve or build. Its exit status (1 found, 2 could
+# not check) is this script's.
+no_config_rc=0
+scripts/check-no-cargo-config.sh || no_config_rc=$?
+if [ "$no_config_rc" -ne 0 ]; then
+  echo "check-deps: FAILED (scripts/check-no-cargo-config.sh)"
+  exit "$no_config_rc"
+fi
 
 allowlist=deps-allowlist.txt
 credits=CREDITS.md
@@ -251,9 +264,16 @@ check_group_rules() {
 
 # 6. Every package in the core's tree comes from crates.io. The walk follows normal and build
 #    edges from polyjose through cargo metadata's resolve graph (all features, all targets), the
-#    same set as the tree above. A `[patch]`, `[replace]` or `.cargo/config.toml` patch shows up
-#    here as a path or git source. cargo-deny's [sources] check (deny.toml) covers git and other
-#    registries for the whole workspace, but not path packages.
+#    same set as the tree above. A `[patch]` or `[replace]` in a manifest shows up here as a path
+#    or git source. cargo-deny's [sources] check (deny.toml) covers git and other registries for
+#    the whole workspace, but not path packages.
+#    Neither sees cargo *source replacement*: a cargo config with `[source.crates-io] replace-with`
+#    (e.g. a vendored directory) keeps reporting the crates.io source while compiling other code.
+#    So no cargo config file may exist anywhere in the repository; scripts/check-no-cargo-config.sh
+#    enforces that (and rejects --config and config variables in scripts/ and .github/) before
+#    this script runs cargo. Residual risk, outside the repository and not checkable here: a config
+#    in a directory above the checkout (e.g. ~/.cargo/config.toml), $CARGO_HOME/config.toml, CARGO_*
+#    variables in the caller's environment, and `--config` on a command line.
 check_sources_crates_io() {
   python3 -I -c '
 import json, os, sys

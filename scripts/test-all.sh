@@ -23,6 +23,9 @@ run() { local name=$1; shift; echo "==> $name"; if "$@"; then record "$name" PAS
 for p in "${platforms[@]}"; do
   case $p in
     rust)
+      # No cargo config file in the repository, and none set by a script or workflow; it could
+      # change sources, rustflags or the rustc wrapper for every cargo command (needs only git).
+      run no-cargo-config scripts/check-no-cargo-config.sh
       if have cargo; then run rust bash -c 'cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
       else record rust "SKIPPED (cargo missing)"; fi
       # The workspace run above uses default features; this one also covers polyjose's

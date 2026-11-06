@@ -18,12 +18,26 @@
 #      sources and tests), this script and Markdown docs, and not in any *RUSTFLAGS variable.
 #      As a backstop that no spelling trick (e.g. a TOML \u escape) can dodge, rustc is asked
 #      which cfgs cargo really passes to polyjose on the host with no features on.
+#   0. First of all, scripts/check-no-cargo-config.sh: no cargo config file anywhere in the
+#      repository. Check 4's scan and backstop see the host only, but a config can set rustflags
+#      for one target (`[target.wasm32-unknown-unknown]`, `[target.'cfg(target_os = "android")']`)
+#      in a spelling no text scan matches; with no config file at all, that switch is gone.
 #   Deliberately obfuscated switches for other targets or in build commands are out of reach of
-#   any scan; .cargo/** and .github/** changes go through owner review for that reason.
+#   any scan; scripts/ and .github/ changes go through owner review for that reason. A config
+#   outside the repository (~/.cargo, parent directories) and the caller's environment remain
+#   residual risk (see scripts/check-no-cargo-config.sh).
 # Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$(pwd); root_physical=$(pwd -P)
+
+# --- 0. No cargo config file in the repository (before any cargo command runs) ---------------------
+no_config_rc=0
+scripts/check-no-cargo-config.sh || no_config_rc=$?
+if [ "$no_config_rc" -ne 0 ]; then
+  echo "FAIL: scripts/check-no-cargo-config.sh (exit $no_config_rc); a cargo config can set a cfg for any target"
+  exit 1
+fi
 # The checks parse cargo's output; CI sets CARGO_TERM_COLOR=always, so turn colour off here.
 export CARGO_TERM_COLOR=never
 

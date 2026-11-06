@@ -41,6 +41,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # Runs before anything that invokes cargo (rust-cache too): a cargo config file in the
+      # repository could replace sources, add rustflags or wrap rustc for every later step. When
+      # it fails, the setup steps are skipped, so no cargo command runs under such a config.
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
       # rustup on the runner reads rust-toolchain.toml, so the channel, components and targets
       # stay defined in one place. That file lists every binding target (WASM, Android, iOS,
       # macOS), so this step downloads their standard libraries too. It costs some setup time
@@ -132,6 +138,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # As in the rust job: before any cargo command, so the MSRV check cannot run under a
+      # cargo config file from the repository.
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
 
       - name: rust-version matches MSRV
         run: |
