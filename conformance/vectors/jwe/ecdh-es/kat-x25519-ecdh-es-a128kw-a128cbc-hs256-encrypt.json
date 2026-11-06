@@ -1,0 +1,28 @@
+{
+  "source": "polyjose",
+  "description": "RFC 7518 §4.6 ECDH-ES+A128KW with A128CBC-HS256 on X25519 (RFC 7748 §6.1 keys), the drawn bytes in the documented order: the exact compact JWE, computed independently with Node.js crypto (OpenSSL)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128CBC-HS256",
+    "plaintext_b64u": "TGl2ZSBsb25nIGFuZCBwcm9zcGVyLg",
+    "recipients": [
+      {
+        "alg": "ECDH-ES+A128KW",
+        "key": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+        }
+      }
+    ],
+    "rng_b64u": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF3B20KcxilfTwWwXJRsmZF30wvh-vAmSqxd_ulHbksKjIyMjIyMjIyMjIyMjIyMjI"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": "eyJhbGciOiJFQ0RILUVTK0ExMjhLVyIsImVuYyI6IkExMjhDQkMtSFMyNTYiLCJlcGsiOnsia3R5IjoiT0tQIiwiY3J2IjoiWDI1NTE5IiwieCI6ImhTRHdDWWt3cDFSMGkzM2N0RDczV2cyX09nMG1PQnIwNjZTcGpxcWJUbW8ifX0.XfBOMWDMJ7WV9Xp4Qf1zWRTtq6A7445IlfN0f90RzD5ckyZtycn0wg.MjIyMjIyMjIyMjIyMjIyMg.2i2qYNAn5b9PkBNgYZPtheTACbK0Mv3Gsjazl1jdR6I.SNyUO2iX3BjB_0-SpJCwug"
+  },
+  "features": [
+    "fixed-rng"
+  ]
+}

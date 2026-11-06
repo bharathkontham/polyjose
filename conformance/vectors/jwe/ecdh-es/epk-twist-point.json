@@ -1,0 +1,33 @@
+{
+  "source": "polyjose",
+  "description": "RFC 8725 §3.4 (Sanso 2017): an \"epk\" that is a low-order point of the quadratic twist of P-256 (Wycheproof ecdh_secp256r1_ecpoint tcId 350) is DecryptionFailed",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTEyOEdDTSIsImVwayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6Ijc5M2pzeWh5cWVfODg3bE12M09xZXpuNWFEN09rU0c1aFNGbjlPUGFZSnMiLCJ5IjoiNnJhaHRHTVV3aG4zQVU0RUZ0ek03SWNlMlZreFo4QWdNSVpRdy1FUTZVbyJ9fQ..NTU1NTU1NTU1NTU1.zY_FwXYs6OPUNKjHQ21YsPM8K83HmQ.GVZsLVJ4SmGr_eXqKC809w",
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+      "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck",
+      "d": "VEmDZpDXXK8p8N0Cndsxs924q6nS1RXFASRl6BfUqdw"
+    },
+    "allowed_algs": [
+      "ECDH-ES",
+      "ECDH-ES+A128KW",
+      "ECDH-ES+A192KW",
+      "ECDH-ES+A256KW"
+    ],
+    "allowed_enc": [
+      "A128GCM",
+      "A192GCM",
+      "A256GCM",
+      "A128CBC-HS256",
+      "A192CBC-HS384",
+      "A256CBC-HS512"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}
