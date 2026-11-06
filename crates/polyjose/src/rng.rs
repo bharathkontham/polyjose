@@ -20,6 +20,10 @@
 //! `insecure-test-vectors` feature, which no binding may enable
 //! (`scripts/check-test-vectors-off.sh`).
 
+use core::fmt;
+use core::marker::PhantomData;
+
+use p256::elliptic_curve::rand_core::{TryCryptoRng, TryRng};
 use zeroize::Zeroize;
 
 use crate::{Error, Result};
@@ -62,6 +66,154 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
         }
     }
 }
+
+/// The crate's one rand_core 0.10 RNG, for the primitive crates that take
+/// an RNG parameter (ADR 0005).
+///
+/// It implements `rand_core::TryRng` (with `Error =`
+/// [`Error`]) and the `rand_core::TryCryptoRng` marker,
+/// reached through `p256::elliptic_curve::rand_core`, so polyjose has no
+/// direct `rand_core` dependency. These are the only `TryRng` and
+/// `TryCryptoRng` impls in the crate. It draws from:
+///
+/// - **the OS CSPRNG** ([`CryptoRngAdapter::os`]): every byte of every
+///   call comes straight from [`fill_random`], with nothing buffered,
+///   seeded or cached. This is the only source in a build without the
+///   `insecure-test-vectors` feature, where the adapter is zero-sized
+///   (checked at compile time) like getrandom's own `SysRng`;
+/// - **an explicitly passed `FixedRng`** (`CryptoRngAdapter::fixed`), only
+///   in polyjose's own tests or with the `insecure-test-vectors` feature
+///   (ADR 0041 §3), to reproduce published vectors. That constructor and
+///   its source variant do not exist otherwise, so no production path can
+///   select it, and nothing global can switch an `os()` adapter to it.
+///
+/// Callers that need randomness take `&mut CryptoRngAdapter` (or
+/// `&mut impl TryCryptoRng`) as a parameter; public APIs create
+/// [`CryptoRngAdapter::os`] themselves. Uses: the added entropy of hedged
+/// RFC 6979 ECDSA signing (`ecdsa`'s `try_sign_with_rng`; RFC 7518 §3.4,
+/// RFC 8812 §3.2), which ADR 0005 requires so that a weak RNG cannot leak
+/// the key, and later JWE and key generation.
+///
+/// A failure is [`Error::RandomnessUnavailable`] and leaves no partial
+/// output (the OS path through [`fill_random`], a `FixedRng` by running
+/// out). The adapter provides bytes only; it is not a key generator. It is
+/// deliberately not `Clone` or `Copy` (rand_core's advice for
+/// cryptographic RNGs), and its `Debug` names the source only.
+pub(crate) struct CryptoRngAdapter<'a>(Source<'a>);
+
+/// Where a [`CryptoRngAdapter`] draws its bytes from.
+enum Source<'a> {
+    /// The OS CSPRNG through [`fill_random`]. The marker only carries the
+    /// lifetime, which a build without the test sources leaves unused.
+    Os(PhantomData<&'a mut ()>),
+    /// A deterministic `FixedRng` the caller passed explicitly (ADR 0041 §3).
+    #[cfg(any(test, feature = "insecure-test-vectors"))]
+    Fixed(&'a mut insecure_test_vectors::FixedRng),
+    /// Test-only: an OS source that fails with this `getrandom::Error`,
+    /// fed through [`fail_closed`], the mapping [`fill_random`] itself uses.
+    /// It reaches a caller's `RandomnessUnavailable` path (ADR 0005).
+    #[cfg(test)]
+    Failing(getrandom::Error),
+}
+
+// Without the test sources the adapter is a zero-sized handle on the OS
+// CSPRNG: there is no state to seed, share or switch (ADR 0005).
+#[cfg(not(any(test, feature = "insecure-test-vectors")))]
+const _: () = assert!(core::mem::size_of::<CryptoRngAdapter<'static>>() == 0);
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the RNG passed to ES* signing (T08), JWE (0003) and key generation (0005)"
+    )
+)]
+impl CryptoRngAdapter<'_> {
+    /// An adapter over the OS CSPRNG ([`fill_random`], ADR 0005).
+    pub(crate) fn os() -> Self {
+        CryptoRngAdapter(Source::Os(PhantomData))
+    }
+
+    /// Fills `dest` from the source; on failure `dest` is zeroed.
+    fn fill(&mut self, dest: &mut [u8]) -> Result<()> {
+        match &mut self.0 {
+            Source::Os(_) => fill_random(dest),
+            #[cfg(any(test, feature = "insecure-test-vectors"))]
+            Source::Fixed(rng) => rng.fill(dest),
+            #[cfg(test)]
+            Source::Failing(injected) => fail_closed(dest, Err(*injected)),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "insecure-test-vectors"))]
+impl<'a> CryptoRngAdapter<'a> {
+    /// An adapter over `rng`, a deterministic source a test passes
+    /// explicitly to reproduce published vectors (ADR 0005, ADR 0041 §3).
+    /// It exists only in polyjose's own tests and with the
+    /// `insecure-test-vectors` feature.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "used by the RFC 7520 JWE vector tests of feature 0003"
+        )
+    )]
+    pub(crate) fn fixed(rng: &'a mut insecure_test_vectors::FixedRng) -> Self {
+        CryptoRngAdapter(Source::Fixed(rng))
+    }
+}
+
+#[cfg(test)]
+impl CryptoRngAdapter<'_> {
+    /// Test-only: an adapter whose OS source fails with `injected`, through
+    /// the [`fail_closed`] injection point.
+    pub(crate) fn failing(injected: getrandom::Error) -> Self {
+        CryptoRngAdapter(Source::Failing(injected))
+    }
+}
+
+impl fmt::Debug for CryptoRngAdapter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The source kind only: never a FixedRng's bytes (test keys).
+        let source = match self.0 {
+            Source::Os(_) => "Os",
+            #[cfg(any(test, feature = "insecure-test-vectors"))]
+            Source::Fixed(_) => "Fixed",
+            #[cfg(test)]
+            Source::Failing(_) => "Failing",
+        };
+        f.debug_tuple("CryptoRngAdapter").field(&source).finish()
+    }
+}
+
+impl TryRng for CryptoRngAdapter<'_> {
+    type Error = Error;
+
+    /// Four bytes, little-endian (rand_core's convention for words built
+    /// from bytes).
+    fn try_next_u32(&mut self) -> Result<u32> {
+        let mut bytes = [0u8; 4];
+        self.fill(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    /// Eight bytes, little-endian.
+    fn try_next_u64(&mut self) -> Result<u64> {
+        let mut bytes = [0u8; 8];
+        self.fill(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<()> {
+        self.fill(dst)
+    }
+}
+
+/// The OS CSPRNG is cryptographically secure (ADR 0005). A `FixedRng`
+/// source is not, which is why it exists only in tests and behind the
+/// `insecure-test-vectors` feature.
+impl TryCryptoRng for CryptoRngAdapter<'_> {}
 
 /// Deterministic byte source for reproducing published test vectors.
 ///
@@ -408,6 +560,115 @@ mod tests {
             assert_eq!(e.to_string(), "randomness unavailable");
             assert!(!e.to_string().contains(&injected.to_string()));
             assert!(std::error::Error::source(&e).is_none());
+        }
+    }
+
+    /// Compiles only for a `TryCryptoRng`: the bound `ecdsa`'s
+    /// `try_sign_with_rng` and elliptic-curve's `Generate` place on an RNG.
+    fn require_try_crypto_rng<R: TryCryptoRng<Error = Error>>(_: &R) {}
+
+    #[test]
+    fn every_adapter_source_is_a_try_crypto_rng() {
+        let mut fixed = insecure_test_vectors::FixedRng::new([0u8; 1]);
+        require_try_crypto_rng(&CryptoRngAdapter::os());
+        require_try_crypto_rng(&CryptoRngAdapter::fixed(&mut fixed));
+        require_try_crypto_rng(&CryptoRngAdapter::failing(getrandom::Error::UNSUPPORTED));
+    }
+
+    #[test]
+    fn os_adapter_fills_bytes_from_the_os() {
+        // 256 bits each: equal or all-zero outputs are 2^-256 events.
+        let mut rng = CryptoRngAdapter::os();
+        let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+        assert_eq!(rng.try_fill_bytes(&mut a), Ok(()));
+        assert_eq!(rng.try_fill_bytes(&mut b), Ok(()));
+        assert_ne!(a, [0u8; 32]);
+        assert_ne!(a, b);
+        assert_eq!(rng.try_fill_bytes(&mut []), Ok(()));
+    }
+
+    #[test]
+    fn os_adapter_draws_words_from_the_os() {
+        // Two 64-bit draws collide with probability 2^-64; four 32-bit draws
+        // are all equal with probability 2^-96.
+        let mut rng = CryptoRngAdapter::os();
+        let (a, b) = (rng.try_next_u64(), rng.try_next_u64());
+        assert!(a.is_ok() && b.is_ok());
+        assert_ne!(a, b);
+        let words: Vec<_> = (0..4).map(|_| rng.try_next_u32()).collect();
+        assert!(words.iter().all(Result::is_ok));
+        assert!(words.windows(2).any(|w| w[0] != w[1]), "{words:?}");
+    }
+
+    #[test]
+    fn os_adapters_are_independent_of_a_fixed_rng_in_scope() {
+        // An explicitly passed FixedRng feeds only its own adapter: an
+        // os() adapter made alongside still reads the OS (ADR 0041 §3).
+        let mut fixed = insecure_test_vectors::FixedRng::new([0u8; 32]);
+        let _fixed_adapter = CryptoRngAdapter::fixed(&mut fixed);
+        let mut buf = [0u8; 32];
+        assert_eq!(CryptoRngAdapter::os().try_fill_bytes(&mut buf), Ok(()));
+        assert_ne!(buf, [0u8; 32]);
+    }
+
+    #[test]
+    fn fixed_adapter_replays_the_bytes_little_endian() {
+        // rand_core builds words from bytes little-endian; pinning it keeps
+        // vector reproduction stable.
+        let bytes: Vec<u8> = (1..=16).collect();
+        let mut fixed = insecure_test_vectors::FixedRng::new(bytes);
+        {
+            let mut rng = CryptoRngAdapter::fixed(&mut fixed);
+            assert_eq!(rng.try_next_u32(), Ok(0x0403_0201));
+            assert_eq!(rng.try_next_u64(), Ok(0x0c0b_0a09_0807_0605));
+            let mut rest = [0u8; 4];
+            assert_eq!(rng.try_fill_bytes(&mut rest), Ok(()));
+            assert_eq!(rest, [13, 14, 15, 16]);
+        }
+        assert_eq!(fixed.remaining(), 0);
+    }
+
+    #[test]
+    fn fixed_adapter_fails_closed_when_exhausted() {
+        // Never wraps or pads (RFC 7518 §8.4 IV reuse); same error as the OS.
+        let mut fixed = insecure_test_vectors::FixedRng::new([1u8, 2, 3]);
+        let mut rng = CryptoRngAdapter::fixed(&mut fixed);
+        assert_eq!(rng.try_next_u32(), Err(Error::RandomnessUnavailable));
+        let mut buf = [0xA5u8; 4];
+        assert_eq!(
+            rng.try_fill_bytes(&mut buf),
+            Err(Error::RandomnessUnavailable)
+        );
+        assert_eq!(buf, [0u8; 4]);
+    }
+
+    #[test]
+    fn adapter_debug_names_the_source_only() {
+        let mut fixed = insecure_test_vectors::FixedRng::new([0x5Au8; 8]);
+        assert_eq!(
+            format!("{:?}", CryptoRngAdapter::os()),
+            r#"CryptoRngAdapter("Os")"#
+        );
+        let debug = format!("{:?}", CryptoRngAdapter::fixed(&mut fixed));
+        assert_eq!(debug, r#"CryptoRngAdapter("Fixed")"#);
+    }
+
+    #[test]
+    fn injected_getrandom_failure_surfaces_from_the_adapter() {
+        // The adapter's failure path, through the fail_closed injection
+        // point: every getrandom error is RandomnessUnavailable, with no
+        // partial output left behind (ADR 0005, ADR 0007).
+        for injected in injected_errors() {
+            let mut rng = CryptoRngAdapter::failing(injected);
+            let mut buf = [0xA5u8; 32];
+            assert_eq!(
+                rng.try_fill_bytes(&mut buf),
+                Err(Error::RandomnessUnavailable),
+                "{injected:?}"
+            );
+            assert_eq!(buf, [0u8; 32]);
+            assert_eq!(rng.try_next_u32(), Err(Error::RandomnessUnavailable));
+            assert_eq!(rng.try_next_u64(), Err(Error::RandomnessUnavailable));
         }
     }
 }
