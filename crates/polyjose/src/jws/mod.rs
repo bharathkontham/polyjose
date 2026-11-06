@@ -462,6 +462,13 @@ impl fmt::Debug for VerifyOptions<'_> {
 /// Header parameters such as `jwk`, `jku`, `x5c` and `kid` are returned as
 /// data only; they played no part in choosing the key (ADR 0026 §2).
 ///
+/// Only [`protected`](Self::protected) is integrity-protected: the
+/// signature covers it, and does not cover
+/// [`unprotected`](Self::unprotected) (RFC 7515 §5.1 step 5, §7.2.1).
+/// Anyone can change or add an unprotected header without the JWS failing
+/// to verify, so read `typ`, `cty`, `kid` and `crit` from `protected`
+/// only, and never trust them from `unprotected` (ADR 0049 §2).
+///
 /// `Debug` prints the payload's length, never its bytes, and the headers
 /// through [`Header`]'s redacting `Debug`.
 #[derive(Clone, PartialEq)]
@@ -474,6 +481,14 @@ pub struct Verified {
     pub protected: Option<Header>,
     /// That signature's JWS Unprotected Header, if it had one (JSON only,
     /// RFC 7515 §7.2.1).
+    ///
+    /// **Not integrity-protected** (ADR 0049 §2): the signature does not
+    /// cover it (RFC 7515 §5.1 step 5), so an attacker can set any value
+    /// here and the JWS still verifies. It is returned because RFC 7515
+    /// makes it part of the JOSE Header, but callers must not trust it for
+    /// `typ`, `cty`, `kid` or `crit`; read those from
+    /// [`protected`](Self::protected). (Verification already rejects
+    /// `crit` and `b64` here, RFC 7515 §4.1.11, RFC 7797 §3.)
     pub unprotected: Option<Header>,
     /// The JWS Payload (RFC 7515 §2): base64url-decoded, or the raw octets
     /// when `b64` is `false` (RFC 7797 §3), or a copy of the detached
