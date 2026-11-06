@@ -2,7 +2,7 @@
 //! must be on their curve (SEC 1 §3.2.2.1, RFC 7518 §6.2.1), EC private
 //! scalars `d` in [1, n−1] (SEC 1 §3.2.1, RFC 7518 §6.2.2.1), and Ed25519
 //! public keys must decode (RFC 8032 §5.1.3) to a point that is not of small
-//! order. Every rejection is `InvalidKey` with a fixed detail, and a JWK Set
+//! order and has no torsion component (ADR 0043 §1). Every rejection is `InvalidKey` with a fixed detail, and a JWK Set
 //! skips such a member instead of failing (ADR 0041 §2, RFC 7517 §5).
 //!
 //! The curve constants below (generators G, −G, the group orders n and the
@@ -280,6 +280,51 @@ fn ed25519_public_keys_that_do_not_decode_or_are_small_order_are_rejected() {
         ))
         .is_ok()
     );
+}
+
+/// Mixed-order Ed25519 public keys: canonical, not of small order, but with
+/// a torsion component (Wycheproof `ed25519_test.json` tcIds 160, 161 and
+/// 180, flag `MixedOrderPublicKey`). Checked independently of polyjose with
+/// RFC 8032 §5.1 arithmetic in Python: each decodes canonically, [8]P is
+/// not the identity and [L]P is not the identity.
+const MIXED_ORDER: [&str; 3] = [
+    "Fd6zBynrPkZciPEbV9DI026w9nDDsi0vgOpgSe6ywjs",
+    "MfIK3w8loE9tCUDS62oLfUqi8YyVcab363S_BZsNchU",
+    "4Q5PVyWs9fD0zwpOz8bprQ22l_HwwIN_17QjpUaqMFw",
+];
+
+#[test]
+fn ed25519_public_keys_with_a_torsion_component_are_rejected() {
+    // ADR 0043 §1: implementations disagree on such keys, and honest keys
+    // never have one, so they are InvalidKey at import with the same fixed
+    // detail as any other unusable Ed25519 key.
+    for x in MIXED_ORDER {
+        assert_eq!(import(&okp("Ed25519", x)).err(), Some(BAD_ED25519), "{x}");
+        let e = import(&okp("Ed25519", x)).unwrap_err();
+        assert!(!format!("{e} {e:?}").contains(&x[..10]));
+    }
+}
+
+#[test]
+fn jwk_set_skips_mixed_order_ed25519_members() {
+    // ADR 0041 §2, ADR 0043 §1: skipped like any invalid member.
+    let doc = format!(
+        r#"{{"keys":[{},{},{}]}}"#,
+        okp("Ed25519", MIXED_ORDER[0]),
+        okp("Ed25519", "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"),
+        okp("Ed25519", MIXED_ORDER[2]),
+    );
+    let set = JwkSet::from_json(doc.as_bytes()).expect("the set itself is valid");
+    assert_eq!((set.len(), set.skipped()), (1, 2));
+}
+
+#[test]
+fn x25519_keys_with_a_torsion_component_keep_importing() {
+    // ADR 0043 §2: torsion is normal for X25519 and clamping neutralises
+    // it (RFC 7748 §5), so the same 32 octets import as an X25519 key.
+    for x in MIXED_ORDER {
+        assert!(import(&okp("X25519", x)).is_ok(), "{x}");
+    }
 }
 
 #[test]

@@ -226,6 +226,30 @@ mod tests {
         ));
     }
 
+    /// Wycheproof `ed25519_test.json` tcId 160's public key
+    /// 15deb307…b2c23b (`MixedOrderPublicKey`): canonical, not of small
+    /// order, with a torsion component of order 8 (checked independently
+    /// with RFC 8032 §5.1 arithmetic in Python).
+    const MIXED_ORDER: &str = "Fd6zBynrPkZciPEbV9DI026w9nDDsi0vgOpgSe6ywjs";
+
+    #[test]
+    fn a_key_with_a_torsion_component_is_refused_before_the_signature() {
+        // ADR 0043 §1: defence in depth behind JWK import, which refuses
+        // the key first. `is_weak` alone lets it through.
+        let x = b64url_decode(MIXED_ORDER).unwrap();
+        let key = VerifyingKey::from_bytes(&<[u8; 32]>::try_from(&x[..]).unwrap()).unwrap();
+        assert!(!key.is_weak());
+        assert_eq!(
+            verify_ed25519(&x, A4_SIGNING_INPUT, &a4_signature()),
+            Err(Error::InvalidKey("Ed25519 x has a torsion component"))
+        );
+        let jwk = format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{MIXED_ORDER}"}}"#);
+        assert!(matches!(
+            Jwk::from_json(jwk.as_bytes()),
+            Err(Error::InvalidKey(_))
+        ));
+    }
+
     #[test]
     fn the_probe_would_pass_a_lenient_verifier() {
         // Shows the probe above tests something: ed25519-dalek's
@@ -478,11 +502,11 @@ mod tests {
         Deviation::range(
             160,
             180,
-            Outcome::Accept,
-            "ADR 0026 §6: verify_strict plus is_weak() is the policy; a mixed-order \
-             key is not of small order, and these signatures satisfy the \
-             cofactorless equation [S]B = R + [k]A that RFC 8032 §5.1.7 step 3 \
-             allows",
+            Outcome::Reject,
+            "ADR 0043 §1: a public key with a torsion component (mixed order, not \
+             small order) is rejected with InvalidKey at JWK import, although \
+             RFC 8032 §5.1.7 and verify_strict accept it, because implementations \
+             disagree on such keys; verify re-checks is_torsion_free()",
         ),
     ];
 
@@ -497,9 +521,14 @@ mod tests {
             let key = match Jwk::from_json(group.verification_jwk().as_bytes()) {
                 Ok(key) => key,
                 Err(e) => {
-                    // Only the small-order keys fail import, and only with
-                    // InvalidKey (ADR 0041 §4).
-                    assert!(test.has_flag("SmallOrderPublicKey"), "tcId {id}: {e:?}");
+                    // Only the small-order (ADR 0041 §4) and mixed-order
+                    // (ADR 0043 §1) keys fail import, and only with
+                    // InvalidKey.
+                    assert!(
+                        test.has_flag("SmallOrderPublicKey")
+                            || test.has_flag("MixedOrderPublicKey"),
+                        "tcId {id}: {e:?}"
+                    );
                     assert_eq!(e.code(), "InvalidKey", "tcId {id}");
                     return Outcome::Reject;
                 }
@@ -517,10 +546,10 @@ mod tests {
         });
         assert_eq!(summary.tests, 210);
         assert_eq!(summary.deviations, 29);
-        // 117 valid + 21 mixed-order acceptable; 64 invalid + 8 small-order
-        // acceptable rejected.
-        assert_eq!(summary.accepted, 117 + 21);
-        assert_eq!(summary.rejected, 64 + 8);
+        // 117 valid accepted; 64 invalid + 8 small-order acceptable +
+        // 21 mixed-order acceptable rejected.
+        assert_eq!(summary.accepted, 117);
+        assert_eq!(summary.rejected, 64 + 8 + 21);
     }
 
     /// RFC 8037 §A.4: the complete compact JWS.
