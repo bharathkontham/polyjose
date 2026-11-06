@@ -855,6 +855,86 @@ mod tests {
         }
     }
 
+    /// Tester additions: the malformed-signature and key-order rules on all
+    /// four curves, not only the RFC vectors' P-256 and P-521.
+    mod all_curves {
+        use super::*;
+
+        #[test]
+        fn malformed_signatures_are_invalid_signature_on_every_curve() {
+            for alg in &ALL {
+                let private = private_key(alg);
+                let public = private.to_public().unwrap();
+                let sig = sign(alg, &private, b"input").unwrap();
+                let n = sig.len();
+                assert_eq!(n, signature_len(alg));
+                assert_eq!(verify(alg, &public, b"input", &sig), Ok(()));
+                let half = n / 2;
+                let mut long = sig.clone();
+                long.push(0);
+                let mut flipped = sig.clone();
+                flipped[n - 1] ^= 1;
+                let mut flipped_r = sig.clone();
+                flipped_r[0] ^= 0x80;
+                let bad = [
+                    Vec::new(),
+                    sig[..n - 1].to_vec(),
+                    long,
+                    vec![0; n],
+                    [vec![0; half], sig[half..].to_vec()].concat(),
+                    [sig[..half].to_vec(), vec![0; half]].concat(),
+                    vec![0xff; n],
+                    der(&sig),
+                    flipped,
+                    flipped_r,
+                ];
+                for b in &bad {
+                    assert_eq!(
+                        verify(alg, &public, b"input", b),
+                        Err(Error::InvalidSignature),
+                        "{alg}: {} octets",
+                        b.len()
+                    );
+                }
+                assert_eq!(
+                    verify(alg, &public, b"inpuu", &sig),
+                    Err(Error::InvalidSignature),
+                    "{alg}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_off_curve_key_beats_a_bad_signature_on_every_curve() {
+            // ADR 0026 §2: step 8 (key) before step 9 (signature).
+            macro_rules! check {
+                ($ops:ident, $alg:expr) => {{
+                    let key = private_key(&$alg);
+                    let public = key.to_public().unwrap();
+                    let KeyMaterial::Ec(ec) = public.material() else {
+                        unreachable!()
+                    };
+                    let mut y = ec.y().to_vec();
+                    *y.last_mut().unwrap() ^= 1;
+                    for sig in [&b"junk"[..], &[]] {
+                        assert_eq!(
+                            $ops::verify(ec.x(), &y, b"input", sig).map_err(|e| e.code()),
+                            Err("InvalidKey")
+                        );
+                    }
+                    assert_eq!(
+                        $ops::verify(ec.x(), &y[1..], b"input", b"junk").map_err(|e| e.code()),
+                        Err("InvalidKey")
+                    );
+                }};
+            }
+            check!(p256_ops, A::ES256);
+            check!(p384_ops, A::ES384);
+            check!(p521_ops, A::ES512);
+            check!(k256_ops, A::ES256K);
+        }
+    }
+
     mod properties {
         use super::*;
         use proptest::prelude::*;
