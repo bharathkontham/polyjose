@@ -1,6 +1,7 @@
 # RFC 7520 notice
 
-The vectors under this directory are converted from:
+The vectors under this directory, and the RFC 7520 vectors of the JWE
+directories listed below, are converted from:
 
 > M. Miller, "Examples of Protecting Content Using JSON Object Signing and
 > Encryption (JOSE)", RFC 7520, DOI 10.17487/RFC7520, May 2015.
@@ -9,12 +10,37 @@ The vectors under this directory are converted from:
 | Directory | RFC 7520 sections |
 |---|---|
 | `jws/` | §4 (JSON Web Signature examples), with the §3 keys |
+| `conformance/vectors/jwe/compact/` | §5.6, §5.8 |
+| `conformance/vectors/jwe/gcmkw/` | §5.7 |
+| `conformance/vectors/jwe/pbes2/` | §5.3 |
+| `conformance/vectors/jwe/ecdh-es/` | §5.4, §5.5 |
+| `conformance/vectors/jwe/json/` | §5.6, §5.7, §5.8, §5.10, §5.11, §5.12 |
+| `conformance/vectors/jwe/zip/` | §5.9 |
+| `conformance/vectors/jwe/rfc7520-multi/` | §5.13 |
+| `conformance/vectors/jwe/negative-structure/` | §5.1, §5.2 (the RSA1_5 and RSA-OAEP refusals); §5.6, §5.8 inputs |
+| `conformance/vectors/jwe/negative-crypto/` | §5.3–§5.7, §5.13 inputs |
+| `conformance/vectors/jwe/negative-json/` | §5.10, §5.11 inputs |
 
-Every key, header, payload, signature and serialization in a vector is copied
-octet for octet from the RFC's figures; each vector's `source` names the
-section and figure. Only the vector format (`conformance/schema.json`) is
-polyjose's. The JSON objects, JWKs and base64url values taken from the RFC
-are Code Components under Section 4 of the IETF Trust Legal Provisions.
+In `jws/`, every key, header, payload, signature and serialization in a
+vector is copied octet for octet from the RFC's figures; each vector's
+`source` names the section and figure. Only the vector format
+(`conformance/schema.json`) is polyjose's. The JSON objects, JWKs and
+base64url values taken from the RFC are Code Components under Section 4 of
+the IETF Trust Legal Provisions.
+
+In the JWE directories, only the vectors whose `source` or `description`
+names RFC 7520 come from it; the other files of those directories are
+polyjose's or an oracle's, as their `source` says. Their RFC 7520 values
+(keys, headers, plaintexts, the printed random values and the outputs) were
+not transcribed from the RFC text: the generators in `conformance/tools/jwe/`
+read them from the vendored ietf-jose cookbook,
+`crates/polyjose/tests/third_party/ietf-jose-cookbook/`, a machine-readable
+copy of the RFC 7520 §5 examples. The cookbook files are under the
+Unlicense and keep their own notice in that directory, because they are a
+different upstream. The RFC 7520 values in these vectors, whether used as
+printed or as the input of a negative case (a flipped bit, a removed or
+changed member), are the RFC's Code Components, and this notice applies to
+them as it does to `jws/`.
 
 This code was derived from IETF RFC 7520. Please reproduce this note if
 possible.
