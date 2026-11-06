@@ -680,3 +680,104 @@ fn every_alg_serialization_and_b64_round_trips() {
     }
     assert_eq!(cells, ALGS.len() * 3 * 2 * 2);
 }
+
+/// RFC 7520 §3.3 (Figure 3): the RSA public key's `n` (`e` is `AQAB`).
+const RFC7520_N: &str = concat!(
+    "n4EPtAOCc9AlkeQHPzHStgAbgs7bTZLwUBZdR8_KuKPEHLd4rHVTeT",
+    "-O-XV2jRojdNhxJWTDvNd7nqQ0VEiZQHz_AJmSCpMaJMRBSFKrKb2wqV",
+    "wGU_NsYOYL-QtiWN2lbzcEe6XC0dApr5ydQLrHqkHHig3RBordaZ6Aj-",
+    "oBHqFEHYpPe7Tpe-OfVfHd1E6cS6M1FZcD1NNLYD5lFHpPI9bTwJlsde",
+    "3uhGqC0ZCuEHg8lhzwOHrtIQbS0FVbb9k3-tVTU4fg_3L_vniUFAKwuC",
+    "LqKnS2BYwdq_mzSnbLY7h_qixoR7jig3__kRhuaxwUkRz5iaiQkqgc5g",
+    "HdrNP5zw",
+);
+
+/// RFC 7520 §4 (Figure 8): BASE64URL(JWS Payload) of §4.1 and §4.2.
+const RFC7520_PAYLOAD: &str = concat!(
+    "SXTigJlzIGEgZGFuZ2Vyb3VzIGJ1c2luZXNzLCBGcm9kbywgZ29pbmcgb3V0IH",
+    "lvdXIgZG9vci4gWW91IHN0ZXAgb250byB0aGUgcm9hZCwgYW5kIGlmIHlvdSBk",
+    "b24ndCBrZWVwIHlvdXIgZmVldCwgdGhlcmXigJlzIG5vIGtub3dpbmcgd2hlcm",
+    "UgeW91IG1pZ2h0IGJlIHN3ZXB0IG9mZiB0by4",
+);
+
+/// RFC 7520 §4.1.3 (Figure 13): the RS256 compact JWS, as `(protected,
+/// signature)` around [`RFC7520_PAYLOAD`] (Figures 10 and 12).
+const RFC7520_4_1: (&str, &str) = (
+    "eyJhbGciOiJSUzI1NiIsImtpZCI6ImJpbGJvLmJhZ2dpbnNAaG9iYml0b24uZXhhbXBsZSJ9",
+    concat!(
+        "MRjdkly7_-oTPTS3AXP41iQIGKa80A0ZmTuV5MEaHoxnW2e5CZ5NlKtainoFmK",
+        "ZopdHM1O2U4mwzJdQx996ivp83xuglII7PNDi84wnB-BDkoBwA78185hX-Es4J",
+        "IwmDLJK3lfWRa-XtL0RnltuYv746iYTh_qHRD68BNt1uSNCrUCTJDt5aAE6x8w",
+        "W1Kt9eRo4QPocSadnHXFxnt8Is9UzpERV0ePPQdLuW3IS_de3xyIrDaLGdjluP",
+        "xUAhb6L2aXic1U12podGU0KLUQSE_oI-ZnmKJ3F4uOZDnd6QZWJushZ41Axf_f",
+        "cIe8u9ipH84ogoree7vjbU5y18kDquDg",
+    ),
+);
+
+/// RFC 7520 §4.2.3 (Figure 20): the PS384 compact JWS (Figures 17, 19).
+const RFC7520_4_2: (&str, &str) = (
+    "eyJhbGciOiJQUzM4NCIsImtpZCI6ImJpbGJvLmJhZ2dpbnNAaG9iYml0b24uZXhhbXBsZSJ9",
+    concat!(
+        "cu22eBqkYDKgIlTpzDXGvaFfz6WGoz7fUDcfT0kkOy42miAh2qyBzk1xEsnk2I",
+        "pN6-tPid6VrklHkqsGqDqHCdP6O8TTB5dDDItllVo6_1OLPpcbUrhiUSMxbbXU",
+        "vdvWXzg-UD8biiReQFlfz28zGWVsdiNAUf8ZnyPEgVFn442ZdNqiVJRmBqrYRX",
+        "e8P_ijQ7p8Vdz0TTrxUeT3lm8d9shnr2lfJT8ImUjvAA2Xez2Mlp8cBE5awDzT",
+        "0qI0n6uiP1aCN_2_jLAeQTlqRHtfa64QQSUmFAAjVKPbByi7xho0uTOcbH510a",
+        "6GYmJUAfmWjwZ6oD4ifKo8DYM-X72Eaw",
+    ),
+);
+
+/// The RFC 7520 RSA tokens with their alg, and the §3.3 public key.
+fn rfc7520_rsa() -> ([(String, SigningAlg); 2], Jwk) {
+    let token =
+        |(protected, signature): (&str, &str)| format!("{protected}.{RFC7520_PAYLOAD}.{signature}");
+    let key = Jwk::from_json(format!(r#"{{"kty":"RSA","n":"{RFC7520_N}","e":"AQAB"}}"#).as_bytes())
+        .unwrap();
+    (
+        [
+            (token(RFC7520_4_1), SigningAlg::RS256),
+            (token(RFC7520_4_2), SigningAlg::PS384),
+        ],
+        key,
+    )
+}
+
+#[test]
+fn rfc7520_rsa_tokens_verify() {
+    // RFC 7520 §4.1 and §4.2: RSA is verify-only (ADR 0021), so these
+    // published tokens stand in for a round trip.
+    let (tokens, key) = rfc7520_rsa();
+    for (jws, alg) in &tokens {
+        let allowed = [alg.clone()];
+        let verified = verify_compact(jws, &key, &VerifyOptions::new(&allowed).unwrap()).unwrap();
+        assert!(
+            verified
+                .payload
+                .starts_with("It\u{2019}s a dangerous business".as_bytes())
+        );
+    }
+}
+
+proptest! {
+    // ADR 0009: at most 1,000 cases.
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// RFC 7515 §5.2, ADR 0021: one bit flipped anywhere in the RFC 7520
+    /// §4.1 (RS256) or §4.2 (PS384) token, separators included, and it
+    /// never verifies. The flip is in the low seven bits, so the token
+    /// stays ASCII: a `&str` holds nothing else.
+    #[test]
+    fn flipping_a_bit_of_an_rfc7520_rsa_token_never_verifies(
+        which in 0..2usize,
+        at in any::<Index>(),
+        bit in 0u8..7,
+    ) {
+        let (tokens, key) = rfc7520_rsa();
+        let (jws, alg) = &tokens[which];
+        let tampered = flip_text(jws, at, bit);
+        prop_assert_ne!(&tampered, jws);
+        let allowed = [alg.clone()];
+        let result = verify_compact(&tampered, &key, &VerifyOptions::new(&allowed).unwrap());
+        prop_assert!(result.is_err(), "still verified: {tampered}");
+    }
+}
