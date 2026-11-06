@@ -142,6 +142,82 @@ append_to crates/polyjose/src/jws/mod.rs 'mod rsa; fn v() { self::rsa::verify();
 append_to crates/polyjose/src/jws/rsa.rs 'use rsa::pkcs1v15::VerifyingKey; use rsa::pss::VerifyingKey as PssKey; use rsa::RsaPublicKey;'
 expect_pass "ECDSA/EdDSA SigningKey, cbc Decryptor, self::rsa:: and the typed RSA VerifyingKey"
 
+# The same legitimate code as rustfmt lays it out over several lines, one case per family, so the
+# whole-file views of check 9 are exercised on it too.
+new_case rsa-public-key-code
+append_to crates/polyjose/src/jws/rsa.rs '//! RS256 and PS256 verification only; see [`super::ecdsa`] for signing.
+use rsa::{
+    BigUint, RsaPublicKey,
+    pkcs1v15::{Signature, VerifyingKey},
+    pss::VerifyingKey as PssVerifyingKey,
+    signature::Verifier,
+    traits::PublicKeyParts,
+};
+
+/// Imports n and e (RFC 7518 §6.3.1) and verifies (RFC 7518 §3.3, §3.5).
+fn verify(n: &[u8], e: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    let Ok(key) = RsaPublicKey::new(BigUint::from_bytes_be(n), BigUint::from_bytes_be(e)) else {
+        return false;
+    };
+    let _bits = key.size() * 8; // "// not a comment" in a string: "/* nor this"
+    let pkcs1 = rsa::pkcs1v15::VerifyingKey::<rsa::sha2::Sha256>::new(key.clone());
+    let pss: PssVerifyingKey<rsa::sha2::Sha256> = rsa::pss::VerifyingKey::new(key);
+    let Ok(signature) = Signature::try_from(sig) else {
+        return false;
+    };
+    pkcs1.verify(msg, &signature).is_ok() || pss.verify(msg, &signature.into()).is_ok()
+}
+
+fn _typed(_: VerifyingKey<rsa::sha2::Sha512>) {}'
+append_to crates/polyjose/src/jwe.rs 'fn wrap(key: &rsa::RsaPublicKey, rng: &mut R, cek: &[u8]) -> Vec<u8> {
+    key.encrypt(
+        rng,
+        rsa::Oaep::<rsa::sha2::Sha256>::new(),
+        cek,
+    )
+    .unwrap_or_default()
+}'
+expect_pass "rsa::RsaPublicKey, rsa::pkcs1v15::VerifyingKey, rsa::pss::VerifyingKey and an Oaep encrypt over several lines"
+
+new_case ecdsa-signing-key
+append_to crates/polyjose/src/jws/ecdsa.rs '//! ES256 signs (RFC 7518 §3.4); unlike [`super::rsa`], which only verifies.
+use p256::ecdsa::{
+    Signature, SigningKey, VerifyingKey,
+    signature::{Signer, Verifier},
+};
+
+fn sign(d: &[u8; 32], msg: &[u8]) -> Option<Vec<u8>> {
+    let key = p256::ecdsa::SigningKey::from_bytes(
+        &(*d).into(),
+    )
+    .ok()?;
+    let _p384: Option<p384::ecdsa::SigningKey> = None;
+    let _k256: Option<k256::ecdsa::SigningKey> = None;
+    let signature: Signature = key.sign(msg);
+    VerifyingKey::from(&key).verify(msg, &signature).ok()?;
+    let _ = SigningKey::verifying_key;
+    Some(signature.to_bytes().to_vec())
+}'
+expect_pass "p256::ecdsa::SigningKey over several lines in a file that does not use rsa"
+
+new_case eddsa-signing-key
+append_to crates/polyjose/src/jws/eddsa.rs '//! EdDSA over Ed25519 (RFC 8037 §3.1).
+use ed25519_dalek::{
+    Signature, Signer, SigningKey,
+    Verifier, VerifyingKey,
+};
+
+fn sign(seed: &[u8; 32], msg: &[u8]) -> [u8; 64] {
+    let key = ed25519_dalek::SigningKey::from_bytes(
+        seed,
+    );
+    let signature: Signature = key.sign(msg);
+    let _ok = VerifyingKey::from(&key).verify(msg, &signature).is_ok();
+    let _ = SigningKey::verifying_key;
+    signature.to_bytes()
+}'
+expect_pass "ed25519_dalek::SigningKey over several lines in a file that does not use rsa"
+
 # --- Check 10: sha1 --------------------------------------------------------------------------------
 new_case sha1
 add_core_dependency 'sha1 = { version = "0.11", default-features = false }'
