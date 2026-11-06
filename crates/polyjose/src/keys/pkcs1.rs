@@ -82,6 +82,49 @@ pub(crate) fn decode(der: &[u8]) -> Result<RsaPublicParts<'_>> {
     read_public(fields)
 }
 
+/// Whether `der` is exactly one SEQUENCE (X.690 §8.1.1, nothing after it)
+/// whose contents have the RSAPrivateKey shape of RFC 8017 App. A.1.2
+/// (see [`is_rsa_private_key`]).
+///
+/// This is the framing-only check the PKCS#8 and SEC1 decoders run after
+/// their own parse has failed, so that an RSAPrivateKey under a `PRIVATE
+/// KEY` or `EC PRIVATE KEY` label (or [`KeyFormat::Pkcs8`] /
+/// [`KeyFormat::Sec1`]) is refused as an RSA private key (ADR 0018 §3, §4;
+/// ADR 0021) and not as malformed input. As in [`decode`], only the
+/// version's contents and the identifier and length octets of the next
+/// eight elements are read: no private INTEGER's contents are parsed,
+/// copied or reported.
+///
+/// [`KeyFormat::Pkcs8`]: super::KeyFormat::Pkcs8
+/// [`KeyFormat::Sec1`]: super::KeyFormat::Sec1
+pub(crate) fn is_rsa_private_key_der(der: &[u8]) -> bool {
+    let Ok(mut outer) = Reader::new(der) else {
+        return false;
+    };
+    let Ok(fields) = outer.sequence() else {
+        return false;
+    };
+    outer.finish().is_ok() && is_rsa_private_key(fields)
+}
+
+/// The error a PKCS#8 or SEC1 decoder returns for `der` once its own parse
+/// failed with `error`: [`Error::UnsupportedAlgorithm`] when `error` is
+/// [`Error::InvalidKey`] and `der` has the RSAPrivateKey shape
+/// ([`is_rsa_private_key_der`]; ADR 0018 §3 "RSA private, any format",
+/// ADR 0021), otherwise `error` unchanged.
+///
+/// Neither PKCS#8 (whose second field is an AlgorithmIdentifier SEQUENCE,
+/// RFC 5958 §2) nor SEC1 (an OCTET STRING, RFC 5915 §3) can have that
+/// shape (eight INTEGERs after the version), so a key that parses as
+/// either is never re-labelled, and every other malformed input keeps its
+/// `InvalidKey` detail.
+pub(crate) fn relabel_rsa_private_key(der: &[u8], error: Error) -> Error {
+    match error {
+        Error::InvalidKey(_) if is_rsa_private_key_der(der) => Error::UnsupportedAlgorithm,
+        other => other,
+    }
+}
+
 /// How many INTEGERs follow `version` in every RSAPrivateKey (RFC 8017
 /// App. A.1.2): modulus, publicExponent, privateExponent, prime1, prime2,
 /// exponent1, exponent2 and coefficient.
@@ -431,6 +474,62 @@ mod tests {
         }
         // N65 (RFC 8017 App. A.1.1, exactly modulus and publicExponent).
         assert!(is_invalid(&decode(&fixtures::negative("N65"))));
+    }
+
+    #[test]
+    fn the_der_check_agrees_with_decode_on_every_shape() {
+        // `is_rsa_private_key_der` is true exactly where `decode` refuses
+        // the input as an RSAPrivateKey (RFC 8017 App. A.1.2, ADR 0021).
+        let octets: &[u8] = &[0x04, 0x01, 0x00];
+        let empty: &[u8] = &[0x02, 0x00];
+        let private = [
+            fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der"),
+            fixtures::load("openssl", "reject-rsa2048-3prime-private-pkcs1.pem"),
+            version_then(TWO_PRIME, SMALL, 8),
+            version_then(MULTI, SMALL, 9),
+            version_then(TWO_PRIME, empty, 8),
+        ];
+        let mut trailing = version_then(TWO_PRIME, SMALL, 8);
+        trailing.push(0x00);
+        let other = [
+            fixtures::load("rfc", "rfc7517-a1-rsa-pkcs1-pub.der"),
+            fixtures::load("openssl", "reject-rsa2048-private-pkcs8.der"),
+            fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der"),
+            fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der"),
+            vec![],
+            sequence(&[]),
+            sequence(&[TWO_PRIME]),
+            version_then(TWO_PRIME, SMALL, 7),
+            version_then(&[0x02, 0x01, 0x02], SMALL, 8),
+            version_then(octets, SMALL, 8),
+            trailing,
+        ];
+        for der in &private {
+            assert!(is_rsa_private_key_der(der));
+            assert!(is_unsupported(&decode(der)));
+        }
+        for der in &other {
+            assert!(!is_rsa_private_key_der(der));
+            assert!(!is_unsupported(&decode(der)));
+        }
+    }
+
+    #[test]
+    fn relabel_turns_only_an_invalid_rsa_private_key_into_unsupported() {
+        let private = fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der");
+        let ed25519 = fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der");
+        let invalid = Error::InvalidKey("detail");
+        assert_eq!(
+            relabel_rsa_private_key(&private, invalid.clone()),
+            Error::UnsupportedAlgorithm
+        );
+        // Other inputs keep their InvalidKey detail (ADR 0018 §4), and
+        // codes other than InvalidKey are never changed.
+        assert_eq!(relabel_rsa_private_key(&ed25519, invalid.clone()), invalid);
+        assert_eq!(
+            relabel_rsa_private_key(&private, Error::InvalidBase64),
+            Error::InvalidBase64
+        );
     }
 
     mod properties {

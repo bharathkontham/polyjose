@@ -678,13 +678,23 @@ fn negative_entries() -> Vec<NegativeEntry> {
 }
 
 /// The container a negative DER vector is, from the fixture it mutates.
-/// N67 turns the RFC 7517 RSA SPKI into a PKCS#8 with rsaEncryption.
+/// N67 turns the RFC 7517 RSA SPKI into a PKCS#8 with rsaEncryption; N68
+/// and N69 are a PKCS#1 RSAPrivateKey read as PKCS#8 and as SEC1 (ADR 0018
+/// §3, ADR 0021).
 fn negative_kind(entry: &NegativeEntry) -> Kind {
-    if entry.id == "N67" {
-        Kind::Pkcs8
-    } else {
-        Kind::of_file(&entry.base)
+    match entry.id.as_str() {
+        "N67" | "N68" => Kind::Pkcs8,
+        "N69" => Kind::Sec1,
+        _ => Kind::of_file(&entry.base),
     }
+}
+
+/// Whether a negative vector's base is an RSA private key fixture in
+/// `openssl/` (N68, N69, P17, P18): such a vector has no private key the
+/// marker test could look for, and its octets are checked by
+/// `rsa_private_key_octets_never_reach_an_error` instead.
+fn has_rsa_private_base(entry: &NegativeEntry) -> bool {
+    entry.base.starts_with("reject-rsa") && entry.base.contains("-private-")
 }
 
 /// Whether `result` is the error code a manifest `expect` names.
@@ -773,7 +783,7 @@ const NEGATIVE_STRICTER_THAN_ORACLE: &[(&str, &str)] = &[
     ),
 ];
 
-/// Every `negative/` DER vector (48, N01–N67) is rejected by polyjose's import
+/// Every `negative/` DER vector (50, N01–N69) is rejected by polyjose's import
 /// path with its manifest error code; the ones the oracle accepts are
 /// exactly [`NEGATIVE_STRICTER_THAN_ORACLE`].
 #[test]
@@ -805,8 +815,8 @@ fn negative_vectors_are_rejected_and_every_oracle_acceptance_is_listed() {
         .collect();
     let accepted: Vec<&str> = oracle_accepts.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(accepted, listed, "{oracle_accepts:?}");
-    // N01–N12, N20–N27, N30–N38, N40–N47, N50–N52, N60–N67.
-    assert_eq!(count, 48);
+    // N01–N12, N20–N27, N30–N38, N40–N47, N50–N52, N60–N69.
+    assert_eq!(count, 50);
 }
 
 /// polyjose's verdict on a `reject-*` fixture through the whole path: PEM
@@ -1741,7 +1751,7 @@ fn check_pem(text: &[u8]) {
 }
 
 /// How polyjose and `pem-rfc7468` disagree on the PEM vectors (`negative/`
-/// P01–P16 and A01–A03, the RFC 8410 rejection files): (vector, polyjose
+/// P01–P18 and A01–A03, the RFC 8410 rejection files): (vector, polyjose
 /// accepts, `pem-rfc7468` accepts, reason). Every other vector gets the
 /// same verdict from both, and the same label and octets where both
 /// accept.
@@ -1807,8 +1817,8 @@ fn pem_vectors_differ_from_pem_rfc7468_only_as_listed() {
         .map(|(id, ours, theirs, _)| ((*id).to_owned(), *ours, *theirs))
         .collect();
     assert_eq!(differences, listed);
-    // A01–A03, P01–P16 and the two RFC 8410 files.
-    assert_eq!(vectors.len(), 21);
+    // A01–A03, P01–P18 and the two RFC 8410 files.
+    assert_eq!(vectors.len(), 23);
 }
 
 mod pem_properties {
@@ -2211,6 +2221,9 @@ fn no_error_or_debug_output_shows_private_key_octets() {
         inputs.push((Some(kind), der, d, false));
     }
     for entry in negative_entries() {
+        if has_rsa_private_base(&entry) {
+            continue;
+        }
         let bytes = raw("negative", &entry.file);
         let base_kind = Kind::of_file(&entry.base);
         let d = private_key_of(base_kind, &load_positive("rfc", &entry.base));
@@ -2265,45 +2278,59 @@ fn no_error_or_debug_output_shows_private_key_octets() {
 }
 
 /// RSA private keys are refused (ADR 0021), but the refusal must not echo
-/// them either: every `reject-*rsa*private*` fixture goes through the PEM
-/// and DER decoders and the importers, and no error or `Debug` output may
-/// show any 8-octet window (hex, decimal, ASCII, base64) of its DER past
-/// the first 40 octets (the framing and the public modulus header).
+/// them either: every `reject-*rsa*private*` fixture, and every `negative/`
+/// vector built from one (N68, N69 and P17, P18: a PKCS#1 RSAPrivateKey read
+/// as PKCS#8 or SEC1, ADR 0018 §3), goes through the PEM and DER decoders
+/// and the importers, and no error or `Debug` output may show any 8-octet
+/// window (hex, decimal, ASCII, base64) of its DER past the first 40 octets
+/// (the framing and the public modulus header).
 #[test]
 fn rsa_private_key_octets_never_reach_an_error() {
     use std::collections::BTreeSet;
 
+    let check = |name: &str, bytes: &[u8]| {
+        let der = if name.ends_with(".pem") {
+            ::pem_rfc7468::decode_vec(bytes).unwrap().1
+        } else {
+            bytes.to_vec()
+        };
+        let mut out = BTreeSet::new();
+        if name.ends_with(".pem") {
+            render_pem(bytes, &mut out);
+        }
+        render_der(&der, None, &mut out);
+        for n in (0..=der.len()).step_by(7) {
+            render_der(&der[..n], None, &mut out);
+        }
+        let forms = leak_forms(&der[40..]);
+        for text in &out {
+            for form in &forms {
+                assert!(
+                    !text.contains(form.as_str()),
+                    "{name}: {text:?} shows {form:?}"
+                );
+            }
+        }
+    };
     let mut checked = 0;
     for dir in ["openssl", "rfc"] {
         let names = fixtures::files(dir, |name| {
             name.starts_with("reject-") && name.contains("rsa") && name.contains("private")
         });
         for name in names {
-            let bytes = raw(dir, &name);
-            let der = if name.ends_with(".pem") {
-                ::pem_rfc7468::decode_vec(&bytes).unwrap().1
-            } else {
-                bytes.clone()
-            };
-            let mut out = BTreeSet::new();
-            if name.ends_with(".pem") {
-                render_pem(&bytes, &mut out);
-            }
-            render_der(&der, None, &mut out);
-            for n in (0..=der.len()).step_by(7) {
-                render_der(&der[..n], None, &mut out);
-            }
-            let forms = leak_forms(&der[40..]);
-            for text in &out {
-                for form in &forms {
-                    assert!(
-                        !text.contains(form.as_str()),
-                        "{name}: {text:?} shows {form:?}"
-                    );
-                }
-            }
+            check(&name, &raw(dir, &name));
             checked += 1;
         }
     }
-    assert!(checked >= 10, "only {checked} RSA private fixtures");
+    let relabelled: Vec<NegativeEntry> = negative_entries()
+        .into_iter()
+        .filter(has_rsa_private_base)
+        .collect();
+    let ids: Vec<&str> = relabelled.iter().map(|entry| entry.id.as_str()).collect();
+    assert_eq!(ids, ["N68", "N69", "P17", "P18"]);
+    for entry in &relabelled {
+        check(&entry.file, &raw("negative", &entry.file));
+        checked += 1;
+    }
+    assert!(checked >= 14, "only {checked} RSA private inputs");
 }

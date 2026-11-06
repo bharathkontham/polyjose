@@ -417,9 +417,11 @@ mod tests {
     // ---- negative/ vectors (manifest.json) ----------------------------
 
     /// Every P vector in `negative/manifest.json` fails with the code the
-    /// manifest gives, except P14 and P16: their armor is valid and the DER
-    /// inside is what is wrong, which the container parsers reject (here the
-    /// PEM layer must return the label and the decoded body).
+    /// manifest gives, except P14, P16, P17 and P18: their armor is valid
+    /// and the DER inside is what is wrong, which the container parsers
+    /// reject (here the PEM layer must return the label and the decoded
+    /// body). P17 and P18 wrap a PKCS#1 RSAPrivateKey (ADR 0021), so only
+    /// the label is compared and the body is not looked at.
     #[test]
     fn negative_pem_vectors_fail_with_the_manifest_code() {
         let manifest =
@@ -440,11 +442,13 @@ mod tests {
                     der.push(0);
                     assert_eq!(got, Ok((Label::PrivateKey, der)), "{id}");
                 }
+                "P17" => assert_eq!(got.map(|(label, _)| label), Ok(Label::PrivateKey), "{id}"),
+                "P18" => assert_eq!(got.map(|(label, _)| label), Ok(Label::EcPrivateKey), "{id}"),
                 _ => assert_eq!(got.map(|_| ()), Err(expect), "{id} {file}"),
             }
             checked.push(id.to_owned());
         }
-        let expected: Vec<String> = (1..=16).map(|n| format!("P{n:02}")).collect();
+        let expected: Vec<String> = (1..=18).map(|n| format!("P{n:02}")).collect();
         assert_eq!(checked, expected);
     }
 
