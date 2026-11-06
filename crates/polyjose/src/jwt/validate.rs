@@ -821,4 +821,142 @@ mod tests {
         wrong.aud = one("https://other");
         assert_eq!(validate_claims(&wrong, &p), Err(Error::InvalidClaim("aud")));
     }
+
+    /// The time of the ordering tests.
+    const ORDER_NOW: i64 = 1_300_819_380;
+
+    /// A policy that configures every J4–J10 check.
+    fn order_policy(clock: &dyn Clock) -> Policy<'_> {
+        Policy::new(clock, ES256)
+            .unwrap()
+            .issuer("https://as")
+            .subject("alice")
+            .audience("api")
+            .max_age(300)
+            .require("client_id")
+    }
+
+    /// The J4–J10 steps, each with a mutation that makes only that step
+    /// fail under [`order_policy`], and the error it then reports.
+    const STEPS: [(&str, Error); 7] = [
+        ("J4", Error::InvalidClaim("client_id")),
+        ("J5", Error::TokenExpired),
+        ("J6", Error::TokenNotYetValid),
+        ("J7", Error::InvalidClaim("iat")),
+        ("J8", Error::InvalidClaim("iss")),
+        ("J9", Error::InvalidClaim("sub")),
+        ("J10", Error::InvalidClaim("aud")),
+    ];
+
+    /// A claim set passing [`order_policy`] at [`ORDER_NOW`], except for
+    /// the steps whose bit is set in `broken` (bit i is `STEPS[i]`).
+    fn order_claims(broken: u8) -> Claims {
+        let fails = |step: usize| broken & (1 << step) != 0;
+        let now = ORDER_NOW;
+        let mut c = Claims::new();
+        if !fails(0) {
+            c.insert("client_id", "s6BhdRkqt3").unwrap();
+        }
+        c.exp = date(if fails(1) { now - 120 } else { now + 300 });
+        c.nbf = date(if fails(2) { now + 120 } else { now - 10 });
+        c.iat = date(if fails(3) { now - 1000 } else { now - 10 });
+        c.iss = Some(
+            if fails(4) {
+                "https://evil"
+            } else {
+                "https://as"
+            }
+            .into(),
+        );
+        c.sub = Some(if fails(5) { "mallory" } else { "alice" }.into());
+        c.aud = one(if fails(6) { "other" } else { "api" });
+        c
+    }
+
+    #[test]
+    fn the_first_failing_step_decides_for_every_combination() {
+        // ADR 0027 §9: J4 → J10 in order, the first failure decides. Every
+        // subset of the seven steps, so every pair (asserted to be 21) and
+        // every larger combination.
+        let clock = FixedClock(ORDER_NOW);
+        let p = order_policy(&clock);
+        let mut pairs = 0;
+        for broken in 0..(1_u8 << STEPS.len()) {
+            let expected = STEPS
+                .iter()
+                .enumerate()
+                .find(|(i, _)| broken & (1 << i) != 0)
+                .map(|(_, (_, error))| error.clone());
+            let names: Vec<&str> = STEPS
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| broken & (1 << i) != 0)
+                .map(|(_, (name, _))| *name)
+                .collect();
+            assert_eq!(
+                validate_claims(&order_claims(broken), &p).err(),
+                expected,
+                "failing steps {names:?}"
+            );
+            if names.len() == 2 {
+                pairs += 1;
+            }
+            // Presence (J4) never needs the time.
+            if broken & 1 != 0 {
+                assert_eq!(
+                    validate_claims(&order_claims(broken), &order_policy(&PanicClock)).err(),
+                    expected,
+                    "failing steps {names:?}, unread clock"
+                );
+            }
+        }
+        assert_eq!(pairs, 21);
+    }
+
+    #[test]
+    fn named_ordering_cases_of_adr_0027_section_9() {
+        let clock = FixedClock(ORDER_NOW);
+        let p = Policy::new(&clock, ES256)
+            .unwrap()
+            .issuer("https://as")
+            .audience("api");
+
+        // Expired, wrong issuer and wrong audience → the time check wins.
+        let mut c = Claims::new();
+        c.exp = date(ORDER_NOW - 3600);
+        c.iss = Some("https://evil".into());
+        c.aud = one("other");
+        assert_eq!(validate_claims(&c, &p), Err(Error::TokenExpired));
+
+        // Not yet valid and wrong audience → TokenNotYetValid.
+        let mut c = Claims::new();
+        c.exp = date(ORDER_NOW + 3600);
+        c.nbf = date(ORDER_NOW + 600);
+        c.iss = Some("https://as".into());
+        c.aud = many(&["other"]);
+        assert_eq!(validate_claims(&c, &p), Err(Error::TokenNotYetValid));
+
+        // Missing `exp` and an `nbf` that would fail → presence first,
+        // before the clock is read.
+        let mut c = Claims::new();
+        c.nbf = date(ORDER_NOW + 600);
+        c.iss = Some("https://as".into());
+        c.aud = one("api");
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("exp")));
+        let untimed = untimed().issuer("https://as").audience("api");
+        assert_eq!(
+            validate_claims(&c, &untimed),
+            Err(Error::InvalidClaim("exp"))
+        );
+
+        // An unconfigured `aud` is the last check: an expired token that
+        // also carries one is TokenExpired.
+        let p = Policy::new(&clock, ES256).unwrap();
+        let mut c = Claims::new();
+        c.exp = date(ORDER_NOW - 3600);
+        c.aud = one("api");
+        assert_eq!(validate_claims(&c, &p), Err(Error::TokenExpired));
+        c.exp = date(ORDER_NOW + 3600);
+        assert_eq!(validate_claims(&c, &p), Err(Error::InvalidClaim("aud")));
+    }
 }
