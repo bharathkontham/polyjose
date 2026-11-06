@@ -1290,3 +1290,39 @@ fn max_key_candidates_zero_does_not_affect_a_single_key() {
         );
     }
 }
+
+/// ADR 0029 §1: `Keys` converts from a single key and from a JWK Set, and
+/// each conversion verifies exactly as the variant it names.
+#[test]
+fn keys_from_a_key_or_a_set_is_the_matching_variant() {
+    let clock = FixedClock(1_300_819_320);
+    let policy = Policy::new(&clock, &ALLOWED).unwrap();
+    let mut claims = Claims::new();
+    claims.exp = NumericDate::from_secs(1_300_819_380);
+    let signer = Signer {
+        eddsa: true,
+        key: 2,
+    };
+    let token = jwt::sign(
+        &claims,
+        &IssueOptions::new(signer.alg()),
+        &signer.signing_key(),
+    )
+    .unwrap();
+
+    let key = signer.verifying_key();
+    let one: Keys<'_> = (&key).into();
+    assert!(matches!(one, Keys::One(_)));
+    assert_eq!(
+        jwt::verify(&token, one, &policy),
+        jwt::verify(&token, Keys::One(&key), &policy)
+    );
+
+    let set = JwkSet::from_json(format!(r#"{{"keys":[{}]}}"#, key.to_json().as_str()).as_bytes())
+        .unwrap();
+    let from_set: Keys<'_> = Keys::from(&set);
+    assert!(matches!(from_set, Keys::Set(_)));
+    let verified = jwt::verify(&token, from_set, &policy).unwrap();
+    assert_eq!(verified.key_index, Some(0));
+    assert_eq!(verified.claims, claims);
+}
