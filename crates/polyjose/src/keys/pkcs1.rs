@@ -55,6 +55,69 @@ pub(crate) fn decode_public(der: &[u8]) -> Result<RsaPublicParts<'_>> {
     read_public(fields)
 }
 
+/// Decodes standalone PKCS#1 DER, the `KeyFormat::Pkcs1` input: an
+/// RSAPublicKey (RFC 8017 App. A.1.1) is returned, an RSAPrivateKey
+/// (App. A.1.2) is refused as unsupported (ADR 0021).
+///
+/// The two structures share an outer SEQUENCE of INTEGERs, so they are told
+/// apart by shape:
+///
+/// - Exactly two INTEGERs: RSAPublicKey, checked as in [`decode_public`].
+/// - A first INTEGER of 0 (`two-prime`) or 1 (`multi`), the `Version` of
+///   App. A.1.2, followed by eight or more INTEGERs (modulus,
+///   publicExponent, privateExponent, prime1, prime2, exponent1, exponent2,
+///   coefficient, then `otherPrimeInfos` for `multi`): RSAPrivateKey,
+///   [`Error::UnsupportedAlgorithm`]. An RSAPublicKey can never look like
+///   this: it has two INTEGERs, and its first is a modulus of at least 2048
+///   bits.
+/// - Anything else: [`Error::InvalidKey`].
+///
+/// # No private INTEGER is parsed
+///
+/// For an RSAPrivateKey, only the version's contents are looked at. The
+/// eight INTEGERs after it are counted from their identifier and length
+/// octets alone ([`Reader::element`]): their contents, the private
+/// exponent and primes among them, are never interpreted (not even
+/// checked for minimal encoding), never copied and never reach an error.
+/// Whatever follows the eighth (`otherPrimeInfos`) is not read at all.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "called by the RSA mapper (rsa.rs)")
+)]
+pub(crate) fn decode(der: &[u8]) -> Result<RsaPublicParts<'_>> {
+    let mut outer = Reader::new(der)?;
+    let fields = outer.sequence()?;
+    outer.finish()?;
+    if is_rsa_private_key(fields) {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    read_public(fields)
+}
+
+/// How many INTEGERs follow `version` in every RSAPrivateKey (RFC 8017
+/// App. A.1.2): modulus, publicExponent, privateExponent, prime1, prime2,
+/// exponent1, exponent2 and coefficient.
+const PRIVATE_KEY_INTEGERS: usize = 8;
+
+/// Whether the SEQUENCE contents `fields` have the shape of an RSAPrivateKey
+/// (RFC 8017 App. A.1.2): a version INTEGER whose contents are exactly 0x00
+/// (two-prime) or 0x01 (multi), then at least [`PRIVATE_KEY_INTEGERS`]
+/// elements tagged INTEGER. Those are read by framing only and their
+/// contents are never looked at; see [`decode`].
+fn is_rsa_private_key(mut fields: Reader<'_>) -> bool {
+    let Ok(version) = fields.expect(der::INTEGER) else {
+        return false;
+    };
+    if !matches!(version.contents, [0x00] | [0x01]) {
+        return false;
+    }
+    (0..PRIVATE_KEY_INTEGERS).all(|_| {
+        fields
+            .element()
+            .is_ok_and(|element| element.tag == der::INTEGER)
+    })
+}
+
 /// Reads the fields of an RSAPublicKey SEQUENCE: `modulus` and
 /// `publicExponent`, each a non-negative minimal INTEGER
 /// ([`Reader::unsigned_integer`], X.690 §8.3), and nothing else
@@ -214,5 +277,175 @@ mod tests {
     fn the_rsa_public_key_negative_vectors_are_invalid() {
         // N65: RSAPublicKey with a third INTEGER (RFC 8017 App. A.1.1).
         assert!(is_invalid(&decode_public(&fixtures::negative("N65"))));
+    }
+
+    /// `SEQUENCE { parts... }` in the short or one-octet long form.
+    fn sequence(parts: &[&[u8]]) -> Vec<u8> {
+        let body = parts.concat();
+        let mut out = vec![0x30];
+        match u8::try_from(body.len()).unwrap() {
+            len @ 0..=0x7F => out.push(len),
+            len => out.extend_from_slice(&[0x81, len]),
+        }
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn is_unsupported<T>(result: &Result<T>) -> bool {
+        matches!(result, Err(Error::UnsupportedAlgorithm))
+    }
+
+    /// INTEGER 0 and 1: the RSAPrivateKey `Version` values two-prime and
+    /// multi (RFC 8017 App. A.1.2).
+    const TWO_PRIME: &[u8] = &[0x02, 0x01, 0x00];
+    const MULTI: &[u8] = &[0x02, 0x01, 0x01];
+    /// A small valid INTEGER, standing in for an RSAPrivateKey field.
+    const SMALL: &[u8] = &[0x02, 0x01, 0x05];
+
+    /// `version` followed by `count` copies of `field`.
+    fn version_then(version: &[u8], field: &[u8], count: usize) -> Vec<u8> {
+        let mut parts = vec![version];
+        parts.extend(std::iter::repeat_n(field, count));
+        sequence(&parts)
+    }
+
+    #[test]
+    fn two_integers_are_an_rsa_public_key() {
+        for (dir, file) in public_fixtures() {
+            let der = fixtures::load(dir, &file);
+            let classified = decode(&der).unwrap_or_else(|e| panic!("{file}: {e:?}"));
+            let public = decode_public(&der).unwrap();
+            assert_eq!(classified.n, public.n, "{file}");
+            assert_eq!(classified.e, public.e, "{file}");
+        }
+        // Shape alone decides: two INTEGERs are an RSAPublicKey even when
+        // the first is 0 or 1. Such a key is then refused by the JWK
+        // validation in rsa.rs (RFC 8017 §3.1), not here.
+        for first in [TWO_PRIME, MULTI] {
+            let der = sequence(&[first, SMALL]);
+            let key = decode(&der).unwrap();
+            assert_eq!(key.e, &[0x05]);
+        }
+    }
+
+    #[test]
+    fn rsa_private_key_fixtures_are_unsupported() {
+        // ADR 0021: every RSAPrivateKey (RFC 8017 App. A.1.2), two-prime
+        // (version 0) or three-prime (version 1, with otherPrimeInfos),
+        // including the RFC 9500 §2.1 test keys. The PEM files are turned
+        // into DER by the test oracle here; pem::decode refuses their
+        // `RSA PRIVATE KEY` label before this (rsa.rs tests).
+        let mut files: Vec<(&str, String)> = [
+            "reject-rsa2048-private-pkcs1.der",
+            "reject-rsa2048-private-pkcs1.pem",
+            "reject-rsa2048-3prime-private-pkcs1.pem",
+        ]
+        .map(|file| ("openssl", file.to_owned()))
+        .into();
+        for bits in [1024, 2048, 4096] {
+            files.push((
+                "rfc",
+                format!("reject-rfc9500-testRSA{bits}-private-pkcs1.pem"),
+            ));
+        }
+        for (dir, file) in files {
+            let der = fixtures::load(dir, &file);
+            assert!(is_unsupported(&decode(&der)), "{file}");
+            // As the SPKI contents, it is not an RSAPublicKey (RFC 3279
+            // §2.3.1) and is simply malformed.
+            assert!(is_invalid(&decode_public(&der)), "{file}");
+        }
+    }
+
+    #[test]
+    fn rsa_private_key_shapes_are_unsupported() {
+        // RFC 8017 App. A.1.2: Version two-prime(0) or multi(1), then the
+        // eight INTEGERs, then (multi) otherPrimeInfos.
+        let other_prime_infos = sequence(&[&sequence(&[SMALL, SMALL, SMALL])]);
+        for (what, der) in [
+            ("two-prime", version_then(TWO_PRIME, SMALL, 8)),
+            ("multi", version_then(MULTI, SMALL, 8)),
+            ("nine INTEGERs", version_then(TWO_PRIME, SMALL, 9)),
+            ("multi with otherPrimeInfos", {
+                let mut parts = vec![MULTI];
+                parts.extend(std::iter::repeat_n(SMALL, 8));
+                parts.push(&other_prime_infos);
+                sequence(&parts)
+            }),
+        ] {
+            assert!(is_unsupported(&decode(&der)), "{what}");
+        }
+    }
+
+    #[test]
+    fn the_private_integers_are_never_parsed() {
+        // The classification looks at the version's contents only. Each of
+        // these would fail INTEGER parsing (X.690 §8.3.1 empty, §8.3.2 not
+        // minimal) or element framing after the eighth field, so the
+        // UnsupportedAlgorithm result shows that none of the private
+        // INTEGERs' contents was parsed and nothing after them was read.
+        let empty: &[u8] = &[0x02, 0x00];
+        let non_minimal: &[u8] = &[0x02, 0x02, 0x00, 0x01];
+        let negative_padding: &[u8] = &[0x02, 0x02, 0xFF, 0x80];
+        for (what, der) in [
+            ("empty INTEGERs", version_then(TWO_PRIME, empty, 8)),
+            ("non-minimal INTEGERs", version_then(MULTI, non_minimal, 8)),
+            (
+                "redundant 0xFF",
+                version_then(TWO_PRIME, negative_padding, 8),
+            ),
+            ("high-tag-number garbage after the eighth", {
+                let mut parts = vec![TWO_PRIME];
+                parts.extend(std::iter::repeat_n(SMALL, 8));
+                parts.push(&[0x1F, 0xFF, 0xFF]);
+                sequence(&parts)
+            }),
+        ] {
+            assert!(is_unsupported(&decode(&der)), "{what}");
+        }
+    }
+
+    #[test]
+    fn every_other_shape_is_invalid() {
+        let octets: &[u8] = &[0x04, 0x01, 0x00];
+        for (what, der) in [
+            ("empty", vec![]),
+            ("empty SEQUENCE", sequence(&[])),
+            ("version alone", sequence(&[TWO_PRIME])),
+            (
+                "version and seven INTEGERs",
+                version_then(TWO_PRIME, SMALL, 7),
+            ),
+            ("version 2", version_then(&[0x02, 0x01, 0x02], SMALL, 8)),
+            ("version -1", version_then(&[0x02, 0x01, 0xFF], SMALL, 8)),
+            (
+                "non-minimal version 0",
+                version_then(&[0x02, 0x02, 0x00, 0x00], SMALL, 8),
+            ),
+            ("version not an INTEGER", version_then(octets, SMALL, 8)),
+            ("an OCTET STRING among the eight", {
+                let mut parts = vec![TWO_PRIME];
+                parts.extend(std::iter::repeat_n(SMALL, 7));
+                parts.push(octets);
+                sequence(&parts)
+            }),
+            (
+                "three INTEGERs, the first a modulus",
+                sequence(&[&[0x02, 0x01, 0x07], SMALL, SMALL]),
+            ),
+            (
+                "not a SEQUENCE",
+                version_then(TWO_PRIME, SMALL, 8)[2..].to_vec(),
+            ),
+            ("trailing data after a private key", {
+                let mut der = version_then(TWO_PRIME, SMALL, 8);
+                der.push(0x00);
+                der
+            }),
+        ] {
+            assert!(is_invalid(&decode(&der)), "{what}");
+        }
+        // N65 (RFC 8017 App. A.1.1, exactly modulus and publicExponent).
+        assert!(is_invalid(&decode(&fixtures::negative("N65"))));
     }
 }
