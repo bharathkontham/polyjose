@@ -423,12 +423,30 @@ mod tests {
             let result = decode(&der);
             assert!(is_unsupported(&result), "{file}: {:?}", result.err());
         }
-        // Its contents are not parsed: BER and garbage inside give the same
-        // answer.
-        assert!(is_unsupported(&decode(&[
-            0x30, 0x05, 0x30, 0x80, 0xFF, 0xFF, 0xFF
-        ])));
-        assert!(is_unsupported(&decode(&[0x30, 0x02, 0x30, 0x00])));
+        // Only the framing of the two components is read: BER and garbage
+        // inside encryptedData or inside the AlgorithmIdentifier give the
+        // same answer.
+        for input in [
+            // SEQUENCE { SEQUENCE {}, OCTET STRING {} }
+            &[0x30, 0x04, 0x30, 0x00, 0x04, 0x00][..],
+            // encryptedData holding an indefinite length and garbage.
+            &[
+                0x30, 0x09, 0x30, 0x00, 0x04, 0x05, 0x30, 0x80, 0xFF, 0x00, 0x1F,
+            ],
+            // encryptionAlgorithm holding no OID, an indefinite length and
+            // garbage.
+            &[0x30, 0x08, 0x30, 0x04, 0x02, 0x80, 0xFF, 0xFF, 0x04, 0x00],
+        ] {
+            assert!(is_unsupported(&decode(input)), "{input:02x?}");
+        }
+        // A real encrypted key whose ciphertext is flipped: encryptedData is
+        // the last element, so its last 32 octets are all ciphertext.
+        let mut der = fixtures::load("openssl", "reject-ec-p256-pkcs8-encrypted.der");
+        let len = der.len();
+        for byte in &mut der[len - 32..] {
+            *byte ^= 0xFF;
+        }
+        assert!(is_unsupported(&decode(&der)));
         // The outer framing is still checked.
         assert!(is_invalid(&decode(&[0x30, 0x02, 0x30, 0x00, 0x00])));
     }
