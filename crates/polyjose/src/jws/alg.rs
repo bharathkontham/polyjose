@@ -43,7 +43,7 @@
 
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
-use crate::jwk::{Jwk, KeyAlg, KeyMaterial, KeyOp};
+use crate::jwk::{Jwk, KeyAlg, KeyMaterial, KeyOp, RSA_MODULUS_BITS};
 
 use super::{ecdsa, eddsa, hmac, rsa};
 
@@ -118,15 +118,6 @@ pub(crate) enum Operation {
     Verify,
 }
 
-/// The smallest RSA modulus polyjose uses, in bits (RFC 7518 §3.3, §3.5).
-/// Import already rejects smaller keys (ADR 0007); this is defence in
-/// depth.
-const RSA_MIN_BITS: usize = 2048;
-
-/// The largest RSA modulus polyjose uses, in bits: the `rsa` crate's own
-/// maximum (ADR 0026 §2 step 8).
-const RSA_MAX_BITS: usize = 8192;
-
 /// Key binding, ADR 0026 §2 step 8: checks that `key` may be used with
 /// `alg` for `op`, before any cryptography runs. Signing and verifying
 /// both call it, and nothing reaches a family without it.
@@ -194,7 +185,9 @@ fn check_strength(alg: &SigningAlg, material: &KeyMaterial) -> Result<()> {
             Ok(())
         }
         KeyMaterial::Rsa(k) => {
-            if (RSA_MIN_BITS..=RSA_MAX_BITS).contains(&k.modulus_bits()) {
+            // RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8. The range is the
+            // crate's one definition, shared with JWK import.
+            if RSA_MODULUS_BITS.contains(&k.modulus_bits()) {
                 Ok(())
             } else {
                 Err(Error::InvalidKey("RSA modulus must be 2048 to 8192 bits"))
