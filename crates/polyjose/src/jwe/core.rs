@@ -501,7 +501,10 @@ fn check_reproducible(given: &str, built: &Header) -> Result<()> {
 ///    [`Error::UnsupportedAlgorithm`] (`RSA-OAEP` and `RSA1_5` are not,
 ///    ADRs 0021, 0022);
 /// 4. every key bound to its `alg` ([`RecipientKey::from_jwk`]) →
-///    [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`].
+///    [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`];
+/// 5. every PBES2 recipient's `p2c` and `p2s` length in range
+///    ([`pbes2::check_encrypt_options`]: RFC 7518 §4.8.1, ADR 0050 §2) →
+///    [`Error::InvalidKey`].
 ///
 /// Then: the random CEK when the modes need one (§5.1 step 2), key
 /// management for each recipient in order (steps 3–8), the protected header
@@ -600,6 +603,9 @@ pub(crate) fn encrypt(
             enc,
             Direction::Encrypt,
         )?);
+    }
+    for recipient in recipients {
+        pbes2::check_encrypt_options(&recipient.alg, &recipient.options)?;
     }
 
     // Draw 1 (§5.1 step 2): the CEK, once, when the modes wrap or encrypt
@@ -1355,6 +1361,35 @@ mod tests {
         assert_eq!(iv_only.remaining(), 0);
         assert_eq!(parts.iv, [7u8; 12]);
         assert!(parts.recipients[0].encrypted_key.is_empty());
+    }
+
+    #[test]
+    fn pbes2_parameters_are_refused_before_any_draw() {
+        // RFC 7518 §4.8.1.1–§4.8.1.2, ADR 0050 §2: a p2c below 1000 or
+        // above the 1,000,000 ceiling, or a p2s length below 8 or above
+        // 256, is InvalidKey before the CEK (draw 1) is drawn.
+        let k = password("pw");
+        let ceiling = DecryptPolicy::MAX_PBES2_COUNT_CEILING;
+        let cases: [fn(Recipient) -> Recipient; 4] = [
+            |r| r.p2c(999),
+            |r| r.p2c(DecryptPolicy::MAX_PBES2_COUNT_CEILING + 1),
+            |r| r.p2s_len(7),
+            |r| r.p2s_len(257),
+        ];
+        assert_eq!(ceiling, 1_000_000);
+        for (i, make) in cases.iter().enumerate() {
+            // A good first recipient, then the bad one.
+            let e = Encryptor::new(ContentEncAlg::A128GCM)
+                .recipient(Recipient::new(A::Pbes2Hs256A128KW, &k).p2c(1000))
+                .recipient(make(Recipient::new(A::Pbes2Hs256A128KW, &k)));
+            let mut rng = FixedRng::new([0u8; 128]);
+            let form = Serialization::Json(JsonForm::General);
+            let (out, n) = crate::test_counters::pbkdf2_derivations::count(|| {
+                encrypt(&e, b"x", form, &mut rng, None)
+            });
+            assert_eq!((code(out), n), ("InvalidKey", 0), "case {i}");
+            assert_eq!(rng.remaining(), 128, "case {i}: drew before the checks");
+        }
     }
 
     #[test]
