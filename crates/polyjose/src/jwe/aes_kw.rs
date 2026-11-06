@@ -631,4 +631,58 @@ mod tests {
             );
         }
     }
+
+    mod properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// An `alg` of the family with a random KEK of its length, an `enc`
+        /// and a random CEK of the length that `enc` requires.
+        fn case() -> impl Strategy<Value = (KeyMgmtAlg, Vec<u8>, ContentEncAlg, Vec<u8>)> {
+            (0..FAMILY.len(), 0..ContentEncAlg::KNOWN.len()).prop_flat_map(|(a, e)| {
+                let (alg, kek_len) = FAMILY[a].clone();
+                let enc = ContentEncAlg::KNOWN[e].clone();
+                let cek_len = cek_len(&enc).unwrap_or_else(|err| panic!("{err}"));
+                (
+                    Just(alg),
+                    proptest::collection::vec(any::<u8>(), kek_len),
+                    Just(enc),
+                    proptest::collection::vec(any::<u8>(), cek_len),
+                )
+            })
+        }
+
+        proptest! {
+            // ADR 0008 layer 2: bounded case counts in the fast suite.
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            /// RFC 3394 §2.2.2 inverts §2.2.1 for every KEK size and every
+            /// `enc` CEK length (RFC 7518 §4.4, §5.2.3–§5.2.5, §5.3).
+            #[test]
+            fn encrypt_key_then_decrypt_key_round_trips((alg, kek, enc, cek) in case()) {
+                let key = RecipientKey::Symmetric(Zeroizing::new(kek));
+                let random_cek = Cek::from_slice(&cek);
+                let out = encrypt(&alg, &key, &enc, Some(&random_cek))?;
+                prop_assert_eq!(out.encrypted_key.len(), cek.len() + 8);
+                let got = decrypt(&alg, &key, &enc, &out.encrypted_key)?;
+                prop_assert_eq!(got.as_bytes(), cek.as_slice());
+            }
+
+            /// RFC 3394 §2.2.3: flipping any bit of the wrapped key fails the
+            /// integrity check, and decrypt says only DecryptionFailed.
+            #[test]
+            fn any_flipped_bit_fails_as_decryption_failed(
+                (alg, kek, enc, cek) in case(),
+                at in any::<prop::sample::Index>(),
+                bit in 0..8u8,
+            ) {
+                let key = RecipientKey::Symmetric(Zeroizing::new(kek));
+                let mut wrapped = encrypt(&alg, &key, &enc, Some(&Cek::from_slice(&cek)))?.encrypted_key;
+                let at = at.index(wrapped.len());
+                wrapped[at] ^= 1 << bit;
+                let result = decrypt(&alg, &key, &enc, &wrapped);
+                prop_assert!(matches!(result, Err(Error::DecryptionFailed)), "{:?}", result);
+            }
+        }
+    }
 }
