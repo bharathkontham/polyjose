@@ -114,8 +114,9 @@ fn without_application(media_type: &[u8]) -> Option<&[u8]> {
 ///   `InvalidHeader`, even when `protected` is valid (ADR 0049 §2,
 ///   ADR 0050 §3). Its other members are ignored here.
 ///
-/// The checks run in the order listed, unprotected header first; every
-/// failure is `InvalidHeader`, and the detail string is diagnostic only
+/// The unprotected-header rule runs first, then the layer's rules in the
+/// order listed; every failure is `InvalidHeader`, and the detail string
+/// is diagnostic only
 /// (ADR 0027 §9). `b64` is a JWS parameter (RFC 7797 §3) and is not
 /// checked on the outer layer. Comparisons use [`media_type_eq`].
 ///
