@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "The RFC 8037 A.2 Ed25519 public key with \"alg\": \"ECDH-ES\": ECDH-ES uses EC P-256/P-384/P-521 or OKP X25519 keys (RFC 7518 §4.6, RFC 8037 §3.2, ADR 0006), not Ed25519 signature keys",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+      "alg": "ECDH-ES"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

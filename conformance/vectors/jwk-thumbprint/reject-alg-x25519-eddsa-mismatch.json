@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "The RFC 8037 A.6 X25519 public key with \"alg\": \"EdDSA\": X25519 is a key agreement curve (RFC 8037 §3.2) and EdDSA needs an Ed25519 key (RFC 8037 §3.1)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+      "alg": "EdDSA"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

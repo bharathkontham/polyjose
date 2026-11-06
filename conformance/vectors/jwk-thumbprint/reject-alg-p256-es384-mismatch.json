@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "The RFC 7517 A.1 P-256 public key with \"alg\": \"ES384\": ES384 needs a P-384 key (RFC 7518 §3.4), so the curve does not serve the JWK alg (RFC 7517 §4.4)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+      "alg": "ES384"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}
