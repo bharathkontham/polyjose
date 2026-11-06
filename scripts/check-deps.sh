@@ -2,17 +2,19 @@
 # Enforces polyjose's minimal runtime dependency tree (ADR 0016) and its public credits (ADR 0020).
 #
 # Fails, listing every offender, when:
-#   1. the core's runtime tree contains a crate that deps-allowlist.txt does not list (ADR 0016 §4);
+#   1. the core's tree contains a crate that deps-allowlist.txt does not list (ADR 0016 §4);
 #   2. deps-allowlist.txt lists a crate the tree no longer contains, so the list stays exact;
-#   3. a dependency of crates/polyjose ([dependencies] or [target.*.dependencies]) does not use
-#      `default-features = false` (ADR 0016 §3);
+#   3. a dependency of crates/polyjose ([dependencies], [build-dependencies] or their
+#      [target.*.…] forms) does not use `default-features = false` (ADR 0016 §3);
 #   4. a crate in deps-allowlist.txt is not credited in CREDITS.md, or CREDITS.md credits a crate
 #      that is not in deps-allowlist.txt (ADR 0020 §5);
 #   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below.
 #
-# The tree is `cargo tree -p polyjose -e normal --all-features --target all --prefix none`: runtime
-# dependencies only (dev-dependencies never ship, ADR 0016 §5), on every target and with every
-# feature, so a target- or feature-specific dependency cannot hide.
+# The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
+# runtime dependencies and the build-dependencies of every crate in it (a build script or a
+# build-dependency runs on the builder's machine and can change the code that ships, so it is
+# audit surface too), on every target and with every feature, so a target- or feature-specific
+# dependency cannot hide. Dev-dependencies never ship and are not checked (ADR 0016 §5).
 #
 # Fails closed: if cargo or python3 is missing, or any command errors, it exits non-zero.
 # Runs on macOS /bin/bash 3.2 and on Linux bash, so no associative arrays or mapfile.
@@ -88,8 +90,8 @@ awk -v file="$credits" '
 ' "$credits" >"$work/credited.unsorted" || die "$credits is malformed (see above)"
 sort "$work/credited.unsorted" >"$work/credited"
 
-# The core's runtime tree -> "$work/tree" (sorted, unique names, without polyjose itself).
-tree_cmd=(cargo tree --locked -p "$core_pkg" -e normal --all-features --target all --prefix none)
+# The core's tree -> "$work/tree" (sorted, unique names, without polyjose itself).
+tree_cmd=(cargo tree --locked -p "$core_pkg" -e "normal,build" --all-features --target all --prefix none)
 "${tree_cmd[@]}" >"$work/tree.raw" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "'${tree_cmd[*]}' failed"; }
 # The first line is the root package from this checkout; every other line is "<name> v<version> ...".
 awk -v want="$core_pkg" -v dir="$root/crates/polyjose" -v pdir="$root_physical/crates/polyjose" '
@@ -101,6 +103,12 @@ awk -v want="$core_pkg" -v dir="$root/crates/polyjose" -v pdir="$root_physical/c
 ' "$work/tree.raw" >"$work/tree.names" || die "cannot parse the output of '${tree_cmd[*]}'; check the script"
 normalize <"$work/tree.names" | sort -u >"$work/tree"
 
+# The whole resolved workspace -> "$work/metadata.json". With every feature and no platform filter,
+# like the tree above. cargo metadata resolves `workspace = true` inheritance, so the checks below
+# read what cargo will build, not the manifest text.
+cargo metadata --locked --format-version 1 --all-features >"$work/metadata.json" 2>"$work/metadata.err" \
+  || { cat "$work/metadata.err" >&2; die "cargo metadata failed"; }
+
 # --- Checks -----------------------------------------------------------------------------------------
 # Each check reports every offender with fail(); the script exits 1 at the end if any check failed.
 # A new rule (e.g. a source guard) is a new function, called with the others below them.
@@ -109,10 +117,10 @@ normalize <"$work/tree.names" | sort -u >"$work/tree"
 check_tree_allowlisted() {
   comm -23 "$work/tree" "$work/allowed" >"$work/offenders"
   if [ -s "$work/offenders" ]; then
-    fail "the core's runtime tree contains crates that $allowlist does not allow (ADR 0016 §4):"
+    fail "the core's tree (normal and build dependencies) contains crates that $allowlist does not allow (ADR 0016 §4):"
     sed 's/^/  - /' "$work/offenders"
     echo "  Remove the dependency, or add it to $allowlist with an ADR. To see what pulls one in:"
-    echo "    cargo tree -p $core_pkg -e normal --all-features --target all -i <crate>"
+    echo "    cargo tree -p $core_pkg -e normal,build --all-features --target all -i <crate>"
   fi
 }
 
@@ -120,16 +128,14 @@ check_tree_allowlisted() {
 check_allowlist_not_stale() {
   comm -13 "$work/tree" "$work/allowed" >"$work/stale"
   if [ -s "$work/stale" ]; then
-    fail "$allowlist lists crates the core's runtime tree no longer contains; remove them (and their CREDITS.md entries):"
+    fail "$allowlist lists crates the core's tree no longer contains; remove them (and their CREDITS.md entries):"
     sed 's/^/  - /' "$work/stale"
   fi
 }
 
-# 3. Every runtime dependency of the core turns default features off (ADR 0016 §3). cargo metadata
-#    resolves `workspace = true` inheritance and covers [dependencies] and [target.*.dependencies].
+# 3. Every normal and build dependency of the core turns default features off (ADR 0016 §3),
+#    in [dependencies], [build-dependencies] and their [target.*.…] forms.
 check_default_features_off() {
-  cargo metadata --locked --format-version 1 --no-deps >"$work/metadata.json" 2>"$work/metadata.err" \
-    || { cat "$work/metadata.err" >&2; die "cargo metadata failed"; }
   python3 -I -c '
 import json, os, sys
 meta_path, pkg_name, manifest = sys.argv[1], sys.argv[2], os.path.realpath(sys.argv[3])
@@ -139,12 +145,14 @@ pkgs = [p for p in meta["packages"]
         if p["name"] == pkg_name and os.path.realpath(p["manifest_path"]) == manifest]
 if len(pkgs) != 1:
     sys.exit("expected exactly one package %s at %s, found %d" % (pkg_name, manifest, len(pkgs)))
+tables = {None: "dependencies", "build": "build-dependencies"}
 for dep in pkgs[0]["dependencies"]:
-    if dep["kind"] is not None:  # "dev" or "build": not part of the runtime tree
+    if dep["kind"] == "dev":  # dev-dependencies never ship (ADR 0016 §5)
         continue
+    table = tables[dep["kind"]]  # any other kind is a KeyError: fail closed
     if dep["uses_default_features"] is not False:
         name = dep["name"] if not dep.get("rename") else "%s (as %s)" % (dep["name"], dep["rename"])
-        where = "[target.%s.dependencies]" % dep["target"] if dep.get("target") else "[dependencies]"
+        where = "[target.%s.%s]" % (dep["target"], table) if dep.get("target") else "[%s]" % table
         print("%s in %s" % (name, where))
 ' "$work/metadata.json" "$core_pkg" "$core_manifest" >"$work/defaults" \
     || die "could not read $core_pkg's dependencies from cargo metadata"
@@ -191,7 +199,7 @@ if [ "$failed" -ne 0 ]; then
   exit 1
 fi
 
-echo "ok: the core's runtime tree ($(wc -l <"$work/tree" | tr -d ' ') crates) matches $allowlist, all with default features off, all credited in $credits"
+echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
 exit 0
