@@ -1,0 +1,23 @@
+{
+  "source": "RFC 7519 §4.1.4; RFC 9068 §4; ADR 0027 §3; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "A leeway of 601 s is over the 600 s cap, so the policy is refused when it is built, before the (otherwise valid) token is looked at: InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MDAwMDA2MDB9.RE3BJuSPwoa_WAkTvlIR-EuC_HAmxdJ4TAZqwI5XrE8",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "leeway": 601
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}
