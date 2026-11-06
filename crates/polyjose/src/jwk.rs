@@ -885,12 +885,17 @@ impl Jwk {
         let x5t_s256 =
             optional_str(object, "x5t#S256", "x5t#S256 must be a string")?.map(str::to_owned);
         let typed = type_members(kty);
-        let mut other = Object::new();
-        for (name, value) in object {
-            if !COMMON_MEMBERS.contains(&name) && !typed.contains(&name) {
-                other.insert(name, value.clone());
-            }
-        }
+        // RFC 7517 §4: members not understood "MUST be ignored"; polyjose
+        // keeps them. They are a subset of `object`'s members, whose names
+        // are unique, so they are wrapped as they are: inserting them one by
+        // one would re-check every name, O(n²) on untrusted input.
+        let other = Object::from_unique_members(
+            object
+                .iter()
+                .filter(|(name, _)| !COMMON_MEMBERS.contains(name) && !typed.contains(name))
+                .map(|(name, value)| member(name, value.clone()))
+                .collect(),
+        );
         Ok(Jwk {
             material,
             key_use,
@@ -1185,6 +1190,13 @@ impl fmt::Debug for MemberNames<'_> {
 /// Every secret in a `Jwk` (its key material and any unknown member) is
 /// wiped on drop.
 impl ZeroizeOnDrop for Jwk {}
+
+/// One JSON object member. The name is a [`Zeroizing<String>`] like every
+/// name an [`Object`] owns; a `String` value moves into the [`Value`]
+/// without a copy.
+fn member(name: &str, value: impl Into<Value>) -> (Zeroizing<String>, Value) {
+    (Zeroizing::new(name.to_owned()), value.into())
+}
 
 /// The member names a key type defines, besides `kty`.
 fn type_members(kty: KeyType) -> &'static [&'static str] {
