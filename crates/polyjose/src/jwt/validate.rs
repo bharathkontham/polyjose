@@ -97,11 +97,23 @@ fn check_sub(c: &Claims, p: &Policy<'_>) -> Result<()> {
 /// [`Error::InvalidClaim`]`("aud")`.
 fn check_aud(c: &Claims, p: &Policy<'_>) -> Result<()> {
     let accepted = p.accepted_audiences();
-    let ok = match &c.aud {
-        _ if accepted.is_empty() => c.aud.is_none() || p.ignores_audience(),
-        Some(aud) => aud.values().iter().any(|value| accepted.contains(value)),
-        None => false,
-    };
+    if accepted.is_empty() {
+        // No audience configured: a present `aud` is rejected unless the
+        // caller opted out (RFC 7519 §4.1.3; ADR 0027 §4).
+        return aud_verdict(c.aud.is_none() || p.ignores_audience());
+    }
+    // Configured: `aud` is required and one value must match exactly
+    // (RFC 7519 §4.1.3, §7.3); a missing `aud` matches nothing.
+    aud_verdict(
+        c.aud
+            .as_ref()
+            .is_some_and(|aud| aud.values().iter().any(|value| accepted.contains(value))),
+    )
+}
+
+/// `Ok` if the J10 audience check passed, else
+/// [`Error::InvalidClaim`]`("aud")` (RFC 7519 §4.1.3).
+fn aud_verdict(ok: bool) -> Result<()> {
     if ok {
         Ok(())
     } else {
