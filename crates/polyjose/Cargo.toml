@@ -14,10 +14,11 @@ workspace = true
 
 [features]
 default = []
-# NEVER enable in production or in a binding (ADR 0005). Exposes `polyjose::test_vectors`, a
-# deterministic byte source used only to reproduce published test vectors (RFC 7520 JWE outputs).
-# scripts/check-test-vectors-off.sh fails the build if any binding enables it.
-test-vectors = []
+# INSECURE. NEVER enable in production or in a binding (ADR 0005). Exposes
+# `polyjose::insecure_test_vectors`, a deterministic byte source used only to reproduce published test
+# vectors (RFC 7520 JWE outputs). scripts/check-test-vectors-off.sh fails the build if any binding
+# can enable it.
+insecure-test-vectors = []
 
 [dependencies]
 zeroize.workspace = true

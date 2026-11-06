@@ -3,7 +3,7 @@
 # A platform whose toolchain or test suite is missing is reported as SKIPPED with the reason,
 # never silently passed; a suite that exists always runs and can FAIL.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 platforms=("$@"); [ ${#platforms[@]} -eq 0 ] && platforms=(rust wasm node android apple)
 summary=""; status=0
 record() { summary="$summary
@@ -28,7 +28,7 @@ for p in "${platforms[@]}"; do
       # Same deny invocation as CI: full graph, dev-dependencies and every feature included.
       if have cargo && have cargo-deny; then run deny cargo deny --all-features check
       else record deny "SKIPPED (cargo-deny missing; CI runs it)"; fi
-      # No binding may enable polyjose's test-vectors feature (ADR 0005).
+      # Nothing that builds a binding can enable polyjose's deterministic test RNG (ADR 0005).
       if have cargo; then run test-vectors-off scripts/check-test-vectors-off.sh
       else record test-vectors-off "SKIPPED (cargo missing)"; fi
       # The core's runtime tree matches deps-allowlist.txt and CREDITS.md (ADR 0016, ADR 0020).

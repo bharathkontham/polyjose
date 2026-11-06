@@ -36,8 +36,8 @@ pub mod jwt;
     )
 )]
 mod rng;
-#[cfg(feature = "test-vectors")]
-pub use rng::test_vectors;
+#[cfg(feature = "insecure-test-vectors")]
+pub use rng::insecure_test_vectors;
 /// base64url and helpers.
 pub mod util;
 
