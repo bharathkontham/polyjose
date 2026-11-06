@@ -12,14 +12,20 @@
 //!   never runs is asserted by the unit tests in `jwe/pbes2.rs` with the
 //!   `pbkdf2_derivations` counter; there are no timing assertions here.
 //! - Encrypt emits `p2s` (16 random octets) and `p2c` (10,000) by default
-//!   and refuses weak parameters with `InvalidKey`.
+//!   and refuses weak or oversized parameters with `InvalidKey` (`p2c`
+//!   1000 to 1,000,000, `p2s` 8 to 256 octets; ADR 0050 §2).
+//! - `max_pbes2_count` is one budget per decrypt call, summed over every
+//!   PBES2 candidate (ADR 0050 §2): a 16-recipient JWE decrypts only when
+//!   the budget covers the recipients tried.
 #![allow(clippy::panic)] // test code: a panic is a failed assertion
 
 use polyjose::Error;
 use polyjose::header::Header;
 use polyjose::json::{self, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
-use polyjose::jwe::{DecryptPolicy, Decrypted, Encryptor, Recipient, decrypt_compact};
+use polyjose::jwe::{
+    DecryptPolicy, Decrypted, Encryptor, JsonForm, Recipient, decrypt_compact, decrypt_json,
+};
 use polyjose::jwk::Jwk;
 use polyjose::util::{b64url_decode, b64url_encode};
 use proptest::prelude::*;
@@ -550,6 +556,82 @@ fn encrypt_refuses_a_count_below_1000_or_a_salt_input_below_8_octets() {
             (Some(1000), Some(8))
         );
     }
+}
+
+#[test]
+fn encrypt_refuses_a_count_above_the_ceiling_or_a_salt_input_above_256_octets() {
+    // ADR 0050 §2: p2c above the 1,000,000 decrypt ceiling (ADR 0023) and
+    // a p2s longer than 256 octets are InvalidKey.
+    let ceiling = DecryptPolicy::MAX_PBES2_COUNT_CEILING;
+    for alg in FAMILY {
+        for r in [
+            (|r: Recipient| r.p2c(DecryptPolicy::MAX_PBES2_COUNT_CEILING + 1))
+                as fn(Recipient) -> Recipient,
+            |r| r.p2c(u32::MAX),
+            |r| r.p2s_len(257),
+            |r| r.p2s_len(usize::MAX),
+        ] {
+            assert_eq!(
+                code(&encrypt(alg.clone(), E::A256GCM, r)),
+                "InvalidKey",
+                "{alg}"
+            );
+        }
+        let ok = encrypt(alg.clone(), E::A256GCM, |r| r.p2c(1000).p2s_len(256));
+        let h = protected_of(&ok.unwrap_or_else(|e| panic!("{e}")));
+        assert_eq!(h.p2s.as_deref().map(|s| bytes(s).len()), Some(256));
+    }
+    assert_eq!(ceiling, 1_000_000);
+}
+
+/// A general JSON JWE (RFC 7516 §7.2.1) with 16 PBES2-HS256+A128KW
+/// recipients of `p2c` 1000 and no `kid`; recipient `correct` (if any) is
+/// for `b"correct"`, the others for decoys.
+fn sixteen_recipients(correct: Option<usize>) -> String {
+    let mut e = Encryptor::new(E::A128GCM);
+    for i in 0..16 {
+        let pw = if correct == Some(i) {
+            b"correct".to_vec()
+        } else {
+            format!("decoy {i}").into_bytes()
+        };
+        e = e.recipient(Recipient::new(A::Pbes2Hs256A128KW, &password(&pw)).p2c(1000));
+    }
+    e.encrypt_json(b"budget", JsonForm::General)
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[test]
+fn the_pbes2_bound_is_one_budget_for_the_whole_token() {
+    // ADR 0050 §2 (amends ADR 0023): the sum of p2c over the candidates
+    // tried is at most max_pbes2_count. With the default 10,000, the 11th
+    // to 16th recipient (p2c 1000 each) are not tried; the derivation
+    // count itself is asserted by the unit tests in `jwe/core.rs`.
+    let key = password(b"correct");
+    let p = policy(&[A::Pbes2Hs256A128KW], &[E::A128GCM]);
+    let last = sixteen_recipients(Some(15));
+    assert_eq!(
+        decrypt_json(&last, &key, &p).map(|_| ()),
+        Err(Error::DecryptionFailed)
+    );
+    let raised = p.clone().max_pbes2_count(16_000);
+    let out = decrypt_json(&last, &key, &raised).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((out.recipient(), out.plaintext()), (15, &b"budget"[..]));
+    // One short of the 16th recipient's share.
+    let short = p.clone().max_pbes2_count(15_999);
+    assert_eq!(
+        decrypt_json(&last, &key, &short).map(|_| ()),
+        Err(Error::DecryptionFailed)
+    );
+    // Within the default budget, the 10th recipient decrypts.
+    let tenth =
+        decrypt_json(&sixteen_recipients(Some(9)), &key, &p).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(tenth.recipient(), 9);
+    // No recipient for the key: DecryptionFailed, as for a wrong password.
+    assert_eq!(
+        decrypt_json(&sixteen_recipients(None), &key, &raised).map(|_| ()),
+        Err(Error::DecryptionFailed)
+    );
 }
 
 #[test]

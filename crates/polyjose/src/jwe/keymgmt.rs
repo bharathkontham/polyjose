@@ -157,6 +157,9 @@ pub(crate) fn encrypt_key(
 /// without reaching `rsa_oaep`: polyjose performs no RSA private-key
 /// operation (ADR 0021).
 ///
+/// `pbes2_budget` is the decrypt call's PBKDF2 budget, shared by all its
+/// candidates (ADR 0050 §2); only the PBES2 family reads it.
+///
 /// # Errors
 ///
 /// [`Error::UnsupportedAlgorithm`] for an `alg` polyjose does not decrypt;
@@ -169,6 +172,7 @@ pub(crate) fn decrypt_key(
     header: &Header,
     encrypted_key: &[u8],
     policy: &DecryptPolicy,
+    pbes2_budget: &mut pbes2::Budget,
 ) -> Result<Cek> {
     use KeyMgmtAlg as A;
     match alg {
@@ -180,7 +184,7 @@ pub(crate) fn decrypt_key(
             aes_gcm_kw::decrypt_key(alg, key, enc, header, encrypted_key, policy)
         }
         A::Pbes2Hs256A128KW | A::Pbes2Hs384A192KW | A::Pbes2Hs512A256KW => {
-            pbes2::decrypt_key(alg, key, enc, header, encrypted_key, policy)
+            pbes2::decrypt_key(alg, key, enc, header, encrypted_key, pbes2_budget)
         }
         A::EcdhEs | A::EcdhEsA128KW | A::EcdhEsA192KW | A::EcdhEsA256KW => {
             ecdh_es::decrypt_key(alg, key, enc, header, encrypted_key, policy)
@@ -257,7 +261,8 @@ mod tests {
         let enc = ContentEncAlg::A128GCM;
         let header = Header::new();
         for alg in [KeyMgmtAlg::RsaOaep256, KeyMgmtAlg::from("RSA1_5")] {
-            let result = decrypt_key(&alg, &key, &enc, &header, &[0; 256], &policy);
+            let mut budget = pbes2::Budget::new(&policy);
+            let result = decrypt_key(&alg, &key, &enc, &header, &[0; 256], &policy, &mut budget);
             assert_eq!(
                 result.map(|_| ()),
                 Err(Error::UnsupportedAlgorithm),

@@ -43,6 +43,7 @@ use super::api::{DecryptPolicy, Decrypted, Encryptor, JsonForm, Serialization};
 use super::content::{self, Cek};
 use super::key::{Direction, RecipientKey, kid_matches};
 use super::keymgmt;
+use super::pbes2;
 use super::random::RandomSource;
 use super::zip;
 use crate::header::Header;
@@ -327,9 +328,11 @@ fn decrypt_recipient(
     aad: &[u8],
     inflate: bool,
     policy: &DecryptPolicy,
+    pbes2_budget: &mut pbes2::Budget,
 ) -> Result<Zeroizing<Vec<u8>>> {
     let failed = |_| Error::DecryptionFailed;
-    let cek = keymgmt::decrypt_key(alg, key, enc, header, encrypted_key, policy).map_err(failed)?;
+    let cek = keymgmt::decrypt_key(alg, key, enc, header, encrypted_key, policy, pbes2_budget)
+        .map_err(failed)?;
     let plaintext = content::decrypt(enc, &cek, &parts.iv, aad, &parts.ciphertext, &parts.tag)
         .map_err(failed)?;
     if inflate {
@@ -354,7 +357,9 @@ fn decrypt_recipient(
 ///    and `kid` ([`candidate`]);
 /// 4. key management and content decryption for each candidate in order
 ///    (steps 6–17), over the protected header **as received** (steps
-///    14–15).
+///    14–15). The PBES2 candidates share one PBKDF2 budget of
+///    `max_pbes2_count` iterations (ADR 0050 §2): one whose `p2c` exceeds
+///    what is left fails, without deriving, and the next is tried.
 ///
 /// # Errors
 ///
@@ -385,6 +390,9 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
     }
 
     let aad = content::aad(&parts.protected_b64, parts.aad.as_deref());
+    // ADR 0050 §2: one PBKDF2 budget for the whole call, so the sum of
+    // `p2c` over the PBES2 candidates tried is at most `max_pbes2_count`.
+    let mut pbes2_budget = pbes2::Budget::new(policy);
     for (index, alg, recipient_key) in &candidates {
         let header = &headers[*index];
         let recipient = &parts.recipients[*index];
@@ -398,6 +406,7 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
             &aad,
             inflate,
             policy,
+            &mut pbes2_budget,
         );
         if let Ok(plaintext) = result {
             let index = *index;
@@ -492,7 +501,10 @@ fn check_reproducible(given: &str, built: &Header) -> Result<()> {
 ///    [`Error::UnsupportedAlgorithm`] (`RSA-OAEP` and `RSA1_5` are not,
 ///    ADRs 0021, 0022);
 /// 4. every key bound to its `alg` ([`RecipientKey::from_jwk`]) →
-///    [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`].
+///    [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`];
+/// 5. every PBES2 recipient's `p2c` and `p2s` length in range
+///    ([`pbes2::check_encrypt_options`]: RFC 7518 §4.8.1, ADR 0050 §2) →
+///    [`Error::InvalidKey`].
 ///
 /// Then: the random CEK when the modes need one (§5.1 step 2), key
 /// management for each recipient in order (steps 3–8), the protected header
@@ -591,6 +603,9 @@ pub(crate) fn encrypt(
             enc,
             Direction::Encrypt,
         )?);
+    }
+    for recipient in recipients {
+        pbes2::check_encrypt_options(&recipient.alg, &recipient.options)?;
     }
 
     // Draw 1 (§5.1 step 2): the CEK, once, when the modes wrap or encrypt
@@ -1061,6 +1076,131 @@ mod tests {
         }
     }
 
+    /// A password as an `oct` JWK (RFC 7518 §4.8), with no `kid`.
+    fn password(pw: &str) -> Jwk {
+        oct(pw.as_bytes(), "")
+    }
+
+    /// A general-form JWE with one PBES2-HS256+A128KW recipient per
+    /// `(password, p2c)`, in order, none with a `kid`.
+    fn pbes2_general(recipients: &[(&str, u32)]) -> JweParts {
+        let mut e = Encryptor::new(ContentEncAlg::A128GCM);
+        for (pw, p2c) in recipients {
+            e = e.recipient(Recipient::new(A::Pbes2Hs256A128KW, &password(pw)).p2c(*p2c));
+        }
+        let form = Serialization::Json(JsonForm::General);
+        encrypt(&e, b"hello", form, &mut OsRandom, None).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// 16 decoy passwords, with `correct` at `index` when given.
+    fn sixteen(correct: Option<usize>) -> Vec<(String, u32)> {
+        (0..16)
+            .map(|i| {
+                let pw = if correct == Some(i) {
+                    "correct".to_owned()
+                } else {
+                    format!("decoy {i}")
+                };
+                (pw, 1000)
+            })
+            .collect()
+    }
+
+    fn pbes2_sixteen(correct: Option<usize>) -> JweParts {
+        let recipients = sixteen(correct);
+        let refs: Vec<(&str, u32)> = recipients.iter().map(|(p, c)| (p.as_str(), *c)).collect();
+        pbes2_general(&refs)
+    }
+
+    /// `decrypt` with the number of PBKDF2 derivations it ran.
+    fn decrypt_counted(parts: JweParts, key: &Jwk, p: &DecryptPolicy) -> (&'static str, u64) {
+        let (result, n) =
+            crate::test_counters::pbkdf2_derivations::count(|| decrypt(parts, key, p));
+        (code(result), n)
+    }
+
+    #[test]
+    fn the_pbes2_budget_is_per_token_summed_over_candidates() {
+        // ADR 0050 §2 (amends ADR 0023), RFC 7518 §8.8: 16 kid-less PBES2
+        // recipients of p2c 1000 under the default 10,000 budget run at most
+        // 10 derivations, and the 11th to 16th fail without deriving.
+        let p = policy(&[A::Pbes2Hs256A128KW]);
+        assert_eq!(
+            p.max_pbes2_count,
+            DecryptPolicy::DEFAULT_MAX_PBES2_COUNT,
+            "the default bound"
+        );
+        let none = pbes2_sixteen(None);
+        let key = password("correct");
+        assert_eq!(
+            decrypt_counted(none.clone(), &key, &p),
+            ("DecryptionFailed", 10)
+        );
+        // Raised enough for every candidate: all 16 are tried.
+        let raised = p.clone().max_pbes2_count(16_000);
+        assert_eq!(
+            decrypt_counted(none, &key, &raised),
+            ("DecryptionFailed", 16)
+        );
+    }
+
+    #[test]
+    fn a_correct_recipient_within_the_budget_still_decrypts() {
+        // ADR 0050 §2: the 10th recipient spends exactly the 10,000 budget
+        // (the bound is inclusive, ADR 0023); the 11th is over it until the
+        // caller raises the bound.
+        let p = policy(&[A::Pbes2Hs256A128KW]);
+        let key = password("correct");
+        assert_eq!(decrypt_counted(pbes2_sixteen(Some(0)), &key, &p), ("ok", 1));
+        let tenth = decrypt(pbes2_sixteen(Some(9)), &key, &p).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((tenth.recipient(), tenth.plaintext()), (9, &b"hello"[..]));
+        assert_eq!(
+            decrypt_counted(pbes2_sixteen(Some(9)), &key, &p),
+            ("ok", 10)
+        );
+        let eleventh = pbes2_sixteen(Some(10));
+        assert_eq!(
+            decrypt_counted(eleventh.clone(), &key, &p),
+            ("DecryptionFailed", 10)
+        );
+        let raised = p.clone().max_pbes2_count(11_000);
+        assert_eq!(decrypt_counted(eleventh, &key, &raised), ("ok", 11));
+    }
+
+    #[test]
+    fn a_candidate_over_the_remaining_budget_is_skipped_not_fatal() {
+        // ADR 0050 §2: a candidate whose p2c exceeds what is left fails as
+        // DecryptionFailed without deriving; selection goes on (plan.md:
+        // each candidate in order, the first success wins).
+        let p = policy(&[A::Pbes2Hs256A128KW]);
+        let key = password("correct");
+        // Over the whole budget on its own, then a fitting correct one.
+        let parts = pbes2_general(&[("decoy", 10_001), ("correct", 1000)]);
+        let d = decrypt(parts.clone(), &key, &p).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(d.recipient(), 1);
+        assert_eq!(decrypt_counted(parts, &key, &p), ("ok", 1));
+        // 9,500 spent on a decoy leaves 500: the correct 1,000 does not fit.
+        let parts = pbes2_general(&[("decoy", 9_500), ("correct", 1000)]);
+        assert_eq!(
+            decrypt_counted(parts.clone(), &key, &p),
+            ("DecryptionFailed", 1)
+        );
+        // ...but a correct one that fits the rest decrypts.
+        let parts = pbes2_general(&[("decoy", 9_000), ("correct", 1000)]);
+        assert_eq!(decrypt_counted(parts, &key, &p), ("ok", 2));
+    }
+
+    #[test]
+    fn the_budget_is_per_decrypt_call() {
+        // ADR 0050 §2: "in one decrypt call"; nothing carries over.
+        let p = policy(&[A::Pbes2Hs256A128KW]);
+        let key = password("correct");
+        let parts = pbes2_sixteen(Some(9));
+        for _ in 0..3 {
+            assert_eq!(decrypt_counted(parts.clone(), &key, &p), ("ok", 10));
+        }
+    }
+
     fn compact_encryptor(alg: KeyMgmtAlg, key: &Jwk) -> Encryptor {
         Encryptor::new(ContentEncAlg::A128GCM).recipient(Recipient::new(alg, key))
     }
@@ -1221,6 +1361,35 @@ mod tests {
         assert_eq!(iv_only.remaining(), 0);
         assert_eq!(parts.iv, [7u8; 12]);
         assert!(parts.recipients[0].encrypted_key.is_empty());
+    }
+
+    #[test]
+    fn pbes2_parameters_are_refused_before_any_draw() {
+        // RFC 7518 §4.8.1.1–§4.8.1.2, ADR 0050 §2: a p2c below 1000 or
+        // above the 1,000,000 ceiling, or a p2s length below 8 or above
+        // 256, is InvalidKey before the CEK (draw 1) is drawn.
+        let k = password("pw");
+        let ceiling = DecryptPolicy::MAX_PBES2_COUNT_CEILING;
+        let cases: [fn(Recipient) -> Recipient; 4] = [
+            |r| r.p2c(999),
+            |r| r.p2c(DecryptPolicy::MAX_PBES2_COUNT_CEILING + 1),
+            |r| r.p2s_len(7),
+            |r| r.p2s_len(257),
+        ];
+        assert_eq!(ceiling, 1_000_000);
+        for (i, make) in cases.iter().enumerate() {
+            // A good first recipient, then the bad one.
+            let e = Encryptor::new(ContentEncAlg::A128GCM)
+                .recipient(Recipient::new(A::Pbes2Hs256A128KW, &k).p2c(1000))
+                .recipient(make(Recipient::new(A::Pbes2Hs256A128KW, &k)));
+            let mut rng = FixedRng::new([0u8; 128]);
+            let form = Serialization::Json(JsonForm::General);
+            let (out, n) = crate::test_counters::pbkdf2_derivations::count(|| {
+                encrypt(&e, b"x", form, &mut rng, None)
+            });
+            assert_eq!((code(out), n), ("InvalidKey", 0), "case {i}");
+            assert_eq!(rng.remaining(), 128, "case {i}: drew before the checks");
+        }
     }
 
     #[test]

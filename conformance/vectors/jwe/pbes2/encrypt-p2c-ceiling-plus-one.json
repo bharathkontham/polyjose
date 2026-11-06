@@ -1,0 +1,24 @@
+{
+  "source": "ADR 0050 §2",
+  "description": "ADR 0050 §2: polyjose refuses to encrypt with p2c 1000001, above the 1,000,000 decrypt ceiling of ADR 0023 that no DecryptPolicy can exceed, before any draw or derivation (InvalidKey)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "eA",
+    "recipients": [
+      {
+        "alg": "PBES2-HS256+A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "SHVudGVyMiwgYnV0IGxvbmdlcg"
+        },
+        "p2c": 1000001
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

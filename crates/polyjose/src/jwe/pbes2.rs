@@ -7,7 +7,9 @@
 //! attacker-chosen, and each iteration is two hash compressions, so the
 //! bound `DecryptPolicy::max_pbes2_count` (ADR 0023; 10,000 by default) is
 //! enforced first (RFC 7518 §8.8; CVE-2022-36083, CVE-2023-52428,
-//! CVE-2023-51775).
+//! CVE-2023-51775). The bound is one [`Budget`] for the whole decrypt call,
+//! summed over every PBES2 candidate tried (ADR 0050 §2), so a token with
+//! many recipients costs no more than one.
 
 use super::aes_kw;
 use super::api::DecryptPolicy;
@@ -29,12 +31,14 @@ use zeroize::Zeroizing;
 /// header parameters are `p2s`, the base64url Salt Input, and `p2c`, the
 /// iteration count (RFC 7518 §4.8.1.1–§4.8.1.2).
 ///
-/// - `p2s` is `options.p2s_len` octets (16 by default, at least 8: RFC 7518
-///   §4.8.1.1), drawn from `rng` (ADR 0005; plan.md RNG draw order).
-/// - `p2c` is `options.p2c` (10,000 by default, ADR 0023), at least 1000:
-///   RFC 7518 §4.8.1.2 recommends that minimum, and polyjose enforces it.
+/// - `p2s` is `options.p2s_len` octets (16 by default, 8 to 256: RFC 7518
+///   §4.8.1.1, ADR 0050 §2), drawn from `rng` (ADR 0005; plan.md RNG draw
+///   order).
+/// - `p2c` is `options.p2c` (10,000 by default, ADR 0023), 1000 to
+///   1,000,000 ([`check_encrypt_options`]).
 ///
-/// Every check runs before anything is drawn or derived.
+/// Every check runs before anything is drawn or derived; `core::encrypt`
+/// also runs [`check_encrypt_options`] before its first draw, the CEK.
 ///
 /// # Errors
 ///
@@ -42,9 +46,9 @@ use zeroize::Zeroizing;
 ///   unknown `enc`;
 /// - [`Error::KeyAlgorithmMismatch`] for a key that is not a password
 ///   (RFC 7518 §4.8, RFC 8725 §3.1);
-/// - [`Error::InvalidKey`] for a `p2c` below 1000, a `p2s` length below 8,
-///   or a CEK that is missing or not the length `enc` requires (RFC 7516
-///   §5.1 step 2);
+/// - [`Error::InvalidKey`] for a `p2c` or `p2s` length out of range
+///   ([`check_encrypt_options`]), or a CEK that is missing or not the length
+///   `enc` requires (RFC 7516 §5.1 step 2);
 /// - [`Error::RandomnessUnavailable`] if `rng` fails.
 pub(super) fn encrypt_key(
     alg: &KeyMgmtAlg,
@@ -64,17 +68,10 @@ pub(super) fn encrypt_key(
     let cek = cek
         .filter(|cek| cek.len() == cek_len)
         .ok_or(Error::InvalidKey(CEK_SIZE))?;
-    let p2c = options.p2c.unwrap_or(DEFAULT_P2C);
-    if p2c < MIN_P2C {
-        return Err(Error::InvalidKey(P2C_TOO_LOW));
-    }
+    let (p2c, p2s_len) = encrypt_params(options)?;
     // A u32 is always an exact I-JSON integer (RFC 7493 §2.2); the error
     // arm is never taken.
     let p2c_number = Number::from_u64(u64::from(p2c)).ok_or(Error::InvalidKey(P2C_TOO_LOW))?;
-    let p2s_len = options.p2s_len.unwrap_or(DEFAULT_P2S_LEN);
-    if p2s_len < MIN_P2S_LEN {
-        return Err(Error::InvalidKey(P2S_TOO_SHORT));
-    }
     let mut p2s = vec![0; p2s_len];
     rng.fill(&mut p2s)?;
     let kek = derive_kek(alg, password, &p2s, p2c).ok_or(Error::UnsupportedAlgorithm)?;
@@ -87,6 +84,49 @@ pub(super) fn encrypt_key(
         header_params,
         cek: None,
     })
+}
+
+/// Checks a recipient's PBES2 encrypt options when `alg` is a PBES2
+/// algorithm (RFC 7518 §4.8.1), and accepts any options for another `alg`,
+/// whose family ignores them. `core::encrypt` calls it before its first
+/// draw, so a bad option costs no randomness and no derivation.
+///
+/// - `p2c` (10,000 by default, ADR 0023) is at least 1000, the minimum RFC
+///   7518 §4.8.1.2 recommends, and at most the 1,000,000 decrypt ceiling
+///   [`DecryptPolicy::MAX_PBES2_COUNT_CEILING`] (ADR 0050 §2): no
+///   `DecryptPolicy` could decrypt more.
+/// - `p2s_len` (16 by default) is at least 8 octets (RFC 7518 §4.8.1.1: "A
+///   Salt Input value containing 8 or more octets MUST be used") and at most
+///   256 (ADR 0050 §2), which bounds the salt PBKDF2 hashes.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] for a value out of range.
+pub(crate) fn check_encrypt_options(alg: &KeyMgmtAlg, options: &RecipientOptions) -> Result<()> {
+    if params(alg).is_some() {
+        encrypt_params(options)?;
+    }
+    Ok(())
+}
+
+/// `(p2c, p2s_len)` of `options` with the defaults applied, checked as
+/// [`check_encrypt_options`] describes.
+fn encrypt_params(options: &RecipientOptions) -> Result<(u32, usize)> {
+    let p2c = options.p2c.unwrap_or(DEFAULT_P2C);
+    if p2c < MIN_P2C {
+        return Err(Error::InvalidKey(P2C_TOO_LOW));
+    }
+    if p2c > DecryptPolicy::MAX_PBES2_COUNT_CEILING {
+        return Err(Error::InvalidKey(P2C_TOO_HIGH));
+    }
+    let p2s_len = options.p2s_len.unwrap_or(DEFAULT_P2S_LEN);
+    if p2s_len < MIN_P2S_LEN {
+        return Err(Error::InvalidKey(P2S_TOO_SHORT));
+    }
+    if p2s_len > MAX_P2S_LEN {
+        return Err(Error::InvalidKey(P2S_TOO_LONG));
+    }
+    Ok((p2c, p2s_len))
 }
 
 /// The encrypt-side default `p2c` (ADR 0023): inside every mainstream
@@ -104,12 +144,54 @@ const DEFAULT_P2S_LEN: usize = 16;
 /// The [`Error::InvalidKey`] detail for a `p2c` below [`MIN_P2C`].
 const P2C_TOO_LOW: &str = "PBES2 p2c must be at least 1000";
 
+/// The [`Error::InvalidKey`] detail for a `p2c` above the decrypt ceiling.
+const P2C_TOO_HIGH: &str = "PBES2 p2c must be at most 1000000";
+
+/// The longest Salt Input polyjose encrypts with, in octets (ADR 0050 §2).
+const MAX_P2S_LEN: usize = 256;
+
 /// The [`Error::InvalidKey`] detail for a `p2s` shorter than [`MIN_P2S_LEN`].
 const P2S_TOO_SHORT: &str = "PBES2 p2s must be at least 8 octets";
+
+/// The [`Error::InvalidKey`] detail for a `p2s` longer than [`MAX_P2S_LEN`].
+const P2S_TOO_LONG: &str = "PBES2 p2s must be at most 256 octets";
 
 /// The [`Error::InvalidKey`] detail for a missing CEK or one of the wrong
 /// length.
 const CEK_SIZE: &str = "the CEK must have the length enc requires";
+
+/// The PBKDF2 iterations one decrypt call may still spend, over every PBES2
+/// candidate it tries (ADR 0050 §2, amending ADR 0023; RFC 7518 §8.8).
+///
+/// `core::decrypt` makes one from `policy.max_pbes2_count` per call and
+/// passes it to each candidate's key management; [`decrypt_key`] spends a
+/// candidate's `p2c` from it just before PBKDF2 runs, and only then. The
+/// sum of `p2c` over the derivations of one call is therefore at most
+/// `max_pbes2_count`, however many recipients the JWE has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Budget {
+    remaining: u32,
+}
+
+impl Budget {
+    /// A budget of `policy.max_pbes2_count` iterations, for one decrypt call.
+    pub(crate) fn new(policy: &DecryptPolicy) -> Self {
+        Self {
+            remaining: policy.max_pbes2_count,
+        }
+    }
+
+    /// Spends `p2c` iterations, or refuses (leaving the budget unchanged)
+    /// if fewer than `p2c` remain: `p2c` equal to what remains is accepted,
+    /// as the bound is inclusive (ADR 0023).
+    fn spend(&mut self, p2c: u32) -> Result<()> {
+        self.remaining = self
+            .remaining
+            .checked_sub(p2c)
+            .ok_or(Error::DecryptionFailed)?;
+        Ok(())
+    }
+}
 
 /// Key management on decrypt (RFC 7516 §5.2 steps 6–12) for the three
 /// PBES2 algorithms: the JWE Encrypted Key unwrapped (RFC 3394 §2.2.2) under
@@ -117,37 +199,43 @@ const CEK_SIZE: &str = "the CEK must have the length enc requires";
 /// §4.8). The CEK must have the length `enc` requires (§5.2 step 9).
 ///
 /// `p2s` and `p2c` are checked before PBKDF2 runs, so a hostile count
-/// costs nothing (RFC 7518 §8.8, ADR 0023):
-/// - `p2c` must be present, at least 1 (a "positive JSON integer", RFC 7518
-///   §4.8.1.2) and at most `policy.max_pbes2_count`;
+/// costs nothing (RFC 7518 §8.8, ADR 0023, ADR 0050 §2):
+/// - `p2c` must be present and at least 1 (a "positive JSON integer",
+///   RFC 7518 §4.8.1.2);
 /// - `p2s` must be present, strict base64url (RFC 7515 §2), and at least 8
 ///   octets once decoded (RFC 7518 §4.8.1.1: "A Salt Input value containing
-///   8 or more octets MUST be used").
+///   8 or more octets MUST be used");
+/// - then `p2c` must fit what is left of the call's `budget`, which it is
+///   spent from (so it is never above `policy.max_pbes2_count`). A fault
+///   above spends nothing.
 ///
 /// # Errors
 ///
 /// [`Error::DecryptionFailed`], whatever the cause, so no cause can be told
 /// from another (RFC 7516 §11.4–§11.5, the plan.md error contract): an
 /// `alg` outside the family, a key that is not a password, an unknown
-/// `enc`, any `p2s` or `p2c` fault above, a wrapped key of the wrong size,
-/// an integrity failure (a wrong password, RFC 3394 §2.2.3) or an unwrapped
-/// CEK of the wrong length. The derived key and every unwrapped byte are
-/// wiped before returning.
+/// `enc`, any `p2s` or `p2c` fault above, a `p2c` over the remaining
+/// budget, a wrapped key of the wrong size, an integrity failure (a wrong
+/// password, RFC 3394 §2.2.3) or an unwrapped CEK of the wrong length. The
+/// derived key and every unwrapped byte are wiped before returning.
 pub(super) fn decrypt_key(
     alg: &KeyMgmtAlg,
     key: &RecipientKey,
     enc: &ContentEncAlg,
     header: &Header,
     encrypted_key: &[u8],
-    policy: &DecryptPolicy,
+    budget: &mut Budget,
 ) -> Result<Cek> {
     let RecipientKey::Password(password) = key else {
         return Err(Error::DecryptionFailed);
     };
     let cek_len = cek_len(enc).map_err(|_| Error::DecryptionFailed)?;
+    if params(alg).is_none() {
+        return Err(Error::DecryptionFailed);
+    }
     let p2c = header
         .p2c
-        .filter(|&p2c| p2c >= 1 && p2c <= u64::from(policy.max_pbes2_count))
+        .filter(|&p2c| p2c >= 1)
         .and_then(|p2c| u32::try_from(p2c).ok())
         .ok_or(Error::DecryptionFailed)?;
     let p2s = header
@@ -156,6 +244,9 @@ pub(super) fn decrypt_key(
         .and_then(|p2s| b64url_decode(p2s).ok())
         .filter(|p2s| p2s.len() >= MIN_P2S_LEN)
         .ok_or(Error::DecryptionFailed)?;
+    // ADR 0050 §2: the last check before PBKDF2, so only a derivation that
+    // runs is charged.
+    budget.spend(p2c)?;
     let kek = derive_kek(alg, password, &p2s, p2c).ok_or(Error::DecryptionFailed)?;
     let cek = aes_kw::unwrap(&kek, encrypted_key)?;
     if cek.len() != cek_len {
@@ -355,7 +446,68 @@ mod tests {
         encrypted_key: &[u8],
         policy: &DecryptPolicy,
     ) -> (Result<Cek>, u64) {
-        pbkdf2_derivations::count(|| decrypt_key(alg, key, enc, header, encrypted_key, policy))
+        let mut budget = Budget::new(policy);
+        pbkdf2_derivations::count(|| decrypt_key(alg, key, enc, header, encrypted_key, &mut budget))
+    }
+
+    #[test]
+    fn the_budget_is_spent_only_by_derivations_that_run() {
+        // ADR 0050 §2: each derivation spends its p2c from the call's
+        // budget, checked before PBKDF2 runs; a fault found first spends
+        // nothing, and a p2c over what is left derives nothing.
+        let alg = KeyMgmtAlg::Pbes2Hs256A128KW;
+        let enc = ContentEncAlg::A128GCM;
+        let pw = password(PASSWORD);
+        let (cek, ek) = wrapped(&alg, &P2S, 4000, 16);
+        let good = header(Some(&P2S), Some(4000));
+        let mut budget = Budget::new(&policy());
+        let run = |h: &Header, ek: &[u8], budget: &mut Budget| {
+            pbkdf2_derivations::count(|| {
+                decrypt_key(&alg, &pw, &enc, h, ek, budget).map(|c| c.as_bytes().to_vec())
+            })
+        };
+        // A fault before the budget check: nothing spent.
+        let (out, n) = run(&header(Some(&P2S[..7]), Some(4000)), &ek, &mut budget);
+        assert_eq!((out, n), (Err(Error::DecryptionFailed), 0));
+        assert_eq!(budget, Budget { remaining: 10_000 });
+        // A derivation that fails afterwards (a tampered key) still spends.
+        let mut tampered = ek.clone();
+        tampered[9] ^= 1;
+        let (out, n) = run(&good, &tampered, &mut budget);
+        assert_eq!((out, n), (Err(Error::DecryptionFailed), 1));
+        assert_eq!(budget, Budget { remaining: 6000 });
+        let (out, n) = run(&good, &ek, &mut budget);
+        assert_eq!((out, n), (Ok(cek.clone()), 1));
+        assert_eq!(budget, Budget { remaining: 2000 });
+        // 4000 > 2000 left: refused without deriving, nothing spent.
+        let (out, n) = run(&good, &ek, &mut budget);
+        assert_eq!((out, n), (Err(Error::DecryptionFailed), 0));
+        assert_eq!(budget, Budget { remaining: 2000 });
+        // Exactly what is left is accepted (the bound is inclusive).
+        let (cek2, ek2) = wrapped(&alg, &P2S, 2000, 16);
+        let (out, n) = run(&header(Some(&P2S), Some(2000)), &ek2, &mut budget);
+        assert_eq!((out, n), (Ok(cek2), 1));
+        assert_eq!(budget, Budget { remaining: 0 });
+        let (out, n) = run(&header(Some(&P2S), Some(1)), &ek, &mut budget);
+        assert_eq!((out, n), (Err(Error::DecryptionFailed), 0));
+    }
+
+    #[test]
+    fn an_alg_outside_the_family_spends_nothing() {
+        let mut budget = Budget::new(&policy());
+        let h = header(Some(&P2S), Some(1000));
+        let (out, n) = pbkdf2_derivations::count(|| {
+            decrypt_key(
+                &KeyMgmtAlg::A128KW,
+                &password(PASSWORD),
+                &ContentEncAlg::A128GCM,
+                &h,
+                &[0; 24],
+                &mut budget,
+            )
+        });
+        assert_eq!((out.map(|_| ()), n), (Err(Error::DecryptionFailed), 0));
+        assert_eq!(budget, Budget::new(&policy()));
     }
 
     #[test]
@@ -616,7 +768,7 @@ mod tests {
                     enc,
                     &h,
                     &out.encrypted_key,
-                    &policy(),
+                    &mut Budget::new(&policy()),
                 );
                 assert_eq!(
                     back.map(|c| c.as_bytes().to_vec()),
@@ -707,6 +859,81 @@ mod tests {
             assert!(matches!(out, Err(Error::InvalidKey(_))), "{opts:?}");
             assert_eq!((rng.remaining(), n), (64, 0), "{opts:?}");
         }
+    }
+
+    #[test]
+    fn encrypt_refuses_a_count_above_the_ceiling_or_a_salt_input_above_256_octets() {
+        // ADR 0050 §2: p2c above the 1,000,000 decrypt ceiling (ADR 0023)
+        // could never be decrypted, and p2s_len is capped at 256 octets;
+        // both are InvalidKey before anything is drawn or derived.
+        let alg = KeyMgmtAlg::Pbes2Hs256A128KW;
+        let enc = ContentEncAlg::A128GCM;
+        let ceiling = DecryptPolicy::MAX_PBES2_COUNT_CEILING;
+        for opts in [
+            options(Some(ceiling + 1), None),
+            options(Some(u32::MAX), None),
+            options(None, Some(257)),
+            options(None, Some(usize::MAX)),
+            options(Some(ceiling + 1), Some(257)),
+        ] {
+            let mut rng = FixedRng::new(vec![0; 512]);
+            let (out, n) = pbkdf2_derivations::count(|| {
+                encrypt_key(
+                    &alg,
+                    &password(PASSWORD),
+                    &enc,
+                    Some(&cek_for(&enc)),
+                    &opts,
+                    &mut rng,
+                )
+            });
+            assert!(matches!(out, Err(Error::InvalidKey(_))), "{opts:?}");
+            assert_eq!((rng.remaining(), n), (512, 0), "{opts:?}");
+            assert!(
+                matches!(
+                    check_encrypt_options(&alg, &opts),
+                    Err(Error::InvalidKey(_))
+                ),
+                "{opts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_encrypt_limits_are_inclusive() {
+        // The ceiling and 256 octets themselves are accepted. The count is
+        // checked without deriving 1,000,000 iterations.
+        let alg = KeyMgmtAlg::Pbes2Hs512A256KW;
+        let ceiling = DecryptPolicy::MAX_PBES2_COUNT_CEILING;
+        assert_eq!(
+            check_encrypt_options(&alg, &options(Some(ceiling), Some(256))),
+            Ok(())
+        );
+        let enc = ContentEncAlg::A256GCM;
+        let mut rng = FixedRng::new(vec![0x44; 256]);
+        let out = encrypt_key(
+            &alg,
+            &password(PASSWORD),
+            &enc,
+            Some(&cek_for(&enc)),
+            &options(Some(1000), Some(256)),
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(rng.remaining(), 0);
+        let p2s = out
+            .header_params
+            .get("p2s")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_eq!(crate::util::b64url_decode(p2s).unwrap(), vec![0x44; 256]);
+    }
+
+    #[test]
+    fn encrypt_options_of_other_algs_are_not_checked_here() {
+        // The other families ignore p2c and p2s_len.
+        let opts = options(Some(u32::MAX), Some(usize::MAX));
+        assert_eq!(check_encrypt_options(&KeyMgmtAlg::A128KW, &opts), Ok(()));
     }
 
     #[test]
