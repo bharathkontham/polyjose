@@ -23,8 +23,10 @@
 #      with its file and line;
 #  10. `sha1` is in the core's tree (ADR 0022: no SHA-1 anywhere in the core);
 #  11. `rsa` is built with any feature enabled, by the core or by anything else in the workspace
-#      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature).
-#  Checks 9-11 are the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
+#      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
+#  12. a workspace member depends on the `rsa` package under another name (`package = "rsa"`),
+#      which would hide its use from check 9.
+#  Checks 9-12 are the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
 #  them means removing that ignore.
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
@@ -645,6 +647,43 @@ for node in meta["resolve"]["nodes"]:
   fi
 }
 
+# 12. No workspace member (the core, the bindings, anything else) depends on the rsa package under
+#     another name (`foo = { package = "rsa", … }`, directly or through [workspace.dependencies]),
+#     in any table: [dependencies], [dev-dependencies], [build-dependencies] or their [target.*.…]
+#     forms. Code could then write `foo::pkcs1v15::SigningKey`, which check 9 cannot tie to rsa
+#     (ADR 0021 §3). Read from cargo metadata (`rename`), so every way of spelling the manifest
+#     is covered.
+check_rsa_not_renamed() {
+  python3 -I -c '
+import json, os, sys
+meta_path, root = sys.argv[1], os.path.realpath(sys.argv[2])
+with open(meta_path, encoding="utf-8") as f:
+    meta = json.load(f)
+members = set(meta["workspace_members"])
+if not members:
+    sys.exit("cargo metadata lists no workspace members")
+tables = {None: "dependencies", "dev": "dev-dependencies", "build": "build-dependencies"}
+seen = 0
+for p in meta["packages"]:
+    if p["id"] not in members:
+        continue
+    seen += 1
+    for dep in p["dependencies"]:
+        table = tables[dep["kind"]]  # any other kind is a KeyError: fail closed
+        if dep["name"].lower().replace("_", "-") != "rsa" or dep.get("rename") in (None, "rsa"):
+            continue
+        where = "[target.%s.%s]" % (dep["target"], table) if dep.get("target") else "[%s]" % table
+        manifest = os.path.relpath(os.path.realpath(p["manifest_path"]), root)
+        print("%s (%s): rsa as %s in %s" % (p["name"], manifest, dep["rename"], where))
+if seen != len(members):
+    sys.exit("cargo metadata is missing %d workspace member(s)" % (len(members) - seen))
+' "$work/metadata.json" "$root_physical" >"$work/rsa-renames" || die "could not read the workspace's dependencies from cargo metadata"
+  if [ -s "$work/rsa-renames" ]; then
+    fail "the rsa package is a dependency under another name; depend on it as rsa, so check 9 can see its use (ADR 0021 §3):"
+    sed 's/^/  - /' "$work/rsa-renames"
+  fi
+}
+
 check_tree_allowlisted
 check_allowlist_not_stale
 check_default_features_off
@@ -656,13 +695,14 @@ check_core_no_build_script
 check_rsa_public_only
 check_no_sha1
 check_rsa_no_features
+check_rsa_not_renamed
 
 if [ "$failed" -ne 0 ]; then
   echo "check-deps: FAILED"
   exit 1
 fi
 
-echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features (ADR 0021, ADR 0022)"
+echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features and under its own name (ADR 0021, ADR 0022)"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
 exit 0
