@@ -60,17 +60,24 @@ pub enum Error {
     ///
     /// A JOSE Header must be a completely valid JSON object (RFC 7515 §5.2
     /// step 3, RFC 7516 §5.2 step 3), and so must a JWT Claims Set
-    /// (RFC 7519 §7.2 step 10) and a JWK (RFC 7517 §4). The detail names
-    /// the failure category only, never the offending input.
+    /// (RFC 7519 §7.2 step 10) and a JWK (RFC 7517 §4). That includes a
+    /// member name occurring twice in one object, a JOSE Header included
+    /// (RFC 7515 §5.2 step 4, RFC 7516 §5.2 step 4; ADR 0041 §1). The
+    /// detail names the failure category only, never the offending input.
     InvalidJson(&'static str),
 
     /// The JOSE Header is structurally invalid.
     ///
     /// For example: a required parameter such as `alg` is missing
-    /// (RFC 7515 §4.1.1, RFC 7516 §4.1.1–§4.1.2), a parameter has the wrong
-    /// type, a Header Parameter name is duplicated (RFC 7515 §5.2 step 4,
-    /// RFC 7516 §5.2 step 4), or `crit` itself is malformed
-    /// (RFC 7515 §4.1.11, RFC 7516 §4.1.13).
+    /// (RFC 7515 §4.1.1, RFC 7516 §4.1.1–§4.1.2), a registered parameter
+    /// has the wrong type, the protected and unprotected headers share a
+    /// name (RFC 7515 §5.2 step 4, §7.2.1; RFC 7516 §5.2 step 4), `crit`
+    /// is malformed or not in the protected header (RFC 7515 §4.1.11,
+    /// RFC 7516 §4.1.13), or `b64` breaks the RFC 7797 §3/§6 rules.
+    ///
+    /// A member name that occurs twice **inside one** header object is not
+    /// this error: the JSON layer rejects it first, as
+    /// [`Error::InvalidJson`] (ADR 0041 §1, amending ADR 0026 §2 step 4).
     InvalidHeader(&'static str),
 
     /// The `alg` or `enc` value does not name an algorithm polyjose
