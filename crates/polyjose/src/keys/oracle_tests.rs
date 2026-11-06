@@ -907,3 +907,259 @@ fn reject_fixtures_are_rejected_and_every_oracle_acceptance_is_listed() {
     assert_eq!(accepted, listed, "{oracle_accepts:?}");
     assert_eq!(count, 33);
 }
+
+// ---------------------------------------------------------------------------
+// Generated keys
+// ---------------------------------------------------------------------------
+
+/// The id-ecPublicKey AlgorithmIdentifier of `crv` (RFC 5480 §2.1.1), built
+/// by the `spki` oracle.
+fn oracle_ec_algorithm(curve: &ObjectIdentifier) -> ::spki::AlgorithmIdentifierRef<'_> {
+    ::spki::AlgorithmIdentifierRef {
+        oid: ID_EC_PUBLIC_KEY,
+        parameters: Some(curve.into()),
+    }
+}
+
+/// Test randomness for key generation: `len` octets expanded from a
+/// 32-octet proptest seed as SHA-512(seed ‖ counter) blocks, so a failing
+/// case replays from its seed. It feeds `FixedRng` through the crate's one
+/// RNG adapter (ADR 0005, ADR 0018 §5); no second RNG type is introduced.
+fn seed_stream(seed: &[u8; 32], len: usize) -> Vec<u8> {
+    use sha2::Digest as _;
+    let mut stream = Vec::with_capacity(len + 64);
+    let mut counter = 0u64;
+    while stream.len() < len {
+        let block = sha2::Sha512::new()
+            .chain_update(seed)
+            .chain_update(counter.to_be_bytes())
+            .finalize();
+        stream.extend_from_slice(&block);
+        counter += 1;
+    }
+    stream.truncate(len);
+    stream
+}
+
+/// A key from T04's `generate_ec`, drawn from [`seed_stream`] through the
+/// crate's one RNG adapter.
+///
+/// The curve crates draw a scalar as a whole field-size octet string and
+/// redraw unless it is below n (`primefield` `try_random`). For P-521 that
+/// is 66 octets of which about 2^521 of 2^528 values pass, so a key takes
+/// 128 draws on average and a short stream can run dry. The stream is
+/// retried longer (always the same prefix, so still a function of the
+/// seed): 16 KiB first, then 1 MiB (15,887 draws, dry with probability
+/// below 2^-170).
+fn generated_ec(crv: EcCurve, seed: &[u8; 32]) -> Jwk {
+    for len in [16 * 1024, 1024 * 1024] {
+        let mut fixed = crate::rng::insecure_test_vectors::FixedRng::new(seed_stream(seed, len));
+        let rng = &mut crate::rng::CryptoRngAdapter::fixed(&mut fixed);
+        match super::generate::generate_ec(crv, rng) {
+            Err(Error::RandomnessUnavailable) => continue,
+            other => return other.unwrap(),
+        }
+    }
+    panic!("{crv:?}: 1 MiB of seed stream ran dry")
+}
+
+/// A key from T04's `generate_okp`, seeded as [`generated_ec`]; it takes
+/// exactly 32 octets (RFC 8032 §5.1.5, RFC 7748 §5).
+fn generated_okp(crv: OkpCurve, seed: &[u8; 32]) -> Jwk {
+    let mut fixed = crate::rng::insecure_test_vectors::FixedRng::new(seed_stream(seed, 32));
+    super::generate::generate_okp(crv, &mut crate::rng::CryptoRngAdapter::fixed(&mut fixed))
+        .unwrap()
+}
+
+/// A generated EC key's SPKI, SEC1 and PKCS#8 encodings decode in the
+/// oracles to the key's own values, re-import to the same key, and equal
+/// byte for byte what the formats crates encode from the same values:
+///
+/// - SPKI: id-ecPublicKey + namedCurve and the uncompressed point (RFC 5480
+///   §2.1.1, §2.2);
+/// - SEC1: version 1, privateKey, `[0]` namedCurve and `[1]` publicKey
+///   (RFC 5915 §3);
+/// - PKCS#8 v1 whose ECPrivateKey has `[1]` and no `[0]`, the layout of
+///   OpenSSL 4 and of RustCrypto's own `elliptic-curve` 0.14.3
+///   `SecretKey::to_pkcs8_der` (`parameters: None`), so there is no
+///   difference to list. The variant with `[0]` inside, which RFC 5915 §3's
+///   "MUST always include" asks for and erratum 5008 drops, is not what
+///   polyjose writes, but polyjose reads it to the same key (ADR 0018 §3).
+fn check_generated_ec(jwk: &Jwk) {
+    let KeyMaterial::Ec(key) = jwk.material() else {
+        panic!("an EC key")
+    };
+    let values = values_of(jwk);
+    let crv = key.crv();
+    let d = key.d().unwrap();
+    let point = [&[0x04][..], key.x(), key.y()].concat();
+    let curve = curve_oid(crv);
+
+    let spki = super::ec::to_spki(key).unwrap();
+    let oracle_spki = ::spki::SubjectPublicKeyInfoRef {
+        algorithm: oracle_ec_algorithm(&curve),
+        subject_public_key: ::der::asn1::BitStringRef::from_bytes(&point).unwrap(),
+    }
+    .to_der()
+    .unwrap();
+    assert_eq!(*spki, oracle_spki, "SPKI");
+    let public = Values::Ec {
+        crv,
+        x: key.x().to_vec(),
+        y: key.y().to_vec(),
+        d: None,
+    };
+    assert_eq!(oracle_key(Kind::Spki, &spki), Ok(Some(public)));
+
+    let sec1 = super::ec::to_sec1(key).unwrap();
+    let oracle_sec1 = ::sec1::EcPrivateKey {
+        private_key: d,
+        parameters: Some(::sec1::EcParameters::NamedCurve(curve)),
+        public_key: Some(&point),
+    }
+    .to_der()
+    .unwrap();
+    assert_eq!(*sec1, oracle_sec1, "SEC1");
+    assert_eq!(
+        oracle_key(Kind::Sec1, &sec1).as_ref(),
+        Ok(&Some(values_ec(jwk)))
+    );
+
+    let pkcs8 = super::ec::to_pkcs8(key).unwrap();
+    let oracle_pkcs8 = |parameters: Option<::sec1::EcParameters>| {
+        let inner = ::sec1::EcPrivateKey {
+            private_key: d,
+            parameters,
+            public_key: Some(&point),
+        }
+        .to_der()
+        .unwrap();
+        ::pkcs8::PrivateKeyInfoRef::new(
+            oracle_ec_algorithm(&curve),
+            OctetStringRef::new(&inner).unwrap(),
+        )
+        .to_der()
+        .unwrap()
+    };
+    assert_eq!(*pkcs8, oracle_pkcs8(None), "PKCS#8");
+    assert_eq!(
+        oracle_key(Kind::Pkcs8, &pkcs8).as_ref(),
+        Ok(&Some(values_ec(jwk)))
+    );
+    let with_curve = oracle_pkcs8(Some(::sec1::EcParameters::NamedCurve(curve)));
+    assert_ne!(*pkcs8, with_curve);
+    assert_eq!(
+        values_of(&our_import(Kind::Pkcs8, &with_curve).unwrap()),
+        values
+    );
+
+    for (kind, der) in [(Kind::Sec1, &sec1), (Kind::Pkcs8, &pkcs8)] {
+        assert_eq!(
+            values_of(&our_import(kind, der).unwrap()),
+            values,
+            "{kind:?}"
+        );
+    }
+    assert!(our_import(Kind::Spki, &spki).unwrap().is_public());
+}
+
+/// [`values_of`] of an EC key, so the call sites read as what they check.
+fn values_ec(jwk: &Jwk) -> Values {
+    values_of(jwk)
+}
+
+/// A generated Ed25519 or X25519 key's SPKI and PKCS#8 encodings decode in
+/// the oracles to the key's values, re-import to the same key, and equal
+/// byte for byte what the formats crates encode: the RFC 8410 §3
+/// AlgorithmIdentifier with parameters absent, the key as the BIT STRING
+/// (§4), and the CurvePrivateKey OCTET STRING inside the PKCS#8 v1
+/// privateKey (§7, the §10.3 layout).
+fn check_generated_okp(jwk: &Jwk) {
+    let KeyMaterial::Okp(key) = jwk.material() else {
+        panic!("an OKP key")
+    };
+    let values = values_of(jwk);
+    let algorithm = ::spki::AlgorithmIdentifierRef {
+        oid: match key.crv() {
+            OkpCurve::Ed25519 => ID_ED25519,
+            OkpCurve::X25519 => ID_X25519,
+        },
+        parameters: None,
+    };
+
+    let spki = super::okp::to_spki(key).unwrap();
+    let oracle_spki = ::spki::SubjectPublicKeyInfoRef {
+        algorithm,
+        subject_public_key: ::der::asn1::BitStringRef::from_bytes(key.x()).unwrap(),
+    }
+    .to_der()
+    .unwrap();
+    assert_eq!(*spki, oracle_spki, "SPKI");
+    let public = Values::Okp {
+        crv: key.crv(),
+        x: key.x().to_vec(),
+        d: None,
+    };
+    assert_eq!(oracle_key(Kind::Spki, &spki), Ok(Some(public)));
+
+    let pkcs8 = super::okp::to_pkcs8(key).unwrap();
+    let curve_private_key = OctetStringRef::new(key.d().unwrap())
+        .unwrap()
+        .to_der()
+        .unwrap();
+    let oracle_pkcs8 = ::pkcs8::PrivateKeyInfoRef::new(
+        algorithm,
+        OctetStringRef::new(&curve_private_key).unwrap(),
+    )
+    .to_der()
+    .unwrap();
+    assert_eq!(*pkcs8, oracle_pkcs8, "PKCS#8");
+    assert_eq!(
+        oracle_key(Kind::Pkcs8, &pkcs8).as_ref(),
+        Ok(&Some(values_of(jwk)))
+    );
+
+    assert_eq!(values_of(&our_import(Kind::Pkcs8, &pkcs8).unwrap()), values);
+    assert!(our_import(Kind::Spki, &spki).unwrap().is_public());
+}
+
+mod generated {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        // ≤ 256 cases per curve (task T09).
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn p256_keys_encode_and_decode_like_the_oracles(seed in any::<[u8; 32]>()) {
+            check_generated_ec(&generated_ec(EcCurve::P256, &seed));
+        }
+
+        #[test]
+        fn p384_keys_encode_and_decode_like_the_oracles(seed in any::<[u8; 32]>()) {
+            check_generated_ec(&generated_ec(EcCurve::P384, &seed));
+        }
+
+        #[test]
+        fn p521_keys_encode_and_decode_like_the_oracles(seed in any::<[u8; 32]>()) {
+            check_generated_ec(&generated_ec(EcCurve::P521, &seed));
+        }
+
+        #[test]
+        fn secp256k1_keys_encode_and_decode_like_the_oracles(seed in any::<[u8; 32]>()) {
+            check_generated_ec(&generated_ec(EcCurve::Secp256k1, &seed));
+        }
+
+        #[test]
+        fn ed25519_keys_encode_and_decode_like_the_oracles(seed in any::<[u8; 32]>()) {
+            check_generated_okp(&generated_okp(OkpCurve::Ed25519, &seed));
+        }
+
+        #[test]
+        fn x25519_keys_encode_and_decode_like_the_oracles(seed in any::<[u8; 32]>()) {
+            check_generated_okp(&generated_okp(OkpCurve::X25519, &seed));
+        }
+    }
+}
