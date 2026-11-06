@@ -41,15 +41,18 @@
 //!
 //! The private scalar is only ever borrowed: from the caller's (zeroizing)
 //! DER buffer on import, from [`EcKey::d`] on export. The curve crate's
-//! `SecretKey` wipes itself on drop, and every encoding is written into a
-//! [`Zeroizing`] buffer. Errors are static strings with no input octet.
+//! `SecretKey` wipes itself on drop, the scalar copy of the public-key
+//! derivation is zeroized ([`public_key`]), and every encoding is written
+//! into a [`Zeroizing`] buffer. Copies inside the curve crates are
+//! best-effort, as [`public_key`] and [`derive_public`] document. Errors
+//! are static strings with no input octet.
 
 use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, ToSec1Point};
 use p256::elliptic_curve::{
-    AffinePoint, CurveArithmetic, FieldBytes, FieldBytesSize, PublicKey, SecretKey,
+    AffinePoint, CurveArithmetic, FieldBytes, FieldBytesSize, NonZeroScalar, PublicKey, SecretKey,
 };
 use subtle::ConstantTimeEq as _;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use super::jwk_build;
 use super::pkcs8;
@@ -163,8 +166,13 @@ fn decode_embedded(crv: EcCurve, octets: Option<&[u8]>) -> Result<Option<Coordin
 
 /// The public point Q = d·G of the scalar `d` on `crv` (SEC 1 v2 §3.2.1).
 /// `SecretKey::from_bytes` rejects 0 and every value ≥ n in constant time,
-/// and `SecretKey::public_key` multiplies in the curve crate's
-/// constant-time arithmetic. The `SecretKey` is wiped on drop.
+/// and [`public_key`] multiplies in the curve crate's constant-time
+/// arithmetic. The `SecretKey` is wiped on drop.
+///
+/// Best-effort: elliptic-curve 0.14.3's `SecretKey::from_bytes` returns
+/// the decoded `ScalarValue` by value through a `CtOption`
+/// (`ScalarValue::from_bytes`, `into_option`); any copy those moves leave
+/// is upstream and not wiped.
 fn derive_public(crv: EcCurve, d: &[u8]) -> Result<Coordinates> {
     match crv {
         EcCurve::P256 => derive_public_on::<p256::NistP256>(d),
@@ -183,7 +191,37 @@ where
 {
     let d = <&FieldBytes<C>>::try_from(d).map_err(|_| Error::InvalidKey(PRIVATE_KEY_LENGTH))?;
     let secret = SecretKey::<C>::from_bytes(d).map_err(|_| Error::InvalidKey(SCALAR_INVALID))?;
-    coordinates(&secret.public_key())
+    coordinates(&public_key(&secret))
+}
+
+/// Q = d·G for `secret` (SEC 1 v2 §3.2.1 step 2): the same point as
+/// elliptic-curve's `SecretKey::public_key`, without its unwiped scalar.
+///
+/// **The crate's one EC public-key derivation from a `SecretKey`:** EC
+/// import ([`derive_public`]) and key generation
+/// (`generate::ec_jwk_from_secret`) both call it.
+///
+/// # Secrets (best-effort)
+///
+/// elliptic-curve 0.14.3's `SecretKey::public_key` is
+/// `PublicKey::from_secret_scalar(&self.to_nonzero_scalar())`, and
+/// `NonZeroScalar` has no `Drop`, so that temporary is never wiped. Here
+/// the `NonZeroScalar` is a named copy that [`public_key_from_copy`]
+/// zeroizes after the multiplication. Copies made inside
+/// `ProjectivePoint::mul_by_generator` (the curve crate's arithmetic) are
+/// out of polyjose's reach and not wiped.
+pub(super) fn public_key<C: CurveArithmetic>(secret: &SecretKey<C>) -> PublicKey<C> {
+    let mut scalar = secret.to_nonzero_scalar();
+    public_key_from_copy(&mut scalar)
+}
+
+/// [`public_key`] of the scalar in `scalar`, which is zeroized once the
+/// point is computed. elliptic-curve's `impl Zeroize for NonZeroScalar`
+/// overwrites the value and then stores one, to keep the type non-zero.
+fn public_key_from_copy<C: CurveArithmetic>(scalar: &mut NonZeroScalar<C>) -> PublicKey<C> {
+    let public = PublicKey::from_secret_scalar(scalar);
+    scalar.zeroize();
+    public
 }
 
 /// The uncompressed SEC1 point of `key`: `0x04 ‖ x ‖ y` (SEC 1 v2 §2.3.3),
@@ -398,6 +436,46 @@ mod tests {
             KeyMaterial::Ec(key) => key,
             _ => panic!("an EC key"),
         }
+    }
+
+    /// [`public_key`] gives the curve crate's own `SecretKey::public_key`
+    /// point, and [`public_key_from_copy`] wipes the scalar it multiplies
+    /// with: read back, the copy is `NonZeroScalar`'s wiped value, one
+    /// (elliptic-curve's `Zeroize` writes 1 to keep the type's invariant).
+    fn check_public_key_wipes_its_scalar<C>(crv: EcCurve)
+    where
+        C: CurveArithmetic,
+    {
+        use p256::elliptic_curve::Field;
+        let fixture = expected("rfc", &format!("{}.jwk.json", rfc_fixture(crv)));
+        let d = ec_key(&fixture).d().unwrap();
+        let secret = SecretKey::<C>::from_slice(d).unwrap();
+        assert_eq!(public_key(&secret), secret.public_key(), "{crv:?}");
+
+        let mut copy = secret.to_nonzero_scalar();
+        assert_eq!(public_key_from_copy(&mut copy), secret.public_key());
+        let one = NonZeroScalar::<C>::new(<p256::elliptic_curve::Scalar<C> as Field>::ONE).unwrap();
+        assert!(copy == one, "{crv:?}: the scalar copy is wiped");
+        assert!(one != secret.to_nonzero_scalar(), "{crv:?}: d is not one");
+    }
+
+    /// The RFC fixture of a private key on `crv` (RFC 7517 A.2, RFC 9500
+    /// §2.3, RFC 7468 Figure 12).
+    fn rfc_fixture(crv: EcCurve) -> &'static str {
+        match crv {
+            EcCurve::P256 => "rfc7517-a2-ec-p256-pkcs8",
+            EcCurve::P384 => "rfc9500-testECCP384-sec1",
+            EcCurve::P521 => "rfc9500-testECCP521-sec1",
+            EcCurve::Secp256k1 => "rfc7468-fig12-secp256k1-pkcs8",
+        }
+    }
+
+    #[test]
+    fn public_key_wipes_its_copy_of_the_scalar() {
+        check_public_key_wipes_its_scalar::<p256::NistP256>(EcCurve::P256);
+        check_public_key_wipes_its_scalar::<p384::NistP384>(EcCurve::P384);
+        check_public_key_wipes_its_scalar::<p521::NistP521>(EcCurve::P521);
+        check_public_key_wipes_its_scalar::<k256::Secp256k1>(EcCurve::Secp256k1);
     }
 
     fn import_spki(der: &[u8]) -> Result<Jwk> {
