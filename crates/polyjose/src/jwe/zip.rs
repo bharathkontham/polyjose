@@ -428,4 +428,37 @@ mod tests {
         let result = pipeline::decrypt(zip_jwe(&stream), &dir_key(), &under);
         assert_eq!(result.err(), Some(Error::DecryptionFailed));
     }
+
+    #[test]
+    fn a_huge_policy_bound_reserves_at_most_the_default_bound() {
+        // ADR 0050 §4: a caller-chosen 1 GiB max_decompressed_len with a
+        // small stream reserves at most the default bound up front, not
+        // the policy bound and not 1,032 x the input. A 1,000-byte stored
+        // block (RFC 1951 §3.2.4) can expand to 1,032 x 1,005 bytes, above
+        // the default, so its reservation is exactly the default bound;
+        // this also pins inflate's reservation to the policy default.
+        const GIB: usize = 1 << 30;
+        let mut stored = vec![1, 0xE8, 0x03, 0x17, 0xFC];
+        stored.extend(std::iter::repeat_n(b'x', 1000));
+        assert!(1032 * stored.len() > DecryptPolicy::DEFAULT_MAX_DECOMPRESSED_LEN);
+        let huge = policy().max_decompressed_len(GIB);
+        let decrypted = pipeline::decrypt(zip_jwe(&stored), &dir_key(), &huge)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(&decrypted.plaintext[..], &[b'x'; 1000][..]);
+        assert_eq!(
+            decrypted.plaintext.capacity(),
+            DecryptPolicy::DEFAULT_MAX_DECOMPRESSED_LEN
+        );
+
+        // Past the default bound the buffer grows with the output, at
+        // most twice it, and never to the policy bound.
+        let matches = 2000;
+        let stream = bomb(matches);
+        let decrypted = pipeline::decrypt(zip_jwe(&stream), &dir_key(), &huge)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let len = decrypted.plaintext.len();
+        assert_eq!(len, 1 + 258 * matches);
+        assert!(decrypted.plaintext.capacity() <= 2 * len);
+        assert!(decrypted.plaintext.capacity() <= 1032 * stream.len());
+    }
 }
