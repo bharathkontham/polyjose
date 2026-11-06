@@ -19,8 +19,10 @@
 //! the PEM label alone, and `oct` keys never cross PEM/DER in either
 //! direction (RFC 8725 §2.1, ADR 0018 §3).
 //!
-//! The module exports [`generate`], [`generate_for`], [`JoseAlg`],
-//! [`KeyFormat`] and [`KeySpec`]; import and export are methods on
+//! The module exports [`generate`](crate::keys::generate),
+//! [`generate_for`](crate::keys::generate_for),
+//! [`JoseAlg`](crate::keys::JoseAlg), [`KeyFormat`](crate::keys::KeyFormat)
+//! and [`KeySpec`](crate::keys::KeySpec); import and export are methods on
 //! [`Jwk`](crate::jwk::Jwk). A glob import brings in all five:
 //!
 //! ```
