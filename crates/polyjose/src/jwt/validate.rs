@@ -842,6 +842,58 @@ mod tests {
         assert_eq!(validate_claims(&wrong, &p), Err(Error::InvalidClaim("aud")));
     }
 
+    /// Every RFC 9068 §2.2 claim, valid for
+    /// `Policy::access_token(.., &["https://as"], &["https://rs"])` at
+    /// `now`, with `client_id` set to `client_id`.
+    fn access_token_claims(now: i64, client_id: Value) -> Claims {
+        let mut c = Claims::new();
+        c.iss = Some("https://as".into());
+        c.exp = date(now + 300);
+        c.aud = one("https://rs");
+        c.sub = Some("5ba552d67".into());
+        c.iat = date(now - 10);
+        c.jti = Some("dbe39bf3a3ba4238a513f51d6e1691c4".into());
+        c.insert("client_id", client_id).unwrap();
+        c
+    }
+
+    /// The JSON values that are not strings, one per RFC 8259 §3 type.
+    fn non_strings() -> [Value; 5] {
+        let mut object = Object::new();
+        object.insert("id", "s6BhdRkqt3");
+        [
+            Value::Null,
+            Value::Number(Number::from_i64(5).unwrap()),
+            Value::Bool(true),
+            Value::from(vec![Value::from("a")]),
+            Value::from(object),
+        ]
+    }
+
+    #[test]
+    fn plain_require_client_id_keeps_any_json_type() {
+        // ADR 0052 §3: the string rule belongs to the profile, not the
+        // name; a `Policy::new` policy with the same claims and
+        // requirements accepts every type (ADR 0027 §4).
+        let now = 1_300_819_380;
+        let clock = FixedClock(now);
+        let p = Policy::new(&clock, ES256)
+            .unwrap()
+            .issuer("https://as")
+            .audience("https://rs")
+            .expect_typ("at+jwt");
+        let p = ACCESS_TOKEN_REQUIRED_CLAIMS
+            .iter()
+            .fold(p, |p, claim| p.require(claim));
+        for value in non_strings() {
+            assert_eq!(
+                validate_claims(&access_token_claims(now, value.clone()), &p),
+                Ok(()),
+                "{value:?}"
+            );
+        }
+    }
+
     /// The time of the ordering tests.
     const ORDER_NOW: i64 = 1_300_819_380;
 
