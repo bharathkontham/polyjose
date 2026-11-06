@@ -7,7 +7,9 @@
 //! attacker-chosen, and each iteration is two hash compressions, so the
 //! bound `DecryptPolicy::max_pbes2_count` (ADR 0023; 10,000 by default) is
 //! enforced first (RFC 7518 §8.8; CVE-2022-36083, CVE-2023-52428,
-//! CVE-2023-51775).
+//! CVE-2023-51775). The bound is one [`Budget`] for the whole decrypt call,
+//! summed over every PBES2 candidate tried (ADR 0050 §2), so a token with
+//! many recipients costs no more than one.
 
 use super::aes_kw;
 use super::api::DecryptPolicy;
@@ -111,43 +113,82 @@ const P2S_TOO_SHORT: &str = "PBES2 p2s must be at least 8 octets";
 /// length.
 const CEK_SIZE: &str = "the CEK must have the length enc requires";
 
+/// The PBKDF2 iterations one decrypt call may still spend, over every PBES2
+/// candidate it tries (ADR 0050 §2, amending ADR 0023; RFC 7518 §8.8).
+///
+/// `core::decrypt` makes one from `policy.max_pbes2_count` per call and
+/// passes it to each candidate's key management; [`decrypt_key`] spends a
+/// candidate's `p2c` from it just before PBKDF2 runs, and only then. The
+/// sum of `p2c` over the derivations of one call is therefore at most
+/// `max_pbes2_count`, however many recipients the JWE has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Budget {
+    remaining: u32,
+}
+
+impl Budget {
+    /// A budget of `policy.max_pbes2_count` iterations, for one decrypt call.
+    pub(crate) fn new(policy: &DecryptPolicy) -> Self {
+        Self {
+            remaining: policy.max_pbes2_count,
+        }
+    }
+
+    /// Spends `p2c` iterations, or refuses (leaving the budget unchanged)
+    /// if fewer than `p2c` remain: `p2c` equal to what remains is accepted,
+    /// as the bound is inclusive (ADR 0023).
+    fn spend(&mut self, p2c: u32) -> Result<()> {
+        self.remaining = self
+            .remaining
+            .checked_sub(p2c)
+            .ok_or(Error::DecryptionFailed)?;
+        Ok(())
+    }
+}
+
 /// Key management on decrypt (RFC 7516 §5.2 steps 6–12) for the three
 /// PBES2 algorithms: the JWE Encrypted Key unwrapped (RFC 3394 §2.2.2) under
 /// the key PBKDF2 derives from the password, `p2s` and `p2c` (RFC 7518
 /// §4.8). The CEK must have the length `enc` requires (§5.2 step 9).
 ///
 /// `p2s` and `p2c` are checked before PBKDF2 runs, so a hostile count
-/// costs nothing (RFC 7518 §8.8, ADR 0023):
-/// - `p2c` must be present, at least 1 (a "positive JSON integer", RFC 7518
-///   §4.8.1.2) and at most `policy.max_pbes2_count`;
+/// costs nothing (RFC 7518 §8.8, ADR 0023, ADR 0050 §2):
+/// - `p2c` must be present and at least 1 (a "positive JSON integer",
+///   RFC 7518 §4.8.1.2);
 /// - `p2s` must be present, strict base64url (RFC 7515 §2), and at least 8
 ///   octets once decoded (RFC 7518 §4.8.1.1: "A Salt Input value containing
-///   8 or more octets MUST be used").
+///   8 or more octets MUST be used");
+/// - then `p2c` must fit what is left of the call's `budget`, which it is
+///   spent from (so it is never above `policy.max_pbes2_count`). A fault
+///   above spends nothing.
 ///
 /// # Errors
 ///
 /// [`Error::DecryptionFailed`], whatever the cause, so no cause can be told
 /// from another (RFC 7516 §11.4–§11.5, the plan.md error contract): an
 /// `alg` outside the family, a key that is not a password, an unknown
-/// `enc`, any `p2s` or `p2c` fault above, a wrapped key of the wrong size,
-/// an integrity failure (a wrong password, RFC 3394 §2.2.3) or an unwrapped
-/// CEK of the wrong length. The derived key and every unwrapped byte are
-/// wiped before returning.
+/// `enc`, any `p2s` or `p2c` fault above, a `p2c` over the remaining
+/// budget, a wrapped key of the wrong size, an integrity failure (a wrong
+/// password, RFC 3394 §2.2.3) or an unwrapped CEK of the wrong length. The
+/// derived key and every unwrapped byte are wiped before returning.
 pub(super) fn decrypt_key(
     alg: &KeyMgmtAlg,
     key: &RecipientKey,
     enc: &ContentEncAlg,
     header: &Header,
     encrypted_key: &[u8],
-    policy: &DecryptPolicy,
+    budget: &mut Budget,
 ) -> Result<Cek> {
     let RecipientKey::Password(password) = key else {
         return Err(Error::DecryptionFailed);
     };
     let cek_len = cek_len(enc).map_err(|_| Error::DecryptionFailed)?;
+    if params(alg).is_none() {
+        return Err(Error::DecryptionFailed);
+    }
     let p2c = header
         .p2c
-        .filter(|&p2c| p2c >= 1 && p2c <= u64::from(policy.max_pbes2_count))
+        .filter(|&p2c| p2c >= 1)
         .and_then(|p2c| u32::try_from(p2c).ok())
         .ok_or(Error::DecryptionFailed)?;
     let p2s = header
@@ -156,6 +197,9 @@ pub(super) fn decrypt_key(
         .and_then(|p2s| b64url_decode(p2s).ok())
         .filter(|p2s| p2s.len() >= MIN_P2S_LEN)
         .ok_or(Error::DecryptionFailed)?;
+    // ADR 0050 §2: the last check before PBKDF2, so only a derivation that
+    // runs is charged.
+    budget.spend(p2c)?;
     let kek = derive_kek(alg, password, &p2s, p2c).ok_or(Error::DecryptionFailed)?;
     let cek = aes_kw::unwrap(&kek, encrypted_key)?;
     if cek.len() != cek_len {
@@ -355,7 +399,68 @@ mod tests {
         encrypted_key: &[u8],
         policy: &DecryptPolicy,
     ) -> (Result<Cek>, u64) {
-        pbkdf2_derivations::count(|| decrypt_key(alg, key, enc, header, encrypted_key, policy))
+        let mut budget = Budget::new(policy);
+        pbkdf2_derivations::count(|| decrypt_key(alg, key, enc, header, encrypted_key, &mut budget))
+    }
+
+    #[test]
+    fn the_budget_is_spent_only_by_derivations_that_run() {
+        // ADR 0050 §2: each derivation spends its p2c from the call's
+        // budget, checked before PBKDF2 runs; a fault found first spends
+        // nothing, and a p2c over what is left derives nothing.
+        let alg = KeyMgmtAlg::Pbes2Hs256A128KW;
+        let enc = ContentEncAlg::A128GCM;
+        let pw = password(PASSWORD);
+        let (cek, ek) = wrapped(&alg, &P2S, 4000, 16);
+        let good = header(Some(&P2S), Some(4000));
+        let mut budget = Budget::new(&policy());
+        let run = |h: &Header, ek: &[u8], budget: &mut Budget| {
+            pbkdf2_derivations::count(|| {
+                decrypt_key(&alg, &pw, &enc, h, ek, budget).map(|c| c.as_bytes().to_vec())
+            })
+        };
+        // A fault before the budget check: nothing spent.
+        let (out, n) = run(&header(Some(&P2S[..7]), Some(4000)), &ek, &mut budget);
+        assert_eq!((out, n), (Err(Error::DecryptionFailed), 0));
+        assert_eq!(budget, Budget { remaining: 10_000 });
+        // A derivation that fails afterwards (a tampered key) still spends.
+        let mut tampered = ek.clone();
+        tampered[9] ^= 1;
+        let (out, n) = run(&good, &tampered, &mut budget);
+        assert_eq!((out, n), (Err(Error::DecryptionFailed), 1));
+        assert_eq!(budget, Budget { remaining: 6000 });
+        let (out, n) = run(&good, &ek, &mut budget);
+        assert_eq!((out, n), (Ok(cek.clone()), 1));
+        assert_eq!(budget, Budget { remaining: 2000 });
+        // 4000 > 2000 left: refused without deriving, nothing spent.
+        let (out, n) = run(&good, &ek, &mut budget);
+        assert_eq!((out, n), (Err(Error::DecryptionFailed), 0));
+        assert_eq!(budget, Budget { remaining: 2000 });
+        // Exactly what is left is accepted (the bound is inclusive).
+        let (cek2, ek2) = wrapped(&alg, &P2S, 2000, 16);
+        let (out, n) = run(&header(Some(&P2S), Some(2000)), &ek2, &mut budget);
+        assert_eq!((out, n), (Ok(cek2), 1));
+        assert_eq!(budget, Budget { remaining: 0 });
+        let (out, n) = run(&header(Some(&P2S), Some(1)), &ek, &mut budget);
+        assert_eq!((out, n), (Err(Error::DecryptionFailed), 0));
+    }
+
+    #[test]
+    fn an_alg_outside_the_family_spends_nothing() {
+        let mut budget = Budget::new(&policy());
+        let h = header(Some(&P2S), Some(1000));
+        let (out, n) = pbkdf2_derivations::count(|| {
+            decrypt_key(
+                &KeyMgmtAlg::A128KW,
+                &password(PASSWORD),
+                &ContentEncAlg::A128GCM,
+                &h,
+                &[0; 24],
+                &mut budget,
+            )
+        });
+        assert_eq!((out.map(|_| ()), n), (Err(Error::DecryptionFailed), 0));
+        assert_eq!(budget, Budget::new(&policy()));
     }
 
     #[test]
@@ -616,7 +721,7 @@ mod tests {
                     enc,
                     &h,
                     &out.encrypted_key,
-                    &policy(),
+                    &mut Budget::new(&policy()),
                 );
                 assert_eq!(
                     back.map(|c| c.as_bytes().to_vec()),
