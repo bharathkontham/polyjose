@@ -207,8 +207,19 @@ impl Object {
         Object::default()
     }
 
-    /// Wraps members whose names the caller has already checked are unique.
+    /// Wraps members whose names the caller has already checked are unique,
+    /// in their given order, in O(1).
+    ///
+    /// Unique names are what makes an `Object` safe to read: JOSE rejects
+    /// duplicate member names (RFC 7515 §5.2, RFC 7516 §5.2, RFC 7493 §2.3).
+    /// Callers pass names that are unique by construction, for example the
+    /// parser after its duplicate check, or a filtered subset of another
+    /// object's members. Debug builds (and so every test) verify it.
     pub(crate) fn from_unique_members(members: Vec<(Zeroizing<String>, Value)>) -> Object {
+        debug_assert!(
+            names_are_unique(&members),
+            "from_unique_members called with a duplicate member name"
+        );
         Object { members }
     }
 
@@ -330,6 +341,16 @@ impl Object {
         members.sort_unstable_by(|(a, _), (b, _)| cmp_names(a, b));
         members
     }
+}
+
+/// Whether no two members share a name: the precondition of
+/// [`Object::from_unique_members`], checked in debug builds. O(n log n), and
+/// deliberately not counted by the test-only comparison counter, so it does
+/// not change what regression tests measure.
+fn names_are_unique(members: &[(Zeroizing<String>, Value)]) -> bool {
+    let mut names: Vec<&str> = members.iter().map(|(n, _)| n.as_str()).collect();
+    names.sort_unstable();
+    names.windows(2).all(|w| w[0] != w[1])
 }
 
 /// Whether two member names are the same name: compared as unescaped
@@ -644,6 +665,25 @@ mod tests {
         let ((_, inner), outer) =
             Object::count_name_comparisons(|| Object::count_name_comparisons(|| o.contains("kty")));
         assert_eq!((inner, outer), (1, 1));
+    }
+
+    #[test]
+    fn unique_member_names_are_checked_in_debug_builds() {
+        let member = |name: &str| (Zeroizing::new(name.to_owned()), Value::Null);
+        assert!(names_are_unique(&[]));
+        assert!(names_are_unique(&[member("a"), member("b"), member("A")]));
+        assert!(!names_are_unique(&[member("a"), member("b"), member("a")]));
+        let o = Object::from_unique_members(vec![member("b"), member("a")]);
+        let names: Vec<&str> = o.iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["b", "a"], "order is kept");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "duplicate member name")]
+    fn from_unique_members_rejects_duplicates_in_debug_builds() {
+        let member = |name: &str| (Zeroizing::new(name.to_owned()), Value::Null);
+        let _ = Object::from_unique_members(vec![member("a"), member("a")]);
     }
 
     #[test]
