@@ -9,7 +9,9 @@
 #      [target.*.…] forms) does not use `default-features = false` (ADR 0016 §3);
 #   4. a crate in deps-allowlist.txt is not credited in CREDITS.md, or CREDITS.md credits a crate
 #      that is not in deps-allowlist.txt (ADR 0020 §5);
-#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below;
+#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below, or a crate of
+#      a guarded group (ADR 0025, ADR 0042) is reached through a path that avoids its required
+#      parent crate (for example a direct dependency of the core on `semver`);
 #   6. a package in the core's tree does not come from crates.io: a path package other than
 #      polyjose itself, a git source or another registry (an allowlisted name is not enough when
 #      the code behind it can be swapped);
@@ -244,22 +246,92 @@ check_credits_match() {
   fi
 }
 
-# 5. Group-specific rules. Every group needs a case here, so a new group (e.g. one whose crates may
-#    only be reached through a single parent crate) cannot land without deciding its rule.
-#    ADR 0025's dalek group (feature 0002: curve25519-dalek-derive, syn, quote, proc-macro2,
-#    unicode-ident) arrives as *normal* x86_64 dependencies of curve25519-dalek, not as
-#    build-dependencies, so check 8 (the core's own manifest only) does not apply to it; its rule
-#    ("only below curve25519-dalek-derive", via `cargo tree -e normal,build --target all -i <crate>`)
-#    goes here. Because the tree includes build edges, curve25519-dalek's own build-dependency
-#    (rustc_version, which pulls semver) is in the tree too and needs allowlisting like any crate.
+# 5. Group-specific rules. Every group needs a case here, so a new group cannot land without
+#    deciding its rule. A *guarded* group holds build-time crates that a primitive needs on the
+#    builder's machine only (they link nothing into the shipped artifact) and that polyjose cannot
+#    switch off from its manifest. Each of its crates may be reached only through one required
+#    parent crate (ADR 0025, ADR 0042 §1-§2):
+#      dalek-proc-macro (ADR 0025): curve25519-dalek-derive, dalek's SIMD-backend code generator,
+#        a normal dependency of curve25519-dalek on x86_64, only below curve25519-dalek; its own
+#        tree (syn, quote, proc-macro2, unicode-ident) only below curve25519-dalek-derive.
+#      dalek-build (ADR 0042): rustc_version and semver, curve25519-dalek's build-dependencies,
+#        only below curve25519-dalek.
+#      num-traits-build (ADR 0042): autocfg, num-traits' build-dependency, only below num-traits.
+#    "Below" is checked on the same graph as check 6 (normal and build edges, every target, every
+#    feature): the crate must be unreachable from polyjose once every package named like the
+#    parent is removed. So a second path to it (a direct dependency, or another crate that pulls
+#    it in) fails, and the offending path is printed with `cargo tree ... -i <crate>`.
 check_group_rules() {
   local group crate
+  : >"$work/guarded"
   while read -r group crate; do
     case $group in
       primitives | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
+      dalek-proc-macro)
+        if [ "$crate" = curve25519-dalek-derive ]; then
+          echo "$crate curve25519-dalek $group" >>"$work/guarded"
+        else
+          echo "$crate curve25519-dalek-derive $group" >>"$work/guarded"
+        fi ;;
+      dalek-build) echo "$crate curve25519-dalek $group" >>"$work/guarded" ;;
+      num-traits-build) echo "$crate num-traits $group" >>"$work/guarded" ;;
       *) fail "$allowlist group '$group' (crate $crate) has no rule in check_group_rules (scripts/check-deps.sh)" ;;
     esac
   done <"$work/groups"
+  [ -s "$work/guarded" ] || return 0
+  # Prints "<crate> <parent> <group> <path>" for each guarded crate reachable without its parent.
+  python3 -I -c '
+import json, os, sys
+meta_path, pkg_name, manifest, guarded_path = sys.argv[1], sys.argv[2], os.path.realpath(sys.argv[3]), sys.argv[4]
+def norm(name):
+    return name.lower().replace("_", "-")
+with open(meta_path, encoding="utf-8") as f:
+    meta = json.load(f)
+packages = {p["id"]: p for p in meta["packages"]}
+core = [p["id"] for p in meta["packages"]
+        if p["name"] == pkg_name and os.path.realpath(p["manifest_path"]) == manifest]
+if len(core) != 1:
+    sys.exit("expected exactly one package %s at %s, found %d" % (pkg_name, manifest, len(core)))
+if meta.get("resolve") is None:
+    sys.exit("cargo metadata has no resolve graph")
+nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+with open(guarded_path, encoding="utf-8") as f:
+    rules = [line.split() for line in f if line.strip()]
+for crate, parent, group in rules:
+    # Breadth-first walk over normal and build edges that never enters `parent`.
+    prev, todo, hit = {core[0]: None}, [core[0]], None
+    while todo and hit is None:
+        nxt = []
+        for node in todo:
+            for dep in nodes[node]["deps"]:
+                pkg = dep["pkg"]
+                if pkg in prev or norm(packages[pkg]["name"]) == parent:
+                    continue
+                # A missing dep_kinds (cargo older than 1.41) is a KeyError: fail closed.
+                if not any(k["kind"] in (None, "build") for k in dep["dep_kinds"]):
+                    continue
+                prev[pkg] = node
+                if norm(packages[pkg]["name"]) == crate:
+                    hit = pkg
+                    break
+                nxt.append(pkg)
+            if hit is not None:
+                break
+        todo = nxt
+    if hit is not None:
+        path, node = [], hit
+        while node is not None:
+            path.append(packages[node]["name"])
+            node = prev[node]
+        print("%s %s %s %s" % (crate, parent, group, " -> ".join(reversed(path))))
+' "$work/metadata.json" "$core_pkg" "$core_manifest" "$work/guarded" >"$work/guard-paths" \
+    || die "could not walk $core_pkg's dependency graph for the guarded groups"
+  local parent path
+  while read -r crate parent group path; do
+    fail "$crate (group $group in $allowlist) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
+    echo "  Inverted tree (cargo tree -p $core_pkg -e normal,build --all-features --target all -i $crate):"
+    cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$crate" 2>&1 | sed 's/^/    /' || true
+  done <"$work/guard-paths"
 }
 
 # 6. Every package in the core's tree comes from crates.io. The walk follows normal and build
