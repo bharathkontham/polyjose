@@ -20,13 +20,15 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)] // test code: a panic is a failed assertion
 
 use polyjose::Error;
+use polyjose::header::Header;
 use polyjose::json::{self, Object, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
 use polyjose::jwe::{
-    DecryptPolicy, Decrypted, Encryptor, Recipient, decrypt_compact, decrypt_json,
+    DecryptPolicy, Decrypted, Encryptor, JsonForm, Recipient, decrypt_compact, decrypt_json,
 };
 use polyjose::jwk::Jwk;
 use polyjose::util::{b64url_decode, b64url_encode};
+use proptest::prelude::*;
 
 use ContentEncAlg as E;
 use KeyMgmtAlg as A;
@@ -35,11 +37,22 @@ fn jwk(json: &str) -> Jwk {
     Jwk::from_json(json.as_bytes()).unwrap_or_else(|e| panic!("{json}: {e}"))
 }
 
+fn oct(bytes: &[u8]) -> Jwk {
+    jwk(&format!(
+        r#"{{"kty":"oct","k":"{}"}}"#,
+        b64url_encode(bytes)
+    ))
+}
+
 fn oct_kid(bytes: &[u8], kid: &str) -> Jwk {
     jwk(&format!(
         r#"{{"kty":"oct","kid":"{kid}","k":"{}"}}"#,
         b64url_encode(bytes)
     ))
+}
+
+fn header(json: &str) -> Header {
+    Header::from_json(json.as_bytes()).unwrap_or_else(|e| panic!("{json}: {e}"))
 }
 
 fn policy(algs: &[KeyMgmtAlg], encs: &[ContentEncAlg]) -> DecryptPolicy {
@@ -69,6 +82,18 @@ fn edit(jwe: &str, f: impl FnOnce(&mut Object)) -> String {
     let mut top = object(jwe);
     f(&mut top);
     top.to_json()
+}
+
+/// `f` applied to `recipients[index]` of a general JWE's top level.
+fn edit_recipient(top: &mut Object, index: usize, f: impl FnOnce(&mut Object)) {
+    let Some(Value::Array(mut entries)) = top.remove("recipients") else {
+        panic!("no recipients");
+    };
+    let Value::Object(entry) = &mut entries[index] else {
+        panic!("recipient is not an object");
+    };
+    f(entry);
+    top.insert("recipients", entries);
 }
 
 /// `f` applied to the object member `name` of `object` (created if
@@ -489,15 +514,10 @@ fn a_json_aad_cannot_move_to_the_compact_serialization() {
 /// `insecure-test-vectors` hook.
 #[cfg(feature = "insecure-test-vectors")]
 mod reproducible {
-    use polyjose::header::Header;
     use polyjose::insecure_test_vectors::FixedRng;
-    use polyjose::jwe::{JsonForm, Serialization};
+    use polyjose::jwe::Serialization;
 
     use super::*;
-
-    fn header(json: &str) -> Header {
-        Header::from_json(json.as_bytes()).unwrap_or_else(|e| panic!("{json}: {e}"))
-    }
 
     const FLATTENED: Serialization = Serialization::Json(JsonForm::Flattened);
     const GENERAL: Serialization = Serialization::Json(JsonForm::General);
@@ -655,5 +675,580 @@ mod reproducible {
             )),
             "InvalidFormat"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Several recipients on encrypt (RFC 7516 §5.1 steps 3-8, §7.2.1)
+// ---------------------------------------------------------------------------
+
+const K128: [u8; 16] = [0x11; 16];
+const K192: [u8; 24] = [0x22; 24];
+const K256: [u8; 32] = [0x33; 32];
+
+fn kw_policy() -> DecryptPolicy {
+    policy(
+        &[A::A128KW, A::A192KW, A::A256KW],
+        &[E::A128GCM, E::A256GCM, E::A128CbcHs256, E::A256CbcHs512],
+    )
+}
+
+fn three_recipients(enc: ContentEncAlg) -> Encryptor {
+    Encryptor::new(enc)
+        .recipient(Recipient::new(A::A128KW, &oct(&K128)))
+        .recipient(Recipient::new(A::A256KW, &oct(&K256)))
+        .recipient(Recipient::new(A::A192KW, &oct(&K192)))
+}
+
+#[test]
+fn one_cek_is_wrapped_for_every_recipient() {
+    // RFC 7516 §5.1 step 2 (one CEK) and steps 3-8 per recipient; §7.2.1:
+    // one `recipients` entry each, with `alg` in its header.
+    for enc in [E::A128GCM, E::A256CbcHs512] {
+        let jwe = three_recipients(enc.clone())
+            .encrypt_json(b"to all three", JsonForm::General)
+            .unwrap();
+        let top = object(&jwe);
+        let entries = top.get("recipients").unwrap().as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        let algs: Vec<_> = entries
+            .iter()
+            .map(|r| {
+                r.get("header")
+                    .and_then(|h| h.get("alg"))
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        assert_eq!(algs, [Some("A128KW"), Some("A256KW"), Some("A192KW")]);
+        // The CEK length is enc's; each wrap adds 8 octets (RFC 3394).
+        let cek = if enc == E::A128GCM { 16 } else { 64 };
+        for entry in entries {
+            let ek = entry.get("encrypted_key").and_then(Value::as_str).unwrap();
+            assert_eq!(b64url_decode(ek).unwrap().len(), cek + 8);
+        }
+        let protected = b64url_decode(top.get("protected").and_then(Value::as_str).unwrap());
+        assert_eq!(
+            protected.unwrap(),
+            format!(r#"{{"enc":"{}"}}"#, enc.as_str()).into_bytes()
+        );
+        for (index, key) in [&K128[..], &K256, &K192].into_iter().enumerate() {
+            let d = decrypt(&jwe, &oct(key), &kw_policy());
+            assert_eq!(d.plaintext(), b"to all three");
+            assert_eq!(d.recipient(), index);
+        }
+        assert_eq!(
+            code(decrypt_json(&jwe, &oct(&[0x44; 16]), &kw_policy())),
+            "DecryptionFailed"
+        );
+    }
+}
+
+#[test]
+fn shared_and_per_recipient_headers_and_aad_round_trip() {
+    let jwe = Encryptor::new(E::A128GCM)
+        .protected_header(header(r#"{"typ":"JOSE+JSON"}"#))
+        .shared_unprotected_header(header(r#"{"jku":"https://example.com/k"}"#))
+        .aad(b"bound but not secret".to_vec())
+        .recipient(Recipient::new(A::A128KW, &oct(&K128)).header(header(r#"{"kid":"a"}"#)))
+        .recipient(Recipient::new(A::A192KW, &oct(&K192)).header(header(r#"{"kid":"b"}"#)))
+        .encrypt_json(b"payload", JsonForm::General)
+        .unwrap();
+    let d = decrypt(&jwe, &oct_kid(&K192, "b"), &kw_policy());
+    assert_eq!((d.plaintext(), d.recipient()), (&b"payload"[..], 1));
+    assert_eq!(d.aad(), Some(&b"bound but not secret"[..]));
+    assert_eq!(d.header().typ.as_deref(), Some("JOSE+JSON"));
+    assert_eq!(d.header().jku.as_deref(), Some("https://example.com/k"));
+    assert_eq!(d.header().kid.as_deref(), Some("b"));
+    assert_eq!(d.recipient_header().unwrap().alg.as_deref(), Some("A192KW"));
+
+    // Flattened: one recipient, `alg` in the protected header (plan.md).
+    let flat = Encryptor::new(E::A128GCM)
+        .shared_unprotected_header(header(r#"{"jku":"https://example.com/k"}"#))
+        .aad(b"x".to_vec())
+        .recipient(Recipient::new(A::A128KW, &oct(&K128)).header(header(r#"{"kid":"a"}"#)))
+        .encrypt_json(b"payload", JsonForm::Flattened)
+        .unwrap();
+    let top = object(&flat);
+    assert!(top.get("recipients").is_none());
+    assert_eq!(top.get("header").unwrap().to_json(), r#"{"kid":"a"}"#);
+    let d = decrypt(&flat, &oct(&K128), &kw_policy());
+    assert_eq!(d.protected_header().unwrap().alg.as_deref(), Some("A128KW"));
+    assert_eq!(d.aad(), Some(&b"x"[..]));
+}
+
+#[test]
+fn an_empty_plaintext_has_an_empty_ciphertext() {
+    // RFC 7518 §5.3 (AES-GCM): `ciphertext` is present and empty
+    // (RFC 7516 §7.2.1 does not make it conditional).
+    for form in [JsonForm::General, JsonForm::Flattened] {
+        let jwe = Encryptor::new(E::A128GCM)
+            .recipient(Recipient::new(A::A128KW, &oct(&K128)))
+            .encrypt_json(b"", form)
+            .unwrap();
+        assert_eq!(object(&jwe).get("ciphertext"), Some(&Value::from("")));
+        assert_eq!(decrypt(&jwe, &oct(&K128), &kw_policy()).plaintext(), b"");
+    }
+}
+
+#[test]
+fn encrypt_refuses_what_the_form_cannot_carry() {
+    let two = three_recipients(E::A128GCM);
+    // §7.2.2: flattened is for one recipient.
+    assert_eq!(
+        two.encrypt_json(b"x", JsonForm::Flattened),
+        Err(Error::InvalidFormat(
+            "flattened JWE must have exactly one recipient"
+        ))
+    );
+    // `dir` and ECDH-ES determine the CEK (§5.1 steps 5-6), so they allow
+    // no other recipient.
+    for alg in [A::Dir, A::EcdhEs] {
+        let e = Encryptor::new(E::A128GCM)
+            .recipient(Recipient::new(A::A128KW, &oct(&K128)))
+            .recipient(Recipient::new(alg.clone(), &oct(&K128)));
+        assert_eq!(
+            e.encrypt_json(b"x", JsonForm::General),
+            Err(Error::InvalidFormat(
+                "dir and ECDH-ES allow only one recipient"
+            )),
+            "{alg:?}"
+        );
+    }
+    let dirs = Encryptor::new(E::A128GCM)
+        .recipient(Recipient::new(A::Dir, &oct(&K128)))
+        .recipient(Recipient::new(A::Dir, &oct(&K128)));
+    assert_eq!(
+        code(dirs.encrypt_json(b"x", JsonForm::General)),
+        "InvalidFormat"
+    );
+    // No recipients.
+    assert_eq!(
+        code(Encryptor::new(E::A128GCM).encrypt_json(b"x", JsonForm::General)),
+        "InvalidFormat"
+    );
+    // An empty JWE AAD would be in the AAD computation but cannot be
+    // written (§7.2.1: `aad` absent when empty).
+    let empty_aad = Encryptor::new(E::A128GCM)
+        .aad(Vec::new())
+        .recipient(Recipient::new(A::A128KW, &oct(&K128)));
+    for form in [JsonForm::General, JsonForm::Flattened] {
+        assert_eq!(
+            empty_aad.encrypt_json(b"x", form),
+            Err(Error::InvalidFormat(
+                "an empty JWE AAD cannot be serialized"
+            ))
+        );
+    }
+}
+
+#[test]
+fn a_single_dir_recipient_has_no_encrypted_key() {
+    // RFC 7516 §7.2.1: `encrypted_key` is absent when empty (dir, §5.1
+    // step 6). The general entry holds only the recipient's `alg`; the
+    // flattened form has no recipient members at all.
+    let general = Encryptor::new(E::A128GCM)
+        .recipient(Recipient::new(A::Dir, &oct(&K128)))
+        .encrypt_json(b"x", JsonForm::General)
+        .unwrap();
+    let entries = object(&general).get("recipients").unwrap().to_json();
+    assert_eq!(entries, r#"[{"header":{"alg":"dir"}}]"#);
+    let flat = Encryptor::new(E::A128GCM)
+        .recipient(Recipient::new(A::Dir, &oct(&K128)))
+        .encrypt_json(b"x", JsonForm::Flattened)
+        .unwrap();
+    let top = object(&flat);
+    assert!(top.get("encrypted_key").is_none() && top.get("header").is_none());
+    let p = policy(&[A::Dir], &[E::A128GCM]);
+    for jwe in [general, flat] {
+        assert_eq!(decrypt(&jwe, &oct(&K128), &p).plaintext(), b"x");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recipient selection (plan.md "Recipient selection on decrypt")
+// ---------------------------------------------------------------------------
+
+/// A general JWE for three A128KW recipients wrapping one CEK: recipient
+/// `i` is encrypted to `keys[i]`.
+fn for_keys(keys: [&[u8]; 3]) -> String {
+    let mut e = Encryptor::new(E::A128GCM);
+    for key in keys {
+        e = e.recipient(Recipient::new(A::A128KW, &oct(key)));
+    }
+    e.encrypt_json(b"selected", JsonForm::General).unwrap()
+}
+
+fn set_header(jwe: &str, index: usize, name: &str, value: &str) -> String {
+    edit(jwe, |top| {
+        edit_recipient(top, index, |entry| {
+            edit_member(entry, "header", |h| {
+                h.insert(name, value);
+            });
+        });
+    })
+}
+
+const K1: [u8; 16] = [1; 16];
+const K2: [u8; 16] = [2; 16];
+const K3: [u8; 16] = [3; 16];
+
+#[test]
+fn the_first_candidate_that_decrypts_wins() {
+    let p = kw_policy();
+    // Every recipient is for K1: the first.
+    let all = for_keys([&K1, &K1, &K1]);
+    assert_eq!(decrypt(&all, &oct(&K1), &p).recipient(), 0);
+    // Candidates that fail to unwrap are passed over (§5.2 step 6: "the
+    // recipient ... can determine"), in order.
+    let third = for_keys([&K2, &K3, &K1]);
+    assert_eq!(decrypt(&third, &oct(&K1), &p).recipient(), 2);
+    assert_eq!(decrypt(&third, &oct(&K3), &p).recipient(), 1);
+    // A corrupted earlier recipient (wrong length) does not stop a later
+    // one.
+    let corrupt = edit(&third, |top| {
+        edit_recipient(top, 0, |entry| {
+            entry.insert("encrypted_key", "AAAA");
+        });
+    });
+    assert_eq!(decrypt(&corrupt, &oct(&K1), &p).recipient(), 2);
+}
+
+#[test]
+fn a_kid_mismatch_skips_a_recipient() {
+    // RFC 7516 §4.1.6: when both carry a `kid`, they must match. Recipient
+    // 0 would decrypt but names another key, so it is not tried.
+    let p = kw_policy();
+    let jwe = set_header(&for_keys([&K1, &K1, &K2]), 0, "kid", "other");
+    let jwe = set_header(&jwe, 1, "kid", "mine");
+    assert_eq!(decrypt(&jwe, &oct_kid(&K1, "mine"), &p).recipient(), 1);
+    // Without a key kid every recipient is a candidate.
+    assert_eq!(decrypt(&jwe, &oct(&K1), &p).recipient(), 0);
+    // A recipient without a kid matches any key.
+    assert_eq!(decrypt(&jwe, &oct_kid(&K2, "mine"), &p).recipient(), 2);
+    // Only kid-mismatched recipients: no candidate, KeyAlgorithmMismatch
+    // (plan.md refinement 15).
+    let none = set_header(&set_header(&jwe, 2, "kid", "x"), 1, "kid", "y");
+    assert_eq!(
+        decrypt_json(&none, &oct_kid(&K1, "mine"), &p).map(|_| ()),
+        Err(Error::KeyAlgorithmMismatch)
+    );
+}
+
+#[test]
+fn every_candidate_failing_is_decryption_failed() {
+    let jwe = for_keys([&K1, &K2, &K3]);
+    assert_eq!(
+        decrypt_json(&jwe, &oct(&[9; 16]), &kw_policy()).map(|_| ()),
+        Err(Error::DecryptionFailed)
+    );
+    // A tampered shared ciphertext fails for every candidate alike.
+    let tampered = edit(&jwe, |top| {
+        top.insert("tag", b64url_encode(&[0; 16]));
+    });
+    assert_eq!(
+        decrypt_json(&tampered, &oct(&K1), &kw_policy()).map(|_| ()),
+        Err(Error::DecryptionFailed)
+    );
+}
+
+#[test]
+fn with_no_candidate_the_best_error_wins() {
+    // plan.md: AlgorithmNotAllowed > UnsupportedAlgorithm >
+    // KeyAlgorithmMismatch, whatever the recipients' order.
+    let base = for_keys([&K1, &K1, &K1]);
+    let p = policy(&[A::A128KW, A::A192KW], &[E::A128GCM]);
+    let key = oct(&K1);
+    let with = |algs: [&str; 3]| {
+        let mut jwe = base.clone();
+        for (i, alg) in algs.into_iter().enumerate() {
+            jwe = set_header(&jwe, i, "alg", alg);
+        }
+        code(decrypt_json(&jwe, &key, &p))
+    };
+    // A256KW: implemented, not allowed. RSA1_5 / "x": unsupported. A192KW:
+    // allowed, but a 16-octet key cannot serve it.
+    let not_allowed = "A256KW";
+    let unsupported = "RSA1_5";
+    let mismatch = "A192KW";
+    for algs in [
+        [not_allowed, unsupported, mismatch],
+        [mismatch, unsupported, not_allowed],
+        [unsupported, not_allowed, mismatch],
+    ] {
+        assert_eq!(with(algs), "AlgorithmNotAllowed", "{algs:?}");
+    }
+    for algs in [
+        [unsupported, mismatch, mismatch],
+        [mismatch, "x", mismatch],
+        [mismatch, mismatch, "RSA-OAEP-256"],
+    ] {
+        assert_eq!(with(algs), "UnsupportedAlgorithm", "{algs:?}");
+    }
+    assert_eq!(with([mismatch; 3]), "KeyAlgorithmMismatch");
+    // One candidate among them is enough.
+    assert_eq!(with([not_allowed, unsupported, "A128KW"]), "ok");
+}
+
+#[test]
+fn enc_problems_are_immediate_and_shared() {
+    // `enc` is one for all recipients (§5.2 step 4: one ciphertext), so an
+    // unsupported or disallowed enc fails before any recipient is looked
+    // at.
+    let jwe = for_keys([&K1, &K2, &K3]);
+    let narrow = policy(&[A::A128KW], &[E::A256GCM]);
+    assert_eq!(
+        code(decrypt_json(&jwe, &oct(&K1), &narrow)),
+        "AlgorithmNotAllowed"
+    );
+    let unknown = edit(&jwe, |top| {
+        top.insert("protected", b64url_encode(br#"{"enc":"A1GCM"}"#));
+    });
+    assert_eq!(
+        code(decrypt_json(&unknown, &oct(&K1), &kw_policy())),
+        "UnsupportedAlgorithm"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Header rules across the three header locations (core, RFC 7516 §5.2
+// step 4), reached through the JSON serialization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn header_rules_are_checked_for_every_recipient_before_any_crypto() {
+    // Recipient 0 is valid for the key; recipient 2 breaks a header rule.
+    // The rule wins, even with a tampered tag that would otherwise give
+    // DecryptionFailed: no cryptography runs first.
+    let base = edit(&for_keys([&K1, &K2, &K3]), |top| {
+        top.insert("tag", b64url_encode(&[0; 16]));
+    });
+    let p = kw_policy();
+    let key = oct(&K1);
+    // `alg` in both the protected and a per-recipient header (§7.2.1:
+    // disjoint).
+    let protected_alg = edit(&base, |top| {
+        let protected = r#"{"enc":"A128GCM","alg":"A128KW"}"#;
+        top.insert("protected", b64url_encode(protected.as_bytes()));
+    });
+    assert_eq!(
+        code(decrypt_json(&protected_alg, &key, &p)),
+        "InvalidHeader"
+    );
+    // A shared member repeated in the last recipient's header.
+    let shared = edit(&set_header(&base, 2, "jku", "b"), |top| {
+        edit_member(top, "unprotected", |u| {
+            u.insert("jku", "a");
+        });
+    });
+    assert_eq!(code(decrypt_json(&shared, &key, &p)), "InvalidHeader");
+    // `enc` repeated outside the protected header.
+    let enc_twice = set_header(&base, 2, "enc", "A128GCM");
+    assert_eq!(code(decrypt_json(&enc_twice, &key, &p)), "InvalidHeader");
+    // `zip` and `crit` only in the protected header (RFC 7516 §4.1.3,
+    // §4.1.13).
+    let zip = set_header(&base, 2, "zip", "DEF");
+    assert_eq!(code(decrypt_json(&zip, &key, &p)), "InvalidHeader");
+    let crit = edit(&base, |top| {
+        edit_recipient(top, 2, |entry| {
+            edit_member(entry, "header", |h| {
+                h.insert("crit", vec![Value::from("x")]);
+                h.insert("x", true);
+            });
+        });
+    });
+    assert_eq!(code(decrypt_json(&crit, &key, &p)), "InvalidHeader");
+    // Recipients that disagree on `enc`: move `enc` out of the protected
+    // header into each recipient.
+    let split = edit(&base, |top| {
+        top.remove("protected");
+        for (i, enc) in ["A128GCM", "A128GCM", "A256GCM"].into_iter().enumerate() {
+            edit_recipient(top, i, |entry| {
+                edit_member(entry, "header", |h| {
+                    h.insert("enc", enc);
+                });
+            });
+        }
+    });
+    assert_eq!(code(decrypt_json(&split, &key, &p)), "InvalidHeader");
+    // A recipient with no `alg` anywhere.
+    let no_alg = edit(&base, |top| {
+        edit_recipient(top, 2, |entry| {
+            entry.remove("header");
+        });
+    });
+    assert_eq!(code(decrypt_json(&no_alg, &key, &p)), "InvalidHeader");
+    // And the untampered JWE decrypts.
+    assert_eq!(
+        code(decrypt_json(&for_keys([&K1, &K2, &K3]), &key, &p)),
+        "ok"
+    );
+}
+
+#[test]
+fn a_tampered_unprotected_alg_follows_the_error_contract() {
+    // `alg` in a per-recipient header is not integrity protected. A
+    // change is caught by the policy, the support check, the key binding,
+    // or, if the new alg is still a candidate, by key management
+    // (DecryptionFailed): never a wrong plaintext.
+    let jwe = Encryptor::new(E::A128GCM)
+        .recipient(Recipient::new(A::A128KW, &oct(&K1)))
+        .encrypt_json(b"x", JsonForm::General)
+        .unwrap();
+    let key = oct(&K1);
+    let all = policy(&[A::A128KW, A::A256KW, A::Dir, A::A128GCMKW], &[E::A128GCM]);
+    let only_kw = policy(&[A::A128KW], &[E::A128GCM]);
+    for (alg, policy, want) in [
+        ("A256KW", &only_kw, "AlgorithmNotAllowed"),
+        ("RSA1_5", &all, "UnsupportedAlgorithm"),
+        ("none", &all, "UnsupportedAlgorithm"),
+        ("A256KW", &all, "KeyAlgorithmMismatch"),
+        // `dir` with a 16-octet key is a candidate for A128GCM, but the
+        // encrypted key must be empty (RFC 7518 §4.5).
+        ("dir", &all, "DecryptionFailed"),
+        ("A128GCMKW", &all, "DecryptionFailed"),
+    ] {
+        let tampered = set_header(&jwe, 0, "alg", alg);
+        assert_eq!(code(decrypt_json(&tampered, &key, policy)), want, "{alg}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parsing negatives through the public API
+// ---------------------------------------------------------------------------
+
+#[test]
+fn structural_negatives() {
+    let key = jwk(a4::KEY);
+    let p = a4_policy(&[A::A128KW]);
+    let run = |jwe: &str| code(decrypt_json(jwe, &key, &p));
+    // `recipients: []` (§7.2.1).
+    assert_eq!(
+        run(&edit(a4::GENERAL, |t| {
+            t.insert("recipients", Vec::<Value>::new());
+        })),
+        "InvalidFormat"
+    );
+    // A flattened JWE with `recipients` (§7.2.2).
+    assert_eq!(
+        run(&edit(a4::FLATTENED, |t| {
+            t.insert("recipients", vec![Value::from(Object::new())]);
+        })),
+        "InvalidFormat"
+    );
+    // No `ciphertext` (§7.2.1: "MUST be present").
+    for jwe in [a4::GENERAL, a4::FLATTENED] {
+        assert_eq!(
+            run(&edit(jwe, |t| {
+                t.remove("ciphertext");
+            })),
+            "InvalidFormat"
+        );
+    }
+    // Duplicate member names, at the top level and in a recipient
+    // (ADR 0041 §1).
+    let dup_top = a4::FLATTENED.replacen('{', r#"{"iv":"AxY8DCtDaGlsbGljb3RoZQ","#, 1);
+    assert_eq!(run(&dup_top), "InvalidJson");
+    let dup_entry = a4::GENERAL.replace(r#""kid":"7"}"#, r#""kid":"7"},"header":{}"#);
+    assert_eq!(run(&dup_entry), "InvalidJson");
+    // More recipients than max_recipients.
+    let many = edit(a4::GENERAL, |t| {
+        let Some(Value::Array(entries)) = t.remove("recipients") else {
+            panic!()
+        };
+        t.insert(
+            "recipients",
+            entries.iter().cycle().take(18).cloned().collect::<Vec<_>>(),
+        );
+    });
+    assert_eq!(run(&many), "InvalidFormat");
+    let raised = a4_policy(&[A::A128KW]).max_recipients(18);
+    let d = decrypt(&many, &key, &raised);
+    assert_eq!(d.recipient(), 1);
+    // Over max_input_len.
+    let small = a4_policy(&[A::A128KW]).max_input_len(a4::FLATTENED.len() - 1);
+    assert_eq!(
+        code(decrypt_json(a4::FLATTENED, &key, &small)),
+        "InvalidFormat"
+    );
+    // A compact JWE given to decrypt_json is not JSON.
+    let compact = "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0.6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ.AxY8DCtDaGlsbGljb3RoZQ.KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY.U0m_YmjN04DJvceFICbCVQ";
+    assert_eq!(run(compact), "InvalidJson");
+    // A protected header that is JSON but not an object (plan.md
+    // refinement 15).
+    let not_object = edit(a4::FLATTENED, |t| {
+        t.insert("protected", b64url_encode(b"[\"enc\"]"));
+    });
+    assert_eq!(run(&not_object), "InvalidJson");
+}
+
+// ---------------------------------------------------------------------------
+// Property: round trips with random AAD and 1-4 symmetric recipients
+// ---------------------------------------------------------------------------
+
+fn kw_alg() -> impl Strategy<Value = (KeyMgmtAlg, usize)> {
+    prop_oneof![
+        Just((A::A128KW, 16usize)),
+        Just((A::A192KW, 24)),
+        Just((A::A256KW, 32)),
+    ]
+}
+
+fn any_enc() -> impl Strategy<Value = ContentEncAlg> {
+    prop_oneof![
+        Just(E::A128GCM),
+        Just(E::A192GCM),
+        Just(E::A256GCM),
+        Just(E::A128CbcHs256),
+        Just(E::A192CbcHs384),
+        Just(E::A256CbcHs512),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn json_round_trips_for_every_recipient(
+        enc in any_enc(),
+        recipients in prop::collection::vec((kw_alg(), any::<[u8; 32]>()), 1..=4),
+        aad in prop::option::of(prop::collection::vec(any::<u8>(), 1..48)),
+        plaintext in prop::collection::vec(any::<u8>(), 0..96),
+        flattened in any::<bool>(),
+    ) {
+        let form = if flattened && recipients.len() == 1 {
+            JsonForm::Flattened
+        } else {
+            JsonForm::General
+        };
+        let raw: Vec<&[u8]> = recipients.iter().map(|((_, len), bytes)| &bytes[..*len]).collect();
+        let keys: Vec<(KeyMgmtAlg, Jwk)> = recipients
+            .iter()
+            .zip(&raw)
+            .map(|(((alg, _), _), bytes)| (alg.clone(), oct(bytes)))
+            .collect();
+        let mut e = Encryptor::new(enc.clone());
+        if let Some(aad) = &aad {
+            e = e.aad(aad.clone());
+        }
+        for (alg, key) in &keys {
+            e = e.recipient(Recipient::new(alg.clone(), key));
+        }
+        let jwe = e.encrypt_json(&plaintext, form).unwrap();
+        let top = object(&jwe);
+        prop_assert_eq!(top.get("recipients").is_none(), form == JsonForm::Flattened);
+        let p = policy(&[A::A128KW, A::A192KW, A::A256KW], &[enc]);
+        for (index, (_, key)) in keys.iter().enumerate() {
+            let d = decrypt_json(&jwe, key, &p).unwrap();
+            prop_assert_eq!(d.plaintext(), &plaintext[..]);
+            prop_assert_eq!(d.aad(), aad.as_deref());
+            // Equal keys may repeat; the first one that decrypts wins.
+            let first = raw.iter().position(|k| *k == raw[index]).unwrap();
+            prop_assert_eq!(d.recipient(), first);
+        }
+        // The AAD is bound: changing it fails for every recipient.
+        let other = edit(&jwe, |t| {
+            t.insert("aad", b64url_encode(b"\0other"));
+        });
+        prop_assert_eq!(code(decrypt_json(&other, &keys[0].1, &p)), "DecryptionFailed");
     }
 }
