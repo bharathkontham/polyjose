@@ -1,0 +1,28 @@
+{
+  "source": "Node v24.21.0 built-in crypto (OpenSSL 3.5.8), conformance/tools/rsa-oaep-oracle.mjs",
+  "description": "RFC 7518 §4.3 RSA-OAEP-256 + A256CBC-HS512 to the 2048-bit test key: with rng_b64u as the drawn bytes (the 64-octet CEK, which is the expected CEK, then the 32-octet OAEP seed, then the 16-octet IV) polyjose reproduces the compact JWE exactly; the expected JWE was computed independently of polyjose by the oracle's EME-OAEP encoding (RFC 8017 §7.1.1) with Node's raw RSA and AES, and the oracle checks it with crypto.privateDecrypt (oaepHash sha256) against the test-only private key keys/rsa-2048.private.jwk (data only, never read by Rust); interop: true (feature 0010)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A256CBC-HS512",
+    "plaintext_b64u": "UlNBLU9BRVAtMjU2IHdpdGggQTI1NkNCQy1IUzUxMiB0byBhIDIwNDgtYml0IGtleTogdGhlIENFSywgdGhlIE9BRVAgc2VlZCBhbmQgdGhlIElWIGFyZSBkcmF3biBpbiB0aGF0IG9yZGVyLg",
+    "recipients": [
+      {
+        "alg": "RSA-OAEP-256",
+        "key": {
+          "kty": "RSA",
+          "n": "tNzZIjyPSkJr-WPJsHzUF7m9m1lgV1mm1EJa5nCuxo_YdYRLmbEKaGcY6eNquHIa6oQFeh-Mg35K6jZ2Vg77QLaC_Z8YpL8Rk0jhPb6mQALM_4iQcBFT4Ce9XrRdYnsVdjziflVEJTf2_-5ZBcRTaqCf59fvgWkdKZcJwppBDnjCabj8wmWBmomY9RDECwPk9ahNyo9AZWg2CdaSg3U09NaPx39VEXvbZOQuG_yJCv58D1d7DeeEFPo8vZfpRO2mAZVHREMacrN2CbaEfQZiPMkBkAV0zg6g7zKUyEW7Osa92VJXPlQR1tko4sqbKAGBWz6WjcdXEiTLCLGgn3e5bQ",
+          "e": "AQAB"
+        }
+      }
+    ],
+    "rng_b64u": "36D6BJivLlpXx0kNdvbAkkg-rz0M7A9ocisdE6d4Gp6-4KWPztYJeHgJobgoVCmafeUrrwHtcQ24m7X7JEGPxwpAR5l6REac3Y72ETcjhxZT9C2aXTwbhumUrfauVBPqnvO5TJ0AYZyXEHsBCkAYzA"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMjU2Q0JDLUhTNTEyIn0.sFyAhVmOGQF7wZZGU8hSRUEUHwl3SgPRLswDuFfguvx69ETMCS6FIsT5Z2x3ZionCyGHzvhLXzBM5c6Z4zwFi5cuXOiick_128LUc8AGahqujD2Ojy95PY-coFeA2Z6My42EBGZpcfsnkg7irtAgZnvTMI8XurcJne58sfJYAP8UswrGpGb81LZKiyssUlgxpPEBsGQBJx5VNMk15JTvMs7DHt36M8SxASOzSk7zOJzEpO8Rwj2StCXM1Dp74n184TGJQpTsWuOU7MMY_W6FXCFQ4uj8V-yYiShLbk4-D28YZWR1Bnt_pk43KLODLSjj79-TL3m0eXlOFovcF4xTew.nvO5TJ0AYZyXEHsBCkAYzA.KSVIlcBzvgcEVRiQ0d2veg09Oa1og4ssTuTA9q9VEKiBK2BnRYk5DxAD5LT_Yp5OHJHjf85KkUPEQNiByLOK9P5Dogq6n-Fiim9E4FyYEtB-CPL4FFgTjlktpsqJ98kbvea69buOIWMWhwNlR4iJ2w.NlmrGW1mu1UyBAUwzA_bS8pii7O7TDvlRj9c3uoQNLg"
+  },
+  "features": [
+    "fixed-rng"
+  ]
+}

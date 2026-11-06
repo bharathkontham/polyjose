@@ -1,0 +1,24 @@
+{
+  "source": "polyjose",
+  "description": "ADR 0022: polyjose never encrypts with RSA-OAEP (SHA-1 OAEP, RFC 7518 \u00a74.3), even to an RSA public key that RSA-OAEP-256 accepts: UnsupportedAlgorithm",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "dGVzdA",
+    "recipients": [
+      {
+        "alg": "RSA-OAEP",
+        "key": {
+          "kty": "RSA",
+          "n": "tNzZIjyPSkJr-WPJsHzUF7m9m1lgV1mm1EJa5nCuxo_YdYRLmbEKaGcY6eNquHIa6oQFeh-Mg35K6jZ2Vg77QLaC_Z8YpL8Rk0jhPb6mQALM_4iQcBFT4Ce9XrRdYnsVdjziflVEJTf2_-5ZBcRTaqCf59fvgWkdKZcJwppBDnjCabj8wmWBmomY9RDECwPk9ahNyo9AZWg2CdaSg3U09NaPx39VEXvbZOQuG_yJCv58D1d7DeeEFPo8vZfpRO2mAZVHREMacrN2CbaEfQZiPMkBkAV0zg6g7zKUyEW7Osa92VJXPlQR1tko4sqbKAGBWz6WjcdXEiTLCLGgn3e5bQ",
+          "e": "AQAB"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "source": "polyjose",
+  "description": "RFC 8725 \u00a73.1, RFC 7518 \u00a74.3: RSA-OAEP-256 to an oct key is KeyAlgorithmMismatch: the alg needs an RSA public key",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "dGVzdA",
+    "recipients": [
+      {
+        "alg": "RSA-OAEP-256",
+        "key": {
+          "kty": "oct",
+          "k": "XctOhJAkA-pD9Lh7ZgW_2A"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}
