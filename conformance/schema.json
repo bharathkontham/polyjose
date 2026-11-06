@@ -119,7 +119,8 @@
         "TokenExpired",
         "TokenNotYetValid",
         "InvalidClaim",
-        "RandomnessUnavailable"
+        "RandomnessUnavailable",
+        "InvalidFormat"
       ]
     },
     "failure": {
