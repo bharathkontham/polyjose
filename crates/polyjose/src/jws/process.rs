@@ -10,7 +10,31 @@
 //!
 //! - step 4's header structure: [`JoseHeader::new`] for one signature,
 //!   [`common_b64`] across signatures;
-//! - the JWS Signing Input: [`signing_input`].
+//! - the JWS Signing Input: [`signing_input`];
+//! - steps 5–9 for verification: [`check_verify`] (5–8) and
+//!   [`verify_signature`] (5–9, calling the [`Families`] table);
+//! - steps 5–8 for signing: [`prepare_sign`], whose [`SignReady`] is the
+//!   only way to reach a family's `sign`;
+//! - the multiple-signature ranking of ADR 0026 §3: [`progress_rank`] and
+//!   [`furthest`].
+//!
+//! # How the serializations use this
+//!
+//! Verify (one signature, or each of several):
+//!
+//! ```text
+//! ProtectedHeader::from_encoded / Header::from_object  // step 4, I-JSON + types
+//! JoseHeader::new(protected, unprotected)              // step 4, structure
+//! common_b64(&all_headers)                             // step 4, across signatures
+//! signing_input(encoded_protected, payload, b64)
+//! verify_signature(families, &header, key, opts, &input, &signature)  // steps 5-9
+//! furthest(errors)                                     // none verified (ADR 0026 §3)
+//! ```
+//!
+//! Sign (per signer): `JoseHeader::new`, `common_b64` (general JSON), then
+//! `prepare_sign` (steps 5–8), then the serialization's payload rules
+//! (`InvalidFormat`, RFC 7797 §5.2–§5.3), then `signing_input` and
+//! `SignReady::sign`.
 
 use std::collections::BTreeSet;
 
@@ -19,7 +43,16 @@ use zeroize::Zeroizing;
 use crate::error::{Error, Result};
 use crate::header::Header;
 use crate::json::{Object, Value};
+use crate::jwa::SigningAlg;
+use crate::jwk::Jwk;
 use crate::util::b64url_encode;
+
+use super::VerifyOptions;
+use super::alg::{Families, Operation, bind_key};
+
+/// The `crit` extensions polyjose understands: only `b64` (RFC 7797 §6;
+/// RFC 7515 §4.1.11; ADR 0007).
+pub(crate) const UNDERSTOOD_CRIT: &[&str] = &["b64"];
 
 /// One signature's JOSE Header after ADR 0026 §2 step 4: the JWS Protected
 /// and Unprotected Headers as given, and their union, which has passed
@@ -173,10 +206,158 @@ pub(crate) fn signing_input(protected_b64: &str, payload: &[u8], b64: bool) -> V
     input
 }
 
+/// Steps 5 and 6 of ADR 0026 §2: every `crit` name understood, then a
+/// known `alg`.
+fn understood_alg(header: &JoseHeader) -> Result<SigningAlg> {
+    // Step 5 (RFC 7515 §4.1.11): UnknownCritical. Its `validate_crit` part
+    // already passed in step 4.
+    header.union.validate_crit_understood(UNDERSTOOD_CRIT)?;
+    // Step 6 (RFC 7515 §4.1.1): UnsupportedAlgorithm. Step 4 checked that
+    // `alg` is present.
+    header.union.signing_alg()
+}
+
+/// Steps 5–8 of ADR 0026 §2 for one signature being verified, returning
+/// its `alg`.
+///
+/// # Errors
+///
+/// In this order:
+/// 5. [`Error::UnknownCritical`]: `crit` lists a name other than `b64`
+///    (RFC 7515 §4.1.11).
+/// 6. [`Error::UnsupportedAlgorithm`]: `alg` is not a known JWS algorithm
+///    (RFC 7515 §4.1.1).
+/// 7. [`Error::AlgorithmNotAllowed`]: `alg` is `none` or not in
+///    `opts`'s allow-list (RFC 8725 §3.1; RFC 7515 §5.2, last paragraph).
+/// 8. [`Error::KeyAlgorithmMismatch`] / [`Error::InvalidKey`]: key binding
+///    ([`bind_key`]).
+pub(crate) fn check_verify(
+    header: &JoseHeader,
+    key: &Jwk,
+    opts: &VerifyOptions<'_>,
+) -> Result<SigningAlg> {
+    let alg = understood_alg(header)?;
+    // `VerifyOptions` cannot hold `none`; checked again regardless.
+    if alg == SigningAlg::None || !opts.allowed_algs.contains(&alg) {
+        return Err(Error::AlgorithmNotAllowed);
+    }
+    bind_key(&alg, key, Operation::Verify)?;
+    Ok(alg)
+}
+
+/// Steps 5–9 of ADR 0026 §2 for one signature: [`check_verify`], then the
+/// signature check through `families` (RFC 7515 §5.2 step 8).
+///
+/// `signing_input` is [`signing_input`] of this signature's encoded
+/// protected header and the payload; `signature` is the decoded JWS
+/// Signature.
+///
+/// # Errors
+///
+/// As [`check_verify`], then [`Error::InvalidSignature`] (or
+/// [`Error::InvalidKey`] for a key only the primitive can reject) from the
+/// family.
+pub(crate) fn verify_signature(
+    families: &Families,
+    header: &JoseHeader,
+    key: &Jwk,
+    opts: &VerifyOptions<'_>,
+    signing_input: &[u8],
+    signature: &[u8],
+) -> Result<SigningAlg> {
+    let alg = check_verify(header, key, opts)?;
+    (families.verify)(&alg, key, signing_input, signature)?;
+    Ok(alg)
+}
+
+/// A signature that passed steps 5–8 for signing and may be computed.
+///
+/// Only [`prepare_sign`] builds one, so a family's `sign` is never reached
+/// without key binding.
+pub(crate) struct SignReady<'k> {
+    alg: SigningAlg,
+    key: &'k Jwk,
+}
+
+impl SignReady<'_> {
+    /// The `alg` the signature will use.
+    pub(crate) fn alg(&self) -> &SigningAlg {
+        &self.alg
+    }
+
+    /// Computes the JWS Signature over `signing_input` (RFC 7515 §5.1
+    /// step 5) through `families`.
+    ///
+    /// # Errors
+    ///
+    /// The family's: [`Error::InvalidKey`], or
+    /// [`Error::RandomnessUnavailable`] for ECDSA.
+    pub(crate) fn sign(&self, families: &Families, signing_input: &[u8]) -> Result<Vec<u8>> {
+        (families.sign)(&self.alg, self.key, signing_input)
+    }
+}
+
+/// Steps 5–8 of ADR 0026 §2 for a signature being produced, so that
+/// polyjose only signs what it would itself accept.
+///
+/// # Errors
+///
+/// In this order:
+/// 5. [`Error::UnknownCritical`]: `crit` lists a name other than `b64`;
+///    polyjose cannot honour an extension it does not understand
+///    (RFC 7515 §4.1.11).
+/// 6. [`Error::UnsupportedAlgorithm`]: `alg` is not a known JWS algorithm.
+/// 7. [`Error::AlgorithmNotAllowed`]: `alg` is `none` (RFC 8725 §3.2,
+///    ADR 0007).
+/// 8. [`Error::UnsupportedAlgorithm`] for RS*/PS* (ADR 0021), then
+///    [`Error::KeyAlgorithmMismatch`] / [`Error::InvalidKey`] from key
+///    binding, including a public-only key ([`bind_key`]).
+pub(crate) fn prepare_sign<'k>(header: &JoseHeader, key: &'k Jwk) -> Result<SignReady<'k>> {
+    let alg = understood_alg(header)?;
+    if alg == SigningAlg::None {
+        return Err(Error::AlgorithmNotAllowed);
+    }
+    bind_key(&alg, key, Operation::Sign)?;
+    Ok(SignReady { alg, key })
+}
+
+/// How far a signature got through steps 5–9 before failing, for
+/// ADR 0026 §3: `InvalidSignature` (6) > `InvalidKey` (5) >
+/// `KeyAlgorithmMismatch` (4) > `AlgorithmNotAllowed` (3) >
+/// `UnsupportedAlgorithm` (2) > `UnknownCritical` (1).
+///
+/// Steps 5–9 produce no other code under the family contract; anything
+/// else ranks 0, so the ranking stays total and deterministic.
+pub(crate) fn progress_rank(error: &Error) -> u8 {
+    match error {
+        Error::InvalidSignature => 6,
+        Error::InvalidKey(_) => 5,
+        Error::KeyAlgorithmMismatch => 4,
+        Error::AlgorithmNotAllowed => 3,
+        Error::UnsupportedAlgorithm => 2,
+        Error::UnknownCritical => 1,
+        _ => 0,
+    }
+}
+
+/// The error to report when no signature of a JWS verified (ADR 0026 §3):
+/// the one with the highest [`progress_rank`], ties going to the earliest,
+/// so pass the errors in signature order. `None` if there are none.
+pub(crate) fn furthest(errors: impl IntoIterator<Item = Error>) -> Option<Error> {
+    errors.into_iter().fold(None, |best, e| match best {
+        Some(b) if progress_rank(&b) >= progress_rank(&e) => Some(b),
+        _ => Some(e),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jws::ProtectedHeader;
+    use crate::jwa::SigningAlg;
+    use crate::jwk::Jwk;
+    use crate::jws::alg::fake::{FAKE, REJECTING, fake_signature};
+    use crate::jws::alg::test_keys as keys;
+    use crate::jws::{ProtectedHeader, VerifyOptions};
     use crate::util::b64url_encode;
 
     fn h(json: &str) -> Header {
@@ -395,5 +576,272 @@ mod tests {
                 Err("InvalidHeader")
             );
         }
+    }
+
+    // ---- Steps 5-9 and the ADR 0026 §2 precedence ----
+
+    use SigningAlg as A;
+
+    fn hj(protected: &str) -> JoseHeader {
+        jose(Some(protected), None).unwrap()
+    }
+
+    fn opts(allowed: &[SigningAlg]) -> VerifyOptions<'_> {
+        VerifyOptions::new(allowed).unwrap()
+    }
+
+    /// Steps 5-8 for verification, as an error code.
+    fn verify_code(protected: &str, key: &Jwk, allowed: &[SigningAlg]) -> &'static str {
+        check_verify(&hj(protected), key, &opts(allowed)).map_or_else(|e| e.code(), |_| "ok")
+    }
+
+    #[test]
+    fn verify_policy_each_step() {
+        let hs = keys::oct(32, "");
+        // Step 5: crit names must be understood (RFC 7515 §4.1.11).
+        assert_eq!(
+            verify_code(
+                r#"{"alg":"HS256","crit":["x-a"],"x-a":1}"#,
+                &hs,
+                &[A::HS256]
+            ),
+            "UnknownCritical"
+        );
+        assert_eq!(
+            verify_code(
+                r#"{"alg":"HS256","b64":false,"crit":["b64"]}"#,
+                &hs,
+                &[A::HS256]
+            ),
+            "ok"
+        );
+        // Step 6: a known alg (RFC 7515 §4.1.1).
+        assert_eq!(
+            verify_code(r#"{"alg":"HS1"}"#, &hs, &[A::HS256]),
+            "UnsupportedAlgorithm"
+        );
+        assert_eq!(
+            verify_code(r#"{"alg":"RSA1_5"}"#, &hs, &[A::HS256]),
+            "UnsupportedAlgorithm"
+        );
+        // Step 7: the allow-list; `none` never passes (RFC 8725 §3.1).
+        assert_eq!(
+            verify_code(r#"{"alg":"HS384"}"#, &hs, &[A::HS256]),
+            "AlgorithmNotAllowed"
+        );
+        assert_eq!(
+            verify_code(r#"{"alg":"none"}"#, &hs, &[A::HS256]),
+            "AlgorithmNotAllowed"
+        );
+        // Step 8: key binding.
+        assert_eq!(
+            verify_code(r#"{"alg":"ES256"}"#, &hs, &[A::ES256]),
+            "KeyAlgorithmMismatch"
+        );
+        assert_eq!(
+            verify_code(r#"{"alg":"HS512"}"#, &hs, &[A::HS512]),
+            "InvalidKey"
+        );
+        assert_eq!(
+            check_verify(&hj(r#"{"alg":"HS256"}"#), &hs, &opts(&[A::HS256])),
+            Ok(A::HS256)
+        );
+    }
+
+    #[test]
+    fn precedence_follows_the_adr_0026_order() {
+        let rsa = keys::rsa(2048);
+        let hs = keys::oct(32, "");
+        // Unknown crit (5) and a disallowed alg (7): UnknownCritical.
+        assert_eq!(
+            verify_code(
+                r#"{"alg":"HS512","crit":["x-a"],"x-a":1}"#,
+                &hs,
+                &[A::HS256]
+            ),
+            "UnknownCritical"
+        );
+        // Unknown crit (5) and an unknown alg (6): UnknownCritical.
+        assert_eq!(
+            verify_code(r#"{"alg":"HS1","crit":["x-a"],"x-a":1}"#, &hs, &[A::HS256]),
+            "UnknownCritical"
+        );
+        // Unknown alg (6) can't be allowed (7) either: UnsupportedAlgorithm.
+        assert_eq!(
+            verify_code(r#"{"alg":"XS256"}"#, &rsa, &[A::RS256]),
+            "UnsupportedAlgorithm"
+        );
+        // A disallowed alg (7) with a mismatched key (8): AlgorithmNotAllowed.
+        assert_eq!(
+            verify_code(r#"{"alg":"HS256"}"#, &rsa, &[A::RS256]),
+            "AlgorithmNotAllowed"
+        );
+        // `none` with any key and list: AlgorithmNotAllowed, never a key error.
+        assert_eq!(
+            verify_code(r#"{"alg":"none"}"#, &rsa, &[A::RS256]),
+            "AlgorithmNotAllowed"
+        );
+        // Step 4 beats them all: crit listing an absent name, with `none`.
+        assert_eq!(
+            code(jose(Some(r#"{"alg":"none","crit":["x-a"]}"#), None)),
+            "InvalidHeader"
+        );
+        // A mismatched key (8) is reported before any signature check (9).
+        let hdr = hj(r#"{"alg":"HS256"}"#);
+        assert_eq!(
+            verify_signature(&FAKE, &hdr, &rsa, &opts(&[A::HS256]), b"x", b""),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+    }
+
+    #[test]
+    fn verify_signature_runs_step_9_through_the_families_table() {
+        let key = keys::oct(32, "");
+        let hdr = hj(r#"{"alg":"HS256"}"#);
+        let o = opts(&[A::HS256]);
+        let input = signing_input("eyJhbGciOiJIUzI1NiJ9", b"$.02", hdr.b64());
+        let sig = fake_signature(&A::HS256, &input);
+        assert_eq!(
+            verify_signature(&FAKE, &hdr, &key, &o, &input, &sig),
+            Ok(A::HS256)
+        );
+        assert_eq!(
+            verify_signature(&FAKE, &hdr, &key, &o, &input, &sig[1..]),
+            Err(Error::InvalidSignature)
+        );
+        assert_eq!(
+            verify_signature(&REJECTING, &hdr, &key, &o, &input, &sig),
+            Err(Error::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn sign_policy_each_step() {
+        let hs = keys::oct(32, "");
+        let sign_code = |protected: &str, key: &Jwk| {
+            prepare_sign(&hj(protected), key).map_or_else(|e| e.code(), |_| "ok")
+        };
+        assert_eq!(
+            sign_code(r#"{"alg":"HS256","crit":["x-a"],"x-a":1}"#, &hs),
+            "UnknownCritical"
+        );
+        assert_eq!(sign_code(r#"{"alg":"HS1"}"#, &hs), "UnsupportedAlgorithm");
+        // RFC 8725 §3.2: never produce `none`.
+        assert_eq!(sign_code(r#"{"alg":"none"}"#, &hs), "AlgorithmNotAllowed");
+        // ADR 0021: no RSA signing, whatever the key.
+        assert_eq!(
+            sign_code(r#"{"alg":"RS256"}"#, &keys::rsa(2048)),
+            "UnsupportedAlgorithm"
+        );
+        assert_eq!(sign_code(r#"{"alg":"PS256"}"#, &hs), "UnsupportedAlgorithm");
+        // Key binding: a public key cannot sign; a short HMAC key is weak.
+        assert_eq!(
+            sign_code(r#"{"alg":"ES256"}"#, &keys::p256("")),
+            "KeyAlgorithmMismatch"
+        );
+        assert_eq!(sign_code(r#"{"alg":"HS512"}"#, &hs), "InvalidKey");
+        // b64 false is fine to sign once it is critical (RFC 7797 §6).
+        assert_eq!(
+            sign_code(r#"{"alg":"HS256","b64":false,"crit":["b64"]}"#, &hs),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn prepared_signature_round_trips() {
+        let key = keys::oct(32, "");
+        let hdr = jose(Some(r#"{"alg":"HS256"}"#), Some(r#"{"kid":"k"}"#)).unwrap();
+        let ready = prepare_sign(&hdr, &key).unwrap();
+        assert_eq!(ready.alg(), &A::HS256);
+        let input = signing_input("eyJhbGciOiJIUzI1NiJ9", b"payload", hdr.b64());
+        let sig = ready.sign(&FAKE, &input).unwrap();
+        assert_eq!(
+            verify_signature(&FAKE, &hdr, &key, &opts(&[A::HS256]), &input, &sig),
+            Ok(A::HS256)
+        );
+    }
+
+    #[test]
+    fn progress_ranking_matches_adr_0026_section_3() {
+        let ranked = [
+            Error::InvalidSignature,
+            Error::InvalidKey("k"),
+            Error::KeyAlgorithmMismatch,
+            Error::AlgorithmNotAllowed,
+            Error::UnsupportedAlgorithm,
+            Error::UnknownCritical,
+        ];
+        for pair in ranked.windows(2) {
+            assert!(
+                progress_rank(&pair[0]) > progress_rank(&pair[1]),
+                "{pair:?}"
+            );
+        }
+        // Errors of steps 1-4 never come out of steps 5-9; they rank last.
+        assert!(progress_rank(&Error::UnknownCritical) > progress_rank(&Error::InvalidHeader("h")));
+    }
+
+    #[test]
+    fn furthest_error_wins_with_ties_to_the_lowest_index() {
+        use Error as E;
+        // T05's named cases (ADR 0026 §3).
+        assert_eq!(
+            furthest([E::InvalidSignature, E::AlgorithmNotAllowed]),
+            Some(E::InvalidSignature)
+        );
+        assert_eq!(
+            furthest([E::AlgorithmNotAllowed, E::InvalidSignature]),
+            Some(E::InvalidSignature)
+        );
+        assert_eq!(
+            furthest([E::UnknownCritical, E::UnknownCritical]),
+            Some(E::UnknownCritical)
+        );
+        // Ties go to the lowest index (the detail tells them apart).
+        assert_eq!(
+            furthest([
+                E::UnknownCritical,
+                E::InvalidKey("first"),
+                E::InvalidKey("second")
+            ]),
+            Some(E::InvalidKey("first"))
+        );
+        assert_eq!(furthest([]), None);
+    }
+
+    #[test]
+    fn multi_signature_flow_with_the_shared_helpers() {
+        // How json.rs composes the helpers (ADR 0026 §3): step 4 over all
+        // signatures, common b64, then steps 5-9 per signature, first
+        // success wins, else the furthest error.
+        let key = keys::oct(32, "");
+        let headers = [
+            hj(r#"{"alg":"HS256","crit":["x-a"],"x-a":1}"#), // UnknownCritical
+            hj(r#"{"alg":"HS384"}"#),                        // AlgorithmNotAllowed
+            hj(r#"{"alg":"HS256"}"#),                        // InvalidSignature (bad sig)
+            hj(r#"{"alg":"HS256","kid":"good"}"#),           // verifies
+        ];
+        let b64 = common_b64(&headers).unwrap();
+        let o = opts(&[A::HS256]);
+        let run = |count: usize| {
+            let mut errors = Vec::new();
+            for (index, hdr) in headers.iter().take(count).enumerate() {
+                let input = signing_input("", b"p", b64);
+                let sig = if index == 3 {
+                    fake_signature(&A::HS256, &input)
+                } else {
+                    vec![0]
+                };
+                match verify_signature(&FAKE, hdr, &key, &o, &input, &sig) {
+                    Ok(_) => return Ok(index),
+                    Err(e) => errors.push(e),
+                }
+            }
+            Err(furthest(errors))
+        };
+        assert_eq!(run(4), Ok(3));
+        assert_eq!(run(3), Err(Some(Error::InvalidSignature)));
+        assert_eq!(run(2), Err(Some(Error::AlgorithmNotAllowed)));
+        assert_eq!(run(1), Err(Some(Error::UnknownCritical)));
     }
 }
