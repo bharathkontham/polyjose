@@ -2,14 +2,15 @@
 
 polyjose is MIT licensed (see [LICENSE](LICENSE)). It does not implement cryptographic primitives
 itself: it composes primitives written and maintained by other projects into JOSE. This file credits
-every third-party crate that the `polyjose` crate depends on at run time and says what each one does
-for polyjose.
+every third-party crate that the `polyjose` crate depends on, at run time or at build time, and says
+what each one does for polyjose.
 
 The list is exactly the output of
-`cargo tree -p polyjose -e normal --all-features --target all`, so it covers every target and every
-feature. Some crates are compiled only for some targets; their entries say which. Test-only
-dependencies and the frameworks of the language bindings (napi-rs, wasm-bindgen, UniFFI) are not
-part of the core crate and are not listed here.
+`cargo tree -p polyjose -e normal,build --all-features --target all`, so it covers every target and
+every feature. Some crates are compiled only for some targets or backends; their entries say which.
+The [build-time crates](#build-time-only) run on the builder's machine and link nothing into
+polyjose. Test-only dependencies and the frameworks of the language bindings (napi-rs, wasm-bindgen,
+UniFFI) are not part of the core crate and are not listed here.
 
 - **License:** as each crate declares it in its manifest. polyjose itself is MIT.
 - **Audit status:** taken from polyjose's audit register (ADR 0019). polyjose never claims an audit
@@ -17,25 +18,36 @@ part of the core crate and are not listed here.
 - **Kept current:** `scripts/check-deps.sh` fails when this file, `deps-allowlist.txt` and the
   dependency tree disagree. Each crate has exactly one `` ### `crate` `` heading below.
 
-## Cryptographic primitives and their own dependencies
+## Hashes and MACs
 
 ### `sha2`
 
 - **Upstream:** RustCrypto, [RustCrypto/hashes](https://github.com/RustCrypto/hashes)
   ([crates.io](https://crates.io/crates/sha2))
 - **License:** MIT OR Apache-2.0
-- **Used for:** SHA-256 (FIPS 180-4) for JWK thumbprints (RFC 7638). Its `zeroize` feature wipes
-  the hash state on drop, since the thumbprint of an `oct` key hashes the secret.
+- **Used for:** SHA-256 (FIPS 180-4) for JWK thumbprints (RFC 7638), and the SHA-2 hashes of the
+  HS*, ES* and RS*/PS* algorithms (through `hmac`, the curve crates and `rsa`). Its `zeroize`
+  feature wipes the hash state on drop, since the thumbprint of an `oct` key hashes the secret.
 - **Audit status:** no public independent audit found. polyjose checks it, at the exact pinned
   version, against the RFC 7638 thumbprint test vector through its own JWK code.
+
+### `hmac`
+
+- **Upstream:** RustCrypto, [RustCrypto/MACs](https://github.com/RustCrypto/MACs)
+  ([crates.io](https://crates.io/crates/hmac))
+- **License:** MIT OR Apache-2.0
+- **Used for:** HMAC (RFC 2104) for the JWS algorithms HS256, HS384 and HS512 (RFC 7518 §3.2),
+  including the constant-time tag comparison. Its `zeroize` feature wipes the keyed state on drop.
+- **Audit status:** no public independent audit found.
 
 ### `digest`
 
 - **Upstream:** RustCrypto, [RustCrypto/traits](https://github.com/RustCrypto/traits)
   ([crates.io](https://crates.io/crates/digest))
 - **License:** MIT OR Apache-2.0
-- **Used for:** the `Digest` trait that polyjose calls SHA-256 through (re-exported by `sha2`).
-- **Audit status:** not in the ADR 0019 register; a dependency of `sha2`.
+- **Used for:** the `Digest` and `Mac` traits that polyjose calls SHA-256 and HMAC through
+  (re-exported by `sha2` and `hmac`).
+- **Audit status:** not in the ADR 0019 register; a dependency of `sha2` and `hmac`.
 
 ### `block-buffer`
 
@@ -79,8 +91,354 @@ part of the core crate and are not listed here.
   ([crates.io](https://crates.io/crates/cpufeatures))
 - **License:** MIT OR Apache-2.0
 - **Used for:** not used directly. `sha2` uses it on aarch64, x86 and x86_64 to detect the SHA CPU
-  extensions at run time.
-- **Audit status:** not in the ADR 0019 register; a dependency of `sha2`.
+  extensions at run time, and `curve25519-dalek` on x86_64 to pick its AVX2 backend.
+- **Audit status:** not in the ADR 0019 register; a dependency of `sha2` and `curve25519-dalek`.
+
+### `ctutils`
+
+- **Upstream:** RustCrypto, [RustCrypto/utils](https://github.com/RustCrypto/utils)
+  ([crates.io](https://crates.io/crates/ctutils))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. Constant-time comparison and selection helpers: `digest` verifies
+  HMAC tags with them, and `crypto-bigint` and `sec1` use them too.
+- **Audit status:** not in the ADR 0019 register; a dependency of `digest`, `crypto-bigint` and
+  `sec1`.
+
+### `cmov`
+
+- **Upstream:** RustCrypto, [RustCrypto/utils](https://github.com/RustCrypto/utils)
+  ([crates.io](https://crates.io/crates/cmov))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. Constant-time conditional moves under `ctutils`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `ctutils`.
+
+### `const-oid`
+
+- **Upstream:** RustCrypto, [RustCrypto/formats](https://github.com/RustCrypto/formats)
+  ([crates.io](https://crates.io/crates/const-oid))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. ASN.1 object identifiers of the hash algorithms, for `digest` and
+  `der`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `digest` and `der`.
+
+## ECDSA
+
+### `p256`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
+  ([crates.io](https://crates.io/crates/p256))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** the P-256 curve: ES256 (RFC 7518 §3.4) and the on-curve and scalar-range checks of
+  `crv` `P-256` JWKs (ADR 0041 §4).
+- **Audit status:** no public independent audit found.
+
+### `p384`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
+  ([crates.io](https://crates.io/crates/p384))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** the P-384 curve: ES384 (RFC 7518 §3.4) and the on-curve and scalar-range checks of
+  `crv` `P-384` JWKs.
+- **Audit status:** no public independent audit found.
+
+### `p521`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
+  ([crates.io](https://crates.io/crates/p521))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** the P-521 curve: ES512 (RFC 7518 §3.4) and the on-curve and scalar-range checks of
+  `crv` `P-521` JWKs.
+- **Audit status:** no public independent audit found.
+
+### `k256`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
+  ([crates.io](https://crates.io/crates/k256))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** the secp256k1 curve: ES256K (RFC 8812 §3.2) and the on-curve and scalar-range checks
+  of `crv` `secp256k1` JWKs.
+- **Audit status:** audited by NCC Group in 2023 (for Entropy): two high-severity findings, both
+  fixed. polyjose pins 0.14.0, which postdates the audit.
+
+### `ecdsa`
+
+- **Upstream:** RustCrypto, [RustCrypto/signatures](https://github.com/RustCrypto/signatures)
+  ([crates.io](https://crates.io/crates/ecdsa))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. The ECDSA algorithm (FIPS 186-5) behind the `SigningKey`,
+  `VerifyingKey` and `Signature` types the four curve crates re-export.
+- **Audit status:** not in the ADR 0019 register; a dependency of `p256`, `p384`, `p521` and `k256`.
+
+### `rfc6979`
+
+- **Upstream:** RustCrypto, [RustCrypto/signatures](https://github.com/RustCrypto/signatures)
+  ([crates.io](https://crates.io/crates/rfc6979))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. `ecdsa` derives its nonces with it (RFC 6979), hedged with fresh
+  randomness from the OS (RFC 6979 §3.6).
+- **Audit status:** not in the ADR 0019 register; a dependency of `ecdsa`.
+
+### `elliptic-curve`
+
+- **Upstream:** RustCrypto, [RustCrypto/traits](https://github.com/RustCrypto/traits)
+  ([crates.io](https://crates.io/crates/elliptic-curve))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. The traits and types the curve crates share: points, scalars,
+  public and secret keys and their validation.
+- **Audit status:** not in the ADR 0019 register; a dependency of the four curve crates and `ecdsa`.
+
+### `primeorder`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
+  ([crates.io](https://crates.io/crates/primeorder))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. Complete addition formulas for the prime-order short Weierstrass
+  curves.
+- **Audit status:** not in the ADR 0019 register; a dependency of the four curve crates.
+
+### `primefield`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
+  ([crates.io](https://crates.io/crates/primefield))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. The prime-field arithmetic of the curve crates.
+- **Audit status:** not in the ADR 0019 register; a dependency of `p256`, `p384`, `p521`,
+  `primeorder` and `wnaf`.
+
+### `ff`
+
+- **Upstream:** zkcrypto, [zkcrypto/ff](https://github.com/zkcrypto/ff)
+  ([crates.io](https://crates.io/crates/ff))
+- **License:** MIT/Apache-2.0
+- **Used for:** not used directly. The finite-field traits behind the curve crates' field and scalar
+  types.
+- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`, `group`,
+  `primefield` and `wnaf`.
+
+### `group`
+
+- **Upstream:** zkcrypto, [zkcrypto/group](https://github.com/zkcrypto/group)
+  ([crates.io](https://crates.io/crates/group))
+- **License:** MIT/Apache-2.0
+- **Used for:** not used directly. The elliptic-curve group traits behind the curve crates' point
+  types.
+- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve` and `wnaf`.
+
+### `wnaf`
+
+- **Upstream:** RustCrypto,
+  [RustCrypto/elliptic-curves](https://github.com/RustCrypto/elliptic-curves)
+  ([crates.io](https://crates.io/crates/wnaf))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. Windowed non-adjacent-form scalar multiplication for `k256` and
+  `primeorder`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `k256` and `primeorder`.
+
+### `crypto-bigint`
+
+- **Upstream:** RustCrypto, [RustCrypto/crypto-bigint](https://github.com/RustCrypto/crypto-bigint)
+  ([crates.io](https://crates.io/crates/crypto-bigint))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. Constant-time big-integer arithmetic under the curve crates'
+  fields and scalars (and under `rsa`).
+- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`, `primefield` and
+  `rfc6979`.
+
+### `cpubits`
+
+- **Upstream:** RustCrypto, [RustCrypto/utils](https://github.com/RustCrypto/utils)
+  ([crates.io](https://crates.io/crates/cpubits))
+- **License:** MIT OR Apache-2.0
+- **Used for:** not used directly. Selects the 32- or 64-bit limb size of `crypto-bigint` and `k256`
+  for the target at compile time.
+- **Audit status:** not in the ADR 0019 register; a dependency of `crypto-bigint` and `k256`.
+
+### `num-traits`
+
+- **Upstream:** rust-num, [rust-num/num-traits](https://github.com/rust-num/num-traits)
+  ([crates.io](https://crates.io/crates/num-traits))
+- **License:** MIT OR Apache-2.0
+- **Used for:** not used directly. Generic numeric traits that `crypto-bigint` implements.
+- **Audit status:** not in the ADR 0019 register; a dependency of `crypto-bigint`.
+
+### `sec1`
+
+- **Upstream:** RustCrypto, [RustCrypto/formats](https://github.com/RustCrypto/formats)
+  ([crates.io](https://crates.io/crates/sec1))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. The SEC1 point encoding that the curve crates build public keys
+  from (`x` and `y` of an `EC` JWK become an uncompressed SEC1 point).
+- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`.
+
+### `der`
+
+- **Upstream:** RustCrypto, [RustCrypto/formats](https://github.com/RustCrypto/formats)
+  ([crates.io](https://crates.io/crates/der))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. ASN.1 DER types of `ecdsa` and `sec1`; polyjose writes JWS
+  signatures as fixed-length R‖S (RFC 7518 §3.4), never DER.
+- **Audit status:** not in the ADR 0019 register; a dependency of `ecdsa` and `sec1`.
+
+### `base16ct`
+
+- **Upstream:** RustCrypto, [RustCrypto/formats](https://github.com/RustCrypto/formats)
+  ([crates.io](https://crates.io/crates/base16ct))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. Constant-time hex encoding inside `elliptic-curve`, `sec1` and
+  `p521`.
+- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`, `sec1` and
+  `p521`.
+
+### `signature`
+
+- **Upstream:** RustCrypto, [RustCrypto/traits](https://github.com/RustCrypto/traits)
+  ([crates.io](https://crates.io/crates/signature))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** the RustCrypto `Signer`, `Verifier` and `RandomizedSigner` traits that ECDSA and
+  EdDSA signing and verification go through (re-exported by the curve crates).
+- **Audit status:** not in the ADR 0019 register; a dependency of `ecdsa` and `ed25519`.
+
+### `rand_core`
+
+- **Upstream:** rust-random, [rust-random/rand_core](https://github.com/rust-random/rand_core)
+  ([crates.io](https://crates.io/crates/rand_core))
+- **License:** MIT OR Apache-2.0
+- **Used for:** the `TryRng`/`TryCryptoRng` traits that hand the OS random source (`getrandom`) to
+  hedged ECDSA signing (ADR 0005), reached through the primitives' re-export.
+- **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve`, `crypto-bigint`,
+  `signature` and others.
+
+## EdDSA
+
+### `ed25519-dalek`
+
+- **Upstream:** dalek-cryptography,
+  [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
+  ([crates.io](https://crates.io/crates/ed25519-dalek))
+- **License:** BSD-3-Clause
+- **Used for:** EdDSA over Ed25519 (RFC 8032, RFC 8037 §3.1) and the decoding and small-order checks
+  of `crv` `Ed25519` JWKs (ADR 0041 §4). Its `zeroize` feature wipes the signing key on drop.
+- **Audit status:** audited by Quarkslab in 2019 (for Tari), together with `curve25519-dalek`: minor
+  issues only, but `ed25519-dalek` was reviewed only marginally. RUSTSEC-2022-0093 (double public
+  key oracle, fixed in 2.0) and a scalar timing fix came later; polyjose pins 3.0.0.
+
+### `ed25519`
+
+- **Upstream:** RustCrypto, [RustCrypto/signatures](https://github.com/RustCrypto/signatures)
+  ([crates.io](https://crates.io/crates/ed25519))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** not used directly. The Ed25519 signature type that `ed25519-dalek` uses.
+- **Audit status:** not in the ADR 0019 register; a dependency of `ed25519-dalek`.
+
+### `curve25519-dalek`
+
+- **Upstream:** dalek-cryptography,
+  [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
+  ([crates.io](https://crates.io/crates/curve25519-dalek))
+- **License:** BSD-3-Clause
+- **Used for:** not used directly. The Curve25519 group and field arithmetic under `ed25519-dalek`.
+  Its build script picks the arithmetic backend from the target and the compiler version, and on
+  x86_64 it generates its SIMD backends with `curve25519-dalek-derive`.
+- **Audit status:** audited by Quarkslab in 2019 (for Tari): minor issues only. polyjose pins 5.0.0,
+  which postdates the audit.
+
+### `fiat-crypto`
+
+- **Upstream:** mit-plv, [mit-plv/fiat-crypto](https://github.com/mit-plv/fiat-crypto)
+  ([crates.io](https://crates.io/crates/fiat-crypto))
+- **License:** MIT OR Apache-2.0 OR BSD-1-Clause
+- **Used for:** not used by default. Formally verified field arithmetic, compiled only when the
+  builder selects the `fiat` backend of `curve25519-dalek` or `p384` with a `--cfg` (ADR 0025).
+- **Audit status:** not in the ADR 0019 register; an optional dependency of `curve25519-dalek` and
+  `p384`.
+
+## Build time only
+
+These crates run on the builder's machine while polyjose compiles and link nothing into it. Each
+may be reached only through one parent crate, which `scripts/check-deps.sh` checks (ADR 0025,
+ADR 0042).
+
+### `curve25519-dalek-derive`
+
+- **Upstream:** dalek-cryptography,
+  [dalek-cryptography/curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek)
+  ([crates.io](https://crates.io/crates/curve25519-dalek-derive))
+- **License:** MIT/Apache-2.0
+- **Used for:** compile time only, on x86_64 targets: the procedural macro that generates
+  `curve25519-dalek`'s AVX2 and AVX-512 backends. It links nothing into polyjose.
+  `scripts/check-deps.sh` fails if it is reached other than through `curve25519-dalek` (ADR 0025).
+- **Audit status:** not in the ADR 0019 register; a proc-macro dependency of `curve25519-dalek`.
+
+### `syn`
+
+- **Upstream:** [dtolnay/syn](https://github.com/dtolnay/syn)
+  ([crates.io](https://crates.io/crates/syn))
+- **License:** MIT OR Apache-2.0
+- **Used for:** compile time only: the Rust parser of `curve25519-dalek-derive`. Allowed only below
+  that crate (ADR 0025).
+- **Audit status:** not in the ADR 0019 register; a dependency of `curve25519-dalek-derive`.
+
+### `quote`
+
+- **Upstream:** [dtolnay/quote](https://github.com/dtolnay/quote)
+  ([crates.io](https://crates.io/crates/quote))
+- **License:** MIT OR Apache-2.0
+- **Used for:** compile time only: code generation in `curve25519-dalek-derive`. Allowed only below
+  that crate (ADR 0025).
+- **Audit status:** not in the ADR 0019 register; a dependency of `curve25519-dalek-derive` and
+  `syn`.
+
+### `proc-macro2`
+
+- **Upstream:** [dtolnay/proc-macro2](https://github.com/dtolnay/proc-macro2)
+  ([crates.io](https://crates.io/crates/proc-macro2))
+- **License:** MIT OR Apache-2.0
+- **Used for:** compile time only: the token types of `curve25519-dalek-derive`, `syn` and `quote`.
+  Allowed only below `curve25519-dalek-derive` (ADR 0025).
+- **Audit status:** not in the ADR 0019 register; a dependency of `curve25519-dalek-derive`, `syn`
+  and `quote`.
+
+### `unicode-ident`
+
+- **Upstream:** [dtolnay/unicode-ident](https://github.com/dtolnay/unicode-ident)
+  ([crates.io](https://crates.io/crates/unicode-ident))
+- **License:** (MIT OR Apache-2.0) AND Unicode-3.0
+- **Used for:** compile time only: identifier classification for `proc-macro2` and `syn`. Allowed
+  only below `curve25519-dalek-derive` (ADR 0025).
+- **Audit status:** not in the ADR 0019 register; a dependency of `proc-macro2` and `syn`.
+
+### `rustc_version`
+
+- **Upstream:** [djc/rustc-version-rs](https://github.com/djc/rustc-version-rs)
+  ([crates.io](https://crates.io/crates/rustc_version))
+- **License:** MIT OR Apache-2.0
+- **Used for:** build time only: `curve25519-dalek`'s build script reads the compiler version with
+  it. Allowed only below `curve25519-dalek` (ADR 0042).
+- **Audit status:** not in the ADR 0019 register; a build-dependency of `curve25519-dalek`.
+
+### `semver`
+
+- **Upstream:** [dtolnay/semver](https://github.com/dtolnay/semver)
+  ([crates.io](https://crates.io/crates/semver))
+- **License:** MIT OR Apache-2.0
+- **Used for:** build time only: version parsing for `rustc_version`. Allowed only below
+  `curve25519-dalek` (ADR 0042).
+- **Audit status:** not in the ADR 0019 register; a dependency of `rustc_version`.
+
+### `autocfg`
+
+- **Upstream:** [cuviper/autocfg](https://github.com/cuviper/autocfg)
+  ([crates.io](https://crates.io/crates/autocfg))
+- **License:** Apache-2.0 OR MIT
+- **Used for:** build time only: `num-traits`' build script probes compiler features with it.
+  Allowed only below `num-traits` (ADR 0042).
+- **Audit status:** not in the ADR 0019 register; a build-dependency of `num-traits`.
 
 ## Randomness
 
@@ -98,9 +456,10 @@ part of the core crate and are not listed here.
 - **Upstream:** The Rust Project, [rust-lang/cfg-if](https://github.com/rust-lang/cfg-if)
   ([crates.io](https://crates.io/crates/cfg-if))
 - **License:** MIT OR Apache-2.0
-- **Used for:** not used directly. `getrandom` and `sha2` use it to select per-platform code at
-  compile time.
-- **Audit status:** not in the ADR 0019 register; a dependency of `getrandom` and `sha2`.
+- **Used for:** not used directly. `getrandom`, `sha2` and `curve25519-dalek` use it to select
+  per-platform code at compile time.
+- **Audit status:** not in the ADR 0019 register; a dependency of `getrandom`, `sha2` and
+  `curve25519-dalek`.
 
 ### `libc`
 
@@ -125,11 +484,13 @@ part of the core crate and are not listed here.
 
 ### `subtle`
 
-- **Upstream:** dalek-cryptography, [dalek-cryptography/subtle](https://github.com/dalek-cryptography/subtle)
+- **Upstream:** dalek-cryptography,
+  [dalek-cryptography/subtle](https://github.com/dalek-cryptography/subtle)
   ([crates.io](https://crates.io/crates/subtle))
 - **License:** BSD-3-Clause
 - **Used for:** constant-time choices and comparisons (`Choice`, `ConstantTimeEq`), for example in
-  polyjose's base64url decoder, which handles secret input.
+  polyjose's base64url decoder, which handles secret input. The curve crates, `crypto-bigint` and
+  the dalek crates use it for their own constant-time code.
 - **Audit status:** not in the ADR 0019 register.
 
 ### `zeroize`
@@ -138,6 +499,7 @@ part of the core crate and are not listed here.
   ([crates.io](https://crates.io/crates/zeroize))
 - **License:** Apache-2.0 OR MIT
 - **Used for:** wiping key material and other secrets from memory when they are dropped
-  (`Zeroize`, `Zeroizing`). `sha2` (through `digest`'s re-export), `digest` and `block-buffer` also
-  use it to wipe the hash state and buffered input.
+  (`Zeroize`, `Zeroizing`). `digest` and its `block-buffer` (under `sha2` and `hmac`) also use it
+  to wipe the hash state and buffered input, and the curve crates, `crypto-bigint` and the dalek
+  crates to wipe secret scalars and signing keys.
 - **Audit status:** not in the ADR 0019 register.

@@ -43,6 +43,21 @@ getrandom = { version = "0.4.3", default-features = false }
 # (`alloc`, `oid`) off (ADR 0016): polyjose needs only the `Digest` API. `zeroize` wipes the hash
 # state on drop, since an `oct` thumbprint hashes the secret `k` (RFC 7638 §7).
 sha2 = { version = "=0.11.1", default-features = false, features = ["zeroize"] }
-# Crypto: pure-Rust crates only (enforced by deny.toml) — added per algorithm as each feature lands:
-# hmac 0.13, p256/p384/p521/k256 0.14, ed25519-dalek 3, x25519-dalek 3,
-# aes-gcm 0.11, aes-kw 0.3, cbc 0.2, pbkdf2 0.13, rsa 0.10 rc (public-key operations only, ADR 0021).
+# JWS primitives (feature 0002, ADR 0002). Every crypto crate is pinned exactly (ADR 0019 §4) and
+# turns default features off (ADR 0016 §3); the ones enabled are what polyjose calls. Their own
+# re-exports (`p256::elliptic_curve::rand_core`, `signature`, `ecdsa`) are used instead of direct
+# dependencies on those crates.
+# HMAC (RFC 2104) for HS256/384/512 (RFC 7518 §3.2). `zeroize` wipes the keyed state on drop.
+hmac = { version = "=0.13.0", default-features = false, features = ["zeroize"] }
+# ECDSA (RFC 7518 §3.4, RFC 8812 §3.2) and on-curve checks at JWK import (ADR 0041 §4). `ecdsa`
+# is the curve arithmetic, the ECDSA algorithm and the matching SHA-2 hash; nothing else (no `std`,
+# `pem`, `pkcs8`, `serde` or `precomputed-tables`).
+p256 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
+p384 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
+p521 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
+k256 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
+# EdDSA over Ed25519 (RFC 8037 §3.1). `zeroize` wipes the signing key on drop; `fast` (precomputed
+# tables) stays off. Its curve25519-dalek brings the guarded build-time groups of ADR 0025/0042.
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["zeroize"] }
+# Still to come with their features: x25519-dalek 3, aes-gcm 0.11, aes-kw 0.3, cbc 0.2,
+# pbkdf2 0.13 (feature 0003).
