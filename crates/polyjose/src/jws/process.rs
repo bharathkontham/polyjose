@@ -806,7 +806,7 @@ mod tests {
             keys::oct(32, ""),
             keys::oct(64, ""),
             keys::p256(""),
-            keys::rsa(2048),
+            keys::ed25519(""),
             keys::oct(32, r#","alg":"HS512""#),
         ];
         let allowed = [A::HS256, A::HS512, A::ES256, A::RS256];
@@ -840,7 +840,7 @@ mod tests {
         );
         // A valid signature never rescues a key that fails binding.
         assert_eq!(
-            check(&FAKE, &A::HS256, &keys::rsa(2048), &sig),
+            check(&FAKE, &A::HS256, &keys::p256(""), &sig),
             Err(Error::KeyAlgorithmMismatch)
         );
         assert_eq!(
