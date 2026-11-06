@@ -12,6 +12,7 @@ use core::fmt;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::random::RandomSource;
+use super::{enc_cbc_hmac, enc_gcm};
 use crate::jwa::ContentEncAlg;
 use crate::util::b64url_encode;
 use crate::{Error, Result};
@@ -152,40 +153,61 @@ pub(crate) fn aad(encoded_protected: &str, jwe_aad: Option<&[u8]>) -> Vec<u8> {
 
 /// Encrypts `plaintext` under `cek` and `iv` with `aad` (RFC 7516 §5.1
 /// step 15) and returns `(ciphertext, tag)`, dispatching on `enc` to
-/// AES-GCM (RFC 7518 §5.3) or AES_CBC_HMAC_SHA2 (RFC 7518 §5.2). Filled in
-/// by T02 (dispatch and GCM) and T03 (CBC-HMAC).
+/// AES-GCM (RFC 7518 §5.3, `enc_gcm`) or AES_CBC_HMAC_SHA2 (RFC 7518 §5.2,
+/// `enc_cbc_hmac`).
 ///
 /// # Errors
 ///
-/// [`Error::UnsupportedAlgorithm`] for an unknown `enc`; an error if the
-/// CEK or IV length is wrong for `enc`.
+/// [`Error::UnsupportedAlgorithm`] for an unknown `enc` (RFC 7516 §4.1.2);
+/// otherwise the family's error for a CEK or IV of the wrong length
+/// ([`Error::InvalidKey`] for the CEK, [`Error::InvalidFormat`] for the IV
+/// on A*GCM).
 pub(crate) fn encrypt(
-    _enc: &ContentEncAlg,
-    _cek: &Cek,
-    _iv: &[u8],
-    _aad: &[u8],
-    _plaintext: &[u8],
+    enc: &ContentEncAlg,
+    cek: &Cek,
+    iv: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>)> {
-    Err(Error::UnsupportedAlgorithm)
+    match enc {
+        ContentEncAlg::A128GCM | ContentEncAlg::A192GCM | ContentEncAlg::A256GCM => {
+            enc_gcm::encrypt(enc, cek.as_bytes(), iv, aad, plaintext)
+        }
+        ContentEncAlg::A128CbcHs256 | ContentEncAlg::A192CbcHs384 | ContentEncAlg::A256CbcHs512 => {
+            enc_cbc_hmac::encrypt(enc, cek.as_bytes(), iv, aad, plaintext)
+        }
+        ContentEncAlg::Unknown(_) => Err(Error::UnsupportedAlgorithm),
+    }
 }
 
 /// Verifies `tag` and decrypts `ciphertext` (RFC 7516 §5.2 step 16): no
 /// plaintext is returned, or left in a returned buffer, unless the tag is
-/// correct. Dispatches like [`encrypt`]. Filled in by T02 and T03.
+/// correct ("reject the input without emitting any decrypted output").
+/// Dispatches like [`encrypt`].
 ///
 /// # Errors
 ///
-/// [`Error::DecryptionFailed`] for every failure once `enc` is known:
-/// tag, ciphertext, IV, AAD, padding, or CEK length (RFC 7516 §11.4).
+/// [`Error::UnsupportedAlgorithm`] for an unknown `enc` (RFC 7516 §4.1.2;
+/// the pipeline rejects it before key management). Once `enc` is known,
+/// [`Error::DecryptionFailed`] for every failure, with no detail: tag,
+/// ciphertext, IV, AAD, padding, or CEK length (RFC 7516 §11.4, §11.5).
 pub(crate) fn decrypt(
-    _enc: &ContentEncAlg,
-    _cek: &Cek,
-    _iv: &[u8],
-    _aad: &[u8],
-    _ciphertext: &[u8],
-    _tag: &[u8],
+    enc: &ContentEncAlg,
+    cek: &Cek,
+    iv: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
-    Err(Error::UnsupportedAlgorithm)
+    match enc {
+        ContentEncAlg::A128GCM | ContentEncAlg::A192GCM | ContentEncAlg::A256GCM => {
+            enc_gcm::decrypt(enc, cek.as_bytes(), iv, aad, ciphertext, tag)
+        }
+        ContentEncAlg::A128CbcHs256 | ContentEncAlg::A192CbcHs384 | ContentEncAlg::A256CbcHs512 => {
+            enc_cbc_hmac::decrypt(enc, cek.as_bytes(), iv, aad, ciphertext, tag)
+        }
+        ContentEncAlg::Unknown(_) => Err(Error::UnsupportedAlgorithm),
+    }
 }
 
 #[cfg(test)]
@@ -379,5 +401,102 @@ mod tests {
             aad("", Some(b"[\"vcard\"]")),
             format!(".{}", b64url_encode(b"[\"vcard\"]")).as_bytes()
         );
+    }
+
+    const GCM: [ContentEncAlg; 3] = [
+        ContentEncAlg::A128GCM,
+        ContentEncAlg::A192GCM,
+        ContentEncAlg::A256GCM,
+    ];
+    const CBC: [ContentEncAlg; 3] = [
+        ContentEncAlg::A128CbcHs256,
+        ContentEncAlg::A192CbcHs384,
+        ContentEncAlg::A256CbcHs512,
+    ];
+
+    #[test]
+    fn gcm_dispatches_to_enc_gcm() {
+        // RFC 7518 §5.3: the dispatcher hands the CEK bytes through
+        // unchanged, so its output is exactly enc_gcm's.
+        for enc in &GCM {
+            let cek = Cek::from_slice(&vec![0x42; cek_len(enc).unwrap()]);
+            let iv = [9u8; 12];
+            let sealed = encrypt(enc, &cek, &iv, b"aad", b"msg").unwrap();
+            assert_eq!(
+                sealed,
+                enc_gcm::encrypt(enc, cek.as_bytes(), &iv, b"aad", b"msg").unwrap()
+            );
+            let (ct, tag) = sealed;
+            let opened = decrypt(enc, &cek, &iv, b"aad", &ct, &tag).unwrap();
+            assert_eq!(opened.as_slice(), b"msg", "{enc}");
+        }
+    }
+
+    #[test]
+    fn cbc_dispatches_to_enc_cbc_hmac() {
+        // RFC 7518 §5.2 is enc_cbc_hmac's (T03): whatever it answers, the
+        // dispatcher answers the same, in both directions.
+        for enc in &CBC {
+            let cek = Cek::from_slice(&vec![0x42; cek_len(enc).unwrap()]);
+            let iv = [9u8; 16];
+            assert_eq!(
+                encrypt(enc, &cek, &iv, b"aad", b"msg"),
+                enc_cbc_hmac::encrypt(enc, cek.as_bytes(), &iv, b"aad", b"msg"),
+                "{enc}"
+            );
+            assert_eq!(
+                decrypt(enc, &cek, &iv, b"aad", b"msg", &[0; 16]),
+                enc_cbc_hmac::decrypt(enc, cek.as_bytes(), &iv, b"aad", b"msg", &[0; 16]),
+                "{enc}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_enc_is_unsupported_in_both_directions() {
+        // RFC 7516 §4.1.2: an `enc` the implementation does not support
+        // is rejected; it never reaches a cipher.
+        let unknown = ContentEncAlg::from("A128CTR");
+        let cek = Cek::from_slice(&[0; 16]);
+        assert_eq!(
+            encrypt(&unknown, &cek, &[0; 12], b"", b"msg"),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        assert_eq!(
+            decrypt(&unknown, &cek, &[0; 12], b"", b"msg", &[0; 16]),
+            Err(Error::UnsupportedAlgorithm)
+        );
+    }
+
+    #[test]
+    fn every_gcm_decrypt_failure_is_the_same_unit_error() {
+        // RFC 7516 §11.4/§11.5: bad tag, ciphertext, IV, AAD or CEK length
+        // all give DecryptionFailed, which carries no data, so no
+        // plaintext byte can be returned with it.
+        for enc in &GCM {
+            let n = cek_len(enc).unwrap();
+            let cek = Cek::from_slice(&vec![0x42; n]);
+            let iv = [9u8; 12];
+            let (ct, tag) = encrypt(enc, &cek, &iv, b"aad", b"secret plaintext").unwrap();
+            let mut bad_tag = tag.clone();
+            bad_tag[0] ^= 1;
+            let mut bad_ct = ct.clone();
+            bad_ct[3] ^= 4;
+            let short_cek = Cek::from_slice(&vec![0x42; n - 1]);
+            let results = [
+                decrypt(enc, &cek, &iv, b"aad", &ct, &bad_tag),
+                decrypt(enc, &cek, &iv, b"aad", &bad_ct, &tag),
+                decrypt(enc, &cek, &[9; 16], b"aad", &ct, &tag),
+                decrypt(enc, &cek, &iv, b"aae", &ct, &tag),
+                decrypt(enc, &cek, &iv, b"aad", &ct, &tag[..12]),
+                decrypt(enc, &short_cek, &iv, b"aad", &ct, &tag),
+            ];
+            for result in results {
+                assert_eq!(result, Err(Error::DecryptionFailed), "{enc}");
+                let error = result.unwrap_err();
+                assert_eq!(format!("{error:?}"), "DecryptionFailed");
+                assert!(!error.to_string().contains("secret"));
+            }
+        }
     }
 }
