@@ -120,10 +120,6 @@ pub(crate) enum AlgId {
 ///
 /// The label only selects which structure to parse. The key type always comes
 /// from that structure's DER, never from the label (ADR 0018 §2).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the PEM codec in pem.rs")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Label {
     /// `PRIVATE KEY`: PKCS#8 OneAsymmetricKey (RFC 7468 §10, RFC 5958 §2).
@@ -147,10 +143,6 @@ pub(crate) enum Label {
     Other,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the PEM codec in pem.rs")
-)]
 impl Label {
     /// Each known label and its exact text. Labels are case-sensitive
     /// (RFC 7468 §2, erratum 4508).
