@@ -7,6 +7,20 @@
 //! INTEGERs (§8.3.2), primitive strings only (§10.2), minimal OID
 //! subidentifiers (§8.19.2), low-tag-number form only (§8.1.2.4) and no data
 //! after the outermost element (§8.1.1). BER is rejected (ADR 0018 §2).
+//!
+//! - [`Reader`] reads one element at a time from a borrowed buffer of at most
+//!   [`MAX_INPUT_LEN`] octets and returns sub-slices, so secret contents are
+//!   never copied. Constructed elements are entered by asking for a new
+//!   reader over their contents: the call stack never follows the input's
+//!   nesting.
+//! - [`check_well_formed`] validates values polyjose ignores (PKCS#8
+//!   attributes, unsupported algorithm parameters) with an explicit,
+//!   bounded stack.
+//! - [`Writer`] writes into a [`Zeroizing`] buffer sized exactly up front,
+//!   so it never reallocates and leaves no unzeroized copy behind.
+//!
+//! Every error is `InvalidKey` with a static detail; no input octet ever
+//! reaches an error.
 
 use zeroize::Zeroizing;
 
