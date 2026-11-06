@@ -274,8 +274,8 @@ neg("tampered-unprotected-alg-unsupported", "plan.md error contract, ADR 0022: t
 neg("tampered-unprotected-alg-key-mismatch", "RFC 7516 §5.2 step 7, RFC 7517 §4.4: the RFC 7520 §5.11 flattened JWE with its unprotected alg changed to A192KW, which the key's alg A128KW forbids: KeyAlgorithmMismatch",
     t511(alg="A192KW"), "KeyAlgorithmMismatch", key=c511.key, algs=["A128KW", "A192KW"], encs=["A128GCM"])
 bare = {"kty": "oct", "k": c511.key["k"]}
-neg("tampered-unprotected-alg-decryption-failed", "RFC 7518 §4.5, RFC 7516 §11.4: the RFC 7520 §5.11 flattened JWE with its unprotected alg changed to dir, for which the alg-less 16-octet key is a candidate under A128GCM: the non-empty encrypted key fails key management: DecryptionFailed",
-    t511(alg="dir"), "DecryptionFailed", key=bare, algs=["A128KW", "dir"], encs=["A128GCM"])
+neg("tampered-unprotected-alg-dir-invalid-header", "ADR 0050 §1, RFC 7518 §4.5, RFC 7516 §5.2 step 4: the RFC 7520 §5.11 flattened JWE with its unprotected alg changed to dir, with an alg-less 16-octet key allowed for dir under A128GCM: a direct mode needs alg and enc in the protected header, so InvalidHeader before any cryptography (was DecryptionFailed in key management before ADR 0050)",
+    t511(alg="dir"), "InvalidHeader", key=bare, algs=["A128KW", "dir"], encs=["A128GCM"])
 # A.4 selection
 neg("rfc7516-a4-rsa-key-only", "RFC 7516 App. A.4.7 with only the A.2 RSA public key: RSA1_5 is UnsupportedAlgorithm (ADRs 0021, 0022) and the A128KW recipient cannot use an RSA key (KeyAlgorithmMismatch), which ranks lower (plan.md recipient selection): UnsupportedAlgorithm",
     copy.deepcopy(A4), "UnsupportedAlgorithm", key=A2_RSA_PUBLIC, algs=["RSA1_5", "A128KW"], source="RFC 7516 App. A.4")

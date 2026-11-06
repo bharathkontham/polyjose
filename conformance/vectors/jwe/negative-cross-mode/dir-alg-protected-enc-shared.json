@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1, RFC 7516 §5.2 step 4, RFC 7518 §4.5: a flattened dir + A128GCM JWE with alg protected and enc only in the shared unprotected header, a valid ciphertext over its protected header (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)): a direct mode needs both alg and enc protected, so InvalidHeader",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJhbGciOiJkaXIifQ",
+      "unprotected": {
+        "enc": "A128GCM"
+      },
+      "iv": "_Xxhos9uwdTx40Q8",
+      "ciphertext": "ZvrMXSrlXjJmfAwZQzZ5fe8jb-0Grd5t7eS3W79rBpzBdig__v7z",
+      "tag": "Tza-3wqfjC9kg-Bt7vElDg"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

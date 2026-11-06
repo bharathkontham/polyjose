@@ -22,7 +22,8 @@
 //! encrypt, the family returns its header parameters (`epk`, `iv`, `tag`,
 //! `p2s`, `p2c`, `apu`, `apv`) in `KeyOutput::header_params`; this file
 //! places them, next to `alg`, in the protected header (compact,
-//! flattened) or in the recipient's header (general JSON). On decrypt the
+//! flattened, and the direct modes in every form, ADR 0050 §1) or in the
+//! recipient's header (general JSON). On decrypt the
 //! family receives the recipient's JOSE Header (the union) and reads its
 //! parameters there; any error it returns becomes `DecryptionFailed`.
 //!
@@ -163,17 +164,56 @@ fn jose_header(
     Ok(union)
 }
 
+/// For a direct mode, `dir` (RFC 7518 §4.5) or `ECDH-ES` Direct Key
+/// Agreement (RFC 7518 §4.6), requires `alg` **and** `enc` in the JWE
+/// Protected Header (ADR 0050 §1).
+///
+/// RFC 7516 §5.2 step 4 lets `alg` and `enc` sit in any of the three
+/// headers, but A*GCMKW wraps the CEK with AES-GCM under an **empty** AAD
+/// (RFC 7518 §4.7), and a JSON JWE with no protected header and no `aad`
+/// has the content AAD `""` too (RFC 7516 §5.1 step 14). A GCMKW
+/// recipient's (`iv`, `encrypted_key`, `tag`) would then decrypt as a
+/// `dir` ciphertext under an alg-less key, to the victim's CEK (security
+/// audit B1). With `alg` and `enc` protected, a direct message's content
+/// AAD is never empty, and the mode itself is integrity protected. Direct
+/// modes have exactly one recipient (RFC 7516 §5.1 steps 5–6), so no
+/// multi-recipient layout is lost; the non-direct modes are unaffected.
+///
+/// Runs in step 4, before any cryptographic operation, for compact and
+/// JSON alike (a compact header is always protected, RFC 7516 §7.1).
+///
+/// # Errors
+///
+/// [`Error::InvalidHeader`] if `union`'s `alg` is a direct mode and the
+/// protected header lacks `alg` or `enc`.
+fn check_direct_protected(union: &Header, protected: Option<&Header>) -> Result<()> {
+    let alg = KeyMgmtAlg::from(union.alg.as_deref().unwrap_or_default());
+    let direct = matches!(
+        keymgmt::mode(&alg),
+        Some(keymgmt::Mode::DirectEncryption | keymgmt::Mode::DirectAgreement)
+    );
+    let protected_alg_and_enc = protected.is_some_and(|p| p.alg.is_some() && p.enc.is_some());
+    if direct && !protected_alg_and_enc {
+        return Err(Error::InvalidHeader(
+            "dir and ECDH-ES need alg and enc in the protected header",
+        ));
+    }
+    Ok(())
+}
+
 /// The JOSE Header of every recipient, after RFC 7516 §5.2 steps 4–5:
 /// structure ([`jose_header`]), `alg` and `enc` present (§4.1.1–§4.1.2),
-/// one `enc` for the one ciphertext, and every `crit` name understood.
+/// for a direct mode both protected ([`check_direct_protected`], ADR 0050
+/// §1), one `enc` for the one ciphertext, and every `crit` name understood.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidFormat`] for no recipients or more than
 /// `max_recipients` (ADR 0026 §7); [`Error::InvalidHeader`] as
-/// [`jose_header`], for a missing `alg` or `enc`, or recipients that
-/// disagree on `enc`; [`Error::UnknownCritical`] for a `crit` name not in
-/// the policy's `understood_crit` (§4.1.13).
+/// [`jose_header`], for a missing `alg` or `enc`, a direct mode whose
+/// `alg` or `enc` is unprotected, or recipients that disagree on `enc`;
+/// [`Error::UnknownCritical`] for a `crit` name not in the policy's
+/// `understood_crit` (§4.1.13).
 fn jose_headers(parts: &JweParts, policy: &DecryptPolicy) -> Result<Vec<Header>> {
     if parts.recipients.is_empty() {
         return Err(Error::InvalidFormat("JWE has no recipients"));
@@ -194,6 +234,7 @@ fn jose_headers(parts: &JweParts, policy: &DecryptPolicy) -> Result<Vec<Header>>
         if union.enc.is_none() {
             return Err(Error::InvalidHeader("missing enc"));
         }
+        check_direct_protected(&union, parts.protected.as_ref())?;
         unions.push(union);
     }
     if unions.iter().any(|u| u.enc != unions[0].enc) {
@@ -462,7 +503,9 @@ fn check_reproducible(given: &str, built: &Header) -> Result<()> {
 /// `enc` (and `zip`) always go in the protected header. For compact and
 /// flattened output each recipient's `alg` and key management parameters
 /// do too; for general JSON they go in the recipient's header (as RFC 7520
-/// §5.13).
+/// §5.13), except for the direct modes, `dir` and ECDH-ES, whose one
+/// recipient's `alg` and parameters are protected in every form (ADR 0050
+/// §1), leaving its `recipients` entry without them.
 ///
 /// `protected_b64` is the `insecure-test-vectors` hook
 /// ([`check_reproducible`]).
@@ -570,7 +613,10 @@ pub(crate) fn encrypt(
             // A family broke the `KeyOutput` contract: fail closed.
             _ => return Err(Error::UnsupportedAlgorithm),
         }
-        let header = if general {
+        // A direct mode's `alg` and parameters are protected in every form
+        // (ADR 0050 §1): it has the only recipient, so the general form
+        // loses nothing, and decrypt requires it (`check_direct_protected`).
+        let header = if general && mode.has_random_cek() {
             let base = recipient.header.clone().unwrap_or_default();
             Some(with_key_params(
                 &base,
@@ -809,6 +855,57 @@ mod tests {
             "InvalidFormat"
         );
         assert_eq!(code(decrypt(base, &key, &p)), "ok");
+    }
+
+    #[test]
+    fn direct_modes_need_a_protected_alg_and_enc_in_step_4() {
+        // ADR 0050 §1: dir and ECDH-ES with `alg` or `enc` outside the
+        // protected header are InvalidHeader in step 4, so before step 5
+        // (crit), the support check, the allow-list and the key binding.
+        let key = oct(&[1; 16], "");
+        let mut parts = general(&[&key]);
+        set_alg(&mut parts, 0, "dir");
+        parts.recipients[0].encrypted_key.clear();
+        let not_allowed = policy(&[A::A128KW]);
+        let unbound = oct(&[1; 16], r#","alg":"A128KW""#);
+        assert_eq!(
+            code(decrypt(parts.clone(), &key, &not_allowed)),
+            "InvalidHeader"
+        );
+        assert_eq!(
+            code(decrypt(parts.clone(), &unbound, &policy(&[A::Dir]))),
+            "InvalidHeader"
+        );
+        let mut crit = parts.clone();
+        reprotect(&mut crit, r#"{"enc":"A128GCM","crit":["x-a"],"x-a":1}"#);
+        assert_eq!(
+            code(decrypt(crit, &key, &policy(&[A::Dir]))),
+            "InvalidHeader"
+        );
+        let mut unsupported_enc = parts.clone();
+        reprotect(&mut unsupported_enc, r#"{"enc":"A128CTR"}"#);
+        assert_eq!(
+            code(decrypt(unsupported_enc, &key, &policy(&[A::Dir]))),
+            "InvalidHeader"
+        );
+        set_alg(&mut parts, 0, "ECDH-ES");
+        assert_eq!(
+            code(decrypt(parts.clone(), &key, &policy(&[A::EcdhEs]))),
+            "InvalidHeader"
+        );
+
+        // `alg` protected but `enc` not: still refused.
+        let mut enc_unprotected = general(&[&key]);
+        rheader(&mut enc_unprotected, 0).alg = None;
+        rheader(&mut enc_unprotected, 0).enc = Some(ContentEncAlg::A128GCM);
+        reprotect(&mut enc_unprotected, r#"{"alg":"dir"}"#);
+        assert_eq!(
+            code(decrypt(enc_unprotected, &key, &policy(&[A::Dir]))),
+            "InvalidHeader"
+        );
+
+        // A non-direct alg may stay unprotected (RFC 7516 §7.2.1).
+        assert_eq!(code(decrypt(general(&[&key]), &key, &not_allowed)), "ok");
     }
 
     #[test]
@@ -1149,6 +1246,21 @@ mod tests {
             .as_ref()
             .unwrap_or_else(|| panic!("none"));
         assert_eq!(r.alg.as_deref(), Some("A128KW"));
+
+        // ADR 0050 §1: a direct mode is protected in the general form too;
+        // a caller's per-recipient header stays where it was put.
+        let d = Encryptor::new(ContentEncAlg::A128GCM)
+            .recipient(Recipient::new(A::Dir, &k).header(header(r#"{"kid":"r"}"#)));
+        let general =
+            encrypt(&d, b"x", general_form, &mut OsRandom, None).unwrap_or_else(|e| panic!("{e}"));
+        let p = general.protected.as_ref().unwrap_or_else(|| panic!("none"));
+        assert_eq!(p.alg.as_deref(), Some("dir"));
+        let r = general.recipients[0]
+            .header
+            .as_ref()
+            .unwrap_or_else(|| panic!("none"));
+        assert!(r.alg.is_none());
+        assert_eq!(r.kid.as_deref(), Some("r"));
     }
 
     #[test]

@@ -1,0 +1,25 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1 positive control, RFC 7518 §4.6: a compact ECDH-ES + A128GCM JWE on X25519 (alg, enc and epk protected) decrypts (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8))",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTEyOEdDTSIsImVwayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJYMjU1MTkiLCJ4IjoiQ1pheU1Kc3o5VWNNSnVzOElkOG1OVlYxM3J6ajF3MVZ5X2JnVWZEc25rMCJ9fQ..sDOKClqpzSuBtXsV.vRmKtjKGRtClJEfPdbpoM5BMPzMWy7jIzFTy7E_yi-aaB45C2FCt.4oZJ7PWhAaS3qOBXtjYAHg",
+    "key": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "l0E9j6QjtU09_vJ2RIPYyOaw--kS3J5tpGAVDgiTOmA",
+      "d": "Avc3N0zmTca-XBLPGQ5QYSjIDfyWf8tYKb9tqlsYvqk"
+    },
+    "allowed_algs": [
+      "ECDH-ES"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "Y3Jvc3MtbW9kZSBjb25mdXNpb24gbXVzdCBuZXZlciBkZWNyeXB0",
+    "recipient": 0
+  }
+}

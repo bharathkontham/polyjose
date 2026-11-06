@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1, RFC 7518 §4.5, §4.7.1: an A128GCMKW key wrap relabelled as a flattened dir JWE with alg and enc in the per-recipient header (RFC 7516 §7.2.2 \"header\"), alg-less key, [A128GCMKW, dir] allowed; the triple opens to the wrapped CEK under the empty AAD (Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)): InvalidHeader",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "header": {
+        "alg": "dir",
+        "enc": "A128GCM"
+      },
+      "iv": "8CUMmwcfQRnZ0PCC",
+      "ciphertext": "Pek7qLoq8oiNyIu8mYm0bw",
+      "tag": "CEG_tVssSPkhkz2Qx_4kOA"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

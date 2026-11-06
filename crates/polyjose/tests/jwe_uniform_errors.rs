@@ -171,6 +171,18 @@ fn edit_epk(mut doc: Value, f: impl FnOnce(&mut Map<String, Value>)) -> Value {
     doc
 }
 
+/// A compact `token` with the `epk` of its protected header replaced by
+/// `f` of it: where a direct ECDH-ES `epk` is (ADR 0050 §1).
+fn edit_protected_epk(token: &str, f: impl FnOnce(&mut Map<String, Value>)) -> String {
+    edit_protected(token, |header| {
+        let epk = header
+            .get_mut("epk")
+            .and_then(Value::as_object_mut)
+            .unwrap_or_else(|| panic!("no epk"));
+        f(epk);
+    })
+}
+
 /// `doc` with its first recipient taken from `donor` (same `alg` and key,
 /// another `enc`), so the key unwraps cleanly to a CEK of the donor's
 /// length (RFC 7516 §5.2 step 10 then rejects it).
@@ -481,15 +493,14 @@ fn ecdh_causes(cases: &mut Cases) {
         open_json(&ek, &p256),
     ));
 
-    let direct = general(
-        Encryptor::new(E::A128GCM),
-        Recipient::new(A::EcdhEs, &public(&p256)),
-        &p256,
-    );
+    // Direct ECDH-ES has `alg` and `epk` in the protected header (ADR 0050
+    // §1), so these edit a compact token: each changes the AAD too, but
+    // key agreement or the tag fails either way, after key management.
+    let direct = compact(E::A128GCM, Recipient::new(A::EcdhEs, &public(&p256)), &p256);
     cases.push((
         "ECDH-ES P-256 epk replaced by another valid point",
-        open_json(
-            &edit_epk(direct.clone(), |epk| {
+        open_compact(
+            &edit_protected_epk(&direct, |epk| {
                 *epk = epk_of(&ec(EcCurve::P256))
                     .as_object()
                     .cloned()
@@ -498,21 +509,16 @@ fn ecdh_causes(cases: &mut Cases) {
             &p256,
         ),
     ));
-    let mut nonempty = direct;
-    nonempty["recipients"][0]["encrypted_key"] = json!(b64url_encode(&[0; 16]));
+    let nonempty = edit_part(&direct, ENCRYPTED_KEY, |octets| *octets = vec![0; 16]);
     cases.push((
         "ECDH-ES (direct) with a non-empty encrypted key",
-        open_json(&nonempty, &p256),
+        open_compact(&nonempty, &p256),
     ));
 
     let okp = x25519();
-    let x = general(
-        Encryptor::new(E::A128GCM),
-        Recipient::new(A::EcdhEs, &public(&okp)),
-        &okp,
-    );
+    let x = compact(E::A128GCM, Recipient::new(A::EcdhEs, &public(&okp)), &okp);
     let replace = |epk: Value| {
-        edit_epk(x.clone(), move |m| {
+        edit_protected_epk(&x, move |m| {
             *m = epk.as_object().cloned().unwrap_or_default()
         })
     };
@@ -522,15 +528,15 @@ fn ecdh_causes(cases: &mut Cases) {
     one[0] = 1;
     cases.push((
         "ECDH-ES X25519 epk of low order (u = 1)",
-        open_json(&replace(x25519_epk(&one)), &okp),
+        open_compact(&replace(x25519_epk(&one)), &okp),
     ));
     cases.push((
         "ECDH-ES X25519 epk u = 0 (all-zero shared secret)",
-        open_json(&replace(x25519_epk(&[0; 32])), &okp),
+        open_compact(&replace(x25519_epk(&[0; 32])), &okp),
     ));
     cases.push((
         "ECDH-ES X25519 epk x of 31 octets",
-        open_json(&replace(x25519_epk(&[9; 31])), &okp),
+        open_compact(&replace(x25519_epk(&[9; 31])), &okp),
     ));
 }
 

@@ -1,0 +1,42 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1 positive control, RFC 7516 §7.2.2, RFC 7518 §4.6: a flattened ECDH-ES+A128KW + A128GCM JWE on P-256 with enc protected and alg and epk in the per-recipient header decrypts, [ECDH-ES+A128KW, ECDH-ES] allowed (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8))",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4R0NNIn0",
+      "header": {
+        "alg": "ECDH-ES+A128KW",
+        "epk": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "yb6NUne5QvMOS9BFsLXAPWrh3nSfAJjSgi0SarJBV_k",
+          "y": "PS98WrI-dc0n9bc-xWtaTjrOIYZaDbiPZBwVuL4hVZc"
+        }
+      },
+      "encrypted_key": "PzyeH67JrLXSsxM0vMaRMmC2qFLn6w9Y",
+      "iv": "9NNCCZ6gFNexEZcs",
+      "ciphertext": "lW9_XLBUq65q8VUajs2zHF36ycs2WsGzTEcSipwrWAAdGxZrRGKL",
+      "tag": "-wewAIAQ7BaeTx44XL_baw"
+    },
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "y7f2mVK84kO3zqFuPaCBtA3WUhkF_kVxoy_XEihK8FA",
+      "y": "-4WlU8v2oK3WvAiACn-ORltXvA0H3gDfSyC-eUdeo2s",
+      "d": "-_nytyiEI0OyVKkN9Iyyzaqcexr7wpXWDDj2a21zvFM"
+    },
+    "allowed_algs": [
+      "ECDH-ES+A128KW",
+      "ECDH-ES"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "Y3Jvc3MtbW9kZSBjb25mdXNpb24gbXVzdCBuZXZlciBkZWNyeXB0",
+    "recipient": 0
+  }
+}

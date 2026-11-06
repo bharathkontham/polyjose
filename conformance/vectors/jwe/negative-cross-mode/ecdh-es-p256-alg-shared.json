@@ -1,0 +1,39 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1, RFC 7518 §4.6 (Direct Key Agreement), RFC 8037 §3.2 where X25519: an ECDH-ES + A128GCM JWE on P-256 with enc protected and alg and epk only in the shared unprotected header, a valid ciphertext under the Concat KDF CEK (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)): InvalidHeader before the agreement runs",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4R0NNIn0",
+      "unprotected": {
+        "alg": "ECDH-ES",
+        "epk": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "IeQwN4R8Ia0KzQMdl2ECtPtqr4uZlLli6c1-a3HxQJ4",
+          "y": "9o6N0HCvnnEbmdRm16NlvJaRXAs7yxfsPl1kJBr4TBM"
+        }
+      },
+      "iv": "Hb842gFCnuL39bIE",
+      "ciphertext": "iTkAUwjKG8ia-eJCA_6MHbdYlN2CqzhcjdM65T_0zMbW07mFzmnU",
+      "tag": "oZb92a-LZdMZQHL7dRxiTg"
+    },
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "y7f2mVK84kO3zqFuPaCBtA3WUhkF_kVxoy_XEihK8FA",
+      "y": "-4WlU8v2oK3WvAiACn-ORltXvA0H3gDfSyC-eUdeo2s",
+      "d": "-_nytyiEI0OyVKkN9Iyyzaqcexr7wpXWDDj2a21zvFM"
+    },
+    "allowed_algs": [
+      "ECDH-ES"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

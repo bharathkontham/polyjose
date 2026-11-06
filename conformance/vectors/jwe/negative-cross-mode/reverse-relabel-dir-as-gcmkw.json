@@ -1,0 +1,34 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1, RFC 7518 §4.7.1, RFC 7516 §11.4: the reverse relabel: the dir-no-protected-header triple presented as an A128GCMKW key wrap (iv and tag in the shared header, its ciphertext as encrypted_key), with the same triple as content. GCMKW with an unprotected alg is not a direct mode, so the header rule does not apply; the key unwraps to the dir plaintext, under which the copied content does not open (checked with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)): the uniform DecryptionFailed, never a plaintext",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "unprotected": {
+        "alg": "A128GCMKW",
+        "enc": "A128GCM",
+        "iv": "cg4gak1ok5MkDhBf",
+        "tag": "Zkerl5MxxOenLBmWbJqhRw"
+      },
+      "encrypted_key": "kbXXRkfQJoVUOb99YK-Yww",
+      "iv": "cg4gak1ok5MkDhBf",
+      "ciphertext": "kbXXRkfQJoVUOb99YK-Yww",
+      "tag": "Zkerl5MxxOenLBmWbJqhRw"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}
