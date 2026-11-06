@@ -36,7 +36,7 @@ use zeroize::{Zeroize, Zeroizing};
 use super::jwk_build;
 use super::types::KeySpec;
 use crate::error::{Error, Result};
-use crate::jwk::{EcCurve, Jwk};
+use crate::jwk::{EcCurve, Jwk, OkpCurve};
 use crate::rng::CryptoRngAdapter;
 
 /// The shortest `oct` key [`generate`] accepts: 16 octets, the smallest
@@ -56,6 +56,9 @@ const OCT_MAX_BYTES: usize = 512;
 ///   and its public point; `x`, `y` and `d` are each the curve's full
 ///   coordinate length (RFC 7518 §6.2.1.2–§6.2.1.3, §6.2.2.1; RFC 8812
 ///   §3.1 for secp256k1).
+/// - [`KeySpec::Okp`]: 32 random octets as `d` and the derived public key
+///   `x` (RFC 8037 §2): Ed25519 per RFC 8032 §5.1.5, X25519 per RFC 7748
+///   §5 and §6.1.
 ///
 /// The returned JWK has no `alg` member; use [`generate_for`] to bind the
 /// key to one algorithm (RFC 8725 §3.1).
@@ -84,7 +87,7 @@ fn generate_with<R: TryCryptoRng + ?Sized>(spec: KeySpec, rng: &mut R) -> Result
     match spec {
         KeySpec::Oct { bytes } => generate_oct(bytes, rng),
         KeySpec::Ec(crv) => generate_ec(crv, rng),
-        KeySpec::Okp(_) => Err(Error::UnsupportedAlgorithm),
+        KeySpec::Okp(crv) => generate_okp(crv, rng),
     }
 }
 
@@ -136,6 +139,42 @@ where
     // NonZeroScalar does not wipe itself on drop; SecretKey does.
     scalar.zeroize();
     Ok(secret)
+}
+
+/// Generates a private OKP key on `crv` from `rng`, as a validated JWK with
+/// `crv`, `x` and `d` and no `alg` member (RFC 8037 §2).
+///
+/// The private key is 32 octets drawn from `rng` (Ed25519: RFC 8032 §5.1.5,
+/// "The private key is 32 octets (256 bits) of cryptographically secure
+/// random data"; X25519: RFC 7748 §5 and §6.1, 32 random bytes, clamped
+/// only when used). The public key `x` is derived by ed25519-dalek or
+/// x25519-dalek. Like [`generate_ec`], this is the crate-wide entry point,
+/// for X25519 ECDH-ES ephemeral keys too (RFC 8037 §3.1, RFC 7518 §4.6).
+///
+/// # Errors
+///
+/// [`Error::RandomnessUnavailable`] if `rng` fails; no key is returned.
+pub(crate) fn generate_okp<R: TryCryptoRng + ?Sized>(crv: OkpCurve, rng: &mut R) -> Result<Jwk> {
+    okp_key(crv, None, rng)
+}
+
+/// [`generate_okp`] with the optional `alg` member (RFC 7517 §4.4). The
+/// 32-octet seed lives only in a [`Zeroizing`] buffer, and the dalek key
+/// types built from it are wiped on drop (their `zeroize` feature).
+fn okp_key<R: TryCryptoRng + ?Sized>(crv: OkpCurve, alg: Option<&str>, rng: &mut R) -> Result<Jwk> {
+    let mut d = Zeroizing::new([0u8; 32]);
+    fill(rng, d.as_mut_slice())?;
+    let x = match crv {
+        // RFC 8032 §5.1.5 steps 1–4: A = [s]B from SHA-512(d).
+        OkpCurve::Ed25519 => ed25519_dalek::SigningKey::from_bytes(&d)
+            .verifying_key()
+            .to_bytes(),
+        // RFC 7748 §6.1: the public key is X25519(d, 9).
+        OkpCurve::X25519 => {
+            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*d)).to_bytes()
+        }
+    };
+    jwk_build::okp_jwk(crv, &x, Some(d.as_slice()), alg)
 }
 
 /// [`generate_ec`] with the optional `alg` member (RFC 7517 §4.4).
@@ -205,7 +244,7 @@ fn fill<R: TryCryptoRng + ?Sized>(rng: &mut R, dest: &mut [u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::Error;
-    use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial};
+    use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, OkpCurve, OkpKey};
     use crate::rng::CryptoRngAdapter;
     use crate::rng::insecure_test_vectors::FixedRng;
     use crate::util::b64url_encode;
@@ -258,6 +297,33 @@ mod tests {
 
     fn ec_d(jwk: &Jwk) -> Vec<u8> {
         ec_key(jwk).d().expect("a private EC key").to_vec()
+    }
+
+    const OKP_CURVES: [OkpCurve; 2] = [OkpCurve::Ed25519, OkpCurve::X25519];
+
+    /// RFC 8037 A.1 (Ed25519) and A.6 (X25519, the ephemeral key, which
+    /// is RFC 7748 §6.1's Alice), from `tests/data/keys/rfc` (T01).
+    fn published_okp_key(crv: OkpCurve) -> Jwk {
+        let json: &[u8] = match crv {
+            OkpCurve::Ed25519 => {
+                include_bytes!("../../tests/data/keys/rfc/rfc8037-a1-ed25519-pkcs8.jwk.json")
+            }
+            OkpCurve::X25519 => {
+                include_bytes!("../../tests/data/keys/rfc/rfc8037-a6-x25519-pkcs8.jwk.json")
+            }
+        };
+        Jwk::from_json(json).expect("the fixture is a valid private OKP JWK")
+    }
+
+    fn okp_key(jwk: &Jwk) -> &OkpKey {
+        let KeyMaterial::Okp(key) = jwk.material() else {
+            panic!("an OKP key")
+        };
+        key
+    }
+
+    fn okp_d(jwk: &Jwk) -> Vec<u8> {
+        okp_key(jwk).d().expect("a private OKP key").to_vec()
     }
 
     /// `generate_ec` over a `FixedRng` that holds exactly `bytes`.
@@ -466,5 +532,84 @@ mod tests {
         let debug = format!("{jwk:?}");
         assert!(debug.contains(r#"d: "<redacted>""#), "{debug}");
         assert!(!debug.contains(&b64url_encode(&ec_d(&jwk))));
+    }
+
+    #[test]
+    fn okp_keys_have_32_octet_members_and_validate_after_a_json_round_trip() {
+        // RFC 8032 §5.1.5 / RFC 7748 §5: 32-octet private keys; RFC 8037
+        // §2: x is the 32-octet public key.
+        for crv in OKP_CURVES {
+            let jwk = generate(KeySpec::Okp(crv)).unwrap();
+            let key = okp_key(&jwk);
+            assert_eq!(key.crv(), crv);
+            assert_eq!(key.x().len(), 32);
+            assert_eq!(okp_d(&jwk).len(), 32);
+            assert!(jwk.alg().is_none());
+
+            let reparsed = Jwk::from_json(jwk.to_json().as_bytes()).unwrap();
+            assert_eq!(okp_key(&reparsed).crv(), crv);
+            assert_eq!(okp_key(&reparsed).x(), key.x());
+            assert_eq!(okp_d(&reparsed), okp_d(&jwk));
+            assert_eq!(*reparsed.to_json(), *jwk.to_json());
+
+            let public = jwk.to_public().expect("an OKP key has a public part");
+            assert!(public.is_public());
+            assert_eq!(okp_key(&public).d(), None);
+        }
+    }
+
+    #[test]
+    fn okp_derives_the_published_public_keys() {
+        // RFC 8037 A.1: Ed25519 d → x (RFC 8032 §5.1.5); RFC 8037 A.6 /
+        // RFC 7748 §6.1: X25519 d → x = X25519(d, 9) (RFC 7748 §6.1).
+        for crv in OKP_CURVES {
+            let published = published_okp_key(crv);
+            let mut fixed = FixedRng::new(okp_d(&published));
+            let jwk = generate_okp(crv, &mut CryptoRngAdapter::fixed(&mut fixed)).unwrap();
+            assert_eq!(fixed.remaining(), 0);
+            assert_eq!(*jwk.to_json(), *published.to_json(), "{crv:?}");
+        }
+    }
+
+    #[test]
+    fn a_generated_ed25519_key_signs_and_verifies() {
+        // Sanity check through ed25519-dalek (RFC 8032 §5.1.6, §5.1.7).
+        use ed25519_dalek::{Signer, Verifier};
+        let jwk = generate(KeySpec::Okp(OkpCurve::Ed25519)).unwrap();
+        let d: [u8; 32] = okp_d(&jwk).try_into().unwrap();
+        let x: [u8; 32] = okp_key(&jwk).x().try_into().unwrap();
+        let signature = ed25519_dalek::SigningKey::from_bytes(&d).sign(b"polyjose");
+        let verifying = ed25519_dalek::VerifyingKey::from_bytes(&x).unwrap();
+        assert!(verifying.verify(b"polyjose", &signature).is_ok());
+        assert!(verifying.verify(b"polyjosE", &signature).is_err());
+    }
+
+    #[test]
+    fn okp_fails_closed_on_rng_failure() {
+        for crv in OKP_CURVES {
+            assert_eq!(
+                generate_okp(
+                    crv,
+                    &mut CryptoRngAdapter::failing(getrandom::Error::UNSUPPORTED)
+                )
+                .unwrap_err(),
+                Error::RandomnessUnavailable
+            );
+            let mut fixed = FixedRng::new([0x5Au8; 31]);
+            assert_eq!(
+                generate_okp(crv, &mut CryptoRngAdapter::fixed(&mut fixed)).unwrap_err(),
+                Error::RandomnessUnavailable
+            );
+        }
+    }
+
+    #[test]
+    fn debug_of_a_generated_okp_key_redacts_d() {
+        for crv in OKP_CURVES {
+            let jwk = generate(KeySpec::Okp(crv)).unwrap();
+            let debug = format!("{jwk:?}");
+            assert!(debug.contains(r#"d: "<redacted>""#), "{debug}");
+            assert!(!debug.contains(&b64url_encode(&okp_d(&jwk))));
+        }
     }
 }

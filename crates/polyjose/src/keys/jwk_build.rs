@@ -80,13 +80,6 @@ pub(crate) fn ec_jwk(
 /// invalid Ed25519 public key, and
 /// [`Error::KeyAlgorithmMismatch`](crate::Error::KeyAlgorithmMismatch) for
 /// an `alg` this curve cannot serve; whatever [`Jwk::from_object`] returns.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by key generation (generate.rs) and the OKP mapper (okp.rs)"
-    )
-)]
 pub(crate) fn okp_jwk(crv: OkpCurve, x: &[u8], d: Option<&[u8]>, alg: Option<&str>) -> Result<Jwk> {
     let mut object = Object::new();
     object.insert("kty", "OKP");
