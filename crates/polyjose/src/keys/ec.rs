@@ -236,8 +236,8 @@ pub(crate) fn to_spki(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
 /// as a private JWK with `crv`, `x`, `y` and `d` (RFC 7518 §6.2) and no
 /// `alg`.
 ///
-/// - The structure is decoded by `sec1::decode` (version 1, EXPLICIT
-///   `[0]`/`[1]`, DER only).
+/// - The structure is decoded by `sec1::decode_standalone` (version 1,
+///   EXPLICIT `[0]`/`[1]`, DER only).
 /// - The `[0]` namedCurve is required: "Implementations that conform to
 ///   this document MUST always include the parameters field" (RFC 5915
 ///   §3).
@@ -248,12 +248,13 @@ pub(crate) fn to_spki(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
 /// # Errors
 ///
 /// - [`Error::UnsupportedAlgorithm`] for a namedCurve outside P-256,
-///   P-384, P-521 and secp256k1, or a specifiedCurve (RFC 5480 §2.1.1).
+///   P-384, P-521 and secp256k1, or a specifiedCurve (RFC 5480 §2.1.1),
+///   and for a PKCS#1 RSAPrivateKey given as SEC1 (ADR 0018 §3, ADR 0021).
 /// - [`Error::InvalidKey`] for malformed DER, a missing `[0]`, a wrong
 ///   version or length, d out of range, an invalid point, or a point that
 ///   is not d·G.
 pub(crate) fn from_sec1(der: &[u8]) -> Result<Jwk> {
-    let key = sec1::decode(der)?;
+    let key = sec1::decode_standalone(der)?;
     let crv = key.parameters.ok_or(Error::InvalidKey(
         "EC PRIVATE KEY has no namedCurve parameters",
     ))?;
