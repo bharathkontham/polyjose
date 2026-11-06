@@ -250,7 +250,11 @@ where
 /// - [`Error::InvalidKey`] (`"curve required"`) for `ECDH-ES` and
 ///   `ECDH-ES+A128KW`/`+A192KW`/`+A256KW`: they work on several curves, so
 ///   there is no default. Call [`generate`] with `KeySpec::Ec(crv)` or
-///   `KeySpec::Okp(OkpCurve::X25519)` instead.
+///   `KeySpec::Okp(OkpCurve::X25519)` instead. This is deliberate and part
+///   of the contract: ECDH-ES is supported (RFC 7518 §4.6), so it is not
+///   `UnsupportedAlgorithm`; the request lacks a curve, and polyjose never
+///   picks one for the caller. Bindings map it like every other
+///   `InvalidKey` and must not substitute a default curve.
 /// - [`Error::UnsupportedAlgorithm`] for the RSA algorithms (`RS*`, `PS*`,
 ///   `RSA-OAEP-256`, `RSA-OAEP`, `RSA1_5`: no RSA key generation,
 ///   ADR 0021), `PBES2-*` (passwords are not generated), `dir` (its key
