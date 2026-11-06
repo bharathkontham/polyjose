@@ -88,6 +88,12 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo test -p polyjose --all-features --locked
 
+      # The core and the WASM binding must build for the browser target. The wasm32 standard
+      # library comes from rust-toolchain.toml's target list.
+      - name: build (wasm32-unknown-unknown)
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm --locked
+
       # Enforces ADR 0002 (no OpenSSL, ring, aws-lc, boring or libsodium) and ADR 0003
       # (RUSTSEC-2023-0071 is never ignored). Dev-dependencies are part of the graph, and
       # --all-features also covers optional, off-by-default features.
