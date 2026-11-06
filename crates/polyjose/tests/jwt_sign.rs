@@ -331,6 +331,37 @@ fn forbidden_header_members_are_invalid_header() {
     assert!(matches!(err, Error::InvalidHeader(_)), "{err:?}");
 }
 
+/// RFC 7515 Appendix A.3.1's P-256 key without `d`: a public EC JWK.
+const P256_PUBLIC: &str = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}"#;
+
+/// RFC 8037 Appendix A.2's Ed25519 public key: a public OKP JWK.
+fn ed25519_public_json() -> String {
+    format!(
+        r#"{{"kty":"OKP","crv":"Ed25519","x":"{}"}}"#,
+        common::ED25519_X
+    )
+}
+
+/// The JSON value of `json`.
+fn value(json: &str) -> Value {
+    json::parse(json.as_bytes()).unwrap()
+}
+
+#[test]
+fn an_embedded_public_jwk_is_signed_into_the_header() {
+    // RFC 7515 §4.1.3: a public EC or OKP key is accepted as given.
+    for public in [P256_PUBLIC.to_owned(), ed25519_public_json()] {
+        let opts = IssueOptions::new(SigningAlg::ES256)
+            .header_param("jwk", value(&public))
+            .unwrap();
+        let token = jwt::sign(&rfc7519_claims(), &opts, &jwk(P256)).unwrap();
+        assert_eq!(
+            header_text(&token),
+            format!(r#"{{"alg":"ES256","typ":"JWT","jwk":{public}}}"#)
+        );
+    }
+}
+
 #[test]
 fn members_set_by_the_options_or_the_key_are_invalid_header() {
     // `alg` comes from `IssueOptions::new`, `typ` from its typ setters and
