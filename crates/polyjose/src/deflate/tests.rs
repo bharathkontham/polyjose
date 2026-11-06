@@ -642,8 +642,8 @@ fn output_cap_applies_to_literals_and_copies() {
 /// DEFLATE's ceiling (`inflate::max_expansion`), so 1 KiB of input can
 /// describe at most about 1 MiB; the 1 GiB bomb is therefore about 1 MiB of
 /// input, and its first 1 KiB is the 1 KiB input. Both must fail with the
-/// output-limit error, with the output buffer allocated once at `max_output`
-/// (within `max_output` + 32 KiB) and never reallocated.
+/// output-limit error, under the default 250,000-byte cap with the output
+/// buffer reserved once at the cap and never grown (ADR 0050 §4).
 #[test]
 fn decompression_bomb_stops_at_the_cap() {
     const GIB: usize = 1 << 30;
@@ -656,10 +656,26 @@ fn decompression_bomb_stops_at_the_cap() {
         let mut capacity = inflate::Capacity::default();
         let result = inflate::inflate_tracked(input, MAX, &mut capacity);
         assert_eq!(result, Err(Error::InvalidFormat(OUTPUT_LIMIT)));
-        // Both inputs can expand past the cap, so the allocation is the cap.
+        // Both inputs can expand past the cap, so the reservation is the cap.
         assert_eq!(capacity.initial, MAX, "input of {} bytes", input.len());
-        assert_eq!(capacity.last, capacity.initial, "buffer reallocated");
-        assert!(capacity.initial <= MAX + 32 * 1024);
+        assert_eq!(capacity.last, capacity.initial, "buffer grown");
+        assert_eq!(capacity.peak, capacity.initial, "two buffers live");
+        // The error fires as soon as the next 258-byte copy would not fit.
+        assert!(capacity.len <= MAX && capacity.len + 258 > MAX);
+    }
+}
+
+/// The growth invariants of ADR 0050 §4, for any run that grew: the buffer
+/// at rest is at most twice the output, a growth step (old and new buffer
+/// both live) at most three times the output, and neither passes the
+/// final capacity's own bound.
+fn assert_growth_bounds(capacity: &inflate::Capacity) {
+    if capacity.last > capacity.initial {
+        assert!(capacity.last <= 2 * capacity.len, "{capacity:?}");
+        assert!(capacity.peak <= 3 * capacity.len, "{capacity:?}");
+        assert!(capacity.peak < 2 * capacity.last, "{capacity:?}");
+    } else {
+        assert_eq!(capacity.peak, capacity.initial, "{capacity:?}");
     }
 }
 
@@ -691,28 +707,32 @@ fn bomb_stream(matches: usize) -> Vec<u8> {
     })
 }
 
-/// A near-maximal-ratio stream inflates in full under an unlimited cap: the
-/// output fits the one allocation of `inflate::max_expansion(len)` bytes,
-/// within a few percent of it (so the bound is tight), and the buffer is
-/// never reallocated.
+/// A near-maximal-ratio stream inflates in full under an unlimited cap:
+/// after the default up-front reservation the buffer grows, and its final
+/// capacity is the input's expansion bound `inflate::max_expansion(len)`,
+/// which the output fills to within a percent (so the bound is tight and
+/// never exceeded).
 #[test]
-fn maximal_expansion_fits_the_single_allocation() {
+fn maximal_expansion_fits_the_expansion_bound() {
     let matches = 32_768;
     let input = bomb_stream(matches);
     let mut capacity = inflate::Capacity::default();
     let out = inflate::inflate_tracked(&input, usize::MAX, &mut capacity).unwrap();
     assert_eq!(out.len(), 1 + matches * 258);
     assert!(out.iter().all(|&b| b == b'a'));
-    assert_eq!(capacity.initial, 1032 * input.len());
-    assert_eq!(capacity.initial, inflate::max_expansion(input.len()));
-    assert_eq!(capacity.last, capacity.initial, "buffer reallocated");
-    assert!(out.len() * 100 > capacity.initial * 99, "bound not tight");
+    assert_eq!(capacity.initial, inflate::INITIAL_RESERVATION);
+    assert_eq!(capacity.last, 1032 * input.len());
+    assert_eq!(capacity.last, inflate::max_expansion(input.len()));
+    assert_eq!(capacity.len, out.len());
+    assert!(out.len() * 100 > capacity.last * 99, "bound not tight");
+    assert_growth_bounds(&capacity);
 }
 
-/// The single allocation is min(`max_output`, 1032 × input length): a small
-/// input under a huge cap allocates for its own worst case, not the cap.
+/// The up-front reservation is min(`max_output`, 1032 × input length,
+/// 250,000): a small input under a huge cap reserves for its own worst
+/// case, not the cap.
 #[test]
-fn allocation_is_the_smaller_of_cap_and_expansion_bound() {
+fn allocation_is_the_smallest_of_cap_expansion_bound_and_default() {
     let input = stream(|w| {
         header(w, true, 0b01);
         fixed(w, u32::from(b'a'));
@@ -861,10 +881,19 @@ mod properties {
                 Ok(out) => prop_assert!(out.len() <= max_output),
                 Err(e) => prop_assert!(matches!(e, Error::InvalidFormat(_))),
             }
-            // One allocation, never grown, within the cap and the bound.
-            prop_assert_eq!(capacity.last, capacity.initial);
-            prop_assert!(capacity.initial <= max_output);
-            prop_assert!(capacity.initial <= inflate::max_expansion(input.len()));
+            // ADR 0050 §4: at most the default bound up front; growth stays
+            // within the cap and the expansion bound, at most twice the
+            // output at rest and three times it during a growth step.
+            let bound = max_output.min(inflate::max_expansion(input.len()));
+            prop_assert!(capacity.initial <= bound.min(inflate::INITIAL_RESERVATION));
+            prop_assert!(capacity.last <= bound);
+            prop_assert!(capacity.len <= capacity.last);
+            if capacity.last > capacity.initial {
+                prop_assert!(capacity.last <= 2 * capacity.len);
+                prop_assert!(capacity.peak <= 3 * capacity.len);
+            } else {
+                prop_assert_eq!(capacity.peak, capacity.initial);
+            }
         }
 
         /// `deflate` is total, and our own inflate inverts it.

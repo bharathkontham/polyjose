@@ -76,7 +76,7 @@ const SINGLE_LENGTH_CODE: &str = "deflate: literal/length code with a single cod
 /// The output would exceed the caller's cap (ADR 0017 §1).
 const OUTPUT_LIMIT: &str = "deflate: output exceeds the limit";
 /// Output beyond `inflate::max_expansion` of the input. Unreachable when
-/// that bound holds; it stops decoding rather than reallocate the buffer.
+/// that bound holds; it stops decoding rather than grow the buffer past it.
 const EXPANSION_BOUND: &str = "deflate: output beyond the RFC 1951 expansion bound";
 /// The output buffer could not be allocated.
 const OUTPUT_ALLOCATION: &str = "deflate: output allocation failed";
@@ -88,10 +88,14 @@ const NO_DISTANCE_CODES: &str = "deflate: distance in a block with no distance c
 /// most `max_output` bytes.
 ///
 /// Decoding stops at the end of the block whose BFINAL bit is set (RFC 1951
-/// §3.2.3); any bytes after it are ignored. The output buffer is allocated
-/// once, with capacity min(`max_output`, 1,032 × `input.len()`, RFC 1951's
-/// largest expansion), and never reallocated; nothing else is allocated on
-/// the heap. Total for every input: no panic, no `unsafe`.
+/// §3.2.3); any bytes after it are ignored. The output buffer reserves
+/// min(`max_output`, 1,032 × `input.len()` (RFC 1951's largest expansion),
+/// 250,000) bytes up front, and beyond that grows by doubling, never past
+/// min(`max_output`, 1,032 × `input.len()`). Each growth step copies into a
+/// new buffer and wipes the old one, so no unwiped plaintext stays in freed
+/// memory; a step briefly holds both, under 3× the output length
+/// (ADR 0050 §4). Nothing else is allocated on the heap. Total for every
+/// input: no panic, no `unsafe`.
 ///
 /// # Errors
 ///

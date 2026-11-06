@@ -8,11 +8,31 @@
 //! allocation is the output buffer; the Huffman tables are fixed-size values
 //! on the stack.
 //!
-//! The output buffer is allocated once, before decoding, with capacity
-//! min(`max_output`, [`max_expansion`]`(input.len())`), and never
-//! reallocated: no second buffer ever exists, no unwiped copy of the
-//! plaintext is left in freed memory, and the heap used by inflate stays
-//! within `max_output`.
+//! # Reservation and growth (ADR 0050 §4)
+//!
+//! The output can never pass `limit` = min(`max_output`,
+//! [`max_expansion`]`(input.len())`). Up front the buffer reserves
+//! min(`limit`, [`INITIAL_RESERVATION`]), so a caller-chosen huge
+//! `max_output` (say, a 1 GiB `DecryptPolicy::max_decompressed_len`) costs
+//! nothing until the stream actually produces that much. Beyond that the
+//! buffer grows by doubling, capped at `limit`, and never past `max_output`.
+//!
+//! Each growth step allocates a new buffer, copies the output into it, and
+//! drops the old one inside its `Zeroizing`, which wipes its whole capacity:
+//! there is never a plain `Vec` reallocation, so no unwiped copy of the
+//! plaintext is left in freed memory.
+//!
+//! The trade-off: memory now follows the output instead of the cap, at the
+//! price of copies and a transient peak.
+//! - At rest the buffer is at most twice the output length.
+//! - During a growth step the old buffer (full, about the output length)
+//!   and the new one (twice that) are both live: a peak of under 3× the
+//!   output length once the step's write lands, i.e. 1.5× the new
+//!   capacity, and always under 2 × `max_output`.
+//! - Each byte is copied O(1) times on average (doubling).
+//!
+//! Without growth the up-front reservation would have to be `limit`
+//! itself, which is what the reservation cap exists to avoid.
 
 use zeroize::Zeroizing;
 
@@ -72,38 +92,60 @@ pub(super) fn max_expansion(input_len: usize) -> usize {
     input_len.saturating_mul(8 * MAX_BYTES_PER_BIT)
 }
 
-/// The output buffer's capacity, recorded for tests: once right after the
-/// single allocation, and once when decoding ends (also on error).
+/// The most the output buffer reserves before decoding: 250,000 bytes, the
+/// default `DecryptPolicy::max_decompressed_len` (ADR 0017 §3, ADR 0050 §4).
+/// This module may depend only on `crate::Error` and `zeroize` (the fuzz
+/// target's shape), so the value is repeated here and the `jwe::zip` tests
+/// pin the two together.
+pub(super) const INITIAL_RESERVATION: usize = 250_000;
+
+/// The output buffer's capacities, recorded for tests: `initial` right after
+/// the up-front reservation, `last` when decoding ends (also on error),
+/// `peak` the most bytes of buffer live at once (the old plus the new
+/// buffer during a growth step; `initial` if it never grew), and `len` the
+/// output length when decoding ended.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Capacity {
     pub(super) initial: usize,
     pub(super) last: usize,
+    pub(super) peak: usize,
+    pub(super) len: usize,
 }
 
 /// The output buffer: the inflated data and the LZ77 window.
 struct Output {
     buf: Zeroizing<Vec<u8>>,
+    /// The caller's cap (ADR 0017 §1).
     max: usize,
+    /// min(`max`, [`max_expansion`] of the input): the most the buffer is
+    /// ever grown to.
+    limit: usize,
+    /// See [`Capacity::peak`].
+    peak: usize,
 }
 
 impl Output {
-    /// Allocates the buffer once: min(`max_output`,
-    /// [`max_expansion`]`(input_len)`) bytes.
+    /// Reserves min(`max_output`, [`max_expansion`]`(input_len)`,
+    /// [`INITIAL_RESERVATION`]) bytes (ADR 0050 §4).
     fn new(input_len: usize, max_output: usize) -> Result<Self> {
-        let capacity = max_output.min(max_expansion(input_len));
+        let limit = max_output.min(max_expansion(input_len));
+        let capacity = limit.min(INITIAL_RESERVATION);
         let mut buf = Vec::new();
         buf.try_reserve_exact(capacity)
             .map_err(|_| Error::InvalidFormat(OUTPUT_ALLOCATION))?;
         Ok(Self {
             buf: Zeroizing::new(buf),
             max: max_output,
+            limit,
+            peak: capacity,
         })
     }
 
     /// Checks that `n` more bytes fit, failing as soon as the output would
-    /// exceed the cap. The buffer is never grown: by [`max_expansion`] the
-    /// output always fits the initial allocation, and if that ever failed to
-    /// hold, decoding stops with an error instead of reallocating.
+    /// exceed the cap (ADR 0017 §1), and grows the buffer if they do not fit
+    /// its capacity. By [`max_expansion`] the output never passes `limit`;
+    /// if that ever failed to hold, decoding stops with an error instead of
+    /// growing past it.
     fn reserve(&mut self, n: usize) -> Result<()> {
         let needed = self
             .buf
@@ -114,12 +156,40 @@ impl Output {
             return Err(Error::InvalidFormat(OUTPUT_LIMIT));
         }
         debug_assert!(
-            needed <= self.buf.capacity(),
+            needed <= self.limit,
             "output beyond the RFC 1951 expansion bound"
         );
-        if needed > self.buf.capacity() {
+        if needed > self.limit {
             return Err(Error::InvalidFormat(EXPANSION_BOUND));
         }
+        if needed > self.buf.capacity() {
+            self.grow(needed)?;
+        }
+        Ok(())
+    }
+
+    /// Moves the output into a new buffer of twice the capacity (at least
+    /// `needed`, at most `limit`; ADR 0050 §4). The old buffer is dropped
+    /// inside its `Zeroizing`, which wipes all of its capacity, so no
+    /// unwiped plaintext stays in freed memory; a plain `Vec` reallocation
+    /// would not wipe the block it frees.
+    fn grow(&mut self, needed: usize) -> Result<()> {
+        let capacity = self
+            .buf
+            .capacity()
+            .saturating_mul(2)
+            .max(needed)
+            .min(self.limit);
+        let mut grown = Vec::new();
+        grown
+            .try_reserve_exact(capacity)
+            .map_err(|_| Error::InvalidFormat(OUTPUT_ALLOCATION))?;
+        grown.extend_from_slice(&self.buf);
+        self.peak = self
+            .peak
+            .max(self.buf.capacity().saturating_add(grown.capacity()));
+        // The old buffer drops here and is wiped.
+        self.buf = Zeroizing::new(grown);
         Ok(())
     }
 
@@ -167,6 +237,8 @@ pub(super) fn inflate_tracked(
     capacity.initial = out.buf.capacity();
     let result = inflate_blocks(&mut reader, &mut out);
     capacity.last = out.buf.capacity();
+    capacity.peak = out.peak;
+    capacity.len = out.buf.len();
     result?;
     Ok(out.buf)
 }
