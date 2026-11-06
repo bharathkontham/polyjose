@@ -1252,4 +1252,148 @@ mod tests {
             }
         }
     }
+
+    /// Tester probes (T06-r1): gaps found against the acceptance criteria.
+    mod tester_probes {
+        use super::*;
+
+        const CURVE_OIDS: [(&str, EcCurve); 4] = CURVES;
+
+        /// 30 L | 02 01 01 | 04 20 d | a0 L <parameters-element>
+        fn raw_sec1(d: &[u8], params: &[u8]) -> Vec<u8> {
+            let mut body = vec![0x02, 0x01, 0x01, 0x04, u8::try_from(d.len()).unwrap()];
+            body.extend_from_slice(d);
+            body.push(0xA0);
+            body.push(u8::try_from(params.len()).unwrap());
+            body.extend_from_slice(params);
+            let mut der = vec![0x30, u8::try_from(body.len()).unwrap()];
+            der.extend(body);
+            der
+        }
+
+        fn a2_d() -> Vec<u8> {
+            let a2 = from_sec1(&fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der")).unwrap();
+            ec_key(&a2).d().unwrap().to_vec()
+        }
+
+        #[test]
+        fn brainpool_and_explicit_sec1_are_unsupported() {
+            // No brainpool SEC1 fixture exists: build one with the
+            // brainpoolP256r1 namedCurve in [0] (RFC 5639 §4.1).
+            let mut oid = vec![0x06, 0x09];
+            oid.extend_from_slice(&[0x2B, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07]);
+            assert_eq!(
+                from_sec1(&raw_sec1(&a2_d(), &oid)).unwrap_err(),
+                Error::UnsupportedAlgorithm
+            );
+            // specifiedCurve in [0], and as the inner [0] of PKCS#8.
+            let specified = [0x30, 0x03, 0x02, 0x01, 0x01];
+            assert_eq!(
+                from_sec1(&raw_sec1(&a2_d(), &specified)).unwrap_err(),
+                Error::UnsupportedAlgorithm
+            );
+            let jwk = expected("openssl/expected", "ec-p256-pkcs8.jwk.json");
+            let inner = raw_sec1(ec_key(&jwk).d().unwrap(), &specified);
+            let parts = Pkcs8Parts {
+                version: 0,
+                alg: AlgId::Ec(EcCurve::P256),
+                private_key: &inner,
+                public_key: None,
+            };
+            assert_eq!(from_pkcs8(parts).unwrap_err(), Error::UnsupportedAlgorithm);
+            // implicitCurve NULL as the inner [0] of PKCS#8 is InvalidKey.
+            let inner = raw_sec1(ec_key(&jwk).d().unwrap(), &[0x05, 0x00]);
+            let parts = Pkcs8Parts {
+                version: 0,
+                alg: AlgId::Ec(EcCurve::P256),
+                private_key: &inner,
+                public_key: None,
+            };
+            assert!(matches!(from_pkcs8(parts), Err(Error::InvalidKey(_))));
+        }
+
+        #[test]
+        fn first_octet_gate_on_every_curve_and_form() {
+            for (name, crv) in CURVE_OIDS {
+                let der = fixtures::load("openssl", &format!("ec-{name}-sec1.der"));
+                let jwk = from_sec1(&der).unwrap();
+                let key = ec_key(&jwk);
+                let d = key.d().unwrap().to_vec();
+                let full = uncompressed_point(key);
+                let sec1_of = |point: &[u8]| {
+                    sec1::encode(&EcPrivateKey {
+                        private_key: &d,
+                        parameters: Some(crv),
+                        public_key: Some(point),
+                    })
+                    .unwrap()
+                    .to_vec()
+                };
+                let spki_of = |point: &[u8]| {
+                    spki::encode(&SpkiParts {
+                        alg: AlgId::Ec(crv),
+                        subject_public_key: point,
+                    })
+                    .unwrap()
+                    .to_vec()
+                };
+                // 0x02, 0x03 (compressed) and 0x04 are accepted.
+                let mut comp = vec![0x02 | (key.y()[key.y().len() - 1] & 1)];
+                comp.extend_from_slice(key.x());
+                for point in [&full, &comp] {
+                    assert!(from_sec1(&sec1_of(point)).is_ok(), "{name}");
+                    assert!(spki::decode(&spki_of(point)).and_then(from_spki).is_ok());
+                }
+                // 0x00, 0x05, 0x06, 0x07 are rejected at full and compact
+                // lengths, in SPKI and in SEC1 [1].
+                for tag in [0x00u8, 0x05, 0x06, 0x07] {
+                    for base in [&full, &comp] {
+                        let mut point = base.clone();
+                        point[0] = tag;
+                        assert!(
+                            matches!(
+                                spki::decode(&spki_of(&point)).and_then(from_spki),
+                                Err(Error::InvalidKey(_))
+                            ),
+                            "{name} {tag:#x} spki"
+                        );
+                        assert!(
+                            matches!(from_sec1(&sec1_of(&point)), Err(Error::InvalidKey(_))),
+                            "{name} {tag:#x} sec1"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn rejection_order_is_length_then_point_then_range_when_a_point_is_embedded() {
+            // Observed behaviour, pinned: wrong length beats a bad point; with an
+            // embedded point the point is decoded before d's range is checked
+            // (jwk.rs), without one d's range is checked first. All InvalidKey.
+            let jwk = from_sec1(&fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der")).unwrap();
+            let mut bad_point = uncompressed_point(ec_key(&jwk));
+            bad_point[64] ^= 1;
+            let sec1_of = |d: &[u8], p: Option<&[u8]>| {
+                sec1::encode(&EcPrivateKey {
+                    private_key: d,
+                    parameters: Some(EcCurve::P256),
+                    public_key: p,
+                })
+                .unwrap()
+                .to_vec()
+            };
+            let detail = |der: Vec<u8>| match from_sec1(&der) {
+                Err(Error::InvalidKey(d)) => d,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(
+                detail(sec1_of(&[0; 31], Some(&bad_point))),
+                PRIVATE_KEY_LENGTH
+            );
+            // d = 0 with a bad point and no point.
+            assert_eq!(detail(sec1_of(&[0; 32], None)), SCALAR_INVALID);
+            assert_eq!(detail(sec1_of(&[0; 32], Some(&bad_point))), POINT_INVALID);
+        }
+    }
 }
