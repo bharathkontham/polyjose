@@ -32,7 +32,8 @@
 //!    (RFC 7518 §4.6: the agreement is on the recipient's curve; this
 //!    stops the invalid-curve attacks of research.md §4.2). This is
 //!    checked on the JSON object, before import, so a wrong-family or
-//!    wrong-curve `epk` is never decoded as a point (feature 0003 code review #4);
+//!    wrong-curve `epk` is never decoded as a point (feature 0003 code
+//!    review #4);
 //! 6. it must import as a JWK ([`Jwk::from_object`]: exact coordinate
 //!    lengths, EC points on their curve and not the identity; ADR 0041 §4,
 //!    SP 800-56A r3 §5.6.2.3.4 partial public-key validation).
@@ -331,8 +332,8 @@ pub(super) fn agree_with_epk(key: &RecipientKey, epk: &Object) -> Result<Zeroizi
 /// [`agree_with_epk`] with the JWK import step passed in as `import`.
 ///
 /// Production always passes [`Jwk::from_object`]; the seam lets the unit
-/// tests observe whether, and when, import is reached (0003 code review #4), without
-/// any global or thread-local state.
+/// tests observe whether, and when, import is reached (0003 code review
+/// #4), without any global or thread-local state.
 fn agree_with_imported_epk(
     key: &RecipientKey,
     epk: &Object,
@@ -345,10 +346,10 @@ fn agree_with_imported_epk(
     if PRIVATE_MEMBERS.iter().any(|name| epk.contains(name)) {
         return Err(Error::DecryptionFailed);
     }
-    // RFC 7518 §4.6, RFC 8725 §3.4, 0003 review #4: the ephemeral key must be of
-    // the recipient's family and on its curve. Checked on the raw `kty` and
-    // `crv`, before import, so a wrong-family or wrong-curve epk never
-    // reaches point decoding, the on-curve check or an agreement.
+    // RFC 7518 §4.6, RFC 8725 §3.4, 0003 code review #4: the ephemeral key
+    // must be of the recipient's family and on its curve. Checked on the
+    // raw `kty` and `crv`, before import, so a wrong-family or wrong-curve
+    // epk never reaches point decoding, the on-curve check or an agreement.
     if !raw_epk_is_on_recipient_curve(key, epk) {
         return Err(Error::DecryptionFailed);
     }
@@ -928,10 +929,11 @@ mod tests {
 
     #[test]
     fn an_epk_of_the_wrong_kty_or_crv_never_reaches_import() {
-        // 0003 code review #4, RFC 7518 §4.6, RFC 8725 §3.4: the raw `kty` and `crv`
-        // are compared with the recipient's key before `Jwk::from_object`,
-        // so a wrong-family or wrong-curve epk is never imported (no point
-        // decoding, no on-curve check) and never agreed with. Each case is
+        // 0003 code review #4, RFC 7518 §4.6, RFC 8725 §3.4: the raw `kty`
+        // and `crv` are compared with the recipient's key before
+        // `Jwk::from_object`, so a wrong-family or wrong-curve epk is never
+        // imported (no point decoding, no on-curve check) and never agreed
+        // with. Each case is
         // the raw epk and the (kty, crv) of the one recipient it may reach
         // import for, if any. Contents past `kty` and `crv` do not matter
         // to a refused case, so most are labels only.
