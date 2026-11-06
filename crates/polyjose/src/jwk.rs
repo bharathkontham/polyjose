@@ -1856,6 +1856,85 @@ mod tests {
         );
     }
 
+    /// `c · n · ⌈log2 n⌉` with `c = 4`: the most work an O(n log n) import
+    /// path may do on `n` members or values. Quadratic code needs about
+    /// `n² / 2`, which for `n = 10 000` is about 90 times this.
+    fn n_log_n_bound(n: usize) -> u64 {
+        let n = n as u64;
+        4 * n * u64::from(u64::BITS - n.leading_zeros())
+    }
+
+    /// An `oct` JWK with `unknown` extra members `u0`, `u1`, ... (RFC 7517
+    /// §4: unknown members "MUST be ignored", so they are kept).
+    fn oct_with_unknown_members(unknown: usize) -> String {
+        let mut json = format!(r#"{{"kty":"oct","k":"{OCT_K}""#);
+        for i in 0..unknown {
+            json.push_str(&format!(r#","u{i}":{i}"#));
+        }
+        json.push('}');
+        json
+    }
+
+    /// An `oct` JWK whose `key_ops` holds `ops` (RFC 7517 §4.3).
+    fn oct_with_key_ops(ops: impl Iterator<Item = String>) -> String {
+        let ops: Vec<String> = ops.map(|op| format!(r#""{op}""#)).collect();
+        format!(
+            r#"{{"kty":"oct","k":"{OCT_K}","key_ops":[{}]}}"#,
+            ops.join(",")
+        )
+    }
+
+    /// DoS regression (0001 security review, F01): importing a JWK with the
+    /// most members the default `json::Limits` allow is not quadratic.
+    #[test]
+    fn import_with_10_000_members_is_n_log_n() {
+        const N: usize = 10_000;
+        let json = oct_with_unknown_members(N - 2);
+        let (jwk, count) = Object::count_name_comparisons(|| Jwk::from_json(json.as_bytes()));
+        let jwk = jwk.expect("a JWK with unknown members imports");
+        assert_eq!(jwk.other_params().len(), N - 2);
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+    }
+
+    /// DoS regression (F01): writing such a key back out is not quadratic,
+    /// and writes every member, in order.
+    #[test]
+    fn to_object_with_10_000_members_is_n_log_n() {
+        const N: usize = 10_000;
+        let json = oct_with_unknown_members(N - 2);
+        let jwk = parse(&json);
+        let (written, count) = Object::count_name_comparisons(|| jwk.to_object());
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+        assert_eq!(written.len(), N);
+        assert_eq!(written.to_json(), json);
+    }
+
+    /// DoS regression (F01): the RFC 7517 §4.3 duplicate check on a
+    /// `key_ops` with the most values the default `json::Limits` allow.
+    #[test]
+    fn key_ops_duplicate_check_is_n_log_n() {
+        const N: usize = 10_000;
+        let distinct = oct_with_key_ops((0..N).map(|i| format!("op{i}")));
+        let (jwk, count) = key_op_comparisons::count(|| Jwk::from_json(distinct.as_bytes()));
+        let jwk = jwk.expect("distinct key_ops values import");
+        assert_eq!(jwk.key_ops().map(<[KeyOp]>::len), Some(N));
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+
+        // The duplicate is found however late it comes.
+        let late_duplicate = oct_with_key_ops(
+            (0..N - 1)
+                .map(|i| format!("op{i}"))
+                .chain(["op0".to_owned()]),
+        );
+        let (result, count) =
+            key_op_comparisons::count(|| Jwk::from_json(late_duplicate.as_bytes()));
+        assert_eq!(
+            result.err(),
+            Some(Error::InvalidKey("key_ops must not contain duplicates"))
+        );
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+    }
+
     #[test]
     fn modulus_bits_counts_from_the_top_set_bit() {
         let KeyMaterial::Rsa(key) = parse(&rsa_json()).material().clone() else {

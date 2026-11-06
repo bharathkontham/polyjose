@@ -625,6 +625,50 @@ mod tests {
         assert_eq!((inner, outer), (1, 1));
     }
 
+    /// `c · n · ⌈log2 n⌉` with `c = 4`: the most work an O(n log n) path
+    /// may do on `n` members. Quadratic code needs about `n² / 2`, which
+    /// for `n = 10 000` is about 90 times this.
+    fn n_log_n_bound(n: usize) -> u64 {
+        let n = n as u64;
+        4 * n * u64::from(u64::BITS - n.leading_zeros())
+    }
+
+    /// `n` members `m0`, `m1`, ... with values 0, 1, ..., in the order
+    /// `order` gives.
+    fn numbered_object(n: usize, order: impl Fn(usize) -> usize) -> Object {
+        Object::from_unique_members(
+            (0..n)
+                .map(order)
+                .map(|i| (Zeroizing::new(format!("m{i}")), int(i as i64)))
+                .collect(),
+        )
+    }
+
+    /// DoS regression (0001 security review, F01): equality of untrusted
+    /// objects must not be quadratic in their size. The second object holds
+    /// the same members in a scrambled order (7919 is prime, so `i ↦ 7919i
+    /// mod n` is a permutation of `0..n`).
+    #[test]
+    fn object_equality_is_n_log_n_in_the_member_count() {
+        const N: usize = 10_000;
+        let a = numbered_object(N, |i| i);
+        let b = numbered_object(N, |i| (i * 7919) % N);
+        let (equal, count) = Object::count_name_comparisons(|| a == b);
+        assert!(equal);
+        assert!(count <= n_log_n_bound(N), "{count} comparisons");
+
+        let mut other_value = b.clone();
+        other_value.insert("m1234", int(-1));
+        let mut other_name = b.clone();
+        other_name.remove("m4321");
+        other_name.insert("x", int(4321));
+        for unequal in [&other_value, &other_name] {
+            let (equal, count) = Object::count_name_comparisons(|| a == *unequal);
+            assert!(!equal);
+            assert!(count <= n_log_n_bound(N), "{count} comparisons");
+        }
+    }
+
     #[test]
     fn replaced_and_removed_members_come_back_zeroizing() {
         let mut o = sample();

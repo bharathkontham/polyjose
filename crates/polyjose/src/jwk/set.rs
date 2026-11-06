@@ -340,6 +340,39 @@ mod tests {
         Jwk::from_json(json.as_bytes()).unwrap()
     }
 
+    /// DoS regression (0001 security review, F01): a JWK Set with 10 000
+    /// top-level members whose one key also has 10 000 members (the most
+    /// the default `json::Limits` allow per object) imports without
+    /// quadratic work. The bound is `c · n · ⌈log2 n⌉` with `c = 4` over all
+    /// `n` members; quadratic code needs about 90 times that.
+    #[test]
+    fn import_with_10_000_members_per_object_is_n_log_n() {
+        const PER_OBJECT: usize = 10_000;
+        // RFC 7517 Appendix A.3, the HMAC key value.
+        const OCT_K: &str = "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow";
+        let mut key = format!(r#"{{"kty":"oct","k":"{OCT_K}""#);
+        for i in 0..PER_OBJECT - 2 {
+            key.push_str(&format!(r#","u{i}":{i}"#));
+        }
+        key.push('}');
+        let mut set = format!(r#"{{"keys":[{key}]"#);
+        for i in 0..PER_OBJECT - 1 {
+            set.push_str(&format!(r#","s{i}":{i}"#));
+        }
+        set.push('}');
+
+        let (set, count) =
+            json::Object::count_name_comparisons(|| JwkSet::from_json(set.as_bytes()));
+        let set = set.expect("the set imports");
+        assert_eq!((set.len(), set.skipped()), (1, 0));
+        assert_eq!(set.keys()[0].other_params().len(), PER_OBJECT - 2);
+        assert_eq!(set.other_params().len(), PER_OBJECT - 1);
+
+        let n = (2 * PER_OBJECT) as u64;
+        let bound = 4 * n * u64::from(u64::BITS - n.leading_zeros());
+        assert!(count <= bound, "{count} comparisons");
+    }
+
     /// ADR 0026 §2 step 8: the whole alg → key family table, every row
     /// against every key kind.
     #[test]
