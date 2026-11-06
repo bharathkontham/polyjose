@@ -378,25 +378,10 @@ fn cmp_names(a: &str, b: &str) -> core::cmp::Ordering {
 }
 
 /// Test-only, per-thread count of the member-name comparisons ([`same_name`]
-/// and [`cmp_names`]) objects make. It turns "this is O(n log n)" into a
-/// deterministic assertion without wall-clock timing, and is not compiled
-/// into non-test builds.
+/// and [`cmp_names`]) objects make. It lives in the test-only
+/// `crate::test_counters` and is not compiled into non-test builds.
 #[cfg(test)]
-mod name_comparisons {
-    use core::cell::Cell;
-
-    std::thread_local! {
-        static COUNT: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub(super) fn tick() {
-        COUNT.with(|c| c.set(c.get().saturating_add(1)));
-    }
-
-    pub(super) fn get() -> u64 {
-        COUNT.with(Cell::get)
-    }
-}
+use crate::test_counters::name_comparisons;
 
 #[cfg(test)]
 impl Object {

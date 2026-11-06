@@ -15,9 +15,10 @@
 //! the WASM binding selects with getrandom's `wasm_js` crate feature (see
 //! `bindings/wasm/Cargo.toml`).
 //!
-//! The only other byte source is `test_vectors::FixedRng`, compiled for
-//! polyjose's own tests and behind the off-by-default `test-vectors`
-//! feature, which no binding may enable (`scripts/check-test-vectors-off.sh`).
+//! The only other byte source is `insecure_test_vectors::FixedRng`, compiled
+//! for polyjose's own tests and behind the off-by-default
+//! `insecure-test-vectors` feature, which no binding may enable
+//! (`scripts/check-test-vectors-off.sh`).
 
 use zeroize::Zeroize;
 
@@ -34,6 +35,12 @@ use crate::{Error, Result};
 /// made once; getrandom itself only retries interrupted system calls. On
 /// failure `dest` is zeroed, so no partial output survives, and the error
 /// carries no backend or OS detail.
+///
+/// There is no process-wide or thread-local switch to another source: this
+/// body always calls `getrandom::fill` and has no `cfg`, so it is the same
+/// with or without the `insecure-test-vectors` feature. A
+/// `insecure_test_vectors::FixedRng` is used only where a caller passes one
+/// explicitly (ADR 0005).
 pub(crate) fn fill_random(dest: &mut [u8]) -> Result<()> {
     let outcome = getrandom::fill(dest);
     fail_closed(dest, outcome)
@@ -62,11 +69,16 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 /// is not random. It exists only so tests can reproduce outputs that depend
 /// on "random" values, such as the CEKs and IVs of the RFC 7520 JWE
 /// examples. Outside polyjose's own unit tests it exists only with the
-/// off-by-default `test-vectors` cargo feature (ADR 0005), and
+/// off-by-default `insecure-test-vectors` cargo feature (ADR 0005), and
 /// `scripts/check-test-vectors-off.sh` fails if any binding enables it.
 ///
+/// A `FixedRng` is a plain value that is reachable only as an explicit
+/// parameter a test passes in. It can never be installed as polyjose's random
+/// source: there is no global or thread-local RNG switch, and
+/// [`fill_random`] has no code path to it, even with the feature on.
+///
 /// ```
-/// use polyjose::test_vectors::FixedRng;
+/// use polyjose::insecure_test_vectors::FixedRng;
 ///
 /// let mut rng = FixedRng::new([0x01, 0x02, 0x03]);
 /// let mut iv = [0u8; 2];
@@ -75,8 +87,8 @@ fn fail_closed(dest: &mut [u8], outcome: core::result::Result<(), getrandom::Err
 /// assert!(rng.fill(&mut [0u8; 2]).is_err()); // only one byte is left
 /// # Ok::<(), polyjose::Error>(())
 /// ```
-#[cfg(any(test, feature = "test-vectors"))]
-pub mod test_vectors {
+#[cfg(any(test, feature = "insecure-test-vectors"))]
+pub mod insecure_test_vectors {
     use zeroize::{Zeroize, Zeroizing};
 
     use crate::{Error, Result};
@@ -183,6 +195,151 @@ mod tests {
         assert_eq!(fill_random(&mut b), Ok(()));
         assert_ne!(a, [0u8; 32]);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn fill_random_never_consults_a_fixed_rng() {
+        // A FixedRng in scope is just a value: fill_random still reads the OS
+        // source and leaves the fixed bytes untouched (ADR 0005).
+        let rng = insecure_test_vectors::FixedRng::new([0u8; 32]);
+        let mut buf = [0u8; 32];
+        assert_eq!(fill_random(&mut buf), Ok(()));
+        assert_ne!(buf, [0u8; 32]);
+        assert_eq!(rng.remaining(), 32);
+    }
+
+    #[test]
+    fn fill_random_has_one_unconditional_source() {
+        // The body is the same with or without `insecure-test-vectors`: no
+        // `cfg`, no reference to the fixed source, only `getrandom::fill`.
+        let src = include_str!("rng.rs");
+        let start = src.find("pub(crate) fn fill_random(");
+        assert!(start.is_some(), "fill_random not found");
+        let body = &src[start.unwrap_or_default()..];
+        let end = body.find("\n}\n");
+        assert!(end.is_some(), "end of fill_random not found");
+        let body = &body[..end.unwrap_or_default()];
+        assert!(body.contains("getrandom::fill(dest)"), "{body}");
+        for banned in ["cfg", "FixedRng", "insecure", "static", "thread"] {
+            assert!(!body.contains(banned), "fill_random mentions {banned}");
+        }
+    }
+
+    #[test]
+    fn no_global_or_thread_local_state_can_switch_the_rng() {
+        // A global RNG switch needs process-wide or thread-local state:
+        // `static` items or `thread_local!`. polyjose's library code has
+        // none, so FixedRng can only be passed explicitly. The banned tokens
+        // are split so this test does not match itself.
+        //
+        // One file is exempt: `src/test_counters.rs`, the thread-local
+        // operation counters that let tests bound the work of untrusted-input
+        // paths without wall-clock timing. It is skipped only after this test
+        // proves it never reaches a non-test build: the file opens with
+        // `#![cfg(test)]`, and the crate declares it exactly once, as
+        // `mod test_counters;` in `lib.rs` directly under `#[cfg(test)]`.
+        let banned = [
+            ["thread", "_local!"].concat(),
+            ["Once", "Lock"].concat(),
+            ["Once", "Cell"].concat(),
+            ["Lazy", "Lock"].concat(),
+            ["Lazy", "Cell"].concat(),
+            ["Atomic", "Ptr"].concat(),
+        ];
+        let is_static_item = |line: &str| {
+            let item = ["pub(crate) ", "pub(super) ", "pub "]
+                .iter()
+                .find_map(|vis| line.strip_prefix(vis))
+                .unwrap_or(line);
+            item.starts_with(&["static", " "].concat())
+        };
+        let src = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+        let exempt = src.join(["test", "_counters.rs"].concat());
+        let exempt_mod = ["test", "_counters"].concat();
+        // Any `mod test_counters`, whatever its visibility, attributes or
+        // spacing: the word `mod` followed by the module's name.
+        let declares_exempt = |line: &str| {
+            let words: Vec<&str> = line
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|w| !w.is_empty())
+                .collect();
+            words
+                .windows(2)
+                .any(|w| w[0] == "mod" && w[1] == exempt_mod)
+        };
+        // (file, declaration line, the line directly above it), trimmed.
+        let mut declarations = Vec::new();
+        let mut exempt_text = None;
+        let mut dirs = vec![src.clone()];
+        let mut scanned = 0;
+        while let Some(dir) = dirs.pop() {
+            let entries = std::fs::read_dir(&dir);
+            assert!(entries.is_ok(), "cannot read {}", dir.display());
+            for entry in entries.into_iter().flatten() {
+                assert!(entry.is_ok(), "cannot list {}", dir.display());
+                let Ok(path) = entry.map(|e| e.path()) else {
+                    continue;
+                };
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path);
+                assert!(text.is_ok(), "cannot read {}", path.display());
+                let text = text.unwrap_or_default();
+                scanned += 1;
+                let mut previous = "";
+                for (n, line) in text.lines().enumerate() {
+                    let line = line.trim();
+                    if !line.starts_with("//") && declares_exempt(line) {
+                        declarations.push((path.clone(), line.to_owned(), previous.to_owned()));
+                    }
+                    previous = line;
+                    if path == exempt || line.starts_with("//") {
+                        continue;
+                    }
+                    let hit = banned.iter().any(|b| line.contains(b.as_str()));
+                    assert!(
+                        !hit && !is_static_item(line),
+                        "{}:{}: global or thread-local state: {line}",
+                        path.display(),
+                        n + 1
+                    );
+                }
+                if path == exempt {
+                    exempt_text = Some(text);
+                }
+            }
+        }
+        // Guard against a vacuous pass if the layout changes.
+        assert!(scanned >= 10, "scanned only {scanned} source files");
+
+        // The exemption holds only while the exempt file is test-only.
+        if let Some(text) = exempt_text {
+            let first_code = text
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with("//"));
+            assert_eq!(
+                first_code,
+                Some("#![cfg(test)]"),
+                "{} must open with #![cfg(test)]",
+                exempt.display()
+            );
+            let expected = [(
+                src.join("lib.rs"),
+                ["mod ", &exempt_mod, ";"].concat(),
+                "#[cfg(test)]".to_owned(),
+            )];
+            assert_eq!(
+                declarations, expected,
+                "{exempt_mod} must be declared exactly once, as `mod {exempt_mod};` \
+                 in lib.rs directly under #[cfg(test)]"
+            );
+        }
     }
 
     #[test]
