@@ -25,6 +25,21 @@ for p in "${platforms[@]}"; do
     rust)
       if have cargo; then run rust bash -c 'cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
       else record rust "SKIPPED (cargo missing)"; fi
+      # The workspace run above uses default features; this one also covers polyjose's
+      # off-by-default test-vector feature (ADR 0005), as CI does.
+      if have cargo; then run rust-all-features bash -c 'cargo clippy -p polyjose --all-targets --all-features -- -D warnings && cargo test -p polyjose --all-features'
+      else record rust-all-features "SKIPPED (cargo missing)"; fi
+      # The core and the WASM binding build for the browser target, as in CI.
+      if have cargo; then run wasm32-build cargo build --target wasm32-unknown-unknown -p polyjose -p polyjose-wasm
+      else record wasm32-build "SKIPPED (cargo missing)"; fi
+      # polyjose builds on its MSRV, the workspace rust-version (ADR 0024). CI always runs this;
+      # locally it needs that toolchain installed, and is never auto-installed here.
+      msrv="$(sed -n 's/^rust-version = "\([0-9]*\.[0-9]*\)"$/\1/p' Cargo.toml).0"
+      toolchains="$(rustup toolchain list 2>/dev/null || true)"
+      if ! have cargo || ! have rustup; then record msrv "SKIPPED (cargo or rustup missing; CI runs it)"
+      elif [ "$msrv" = .0 ]; then echo "msrv: no rust-version = \"X.Y\" line in Cargo.toml"; record msrv FAIL
+      elif ! grep -q "^${msrv//./\\.}-" <<<"$toolchains"; then record msrv "SKIPPED (Rust $msrv not installed: rustup toolchain install $msrv --profile minimal; CI runs it)"
+      else run msrv cargo "+$msrv" check -p polyjose --all-features; fi
       # Same deny invocation as CI: full graph, dev-dependencies and every feature included.
       if have cargo && have cargo-deny; then run deny cargo deny --all-features check
       else record deny "SKIPPED (cargo-deny missing; CI runs it)"; fi
