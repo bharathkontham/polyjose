@@ -39,8 +39,9 @@
 
 use core::cmp::Ordering;
 
-use polyjose::json::{MAX_SAFE_INTEGER, parse};
-use polyjose::jwt::NumericDate;
+use polyjose::json::{MAX_SAFE_INTEGER, Number, Object, Value, parse};
+use polyjose::jwt::{Audience, Claims, NumericDate};
+use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::sample::select;
 
@@ -265,5 +266,144 @@ proptest! {
             model_not_yet_valid(v, now, leeway),
             "nbf {:e} now {} leeway {}", v, now, leeway
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JSON and Claims Set generators
+// ---------------------------------------------------------------------------
+
+/// A short string of any Unicode scalar values, control characters,
+/// quotes, backslashes and non-BMP characters included (RFC 8259 §7).
+fn any_string() -> impl Strategy<Value = String> + Clone {
+    prop_oneof![
+        3 => vec(any::<char>(), 0..8).prop_map(String::from_iter),
+        2 => vec(select(vec!['a', '"', '\\', '/', '\u{0}', '\u{1f}', '\u{7f}', 'é', '\u{2028}', '😀']), 0..6)
+            .prop_map(String::from_iter),
+    ]
+}
+
+/// A JSON number: any finite double (RFC 7493 §2.2), or an exact integer.
+fn any_number() -> impl Strategy<Value = Number> {
+    prop_oneof![
+        any_double().prop_filter_map("finite", Number::from_f64),
+        (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).prop_map(|i| Number::from_i64(i).unwrap()),
+    ]
+}
+
+/// A JSON value of depth at most 4 (a scalar is depth 0), with at most four
+/// entries per container.
+fn json_value() -> impl Strategy<Value = Value> {
+    let leaf = prop_oneof![
+        Just(Value::Null),
+        any::<bool>().prop_map(Value::Bool),
+        any_number().prop_map(Value::Number),
+        any_string().prop_map(Value::from),
+    ];
+    leaf.prop_recursive(4, 48, 4, |inner| {
+        prop_oneof![
+            vec(inner.clone(), 0..4).prop_map(Value::from),
+            vec((any_string(), inner), 0..4).prop_map(|members| {
+                let mut object = Object::new();
+                for (name, value) in members {
+                    object.insert(name, value);
+                }
+                Value::from(object)
+            }),
+        ]
+    })
+}
+
+/// The registered claim names (RFC 7519 §4.1), in the ADR 0027 §1 order.
+const REGISTERED: [&str; 7] = ["iss", "sub", "aud", "exp", "nbf", "iat", "jti"];
+
+/// Up to five public or private claims (RFC 7519 §4.2–§4.3): any name but a
+/// registered one, any value of depth ≤ 4.
+fn other_claims() -> impl Strategy<Value = Vec<(String, Value)>> {
+    vec(
+        (
+            any_string().prop_filter("not registered", |n| !REGISTERED.contains(&n.as_str())),
+            json_value(),
+        ),
+        0..5,
+    )
+}
+
+fn audience(value: impl Strategy<Value = String> + Clone) -> impl Strategy<Value = Audience> {
+    prop_oneof![
+        value.clone().prop_map(Audience::One),
+        vec(value, 0..4).prop_map(Audience::Many),
+    ]
+}
+
+/// A Claims Set from its parts.
+#[allow(clippy::too_many_arguments)]
+fn claims_of(
+    iss: Option<String>,
+    sub: Option<String>,
+    aud: Option<Audience>,
+    exp: Option<f64>,
+    nbf: Option<f64>,
+    iat: Option<f64>,
+    jti: Option<String>,
+    other: Vec<(String, Value)>,
+) -> Claims {
+    let date = |v: Option<f64>| v.map(|v| NumericDate::from_f64(v).expect("in range"));
+    let mut c = Claims::new();
+    c.iss = iss;
+    c.sub = sub;
+    c.aud = aud;
+    c.exp = date(exp);
+    c.nbf = date(nbf);
+    c.iat = date(iat);
+    c.jti = jti;
+    for (name, value) in other {
+        c.insert(name, value).expect("not a registered name");
+    }
+    c
+}
+
+/// Any Claims Set: every registered claim optional, of any value of its
+/// type (ADR 0027 §1–§2), and random other claims.
+fn any_claims() -> impl Strategy<Value = Claims> {
+    (
+        (
+            proptest::option::of(any_string()),
+            proptest::option::of(any_string()),
+            proptest::option::of(audience(any_string())),
+            proptest::option::of(date_double()),
+        ),
+        (
+            proptest::option::of(date_double()),
+            proptest::option::of(date_double()),
+            proptest::option::of(any_string()),
+            other_claims(),
+        ),
+    )
+        .prop_map(|((iss, sub, aud, exp), (nbf, iat, jti, other))| {
+            claims_of(iss, sub, aud, exp, nbf, iat, jti, other)
+        })
+}
+// ---------------------------------------------------------------------------
+// 2. Claims round trip (RFC 7519 §4; ADR 0027 §1)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// ADR 0027 §1: `Claims::from_json(to_json(c)) == c` for any Claims Set,
+    /// and serializing the parsed set gives the same octets (registered
+    /// claims in the fixed order, the others in insertion order, `aud` in
+    /// its form).
+    #[test]
+    fn claims_json_round_trip(c in any_claims()) {
+        let json = c.to_json();
+        let back = Claims::from_json(json.as_bytes());
+        prop_assert_eq!(back.as_ref(), Ok(&c), "{}", json);
+        let back = back.unwrap();
+        prop_assert_eq!(back.to_json(), json);
+        let names: Vec<&str> = back.other_claims().iter().map(|(n, _)| n).collect();
+        let expected: Vec<&str> = c.other_claims().iter().map(|(n, _)| n).collect();
+        prop_assert_eq!(names, expected, "insertion order");
     }
 }
