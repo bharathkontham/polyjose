@@ -75,12 +75,22 @@ const NO_DISTANCE_CODES: &str = "deflate: distance in a block with no distance c
 /// Inflates the raw DEFLATE stream `input` (RFC 1951 §3.2), producing at
 /// most `max_output` bytes.
 ///
+/// Decoding stops at the end of the block whose BFINAL bit is set (RFC 1951
+/// §3.2.3); any bytes after it are ignored. The output buffer grows with the
+/// output and its capacity never exceeds `max_output`; nothing else is
+/// allocated on the heap. Total for every input: no panic, no `unsafe`.
+///
 /// # Errors
 ///
-/// An error for a malformed or truncated stream, or one whose output would
-/// exceed `max_output`.
-pub(crate) fn inflate(_input: &[u8], _max_output: usize) -> Result<Zeroizing<Vec<u8>>> {
-    Err(Error::UnsupportedAlgorithm)
+/// [`Error::InvalidFormat`] for a truncated stream or any RFC 1951 §3.2
+/// structural error (reserved BTYPE, LEN/NLEN mismatch, a distance before
+/// the start of the output, symbols 286/287 or distances 30/31, HLIT above
+/// 286 or HDIST above 30, a bad code-length repeat, an over-subscribed or
+/// incomplete Huffman code, a missing end-of-block code), and as soon as the
+/// output would exceed `max_output`.
+pub(crate) fn inflate(input: &[u8], max_output: usize) -> Result<Zeroizing<Vec<u8>>> {
+    let mut peak = 0;
+    inflate::inflate_tracked(input, max_output, &mut peak)
 }
 
 /// Compresses `input` into a raw DEFLATE stream (RFC 1951 §3.2).
