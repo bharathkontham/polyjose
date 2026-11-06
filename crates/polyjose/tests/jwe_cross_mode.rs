@@ -512,3 +512,39 @@ fn non_direct_modes_with_an_unprotected_alg_still_decrypt() {
         }
     }
 }
+
+#[test]
+fn polyjose_protects_a_direct_alg_in_every_serialization() {
+    // ADR 0050 §1: "polyjose's encryptor already places alg and enc in the
+    // protected header". For the direct modes that holds in the general
+    // form too: they have exactly one recipient (RFC 7516 §5.1 steps 5–6),
+    // so `alg` and its parameters (`epk`, `apu`, `apv`, RFC 7518 §4.6.1)
+    // go in the protected header and `recipients[0]` is empty (§7.2.1:
+    // `header` and `encrypted_key` are both optional). The output decrypts.
+    let oct = audit_key();
+    let ec = generate(KeySpec::Ec(EcCurve::P256)).unwrap_or_else(|e| panic!("{e}"));
+    let okp = generate(KeySpec::Okp(OkpCurve::X25519)).unwrap_or_else(|e| panic!("{e}"));
+    for (alg, decrypt_key, encrypt_key) in [
+        (A::Dir, &oct, oct.clone()),
+        (A::EcdhEs, &ec, public(&ec)),
+        (A::EcdhEs, &okp, public(&okp)),
+    ] {
+        let general = Encryptor::new(E::A128GCM)
+            .recipient(Recipient::new(alg.clone(), &encrypt_key).apu(b"a".to_vec()))
+            .encrypt_json(b"m", JsonForm::General)
+            .unwrap_or_else(|e| panic!("{alg}: {e}"));
+        let v = parse(&general);
+        let protected: Value = serde_json::from_slice(&bytes(&text(&v, "protected")))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(protected["alg"], alg.as_str(), "{alg}");
+        assert_eq!(protected["enc"], "A128GCM", "{alg}");
+        if alg == A::EcdhEs {
+            assert_eq!(protected["apu"], "YQ", "{alg}");
+            assert!(protected["epk"].is_object(), "{alg}");
+        }
+        assert_eq!(v["recipients"], json!([{}]), "{alg}");
+        let p = policy(&[alg.clone()], &[E::A128GCM]);
+        let d = decrypt_json(&general, decrypt_key, &p).unwrap_or_else(|e| panic!("{alg}: {e}"));
+        assert_eq!(d.plaintext(), b"m", "{alg}");
+    }
+}
