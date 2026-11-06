@@ -218,7 +218,7 @@ pub(crate) fn to_spki(key: &OkpKey) -> Result<Zeroizing<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jwk::KeyMaterial;
+    use crate::jwk::{EcCurve, KeyMaterial};
     use crate::keys::der::fixtures;
     use crate::keys::pem;
     use crate::keys::types::Label;
@@ -378,5 +378,266 @@ mod tests {
                 assert_eq!(*pem::encode(label, &exported).unwrap(), text, "{name}");
             }
         }
+    }
+
+    /// The PKCS#8 negative vectors on an RFC 8037 A.1 or RFC 8410 §10.3
+    /// base (N20–N27), end to end through `pkcs8::decode` and this mapper,
+    /// fail with their manifest code. N20–N24 are container errors (T02);
+    /// N25 (a 31-octet CurvePrivateKey), N26 (a CurvePrivateKey that is
+    /// not an OCTET STRING, RFC 8410 §7) and N27 (a v2 publicKey that is
+    /// not the key of `d`, ADR 0043 §3) are rejected here and in `jwk.rs`.
+    #[test]
+    fn okp_pkcs8_negative_vectors_fail_with_the_manifest_code() {
+        let vectors: Vec<_> = fixtures::negatives()
+            .into_iter()
+            .filter(|n| n.id.starts_with("N2"))
+            .collect();
+        let ids: Vec<&str> = vectors.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["N20", "N21", "N22", "N23", "N24", "N25", "N26", "N27"]
+        );
+        for vector in vectors {
+            let err = import_pkcs8(&fixtures::load("negative", &vector.file)).unwrap_err();
+            assert_eq!(err.code(), vector.expect, "{}: {err:?}", vector.id);
+        }
+        // The three this task owns fail for the reason named in the
+        // manifest, not on an earlier container check.
+        let reason = |id: &str| import_pkcs8(&fixtures::negative(id)).unwrap_err();
+        assert_eq!(
+            reason("N25"),
+            Error::InvalidKey("CurvePrivateKey is not 32 octets")
+        );
+        assert!(
+            matches!(reason("N26"), Error::InvalidKey(detail) if detail.contains("tag")),
+            "{:?}",
+            reason("N26")
+        );
+        // N27's flipped octet leaves no valid Ed25519 point: `jwk.rs`
+        // rejects it before the pair check, which is tested below with a
+        // valid point.
+        assert!(
+            matches!(reason("N27"), Error::InvalidKey(detail) if detail.starts_with("Ed25519")),
+            "{:?}",
+            reason("N27")
+        );
+    }
+
+    /// Ed448 and X448 (RFC 8410 §3) are out of scope (ADR 0006): OpenSSL's
+    /// keys fail with `UnsupportedAlgorithm` end to end, through T02's
+    /// classification, and so does an encrypted Ed25519 PKCS#8 (RFC 5958
+    /// §3, ADR 0018 §4).
+    #[test]
+    fn ed448_x448_and_encrypted_keys_are_unsupported() {
+        let names = fixtures::files("openssl", |name| {
+            name.starts_with("reject-ed448-")
+                || name.starts_with("reject-x448-")
+                || name.starts_with("reject-ed25519-")
+        });
+        assert_eq!(names.len(), 4, "{names:?}");
+        for name in names {
+            let der = fixtures::load("openssl", &name);
+            let result = if name.contains("spki") {
+                import_spki(&der)
+            } else {
+                import_pkcs8(&der)
+            };
+            assert_eq!(result.unwrap_err(), Error::UnsupportedAlgorithm, "{name}");
+        }
+    }
+
+    /// RFC 8410 §4, RFC 8032 §5.1.5, RFC 7748 §5: an OKP subjectPublicKey
+    /// is exactly 32 octets.
+    #[test]
+    fn spki_keys_that_are_not_32_octets_are_rejected() {
+        for alg in [AlgId::Ed25519, AlgId::X25519] {
+            for len in [0, 1, 31, 33, 57, 64] {
+                let key = vec![0x09; len];
+                let der = spki::encode(&SpkiParts {
+                    alg,
+                    subject_public_key: &key,
+                })
+                .unwrap();
+                assert_eq!(
+                    import_spki(&der).unwrap_err(),
+                    Error::InvalidKey("OKP subjectPublicKey is not 32 octets"),
+                    "{alg:?} {len}"
+                );
+            }
+        }
+    }
+
+    /// The RFC 8037 A.6 X25519 key (RFC 7748 §6.1 Alice) as a v2 PKCS#8
+    /// with `public_key` (RFC 5958 §2), built from the committed v1 DER.
+    fn x25519_v2(public_key: &[u8]) -> Zeroizing<Vec<u8>> {
+        let v1 = fixtures::load("rfc", "rfc8037-a6-x25519-pkcs8.der");
+        let parts = pkcs8::decode(&v1).unwrap();
+        pkcs8::encode(&Pkcs8Parts {
+            version: 1,
+            public_key: Some(public_key),
+            ..parts
+        })
+        .unwrap()
+    }
+
+    /// ADR 0043 §3, ADR 0018 §3: a v2 X25519 publicKey must be X25519(d, 9)
+    /// (RFC 7748 §6.1). `jwk.rs` does not check X25519 pairs yet, so this
+    /// mapper does: Alice's own public key is accepted, Bob's, one with a
+    /// flipped bit, and one with the high bit set (which RFC 7748 §5 masks
+    /// when a u-coordinate is used, so it is a different encoding) are not.
+    #[test]
+    fn x25519_v2_public_key_must_be_the_key_of_d() {
+        let jwk = jwk_fixture("rfc", "rfc8037-a6-x25519-pkcs8.jwk.json");
+        let alice = okp(&jwk).x().to_vec();
+        let accepted = import_pkcs8(&x25519_v2(&alice)).unwrap();
+        assert_same_key(&accepted, &jwk, "v2 with Alice's public key");
+        // Exported as v1, without the publicKey (ADR 0018 §3).
+        assert_eq!(
+            *to_pkcs8(okp(&accepted)).unwrap(),
+            fixtures::load("rfc", "rfc8037-a6-x25519-pkcs8.der")
+        );
+
+        let bob = okp(&jwk_fixture("rfc", "rfc8037-a6-x25519-bob-spki.jwk.json"))
+            .x()
+            .to_vec();
+        let mut flipped = alice.clone();
+        flipped[0] ^= 0x01;
+        let mut high_bit = alice.clone();
+        high_bit[31] |= 0x80;
+        assert_ne!(high_bit, alice);
+        for (what, key) in [("Bob's", bob), ("flipped", flipped), ("high bit", high_bit)] {
+            assert_eq!(
+                import_pkcs8(&x25519_v2(&key)).unwrap_err(),
+                Error::InvalidKey("X25519 PKCS#8 publicKey does not match the private key"),
+                "{what}"
+            );
+        }
+    }
+
+    /// RFC 5958 §2 and RFC 8410 §7: a v2 publicKey is the 32-octet key; any
+    /// other length is rejected before it is compared, for both curves.
+    #[test]
+    fn v2_public_keys_that_are_not_32_octets_are_rejected() {
+        let ed25519 = fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der");
+        for len in [0, 31, 33, 64] {
+            let key = vec![0x5A; len];
+            let ed = pkcs8::encode(&Pkcs8Parts {
+                version: 1,
+                public_key: Some(&key),
+                ..pkcs8::decode(&ed25519).unwrap()
+            })
+            .unwrap();
+            for der in [&ed[..], &x25519_v2(&key)[..]] {
+                assert_eq!(
+                    import_pkcs8(der).unwrap_err(),
+                    Error::InvalidKey("PKCS#8 publicKey is not 32 octets"),
+                    "{len}"
+                );
+            }
+        }
+    }
+
+    /// RFC 8410 §7: the privateKey is exactly one CurvePrivateKey OCTET
+    /// STRING (X.690 §8.1.1: nothing after it), of 32 octets.
+    #[test]
+    fn malformed_curve_private_keys_are_rejected() {
+        let a1 = fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der");
+        let parts = pkcs8::decode(&a1).unwrap();
+        let seed = &parts.private_key[2..];
+        let mut trailing = parts.private_key.to_vec();
+        trailing.extend_from_slice(&[0x05, 0x00]);
+        let mut long = vec![0x04, 0x21];
+        long.extend_from_slice(seed);
+        long.push(0x00);
+        let cases: [(&str, &[u8]); 5] = [
+            ("empty", &[]),
+            ("bare seed", seed),
+            ("trailing NULL", &trailing),
+            ("33 octets", &long),
+            ("empty OCTET STRING", &[0x04, 0x00]),
+        ];
+        for (what, private_key) in cases {
+            let err = from_pkcs8(Pkcs8Parts {
+                private_key,
+                ..parts
+            })
+            .unwrap_err();
+            assert!(matches!(err, Error::InvalidKey(_)), "{what}: {err:?}");
+        }
+    }
+
+    /// The mappers take only OKP containers; T08 dispatches on the
+    /// classified algorithm, and anything else is an error, not a panic.
+    #[test]
+    fn non_okp_containers_are_rejected() {
+        let a1 = fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der");
+        let parts = pkcs8::decode(&a1).unwrap();
+        let spki_der = fixtures::load("rfc", "rfc8037-a2-ed25519-spki.der");
+        let public = spki::decode(&spki_der).unwrap();
+        for alg in [AlgId::Ec(EcCurve::P256), AlgId::RsaEncryption] {
+            let not_okp = Error::InvalidKey("the key is not an OKP key");
+            assert_eq!(
+                from_pkcs8(Pkcs8Parts { alg, ..parts }).unwrap_err(),
+                not_okp
+            );
+            assert_eq!(from_spki(SpkiParts { alg, ..public }).unwrap_err(), not_okp);
+        }
+    }
+
+    /// The plan's export table (T08): a public key has no PKCS#8 encoding.
+    #[test]
+    fn a_public_key_has_no_pkcs8_export() {
+        let jwk = jwk_fixture("rfc", "rfc8037-a2-ed25519-spki.jwk.json");
+        assert_eq!(
+            to_pkcs8(okp(&jwk)).unwrap_err(),
+            Error::InvalidKey("private key required")
+        );
+    }
+
+    /// ADR 0043 §3, ADR 0018 §3: the RFC 8410 §10.3 v2 key with the valid
+    /// RFC 8037 A.1 public key in place of its own is rejected by
+    /// `Jwk::from_object` (in constant time, `ed25519_private_matches`).
+    #[test]
+    fn ed25519_v2_public_key_of_another_key_is_rejected() {
+        let v2 = fixtures::load("rfc", "rfc8410-10.3-ed25519-pkcs8-v2-attr-pub.pem");
+        let other = okp(&jwk_fixture("rfc", "rfc8037-a2-ed25519-spki.jwk.json"))
+            .x()
+            .to_vec();
+        let der = pkcs8::encode(&Pkcs8Parts {
+            public_key: Some(&other),
+            ..pkcs8::decode(&v2).unwrap()
+        })
+        .unwrap();
+        assert_eq!(
+            import_pkcs8(&der).unwrap_err(),
+            Error::InvalidKey("Ed25519 private key d does not match x")
+        );
+    }
+
+    /// Wycheproof `ed25519_test.json` tcId 160 public key 15deb307…b2c23b
+    /// (`MixedOrderPublicKey`): canonical, not of small order, with a
+    /// torsion component (the same vector as `jws/eddsa.rs`).
+    const MIXED_ORDER: &str = "Fd6zBynrPkZciPEbV9DI026w9nDDsi0vgOpgSe6ywjs";
+
+    /// ADR 0043 §1: an Ed25519 SPKI whose key has a torsion component is
+    /// rejected through `Jwk::from_object`. The same 32 octets are a valid
+    /// X25519 key, where torsion is neutralised by clamping (ADR 0043 §2).
+    #[test]
+    fn ed25519_spki_with_a_torsion_component_is_rejected() {
+        let key = crate::util::b64url_decode(MIXED_ORDER).unwrap();
+        let spki_of = |alg| {
+            spki::encode(&SpkiParts {
+                alg,
+                subject_public_key: &key,
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            import_spki(&spki_of(AlgId::Ed25519)).unwrap_err(),
+            Error::InvalidKey("Ed25519 public key is invalid")
+        );
+        let x25519 = import_spki(&spki_of(AlgId::X25519)).unwrap();
+        assert_eq!(okp(&x25519).crv(), OkpCurve::X25519);
+        assert_eq!(okp(&x25519).x(), key.as_slice());
     }
 }
