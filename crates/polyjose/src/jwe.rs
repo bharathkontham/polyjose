@@ -10,4 +10,19 @@
     dead_code,
     reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
 )]
+mod content;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod enc_cbc_hmac;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
+mod enc_gcm;
+#[allow(
+    dead_code,
+    reason = "the JWE skeleton (0003 T01): called once the pipeline (T09) lands"
+)]
 mod random;
