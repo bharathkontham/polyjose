@@ -68,9 +68,8 @@
 //!   must derive that `x` (RFC 8032 §5.1.5, RFC 8037 §2; ADR 0043 §3). An
 //!   `X25519` `x` has no further check: every 32-octet string is a valid
 //!   u-coordinate (RFC 7748 §5), and torsion is neutralised by clamping
-//!   (ADR 0043 §2). Whether an `X25519` `d` derives `x` (ADR 0043 §3) is not
-//!   checked yet: this release has no X25519 primitive, and feature 0003
-//!   adds the check together with X25519 key agreement.
+//!   (ADR 0043 §2). An `X25519` `d` must derive `x`: `x` = X25519(`d`, 9)
+//!   (RFC 7748 §6.1, RFC 8037 §2; ADR 0043 §3).
 //! - **`RSA`**, public keys only (RFC 7518 §6.3.1, ADR 0021): `n` and `e`
 //!   are minimal Base64urlUInt values, non-empty with no leading zero octet
 //!   (RFC 7518 §2, §6.3.1.1); `n` is odd (RFC 8017 §3.1) and at least
@@ -743,9 +742,8 @@ impl ZeroizeOnDrop for EcKey {}
 /// `Ed25519` `x` must also decode canonically, not be of small order and
 /// have no torsion component (RFC 8032 §5.1.3, ADR 0026 §6, ADR 0041 §4,
 /// ADR 0043 §1), and an `Ed25519` `d` must derive `x` (ADR 0043 §3). An
-/// `X25519` `x` can be any 32 octets (RFC 7748 §5); whether an `X25519` `d`
-/// derives `x` is not checked yet (ADR 0043 §3 is completed by feature
-/// 0003, which brings the X25519 primitive).
+/// `X25519` `x` can be any 32 octets (RFC 7748 §5), and an `X25519` `d`
+/// must derive `x` (RFC 7748 §6.1, ADR 0043 §3).
 ///
 /// `d` is held in a buffer that is wiped on drop, and `Debug` prints
 /// `"<redacted>"` instead of it.
