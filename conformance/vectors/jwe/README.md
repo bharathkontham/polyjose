@@ -4,6 +4,7 @@ This is the index of the JWE vectors (RFC 7516, RFC 7518 §4–§5, RFC 7520 §5
 
 - **Features.** A vector that lists `"fixed-rng"` needs the cargo feature `insecure-test-vectors` (ADR 0041 §3), and one that lists `"deflate"` needs `deflate` (ADR 0017). A build without them reports the vector SKIPPED by name and never counts it as passing. The bindings never enable `fixed-rng`, so every RFC output reproduced by a `fixed-rng` `jwe.encrypt` vector also has a `jwe.decrypt` vector that every platform runs.
 - **Where the values come from.** RFC 7520 values are generated from the vendored ietf-jose cookbook (`crates/polyjose/tests/third_party/ietf-jose-cookbook/`), RFC 7516 and RFC 7517 values from the RFC text, and every other token by Node's built-in crypto (OpenSSL) or Python's standard library, independently of polyjose. Nothing is transcribed by hand. The generators are in [`../../tools/jwe/`](../../tools/jwe/) and are listed in [`../../README.md`, Tools](../../README.md#tools).
+- **Notices.** The RFC 7520 values are covered by [`../third_party/rfc7520/NOTICE.md`](../third_party/rfc7520/NOTICE.md), which lists these directories; the vendored cookbook keeps its own Unlicense notice in [`../../../crates/polyjose/tests/third_party/ietf-jose-cookbook/`](../../../crates/polyjose/tests/third_party/ietf-jose-cookbook/README.md).
 
 ## Directories
 
