@@ -1196,3 +1196,97 @@ proptest! {
         prop_assert_eq!(v.recipient, 0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Deterministic checks
+// ---------------------------------------------------------------------------
+
+/// `Policy::max_key_candidates` rustdoc and ADR 0029 §1, §4: the bound
+/// applies to a JWK Set only. With `max_key_candidates(0)`, a single key
+/// (`Keys::One`) verifies exactly as under the default policy, while the
+/// same key as a one-member set (`Keys::Set`) is `NoMatchingKey`.
+#[test]
+fn max_key_candidates_zero_does_not_affect_a_single_key() {
+    let clock = FixedClock(1_300_819_320);
+    let mut claims = Claims::new();
+    claims.iss = Some("joe".into());
+    claims.exp = NumericDate::from_secs(1_300_819_380);
+    for (signer, kid) in [
+        (
+            Signer {
+                eddsa: false,
+                key: 0,
+            },
+            None,
+        ),
+        (
+            Signer {
+                eddsa: true,
+                key: 0,
+            },
+            None,
+        ),
+        (
+            Signer {
+                eddsa: true,
+                key: 1,
+            },
+            Some("k1"),
+        ),
+    ] {
+        let alg = signer.alg();
+        let mut signing = signer.signing_key();
+        let mut verifying = signer.verifying_key();
+        if let Some(kid) = kid {
+            // The key's kid goes into the header (ADR 0027 §8); with
+            // `Keys::One` it is not compared (ADR 0029 §1).
+            let with_kid = |key: &Jwk| {
+                let json = key.to_json();
+                jwk(&format!(
+                    r#"{},"kid":"{kid}"}}"#,
+                    json.strip_suffix('}').unwrap()
+                ))
+            };
+            signing = with_kid(&signing);
+            verifying = with_kid(&verifying);
+        }
+        let token = jwt::sign(&claims, &IssueOptions::new(alg.clone()), &signing).unwrap();
+
+        let default = Policy::new(&clock, &ALLOWED).unwrap();
+        let zero = Policy::new(&clock, &ALLOWED).unwrap().max_key_candidates(0);
+        let baseline = jwt::verify(&token, Keys::One(&verifying), &default).unwrap();
+        let bounded = jwt::verify(&token, Keys::One(&verifying), &zero).unwrap();
+        assert_eq!(bounded, baseline, "{alg:?}");
+        assert_eq!(bounded.key_index, None);
+        assert_eq!(bounded.kid.as_deref(), kid);
+        assert_eq!(bounded.claims, claims);
+
+        // A wrong key is still the same error with either policy.
+        let other = Signer {
+            key: signer.key + 1,
+            ..signer
+        }
+        .verifying_key();
+        assert_eq!(
+            jwt::verify(&token, Keys::One(&other), &zero).unwrap_err(),
+            jwt::verify(&token, Keys::One(&other), &default).unwrap_err(),
+        );
+
+        // The contrast: the same key as a JWK Set is bounded (ADR 0029 §4).
+        let set = JwkSet::from_json(
+            format!(r#"{{"keys":[{}]}}"#, verifying.to_json().as_str()).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(set.len(), 1);
+        assert_eq!(
+            jwt::verify(&token, Keys::Set(&set), &zero).unwrap_err(),
+            Error::NoMatchingKey
+        );
+        assert_eq!(
+            jwt::verify(&token, Keys::Set(&set), &default)
+                .unwrap()
+                .key_index,
+            Some(0)
+        );
+    }
+}
