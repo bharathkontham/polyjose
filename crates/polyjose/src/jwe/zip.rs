@@ -23,7 +23,8 @@ use crate::{Error, Result};
 ///
 /// Compressing before encrypting can reveal plaintext through the
 /// ciphertext length (RFC 8725 §3.6), which is why `Encryptor::compress`
-/// exists only with the `deflate` feature and is opt-in.
+/// is opt-in. Without the `deflate` feature `core` refuses it before any
+/// random draw, so the stub below is not reached (ADR 0030 §4).
 ///
 /// # Errors
 ///

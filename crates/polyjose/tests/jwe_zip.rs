@@ -2,8 +2,9 @@
 //! §5.1 step 11 and §5.2 step 17, RFC 8725 §3.6, ADR 0017.
 //!
 //! - In every build: any `zip` other than `DEF` is `UnsupportedAlgorithm`,
-//!   and so is `DEF` without the `deflate` feature, where
-//!   `Encryptor::compress` does not exist either.
+//!   and so is `DEF` without the `deflate` feature, where encrypting with
+//!   `Encryptor::compress` (which every build has, ADR 0030 §4) is
+//!   `UnsupportedAlgorithm` too.
 //! - With `deflate`: RFC 7520 §5.9 (A128KW + A128GCM + DEF) decrypts to the
 //!   Figure 72 plaintext in the compact form; our compressed output round
 //!   trips and inflates with an independent decoder (byte-exact compression
@@ -98,6 +99,8 @@ fn a_zip_other_than_def_is_unsupported_in_every_build() {
 
 #[cfg(not(feature = "deflate"))]
 mod without_deflate {
+    use polyjose::jwe::{JsonForm, Recipient};
+
     use super::*;
 
     #[test]
@@ -117,26 +120,31 @@ mod without_deflate {
         );
     }
 
-    /// Method-resolution probe: an inherent `Encryptor::compress` would be
-    /// picked before this trait method (inherent methods take priority),
-    /// and its `Encryptor` result would not compile as `&str`. So this
-    /// builds only while the method does not exist.
-    trait Probe {
-        fn compress(self) -> &'static str;
-    }
-
-    impl Probe for Encryptor {
-        fn compress(self) -> &'static str {
-            "no inherent compress"
-        }
-    }
-
     #[test]
-    fn encryptor_compress_does_not_exist() {
-        // RFC 8725 §3.6: compression before encryption is opt-in, and only
-        // with the `deflate` feature.
-        let probe: &'static str = Encryptor::new(E::A128GCM).compress();
-        assert_eq!(probe, "no inherent compress");
+    fn encrypting_with_compress_is_unsupported() {
+        // ADR 0030 §4: `compress` is in every build's surface, and without
+        // a codec (ADR 0017 §5) asking for it is `UnsupportedAlgorithm`, in
+        // every serialization, rather than a silently uncompressed JWE.
+        let e = Encryptor::new(E::A128GCM)
+            .compress()
+            .recipient(Recipient::new(A::Dir, &oct(&DIR_KEY)));
+        assert_eq!(code(e.encrypt_compact(b"x")), "UnsupportedAlgorithm");
+        for form in [JsonForm::Flattened, JsonForm::General] {
+            assert_eq!(
+                code(e.encrypt_json(b"x", form)),
+                "UnsupportedAlgorithm",
+                "{form:?}"
+            );
+        }
+        // A key-wrapping mode too, and without `compress` the same request
+        // encrypts.
+        let wrapped =
+            Encryptor::new(E::A128GCM).recipient(Recipient::new(A::A128KW, &oct(&DIR_KEY)));
+        assert_eq!(
+            code(wrapped.clone().compress().encrypt_compact(b"x")),
+            "UnsupportedAlgorithm"
+        );
+        assert_eq!(code(wrapped.encrypt_compact(b"x")), "ok");
     }
 }
 

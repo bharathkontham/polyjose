@@ -414,10 +414,17 @@ impl Encryptor {
     }
 
     /// Compresses the plaintext with `zip: DEF` before encrypting it
-    /// (RFC 7516 §4.1.3). Compression can reveal information about the
-    /// plaintext (RFC 8725 §3.6); use it only for data an attacker cannot
-    /// influence.
-    #[cfg(feature = "deflate")]
+    /// (RFC 7516 §4.1.3, §5.1 step 11). Compression can reveal information
+    /// about the plaintext (RFC 8725 §3.6); use it only for data an attacker
+    /// cannot influence.
+    ///
+    /// This method exists in every build, so the binding surface's
+    /// `compress` option is the same on every platform (ADR 0030 §4). The
+    /// codec is the off-by-default `deflate` feature (ADR 0017): without
+    /// it, encrypting after `compress()` fails with
+    /// [`Error::UnsupportedAlgorithm`], among the support checks and so
+    /// before anything is drawn from the random source, and never produces
+    /// an uncompressed JWE in its place (ADR 0017 §5, ADR 0030 §4).
     #[must_use]
     pub fn compress(mut self) -> Self {
         self.compress = true;
@@ -649,7 +656,6 @@ mod tests {
         assert_eq!(e.aad.as_deref(), Some(&b"aad"[..]));
         assert_eq!(e.recipients.len(), 2);
         assert!(!e.compress);
-        #[cfg(feature = "deflate")]
         assert!(e.compress().compress);
     }
 
