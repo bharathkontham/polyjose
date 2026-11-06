@@ -123,19 +123,10 @@ mod ecdsa;
 mod eddsa;
 mod hmac;
 mod json;
-// Nothing calls the shared rules until compact.rs and json.rs (T04, T05)
-// replace their stubs. `allow`, not `expect`: the two tasks merge
-// separately and must not edit this file, and an `expect` would turn into
-// an error once both use everything. Remove this attribute after both land.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "the shared rules are called by compact.rs and json.rs (T04, T05)"
-    )
-)]
 mod process;
 mod rsa;
+#[cfg(test)]
+mod wycheproof_jose;
 
 pub use compact::{sign_compact, verify_compact};
 pub use json::{sign_flattened, sign_general, verify_json};
