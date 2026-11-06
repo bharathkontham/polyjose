@@ -87,6 +87,53 @@ new_case binding-new-file
 append_to bindings/ffi/src/sign/rsa.rs 'pub fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
 expect_fail "rsa SigningKey in a new binding file" "bindings/ffi/src/sign/rsa.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
 
+# --- Check 9: paths split across lines, by whitespace or by a comment ------------------------------
+# Rust lets whitespace and comments sit between the tokens of a path, so `rsa`, `::` and the item
+# can be on different lines; none of these needs rustfmt to have run (or survives it).
+new_case split-newline
+append_to "$jws" $'fn s(k: rsa\n    ::pkcs1v15::SigningKey<Sha256>) {}'
+expect_fail "rsa / newline / ::pkcs1v15::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-spaces-private-key
+append_to "$jws" 'fn k() -> rsa :: RsaPrivateKey { todo!() }'
+expect_fail "rsa :: RsaPrivateKey" "$jws:[0-9]+: RsaPrivateKey" "$src_fail"
+
+new_case split-spaces-signing-key
+append_to "$jws" 'type K = rsa :: pss :: SigningKey<Sha256>;'
+expect_fail "rsa :: pss :: SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-block-comment
+append_to "$jws" 'type K = rsa /* not the crate */ ::pss::SigningKey<Sha256>;'
+expect_fail "rsa /* comment */ ::pss::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-line-comment
+append_to "$jws" $'type K = rsa // not the crate\n    ::pss::SigningKey<Sha256>;'
+expect_fail "rsa // comment / newline / ::pss::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-leading-colons
+append_to "$jws" $'type K = ::\n    rsa\n    ::pss::SigningKey<Sha256>;'
+expect_fail ":: / rsa / ::pss::SigningKey" "$jws:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case split-use-alias
+append_to crates/polyjose/src/jwk.rs $'use\n    rsa as r;'
+expect_fail "use / newline / rsa as r" "crates/polyjose/src/jwk.rs:[0-9]+: use rsa / use rsa as" "$src_fail"
+
+new_case split-pub-use
+append_to crates/polyjose/src/jwk.rs $'pub(crate)\n    use rsa::pkcs1v15;'
+expect_fail "pub(crate) / newline / use rsa::..." "crates/polyjose/src/jwk.rs:[0-9]+: pub use rsa" "$src_fail"
+
+new_case split-extern-crate
+append_to crates/polyjose/src/jwk.rs $'extern crate\n    rsa;'
+expect_fail "extern crate / newline / rsa" "crates/polyjose/src/jwk.rs:[0-9]+: extern crate rsa" "$src_fail"
+
+new_case split-decrypt-call
+append_to crates/polyjose/src/jwe.rs $'fn d<K>(k: &K, ek: &[u8]) { let _cek = k.decrypt\n    (rsa::Oaep::<rsa::sha2::Sha256>::new(), ek); }'
+expect_fail "decrypt / newline / (Oaep...)" "crates/polyjose/src/jwe.rs:[0-9]+: a decrypt call in a file that uses the rsa crate" "$src_fail"
+
+new_case split-binding
+append_to bindings/node/src/lib.rs $'pub fn s(k: rsa /* x */\n    :: pkcs1v15 :: SigningKey<Sha256>) {}'
+expect_fail "split rsa path in a binding" "bindings/node/src/lib.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
 # Look-alikes that are not RSA private-key use.
 new_case look-alikes
 append_to crates/polyjose/src/jws/ecdsa.rs 'fn s(k: &p256::ecdsa::SigningKey) {}'
@@ -94,6 +141,82 @@ append_to crates/polyjose/src/jwe/enc_cbc_hmac.rs 'type D = cbc::Decryptor<aes::
 append_to crates/polyjose/src/jws/mod.rs 'mod rsa; fn v() { self::rsa::verify(); } fn s(k: &ed25519_dalek::SigningKey) {}'
 append_to crates/polyjose/src/jws/rsa.rs 'use rsa::pkcs1v15::VerifyingKey; use rsa::pss::VerifyingKey as PssKey; use rsa::RsaPublicKey;'
 expect_pass "ECDSA/EdDSA SigningKey, cbc Decryptor, self::rsa:: and the typed RSA VerifyingKey"
+
+# The same legitimate code as rustfmt lays it out over several lines, one case per family, so the
+# whole-file views of check 9 are exercised on it too.
+new_case rsa-public-key-code
+append_to crates/polyjose/src/jws/rsa.rs '//! RS256 and PS256 verification only; see [`super::ecdsa`] for signing.
+use rsa::{
+    BigUint, RsaPublicKey,
+    pkcs1v15::{Signature, VerifyingKey},
+    pss::VerifyingKey as PssVerifyingKey,
+    signature::Verifier,
+    traits::PublicKeyParts,
+};
+
+/// Imports n and e (RFC 7518 §6.3.1) and verifies (RFC 7518 §3.3, §3.5).
+fn verify(n: &[u8], e: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    let Ok(key) = RsaPublicKey::new(BigUint::from_bytes_be(n), BigUint::from_bytes_be(e)) else {
+        return false;
+    };
+    let _bits = key.size() * 8; // "// not a comment" in a string: "/* nor this"
+    let pkcs1 = rsa::pkcs1v15::VerifyingKey::<rsa::sha2::Sha256>::new(key.clone());
+    let pss: PssVerifyingKey<rsa::sha2::Sha256> = rsa::pss::VerifyingKey::new(key);
+    let Ok(signature) = Signature::try_from(sig) else {
+        return false;
+    };
+    pkcs1.verify(msg, &signature).is_ok() || pss.verify(msg, &signature.into()).is_ok()
+}
+
+fn _typed(_: VerifyingKey<rsa::sha2::Sha512>) {}'
+append_to crates/polyjose/src/jwe.rs 'fn wrap(key: &rsa::RsaPublicKey, rng: &mut R, cek: &[u8]) -> Vec<u8> {
+    key.encrypt(
+        rng,
+        rsa::Oaep::<rsa::sha2::Sha256>::new(),
+        cek,
+    )
+    .unwrap_or_default()
+}'
+expect_pass "rsa::RsaPublicKey, rsa::pkcs1v15::VerifyingKey, rsa::pss::VerifyingKey and an Oaep encrypt over several lines"
+
+new_case ecdsa-signing-key
+append_to crates/polyjose/src/jws/ecdsa.rs '//! ES256 signs (RFC 7518 §3.4); unlike [`super::rsa`], which only verifies.
+use p256::ecdsa::{
+    Signature, SigningKey, VerifyingKey,
+    signature::{Signer, Verifier},
+};
+
+fn sign(d: &[u8; 32], msg: &[u8]) -> Option<Vec<u8>> {
+    let key = p256::ecdsa::SigningKey::from_bytes(
+        &(*d).into(),
+    )
+    .ok()?;
+    let _p384: Option<p384::ecdsa::SigningKey> = None;
+    let _k256: Option<k256::ecdsa::SigningKey> = None;
+    let signature: Signature = key.sign(msg);
+    VerifyingKey::from(&key).verify(msg, &signature).ok()?;
+    let _ = SigningKey::verifying_key;
+    Some(signature.to_bytes().to_vec())
+}'
+expect_pass "p256::ecdsa::SigningKey over several lines in a file that does not use rsa"
+
+new_case eddsa-signing-key
+append_to crates/polyjose/src/jws/eddsa.rs '//! EdDSA over Ed25519 (RFC 8037 §3.1).
+use ed25519_dalek::{
+    Signature, Signer, SigningKey,
+    Verifier, VerifyingKey,
+};
+
+fn sign(seed: &[u8; 32], msg: &[u8]) -> [u8; 64] {
+    let key = ed25519_dalek::SigningKey::from_bytes(
+        seed,
+    );
+    let signature: Signature = key.sign(msg);
+    let _ok = VerifyingKey::from(&key).verify(msg, &signature).is_ok();
+    let _ = SigningKey::verifying_key;
+    signature.to_bytes()
+}'
+expect_pass "ed25519_dalek::SigningKey over several lines in a file that does not use rsa"
 
 # --- Check 10: sha1 --------------------------------------------------------------------------------
 new_case sha1
@@ -106,6 +229,46 @@ add_core_dependency 'sha1 = { version = "0.11", default-features = false }'
 replace_in deps-allowlist.txt $'\nsha2\n' $'\nsha2\nsha1\n'
 printf '\n### `sha1`\n\nInjected by scripts/tests/check-deps/rsa-guard.sh.\n' >>"$case_dir/CREDITS.md"
 expect_fail "sha1 dependency, allowlisted and credited" "^FAIL: sha1 is in the core's tree" "^FAIL: sha1 is in the core's tree"
+
+# --- Check 12: rsa under another name --------------------------------------------------------------
+# `foo = { package = "rsa" }` lets code write `foo::pkcs1v15::SigningKey`, which no source rule can
+# tie to rsa, so the rename itself fails, in any workspace member and any dependency table.
+rename_fail='^FAIL: the rsa package is a dependency under another name'
+rsa_pub='rsa_pub = { package = "rsa", version = "=0.10.0-rc.20", default-features = false }'
+
+new_case renamed-binding
+replace_in bindings/wasm/Cargo.toml 'wasm-bindgen = "0.2.130"' $'wasm-bindgen = "0.2.130"\n'"$rsa_pub"
+append_to bindings/wasm/src/lib.rs 'use rsa_pub::pkcs1v15::SigningKey;'
+expect_fail "package = \"rsa\" renamed in a binding, used as rsa_pub::pkcs1v15::SigningKey" \
+  "^  - polyjose-wasm \\(bindings/wasm/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
+
+new_case renamed-workspace-dependency
+replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.20", default-features = false }' \
+  $'rsa = { version = "=0.10.0-rc.20", default-features = false }\n'"$rsa_pub"
+replace_in bindings/ffi/Cargo.toml 'polyjose.workspace = true' $'polyjose.workspace = true\nrsa_pub.workspace = true'
+expect_fail "package = \"rsa\" renamed in [workspace.dependencies], inherited by a binding" \
+  "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
+
+# cargo refuses a second name for a package a crate already depends on, so the core's own rsa
+# dependency is the one renamed (each edit relocks, so the workspace keeps `rsa` too).
+new_case renamed-core-dependency
+replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.20", default-features = false }' \
+  $'rsa = { version = "=0.10.0-rc.20", default-features = false }\n'"$rsa_pub"
+replace_in crates/polyjose/Cargo.toml $'\nrsa.workspace = true\n' $'\nrsa_pub.workspace = true\n'
+expect_fail "the core's rsa dependency renamed through [workspace.dependencies]" \
+  "^  - polyjose \\(crates/polyjose/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
+
+new_case renamed-dev-dependency
+append_to bindings/ffi/Cargo.toml $'\n[dev-dependencies]\n'"$rsa_pub"
+relock
+expect_fail "package = \"rsa\" renamed in a binding's [dev-dependencies]" \
+  "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dev-dependencies\\]$" "$rename_fail"
+
+new_case renamed-target-dependency
+append_to bindings/node/Cargo.toml $'\n[target."cfg(unix)".dependencies]\nr = { package = "rsa", version = "=0.10.0-rc.20", default-features = false }'
+relock
+expect_fail "package = \"rsa\" renamed in a [target.*.dependencies] table" \
+  "^  - polyjose-node \\(bindings/node/Cargo.toml\\): rsa as r in \\[target\\.cfg\\(unix\\)\\.dependencies\\]$" "$rename_fail"
 
 # --- Check 11: rsa features ------------------------------------------------------------------------
 new_case rsa-feature

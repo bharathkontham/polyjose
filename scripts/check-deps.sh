@@ -23,8 +23,10 @@
 #      with its file and line;
 #  10. `sha1` is in the core's tree (ADR 0022: no SHA-1 anywhere in the core);
 #  11. `rsa` is built with any feature enabled, by the core or by anything else in the workspace
-#      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature).
-#  Checks 9-11 are the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
+#      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
+#  12. a workspace member depends on the `rsa` package under another name (`package = "rsa"`),
+#      which would hide its use from check 9.
+#  Checks 9-12 are the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
 #  them means removing that ignore.
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
@@ -475,10 +477,16 @@ for dep in pkgs[0]["dependencies"]:
 #      words are legitimate elsewhere (`p256::ecdsa::SigningKey`, `cbc::Decryptor`), so RSA code
 #      lives in files of its own (jws/rsa.rs, jwe/rsa_oaep.rs) and refers to child modules named
 #      `rsa` as `self::rsa::`.
+#    Rust allows whitespace and comments between the tokens of a path (`rsa` / newline /
+#    `::pkcs1v15::SigningKey`, `rsa /* … */ :: x`), and rustfmt need not have run. So every rule
+#    runs on each line and also on two whole-file views, with whitespace runs (newlines included)
+#    collapsed to one space and the spaces next to `::` removed: one with the comments kept and
+#    one with each comment replaced by a space. A view only adds findings; a finding that only a
+#    view sees is reported with the line where the match starts.
 #    Residual risk, outside any text scan: names built by macros or `include!`.
 check_rsa_public_only() {
   python3 -I -c '
-import os, re, sys
+import bisect, os, re, sys
 roots = sys.argv[1:]
 word = lambda w: re.compile(r"(?<![A-Za-z0-9_])" + w + r"(?![A-Za-z0-9_])")
 ANYWHERE = [
@@ -504,6 +512,65 @@ IN_RSA_FILE = [
      "a decrypt call in a file that uses the rsa crate: RSA decryption is not supported (ADR 0021)"),
 ]
 SKIP_DIRS = {"target", "node_modules", ".git"}
+# The whole-file views. Comments are found with a small lexer that knows string, raw string and
+# char literals (so a "//" inside a string is not a comment) and nested block comments; an
+# unterminated literal or comment runs to the end of the file. The view with the comments kept
+# covers any lexer mistake.
+Q = chr(39)
+RAW_STR = re.compile(r"[bc]?r(#*)\"")
+CHAR_LIT = re.compile(Q + r"(?:\\(?:u\{[0-9A-Fa-f_]*\}|x[0-9A-Fa-f]{2}|.)|[^\\\n" + Q + "])" + Q)
+def strip_comments(text):
+    """(char, offset) pairs of text with each comment replaced by one space at its offset."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append((" ", i))
+        elif text.startswith("/*", i):
+            depth, end = 1, i + 2
+            while end < n and depth:
+                if text.startswith("/*", end):
+                    depth, end = depth + 1, end + 2
+                elif text.startswith("*/", end):
+                    depth, end = depth - 1, end + 2
+                else:
+                    end += 1
+            out.append((" ", i))
+        else:
+            raw = None
+            if i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_"):
+                raw = RAW_STR.match(text, i)
+            char = CHAR_LIT.match(text, i) if text[i] == Q else None
+            if raw is not None:
+                close = text.find("\"" + raw.group(1), raw.end())
+                end = n if close < 0 else close + 1 + len(raw.group(1))
+            elif text[i] == "\"":
+                end = i + 1
+                while end < n and text[end] != "\"":
+                    end += 2 if text[end] == "\\" else 1
+                end = min(end + 1, n)
+            elif char is not None:
+                end = char.end()
+            else:
+                end = i + 1
+            out.extend((text[k], k) for k in range(i, end))
+        i = end
+    return out
+def flatten(pairs):
+    """Collapses whitespace runs to one space and drops the spaces next to ::, and returns the
+    text and the source offset of each of its characters."""
+    chars, offsets = [], []
+    for ch, offset in pairs:
+        if ch.isspace():
+            if chars and chars[-1] == " ":
+                continue
+            ch = " "
+        chars.append(ch)
+        offsets.append(offset)
+    keep = [k for k in range(len(chars)) if not (chars[k] == " " and (
+        "".join(chars[k + 1:k + 3]) == "::" or "".join(chars[max(k - 2, 0):k]) == "::"))]
+    return "".join(chars[k] for k in keep), [offsets[k] for k in keep]
 found = 0
 for root in roots:
     if not os.path.isdir(root):
@@ -515,15 +582,28 @@ for root in roots:
                 continue
             path = os.path.join(dirpath, name)
             with open(path, encoding="utf-8", errors="replace") as f:
-                lines = f.read().split("\n")
+                text = f.read()
+            lines = text.split("\n")
+            views = [flatten((ch, k) for k, ch in enumerate(text)), flatten(strip_comments(text))]
             rules = list(ANYWHERE)
-            if any(NAMES_RSA.search(line) for line in lines):
+            if any(NAMES_RSA.search(line) for line in lines) or any(NAMES_RSA.search(v) for v, _ in views):
                 rules += IN_RSA_FILE
+            reported = set()
             for number, line in enumerate(lines, 1):
                 for pattern, why in rules:
                     if pattern.search(line):
                         print("%s:%d: %s" % (path, number, why))
                         found += 1
+                        reported.add((number, why))
+            line_starts = [0] + [k + 1 for k, ch in enumerate(text) if ch == "\n"]
+            for view, offsets in views:
+                for pattern, why in rules:
+                    for m in pattern.finditer(view):
+                        number = bisect.bisect_right(line_starts, offsets[m.start()])
+                        if (number, why) not in reported:
+                            print("%s:%d: %s (path split across lines, by whitespace or by a comment)" % (path, number, why))
+                            found += 1
+                            reported.add((number, why))
 for root in roots:
     if not os.path.isdir(root):
         sys.exit("%s is not a directory" % root)
@@ -567,6 +647,43 @@ for node in meta["resolve"]["nodes"]:
   fi
 }
 
+# 12. No workspace member (the core, the bindings, anything else) depends on the rsa package under
+#     another name (`foo = { package = "rsa", … }`, directly or through [workspace.dependencies]),
+#     in any table: [dependencies], [dev-dependencies], [build-dependencies] or their [target.*.…]
+#     forms. Code could then write `foo::pkcs1v15::SigningKey`, which check 9 cannot tie to rsa
+#     (ADR 0021 §3). Read from cargo metadata (`rename`), so every way of spelling the manifest
+#     is covered.
+check_rsa_not_renamed() {
+  python3 -I -c '
+import json, os, sys
+meta_path, root = sys.argv[1], os.path.realpath(sys.argv[2])
+with open(meta_path, encoding="utf-8") as f:
+    meta = json.load(f)
+members = set(meta["workspace_members"])
+if not members:
+    sys.exit("cargo metadata lists no workspace members")
+tables = {None: "dependencies", "dev": "dev-dependencies", "build": "build-dependencies"}
+seen = 0
+for p in meta["packages"]:
+    if p["id"] not in members:
+        continue
+    seen += 1
+    for dep in p["dependencies"]:
+        table = tables[dep["kind"]]  # any other kind is a KeyError: fail closed
+        if dep["name"].lower().replace("_", "-") != "rsa" or dep.get("rename") in (None, "rsa"):
+            continue
+        where = "[target.%s.%s]" % (dep["target"], table) if dep.get("target") else "[%s]" % table
+        manifest = os.path.relpath(os.path.realpath(p["manifest_path"]), root)
+        print("%s (%s): rsa as %s in %s" % (p["name"], manifest, dep["rename"], where))
+if seen != len(members):
+    sys.exit("cargo metadata is missing %d workspace member(s)" % (len(members) - seen))
+' "$work/metadata.json" "$root_physical" >"$work/rsa-renames" || die "could not read the workspace's dependencies from cargo metadata"
+  if [ -s "$work/rsa-renames" ]; then
+    fail "the rsa package is a dependency under another name; depend on it as rsa, so check 9 can see its use (ADR 0021 §3):"
+    sed 's/^/  - /' "$work/rsa-renames"
+  fi
+}
+
 check_tree_allowlisted
 check_allowlist_not_stale
 check_default_features_off
@@ -578,13 +695,14 @@ check_core_no_build_script
 check_rsa_public_only
 check_no_sha1
 check_rsa_no_features
+check_rsa_not_renamed
 
 if [ "$failed" -ne 0 ]; then
   echo "check-deps: FAILED"
   exit 1
 fi
 
-echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features (ADR 0021, ADR 0022)"
+echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features and under its own name (ADR 0021, ADR 0022)"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
 exit 0

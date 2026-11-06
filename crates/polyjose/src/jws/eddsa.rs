@@ -17,6 +17,11 @@
 //!   §5.1.7 step 1), and a small-order public key, which this module also
 //!   rejects first with [`Error::InvalidKey`] as defence in depth (JWK
 //!   import already refuses one, ADR 0041 §4).
+//! - **Mixed-order public keys** (a torsion component, but not of small
+//!   order) are [`Error::InvalidKey`] too (ADR 0043 §1), although
+//!   `verify_strict` and RFC 8032 §5.1.7 accept them: implementations
+//!   disagree on such keys. JWK import refuses them first; `verify`
+//!   re-checks.
 
 use ed25519_dalek::{
     PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, Signature, Signer as _, SigningKey, VerifyingKey,
@@ -78,8 +83,8 @@ pub(crate) fn sign(alg: &SigningAlg, key: &Jwk, signing_input: &[u8]) -> Result<
 /// # Errors
 ///
 /// - [`Error::InvalidKey`] if `x` is not 32 octets (RFC 8037 §2, RFC 8032
-///   §5.1.5), does not decode to a point (RFC 8032 §5.1.3), or is of small
-///   order (ADR 0026 §6).
+///   §5.1.5), does not decode to a point (RFC 8032 §5.1.3), is of small
+///   order (ADR 0026 §6), or has a torsion component (ADR 0043 §1).
 /// - [`Error::InvalidSignature`] if the signature is not 64 octets
 ///   (RFC 8032 §5.1.6 step 6), has a small-order or non-canonical R, or
 ///   s ≥ L (RFC 8032 §5.1.7 step 1), or does not validate (RFC 8032 §5.1.7
@@ -126,9 +131,14 @@ fn ed25519_key<'k>(alg: &SigningAlg, key: &'k Jwk) -> Result<&'k OkpKey> {
 /// - `x` is 32 octets (RFC 8037 §2, RFC 8032 §5.1.5) and decodes to a point
 ///   (RFC 8032 §5.1.3);
 /// - the point is not of small order (`is_weak`, ADR 0026 §6): a
-///   small-order key admits signatures valid for almost every message.
-///   JWK import already rejects both (ADR 0041 §4); this is defence in
-///   depth, so the family never relies on how a key was built.
+///   small-order key admits signatures valid for almost every message;
+/// - the point has no torsion component (`is_torsion_free`, ADR 0043 §1):
+///   implementations disagree on mixed-order keys, which `verify_strict`
+///   and RFC 8032 §5.1.7 accept.
+///
+/// JWK import already rejects all of these (ADR 0041 §4, ADR 0043 §1);
+/// this is defence in depth, so the family never relies on how a key was
+/// built.
 fn verifying_key(x: &[u8]) -> Result<VerifyingKey> {
     let x = <&[u8; PUBLIC_KEY_LENGTH]>::try_from(x)
         .map_err(|_| Error::InvalidKey("Ed25519 x must be 32 octets"))?;
@@ -136,6 +146,9 @@ fn verifying_key(x: &[u8]) -> Result<VerifyingKey> {
         .map_err(|_| Error::InvalidKey("Ed25519 x is not a valid point"))?;
     if public.is_weak() {
         return Err(Error::InvalidKey("Ed25519 x is of small order"));
+    }
+    if !public.to_edwards().is_torsion_free() {
+        return Err(Error::InvalidKey("Ed25519 x has a torsion component"));
     }
     Ok(public)
 }
@@ -220,6 +233,30 @@ mod tests {
             r#"{{"kty":"OKP","crv":"Ed25519","x":"{}"}}"#,
             crate::util::b64url_encode(&IDENTITY)
         );
+        assert!(matches!(
+            Jwk::from_json(jwk.as_bytes()),
+            Err(Error::InvalidKey(_))
+        ));
+    }
+
+    /// Wycheproof `ed25519_test.json` tcId 160's public key
+    /// 15deb307…b2c23b (`MixedOrderPublicKey`): canonical, not of small
+    /// order, with a torsion component of order 8 (checked independently
+    /// with RFC 8032 §5.1 arithmetic in Python).
+    const MIXED_ORDER: &str = "Fd6zBynrPkZciPEbV9DI026w9nDDsi0vgOpgSe6ywjs";
+
+    #[test]
+    fn a_key_with_a_torsion_component_is_refused_before_the_signature() {
+        // ADR 0043 §1: defence in depth behind JWK import, which refuses
+        // the key first. `is_weak` alone lets it through.
+        let x = b64url_decode(MIXED_ORDER).unwrap();
+        let key = VerifyingKey::from_bytes(&<[u8; 32]>::try_from(&x[..]).unwrap()).unwrap();
+        assert!(!key.is_weak());
+        assert_eq!(
+            verify_ed25519(&x, A4_SIGNING_INPUT, &a4_signature()),
+            Err(Error::InvalidKey("Ed25519 x has a torsion component"))
+        );
+        let jwk = format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{MIXED_ORDER}"}}"#);
         assert!(matches!(
             Jwk::from_json(jwk.as_bytes()),
             Err(Error::InvalidKey(_))
@@ -416,9 +453,19 @@ mod tests {
     fn a_private_key_that_does_not_match_x_is_an_invalid_key() {
         // RFC 8037 §2: `d` is the private key of the public key `x`. A
         // mismatched pair would emit signatures that never verify under the
-        // published `x`, so signing fails closed instead.
+        // published `x`, so signing fails closed instead. JWK import refuses
+        // such a pair first (ADR 0043 §3), so the key is built unchecked to
+        // reach the family's own check.
+        let mismatched = Jwk::okp_unchecked(OkpCurve::Ed25519, &a1_x(), Some(&[7u8; 32]));
         let other_d = crate::util::b64url_encode(&[7u8; 32]);
-        let mismatched = keys::ed25519(&format!(r#","d":"{other_d}""#));
+        let json = format!(
+            r#"{{"kty":"OKP","crv":"Ed25519","x":"{}","d":"{other_d}"}}"#,
+            keys::ED25519_X
+        );
+        assert!(matches!(
+            Jwk::from_json(json.as_bytes()),
+            Err(Error::InvalidKey(_))
+        ));
         assert_eq!(
             sign(&A::EdDSA, &mismatched, A4_SIGNING_INPUT),
             Err(Error::InvalidKey("Ed25519 d does not match x"))
@@ -478,11 +525,11 @@ mod tests {
         Deviation::range(
             160,
             180,
-            Outcome::Accept,
-            "ADR 0026 §6: verify_strict plus is_weak() is the policy; a mixed-order \
-             key is not of small order, and these signatures satisfy the \
-             cofactorless equation [S]B = R + [k]A that RFC 8032 §5.1.7 step 3 \
-             allows",
+            Outcome::Reject,
+            "ADR 0043 §1: a public key with a torsion component (mixed order, not \
+             small order) is rejected with InvalidKey at JWK import, although \
+             RFC 8032 §5.1.7 and verify_strict accept it, because implementations \
+             disagree on such keys; verify re-checks is_torsion_free()",
         ),
     ];
 
@@ -497,9 +544,14 @@ mod tests {
             let key = match Jwk::from_json(group.verification_jwk().as_bytes()) {
                 Ok(key) => key,
                 Err(e) => {
-                    // Only the small-order keys fail import, and only with
-                    // InvalidKey (ADR 0041 §4).
-                    assert!(test.has_flag("SmallOrderPublicKey"), "tcId {id}: {e:?}");
+                    // Only the small-order (ADR 0041 §4) and mixed-order
+                    // (ADR 0043 §1) keys fail import, and only with
+                    // InvalidKey.
+                    assert!(
+                        test.has_flag("SmallOrderPublicKey")
+                            || test.has_flag("MixedOrderPublicKey"),
+                        "tcId {id}: {e:?}"
+                    );
                     assert_eq!(e.code(), "InvalidKey", "tcId {id}");
                     return Outcome::Reject;
                 }
@@ -517,10 +569,10 @@ mod tests {
         });
         assert_eq!(summary.tests, 210);
         assert_eq!(summary.deviations, 29);
-        // 117 valid + 21 mixed-order acceptable; 64 invalid + 8 small-order
-        // acceptable rejected.
-        assert_eq!(summary.accepted, 117 + 21);
-        assert_eq!(summary.rejected, 64 + 8);
+        // 117 valid accepted; 64 invalid + 8 small-order acceptable +
+        // 21 mixed-order acceptable rejected.
+        assert_eq!(summary.accepted, 117);
+        assert_eq!(summary.rejected, 64 + 8 + 21);
     }
 
     /// RFC 8037 §A.4: the complete compact JWS.
