@@ -51,9 +51,9 @@ const KEY_INVALID: &str = "RSA public key is not valid for RSA-OAEP-256";
 /// refused key draws nothing.
 ///
 /// The key is imported with `rsa::RsaPublicKey::new` (RFC 8017 §3.1: n
-/// odd, e odd and 1 < e < n; at most 8192 bits) after the RFC 7518 §4.3
-/// floor of 2048 bits, which `jwk` import enforces already; `key` also
-/// bounds the modulus at 8192 bits.
+/// odd, e odd and 1 < e < n; at most 8192 bits). `jwk` import has already
+/// bounded the modulus to 2048..=8192 bits (`jwk::RSA_MODULUS_BITS`;
+/// RFC 7518 §4.3, ADR 0026 §2 step 8).
 ///
 /// # Errors
 ///
