@@ -17,6 +17,11 @@
 //!   §5.1.7 step 1), and a small-order public key, which this module also
 //!   rejects first with [`Error::InvalidKey`] as defence in depth (JWK
 //!   import already refuses one, ADR 0041 §4).
+//! - **Mixed-order public keys** (a torsion component, but not of small
+//!   order) are [`Error::InvalidKey`] too (ADR 0043 §1), although
+//!   `verify_strict` and RFC 8032 §5.1.7 accept them: implementations
+//!   disagree on such keys. JWK import refuses them first; `verify`
+//!   re-checks.
 
 use ed25519_dalek::{
     PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, Signature, Signer as _, SigningKey, VerifyingKey,
@@ -78,8 +83,8 @@ pub(crate) fn sign(alg: &SigningAlg, key: &Jwk, signing_input: &[u8]) -> Result<
 /// # Errors
 ///
 /// - [`Error::InvalidKey`] if `x` is not 32 octets (RFC 8037 §2, RFC 8032
-///   §5.1.5), does not decode to a point (RFC 8032 §5.1.3), or is of small
-///   order (ADR 0026 §6).
+///   §5.1.5), does not decode to a point (RFC 8032 §5.1.3), is of small
+///   order (ADR 0026 §6), or has a torsion component (ADR 0043 §1).
 /// - [`Error::InvalidSignature`] if the signature is not 64 octets
 ///   (RFC 8032 §5.1.6 step 6), has a small-order or non-canonical R, or
 ///   s ≥ L (RFC 8032 §5.1.7 step 1), or does not validate (RFC 8032 §5.1.7
@@ -126,9 +131,14 @@ fn ed25519_key<'k>(alg: &SigningAlg, key: &'k Jwk) -> Result<&'k OkpKey> {
 /// - `x` is 32 octets (RFC 8037 §2, RFC 8032 §5.1.5) and decodes to a point
 ///   (RFC 8032 §5.1.3);
 /// - the point is not of small order (`is_weak`, ADR 0026 §6): a
-///   small-order key admits signatures valid for almost every message.
-///   JWK import already rejects both (ADR 0041 §4); this is defence in
-///   depth, so the family never relies on how a key was built.
+///   small-order key admits signatures valid for almost every message;
+/// - the point has no torsion component (`is_torsion_free`, ADR 0043 §1):
+///   implementations disagree on mixed-order keys, which `verify_strict`
+///   and RFC 8032 §5.1.7 accept.
+///
+/// JWK import already rejects all of these (ADR 0041 §4, ADR 0043 §1);
+/// this is defence in depth, so the family never relies on how a key was
+/// built.
 fn verifying_key(x: &[u8]) -> Result<VerifyingKey> {
     let x = <&[u8; PUBLIC_KEY_LENGTH]>::try_from(x)
         .map_err(|_| Error::InvalidKey("Ed25519 x must be 32 octets"))?;
@@ -136,6 +146,9 @@ fn verifying_key(x: &[u8]) -> Result<VerifyingKey> {
         .map_err(|_| Error::InvalidKey("Ed25519 x is not a valid point"))?;
     if public.is_weak() {
         return Err(Error::InvalidKey("Ed25519 x is of small order"));
+    }
+    if !public.to_edwards().is_torsion_free() {
+        return Err(Error::InvalidKey("Ed25519 x has a torsion component"));
     }
     Ok(public)
 }
