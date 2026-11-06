@@ -43,6 +43,27 @@ fn opts() -> VerifyOptions<'static> {
     VerifyOptions::new(ALLOW).unwrap()
 }
 
+/// A real HS256 JWS over `payload` with `key()` (RFC 7515 §5.1, RFC 7518
+/// §3.2), under the protected header whose base64url encoding is exactly
+/// `encoded`, so the token shares its first part with the hand-built ones.
+/// `detached` leaves the payload part empty (RFC 7515 Appendix F).
+fn sign_real(encoded: &str, payload: &[u8], detached: bool) -> String {
+    let protected = ProtectedHeader::from_encoded(encoded).unwrap();
+    let opts = SignOptions::new().detached(detached);
+    sign_compact(&protected, payload, &key(), &opts).unwrap()
+}
+
+/// `jws` verifies under `opts` (RFC 7515 §5.2) as HS256, signature 0, no
+/// unprotected header (compact has none, RFC 7515 §7.1), with `payload`.
+fn assert_verifies(jws: &str, opts: &VerifyOptions<'_>, payload: &[u8]) {
+    let v = verify_compact(jws, &key(), opts).unwrap_or_else(|e| panic!("{}: {jws}", e.code()));
+    assert_eq!(v.alg, SigningAlg::HS256, "{jws}");
+    assert_eq!(v.signature_index, 0, "{jws}");
+    assert_eq!(v.unprotected, None, "{jws}");
+    assert!(v.protected.is_some(), "{jws}");
+    assert_eq!(*v.payload, payload, "{jws}");
+}
+
 #[test]
 fn a5_none_token_is_algorithm_not_allowed_for_every_list() {
     let lists: [&[SigningAlg]; 4] = [
@@ -79,10 +100,17 @@ fn shape_limits_and_base64_rows() {
     ] {
         assert_eq!(code(&jws, &opts()), "InvalidFormat", "{jws}");
     }
-    let ok = format!("{h}.{p}.{s}");
+    // A real signature over the same header and payload: exactly
+    // max_input_len verifies, one octet less is refused (step 1).
+    let ok = sign_real(&h, b"hi", false);
+    assert!(ok.starts_with(&format!("{h}.{p}.")), "{ok}");
     let n = ok.len();
-    assert_ne!(code(&ok, &opts().max_input_len(n)), "InvalidFormat");
+    assert_verifies(&ok, &opts().max_input_len(n), b"hi");
     assert_eq!(code(&ok, &opts().max_input_len(n - 1)), "InvalidFormat");
+    // The same shape with an all-zero tag passes steps 1-8 and fails step 9.
+    let zero = format!("{h}.{p}.{s}");
+    assert_eq!(zero.len(), n);
+    assert_eq!(code(&zero, &opts().max_input_len(n)), "InvalidSignature");
     // Padding, '+', '/', whitespace, a stray '.'-free garbage char, in each part.
     for bad in [
         "aGk=", "a+b", "a/b", "aG k", "aGk\n", " aGk", "aG\u{e9}", "a$b",
@@ -145,25 +173,40 @@ fn detached_rules() {
     assert_eq!(code(&format!("{h}.AAAA.{s}"), &d), "InvalidFormat");
     // Even an undecodable payload part is a format error first (step 2 before 3).
     assert_eq!(code(&format!("{h}.a=.{s}"), &d), "InvalidFormat");
-    // Empty part: gets past format checks (stub or real signature decides).
-    assert_ne!(code(&format!("{h}..{s}"), &d), "InvalidFormat");
+    // Empty part: the detached octets are what is verified (Appendix F).
+    let det = sign_real(&h, payload, true);
+    assert!(det.starts_with(&format!("{h}..")), "{det}");
+    assert_verifies(&det, &d, payload);
+    assert_eq!(code(&format!("{h}..{s}"), &d), "InvalidSignature");
+    // Without the detached octets the same token is a signature over an
+    // empty payload, so it fails at step 9, not at a format check.
+    assert_eq!(code(&det, &opts()), "InvalidSignature");
     // Empty detached payload is still "detached": a non-empty part is refused.
     let empty = opts().detached_payload(b"");
     assert_eq!(code(&format!("{h}.AAAA.{s}"), &empty), "InvalidFormat");
     // No detached payload: an empty part is a legal empty payload.
-    assert_ne!(code(&format!("{h}..{s}"), &opts()), "InvalidFormat");
+    let none = sign_real(&h, b"", false);
+    assert!(none.starts_with(&format!("{h}..")), "{none}");
+    assert_verifies(&none, &opts(), b"");
+    assert_verifies(&none, &empty, b"");
+    assert_eq!(code(&format!("{h}..{s}"), &opts()), "InvalidSignature");
 }
 
 #[test]
 fn max_input_len_excludes_a_detached_payload() {
     let h = hdr(r#"{"alg":"HS256"}"#);
     let s = b64(&[0u8; 32]);
-    let jws = format!("{h}..{s}");
     let big = vec![b'x'; 1 << 16];
+    let jws = sign_real(&h, &big, true);
+    assert!(jws.starts_with(&format!("{h}..")), "{jws}");
     let o = opts().detached_payload(&big).max_input_len(jws.len());
-    assert_ne!(code(&jws, &o), "InvalidFormat");
+    assert_verifies(&jws, &o, &big);
     let o = opts().detached_payload(&big).max_input_len(jws.len() - 1);
     assert_eq!(code(&jws, &o), "InvalidFormat");
+    // The all-zero tag of the same length is past step 1 and fails step 9.
+    let zero = format!("{h}..{s}");
+    let o = opts().detached_payload(&big).max_input_len(zero.len());
+    assert_eq!(code(&zero, &o), "InvalidSignature");
 }
 
 #[test]
