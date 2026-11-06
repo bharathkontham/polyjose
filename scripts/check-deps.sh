@@ -9,9 +9,14 @@
 #      [target.*.…] forms) does not use `default-features = false` (ADR 0016 §3);
 #   4. a crate in deps-allowlist.txt is not credited in CREDITS.md, or CREDITS.md credits a crate
 #      that is not in deps-allowlist.txt (ADR 0020 §5);
-#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below, or a crate of
-#      a guarded group (ADR 0025, ADR 0042) is reached through a path that avoids its required
-#      parent crate (for example a direct dependency of the core on `semver`);
+#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below, or a guarded
+#      group (ADR 0025, ADR 0042, ADR 0049 §5) breaks one of its rules. Its members are fixed in
+#      the guarded_group_members table below, not read from deps-allowlist.txt: a crate the
+#      allowlist lists in a guarded group must be a member of it, a member must not be listed in
+#      another group, and a member in the core's tree must be listed. Each member is reachable only
+#      below its required parent crate (a direct dependency of the core on `semver` fails), and
+#      only through its group's edges: the dalek-build and num-traits-build crates must be absent
+#      from `cargo tree -e normal`, and the dalek-proc-macro crates from `-e normal,no-proc-macro`;
 #   6. a package in the core's tree does not come from crates.io: a path package other than
 #      polyjose itself, a git source or another registry (an allowlisted name is not enough when
 #      the code behind it can be swapped);
@@ -19,16 +24,22 @@
 #   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
 #      build-dependency ([build-dependencies] or [target.*.build-dependencies]);
 #   9. a Rust file under crates/polyjose/src or bindings names an RSA private-key or signing type,
-#      or decrypts with rsa (ADR 0021 §3: RSA is used for public-key operations only), reported
-#      with its file and line;
+#      or decrypts with rsa (ADR 0021 §3: RSA is used for public-key operations only), or has a
+#      spelling that could hide such a use from this scan (ADR 0049 §1): `rsa` aliased or
+#      re-exported in a use tree (any `rsa` token in one names the crate), `#[path]` or `include!`,
+#      an out-of-line `mod x;` in jws/rsa.rs or jwe/rsa_oaep.rs (or a file below jws/rsa/ or
+#      jwe/rsa_oaep/), or `rsa` as an identifier in a macro call or attribute (the macro rule; the
+#      arguments of std macros such as `assert!` and `format!` are exempt). Reported with its file
+#      and line;
 #  10. `sha1` is in the core's tree (ADR 0022: no SHA-1 anywhere in the core);
 #  11. `rsa` is built with any feature enabled, by the core or by anything else in the workspace
 #      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
 #  12. a workspace member depends on the `rsa` package under another name (`package = "rsa"`),
 #      which would hide its use from check 9.
 #  Checks 9-12 are, with scripts/check-rsa-symbols.sh (the same rule read from the compiled object
-#  code, ADR 0049 §1), the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
-#  them means removing that ignore.
+#  code of polyjose and the bindings, built in the dev and the release profile, ADR 0049 §1), the
+#  guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing them means removing
+#  that ignore.
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
 # runtime dependencies and the build-dependencies of every crate in it (a build script or a
