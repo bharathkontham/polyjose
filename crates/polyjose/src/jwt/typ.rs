@@ -123,7 +123,19 @@ pub(crate) fn check_jwt_header(
     p: &Policy<'_>,
     layer: Layer,
 ) -> Result<()> {
-    let _ = unprotected;
+    // ADR 0049 §2 (JWS), ADR 0050 §3 (JWE): an unprotected header is not
+    // integrity-protected, so the type of the token and the nesting marker
+    // must not come from it. Rejecting (rather than ignoring) it keeps an
+    // attacker from presenting a `typ`/`cty` a careless reader might trust.
+    // Its other members are not this check's concern.
+    if let Some(unprotected) = unprotected {
+        if unprotected.typ.is_some() {
+            return Err(Error::InvalidHeader("typ must be in the protected header"));
+        }
+        if unprotected.cty.is_some() {
+            return Err(Error::InvalidHeader("cty must be in the protected header"));
+        }
+    }
     match layer {
         Layer::Signed => {
             // RFC 7797 §7: "JSON Web Tokens MUST NOT use "b64" with a
@@ -143,7 +155,26 @@ pub(crate) fn check_jwt_header(
             }
             check_typ(protected.typ.as_deref(), p.typ_mode())
         }
-        Layer::Outer => Err(Error::UnsupportedAlgorithm),
+        Layer::Outer => {
+            // RFC 7519 §5.2: in a nested JWT, `cty` "MUST be present" and
+            // "MUST be "JWT"" (compared per RFC 7515 §4.1.10, ADR 0027 §7).
+            // Without it the JWE is not a nested JWT; encrypt-only JWTs are
+            // not supported in 0.1.0.
+            if !protected
+                .cty
+                .as_deref()
+                .is_some_and(|cty| media_type_eq(cty, JWT))
+            {
+                return Err(Error::InvalidHeader("cty"));
+            }
+            // ADR 0027 §7: explicit typing is required on the inner JWT
+            // only (RFC 8725 §3.11); the outer `typ`, if present, must
+            // satisfy the same policy.
+            match protected.typ.as_deref() {
+                Some(typ) => check_typ(Some(typ), p.typ_mode()),
+                None => Ok(()),
+            }
+        }
     }
 }
 
@@ -324,6 +355,140 @@ mod tests {
     fn assert_ne_both_ways(a: &str, b: &str) {
         assert!(!media_type_eq(a, b), "{a:?} should not equal {b:?}");
         assert!(!media_type_eq(b, a), "{b:?} should not equal {a:?}");
+    }
+
+    fn outer(h: &Header, p: &Policy<'_>) -> Result<()> {
+        check_jwt_header(h, None, p, Layer::Outer)
+    }
+
+    #[test]
+    fn outer_layer_requires_cty_jwt() {
+        // RFC 7519 §5.2: for nested JWTs "this Header Parameter MUST be
+        // present ... the value MUST be "JWT""; ADR 0027 §7.
+        for p in [default_policy(), default_policy().any_typ()] {
+            assert_eq!(outer(&header(""), &p), Err(Error::InvalidHeader("cty")));
+            for cty in ["JWT", "jwt", "application/jwt", "Application/JWT"] {
+                let h = header(&format!(r#""cty":"{cty}""#));
+                assert_eq!(outer(&h, &p), Ok(()), "{cty:?}");
+            }
+            for cty in ["JOSE", "text/plain", "at+jwt", "jwt;v=1", "jwt ", ""] {
+                let h = header(&format!(r#""cty":"{cty}""#));
+                assert_eq!(outer(&h, &p), Err(Error::InvalidHeader("cty")), "{cty:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn outer_typ_uses_the_inner_mode_when_present() {
+        // ADR 0027 §7: "The outer `typ`, if present, must satisfy the same
+        // `typ` policy"; explicit typing itself is required only on the
+        // inner JWT (RFC 8725 §3.11).
+        let outer_with = |typ: Option<&str>| match typ {
+            Some(t) => header(&format!(r#""cty":"JWT","typ":"{t}""#)),
+            None => header(r#""cty":"JWT""#),
+        };
+        let p = default_policy();
+        for ok in [None, Some("JWT"), Some("application/jwt")] {
+            assert_eq!(outer(&outer_with(ok), &p), Ok(()), "{ok:?}");
+        }
+        for bad in ["at+jwt", "JOSE"] {
+            let r = outer(&outer_with(Some(bad)), &p);
+            assert_eq!(r, Err(Error::InvalidHeader("typ")), "{bad:?}");
+        }
+
+        let p = default_policy().expect_typ(AT_JWT);
+        for ok in [None, Some("at+jwt"), Some("application/AT+JWT")] {
+            assert_eq!(outer(&outer_with(ok), &p), Ok(()), "{ok:?}");
+        }
+        for bad in ["JWT", "secevent+jwt"] {
+            let r = outer(&outer_with(Some(bad)), &p);
+            assert_eq!(r, Err(Error::InvalidHeader("typ")), "{bad:?}");
+        }
+
+        let p = default_policy().any_typ();
+        for typ in [None, Some("JWT"), Some("at+jwt"), Some("JOSE")] {
+            assert_eq!(outer(&outer_with(typ), &p), Ok(()), "{typ:?}");
+        }
+    }
+
+    #[test]
+    fn unprotected_typ_or_cty_is_rejected_on_both_layers() {
+        // ADR 0049 §2 (JWS), ADR 0050 §3 (JWE): an unprotected header is
+        // attacker-controlled, so it must not set `typ` or `cty`, even when
+        // the protected header is valid and even under `any_typ`.
+        let protected = [
+            (Layer::Signed, header(r#""typ":"JWT""#)),
+            (Layer::Outer, header(r#""cty":"JWT""#)),
+        ];
+        let unprotected = [
+            (Header::from_json(br#"{"typ":"JWT"}"#).unwrap(), "typ"),
+            (Header::from_json(br#"{"typ":"at+jwt"}"#).unwrap(), "typ"),
+            (Header::from_json(br#"{"cty":"JWT"}"#).unwrap(), "cty"),
+            (
+                Header::from_json(br#"{"cty":"text/plain"}"#).unwrap(),
+                "cty",
+            ),
+            (
+                Header::from_json(br#"{"kid":"k","typ":""}"#).unwrap(),
+                "typ",
+            ),
+        ];
+        for p in [
+            default_policy(),
+            default_policy().expect_typ(AT_JWT),
+            default_policy().any_typ(),
+        ] {
+            for (layer, prot) in &protected {
+                for (unprot, member) in &unprotected {
+                    let r = check_jwt_header(prot, Some(unprot), &p, *layer);
+                    let detail = if *member == "cty" {
+                        "cty must be in the protected header"
+                    } else {
+                        "typ must be in the protected header"
+                    };
+                    assert_eq!(r, Err(Error::InvalidHeader(detail)), "{layer:?} {unprot:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn outer_cty_only_in_the_unprotected_header_is_not_the_nesting_marker() {
+        // ADR 0050 §3: the nesting marker must be integrity-protected.
+        let p = default_policy();
+        let unprot = Header::from_json(br#"{"cty":"JWT"}"#).unwrap();
+        let r = check_jwt_header(&header(""), Some(&unprot), &p, Layer::Outer);
+        assert!(is_invalid_header(r));
+    }
+
+    #[test]
+    fn other_unprotected_members_are_ignored() {
+        let p = default_policy();
+        let unprot = Header::from_json(br#"{"kid":"k1","x-custom":true}"#).unwrap();
+        let signed_h = header(r#""typ":"JWT""#);
+        let outer_h = header(r#""cty":"JWT""#);
+        assert_eq!(
+            check_jwt_header(&signed_h, Some(&unprot), &p, Layer::Signed),
+            Ok(())
+        );
+        assert_eq!(
+            check_jwt_header(&outer_h, Some(&unprot), &p, Layer::Outer),
+            Ok(())
+        );
+        let empty = Header::new();
+        assert_eq!(
+            check_jwt_header(&signed_h, Some(&empty), &p, Layer::Signed),
+            Ok(())
+        );
+        // The protected rules still apply alongside a harmless unprotected
+        // header.
+        let bad = header(r#""typ":"at+jwt""#);
+        assert!(is_invalid_header(check_jwt_header(
+            &bad,
+            Some(&unprot),
+            &p,
+            Layer::Signed
+        )));
     }
 
     #[test]
