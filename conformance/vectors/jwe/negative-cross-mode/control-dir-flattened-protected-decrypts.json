@@ -1,0 +1,32 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1 positive control, RFC 7516 §7.2.2: a flattened dir + A128GCM JWE with alg and enc protected and a kid in the shared unprotected header decrypts under the audit key and policy (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8))",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIn0",
+      "unprotected": {
+        "kid": "f06"
+      },
+      "iv": "os84Wep7cQLQ2sjk",
+      "ciphertext": "qdddC35kgwe33O0DMCBY6jLBTGaMBYp2Iwn3hueBNIh70UtVzG7e",
+      "tag": "iQYaf32TQ3wJYF9Q2Mo_EA"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "Y3Jvc3MtbW9kZSBjb25mdXNpb24gbXVzdCBuZXZlciBkZWNyeXB0",
+    "recipient": 0
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1 positive control, RFC 7516 §7.2.1, RFC 7518 §4.7: an A128GCMKW + A128GCM flattened JWE with no protected header and alg, enc, iv and tag in the shared unprotected header decrypts under the audit key and policy: the rule is for the direct modes only (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8))",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "unprotected": {
+        "alg": "A128GCMKW",
+        "enc": "A128GCM",
+        "iv": "5Elsi_ywTtXHG5VO",
+        "tag": "MuKCIsou9CkqH0wOle4Yfw"
+      },
+      "encrypted_key": "tgJA7IrBeBAghkMkAJnDFg",
+      "iv": "w0mmwdRAFH2CRFzC",
+      "ciphertext": "tIpIUoWfDsMgfeN9Y7vKLrdi-NH970JGiqVj7ADEL8iwIhRu_q3z",
+      "tag": "mLcLLeDHuwAjr3vkZ2fnzg"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "Y3Jvc3MtbW9kZSBjb25mdXNpb24gbXVzdCBuZXZlciBkZWNyeXB0",
+    "recipient": 0
+  }
+}

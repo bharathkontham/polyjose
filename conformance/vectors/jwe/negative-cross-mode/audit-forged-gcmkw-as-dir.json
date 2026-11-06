@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "Security audit B1: an A128GCMKW recipient's iv, encrypted_key and tag relabelled as a flattened dir + A128GCM JWE with alg and enc in the shared unprotected header and no protected header or aad, under the audit's alg-less 16-octet key with [A128GCMKW, dir] allowed. Both AADs are empty, so the triple opens (checked with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)) to the victim's CEK; RFC 7516 §5.2 step 4 with ADR 0050 §1 makes it InvalidHeader before any cryptography",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "unprotected": {
+        "alg": "dir",
+        "enc": "A128GCM"
+      },
+      "iv": "O7z64SOn4nzSXqYX",
+      "ciphertext": "MnP1M2KMxJATaL2fiHopzA",
+      "tag": "1iuYCU-NaRWTNmU0AQpqYg"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

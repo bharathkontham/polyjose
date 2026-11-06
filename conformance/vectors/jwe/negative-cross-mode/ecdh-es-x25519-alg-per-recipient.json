@@ -1,0 +1,37 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1, RFC 7518 §4.6 (Direct Key Agreement), RFC 8037 §3.2 where X25519: an ECDH-ES + A128GCM JWE on X25519 with enc protected and alg and epk only in the per-recipient header (flattened), a valid ciphertext under the Concat KDF CEK (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)): InvalidHeader before the agreement runs",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4R0NNIn0",
+      "header": {
+        "alg": "ECDH-ES",
+        "epk": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "x": "13CHHag87ohkq1IaDe6lh5wZKJYbvEgkFMSYdfbwJhg"
+        }
+      },
+      "iv": "gEQ4GXFzI_58w8xW",
+      "ciphertext": "gLsatkjz8yg_GvlRZAd8O2MRPPVKo2rh6xvZWdB0mr5Yym6rLQW0",
+      "tag": "s597rQeRY9oISRgFK4vGRg"
+    },
+    "key": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "l0E9j6QjtU09_vJ2RIPYyOaw--kS3J5tpGAVDgiTOmA",
+      "d": "Avc3N0zmTca-XBLPGQ5QYSjIDfyWf8tYKb9tqlsYvqk"
+    },
+    "allowed_algs": [
+      "ECDH-ES"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

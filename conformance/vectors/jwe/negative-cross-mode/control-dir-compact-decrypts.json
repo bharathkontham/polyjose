@@ -1,0 +1,24 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1 positive control, RFC 7516 §7.1: a compact dir + A128GCM JWE (alg and enc protected) under the audit key and policy decrypts (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8))",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIn0..jEI6Rdybk2OnNtwe.agR1Bs9-5tygEY2QMXkPji7JbFEYBrizX_rvOLVdM1SIwIMHVq2l.hX0Mh1tR9focmqjFBMFoXw",
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "Y3Jvc3MtbW9kZSBjb25mdXNpb24gbXVzdCBuZXZlciBkZWNyeXB0",
+    "recipient": 0
+  }
+}

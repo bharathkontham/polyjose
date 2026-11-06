@@ -1,0 +1,37 @@
+{
+  "source": "ADR 0050 §1",
+  "description": "ADR 0050 §1, RFC 7516 §7.2.1: the alg-less-key forgery through the general form: an A128GCMKW key wrap relabelled as a dir JWE with enc in the shared unprotected header and alg in recipients[0].header, no protected header; the triple opens to the wrapped CEK under the empty AAD (Node.js 24.21.0 node:crypto (OpenSSL 3.5.8)): InvalidHeader",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "unprotected": {
+        "enc": "A128GCM"
+      },
+      "recipients": [
+        {
+          "header": {
+            "alg": "dir"
+          }
+        }
+      ],
+      "iv": "pj0cHOhahgJVxfdD",
+      "ciphertext": "thRO4LQmC_IsYskB2Q2amg",
+      "tag": "7YkCpxJrLrHCZqR5biwchA"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "allowed_algs": [
+      "A128GCMKW",
+      "dir"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

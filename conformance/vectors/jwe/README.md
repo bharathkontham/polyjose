@@ -21,8 +21,9 @@ This is the index of the JWE vectors (RFC 7516, RFC 7518 §4–§5, RFC 7520 §5
 | `zip/` | 13 (12 decrypt, 1 encrypt) | RFC 7520 §5.9 (compact, flattened, general); `polyjose` (bound, bomb, malformed DEFLATE) | 13 `deflate` | `t15-zip.py` (11), `t18-cross-family.mjs` (2) |
 | `rfc7520-multi/` | 6 (5 decrypt, 1 encrypt) | RFC 7520 §5.13 | 1 `fixed-rng` | `t18-cross-family.mjs` |
 | `negative-crypto/` | 38 decrypt | RFC 7520 §5.3–§5.7, §5.13; `polyjose` (tokens built by the Node/OpenSSL oracle) | none | `t18-cross-family.mjs` |
+| `negative-cross-mode/` | 20 decrypt (11 InvalidHeader, 1 DecryptionFailed, 8 positive controls) | ADR 0050 §1 (security audit B1; tokens built by the Node/OpenSSL oracle, plus the audit's forged token verbatim) | none | `f06-cross-mode.mjs` |
 
-That is 296 files: 217 `jwe.decrypt`, 79 `jwe.encrypt`; 27 need `fixed-rng` and 13 need `deflate`.
+That is 316 files: 237 `jwe.decrypt`, 79 `jwe.encrypt`; 27 need `fixed-rng` and 13 need `deflate`.
 
 ## `rfc7520-multi/`: RFC 7520 §5.13
 
@@ -32,6 +33,23 @@ The general JSON JWE to three recipients (RSA1_5, ECDH-ES+A256KW on P-384, A256G
 - recipient #1's RSA key alone is `UnsupportedAlgorithm` (RSA1_5 is not implemented, ADR 0022, and nothing else fits an RSA key);
 - the EC key with only `A256GCMKW` allowed is `AlgorithmNotAllowed`, and a flipped tag is `DecryptionFailed`;
 - with `fixed-rng`, encrypting to recipients #2 and #3 with the RFC's draws reproduces the RFC output exactly, minus recipient #1.
+
+## `negative-cross-mode/`: direct modes need a protected `alg` and `enc` (ADR 0050 §1)
+
+A\*GCMKW wraps the CEK with AES-GCM under an empty AAD (RFC 7518 §4.7.1), and a JSON JWE with no protected header and no `aad` has the content AAD `""` too, so a GCMKW recipient's (`iv`, `encrypted_key`, `tag`) is a valid `dir` + A\*GCM ciphertext under the same key (security audit B1). polyjose therefore refuses `dir` and ECDH-ES (direct) with `InvalidHeader`, before any cryptography, unless both `alg` and `enc` are in the JWE Protected Header. Every negative here is a live token: without the rule each one decrypts, and each forgery returns the wrapped CEK.
+
+| Case | Vectors | Expect |
+|---|---|---|
+| The audit's forged token (verbatim) | `audit-forged-gcmkw-as-dir` | InvalidHeader |
+| The forgery in the per-recipient header, in the general form, and for A256GCMKW | `forged-gcmkw-as-dir-per-recipient-header`, `forged-gcmkw-as-dir-general`, `forged-a256gcmkw-as-dir-a256gcm` | InvalidHeader |
+| An honest `dir` token with no protected header | `dir-no-protected-header` | InvalidHeader |
+| The reverse relabel: that token presented as A128GCMKW. Not a direct mode, so the rule does not apply; it never decrypts | `reverse-relabel-dir-as-gcmkw` | DecryptionFailed |
+| `dir` with only one of `alg` and `enc` protected | `dir-alg-shared-enc-protected`, `dir-alg-per-recipient-enc-protected`, `dir-alg-protected-enc-shared` | InvalidHeader |
+| ECDH-ES (direct) with `alg` unprotected, P-256 and X25519 | `ecdh-es-p256-alg-shared`, `ecdh-es-x25519-alg-per-recipient`, `ecdh-es-x25519-general-alg-per-recipient` | InvalidHeader |
+| Positive controls: protected direct tokens | `control-dir-compact-decrypts`, `control-dir-flattened-protected-decrypts`, `control-ecdh-es-{p256,x25519}-compact-decrypts` | decrypts |
+| Positive controls: non-direct modes with an unprotected `alg` | `control-a128gcmkw-alg-unprotected-decrypts`, `control-a128kw-alg-per-recipient-decrypts`, `control-pbes2-alg-shared-decrypts`, `control-ecdh-es-a128kw-alg-per-recipient-decrypts` | decrypts |
+
+Re-marked by ADR 0050 §1: `negative-json/tampered-unprotected-alg-dir-invalid-header.json` (formerly `tampered-unprotected-alg-decryption-failed.json`, which expected `DecryptionFailed`) is now `InvalidHeader`. No other vector decrypted a direct mode with `alg` or `enc` outside the protected header.
 
 ## `negative-crypto/`: cross-family negatives
 
@@ -54,7 +72,8 @@ Each case of the list is either here or in the directory named, and is not repea
 These RFC outputs have a `jwe.decrypt` vector but no exact `jwe.encrypt` vector, by decision (plan.md, lead refinements 15 and 17). Each decrypt vector's `description` names the omission. No encrypt vector exists for them, so none is skipped.
 
 - **RFC 7520 §5.11** (flattened, `alg` in the unprotected header): polyjose's encryptor always puts `alg` in the protected header for the flattened form (orchestrator decision, refinement 15).
-- **RFC 7520 §5.6, §5.8 and §5.10 in the general form**: the RFC keeps `alg` in the protected header; polyjose puts it in each recipient's header (refinement 17). Their flattened forms are exact.
+- **RFC 7520 §5.8 and §5.10 in the general form**: the RFC keeps `alg` in the protected header; polyjose puts a non-direct `alg` in each recipient's header (refinement 17). Their flattened forms are exact.
+- **RFC 7520 §5.6 in the general form**: `dir` is protected in every form (ADR 0050 §1), so the same draws reproduce the RFC's protected header, IV, ciphertext and tag; polyjose writes the one recipient as `"recipients":[{}]`, which the cookbook's output omits (`crates/polyjose/tests/jwe_json.rs`).
 - **RFC 7520 §5.12, both forms**: there is no protected header; polyjose always protects `enc` and, when flattened, `alg` (refinement 17).
 - **RFC 7516 App. A.5** (flattened, `alg` in the per-recipient header): polyjose protects it (refinement 17).
 
