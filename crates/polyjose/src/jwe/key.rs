@@ -4,7 +4,7 @@
 //! [`RecipientKey::from_jwk`] enforces, before any cryptography runs, the
 //! family binding (`KeyMaterial::serves_key_mgmt_alg`), the JWK `alg`,
 //! `use` and `key_ops` (RFC 7517 §4.2–§4.4) and the key size the `alg`
-//! needs. Filled in by T05.
+//! needs, and picks the public or private part `direction` uses.
 //!
 //! RSA keys are held as their validated `n` and `e` only (ADR 0021: public
 //! keys, encryption only); this file never names the `rsa` crate.
@@ -69,9 +69,10 @@ impl RecipientKey {
     /// The key itself was validated when the [`Jwk`] was imported
     /// (`Jwk::from_object`: exact member lengths, EC points on their curve
     /// and not the identity, `d` in [1, n − 1], RSA moduli of at least 2048
-    /// bits, RSA private keys refused; ADR 0041 §4, ADR 0021). The
-    /// private-to-public consistency of ADR 0043 is an import check too.
-    /// None of that is repeated here. In this order:
+    /// bits, RSA private keys refused; ADR 0041 §4, ADR 0021), and so is
+    /// private-to-public consistency (ADR 0043 §3: EC `d·G` = (`x`, `y`)
+    /// now; X25519 `d` → `x` when 0002 T17 adds it there). None of that is
+    /// repeated here. In this order:
     ///
     /// 1. **Support** → [`Error::UnsupportedAlgorithm`]: `alg` must be
     ///    implemented in `direction` (`keymgmt::supported`: RSA-OAEP-256 is
@@ -99,7 +100,8 @@ impl RecipientKey {
     ///    candidate; plan.md error contract). On decrypt the `dir` length
     ///    is *not* checked here: `enc` comes from the attacker-controlled
     ///    header, so a mismatch is the `dir` key management's
-    ///    [`Error::DecryptionFailed`].
+    ///    [`Error::DecryptionFailed`]. An RSA modulus above 8192 bits is
+    ///    [`Error::InvalidKey`] (encrypt is RSA's only direction).
     ///
     /// # Errors
     ///
