@@ -268,7 +268,10 @@ fn parse_label(text: &[u8]) -> Result<Label> {
 ///
 /// # Errors
 ///
-/// - [`Error::UnsupportedAlgorithm`] for [`Label::Other`], which has no text.
+/// - [`Error::UnsupportedAlgorithm`] for the labels [`decode`] rejects from
+///   the BEGIN line: [`Label::Other`] (no text), [`Label::RsaPrivate`]
+///   (ADR 0021) and [`Label::EncryptedPrivateKey`] (ADR 0018 §4). polyjose
+///   never writes what it will not read.
 /// - [`Error::InvalidKey`] for empty `der`: the strict grammar has at least
 ///   one base64 quantum (§3 `strictbase64finl`).
 ///
@@ -282,6 +285,9 @@ fn parse_label(text: &[u8]) -> Result<Label> {
     expect(dead_code, reason = "called by the PEM entry points in api.rs")
 )]
 pub(crate) fn encode(label: Label, der: &[u8]) -> Result<Zeroizing<String>> {
+    if is_unsupported(label) {
+        return Err(Error::UnsupportedAlgorithm);
+    }
     let text = label.as_str().ok_or(Error::UnsupportedAlgorithm)?;
     if der.is_empty() {
         return Err(Error::InvalidKey("PEM body cannot be empty"));
@@ -563,15 +569,7 @@ mod tests {
                 checked += 1;
             }
         }
-        // The RSA PRIVATE KEY label too (the codec is label-agnostic).
-        let der = read_der("openssl", "reject-rsa2048-private-pkcs1.der");
-        let pem = encode(Label::RsaPrivate, &der).unwrap();
-        assert_eq!(
-            *pem,
-            read_text("openssl", "reject-rsa2048-private-pkcs1.pem")
-        );
-        checked += 1;
-        assert!(checked >= 29, "{checked}");
+        assert!(checked >= 28, "{checked}");
     }
 
     /// Lines are exactly 64 characters except the last (RFC 7468 §2), at
@@ -597,14 +595,21 @@ mod tests {
         }
     }
 
-    /// No label text for `Other`, and no strict encoding of an empty body
-    /// (RFC 7468 §3 `strictbase64finl` has at least one quantum).
+    /// No output for the unsupported labels, and no strict encoding of an
+    /// empty body (RFC 7468 §3 `strictbase64finl` has at least one quantum).
     #[test]
-    fn encoder_rejects_other_and_empty_input() {
-        assert_eq!(
-            encode(Label::Other, &[1, 2, 3]).map(|_| ()),
-            Err(Error::UnsupportedAlgorithm)
-        );
+    fn encoder_rejects_unsupported_labels_and_empty_input() {
+        // The labels decode rejects from the BEGIN line are never written
+        // either: RSA private keys (ADR 0021) and encrypted PKCS#8
+        // (ADR 0018 §4).
+        let rsa_private = read_der("openssl", "reject-rsa2048-private-pkcs1.der");
+        for label in [Label::Other, Label::RsaPrivate, Label::EncryptedPrivateKey] {
+            assert_eq!(
+                encode(label, &rsa_private).map(|_| ()),
+                Err(Error::UnsupportedAlgorithm),
+                "{label:?}"
+            );
+        }
         assert!(matches!(
             encode(Label::PrivateKey, &[]),
             Err(Error::InvalidKey(_))
