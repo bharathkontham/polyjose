@@ -498,15 +498,36 @@ fn the_flattened_rewrap_is_invalid_format() {
             Err(Error::InvalidFormat(_))
         ));
     }
-    // The rewrap's protected, payload and signature are §3.1's, so the
-    // signature is valid: 0002's JSON verifier accepts it.
-    let v = polyjose::jws::verify_json(
-        ORACLE_FLATTENED_REWRAP,
-        &key,
-        &polyjose::jws::VerifyOptions::new(&HS256).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(v.unprotected.and_then(|h| h.typ).as_deref(), Some("at+jwt"));
+    // The rewrap's protected, payload and signature are §3.1's three parts,
+    // so its signature is valid: put back together they are the RFC token,
+    // which verifies.
+    let rewrap = polyjose::json::parse(ORACLE_FLATTENED_REWRAP.as_bytes()).unwrap();
+    let part = |name: &str| {
+        rewrap
+            .as_object()
+            .and_then(|o| o.get(name))
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_owned()
+    };
+    let compact = format!(
+        "{}.{}.{}",
+        part("protected"),
+        part("payload"),
+        part("signature")
+    );
+    assert_eq!(compact, RFC7519_3_1);
+    assert!(verify_hs256_at(&compact, 1_300_819_320).is_ok());
+    // A JWS JSON verifier rejects it too, for its own reason: the
+    // unprotected `typ` repeats a protected parameter (RFC 7515 §5.2 step 4).
+    assert!(matches!(
+        polyjose::jws::verify_json(
+            ORACLE_FLATTENED_REWRAP,
+            &key,
+            &polyjose::jws::VerifyOptions::new(&HS256).unwrap(),
+        ),
+        Err(Error::InvalidHeader(_))
+    ));
 }
 
 /// ADR 0049 §2: `typ` comes from the protected header only. A compact
