@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §4; RFC 7515 §5.2 step 4 (via RFC 7519 §7.2); ADR 0027 §1; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The Claims Set {\"exp\":1,\"exp\":2} names exp twice; polyjose rejects duplicate claim names (RFC 7519 §4 allows reject or last-wins) before any claim is checked: InvalidJson",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjEsImV4cCI6Mn0.rbc8rPhsj7Wnj5YAQs3F3Rm6GE0CNWUF5UvH_S_AqP0",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

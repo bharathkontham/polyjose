@@ -1,0 +1,25 @@
+{
+  "source": "RFC 7519 §4.1.3; ADR 0027 §4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "aud is [\"a\", 1]: an array element that is not a string. The configured audience [\"a\"] would match the first element, so this pins the parse-time type check: InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MDAwMDA2MDAsImF1ZCI6WyJhIiwxXX0.rN31-ULc5dWV9iApY7EJ_t41CkWERX_fs7mf42BYVzQ",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "audience": [
+        "a"
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}
