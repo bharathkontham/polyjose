@@ -1,8 +1,10 @@
 //! T05 (tester): the JWS JSON Serialization through the public API only
 //! (RFC 7515 §7.2, App. F; RFC 7797 §3, §5.3; ADR 0026 §1-§3, §7;
-//! ADR 0041 §1). Every case fails before the signature check (step 9) or
-//! only asserts "not this error", so it stays valid while the algorithm
-//! families (T06-T09) are stubs and after they land.
+//! ADR 0041 §1). Each rejected case asserts its exact error code, most of
+//! them from a step before the signature check (step 9). Each accepted case
+//! carries a real HS256 signature and asserts the verified `alg`,
+//! `signature_index` and payload, with the all-zero tag of the same shape
+//! failing as `InvalidSignature` (F06).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
