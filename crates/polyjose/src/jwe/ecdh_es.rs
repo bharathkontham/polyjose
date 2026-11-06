@@ -1210,4 +1210,53 @@ mod tests {
         );
         assert_eq!(cek, Ok(b64("Nou2ueKlP70ZXDbq9UrRwg")));
     }
+
+    /// The T17 X25519 import-consistency check (ADR 0043 §3), seen from
+    /// the JWE side. Moved here from the helper's own tests so that `jwk`
+    /// never imports from `crate::jwe` (0003 code review #6).
+    mod x25519_import_consistency {
+        use super::*;
+        use crate::jwe::x25519_consistency::X25519_PRIVATE_MISMATCH;
+        use x25519_dalek::PublicKey;
+
+        /// RFC 7748 §6.1, as printed (hex).
+        const ALICE_PRIVATE: &str =
+            "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+        const BOB_PRIVATE: &str =
+            "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb";
+        const BOB_PUBLIC: &str = "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f";
+
+        /// 32 bytes from 64 lowercase hex digits.
+        fn hex32(text: &str) -> [u8; 32] {
+            <[u8; 32]>::try_from(hex(text)).unwrap_or_else(|_| panic!("{text:?} is not 32 bytes"))
+        }
+
+        /// The JWE recipient key path (0003 T05) binds only imported keys, so
+        /// the import check is what keeps a mismatched X25519 pair away from
+        /// ECDH-ES decryption: the RFC 7748 §6.1 Bob key binds for decrypt,
+        /// the same `x` with Alice's `d` never becomes a `Jwk`.
+        #[test]
+        fn jwe_recipient_binding_sees_only_consistent_keys() {
+            let jwk = |d: &str| -> Result<Jwk> {
+                let (x, d) = (b64url_encode(&hex32(BOB_PUBLIC)), b64url_encode(&hex32(d)));
+                let json = format!(r#"{{"kty":"OKP","crv":"X25519","x":"{x}","d":"{d}"}}"#);
+                Jwk::from_json(json.as_bytes())
+            };
+            let bob = jwk(BOB_PRIVATE).unwrap();
+            let bound = RecipientKey::from_jwk(
+                &bob,
+                &KeyMgmtAlg::EcdhEs,
+                &ContentEncAlg::A128GCM,
+                Direction::Decrypt,
+            );
+            let Ok(RecipientKey::X25519Secret(secret)) = bound else {
+                panic!("Bob's private key did not bind for ECDH-ES decrypt");
+            };
+            assert_eq!(PublicKey::from(&secret).to_bytes(), hex32(BOB_PUBLIC));
+            assert_eq!(
+                jwk(ALICE_PRIVATE).err(),
+                Some(Error::InvalidKey(X25519_PRIVATE_MISMATCH))
+            );
+        }
+    }
 }
