@@ -810,6 +810,160 @@ impl KeyMaterial {
             ) => false,
         }
     }
+
+    /// Whether this key is of the family JWE key management `alg`
+    /// requires: the **only** copy of this table. JWK import uses it for a
+    /// JWK `alg` (RFC 7517 §4.4); JWE key binding (feature 0003) must call
+    /// it, not restate it.
+    ///
+    /// | `alg` | key |
+    /// |---|---|
+    /// | `RSA-OAEP-256` (RFC 7518 §4.3; encryption only, ADR 0021) | `RSA` |
+    /// | `A128KW`, `A192KW`, `A256KW` (RFC 7518 §4.4) | `oct` |
+    /// | `dir` (RFC 7518 §4.5) | `oct` |
+    /// | `A128GCMKW`, `A192GCMKW`, `A256GCMKW` (RFC 7518 §4.7) | `oct` |
+    /// | `PBES2-HS256+A128KW`, `-HS384+A192KW`, `-HS512+A256KW` (RFC 7518 §4.8) | `oct` (the password octets as `k`) |
+    /// | `ECDH-ES`, `ECDH-ES+A128KW`, `+A192KW`, `+A256KW` (RFC 7518 §4.6) | `EC` `P-256` / `P-384` / `P-521` (RFC 7518 §4.6, §6.2.1.1), or `OKP` `X25519` (RFC 8037 §3.2) |
+    ///
+    /// - ECDH-ES is offered on exactly the curves ADR 0006 lists. RFC 8812
+    ///   §3.3 leaves secp256k1 key agreement undefined ("beyond the scope of
+    ///   this specification"), and `Ed25519` is a signature curve
+    ///   (RFC 8037 §3.1; §3.2 names only X25519 and X448 for ECDH-ES), so
+    ///   neither serves it.
+    /// - PBES2 (RFC 7518 §4.8) is keyed by a password, an "octet sequence"
+    ///   (UTF-8 if it is text). No RFC names a JWK form for it, but `oct`
+    ///   represents "a symmetric key (or another key whose value is a
+    ///   single octet sequence)" (RFC 7518 §6.4), so a JWK with a PBES2
+    ///   `alg` must be `oct`, with the password as `k`.
+    ///
+    /// `RSA-OAEP` (SHA-1, ADR 0022), `RSA1_5` (ADR 0021) and unknown values
+    /// are [`KeyMgmtAlg::Unknown`] and served by no key. Only the family is
+    /// checked here; key length and the JWK `use`/`key_ops` are separate.
+    pub(crate) fn serves_key_mgmt_alg(&self, alg: &KeyMgmtAlg) -> bool {
+        use KeyMgmtAlg as A;
+        match (alg, self) {
+            (A::RsaOaep256, KeyMaterial::Rsa(_)) => true,
+            (
+                A::A128KW
+                | A::A192KW
+                | A::A256KW
+                | A::Dir
+                | A::A128GCMKW
+                | A::A192GCMKW
+                | A::A256GCMKW
+                | A::Pbes2Hs256A128KW
+                | A::Pbes2Hs384A192KW
+                | A::Pbes2Hs512A256KW,
+                KeyMaterial::Oct(_),
+            ) => true,
+            (
+                A::EcdhEs | A::EcdhEsA128KW | A::EcdhEsA192KW | A::EcdhEsA256KW,
+                KeyMaterial::Ec(key),
+            ) => matches!(key.crv, EcCurve::P256 | EcCurve::P384 | EcCurve::P521),
+            (
+                A::EcdhEs | A::EcdhEsA128KW | A::EcdhEsA192KW | A::EcdhEsA256KW,
+                KeyMaterial::Okp(key),
+            ) => key.crv == OkpCurve::X25519,
+            // Every variant is listed (no `_` for `alg`), so a new
+            // algorithm does not compile until it has a row above.
+            (
+                A::RsaOaep256
+                | A::A128KW
+                | A::A192KW
+                | A::A256KW
+                | A::Dir
+                | A::EcdhEs
+                | A::EcdhEsA128KW
+                | A::EcdhEsA192KW
+                | A::EcdhEsA256KW
+                | A::A128GCMKW
+                | A::A192GCMKW
+                | A::A256GCMKW
+                | A::Pbes2Hs256A128KW
+                | A::Pbes2Hs384A192KW
+                | A::Pbes2Hs512A256KW
+                | A::Unknown(_),
+                _,
+            ) => false,
+        }
+    }
+
+    /// Whether this key is of the family a JWE content encryption `enc`
+    /// requires: the **only** copy of this rule, which feature 0003's `dir`
+    /// key binding must call too.
+    ///
+    /// Every `enc` (RFC 7518 §5.1: `A128CBC-HS256`, `A192CBC-HS384`,
+    /// `A256CBC-HS512`, §5.2; `A128GCM`, `A192GCM`, `A256GCM`, §5.3) is
+    /// keyed by a symmetric CEK. A JWK names one as its `alg` when it is
+    /// used directly as the CEK with `dir` (RFC 7518 §4.5), so only an
+    /// `oct` key (RFC 7518 §6.4) serves it. Unknown values are served by no
+    /// key. Key length is a separate check.
+    pub(crate) fn serves_content_enc_alg(&self, enc: &ContentEncAlg) -> bool {
+        use ContentEncAlg as E;
+        match (enc, self) {
+            (
+                E::A128CbcHs256
+                | E::A192CbcHs384
+                | E::A256CbcHs512
+                | E::A128GCM
+                | E::A192GCM
+                | E::A256GCM,
+                KeyMaterial::Oct(_),
+            ) => true,
+            // Every variant is listed (no `_` for `enc`), so a new
+            // algorithm does not compile until it has a row above.
+            (
+                E::A128CbcHs256
+                | E::A192CbcHs384
+                | E::A256CbcHs512
+                | E::A128GCM
+                | E::A192GCM
+                | E::A256GCM
+                | E::Unknown(_),
+                _,
+            ) => false,
+        }
+    }
+}
+
+/// Registered `alg` names that polyjose deliberately does not implement and
+/// that therefore fail JWK import with [`Error::UnsupportedAlgorithm`]:
+/// `RSA1_5` (RFC 7518 §4.2; ADR 0021, not shipped in either direction) and
+/// `RSA-OAEP` (RFC 7518 §4.3, SHA-1; ADR 0022). They parse as
+/// [`KeyAlg::Unknown`]; the match is exact and case-sensitive
+/// (RFC 7518 §7.1 names), so `rsa1_5` stays an unknown value.
+const UNSUPPORTED_KEY_ALGS: &[&str] = &["RSA1_5", "RSA-OAEP"];
+
+/// The JWK `alg` check of import (RFC 7517 §4.4: `alg` "identifies the
+/// algorithm intended for use with the key"), run after every structural
+/// check of the key:
+///
+/// 1. `RSA1_5` or `RSA-OAEP` → [`Error::UnsupportedAlgorithm`], whatever
+///    the key ([`UNSUPPORTED_KEY_ALGS`]).
+/// 2. A known JWS `alg`, JWE `alg` or `enc` that the key's family cannot
+///    serve → [`Error::KeyAlgorithmMismatch`] (RFC 8725 §3.1: a key is used
+///    with one algorithm), by the single tables
+///    [`KeyMaterial::serves_signing_alg`] (ADR 0026 §2 step 8),
+///    [`KeyMaterial::serves_key_mgmt_alg`] and
+///    [`KeyMaterial::serves_content_enc_alg`]. `none` is served by no key.
+/// 3. Any other value is kept as [`KeyAlg::Unknown`]: it is not an error
+///    here, and it never matches a header `alg`, so the key is unusable for
+///    any polyjose operation that checks the JWK `alg`.
+fn check_alg_binding(material: &KeyMaterial, alg: &KeyAlg) -> Result<()> {
+    let serves = match alg {
+        KeyAlg::Signing(alg) => material.serves_signing_alg(alg),
+        KeyAlg::KeyMgmt(alg) => material.serves_key_mgmt_alg(alg),
+        KeyAlg::ContentEnc(enc) => material.serves_content_enc_alg(enc),
+        KeyAlg::Unknown(name) if UNSUPPORTED_KEY_ALGS.contains(&name.as_str()) => {
+            return Err(Error::UnsupportedAlgorithm);
+        }
+        KeyAlg::Unknown(_) => true,
+    };
+    if serves {
+        Ok(())
+    } else {
+        Err(Error::KeyAlgorithmMismatch)
+    }
 }
 
 /// Every secret in the material is a [`Zeroizing`] buffer.
@@ -886,6 +1040,12 @@ impl Jwk {
         let x5t = optional_str(object, "x5t", "x5t must be a string")?.map(str::to_owned);
         let x5t_s256 =
             optional_str(object, "x5t#S256", "x5t#S256 must be a string")?.map(str::to_owned);
+        // RFC 7517 §4.4: last, once the key is known to be well-formed, so
+        // a malformed key is always `InvalidKey`/`InvalidBase64` whatever
+        // its `alg` (ADR 0018 Q3: "unsupported" presumes "well-formed").
+        if let Some(alg) = &alg {
+            check_alg_binding(&material, alg)?;
+        }
         let typed = type_members(kty);
         // RFC 7517 §4: members not understood "MUST be ignored"; polyjose
         // keeps them. They are a subset of `object`'s members, whose names
@@ -1977,6 +2137,127 @@ mod tests {
             Some(Error::InvalidKey("key_ops must not contain duplicates"))
         );
         assert!(count <= n_log_n_bound(N), "{count} comparisons");
+    }
+
+    /// One key of each kind, by label, for the family tables. EC and OKP
+    /// coordinates only need the right length (the tables read `crv`).
+    fn family_keys() -> Vec<(&'static str, KeyMaterial)> {
+        let ec = |crv: EcCurve| {
+            let len = crv.coordinate_len();
+            KeyMaterial::Ec(EcKey {
+                crv,
+                x: vec![7; len],
+                y: vec![7; len],
+                d: None,
+            })
+        };
+        let okp = |crv: OkpCurve| {
+            KeyMaterial::Okp(OkpKey {
+                crv,
+                x: vec![7; 32],
+                d: None,
+            })
+        };
+        vec![
+            ("oct", parse(&oct_json()).material().clone()),
+            ("RSA", parse(&rsa_json()).material().clone()),
+            ("P-256", ec(EcCurve::P256)),
+            ("P-384", ec(EcCurve::P384)),
+            ("P-521", ec(EcCurve::P521)),
+            ("secp256k1", ec(EcCurve::Secp256k1)),
+            ("Ed25519", okp(OkpCurve::Ed25519)),
+            ("X25519", okp(OkpCurve::X25519)),
+        ]
+    }
+
+    /// RFC 7518 §4.3–§4.8, RFC 8037 §3.2, ADR 0006: the JWE `alg` → key
+    /// family table, every row against every key kind, written out here
+    /// independently of `serves_key_mgmt_alg`.
+    #[test]
+    fn key_mgmt_family_table() {
+        const ECDH: &[&str] = &["P-256", "P-384", "P-521", "X25519"];
+        let table: &[(KeyMgmtAlg, &[&str])] = &[
+            (KeyMgmtAlg::RsaOaep256, &["RSA"]),
+            (KeyMgmtAlg::A128KW, &["oct"]),
+            (KeyMgmtAlg::A192KW, &["oct"]),
+            (KeyMgmtAlg::A256KW, &["oct"]),
+            (KeyMgmtAlg::Dir, &["oct"]),
+            (KeyMgmtAlg::EcdhEs, ECDH),
+            (KeyMgmtAlg::EcdhEsA128KW, ECDH),
+            (KeyMgmtAlg::EcdhEsA192KW, ECDH),
+            (KeyMgmtAlg::EcdhEsA256KW, ECDH),
+            (KeyMgmtAlg::A128GCMKW, &["oct"]),
+            (KeyMgmtAlg::A192GCMKW, &["oct"]),
+            (KeyMgmtAlg::A256GCMKW, &["oct"]),
+            (KeyMgmtAlg::Pbes2Hs256A128KW, &["oct"]),
+            (KeyMgmtAlg::Pbes2Hs384A192KW, &["oct"]),
+            (KeyMgmtAlg::Pbes2Hs512A256KW, &["oct"]),
+            (KeyMgmtAlg::from("RSA-OAEP"), &[]),
+            (KeyMgmtAlg::from("RSA1_5"), &[]),
+            (KeyMgmtAlg::from("x-future"), &[]),
+        ];
+        for alg in KeyMgmtAlg::KNOWN {
+            assert!(table.iter().any(|(a, _)| a == alg), "{alg} not in table");
+        }
+        for (alg, kinds) in table {
+            for (kind, key) in family_keys() {
+                assert_eq!(
+                    key.serves_key_mgmt_alg(alg),
+                    kinds.contains(&kind),
+                    "{alg} on {kind}"
+                );
+            }
+        }
+    }
+
+    /// RFC 7518 §5.1 with §4.5: every `enc` binds to `oct` only.
+    #[test]
+    fn content_enc_family_table() {
+        for enc in ContentEncAlg::KNOWN {
+            for (kind, key) in family_keys() {
+                assert_eq!(
+                    key.serves_content_enc_alg(enc),
+                    kind == "oct",
+                    "{enc} on {kind}"
+                );
+            }
+        }
+        for (_, key) in family_keys() {
+            assert!(!key.serves_content_enc_alg(&ContentEncAlg::from("A128CBC")));
+        }
+    }
+
+    /// The import check: the two unsupported names first (any key), then
+    /// the family tables; other unknown values pass.
+    #[test]
+    fn alg_binding_check() {
+        for (kind, key) in family_keys() {
+            for name in UNSUPPORTED_KEY_ALGS {
+                assert_eq!(
+                    check_alg_binding(&key, &KeyAlg::from(*name)),
+                    Err(Error::UnsupportedAlgorithm),
+                    "{name} on {kind}"
+                );
+            }
+            for unknown in ["x-future", "rsa1_5", "Ed448", ""] {
+                assert_eq!(check_alg_binding(&key, &KeyAlg::from(unknown)), Ok(()));
+            }
+            let none = KeyAlg::Signing(SigningAlg::None);
+            assert_eq!(
+                check_alg_binding(&key, &none),
+                Err(Error::KeyAlgorithmMismatch)
+            );
+        }
+        let oct = parse(&oct_json());
+        let oct = oct.material();
+        assert_eq!(check_alg_binding(oct, &KeyAlg::from("HS256")), Ok(()));
+        assert_eq!(check_alg_binding(oct, &KeyAlg::from("A256GCM")), Ok(()));
+        assert_eq!(check_alg_binding(oct, &KeyAlg::from("dir")), Ok(()));
+        assert_eq!(
+            check_alg_binding(oct, &KeyAlg::from("ES256")),
+            Err(Error::KeyAlgorithmMismatch)
+        );
+        assert_eq!(UNSUPPORTED_KEY_ALGS, ["RSA1_5", "RSA-OAEP"]);
     }
 
     #[test]
