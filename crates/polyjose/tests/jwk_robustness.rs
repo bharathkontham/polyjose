@@ -138,10 +138,18 @@ fn use_everything(jwk: &Jwk) {
     }
 }
 
+/// The exact codes `Jwk::from_object` documents (jwk.rs "Error codes" and
+/// its `# Errors`): `UnsupportedAlgorithm` (ADR 0018 Q3; ADRs 0021, 0022),
+/// `InvalidKey` and `InvalidBase64` for a malformed key, and
+/// `KeyAlgorithmMismatch` for a well-formed key whose known `alg` its
+/// family cannot serve (RFC 7517 §4.4, RFC 8725 §3.1).
 fn is_import_error(e: &Error) -> bool {
     matches!(
         e,
-        Error::InvalidKey(_) | Error::InvalidBase64 | Error::UnsupportedAlgorithm
+        Error::InvalidKey(_)
+            | Error::InvalidBase64
+            | Error::UnsupportedAlgorithm
+            | Error::KeyAlgorithmMismatch
     )
 }
 
@@ -228,6 +236,45 @@ fn edited_key() -> impl Strategy<Value = Object> {
 /// Objects of either kind.
 fn any_object() -> impl Strategy<Value = Object> {
     prop_oneof![jwk_object(), edited_key()]
+}
+
+/// Regression for the shape `arbitrary_objects_import_or_fail_with_a_key_error`
+/// shrank to (kty, crv, x, y, alg): a well-formed key whose known `alg` its
+/// family cannot serve fails import with `KeyAlgorithmMismatch`
+/// (RFC 7517 §4.4, RFC 8725 §3.1; jwk.rs "Error codes"), one of the
+/// key-import codes. Each `alg` is one of the generator's `WORDS`, so the
+/// proptest reaches every case here.
+#[test]
+fn alg_family_mismatch_is_an_import_error() {
+    let ec = |crv: &str, len: usize, alg: &str| {
+        let mut o = Object::new();
+        o.insert("kty", "EC");
+        o.insert("crv", crv);
+        o.insert("x", b64url_encode(&vec![7; len]));
+        o.insert("y", b64url_encode(&vec![9; len]));
+        o.insert("alg", alg);
+        o
+    };
+    let mut okp = Object::new();
+    okp.insert("kty", "OKP");
+    okp.insert("crv", "Ed25519");
+    okp.insert("x", b64url_encode(&[3; 32]));
+    okp.insert("alg", "ES256");
+    let mut oct = Object::new();
+    oct.insert("kty", "oct");
+    oct.insert("k", b64url_encode(&[5; 32]));
+    oct.insert("alg", "RS256");
+    for object in [
+        ec("P-256", 32, "RS256"),
+        ec("P-384", 48, "ES256"),
+        ec("P-256", 32, "A128KW"),
+        okp,
+        oct,
+    ] {
+        let e = Jwk::from_object(&object).err();
+        assert!(matches!(e, Some(Error::KeyAlgorithmMismatch)), "{e:?}");
+        assert!(is_import_error(&e.unwrap()));
+    }
 }
 
 proptest! {
