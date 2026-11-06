@@ -444,11 +444,11 @@ fn check_universal(element: Element<'_>) -> Result<()> {
         // Strings (BIT, OCTET, ObjectDescriptor, the character strings and
         // the time types) have a BER-only constructed form (§10.2).
         let string = matches!(number, 3 | 4 | 7 | 12 | 18..=30) && number != 29;
-        return Err(Error::InvalidKey(if constructed && string {
-            "DER constructed string"
+        return if constructed && string {
+            Err(Error::InvalidKey("DER constructed string"))
         } else {
-            "DER unexpected tag"
-        }));
+            Err(Error::InvalidKey("DER unexpected tag"))
+        };
     }
     let contents = element.contents;
     match number {
