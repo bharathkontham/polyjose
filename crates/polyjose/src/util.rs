@@ -37,7 +37,7 @@ use zeroize::Zeroizing;
 /// `data` may be secret (exporting an `oct` `k` or a private JWK member), so
 /// the running time depends only on `data.len()`, which is public. Each
 /// 3-octet group (RFC 4648 §4) is split into 6-bit values and every value
-/// goes through `encode_symbol`, which is pure arithmetic: no branch and
+/// goes through `encode_symbol_in`, which is pure arithmetic: no branch and
 /// no table lookup depends on the octets. The only branches are on lengths.
 /// Each character pushed is ASCII, so `String::push` takes the same one-byte
 /// path for every input. The output is allocated once at its exact length
@@ -51,20 +51,31 @@ use zeroize::Zeroizing;
 /// ```
 pub fn b64url_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(encoded_len(data.len()));
+    encode_groups(data, URL_SAFE, &mut out);
+    out
+}
+
+/// Appends the symbols of `data` in `alphabet` to `out`, without padding:
+/// 1, 2 or 3 octets give 2, 3 or 4 symbols (RFC 4648 §4; RFC 7515 §2 for
+/// base64url). Shared by the base64url and the standard base64 encoders.
+///
+/// # Constant time
+///
+/// As for [`b64url_encode`]: every 6-bit value goes through
+/// [`encode_symbol_in`], and the only branches are on `data.len()`.
+fn encode_groups(data: &[u8], alphabet: Alphabet, out: &mut String) {
     for group in data.chunks(3) {
         // RFC 4648 §4: a short final group is padded with zero bits on the
         // right, which makes the pad bits zero (§3.5).
         let mut octets = [0u8; 3];
         octets[..group.len()].copy_from_slice(group);
         let bits = u32::from(octets[0]) << 16 | u32::from(octets[1]) << 8 | u32::from(octets[2]);
-        // 1, 2 or 3 octets give 2, 3 or 4 symbols, no `=` (RFC 7515 §2).
         for i in 0..=group.len() {
-            // Truncation is intended: encode_symbol uses only the low 6 bits.
+            // Truncation is intended: encode_symbol_in uses only the low 6 bits.
             let value = (bits >> (18 - 6 * i)) as u8;
-            out.push(char::from(encode_symbol(value)));
+            out.push(char::from(encode_symbol_in(value, alphabet)));
         }
     }
-    out
 }
 
 /// Length of the unpadded base64url encoding of `len` octets: ⌈4·len/3⌉
@@ -73,6 +84,26 @@ pub fn b64url_encode(data: &[u8]) -> String {
 fn encoded_len(len: usize) -> usize {
     len / 3 * 4 + (len % 3 * 4).div_ceil(3)
 }
+
+/// The two characters in which the base 64 alphabets of RFC 4648 differ:
+/// the symbols for values 62 and 63. Values 0–61 are `A`–`Z`, `a`–`z`,
+/// `0`–`9` in both (RFC 4648 §4 Table 1, §5 Table 2).
+///
+/// The alphabet is a public parameter of the codec, never data, so code may
+/// depend on it freely.
+#[derive(Clone, Copy)]
+struct Alphabet {
+    /// The symbol for value 62.
+    c62: u8,
+    /// The symbol for value 63.
+    c63: u8,
+}
+
+/// RFC 4648 §5 Table 2, "URL and Filename safe": `-` and `_`.
+const URL_SAFE: Alphabet = Alphabet {
+    c62: b'-',
+    c63: b'_',
+};
 
 /// `-1` (all bits set) if `x >= k`, else `0`, without a branch.
 ///
@@ -83,25 +114,37 @@ fn ge_mask(x: i16, k: i16) -> i16 {
     (k - 1 - x) >> 15
 }
 
-/// Maps the low 6 bits of `value` to its RFC 4648 §5 (Table 2) character.
+/// Maps the low 6 bits of `value` to its RFC 4648 §5 (Table 2) character:
+/// [`encode_symbol_in`] with the base64url alphabet, kept for the Table 2
+/// tests.
+#[cfg(test)]
+fn encode_symbol(value: u8) -> u8 {
+    encode_symbol_in(value, URL_SAFE)
+}
+
+/// Maps the low 6 bits of `value` to its character in `alphabet`
+/// (RFC 4648 §4 Table 1 or §5 Table 2).
 ///
 /// # Constant time
 ///
-/// Table 2 is five contiguous runs, each a fixed offset from the value:
+/// Both tables are five contiguous runs, each a fixed offset from the value:
 /// 0–25 → `'A' + v`, 26–51 → `'a' + (v - 26)`, 52–61 → `'0' + (v - 52)`,
-/// 62 → `'-'`, 63 → `'_'`. Instead of choosing a run with a branch or a
-/// table lookup indexed by the (secret) value, we start from the first
-/// run's offset and add the difference to the next run's offset under a
-/// mask from [`ge_mask`]. Every value runs the same instructions and touches
-/// no memory, so neither timing nor cache state depends on it.
+/// 62 → the alphabet's 62nd symbol (`-` or `+`), 63 → its 63rd (`_` or `/`).
+/// Instead of choosing a run with a branch or a table lookup indexed by the
+/// (secret) value, we start from the first run's offset and add the
+/// difference to the next run's offset under a mask from [`ge_mask`]. The
+/// alphabet only changes those public offsets. Every value runs the same
+/// instructions and touches no memory, so neither timing nor cache state
+/// depends on it.
 #[inline]
-fn encode_symbol(value: u8) -> u8 {
+fn encode_symbol_in(value: u8, alphabet: Alphabet) -> u8 {
     let v = i16::from(value & 0x3f);
+    let (c62, c63) = (i16::from(alphabet.c62), i16::from(alphabet.c63));
     let mut offset = i16::from(b'A');
     offset += ge_mask(v, 26) & ((i16::from(b'a') - 26) - i16::from(b'A'));
     offset += ge_mask(v, 52) & ((i16::from(b'0') - 52) - (i16::from(b'a') - 26));
-    offset += ge_mask(v, 62) & ((i16::from(b'-') - 62) - (i16::from(b'0') - 52));
-    offset += ge_mask(v, 63) & ((i16::from(b'_') - 63) - (i16::from(b'-') - 62));
+    offset += ge_mask(v, 62) & ((c62 - 62) - (i16::from(b'0') - 52));
+    offset += ge_mask(v, 63) & ((c63 - 63) - (c62 - 62));
     // In range: the sum is one of the 64 ASCII alphabet bytes.
     (v + offset) as u8
 }
@@ -129,7 +172,7 @@ fn encode_symbol(value: u8) -> u8 {
 /// private JWK member, RFC 7518 §6.3.2), so the running time and memory
 /// access pattern depend only on `s.len()`, which is public:
 ///
-/// - each byte goes through `decode_symbol`, which maps it to its 6-bit
+/// - each byte goes through `decode_symbol_in`, which maps it to its 6-bit
 ///   value with arithmetic range masks: no branch and no table index
 ///   depends on the byte;
 /// - a bad byte or non-zero pad bits do not stop decoding. They are folded
@@ -182,11 +225,19 @@ pub fn b64url_decode(s: &str) -> crate::Result<Vec<u8>> {
 /// after a fault, and faults are folded into the returned `Choice`, so the
 /// loop runs the same steps for every input of a given length.
 fn decode_into(input: &[u8], out: &mut [u8]) -> Choice {
+    decode_into_in(input, out, URL_SAFE)
+}
+
+/// [`decode_into`] for any `alphabet`: decodes unpadded symbols of
+/// `alphabet` into `out` and returns whether they were the canonical
+/// encoding of `out` (RFC 4648 §3.5). Same preconditions and the same
+/// constant-time structure.
+fn decode_into_in(input: &[u8], out: &mut [u8], alphabet: Alphabet) -> Choice {
     let mut valid = Choice::from(1);
     for (quantum, octets) in input.chunks(4).zip(out.chunks_mut(3)) {
         let mut bits = 0u32;
         for (i, &byte) in quantum.iter().enumerate() {
-            let (value, symbol_valid) = decode_symbol(byte);
+            let (value, symbol_valid) = decode_symbol_in(byte, alphabet);
             valid &= symbol_valid;
             bits |= u32::from(value) << (18 - 6 * i);
         }
@@ -214,18 +265,28 @@ fn in_range_mask(x: i16, lo: i16, hi: i16) -> i16 {
 }
 
 /// Maps a byte to its RFC 4648 §5 (Table 2) value and whether it is in the
-/// alphabet at all (RFC 4648 §3.3: any other byte makes the input invalid).
-/// A byte outside the alphabet yields value 0, so it adds no bits.
+/// alphabet: [`decode_symbol_in`] with the base64url alphabet, kept for the
+/// Table 2 tests.
+#[cfg(test)]
+fn decode_symbol(byte: u8) -> (u8, Choice) {
+    decode_symbol_in(byte, URL_SAFE)
+}
+
+/// Maps a byte to its value in `alphabet` (RFC 4648 §4 Table 1 or §5
+/// Table 2) and whether it is in the alphabet at all (RFC 4648 §3.3: any
+/// other byte makes the input invalid). A byte outside the alphabet yields
+/// value 0, so it adds no bits.
 ///
 /// # Constant time
 ///
 /// The alphabet is five disjoint byte ranges, `A`–`Z`, `a`–`z`, `0`–`9`,
-/// `-` and `_`, each a fixed offset from its value. Every range is tested
-/// with [`in_range_mask`]; the mask selects that range's value and marks
-/// the byte valid. All five tests always run and no memory is indexed by
-/// the byte, so neither timing nor cache state depends on it.
+/// and the single symbols for 62 and 63 (`-` and `_`, or `+` and `/`), each
+/// a fixed offset from its value. Every range is tested with
+/// [`in_range_mask`]; the mask selects that range's value and marks the byte
+/// valid. All five tests always run and no memory is indexed by the byte,
+/// so neither timing nor cache state depends on it. The alphabet is public.
 #[inline]
-fn decode_symbol(byte: u8) -> (u8, Choice) {
+fn decode_symbol_in(byte: u8, alphabet: Alphabet) -> (u8, Choice) {
     let c = i16::from(byte);
     let mut value = 0i16;
     let mut found = 0i16;
@@ -233,8 +294,8 @@ fn decode_symbol(byte: u8) -> (u8, Choice) {
         (b'A', b'Z', 0),
         (b'a', b'z', 26),
         (b'0', b'9', 52),
-        (b'-', b'-', 62),
-        (b'_', b'_', 63),
+        (alphabet.c62, alphabet.c62, 62),
+        (alphabet.c63, alphabet.c63, 63),
     ] {
         let (lo, hi) = (i16::from(lo), i16::from(hi));
         let mask = in_range_mask(c, lo, hi);
