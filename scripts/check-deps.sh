@@ -9,9 +9,14 @@
 #      [target.*.…] forms) does not use `default-features = false` (ADR 0016 §3);
 #   4. a crate in deps-allowlist.txt is not credited in CREDITS.md, or CREDITS.md credits a crate
 #      that is not in deps-allowlist.txt (ADR 0020 §5);
-#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below, or a crate of
-#      a guarded group (ADR 0025, ADR 0042) is reached through a path that avoids its required
-#      parent crate (for example a direct dependency of the core on `semver`);
+#   5. deps-allowlist.txt uses a group that has no entry in check_group_rules below, or a guarded
+#      group (ADR 0025, ADR 0042, ADR 0049 §5) breaks one of its rules. Its members are fixed in
+#      the guarded_group_members table below, not read from deps-allowlist.txt: a crate the
+#      allowlist lists in a guarded group must be a member of it, a member must not be listed in
+#      another group, and a member in the core's tree must be listed. Each member is reachable only
+#      below its required parent crate (a direct dependency of the core on `semver` fails), and
+#      only through its group's edges: the dalek-build and num-traits-build crates must be absent
+#      from `cargo tree -e normal`, and the dalek-proc-macro crates from `-e normal,no-proc-macro`;
 #   6. a package in the core's tree does not come from crates.io: a path package other than
 #      polyjose itself, a git source or another registry (an allowlisted name is not enough when
 #      the code behind it can be swapped);
@@ -19,15 +24,22 @@
 #   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
 #      build-dependency ([build-dependencies] or [target.*.build-dependencies]);
 #   9. a Rust file under crates/polyjose/src or bindings names an RSA private-key or signing type,
-#      or decrypts with rsa (ADR 0021 §3: RSA is used for public-key operations only), reported
-#      with its file and line;
+#      or decrypts with rsa (ADR 0021 §3: RSA is used for public-key operations only), or has a
+#      spelling that could hide such a use from this scan (ADR 0049 §1): `rsa` aliased or
+#      re-exported in a use tree (any `rsa` token in one names the crate), `#[path]` or `include!`,
+#      an out-of-line `mod x;` in jws/rsa.rs or jwe/rsa_oaep.rs (or a file below jws/rsa/ or
+#      jwe/rsa_oaep/), or `rsa` as an identifier in a macro call or attribute (the macro rule; the
+#      arguments of std macros such as `assert!` and `format!` are exempt). Reported with its file
+#      and line;
 #  10. `sha1` is in the core's tree (ADR 0022: no SHA-1 anywhere in the core);
 #  11. `rsa` is built with any feature enabled, by the core or by anything else in the workspace
 #      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
 #  12. a workspace member depends on the `rsa` package under another name (`package = "rsa"`),
 #      which would hide its use from check 9.
-#  Checks 9-12 are the guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing
-#  them means removing that ignore.
+#  Checks 9-12 are, with scripts/check-rsa-symbols.sh (the same rule read from the compiled object
+#  code of polyjose and the bindings, built in the dev and the release profile, ADR 0049 §1), the
+#  guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing them means removing
+#  that ignore.
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
 # runtime dependencies and the build-dependencies of every crate in it (a build script or a
@@ -259,51 +271,112 @@ check_credits_match() {
 # 5. Group-specific rules. Every group needs a case here, so a new group cannot land without
 #    deciding its rule. A *guarded* group holds build-time crates that a primitive needs on the
 #    builder's machine only (they link nothing into the shipped artifact) and that polyjose cannot
-#    switch off from its manifest. Each of its crates may be reached only through one required
-#    parent crate (ADR 0025, ADR 0042 §1-§2):
+#    switch off from its manifest (ADR 0025, ADR 0042 §1-§2, ADR 0049 §5):
 #      dalek-proc-macro (ADR 0025): curve25519-dalek-derive, dalek's SIMD-backend code generator,
 #        a normal dependency of curve25519-dalek on x86_64, only below curve25519-dalek; its own
 #        tree (syn, quote, proc-macro2, unicode-ident) only below curve25519-dalek-derive.
 #      dalek-build (ADR 0042): rustc_version and semver, curve25519-dalek's build-dependencies,
 #        only below curve25519-dalek.
 #      num-traits-build (ADR 0042): autocfg, num-traits' build-dependency, only below num-traits.
-#    "Below" is checked on the tree of check 1 (cargo tree, normal and build edges, every target,
-#    every feature): the crate must be unreachable from polyjose once every package named like
-#    the parent is removed. So a second path to it (a direct dependency, or another crate that
-#    pulls it in) fails, and every path to it is printed with `cargo tree ... -i <crate>`.
+#    Three rules hold for them:
+#    a. Membership (ADR 0049 §5). The members of each guarded group are fixed in
+#       guarded_group_members below, not read from deps-allowlist.txt, so the allowlist alone
+#       cannot grow a guarded group or move a crate out of one. Rules b and c run on every crate of
+#       that table, whatever the allowlist says, and the allowlist must agree with it:
+#       - a crate the allowlist lists in a guarded group must be a member of that group here, so a
+#         crate added to a group (e.g. libm, which num-traits' `libm` feature pulls in below
+#         num-traits, where rule b alone would accept it) fails until this script and an ADR add
+#         it (ADR 0042 §5);
+#       - a member listed by the allowlist in any other group (e.g. syn under primitives) fails;
+#       - a member in the core's tree that the allowlist does not list fails (check 1 also fails);
+#       - a member in neither the tree nor the allowlist passes: the primitive dropped it, which
+#         only shrinks the tree. Check 2 makes the allowlist entry go when the tree loses the
+#         crate; the row here can then go too, and rules b and c still hold for the crate if it
+#         ever comes back while its row is here.
+#    b. Required parent (ADR 0025, ADR 0042 §2). "Below" is checked on the tree of check 1 (cargo
+#       tree, normal and build edges, every target, every feature): the crate must be unreachable
+#       from polyjose once every package named like the parent is removed. So a second path to it
+#       (a direct dependency, or another crate that pulls it in) fails.
+#    c. Edge kinds (ADR 0049 §5), from guarded_group_edges: the dalek-build and num-traits-build
+#       crates must be absent from `cargo tree -e normal` (same flags otherwise), so they reach
+#       polyjose through build edges only, and the dalek-proc-macro crates must be absent from
+#       `-e normal,no-proc-macro`, so they reach it only through a proc-macro. Rule b alone would
+#       accept a parent's *normal* edge to a build-time crate (e.g. num-traits -> libm).
+#    Each failure prints a shortest offending path and every path, with `cargo tree ... -i <crate>`.
 #    (Not cargo metadata's resolve graph, as check 6 walks: that graph unifies features across
 #    the whole workspace, so it would also show what only a binding enables.)
-check_group_rules() {
-  local group crate
-  : >"$work/guarded"
+#    A table row is "<group> <crate> <required parent>".
+
+# The guarded groups' members (ADR 0025, ADR 0042 §1, ADR 0049 §5). Growing a group, or adding
+# one, is a change here and needs an ADR (ADR 0042 §5).
+guarded_group_members() {
+  cat <<'EOF'
+dalek-proc-macro curve25519-dalek-derive curve25519-dalek
+dalek-proc-macro syn curve25519-dalek-derive
+dalek-proc-macro quote curve25519-dalek-derive
+dalek-proc-macro proc-macro2 curve25519-dalek-derive
+dalek-proc-macro unicode-ident curve25519-dalek-derive
+dalek-build rustc_version curve25519-dalek
+dalek-build semver curve25519-dalek
+num-traits-build autocfg num-traits
+EOF
+}
+
+# guarded_membership_rules: checks deps-allowlist.txt's groups against guarded_group_members, as the
+# comment of check 5 describes. Reads "$work/guard-table", "$work/groups" and "$work/tree".
+guarded_membership_rules() {
+  local group crate parent listed
   while read -r group crate; do
-    case $group in
-      primitives | ecdsa | eddsa | rsa | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
-      dalek-proc-macro)
-        if [ "$crate" = curve25519-dalek-derive ]; then
-          echo "$crate curve25519-dalek $group" >>"$work/guarded"
-        else
-          echo "$crate curve25519-dalek-derive $group" >>"$work/guarded"
-        fi ;;
-      dalek-build) echo "$crate curve25519-dalek $group" >>"$work/guarded" ;;
-      num-traits-build) echo "$crate num-traits $group" >>"$work/guarded" ;;
-      *) fail "$allowlist group '$group' (crate $crate) has no rule in check_group_rules (scripts/check-deps.sh)" ;;
-    esac
+    if awk -v g="$group" '$1 == g { found = 1 } END { exit !found }' "$work/guard-table"; then
+      awk -v g="$group" -v c="$crate" '$1 == g && $2 == c { found = 1 } END { exit !found }' "$work/guard-table" \
+        || fail "$crate is listed in guarded group $group in $allowlist but is not a member of it in scripts/check-deps.sh (ADR 0049 §5; growing a guarded group needs an ADR, ADR 0042 §5)"
+    else
+      case $group in
+        primitives | ecdsa | eddsa | rsa | randomness | hygiene) ;; # may appear anywhere in the tree; no extra rule
+        *) fail "$allowlist group '$group' (crate $crate) has no rule in check_group_rules (scripts/check-deps.sh)" ;;
+      esac
+    fi
   done <"$work/groups"
-  [ -s "$work/guarded" ] || return 0
-  # The graph is the tree of check 1 itself, printed with depths so that each line's parent is the
-  # nearest line above it one level up. cargo prints a repeated subtree only once (marked "(*)"),
-  # but every package's own dependencies appear at its first occurrence, so the edges are complete.
-  cargo tree --locked -p "$core_pkg" -e "normal,build" --all-features --target all --prefix depth \
-    >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree --prefix depth failed"; }
-  # Prints "<crate> <parent> <group> <path>" for each guarded crate reachable without its parent.
+  while read -r group crate parent; do
+    listed=$(awk -v c="$crate" '$2 == c { print $1 }' "$work/groups")
+    if [ -n "$listed" ] && [ "$listed" != "$group" ]; then
+      fail "$crate is a member of guarded group $group (scripts/check-deps.sh) but $allowlist lists it in group $listed (ADR 0049 §5)"
+    elif [ -z "$listed" ] && grep -qxF -- "$crate" "$work/tree"; then
+      fail "$crate is a member of guarded group $group (scripts/check-deps.sh) and in the core's tree, but $allowlist does not list it (ADR 0049 §5)"
+    fi
+  done <"$work/guard-table"
+}
+
+# guarded_group_edges <group>: the edge kinds of `cargo tree -e` whose tree must not contain the
+# group's crates (ADR 0049 §5). Build-time crates are absent from the normal edges, so they reach
+# polyjose only as a build-dependency; the proc-macro group is absent from the normal edges that
+# avoid proc-macro crates, so it reaches polyjose only through a proc-macro. Neither links into the
+# artifact. A guarded group without a case here is an error.
+guarded_group_edges() {
+  case $1 in
+    dalek-proc-macro) echo normal,no-proc-macro ;;
+    dalek-build | num-traits-build) echo normal ;;
+    *) return 1 ;;
+  esac
+}
+
+# guarded_paths <edge kinds> <rules> <out>: for each rule "<crate> <avoid> <group>" in <rules>,
+# writes "<crate> <avoid> <group> <name>@<version> <path>" to <out> when <crate> is reachable from
+# polyjose in `cargo tree -p polyjose -e <edge kinds> --all-features --target all` without entering
+# a package named <avoid> ("-" avoids nothing: no crate has that name). <path> is a shortest such
+# path. The tree is printed with depths, so each line's parent is the nearest line above it one
+# level up. cargo prints a repeated subtree only once (marked "(*)"), but every package's own
+# dependencies appear at its first occurrence, so the edges are complete.
+guarded_paths() {
+  cargo tree --locked -p "$core_pkg" -e "$1" --all-features --target all --prefix depth </dev/null \
+    >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree -e $1 --prefix depth failed"; }
   python3 -I -c '
 import re, sys
-tree_path, guarded_path = sys.argv[1], sys.argv[2]
+tree_path, rules_path = sys.argv[1], sys.argv[2]
 def norm(name):
     return name.lower().replace("_", "-")
 line_re = re.compile(r"^([0-9]+)([A-Za-z0-9][A-Za-z0-9_-]*) (v[0-9][^ ]*)")
-edges, stack, root = {}, [], None
+edges, stack, root, spelled = {}, [], None, {}
 with open(tree_path, encoding="utf-8") as f:
     for number, line in enumerate(f, 1):
         line = line.rstrip("\r\n")
@@ -311,6 +384,7 @@ with open(tree_path, encoding="utf-8") as f:
         if m is None:
             sys.exit("unexpected cargo tree line %d: %s" % (number, line))
         depth, node = int(m.group(1)), (norm(m.group(2)), m.group(3))
+        spelled[node] = m.group(2)
         if depth == 0:
             if root is not None:
                 sys.exit("cargo tree printed more than one root")
@@ -323,16 +397,16 @@ with open(tree_path, encoding="utf-8") as f:
         stack.append(node)
 if root is None:
     sys.exit("cargo tree printed nothing")
-with open(guarded_path, encoding="utf-8") as f:
+with open(rules_path, encoding="utf-8") as f:
     rules = [line.split() for line in f if line.strip()]
-for crate, parent, group in rules:
-    # Breadth-first walk from polyjose that never enters a package named `parent`.
+for crate, avoid, group in rules:
+    # Breadth-first walk from polyjose that never enters a package named `avoid`.
     prev, todo, hit = {root: None}, [root], None
     while todo and hit is None:
         nxt = []
         for node in todo:
             for dep in sorted(edges.get(node, ())):
-                if dep in prev or dep[0] == parent:
+                if dep in prev or dep[0] == avoid:
                     continue
                 prev[dep] = node
                 if dep[0] == crate:
@@ -347,15 +421,48 @@ for crate, parent, group in rules:
         while node is not None:
             path.append(node[0])
             node = prev[node]
-        print("%s %s %s %s@%s %s" % (crate, parent, group, hit[0], hit[1][1:], " -> ".join(reversed(path))))
-' "$work/tree.depth" "$work/guarded" >"$work/guard-paths" \
-    || die "could not read the dependency graph for the guarded groups (see above)"
-  local parent spec path
+        print("%s %s %s %s@%s %s" % (crate, avoid, group, spelled[hit], hit[1][1:], " -> ".join(reversed(path))))
+' "$work/tree.depth" "$2" </dev/null >"$3" || die "could not read the dependency graph for the guarded groups (see above)"
+}
+
+check_group_rules() {
+  local group crate parent spec path kinds
+  # The table, with crate names normalized like the allowlist's and the tree's. Fails closed on a
+  # malformed row or a group without an edge rule.
+  guarded_group_members | normalize >"$work/guard-table"
+  awk 'NF != 3 || $1 !~ /^[a-z0-9][a-z0-9-]*$/ { bad = 1 } END { exit bad || NR == 0 }' "$work/guard-table" \
+    || die "guarded_group_members in scripts/check-deps.sh is malformed"
+  : >"$work/guard-edge-rules"
+  while read -r group crate parent; do
+    kinds=$(guarded_group_edges "$group") || die "guarded group $group has no case in guarded_group_edges (scripts/check-deps.sh)"
+    echo "$kinds $crate - $group" >>"$work/guard-edge-rules"
+  done <"$work/guard-table"
+  guarded_membership_rules
+
+  # Path rule: on the tree of check 1 (normal and build edges), every member is unreachable once
+  # its required parent is removed.
+  awk '{ print $2, $3, $1 }' "$work/guard-table" >"$work/guarded"
+  guarded_paths normal,build "$work/guarded" "$work/guard-paths"
   while read -r crate parent group spec path; do
-    fail "$crate (group $group in $allowlist) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
+    fail "$crate (guarded group $group) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
     echo "  Every path to it (cargo tree -p $core_pkg -e normal,build --all-features --target all -i $spec):"
     cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$spec" </dev/null 2>&1 | sed 's/^/    /' || true
   done <"$work/guard-paths"
+
+  # Edge rule: no member is in its group's edge kinds of the tree at all (ADR 0049 §5).
+  awk '{ print $1 }' "$work/guard-edge-rules" | sort -u >"$work/guard-edge-kinds"
+  while read -r kinds; do
+    awk -v k="$kinds" '$1 == k { print $2, $3, $4 }' "$work/guard-edge-rules" >"$work/guard-edge-rules.k"
+    guarded_paths "$kinds" "$work/guard-edge-rules.k" "$work/guard-edge-paths"
+    while read -r crate parent group spec path; do
+      case $kinds in
+        normal) fail "$crate (guarded group $group) is in cargo tree -e $kinds: a build-time crate may be reached through build edges only (ADR 0049 §5): $path" ;;
+        *) fail "$crate (guarded group $group) is in cargo tree -e $kinds: it may be reached only through a proc-macro (ADR 0049 §5): $path" ;;
+      esac
+      echo "  Every path to it (cargo tree -p $core_pkg -e $kinds --all-features --target all -i $spec):"
+      cargo tree --locked -p "$core_pkg" -e "$kinds" --all-features --target all -i "$spec" </dev/null 2>&1 | sed 's/^/    /' || true
+    done <"$work/guard-edge-paths"
+  done <"$work/guard-edge-kinds"
 }
 
 # 6. Every package in the core's tree comes from crates.io. The walk follows normal and build
@@ -470,25 +577,58 @@ for dep in pkgs[0]["dependencies"]:
 #      (verification uses the typed `pkcs1v15::VerifyingKey` / `pss::VerifyingKey`), and
 #      `Pkcs1v15Encrypt` (RSA1_5, ADR 0021);
 #    - anywhere: `use rsa;`, `use rsa as …`, `pub use rsa…` and `extern crate rsa`, which would let
-#      other files name rsa items without writing `rsa::`;
-#    - in a file that names the rsa crate (`rsa::` not preceded by a path, `use rsa…`): the word
+#      other files name rsa items without writing `rsa::`, and the same inside any use tree
+#      (`use {rsa as r};`, `pub(crate) use {rsa::pkcs1v15};`, `use r#rsa as r;`; ADR 0049 §1);
+#    - anywhere: `#[path …]` (also inside `cfg_attr`) and `include!`, which can load code from a
+#      file outside the scanned roots (ADR 0049 §1); include_str!/include_bytes! stay allowed;
+#    - in jws/rsa.rs and jwe/rsa_oaep.rs (or their mod.rs forms): any out-of-line child module
+#      (`mod x;`), and any file in jws/rsa/ or jwe/rsa_oaep/. A child module reaches the parent's
+#      private `use rsa::{pkcs1v15, ..}` as `super::pkcs1v15` without naming rsa (ADR 0049 §1).
+#      Inline modules (`#[cfg(test)] mod tests { .. }`) are allowed: their text is the file's;
+#    - in a file that names the rsa crate (`rsa::` not preceded by a path, `use rsa…`, or an `rsa`
+#      token anywhere in a use tree, e.g. `use super::{hmac, rsa};`): the word
 #      `SigningKey` (e.g. `rsa::pkcs1v15::SigningKey`), the word `Decryptor` (`rsa::traits::
 #      Decryptor`) and any `decrypt(`/`decrypt_blinded(` call (e.g. an `Oaep` decryption). These
 #      words are legitimate elsewhere (`p256::ecdsa::SigningKey`, `cbc::Decryptor`), so RSA code
 #      lives in files of its own (jws/rsa.rs, jwe/rsa_oaep.rs) and refers to child modules named
-#      `rsa` as `self::rsa::`.
+#      `rsa` as `self::rsa::`;
+#    - anywhere, the macro rule (ADR 0049 §1): `rsa` or `r#rsa` as an identifier inside the token
+#      tree of a macro call (`name!(..)`, `name![..]`, `name!{..}`, `macro_rules! name {..}`, at
+#      any depth) or of an attribute (`#[..]`, `#![..]`). A macro can make it the head of a path
+#      (`macro_rules! k { ($c:ident) => { $c::pkcs1v15::SigningKey<..> } }` with `k!(rsa)`) that
+#      no rule above sees, and the compiled-symbol check sees that path only in code that is
+#      codegened, not in an uncalled `#[inline] pub fn`, a generic `pub fn` never instantiated in
+#      the workspace, or code the built profiles leave out, all of which a downstream crate can
+#      still compile. The rule reads the file with every comment and literal removed
+#      (`format!("rsa")`, `k!(/* rsa */ x)` pass), and allows two forms:
+#        - a later segment of a path, `<ident>::rsa` (`polyjose::jws::rsa::verify`, `self::rsa`,
+#          `$crate::jws::rsa`), which names a module of polyjose; a global `::rsa` is the crate
+#          and fails;
+#        - inside the std macros of STD_MACROS called by their plain name (`assert!`,
+#          `assert_eq!`, `format!`, `vec!`, ..), whose arguments are ordinary expressions,
+#          patterns or format arguments that no path is built from, so the rules above read them
+#          as any other code (`assert!(rsa.is_public())` in a test). Every enclosing macro call
+#          must be one (`k!(assert!(rsa))` and `assert!(k!(rsa))` fail), and a `macro_rules!` or
+#          an `as` that takes one of their names fails, so a local macro cannot pass as one.
 #    Rust allows whitespace and comments between the tokens of a path (`rsa` / newline /
 #    `::pkcs1v15::SigningKey`, `rsa /* … */ :: x`), and rustfmt need not have run. So every rule
-#    runs on each line and also on two whole-file views, with whitespace runs (newlines included)
-#    collapsed to one space and the spaces next to `::` removed: one with the comments kept and
-#    one with each comment replaced by a space. A view only adds findings; a finding that only a
-#    view sees is reported with the line where the match starts.
-#    Residual risk, outside any text scan: names built by macros or `include!`.
+#    but the macro rule (which reads tokens) runs on each line and also on two whole-file views,
+#    with whitespace runs (newlines included) collapsed to one space and the spaces next to `::`
+#    removed: one with the comments kept and one with each comment replaced by a space. A view
+#    only adds findings; a finding that only a view sees is reported with the line where the
+#    match starts.
+#    Residual risk, outside this scan: a macro that drops the leading segments of a path it is
+#    given (`k!(x::rsa)` to `rsa::..`), a dependency's macro with a std macro's name brought in by
+#    a glob import, and a derive or attribute macro of a dependency that builds a path from an
+#    item's own identifiers. This scan is the fast first layer; scripts/check-rsa-symbols.sh reads
+#    the compiled objects of polyjose and the bindings (dev and release profiles), where no
+#    spelling of a path can hide codegened code (ADR 0049 §1).
 check_rsa_public_only() {
   python3 -I -c '
 import bisect, os, re, sys
 roots = sys.argv[1:]
 word = lambda w: re.compile(r"(?<![A-Za-z0-9_])" + w + r"(?![A-Za-z0-9_])")
+USE_TREE = r"[A-Za-z0-9_:{},*#\s]"
 ANYWHERE = [
     (word("RsaPrivateKey"), "RsaPrivateKey: RSA private keys are not supported (ADR 0021)"),
     (word("BlindedSigningKey"), "BlindedSigningKey: RSA signing is not supported (ADR 0021)"),
@@ -499,12 +639,37 @@ ANYWHERE = [
     (word("Pkcs1v15Encrypt"), "Pkcs1v15Encrypt: RSA1_5 is not supported (ADR 0021)"),
     (re.compile(r"(?<![A-Za-z0-9_])use\s+(::\s*)?rsa\s*(;|as(?![A-Za-z0-9_]))"),
      "use rsa / use rsa as: aliasing the rsa crate hides it from this check"),
+    # A use tree is the text from `use` to its `;` when that text holds only path characters, so
+    # `{`, `}`, `,`, `*`, `as`, `self` and raw identifiers (`r#rsa`) are all inside it.
+    (re.compile(r"(?<![A-Za-z0-9_])use\s+" + USE_TREE + r"*?(?<![A-Za-z0-9_])rsa\s+as(?![A-Za-z0-9_])" + USE_TREE + r"*;"),
+     "rsa as ... in a use tree: aliasing the rsa crate hides it from this check (ADR 0049 §1)"),
     (re.compile(r"(?<![A-Za-z0-9_])pub(\s*\([^)]*\))?\s+use\s+(::\s*)?rsa(?![A-Za-z0-9_])"),
      "pub use rsa: re-exporting rsa hides it from this check"),
-    (re.compile(r"(?<![A-Za-z0-9_])extern\s+crate\s+rsa(?![A-Za-z0-9_])"),
+    (re.compile(r"(?<![A-Za-z0-9_])pub(\s*\([^)]*\))?\s+use\s+" + USE_TREE + r"*?(?<![A-Za-z0-9_])rsa(?![A-Za-z0-9_])" + USE_TREE + r"*;"),
+     "pub use rsa: re-exporting rsa hides it from this check"),
+    (re.compile(r"(?<![A-Za-z0-9_])extern\s+crate\s+(r#)?rsa(?![A-Za-z0-9_])"),
      "extern crate rsa: aliasing the rsa crate hides it from this check"),
+    # A module file named by #[path] (also through cfg_attr), or code pulled in by include!, can
+    # sit outside the scanned roots (ADR 0049 §1). include_str!/include_bytes! read data, not code.
+    (re.compile(r"#\s*!?\s*\[\s*(path(?![A-Za-z0-9_])|cfg_attr(?![A-Za-z0-9_])[^\]]*(?<![A-Za-z0-9_])path\s*=)"),
+     "#[path]: a module file named by #[path] can sit outside the scanned roots (ADR 0049 §1)"),
+    (re.compile(r"(?<![A-Za-z0-9_])include\s*!"),
+     "include!: code included from another file can sit outside the scanned roots (ADR 0049 §1)"),
 ]
-NAMES_RSA = re.compile(r"(?<![A-Za-z0-9_:])rsa\s*::|(?<![A-Za-z0-9_])::\s*rsa\s*::|(?<![A-Za-z0-9_])use\s+(::\s*)?rsa(?![A-Za-z0-9_])")
+NAMES_RSA = re.compile(r"(?<![A-Za-z0-9_:])rsa\s*::|(?<![A-Za-z0-9_])::\s*rsa\s*::|(?<![A-Za-z0-9_])use\s+(::\s*)?rsa(?![A-Za-z0-9_])"
+                       r"|(?<![A-Za-z0-9_])use\s+" + USE_TREE + r"*?(?<![A-Za-z0-9_])rsa(?![A-Za-z0-9_])" + USE_TREE + r"*;")
+# The files that hold RSA code, and the directories their child module files would live in. An
+# out-of-line child module (`mod x;`) reaches the private `use rsa::{pkcs1v15, ..}` as
+# `super::pkcs1v15` in a file that never names rsa, so these files may only have inline modules
+# (`mod x { .. }`, e.g. `#[cfg(test)] mod tests`), whose text this check sees as part of the file.
+RSA_FILES = {"crates/polyjose/src/jws/rsa.rs", "crates/polyjose/src/jws/rsa/mod.rs",
+             "crates/polyjose/src/jwe/rsa_oaep.rs", "crates/polyjose/src/jwe/rsa_oaep/mod.rs"}
+RSA_CHILD_DIRS = ("crates/polyjose/src/jws/rsa/", "crates/polyjose/src/jwe/rsa_oaep/")
+IN_RSA_MODULE_FILE = [
+    (re.compile(r"(?<![A-Za-z0-9_])mod\s+((r#)?[A-Za-z_][A-Za-z0-9_]*)\s*;"),
+     lambda m: "mod %s;: an out-of-line child module of an RSA file can use its private rsa imports"
+               " through super:: (ADR 0049 §1); use an inline mod %s { .. }" % (m.group(1), m.group(1))),
+]
 IN_RSA_FILE = [
     (word("SigningKey"), "SigningKey in a file that uses the rsa crate: RSA signing is not supported (ADR 0021)"),
     (word("Decryptor"), "Decryptor in a file that uses the rsa crate: RSA decryption is not supported (ADR 0021)"),
@@ -519,8 +684,9 @@ SKIP_DIRS = {"target", "node_modules", ".git"}
 Q = chr(39)
 RAW_STR = re.compile(r"[bc]?r(#*)\"")
 CHAR_LIT = re.compile(Q + r"(?:\\(?:u\{[0-9A-Fa-f_]*\}|x[0-9A-Fa-f]{2}|.)|[^\\\n" + Q + "])" + Q)
-def strip_comments(text):
-    """(char, offset) pairs of text with each comment replaced by one space at its offset."""
+def strip_comments(text, literals=False):
+    """(char, offset) pairs of text with each comment replaced by one space at its offset, and
+    with literals=True each string, raw string and char literal too (for the macro rule)."""
     out, i, n = [], 0, len(text)
     while i < n:
         if text.startswith("//", i):
@@ -554,7 +720,10 @@ def strip_comments(text):
                 end = char.end()
             else:
                 end = i + 1
-            out.extend((text[k], k) for k in range(i, end))
+            if literals and (raw is not None or text[i] == "\"" or char is not None):
+                out.append((" ", i))
+            else:
+                out.extend((text[k], k) for k in range(i, end))
         i = end
     return out
 def flatten(pairs):
@@ -571,6 +740,63 @@ def flatten(pairs):
     keep = [k for k in range(len(chars)) if not (chars[k] == " " and (
         "".join(chars[k + 1:k + 3]) == "::" or "".join(chars[max(k - 2, 0):k]) == "::"))]
     return "".join(chars[k] for k in keep), [offsets[k] for k in keep]
+# The macro rule (see the comment of check 9): the std macros whose arguments are ordinary
+# expressions, patterns or format arguments, called by their plain name. Keywords never name a
+# macro (`if !(x)`, `return !(x)` are negations).
+STD_MACROS = {"assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne",
+              "format", "format_args", "print", "println", "eprint", "eprintln", "write", "writeln",
+              "panic", "unreachable", "todo", "unimplemented", "vec", "matches"}
+KEYWORDS = {"as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+            "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
+            "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true",
+            "type", "unsafe", "use", "where", "while", "yield"}
+TOKEN = re.compile(r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*|[0-9][A-Za-z0-9_]*|" + Q + r"[A-Za-z_][A-Za-z0-9_]*|::|\S")
+IDENT = re.compile(r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*$")
+CLOSE = {"(": ")", "[": "]", "{": "}"}
+def macro_rule(text):
+    """(offset, reason) for each rsa identifier inside a macro call or attribute that the macro
+    rule rejects, and for each local macro that takes a name of STD_MACROS."""
+    pairs = strip_comments(text, literals=True)
+    code = "".join(ch for ch, _ in pairs)
+    toks = [(m.group(0), pairs[m.start()][1]) for m in TOKEN.finditer(code)]
+    tok = lambda k: toks[k][0] if 0 <= k < len(toks) else ""
+    # One entry per open delimiter: None, or (what it is the token tree of, trusted).
+    found, stack = [], []
+    for k, (t, offset) in enumerate(toks):
+        if t in CLOSE:
+            frame, shown = None, t + ".." + CLOSE[t]
+            if tok(k - 1) == "!" and IDENT.match(tok(k - 2)) and tok(k - 2) not in KEYWORDS:
+                name, plain = tok(k - 2), tok(k - 3) not in ("::", "$")
+                frame = ("the macro call %s!%s%s" % (name, shown, "" if plain or name not in STD_MACROS
+                         else " (a qualified or $ name is not the std macro)"), plain and name in STD_MACROS)
+            elif IDENT.match(tok(k - 1)) and tok(k - 2) == "!" and tok(k - 3) in ("macro_rules", "r#macro_rules"):
+                frame = ("the macro call macro_rules! %s %s" % (tok(k - 1), shown), False)
+            elif t == "[" and (tok(k - 1) == "#" or (tok(k - 1) == "!" and tok(k - 2) == "#")):
+                frame = ("the attribute #[%s ..]" % tok(k + 1), False)
+            stack.append(frame)
+        elif t in (")", "]", "}"):
+            if stack:
+                stack.pop()
+        elif t in ("rsa", "r#rsa"):
+            frames = [f for f in stack if f is not None]
+            if not frames or all(trusted for _, trusted in frames):
+                continue
+            # A later segment of a path (`polyjose::jws::rsa`, `self::rsa`, `$crate::jws::rsa`)
+            # names a module of polyjose; a global `::rsa` is the crate.
+            if tok(k - 1) == "::" and (IDENT.match(tok(k - 2)) or tok(k - 2) == ">"):
+                continue
+            where = [w for w, trusted in frames if not trusted][-1]
+            found.append((offset, "rsa as an identifier inside %s: a macro can build an rsa path from it"
+                                  " that no other text rule sees (ADR 0049 §1)" % where))
+        elif IDENT.match(t) and (t[2:] if t.startswith("r#") else t) in STD_MACROS:
+            name = t[2:] if t.startswith("r#") else t
+            if tok(k - 1) == "!" and tok(k - 2) in ("macro_rules", "r#macro_rules"):
+                found.append((offset, "macro_rules! %s: a macro named like a std macro whose arguments"
+                                      " the macro rule trusts (ADR 0049 §1); name it otherwise" % name))
+            elif tok(k - 1) == "as":
+                found.append((offset, "as %s: a macro named like a std macro whose arguments the macro"
+                                      " rule trusts (ADR 0049 §1); name it otherwise" % name))
+    return found
 found = 0
 for root in roots:
     if not os.path.isdir(root):
@@ -585,25 +811,41 @@ for root in roots:
                 text = f.read()
             lines = text.split("\n")
             views = [flatten((ch, k) for k, ch in enumerate(text)), flatten(strip_comments(text))]
+            rel = path.replace(os.sep, "/")
             rules = list(ANYWHERE)
             if any(NAMES_RSA.search(line) for line in lines) or any(NAMES_RSA.search(v) for v, _ in views):
                 rules += IN_RSA_FILE
+            if rel in RSA_FILES:
+                rules += IN_RSA_MODULE_FILE
             reported = set()
+            if rel.startswith(RSA_CHILD_DIRS) and rel not in RSA_FILES:
+                print("%s:1: a child module file of an RSA file (ADR 0049 §1): RSA code stays in"
+                      " jws/rsa.rs and jwe/rsa_oaep.rs, with inline modules only" % path)
+                found += 1
+            # The reason of a rule is a string, or a function of the match (to name what matched).
+            explain = lambda why, m: why(m) if callable(why) else why
             for number, line in enumerate(lines, 1):
                 for pattern, why in rules:
-                    if pattern.search(line):
-                        print("%s:%d: %s" % (path, number, why))
+                    m = pattern.search(line)
+                    if m:
+                        print("%s:%d: %s" % (path, number, explain(why, m)))
                         found += 1
-                        reported.add((number, why))
+                        reported.add((number, explain(why, m)))
             line_starts = [0] + [k + 1 for k, ch in enumerate(text) if ch == "\n"]
             for view, offsets in views:
                 for pattern, why in rules:
                     for m in pattern.finditer(view):
                         number = bisect.bisect_right(line_starts, offsets[m.start()])
-                        if (number, why) not in reported:
-                            print("%s:%d: %s (path split across lines, by whitespace or by a comment)" % (path, number, why))
+                        if (number, explain(why, m)) not in reported:
+                            print("%s:%d: %s (path split across lines, by whitespace or by a comment)" % (path, number, explain(why, m)))
                             found += 1
-                            reported.add((number, why))
+                            reported.add((number, explain(why, m)))
+            for offset, why in macro_rule(text):
+                number = bisect.bisect_right(line_starts, offset)
+                if (number, why) not in reported:
+                    print("%s:%d: %s" % (path, number, why))
+                    found += 1
+                    reported.add((number, why))
 for root in roots:
     if not os.path.isdir(root):
         sys.exit("%s is not a directory" % root)

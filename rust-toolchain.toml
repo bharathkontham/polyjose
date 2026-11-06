@@ -1,5 +1,6 @@
 # Exact pin, so local builds and CI (which installs from this file) compile with the same rustc.
-# Bump it deliberately, in its own commit. The MSRV (`rust-version`, ADR 0024) is checked separately.
+# Bump it deliberately, in its own commit. The MSRV (`rust-version`, 1.89 since 0003 Gate 1,
+# ADR 0024 as amended) is checked separately.
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy"]
