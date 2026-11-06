@@ -12,6 +12,9 @@ repository = "https://github.com/bharathkontham/polyjose"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+# A stale `#[expect(...)]` fails the build on every toolchain (stable and the
+# 1.89 MSRV) instead of warning: expectations must not depend on the compiler.
+unfulfilled_lint_expectations = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
