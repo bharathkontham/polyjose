@@ -34,7 +34,7 @@ const NO_KEYS_ARRAY: &str = "a JWK Set must have a keys member that is an array"
 /// |---|---|
 /// | a valid, supported JWK | kept, in document order |
 /// | unsupported `kty`, or `EC`/`OKP` `crv` (`XYZ`, `Ed448`, `P-192`, ...) | skipped (RFC 7517 §5, ADR 0029 §3) |
-/// | otherwise invalid (not an object, missing or mistyped members, wrong lengths, bad base64url, RSA modulus under 2048 bits, ...) | skipped (RFC 7517 §5) |
+/// | otherwise invalid (not an object, missing or mistyped members, wrong lengths, bad base64url, RSA modulus under 2048 bits, an EC point off its curve, an EC `d` out of range, an invalid or small-order Ed25519 key, ...) | skipped (RFC 7517 §5, ADR 0041 §2) |
 /// | an `alg` of `RSA1_5` or `RSA-OAEP`, or one the key's family cannot serve (`oct` with `RS256`, `EC` `P-256` with `ES384`, ...) | skipped (RFC 7517 §4.4, §5; ADRs 0021, 0022) |
 /// | an RSA private key | the whole set fails, [`Error::UnsupportedAlgorithm`] (ADR 0021) |
 ///
@@ -120,7 +120,9 @@ impl JwkSet {
     ///   a JWK Set that use "kty" (key type) values that are not understood
     ///   by them"; ADR 0029 §3), or if it is otherwise invalid: not an
     ///   object, missing required members, wrong lengths, non-canonical
-    ///   base64url, an RSA modulus under 2048 bits, and so on (RFC 7517 §5:
+    ///   base64url, an RSA modulus under 2048 bits, an off-curve EC point,
+    ///   an out-of-range EC `d`, an invalid Ed25519 key (ADR 0041 §2, §4),
+    ///   and so on (RFC 7517 §5:
     ///   "SHOULD ignore JWKs ... that are missing required members, or for
     ///   which values are out of the supported ranges"), or if its `alg` is
     ///   rejected (`RSA1_5`, `RSA-OAEP`, or a family mismatch, RFC 7517
