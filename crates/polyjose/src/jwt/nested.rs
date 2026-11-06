@@ -136,6 +136,15 @@ fn check_compact_jws_shape(token: &str) -> Result<()> {
 ///    [`Decrypted::protected_header`] only, never from the joint header
 ///    (ADR 0050 §3); a compact JWE has no unprotected header (RFC 7516
 ///    §7.1). An encrypt-only JWT (no `cty`) is therefore rejected.
+///
+///    **Outer `typ` under an explicit-type policy.** With
+///    [`Policy::access_token`] or [`Policy::expect_typ`], an outer `typ`
+///    that is present must match the same type as the inner one
+///    (ADR 0027 §7), so an outer `typ: JWT`, a common issuer habit, is
+///    [`Error::InvalidHeader`]`("typ")` even when the inner JWT is
+///    correctly typed. RFC 8725 §3.11 requires explicit typing on the
+///    inner JWT only, so issuers should omit the outer `typ`
+///    ([`encrypt_nested`] adds none of its own).
 /// 4. **The inner token**, depth 1: the plaintext must be a three-part
 ///    compact JWS. A five-part plaintext (a JWE) is
 ///    [`Error::InvalidFormat`] and an inner JWS whose own `cty` is `JWT`
