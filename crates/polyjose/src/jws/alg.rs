@@ -43,7 +43,7 @@
 
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
-use crate::jwk::{Jwk, KeyAlg, KeyMaterial, KeyOp};
+use crate::jwk::{Jwk, KeyAlg, KeyMaterial, KeyOp, RSA_MODULUS_BITS};
 
 use super::{ecdsa, eddsa, hmac, rsa};
 
@@ -118,15 +118,6 @@ pub(crate) enum Operation {
     Verify,
 }
 
-/// The smallest RSA modulus polyjose uses, in bits (RFC 7518 §3.3, §3.5).
-/// Import already rejects smaller keys (ADR 0007); this is defence in
-/// depth.
-const RSA_MIN_BITS: usize = 2048;
-
-/// The largest RSA modulus polyjose uses, in bits: the `rsa` crate's own
-/// maximum (ADR 0026 §2 step 8).
-const RSA_MAX_BITS: usize = 8192;
-
 /// Key binding, ADR 0026 §2 step 8: checks that `key` may be used with
 /// `alg` for `op`, before any cryptography runs. Signing and verifying
 /// both call it, and nothing reaches a family without it.
@@ -194,7 +185,11 @@ fn check_strength(alg: &SigningAlg, material: &KeyMaterial) -> Result<()> {
             Ok(())
         }
         KeyMaterial::Rsa(k) => {
-            if (RSA_MIN_BITS..=RSA_MAX_BITS).contains(&k.modulus_bits()) {
+            // RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8. JWK import enforces
+            // the same range, so no validly imported `Jwk` fails here; the
+            // check stays as defence in depth, should a key ever reach
+            // binding by another route.
+            if RSA_MODULUS_BITS.contains(&k.modulus_bits()) {
                 Ok(())
             } else {
                 Err(Error::InvalidKey("RSA modulus must be 2048 to 8192 bits"))
@@ -363,6 +358,7 @@ mod tests {
     }
 
     use super::test_keys as keys;
+    use crate::util::b64url_encode;
     use Operation::{Sign, Verify};
     use SigningAlg as A;
 
@@ -480,11 +476,14 @@ mod tests {
     #[test]
     fn binding_enforces_the_rsa_modulus_range() {
         // RFC 7518 §3.3, §3.5 and ADR 0026 §2 step 8: 2048..=8192 bits.
-        // (Under 2048 bits never imports, ADR 0007.)
-        let huge = keys::rsa(8200);
+        // Outside that range a key never imports (ADR 0007, F02), so an
+        // 8200-bit key cannot reach binding at all.
+        let mut n = vec![0xff; 8200 / 8];
+        n[0] = 0x7f;
+        let n = b64url_encode(&n);
         assert_eq!(
-            bind_key(&A::RS256, &huge, Verify).map_err(|e| e.code()),
-            Err("InvalidKey")
+            Jwk::from_json(format!(r#"{{"kty":"RSA","n":"{n}","e":"AQAB"}}"#).as_bytes()).err(),
+            Some(Error::InvalidKey("RSA modulus is longer than 8192 bits"))
         );
         assert_eq!(bind_key(&A::PS256, &keys::rsa(8192), Verify), Ok(()));
     }
@@ -492,9 +491,21 @@ mod tests {
     #[test]
     fn binding_refuses_rsa_signing_before_anything_else() {
         // ADR 0021 / ADR 0026 §2 step 8: UnsupportedAlgorithm even when the
-        // key would fail the other checks.
+        // key would fail the other checks. The key that fails binding is a
+        // 2048-bit RSA key whose `key_ops` allow only `encrypt` (it was an
+        // 8200-bit key, which JWK import now refuses, F02).
+        let encrypt_only = {
+            let n = b64url_encode(&[0xff; 256]);
+            keys::jwk(&format!(
+                r#"{{"kty":"RSA","n":"{n}","e":"AQAB","key_ops":["encrypt"]}}"#
+            ))
+        };
+        assert_eq!(
+            bind_key(&A::RS256, &encrypt_only, Verify),
+            Err(Error::KeyAlgorithmMismatch)
+        );
         for alg in [A::RS256, A::RS384, A::RS512, A::PS256, A::PS384, A::PS512] {
-            for key in [keys::rsa(2048), keys::oct(64, ""), keys::rsa(8200)] {
+            for key in [keys::rsa(2048), keys::oct(64, ""), encrypt_only.clone()] {
                 assert_eq!(
                     bind_key(&alg, &key, Sign),
                     Err(Error::UnsupportedAlgorithm),
