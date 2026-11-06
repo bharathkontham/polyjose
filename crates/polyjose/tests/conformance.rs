@@ -16,14 +16,17 @@
 //! - for `jws.sign` and `jws.verify` (RFC 7515), the step order of
 //!   conformance/README.md: JWK import, then headers or options, then the
 //!   call, the first error being the outcome; and the round trip of a
-//!   randomized signature (`verify_with`).
+//!   randomized signature (`verify_with`);
+//! - for `keys.import_pem` and `keys.export_pem` (ADR 0018 §3), the PEM
+//!   import gives the expected JWK, and the export, after the JWK import,
+//!   gives the exact PEM text.
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
 //! fails if its operations, member names, member kinds, `required` lists,
 //! `allOf` signer rules, patterns or error codes drift from the tables
-//! below. `jws_vectors_are_binding_ready` checks that every JWS vector is
-//! readable unchanged by every binding's JSON parser. Vector files are
+//! below. `jws_and_keys_vectors_are_binding_ready` checks that every JWS and
+//! keys vector is readable unchanged by every binding's JSON parser. Vector files are
 //! parsed with
 //! polyjose's own `json` module, and their inputs reach the library through
 //! it.
@@ -39,6 +42,7 @@ use polyjose::json::{self, Number, Object, Value};
 use polyjose::jwa::SigningAlg;
 use polyjose::jwk::Jwk;
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
+use polyjose::keys::KeyFormat;
 use polyjose::util::{b64url_decode, b64url_encode};
 
 /// Top-level members of a vector; all required (schema `required`).
@@ -53,6 +57,8 @@ const OPERATIONS: &[&str] = &[
     "jwk.thumbprint",
     "jws.sign",
     "jws.verify",
+    "keys.import_pem",
+    "keys.export_pem",
     "jwe.encrypt",
     "jwe.decrypt",
     "jwt.validate",
@@ -308,6 +314,43 @@ const JWS_SIGN_ROUND_TRIP: Shape = Shape {
     rules: &[],
 };
 
+// ADR 0018 §3 PEM import through `Jwk::from_pem`: the label selects the
+// structure (RFC 7468 §2), the key type comes from the DER.
+const KEYS_IMPORT_PEM_INPUT: Shape = Shape {
+    def: "keys_import_pem_input",
+    members: &[req("pem", Kind::String)],
+    rules: &[],
+};
+/// The imported JWK, compared as a JSON value (member order ignored).
+const KEYS_IMPORT_PEM_OK: Shape = Shape {
+    def: "keys_import_pem_ok",
+    members: &[req("jwk", Kind::Object)],
+    rules: &[],
+};
+/// The `format` names of `keys.export_pem`, in schema order, and the
+/// library format each selects.
+const KEY_FORMATS: &[(&str, KeyFormat)] = &[
+    ("pkcs8", KeyFormat::Pkcs8),
+    ("sec1", KeyFormat::Sec1),
+    ("spki", KeyFormat::Spki),
+    ("pkcs1", KeyFormat::Pkcs1),
+];
+// ADR 0018 §3 PEM export through `Jwk::from_object` then `Jwk::to_pem`.
+const KEYS_EXPORT_PEM_INPUT: Shape = Shape {
+    def: "keys_export_pem_input",
+    members: &[
+        req("jwk", Kind::Object),
+        req("format", Kind::Enum(&["pkcs8", "sec1", "spki", "pkcs1"])),
+    ],
+    rules: &[],
+};
+/// The exact PEM text, compared as a string.
+const KEYS_EXPORT_PEM_OK: Shape = Shape {
+    def: "keys_export_pem_ok",
+    members: &[req("pem", Kind::String)],
+    rules: &[],
+};
+
 /// The operations this runner implements.
 const SPECS: &[OpSpec] = &[
     OpSpec {
@@ -338,6 +381,18 @@ const SPECS: &[OpSpec] = &[
         name: "jws.verify",
         input: &JWS_VERIFY_INPUT,
         ok: &[&JWS_VERIFY_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "keys.import_pem",
+        input: &KEYS_IMPORT_PEM_INPUT,
+        ok: &[&KEYS_IMPORT_PEM_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "keys.export_pem",
+        input: &KEYS_EXPORT_PEM_INPUT,
+        ok: &[&KEYS_EXPORT_PEM_OK],
         can_fail: true,
     },
 ];
@@ -911,6 +966,44 @@ fn run_jws_verify(input: &Object, out: &mut Object) -> Result<Result<(), Error>,
     Ok(Ok(()))
 }
 
+/// `keys.import_pem`: `Jwk::from_pem`, and the JWK as an object. An `oct`
+/// result fails the vector whatever it expects: PEM never carries one
+/// (RFC 8725 §2.1, ADR 0018 §3).
+fn run_keys_import_pem(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let key = match Jwk::from_pem(input_str(input, "pem")) {
+        Ok(key) => key,
+        Err(e) => return Ok(Err(e)),
+    };
+    let jwk = key.to_object();
+    if jwk.get("kty").and_then(Value::as_str) == Some("oct") {
+        return Err("a PEM import returned an oct key (RFC 8725 §2.1)".to_owned());
+    }
+    out.insert("jwk", Value::from(jwk));
+    Ok(Ok(()))
+}
+
+/// `keys.export_pem`: the JWK import (`Jwk::from_object`), whose error is
+/// the outcome, then `Jwk::to_pem` in `format`.
+fn run_keys_export_pem(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+    let name = input_str(input, "format");
+    let format = KEY_FORMATS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
+        .expect("validated");
+    let key = match Jwk::from_object(input_object(input, "jwk")) {
+        Ok(key) => key,
+        Err(e) => return Ok(Err(e)),
+    };
+    match key.to_pem(format) {
+        Ok(pem) => {
+            out.insert("pem", pem.as_str());
+            Ok(Ok(()))
+        }
+        Err(e) => Ok(Err(e)),
+    }
+}
+
 /// Runs the operation through the public API: the success outputs, or the
 /// library's error.
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
@@ -950,6 +1043,16 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
         }
         "jws.verify" => {
             if let Err(e) = run_jws_verify(input, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "keys.import_pem" => {
+            if let Err(e) = run_keys_import_pem(input, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "keys.export_pem" => {
+            if let Err(e) = run_keys_export_pem(input, &mut out)? {
                 return Ok(Err(e));
             }
         }
@@ -1541,6 +1644,30 @@ fn valid_vectors_pass() {
             r#"{"hash":"sha-256","jwk":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg=="}}"#,
             r#"{"ok":false,"error":"InvalidBase64"}"#,
         ),
+        // RFC 8410 §10.1; member order of the expected JWK does not matter.
+        vector(
+            "keys.import_pem",
+            &format!(r#"{{"pem":{}}}"#, Value::from(RFC8410_10_1_PEM).to_json()),
+            r#"{"ok":true,"jwk":{"x":"Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE","crv":"Ed25519","kty":"OKP"}}"#,
+        ),
+        vector(
+            "keys.import_pem",
+            r#"{"pem":"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"}"#,
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+        ),
+        vector(
+            "keys.export_pem",
+            r#"{"format":"spki","jwk":{"kty":"OKP","crv":"Ed25519","x":"Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE"}}"#,
+            &format!(
+                r#"{{"ok":true,"pem":{}}}"#,
+                Value::from(RFC8410_10_1_PEM).to_json()
+            ),
+        ),
+        vector(
+            "keys.export_pem",
+            r#"{"format":"pkcs8","jwk":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}}"#,
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+        ),
     ];
     for json in cases {
         assert!(
@@ -1548,6 +1675,75 @@ fn valid_vectors_pass() {
             "{:?}",
             check_vector("ok.json", json.as_bytes())
         );
+    }
+}
+
+/// RFC 8410 §10.1, the Ed25519 public key as SPKI.
+const RFC8410_10_1_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PUBLIC KEY-----\n";
+
+/// The keys.* vectors are checked like every other: a wrong expectation,
+/// a format outside the enum and a missing member all fail the run.
+#[test]
+fn keys_vectors_fail_when_wrong_or_malformed() {
+    let pem = Value::from(RFC8410_10_1_PEM).to_json();
+    let jwk = r#"{"kty":"OKP","crv":"Ed25519","x":"Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE"}"#;
+    for (name, json, needle) in [
+        (
+            "import-wrong-jwk.json",
+            vector(
+                "keys.import_pem",
+                &format!(r#"{{"pem":{pem}}}"#),
+                r#"{"ok":true,"jwk":{"kty":"OKP","crv":"X25519","x":"Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE"}}"#,
+            ),
+            "`jwk`",
+        ),
+        (
+            "import-wrong-code.json",
+            vector(
+                "keys.import_pem",
+                &format!(r#"{{"pem":{pem}}}"#),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            "expected error InvalidKey",
+        ),
+        (
+            "export-bad-format.json",
+            vector(
+                "keys.export_pem",
+                &format!(r#"{{"jwk":{jwk},"format":"der"}}"#),
+                r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+            ),
+            "/input/format",
+        ),
+        (
+            "export-no-format.json",
+            vector(
+                "keys.export_pem",
+                &format!(r#"{{"jwk":{jwk}}}"#),
+                r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+            ),
+            "/input/format",
+        ),
+        (
+            "export-wrong-pem.json",
+            vector(
+                "keys.export_pem",
+                &format!(r#"{{"jwk":{jwk},"format":"spki"}}"#),
+                r#"{"ok":true,"pem":"-----BEGIN PUBLIC KEY-----\n"}"#,
+            ),
+            "`pem`",
+        ),
+        (
+            "import-extra-member.json",
+            vector(
+                "keys.import_pem",
+                &format!(r#"{{"pem":{pem},"format":"spki"}}"#),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            "/input/format",
+        ),
+    ] {
+        fails_naming_source(name, &json, needle);
     }
 }
 
@@ -2669,7 +2865,10 @@ fn members_deep<'a>(
 ///   (ADR 0030 `u32`);
 /// - octets are base64url text (`*_b64u`), never raw bytes or `*_hex`, and
 ///   every one the runner decodes is canonical (`protected_b64u` is passed
-///   to the library as text, so it may be anything the schema allows).
+///   to the library as text, so it may be anything the schema allows);
+/// - in a `keys.*` vector, every base64url JWK member (`x`, `y`, `d`, `n`,
+///   `e`, `k`; RFC 7518 §6, RFC 8037 §2) of a `jwk` object is canonical, so
+///   a binding's base64url decoder reads the key the vector means.
 fn binding_ready(text: &str) -> Result<(), String> {
     for token in number_tokens(text) {
         let plain = token
@@ -2689,9 +2888,24 @@ fn binding_ready(text: &str) -> Result<(), String> {
         }
     }
     let value = json::parse(text.as_bytes()).map_err(|e| format!("not JSON ({})", e.code()))?;
+    let keys_vector = value
+        .get("operation")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("keys."));
     let mut members = Vec::new();
     members_deep(&value, String::new(), &mut members);
     for (pointer, name, member) in members {
+        let jwk_member = pointer
+            .rsplit_once('/')
+            .is_some_and(|(parent, _)| parent.ends_with("/jwk"));
+        if keys_vector && jwk_member && JWK_B64U_MEMBERS.contains(&name) {
+            let canonical = member
+                .as_str()
+                .is_some_and(|s| b64url_decode(s).is_ok_and(|b| b64url_encode(&b) == s));
+            if !canonical {
+                return Err(format!("{pointer}: not canonical base64url"));
+            }
+        }
         if name.ends_with("_hex") {
             return Err(format!(
                 "{pointer}: raw bytes; jws.* vectors write octets as *_b64u"
@@ -2709,28 +2923,33 @@ fn binding_ready(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The base64url members of a JWK (RFC 7518 §6.2–§6.4, RFC 8037 §2).
+const JWK_B64U_MEMBERS: &[&str] = &["x", "y", "d", "n", "e", "k"];
+
 /// The vectors the binding-readiness rule covers: everything under a
-/// `jws-*` directory or a `third_party/**/jws/` directory, and any jws.*
-/// vector elsewhere.
-fn is_jws_vector(relative: &Path, text: &str) -> bool {
+/// `jws-*` directory, a `third_party/**/jws/` directory or `keys/`, and any
+/// jws.* or keys.* vector elsewhere.
+fn needs_binding_readiness(relative: &Path, text: &str) -> bool {
     let parts: Vec<String> = relative
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
-    let jws_dir = parts.first().is_some_and(|first| first.starts_with("jws-"));
+    let jws_dir = parts
+        .first()
+        .is_some_and(|first| first.starts_with("jws-") || first == "keys");
     let third_party_jws = parts.first().is_some_and(|first| first == "third_party")
         && parts[..parts.len() - 1].iter().any(|part| part == "jws");
     let jws_operation = json::parse(text.as_bytes()).is_ok_and(|v| {
         v.get("operation")
             .and_then(Value::as_str)
-            .is_some_and(|op| op.starts_with("jws."))
+            .is_some_and(|op| op.starts_with("jws.") || op.starts_with("keys."))
     });
     jws_dir || third_party_jws || jws_operation
 }
 
-/// Every JWS vector is binding-ready (see [`binding_ready`]).
+/// Every JWS and keys vector is binding-ready (see [`binding_ready`]).
 #[test]
-fn jws_vectors_are_binding_ready() {
+fn jws_and_keys_vectors_are_binding_ready() {
     let dir = conformance_dir().join("vectors");
     let (mut files, mut failures) = (Vec::new(), Vec::new());
     collect(&dir, &mut files, &mut failures);
@@ -2738,7 +2957,7 @@ fn jws_vectors_are_binding_ready() {
     for path in files {
         let relative = path.strip_prefix(&dir).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        if !is_jws_vector(relative, &text) {
+        if !needs_binding_readiness(relative, &text) {
             continue;
         }
         checked += 1;
@@ -2751,7 +2970,10 @@ fn jws_vectors_are_binding_ready() {
         "not binding-ready:\n  {}",
         failures.join("\n  ")
     );
-    assert!(checked >= 19, "only {checked} JWS vector files found");
+    assert!(
+        checked >= 19,
+        "only {checked} JWS and keys vector files found"
+    );
 }
 
 /// The readiness check rejects what a binding could misread, and nothing
@@ -2763,6 +2985,9 @@ fn binding_readiness_check_works() {
         r#"{"s":"1.5e3 inside a string","t":"a\"1.0\\","n":7}"#,
         r#"{"payload_b64u":"Zm9v","protected_b64u":"Zh","x":{"detached_payload_b64u":""}}"#,
         r#"{"detached":false,"ok":true,"v":null,"n":12}"#,
+        r#"{"operation":"keys.export_pem","input":{"jwk":{"kty":"oct","k":"Zm9v"}}}"#,
+        // Outside keys.*, a `jwk` object's members are not checked here.
+        r#"{"operation":"jws.verify","x":{"jwk":{"k":"Zh"}}}"#,
     ] {
         assert_eq!(binding_ready(ok), Ok(()), "{ok}");
     }
@@ -2780,11 +3005,20 @@ fn binding_readiness_check_works() {
             r#"{"x":[{"detached_payload_b64u":"Zg=="}]}"#,
             "/x/0/detached_payload_b64u",
         ),
+        (
+            r#"{"operation":"keys.export_pem","input":{"jwk":{"kty":"oct","k":"Zh"}}}"#,
+            "/input/jwk/k",
+        ),
+        (
+            r#"{"operation":"keys.import_pem","expect":{"jwk":{"x":"Zg=="}}}"#,
+            "/expect/jwk/x",
+        ),
     ] {
         let problem = binding_ready(bad).unwrap_err();
         assert!(problem.contains(needle), "{bad}: {problem}");
     }
     let verify = r#"{"operation":"jws.verify"}"#;
+    let import = r#"{"operation":"keys.import_pem"}"#;
     let other = r#"{"operation":"b64url.encode"}"#;
     for (path, text, covered) in [
         ("jws-rfc7515/a.json", other, true),
@@ -2794,8 +3028,15 @@ fn binding_readiness_check_works() {
         ("third_party/jws.json", other, false),
         ("b64url/a.json", other, false),
         ("binding-surface/a.json", verify, true),
+        ("keys/a.json", other, true),
+        ("keys-extra/a.json", other, false),
+        ("elsewhere/a.json", import, true),
     ] {
-        assert_eq!(is_jws_vector(Path::new(path), text), covered, "{path}");
+        assert_eq!(
+            needs_binding_readiness(Path::new(path), text),
+            covered,
+            "{path}"
+        );
     }
 }
 

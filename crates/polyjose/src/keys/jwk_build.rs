@@ -102,10 +102,6 @@ pub(crate) fn okp_jwk(crv: OkpCurve, x: &[u8], d: Option<&[u8]>, alg: Option<&st
 /// a modulus under 2048 bits or an invalid exponent, and
 /// [`Error::KeyAlgorithmMismatch`](crate::Error::KeyAlgorithmMismatch) for a
 /// non-RSA `alg`; whatever [`Jwk::from_object`] returns.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the RSA public-key mapper (rsa.rs)")
-)]
 pub(crate) fn rsa_public_jwk(n: &[u8], e: &[u8], alg: Option<&str>) -> Result<Jwk> {
     let mut object = Object::new();
     object.insert("kty", "RSA");

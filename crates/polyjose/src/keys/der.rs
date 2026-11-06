@@ -57,13 +57,6 @@ pub(crate) const SET: u8 = 0x31;
 pub(crate) const CONTEXT_0: u8 = 0xA0;
 /// Context-specific `[1]`, constructed: an EXPLICIT `[1]` (RFC 5915 §3
 /// publicKey).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the SEC1 ECPrivateKey [1] publicKey reader (T06) uses it"
-    )
-)]
 pub(crate) const CONTEXT_1: u8 = 0xA1;
 /// Context-specific `[1]`, primitive: an IMPLICIT `[1]` BIT STRING
 /// (RFC 5958 §2 publicKey, an IMPLICIT TAGS module).

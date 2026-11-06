@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects an ENCRYPTED PRIVATE KEY (EncryptedPrivateKeyInfo, RFC 5958 §3; RFC 7468 §11, made by OpenSSL 4.1.0 with PBES2/AES-256-CBC): encrypted keys are out of scope (ADR 0018 §4).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIH0MF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBA2vZZhTefTLEkucb0+\nXk6mAgIIADAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQvhmcJLxC66YzYmxn\n07jO9wSBkPvwyVuul3z747vxzgXxnacw/BJAeGHIpABu2W8bHKijflq21Wy2Bea/\nbjKo3JS+h2hqeH9KCCPknQTAlFCX+lgguib4vHHyIagEZ3aErWQB/p0INKCMUDTg\nNz3f8M+1rsITRVsho3CTg4AZ3xOZD2nmiB/xdpkGIemRi4MPHty/IKqdBaaW3PJ+\n+6lpZoH99g==\n-----END ENCRYPTED PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

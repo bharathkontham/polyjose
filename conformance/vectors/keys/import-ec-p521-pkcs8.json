@@ -1,0 +1,18 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "PEM import of a P-521 private key as PKCS#8 (RFC 5958 §2); expected JWK from openssl pkey -text.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMIHuAgEAMBAGByqGSM49AgEGBSuBBAAjBIHWMIHTAgEBBEIB3rgnRLjEUmSIKiMC\nhizyYpuGIuCUpW3uQkWB378crZE/Sl+fr3wLgeiIdyp29FKp3nj5Th62yc+bo5zk\nLsYPmAihgYkDgYYABAHWEA41KVxH6Q5YgT60rFgChiuJ+U5gY54IktI5eMxU2OCa\nPIe9U8Fbyj/RXWyApnp3Kq2r5Hi0rTNJQ6UQNq+bFwACpd9dPsLsRKd8RFk3DHfc\nQ64EkpGCNxOWfhWQUXe0ere/KC6vtBowW8tC2Cg/SPaJSy8TnnD+WWNTvbQ3F50M\n8w==\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-521",
+      "x": "AdYQDjUpXEfpDliBPrSsWAKGK4n5TmBjngiS0jl4zFTY4Jo8h71TwVvKP9FdbICmencqravkeLStM0lDpRA2r5sX",
+      "y": "AAKl310-wuxEp3xEWTcMd9xDrgSSkYI3E5Z-FZBRd7R6t78oLq-0GjBby0LYKD9I9olLLxOecP5ZY1O9tDcXnQzz",
+      "d": "Ad64J0S4xFJkiCojAoYs8mKbhiLglKVt7kJFgd-_HK2RP0pfn698C4HoiHcqdvRSqd54-U4etsnPm6Oc5C7GD5gI"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "source": "RFC 8037 App. A.6",
+  "description": "PEM import of the RFC 8037 A.6 ephemeral X25519 key (RFC 7748 §6.1 Alice) as PKCS#8 (RFC 8410 §7); built from the published JWK and checked with OpenSSL.",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VuBCIEIHcHbQpzGKV9PBbBclGyZkXfTC+H68CZKrF3+6UduSwq\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "x": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+      "d": "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo"
+    }
+  }
+}
