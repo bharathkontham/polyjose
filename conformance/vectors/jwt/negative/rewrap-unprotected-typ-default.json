@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §1, §7.2 step 1; RFC 7515 §7.2.2; ADR 0027 §6; ADR 0049 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "A valid HS256 JWT (protected header {\"alg\":\"HS256\"}) rewrapped as flattened JSON with the attacker unprotected header {\"typ\":\"at+jwt\"}; protected header and signature unchanged, so the signature is valid. A JWT is compact only (ADR 0027 §6), and typing is never read from an unprotected header (ADR 0049 §2): InvalidFormat under the default policy",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "{\"payload\":\"eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ\",\"protected\":\"eyJhbGciOiJIUzI1NiJ9\",\"header\":{\"typ\":\"at+jwt\"},\"signature\":\"JdHT5_VpKD3J1RX6wgORjB7swbyXfekQVudRsco0Iw0\"}",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

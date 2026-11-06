@@ -1,0 +1,34 @@
+{
+  "source": "RFC 7515 §4.1.4; RFC 7517 §4.5; ADR 0029 §2, §4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Header kid \"z\" against a set of members with kid a and b (signed by a's key): no member carries kid z: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InoifQ.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ.W3tKIKPYyUv2VM2g9_6uTumLqtl6IdhSCs02zVp_UoLJV8Rez-Fg8Gpgp9_sbLSrzeTUZZZ3apka_LvZHqzBpw",
+    "now": 1700000000,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "9k4oxJo3yFhw4XvUDFOFlmhgwqGrC25aBd7xhpkFB6Y",
+          "y": "zE-06UddsK2b0rpGKPXn9gz55y3tneIwQbTHPYn4o_I",
+          "kid": "a"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "kYUQsFzddzDVWQ2zrOHzLvP5Xh0vfUGlmngWR9XMJTw",
+          "y": "8uWP4BrVkuiNMETAGTs-RXFQpR9p5DtW6MzL2D6yXX8",
+          "kid": "b"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

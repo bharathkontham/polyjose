@@ -1,0 +1,27 @@
+{
+  "source": "RFC 8725 §2.1, §3.1; ADR 0026 §2; ADR 0029 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Algorithm confusion: an HS256 token whose HMAC key is the SPKI PEM text of the RSA public key rsa-2048 (RFC 7520 §3.3), verified against a JWK Set holding that RSA public key with allow-list [RS256]: HS256 is not allowed: AlgorithmNotAllowed",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ.xr-8XMqp4Malw16h3j3etOsaR0V_CTS49Wp6FhN5AHw",
+    "now": 1700000000,
+    "allowed_algs": [
+      "RS256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "RSA",
+          "kid": "bilbo.baggins@hobbiton.example",
+          "use": "sig",
+          "n": "n4EPtAOCc9AlkeQHPzHStgAbgs7bTZLwUBZdR8_KuKPEHLd4rHVTeT-O-XV2jRojdNhxJWTDvNd7nqQ0VEiZQHz_AJmSCpMaJMRBSFKrKb2wqVwGU_NsYOYL-QtiWN2lbzcEe6XC0dApr5ydQLrHqkHHig3RBordaZ6Aj-oBHqFEHYpPe7Tpe-OfVfHd1E6cS6M1FZcD1NNLYD5lFHpPI9bTwJlsde3uhGqC0ZCuEHg8lhzwOHrtIQbS0FVbb9k3-tVTU4fg_3L_vniUFAKwuCLqKnS2BYwdq_mzSnbLY7h_qixoR7jig3__kRhuaxwUkRz5iaiQkqgc5gHdrNP5zw",
+          "e": "AQAB"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}

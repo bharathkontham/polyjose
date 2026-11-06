@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §2, §4.1.4; ADR 0027 §2; CVE-2026-25537; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "exp is the string \"1300819380\", not a JSON number, behind a valid HS256 signature. At now 1300819320 a parser that coerced it would accept the token (60 s before exp); a NumericDate MUST be a number: InvalidClaim (the CVE-2026-25537 class)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoiMTMwMDgxOTM4MCJ9.sy9E6r9jxAG5bgS9RZpvOz8XVru6H8b7paN6J3eVNkE",
+    "now": 1300819320,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}

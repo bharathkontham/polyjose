@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §2, §4.1.6; ADR 0027 §2, §3; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "iat is the string \"0\" and no max_age is set: iat is still type-checked (ADR 0027 §3), so InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MDAwMDA2MDAsImlhdCI6IjAifQ.7vdULSNpi0ADHoohJ1NC2KLwrTtW6gNySXV4pGQ4rx8",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}

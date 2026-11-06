@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §2; RFC 7493 §2.2; ADR 0027 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "exp is 9007199254740992 (2^53), one past the NumericDate range of ±(2^53 − 1); it would otherwise be far in the future and accepted. Written in the signed payload octets, since vector JSON stays within ±(2^53 − 1): InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjkwMDcxOTkyNTQ3NDA5OTJ9.pZKijmdrd22qRRxhhvcf8oC7IJzlqVhsEF1pcXGy1QE",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}

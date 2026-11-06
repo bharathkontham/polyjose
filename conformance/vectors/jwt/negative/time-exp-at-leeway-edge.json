@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §4.1.4; ADR 0027 §3; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "exp 1700000600, now 1700000660 = exp + 60 with the default leeway 60: exp <= now − leeway, so the token is expired (the accepting side, now exp + 59, is a positive vector): TokenExpired",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MDAwMDA2MDB9.RE3BJuSPwoa_WAkTvlIR-EuC_HAmxdJ4TAZqwI5XrE8",
+    "now": 1700000660,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "TokenExpired"
+  }
+}

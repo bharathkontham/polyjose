@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §4; RFC 8259 §7; ADR 0027 §1, ADR 0041 §1; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The Claims Set {\"exp\":1,\"\\u0065xp\":2}: the second name is exp after unescaping, so it is a duplicate: InvalidJson",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjEsIlx1MDA2NXhwIjoyfQ.zubS-1vXRQLTOZEMuwwaXbeVea9lnNU_AH3FbqSimNw",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

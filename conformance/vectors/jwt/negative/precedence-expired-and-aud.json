@@ -1,0 +1,25 @@
+{
+  "source": "ADR 0027 §9; RFC 7519 §4.1.3, §4.1.4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "aud \"other\" against accepted audiences [\"api\"], and expired at now (exp + 3600): exp (J5) comes before aud (J10): TokenExpired",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJvdGhlciIsImV4cCI6MTcwMDAwMDYwMH0.Ev19BeaJuul_T1NBdjPW2UgXtq0uUsDIVXW2v-RIoCw",
+    "now": 1700004200,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "audience": [
+        "api"
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "TokenExpired"
+  }
+}

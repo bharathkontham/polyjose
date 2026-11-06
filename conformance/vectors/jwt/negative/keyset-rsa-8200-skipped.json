@@ -1,0 +1,31 @@
+{
+  "source": "RFC 7517 §5; RFC 7515 App. A.2; ADR 0041 §2; ADR 0029 §4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The RFC 7515 A.2 RS256 token, allow-list [RS256], against a set whose only RS256-capable member is an 8200-bit RSA public key (over the 8192-bit import limit, so skipped at import) next to a P-256 key: no candidate remains: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw",
+    "now": 1300819320,
+    "allowed_algs": [
+      "RS256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "RSA",
+          "n": "rTphzws3aF2xHUrDRw7j7R0JuF-6mnSdJxusXRTdeVVx0N1gj3iBWnh7TUe3iRCs3swR_c4sfVx-xhm6wrHBWDQkPQnJw6Jtnvd5JgybX_Qbh3LZj4hQrWKCSzXNkjsZ_JpYpWDWwwjut-lVCt1z7uWkTeUVjxcT2fD-JCRa2Fw0lxk4TlSy3EivgtjOBpjKdvq60pF8DZa1q0zQ7pt_Evak4d8221qFZ4GKuifRKojcuzjCtJ7AG-9FCXad0lnjObOYwGdmd3QOC3J_pHiNsGWMT6y0B7PxRu31HTsaXIPuQKyghhthhsA5XIpj9ByUNcepFPQ4D6o0Bi-nb14xAOMhW3zwbC8IkKHVBRYjnP3379DluI8zS7yXup4TIsX-I1U69mHr5TmQGLf6uMTjye8DELEmE2XqywReZGchQN0qhounhXRX1du1_af4vQ_dT81Pf8gzoQe5hL3iSDcMeK9pEN2u4vjU9GdlNLH1kvD3BnO6-gyhdSaXcGFW0vUoxqFQ-0aAVrM31dcy20aJ9V1tttWVlVT9RYvQRiycKan-Ao5lJlM3APL0bLHPXubd0ugZ6gnZ0OJUIA1c8TU6DnOpr35vPo024JG9Y-95TdFR2cwyJs0W7ij3awMzfFKB5IgYmujBRatP7ff8aGjT8634bwCdZNToWWdaxaSDHTW-EgIoLYnb3vc_cKFm48LZuMsLPqoTpXEOxFKsN8s8Yd6sgN2i8_EDUWz2GrUgXS0chIZexXC_O-IsmZyZYsLalcf10Ux7skk08vc2z5lXkIu6lSxhh9Z_GDhBU9oEC3C33VS4nSIqkwJhYlS77yPTXD_rBhxrL0tU9sGfgk9a4Wji4HEz1Hew8qsTazW5_a03fUVoopAvIwiEZF1NfSM-WcN5jPBitK48PaGp03_oPoa7hFcYElUIJo9CLBONZiWmeXDoOvGDbZizpyytRkQ0qf0ApJaPyBOlurmOkSJ2DAa40KWRYTOIETCSWExH2PotJkGsqu5Mer39EAxI6UIzPUSR07OReca9eXmtZmuK438pa1m6KGmlKIUg4pu1bgEfGQZx_CYqH2R_kL4M61CVZ3l00nCC_qupUJwkMEPSj_c_YB2Uc83qMHvAo5GeTFDgc5MAA7ztE5H5pbEs4LI3THcFyoKx2V3zu2k69EWmbtn0wbet1tkJxy5MhmdRVNIckR-teJiGMJ6jerOrewTzncUbF0ywyl7yBwjrBcyGRo-L4QCSfwc_PHPmaMrdkH7dnZp9HMWzGz8uunZwZ-GL3_DNOtSZbgHaq0or9ajPQzjBAelNNzts3_Wl4L8sZsCkxEFtc_bRclaPYGA1zZRH6Qs-LxUVsNVivykD366X04M",
+          "e": "AQAB"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}
