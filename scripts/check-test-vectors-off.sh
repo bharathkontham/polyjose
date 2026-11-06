@@ -16,6 +16,10 @@
 #      .cargo/config.toml or the environment) or `--features polyjose/...` in a build script or
 #      workflow bypasses 1-3. So the name may appear only in crates/polyjose (its manifest,
 #      sources and tests), this script and Markdown docs, and not in any *RUSTFLAGS variable.
+#      As a backstop that no spelling trick (e.g. a TOML \u escape) can dodge, rustc is asked
+#      which cfgs cargo really passes to polyjose on the host with no features on.
+#   Deliberately obfuscated switches for other targets or in build commands are out of reach of
+#   any scan; .cargo/** and .github/** changes go through owner review for that reason.
 # Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -110,6 +114,17 @@ if env | grep -E '^[A-Za-z0-9_]*RUST(DOC)?FLAGS=' | grep -E "$name_re"; then
   fail "a *RUSTFLAGS variable sets $feature as a cfg (ADR 0005)"
 else
   echo "ok: no *RUSTFLAGS variable names $feature"
+fi
+# --print cfg makes rustc report its cfgs and stop; it resolves every cargo config file from here
+# up, $CARGO_HOME and the environment.
+if ! cfgs=$(cargo rustc --locked -q -p polyjose --lib -- --print cfg 2>&1); then
+  echo "$cfgs"; fail "cargo rustc --print cfg failed for polyjose"
+elif ! grep -q '^target_os=' <<<"$cfgs"; then
+  echo "$cfgs"; fail "rustc printed no cfg list for polyjose; check the script"
+elif grep -E "$name_re" <<<"$cfgs"; then
+  fail "the cargo configuration passes $feature to polyjose as a cfg on the host (ADR 0005)"
+else
+  echo "ok: rustc gets no $feature cfg for polyjose on the host"
 fi
 
 exit $status
