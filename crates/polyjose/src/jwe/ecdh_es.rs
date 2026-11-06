@@ -323,6 +323,19 @@ fn party_info(value: Option<&str>) -> Result<Vec<u8>> {
 /// that is not an ECDH-ES private key; the agreement's error otherwise
 /// (an all-zero X25519 secret).
 pub(super) fn agree_with_epk(key: &RecipientKey, epk: &Object) -> Result<Zeroizing<Vec<u8>>> {
+    agree_with_imported_epk(key, epk, Jwk::from_object)
+}
+
+/// [`agree_with_epk`] with the JWK import step passed in as `import`.
+///
+/// Production always passes [`Jwk::from_object`]; the seam lets the unit
+/// tests observe whether, and when, import is reached (ADR 0050), without
+/// any global or thread-local state.
+fn agree_with_imported_epk(
+    key: &RecipientKey,
+    epk: &Object,
+    import: impl FnOnce(&Object) -> Result<Jwk>,
+) -> Result<Zeroizing<Vec<u8>>> {
     // RFC 7518 §4.6.1.1: "It MUST contain only public key parameters".
     // Checked on the raw object, before import, which would otherwise run
     // the ADR 0043 §3 d·G consistency check: a scalar multiplication on
@@ -331,7 +344,7 @@ pub(super) fn agree_with_epk(key: &RecipientKey, epk: &Object) -> Result<Zeroizi
         return Err(Error::DecryptionFailed);
     }
     // ADR 0041 §4: the JWK import checks (lengths, on-curve, identity).
-    let epk = Jwk::from_object(epk).map_err(|_| Error::DecryptionFailed)?;
+    let epk = import(epk).map_err(|_| Error::DecryptionFailed)?;
     // RFC 7518 §4.6, RFC 8725 §3.4: the ephemeral key must be on the
     // recipient's curve.
     match (key, epk.material()) {
