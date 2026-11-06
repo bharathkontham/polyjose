@@ -397,4 +397,121 @@ mod tests {
             Err("InvalidFormat")
         );
     }
+
+    // ---- Several candidates (ADR 0029 §4) ----
+
+    /// `p256-cand-2`.
+    const CAND_2: Ec = Ec {
+        x: "jjgFcO4B9fBwnRZ8E1LOCM3ZJzRC-xfUm32gnyEtVew",
+        y: "C0MPLKegZh95o8tRrtCEI74o_ydt0_jw97NHWK_Oa3Q",
+        d: "JptMBJVQcY56OG-Ft3PeD14NrHqUZD0BcRKv-aUHnWg",
+    };
+    /// `p256-cand-3`.
+    const CAND_3: Ec = Ec {
+        x: "E85pHKYaeBBNe-CI6UtPtYY5p8WHE3m3-1kCTweJiis",
+        y: "XeNaod_9kYFUDwhUCOecuRQsdcKYfr3KDmneZRXCkg4",
+        d: "CwPnivlhyi-CVp7dDOWXFkg20A3rLd1LeLV9etnpOcs",
+    };
+    /// `p256-attacker`: never a member of a verifying set (CVE-2018-0114).
+    const ATTACKER: Ec = Ec {
+        x: "uhAd3X7C07ijtmAyxKzts_abN-ZyyzTqGDHuIVAYZCw",
+        y: "QFlPJHN8yY_RShgvH0QSsFl1Ngxc5XsNzyfmLhg7iSw",
+        d: "VbIeLL_X7qVX9KkkZbWgnSAk0-lVOCVEU1hCnpgiai8",
+    };
+
+    fn three_candidates() -> JwkSet {
+        set(&[
+            &p256_member(&CAND_1, ""),
+            &p256_member(&CAND_2, ""),
+            &p256_member(&CAND_3, ""),
+        ])
+    }
+
+    #[test]
+    fn the_third_of_three_candidates_verifies_with_key_index_2() {
+        let jws = es256(r#"{"alg":"ES256"}"#, &CAND_3);
+        assert_eq!(counted(&jws, &three_candidates(), &policy()), (Ok(2), 3, 0));
+        let (verified, index) = verify_with_set(&jws, &three_candidates(), &policy()).unwrap();
+        assert_eq!(index, 2);
+        assert_eq!(&verified.payload[..], PAYLOAD);
+        assert_eq!(verified.signature_index, 0);
+    }
+
+    #[test]
+    fn a_token_no_candidate_signed_is_invalid_signature() {
+        let jws = es256(r#"{"alg":"ES256"}"#, &ATTACKER);
+        assert_eq!(
+            counted(&jws, &three_candidates(), &policy()),
+            (Err(Error::InvalidSignature), 3, 0)
+        );
+    }
+
+    /// More candidates than the bound → `NoMatchingKey` before any
+    /// signature is computed (ADR 0029 §4), counted through the family
+    /// double; at the bound, they are all tried.
+    #[test]
+    fn more_candidates_than_the_limit_is_no_matching_key_before_any_signature() {
+        let jws = es256(r#"{"alg":"ES256"}"#, &CAND_3);
+        let two = policy().max_key_candidates(2);
+        assert_eq!(
+            counted(&jws, &three_candidates(), &two),
+            (Err(Error::NoMatchingKey), 0, 0)
+        );
+        let three = policy().max_key_candidates(3);
+        assert_eq!(counted(&jws, &three_candidates(), &three), (Ok(2), 3, 0));
+        let zero = policy().max_key_candidates(0);
+        assert_eq!(
+            counted(&jws, &three_candidates(), &zero),
+            (Err(Error::NoMatchingKey), 0, 0)
+        );
+    }
+
+    /// The default bound is [`Policy::DEFAULT_MAX_KEY_CANDIDATES`] (8).
+    #[test]
+    fn the_default_limit_is_eight() {
+        let member = p256_member(&CAND_1, "");
+        let jws = es256(r#"{"alg":"ES256"}"#, &CAND_1);
+        let eight = set(&[member.as_str(); 8]);
+        assert_eq!(counted(&jws, &eight, &policy()), (Ok(0), 1, 0));
+        let nine = set(&[member.as_str(); 9]);
+        assert_eq!(
+            counted(&jws, &nine, &policy()),
+            (Err(Error::NoMatchingKey), 0, 0)
+        );
+    }
+
+    // ---- Error ranking (ADR 0026 §3) ----
+
+    /// An HS256 key of `len` octets of `fill`, without `kid`.
+    fn oct_member(fill: u8, len: usize) -> String {
+        format!(
+            r#"{{"kty":"oct","k":"{}"}}"#,
+            b64url_encode(&vec![fill; len])
+        )
+    }
+
+    /// A weak-key candidate fails at key binding (`InvalidKey`, RFC 7518
+    /// §3.2), a wrong key at the signature (`InvalidSignature`); the
+    /// latter progressed further, in either order.
+    #[test]
+    fn a_weak_key_and_a_wrong_signature_rank_invalid_signature() {
+        let signer = Jwk::from_json(oct_member(0x22, 32).as_bytes()).unwrap();
+        let jws = token(r#"{"alg":"HS256"}"#, &signer);
+        let weak = oct_member(0x33, 16);
+        let wrong = oct_member(0x44, 32);
+        assert_eq!(
+            selected(&jws, &set(&[&weak, &wrong])),
+            Err(Error::InvalidSignature)
+        );
+        assert_eq!(
+            selected(&jws, &set(&[&wrong, &weak])),
+            Err(Error::InvalidSignature)
+        );
+        assert!(matches!(
+            selected(&jws, &set(&[&weak, &weak])),
+            Err(Error::InvalidKey(_))
+        ));
+        let right = oct_member(0x22, 32);
+        assert_eq!(selected(&jws, &set(&[&weak, &wrong, &right])), Ok(2));
+    }
 }
