@@ -23,6 +23,8 @@ use zeroize::Zeroizing;
 use crate::Result;
 
 mod bits;
+#[cfg(test)]
+mod differential;
 mod encode;
 mod huffman;
 mod inflate;
