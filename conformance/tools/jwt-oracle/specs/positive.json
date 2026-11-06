@@ -1747,6 +1747,510 @@
         "alg": "RS256",
         "key_index": 0
       }
+    },
+    {
+      "file": "issue-hs256-exact.json",
+      "description": "Issues HS256 with typ JWT and the 32-octet key: the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's; the runner also validates it (RFC 7519 §7.1, ADR 0027 §1, §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "HS256",
+        "key": {
+          "$key": "oct-32"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "HS256"
+          ],
+          "key": {
+            "$key": "oct-32"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "issue-hs256-exact-kid.json",
+      "description": "Issues HS256 with a key whose kid is hs-32: kid is copied into the header after typ; the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's (RFC 7515 §4.1.4, ADR 0027 §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "HS256",
+        "key": {
+          "$key": "oct-32-kid-hs-32"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "HS256"
+          ],
+          "key": {
+            "$key": "oct-32-kid-hs-32"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT",
+          "kid": "hs-32"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "oct-32-kid-hs-32"
+      }
+    },
+    {
+      "file": "issue-hs256-exact-no-typ.json",
+      "description": "Issues HS256 with typ null, so the header is alg only (RFC 7519 §5.1 OPTIONAL); the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's (ADR 0027 §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "HS256",
+        "key": {
+          "$key": "oct-32"
+        },
+        "typ": null,
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "HS256"
+          ],
+          "key": {
+            "$key": "oct-32"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "issue-eddsa-exact.json",
+      "description": "Issues EdDSA (RFC 8037 §3.1, deterministic) with the RFC 8037 A.1 key: the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's; the runner also validates it (ADR 0027 §1, §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "EdDSA",
+        "key": {
+          "$key": "ed25519"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "EdDSA"
+          ],
+          "key": {
+            "$public": "ed25519"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "EdDSA",
+          "typ": "JWT"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "ed25519"
+      }
+    },
+    {
+      "file": "issue-ed25519-exact.json",
+      "description": "Issues the fully specified Ed25519 alg (RFC 9864 §2.2, deterministic) with the RFC 8037 A.1 key: the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's (ADR 0027 §1, §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "Ed25519",
+        "key": {
+          "$key": "ed25519"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "Ed25519"
+          ],
+          "key": {
+            "$public": "ed25519"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "Ed25519",
+          "typ": "JWT"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "ed25519"
+      }
+    },
+    {
+      "file": "issue-es256-round-trip.json",
+      "description": "Issues ES256 (RFC 7518 §3.4, randomized, so checked by round trip): the runner validates the token with the P-256 public key and gets alg ES256 and the issued claims back (RFC 7519 §7.1-§7.2, ADR 0027 §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "ES256",
+        "key": {
+          "$key": "p256"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "ES256"
+          ],
+          "key": {
+            "$public": "p256"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "file": "issue-es256k-round-trip.json",
+      "source": "RFC 8812 §3.2",
+      "description": "Issues ES256K (RFC 8812 §3.2, randomized) with the jws-oracle's fixed secp256k1 key (from conformance/vectors/jws-oracle/es256k-compact-sign-roundtrip.json): validated with its public key, alg ES256K and the issued claims back (RFC 7519 §7.1-§7.2, ADR 0027 §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "ES256K",
+        "key": {
+          "kty": "EC",
+          "crv": "secp256k1",
+          "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+          "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g",
+          "d": "EE9oTP04ShCl38a3KQRRUczSgnx0bTgrXNm5oGf9xhk"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "ES256K"
+          ],
+          "key": {
+            "kty": "EC",
+            "crv": "secp256k1",
+            "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+            "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "file": "issue-access-token-round-trip.json",
+      "description": "Issues an access token (typ at+jwt, IssueOptions::access_token, RFC 9068 §2.1) with every RFC 9068 §2.2 claim, ES256: it validates under profile access_token with its issuer and audience (RFC 9068 §4, ADR 0027 §5, §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "https://rs.example",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "at-1",
+          "client_id": "client-1",
+          "scope": "read"
+        },
+        "alg": "ES256",
+        "key": {
+          "$key": "p256"
+        },
+        "typ": "at+jwt",
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "ES256"
+          ],
+          "key": {
+            "$public": "p256"
+          },
+          "policy": {
+            "profile": "access_token",
+            "issuer": [
+              "https://issuer.example"
+            ],
+            "audience": [
+              "https://rs.example"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true
+      }
     }
   ]
 }
