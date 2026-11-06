@@ -1163,3 +1163,290 @@ mod generated {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// DER reader against `der`
+// ---------------------------------------------------------------------------
+
+/// A minimal DER length (X.690 §8.1.3.4, §8.1.3.5, §10.1).
+fn der_length(len: usize) -> Vec<u8> {
+    match len {
+        0..=0x7F => vec![len as u8],
+        _ => {
+            let octets: Vec<u8> = len
+                .to_be_bytes()
+                .into_iter()
+                .skip_while(|octet| *octet == 0)
+                .collect();
+            [&[0x80 | octets.len() as u8][..], &octets].concat()
+        }
+    }
+}
+
+/// One TLV with a minimal length.
+fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
+    [&[tag][..], &der_length(contents.len()), contents].concat()
+}
+
+/// Reads exactly one element of `input` with `read`, requiring nothing
+/// after it, as the oracle's `from_der` does.
+fn read_one<'a, T>(input: &'a [u8], read: impl FnOnce(&mut Reader<'a>) -> Result<T>) -> Result<T> {
+    let mut reader = Reader::new(input)?;
+    let value = read(&mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+/// The OBJECT IDENTIFIER contents octets polyjose's reader accepts (every
+/// subidentifier minimal, X.690 §8.19.2) but `const-oid` 0.10 cannot
+/// represent: a first subidentifier of 120 or more (arc 2.40 and above,
+/// including any multi-octet first subidentifier), a subidentifier above
+/// 2^32 − 1 (const-oid rejects some of these and wraps others), or more
+/// than 39 contents octets. polyjose only compares OIDs
+/// with the byte templates of `oid.rs` and checks the OIDs inside PKCS#8
+/// attributes and unsupported parameters for well-formedness, so a wider OID
+/// is never interpreted (ADR 0018 §2): this is a documented, harmless
+/// difference (T02 tester, backlog).
+fn oid_beyond_const_oid(contents: &[u8]) -> bool {
+    let mut wide = false;
+    let mut value = 0u128;
+    for &octet in &contents[1..] {
+        value = (value << 7) | u128::from(octet & 0x7F);
+        wide |= value > u128::from(u32::MAX);
+        if octet & 0x80 == 0 {
+            value = 0;
+        }
+        // Long runs only grow; cap so the shift cannot overflow.
+        value &= u128::from(u64::MAX);
+    }
+    contents.len() > 39 || contents[0] >= 0x78 || wide
+}
+
+/// Whether some subidentifier starts with the padding octet 0x80, which
+/// X.690 §8.19.2 forbids and polyjose rejects (N22) but `const-oid` 0.10
+/// decodes.
+fn oid_has_padded_subidentifier(contents: &[u8]) -> bool {
+    let mut at_start = true;
+    contents.iter().any(|&octet| {
+        let padded = at_start && octet == 0x80;
+        at_start = octet & 0x80 == 0;
+        padded
+    })
+}
+
+/// Compares polyjose's typed readers with `der`'s strict `from_der` on one
+/// encoding. Both must agree on acceptance, and where both accept, on the
+/// value, and `der` must re-encode it to exactly `input`. The documented
+/// differences:
+///
+/// - BIT STRING: polyjose reads only keys, which are whole octets
+///   (RFC 5480 §2.2, RFC 8410 §4, RFC 3279 §2.3.1, RFC 5958 §2), so it
+///   rejects a non-zero unused-bits count that `der` accepts (ADR 0018 §2,
+///   N30).
+/// - OBJECT IDENTIFIER: see [`oid_beyond_const_oid`] (polyjose accepts) and
+///   [`oid_has_padded_subidentifier`] (polyjose rejects).
+fn compare_typed_readers(input: &[u8]) {
+    use ::der::asn1::{BitStringRef, IntRef, Null, UintRef};
+
+    let ours = read_one(input, |r| r.integer());
+    let theirs = IntRef::from_der(input);
+    assert_eq!(ours.is_ok(), theirs.is_ok(), "INTEGER {input:02x?}");
+    if let Ok(int) = theirs {
+        assert_eq!(int.to_der().unwrap(), input, "INTEGER re-encoding");
+    }
+
+    let ours = read_one(input, |r| r.unsigned_integer());
+    let theirs = UintRef::from_der(input);
+    assert_eq!(
+        ours.ok(),
+        theirs.ok().map(|uint| uint.as_bytes()),
+        "unsigned INTEGER {input:02x?}"
+    );
+
+    let ours = read_one(input, |r| r.octet_string());
+    let theirs = <&OctetStringRef>::from_der(input);
+    assert_eq!(
+        ours.ok(),
+        theirs.ok().map(OctetStringRef::as_bytes),
+        "OCTET STRING {input:02x?}"
+    );
+
+    let ours = read_one(input, |r| r.bit_string());
+    let theirs = BitStringRef::from_der(input);
+    match (&ours, &theirs) {
+        (Ok(octets), Ok(bits)) => {
+            assert_eq!(bits.unused_bits(), 0, "BIT STRING {input:02x?}");
+            assert_eq!(Some(*octets), bits.as_bytes(), "BIT STRING {input:02x?}");
+            assert_eq!(bits.to_der().unwrap(), input, "BIT STRING re-encoding");
+        }
+        (Err(_), Ok(bits)) => assert_ne!(bits.unused_bits(), 0, "BIT STRING {input:02x?}"),
+        (Ok(_), Err(_)) => panic!("BIT STRING laxer than der: {input:02x?}"),
+        (Err(_), Err(_)) => {}
+    }
+
+    let ours = read_one(input, |r| r.null());
+    assert_eq!(
+        ours.is_ok(),
+        Null::from_der(input).is_ok(),
+        "NULL {input:02x?}"
+    );
+
+    let ours = read_one(input, |r| r.oid());
+    let theirs = <ObjectIdentifier>::from_der(input);
+    match (&ours, &theirs) {
+        (Ok(encoding), Ok(oid)) => assert_eq!(oid.to_der().unwrap(), *encoding, "OID"),
+        (Ok(_), Err(_)) => assert!(
+            oid_beyond_const_oid(&input[2..]),
+            "OID laxer than der: {input:02x?}"
+        ),
+        (Err(_), Ok(_)) => assert!(
+            oid_has_padded_subidentifier(oid_contents(input)),
+            "OID stricter than der, undocumented: {input:02x?}"
+        ),
+        (Err(_), Err(_)) => {}
+    }
+}
+
+/// The contents octets of a short-form TLV whose framing `der` accepted.
+fn oid_contents(input: &[u8]) -> &[u8] {
+    &input[2..]
+}
+
+/// The documented OBJECT IDENTIFIER differences, one example each.
+#[test]
+fn oid_reader_differences_with_const_oid_are_the_documented_ones() {
+    // polyjose accepts, const-oid 0.10 cannot represent (harmless, see
+    // `oid_beyond_const_oid`).
+    let wider = [
+        // 2.40: first subidentifier 120 (X.690 §8.19.4 allows it).
+        tlv(0x06, &[0x78]),
+        // 2.999 (RFC 9500 uses 2.999-style test arcs): a two-octet first
+        // subidentifier.
+        tlv(0x06, &[0x88, 0x37]),
+        // 1.3.(2^42 − 1): a six-octet subidentifier, above 2^32 − 1.
+        // (const-oid 0.10 decodes a five-octet one above 2^32 − 1, such as
+        // 90 80 80 80 00, by wrapping it; that is the oracle's leniency.)
+        tlv(0x06, &[0x2B, 0x9F, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]),
+        // 40 contents octets.
+        tlv(0x06, &[0x2B; 40]),
+    ];
+    for input in &wider {
+        let contents = &input[1 + der_length(input.len() - 2).len()..];
+        assert!(read_one(input, |r| r.oid()).is_ok(), "{input:02x?}");
+        assert!(<ObjectIdentifier>::from_der(input).is_err(), "{input:02x?}");
+        assert!(oid_beyond_const_oid(contents), "{input:02x?}");
+    }
+    // polyjose rejects, const-oid accepts: a padded subidentifier
+    // (X.690 §8.19.2; N22, listed in NEGATIVE_STRICTER_THAN_ORACLE).
+    let padded = tlv(0x06, &[0x2B, 0x80, 0x65, 0x70]);
+    assert!(read_one(&padded, |r| r.oid()).is_err());
+    assert!(<ObjectIdentifier>::from_der(&padded).is_ok());
+    // The supported OIDs read alike.
+    for template in [
+        oid::OID_EC_PUBLIC_KEY,
+        oid::OID_P256,
+        oid::OID_P384,
+        oid::OID_P521,
+        oid::OID_SECP256K1,
+        oid::OID_X25519,
+        oid::OID_ED25519,
+        oid::OID_RSA_ENCRYPTION,
+    ] {
+        compare_typed_readers(template);
+    }
+}
+
+mod reader {
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// One element with a chosen tag, a length in one of several forms
+    /// (minimal, non-minimal long form, too long, too short, indefinite)
+    /// and contents biased toward the octets that decide INTEGER and BIT
+    /// STRING minimality and OID padding.
+    fn element() -> impl Strategy<Value = Vec<u8>> {
+        let tag = prop::sample::select(vec![
+            0x02u8, 0x03, 0x04, 0x05, 0x06, 0x22, 0x23, 0x24, 0x25, 0x26, 0x1F, 0x30, 0x81,
+        ]);
+        let lead = prop::sample::select(vec![
+            vec![],
+            vec![0x00],
+            vec![0xFF],
+            vec![0x80],
+            vec![0x00, 0x80],
+            vec![0xFF, 0x7F],
+            vec![0x07],
+            vec![0x2B],
+            vec![0x2B, 0x80],
+        ]);
+        (
+            tag,
+            lead,
+            vec(any::<u8>(), 0..40),
+            0u8..6,
+            vec(any::<u8>(), 0..2),
+        )
+            .prop_map(|(tag, lead, rest, form, trailing)| {
+                let contents = [lead, rest].concat();
+                let len = contents.len();
+                let length = match form {
+                    0 | 1 => der_length(len),
+                    2 => [&[0x81][..], &[len as u8]].concat(),
+                    3 => der_length(len + 1),
+                    4 => der_length(len.saturating_sub(1)),
+                    _ => vec![0x80],
+                };
+                let mut out = [&[tag][..], &length, &contents].concat();
+                if form == 1 {
+                    out.extend_from_slice(&trailing);
+                }
+                out
+            })
+    }
+
+    /// Arbitrary OBJECT IDENTIFIERs: base-128 subidentifiers (X.690
+    /// §8.19.2) of any width, sometimes padded with a leading 0x80.
+    fn object_identifier() -> impl Strategy<Value = Vec<u8>> {
+        let arc = prop_oneof![0u64..128, 128u64..1 << 21, any::<u64>()];
+        (vec((arc, any::<bool>()), 1..6), 0u8..128).prop_map(|(arcs, root)| {
+            let mut contents = vec![root];
+            for (value, pad) in arcs {
+                let mut groups = Vec::new();
+                let mut v = value;
+                loop {
+                    groups.push((v & 0x7F) as u8);
+                    v >>= 7;
+                    if v == 0 {
+                        break;
+                    }
+                }
+                if pad && groups.len() < 10 {
+                    groups.push(0);
+                }
+                for (i, group) in groups.iter().enumerate().rev() {
+                    contents.push(if i == 0 { *group } else { group | 0x80 });
+                }
+            }
+            tlv(0x06, &contents)
+        })
+    }
+
+    proptest! {
+        // ≤ 1,000 cases per property (pipeline rule 8).
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn typed_readers_agree_with_der(input in element()) {
+            compare_typed_readers(&input);
+        }
+
+        #[test]
+        fn oid_reader_agrees_with_const_oid_but_for_documented_cases(
+            input in object_identifier()
+        ) {
+            compare_typed_readers(&input);
+        }
+    }
+}
