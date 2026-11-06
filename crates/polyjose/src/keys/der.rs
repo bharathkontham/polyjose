@@ -596,6 +596,79 @@ impl Writer {
     }
 }
 
+/// Test-only access to the committed key fixtures in `tests/data/keys/`,
+/// shared by the DER, PKCS#8 and SPKI tests.
+#[cfg(test)]
+pub(super) mod fixtures {
+    use std::path::{Path, PathBuf};
+
+    use crate::json::{self, Value};
+
+    fn dir(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data/keys")
+            .join(name)
+    }
+
+    /// A fixture as DER: `.der` files as they are, `.pem` files decoded by
+    /// the `pem-rfc7468` oracle (a dev-dependency only).
+    pub(crate) fn load(dir_name: &str, file: &str) -> Vec<u8> {
+        let path = dir(dir_name).join(file);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        if file.ends_with(".pem") {
+            pem_rfc7468::decode_vec(&bytes)
+                .unwrap_or_else(|e| panic!("{file}: {e}"))
+                .1
+        } else {
+            bytes
+        }
+    }
+
+    /// The `.der` and `.pem` files in a fixture directory whose names match
+    /// `keep`, sorted.
+    pub(crate) fn files(dir_name: &str, keep: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir(dir_name))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.ends_with(".der") || name.ends_with(".pem"))
+            .filter(|name| keep(name))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// One entry of `negative/manifest.json`.
+    pub(crate) struct Negative {
+        pub(crate) id: String,
+        pub(crate) file: String,
+        pub(crate) expect: String,
+    }
+
+    /// Every entry of `negative/manifest.json`.
+    pub(crate) fn negatives() -> Vec<Negative> {
+        let bytes = std::fs::read(dir("negative").join("manifest.json")).unwrap();
+        let manifest = json::parse(&bytes).unwrap();
+        let field =
+            |entry: &Value, name: &str| entry.get(name).and_then(Value::as_str).unwrap().to_owned();
+        manifest
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| Negative {
+                id: field(entry, "id"),
+                file: field(entry, "file"),
+                expect: field(entry, "expect"),
+            })
+            .collect()
+    }
+
+    /// The manifest entry `id` loaded as DER.
+    pub(crate) fn negative(id: &str) -> Vec<u8> {
+        let entry = negatives().into_iter().find(|n| n.id == id).unwrap();
+        load("negative", &entry.file)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
