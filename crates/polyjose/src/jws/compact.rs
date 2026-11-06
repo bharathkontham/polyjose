@@ -15,7 +15,15 @@
 //! | 3 | the protected header: strict base64url (§5.2 step 2), one I-JSON object, duplicate members included (§5.2 step 3; ADR 0041 §1), registered parameter types and `crit` syntax (`Header::from_json`, RFC 7515 §4.1.11) | [`Error::InvalidBase64`]; [`Error::InvalidJson`]; [`Error::InvalidHeader`] |
 //! | 4 | strict base64url of the payload part, unless `b64` is `false` or the payload is detached (§5.2 step 6; RFC 7797 §3) | [`Error::InvalidBase64`] |
 //! | 5 | `JoseHeader::new`: the whole-header structure rules | [`Error::InvalidHeader`] |
-//! | 6 | `verify_signature` over the received header encoding (RFC 7515 §5.2 steps 5, 8; ADR 0026 §2 steps 5–9) | as in the [module table](crate::jws) |
+//! | 6a–6c | `allowed_alg`: `crit` understood, `alg` known, `alg` allowed (ADR 0026 §2 steps 5–7) | as in the [module table](crate::jws) |
+//! | 6d–6e | `verify_with_key` over the received header encoding: key binding, then the signature (RFC 7515 §5.2 steps 5, 8; ADR 0026 §2 steps 8–9) | as in the [module table](crate::jws) |
+//!
+//! Verification is split at the key: [`precheck_compact`] runs steps 1–6c
+//! once, without a key, and returns a [`CompactPrechecked`];
+//! [`finish_compact`] runs steps 6d–6e on it for one key, and may be called
+//! again with another. [`verify_compact`] is the two in sequence. The JWT
+//! layer reads the protected header and chooses candidate keys in between
+//! (ADR 0027 §9, ADR 0029 §1).
 //!
 //! Step 4 needs the protected header's `b64`, so it runs once that header
 //! has parsed and its parameters have their types, and before its
