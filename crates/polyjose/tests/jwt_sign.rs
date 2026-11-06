@@ -499,3 +499,73 @@ fn sign_adds_no_iat_exp_or_jti() {
     }
     assert_eq!(payload(&token), br#"{"x":"y"}"#);
 }
+
+// ---------------------------------------------------------------------------
+// Tester additions (T08 r1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_ec_key_of_the_wrong_curve_is_rejected_for_the_alg() {
+    // ADR 0026 §2 step 8: ES256 is bound to P-256 (RFC 7518 §3.4).
+    let err = jwt::sign(
+        &rfc7519_claims(),
+        &IssueOptions::new(SigningAlg::ES256),
+        &jwk(P384),
+    )
+    .unwrap_err();
+    assert_eq!(err, Error::KeyAlgorithmMismatch);
+    let err = jwt::sign(
+        &rfc7519_claims(),
+        &IssueOptions::new(SigningAlg::ES384),
+        &jwk(P256),
+    )
+    .unwrap_err();
+    assert_eq!(err, Error::KeyAlgorithmMismatch);
+}
+
+#[test]
+fn rs_and_ps_with_a_private_looking_or_ec_key_are_still_unsupported() {
+    // The algorithm check is first for every key kind.
+    for key in [jwk(P256), ed25519(), jwk(RS_PUBLIC)] {
+        for alg in [SigningAlg::RS256, SigningAlg::PS256] {
+            let err = jwt::sign(&rfc7519_claims(), &IssueOptions::new(alg), &key).unwrap_err();
+            assert_eq!(err, Error::UnsupportedAlgorithm);
+        }
+    }
+}
+
+#[test]
+fn none_is_not_allowed_for_every_key_kind() {
+    for key in [jwk(P256), ed25519(), jwk(RS_PUBLIC), jwk(OCT_32_KID)] {
+        let err = jwt::sign(
+            &rfc7519_claims(),
+            &IssueOptions::new(SigningAlg::None),
+            &key,
+        )
+        .unwrap_err();
+        assert_eq!(err, Error::AlgorithmNotAllowed);
+    }
+}
+
+#[test]
+fn every_issued_header_round_trips_with_alg_typ_kid_order() {
+    use polyjose::jws::ProtectedHeader;
+    for alg in SIGNING_ALGS {
+        let mut key_json = key_for(&alg).to_json();
+        // add a kid through the JWK JSON
+        assert!(key_json.ends_with('}'));
+        key_json.pop();
+        key_json.push_str(r#","kid":"k-1"}"#);
+        let key = jwk(&key_json);
+        let token = jwt::sign(&rfc7519_claims(), &IssueOptions::new(alg.clone()), &key).unwrap();
+        let text = header_text(&token);
+        assert_eq!(
+            text,
+            format!(r#"{{"alg":"{}","typ":"JWT","kid":"k-1"}}"#, alg.as_str())
+        );
+        let ph = ProtectedHeader::from_encoded(parts(&token)[0]).unwrap();
+        assert_eq!(ph.encoded(), parts(&token)[0]);
+        assert_eq!(ph.header().kid.as_deref(), Some("k-1"));
+        verify(&token, alg, &key);
+    }
+}
