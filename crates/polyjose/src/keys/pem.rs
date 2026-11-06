@@ -1041,6 +1041,17 @@ mod tests {
         assert_eq!(decode(&over).map(|_| ()), Err(TOO_LARGE));
     }
 
+    /// A DER just over its own cap still fits the PEM cap with LF endings,
+    /// so the PEM layer returns it and the DER reader reports the size
+    /// (`der::MAX_INPUT_LEN`): this cap never hides that error.
+    #[test]
+    fn a_der_over_its_cap_gets_through_the_pem_layer() {
+        let der: Vec<u8> = (0..=der::MAX_INPUT_LEN).map(|i| i as u8).collect();
+        let text = encode(Label::PublicKey, &der).unwrap();
+        assert!(text.len() < MAX_INPUT_LEN);
+        assert_eq!(outcome(&text), Ok((Label::PublicKey, der)));
+    }
+
     /// A 65 MiB input fails with the size error before any work: read back
     /// afterwards, both working buffers were never allocated, so no body was
     /// collected or decoded. The well-formed private-key block would
@@ -1071,6 +1082,45 @@ mod tests {
             );
             assert_eq!((body.capacity(), der.capacity()), (0, 0));
             assert_eq!(decode(&text).map(|_| ()), Err(TOO_LARGE));
+        }
+    }
+
+    /// The size check runs before everything else, so an oversize input
+    /// gives the size error whatever its label or content: one the BEGIN
+    /// line would classify as unsupported (ADR 0018 §2, ADR 0021), a
+    /// malformed label, a valid block, or no PEM at all.
+    #[test]
+    fn oversize_input_gives_the_size_error_whatever_its_label() {
+        let b = ED25519_BODY;
+        let over = |text: String| padded(text, MAX_INPUT_LEN + 1);
+        let texts = [
+            over(block("PRIVATE KEY", b)),
+            over(block("PUBLIC KEY", b)),
+            over(block("EC PRIVATE KEY", b)),
+            over(block("RSA PUBLIC KEY", b)),
+            over(block("RSA PRIVATE KEY", b)),
+            over(block("ENCRYPTED PRIVATE KEY", b)),
+            over(block("CERTIFICATE", b)),
+            over(block("private key", b)),
+            over(format!(
+                "-----BEGIN EC PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\n{b}\n-----END EC PRIVATE KEY-----\n"
+            )),
+            over(format!("-----BEGIN PRIVATE KEY-----\n{b}\n")),
+            over("not PEM".to_owned()),
+            over(String::new()),
+            "x".repeat(MAX_INPUT_LEN + 1),
+        ];
+        for text in &texts {
+            assert_eq!(text.len(), MAX_INPUT_LEN + 1);
+            let mut body = Vec::new();
+            let mut der = Vec::new();
+            assert_eq!(
+                decode_into(text.as_bytes(), &mut body, &mut der),
+                Err(TOO_LARGE),
+                "{:?}",
+                &text[..text.len().min(40)]
+            );
+            assert_eq!((body.capacity(), der.capacity()), (0, 0));
         }
     }
 
