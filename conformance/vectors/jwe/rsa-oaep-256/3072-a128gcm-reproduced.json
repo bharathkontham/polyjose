@@ -1,0 +1,28 @@
+{
+  "source": "Node v24.21.0 built-in crypto (OpenSSL 3.5.8), conformance/tools/rsa-oaep-oracle.mjs",
+  "description": "RFC 7518 §4.3 RSA-OAEP-256 + A128GCM to the 3072-bit test key: with rng_b64u as the drawn bytes (the 16-octet CEK, which is the expected CEK, then the 32-octet OAEP seed, then the 12-octet IV) polyjose reproduces the compact JWE exactly; the expected JWE was computed independently of polyjose by the oracle's EME-OAEP encoding (RFC 8017 §7.1.1) with Node's raw RSA and AES, and the oracle checks it with crypto.privateDecrypt (oaepHash sha256) against the test-only private key keys/rsa-3072.private.jwk (data only, never read by Rust); interop: true (feature 0010)",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "UlNBLU9BRVAtMjU2IHdpdGggQTEyOEdDTSB0byBhIDMwNzItYml0IGtleTogdGhlIENFSywgdGhlIE9BRVAgc2VlZCBhbmQgdGhlIElWIGFyZSBkcmF3biBpbiB0aGF0IG9yZGVyLg",
+    "recipients": [
+      {
+        "alg": "RSA-OAEP-256",
+        "key": {
+          "kty": "RSA",
+          "n": "s4bmNtvj-z4K69zqFyHkoOe9Iod3GuFYyua90FgklAGsQhh-m8dOwDjhD_AkPGzC8KPSXoZsFm1jl94AU9OrJDttH7KSFZj6aKFAUwcm_k7HnVn60u9yPTb7UrWGsO6M2lYp-hJpuGizI7CjuwW-WNkty_wzMBp3VhvtZfRvD9E_lWk4vhL6WJ88wXKx6bxypDYIYqdXYfQp_x0cQ_xCcbW6xXSOl4evU8V7Kl3Eub__PRtO9sGGtL3wYEWldfUs4mtTm6nKKPO8Dc2EKOHwzG1PnWY1vJwGYcuInwrCh1q9AJoA9n1iY0abCQeiX9y_1QxT7rgvKRMfkggM3OTotkpZl9XLtWrq7e7iT8x_DtCaiKkEvMg7trhHljkl3GlLXtxm8PAxkX7C50URjImSVK88ZiypADioWeg4wHy3rtqoZGO4-0zTJM1QOhIu8tID6cEzd7VWU5mn0wl5Sa5Mql4mvL14VFPB-9er8g_iFaOeGnqn9mhqZbS5SrSDPwaj",
+          "e": "AQAB"
+        }
+      }
+    ],
+    "rng_b64u": "C4wELixPA6fk_QNH-dizLCPDDwA3KbHnvdz9tRZqGVwuazKOnwBYj6dinSXonoSGSWifOpNVclhVrqwL"
+  },
+  "expect": {
+    "ok": true,
+    "jwe": "eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMTI4R0NNIn0.VYdjY2NrNO7ESjNPOBcP20_S_3oPHDTOoS0CI9i6cACHsuGzOofF0IsuqHjQdoT39Q0SWBrSYXOXTMEvf43kMGJKmhnEZ8CWgN-kBD7hKYNTBPf1t1ocxWbImlsXGEFPCAbrZdwX6SbyTTUB4fcebN-SL49Ed48nfjCmWUX2GUmxf2lnx0tTA67Ci_RW3mC105x9x3NfFXKtH1NX2cqKSogy7p-yNrokhvGknGPBWhMb0Q6WHBgTTWdkCz7ozjE1duuVz0gCWSNvcqMm7EIH7j36v1jfGOIMJwjczgc99nQt5AgQtmgsPktBxYbUoq2OEQ4ZLnLNdwbXplYfHJ4DWkK6IL4r99TxGcbrVNMSjUqZQpfEkJMhlgbD0uzkDfgqTWXCDqa9w_YeDRuqmDm721DR3JIvlti7BnEs_U-SSSLU46T5gpxm9H6gIJKtkxSnsUdPQZGVh2MqjywVg_nlRHsWd_olJlklL566f4V5Ok2_e7QzDhPZpXEuWTW3Vi8T.SWifOpNVclhVrqwL.i_O7u5YwqC1Haw53OojmzsPNRqtxs02G4EM6EYqXzW9ekyocMDCLO9nYIznofCBM8MgqYE6o9dsEEJ_UySG1b5aijw-qIgoaiNNc1MNacXyb-S6vkEuNvC2wSH6q4LFZTxfc3p9zeA.rd0MBO-AuWoc3EU2D1u6zg"
+  },
+  "features": [
+    "fixed-rng"
+  ]
+}
