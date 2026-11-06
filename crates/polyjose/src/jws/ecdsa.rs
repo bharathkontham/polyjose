@@ -801,6 +801,113 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sign_compact_then_verify_compact_for_every_alg() {
+        // End to end through the public API (RFC 7515 §7.1, §5.1, §5.2):
+        // the token verifies, and so does its high-S twin (ADR 0026 §5);
+        // a DER signature or a changed payload does not.
+        use crate::jws::{
+            ProtectedHeader, SignOptions, VerifyOptions, sign_compact, verify_compact,
+        };
+        use crate::util::b64url_encode;
+        for alg in &ALL {
+            let key = private_key(alg);
+            let header = format!(r#"{{"alg":"{alg}"}}"#);
+            let protected =
+                ProtectedHeader::from_encoded(&b64url_encode(header.as_bytes())).unwrap();
+            let jws = sign_compact(&protected, b"payload", &key, &SignOptions::new()).unwrap();
+            let (head, sig) = jws.rsplit_once('.').unwrap();
+            let sig = b64(sig);
+            assert_eq!(sig.len(), signature_len(alg), "{alg}");
+            let algs = [alg.clone()];
+            let opts = VerifyOptions::new(&algs).unwrap();
+            let public = key.to_public().unwrap();
+            let verified = verify_compact(&jws, &public, &opts).unwrap();
+            assert_eq!(
+                (&verified.alg, verified.payload.as_slice()),
+                (alg, &b"payload"[..])
+            );
+            let with_sig = |sig: &[u8]| format!("{head}.{}", b64url_encode(sig));
+            let (_, twin) = low_s_and_twin(alg, &sig);
+            assert!(
+                verify_compact(&with_sig(&twin), &public, &opts).is_ok(),
+                "{alg} twin"
+            );
+            if *alg != A::ES512 {
+                // (The one-byte-length DER helper fits up to P-384.)
+                assert_eq!(
+                    verify_compact(&with_sig(&der(&sig)), &public, &opts).err(),
+                    Some(Error::InvalidSignature),
+                    "{alg} DER"
+                );
+            }
+            let (first, _) = head.split_once('.').unwrap();
+            let other = format!(
+                "{first}.{}.{}",
+                b64url_encode(b"payloaD"),
+                b64url_encode(&sig)
+            );
+            assert_eq!(
+                verify_compact(&other, &public, &opts).err(),
+                Some(Error::InvalidSignature),
+                "{alg} payload"
+            );
+        }
+    }
+
+    mod properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            // ADR 0008 layer 2: bounded case counts in the fast suite. Each
+            // case covers all four curves, so 100 cases per curve.
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            /// RFC 7518 §3.4, RFC 8812 §3.2: what `sign` emits verifies with
+            /// the public key, is low-S, and any one-bit change of the
+            /// signature or the input breaks it.
+            #[test]
+            fn sign_then_verify_round_trips_and_detects_changes(
+                input in proptest::collection::vec(any::<u8>(), 0..512),
+                bit in any::<usize>(),
+            ) {
+                for alg in &ALL {
+                    let key = private_key(alg);
+                    let public = key.to_public().unwrap();
+                    let sig = sign(alg, &key, &input).unwrap();
+                    prop_assert_eq!(sig.len(), signature_len(alg));
+                    prop_assert!(low_s_and_twin(alg, &sig).0);
+                    prop_assert_eq!(verify(alg, &public, &input, &sig), Ok(()));
+                    let mut flipped = sig.clone();
+                    let bit = bit % (sig.len() * 8);
+                    flipped[bit / 8] ^= 1 << (bit % 8);
+                    prop_assert_eq!(verify(alg, &public, &input, &flipped), Err(Error::InvalidSignature));
+                    let mut changed = input.clone();
+                    changed.push(0);
+                    prop_assert_eq!(verify(alg, &public, &changed, &sig), Err(Error::InvalidSignature));
+                }
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// Untrusted signature octets of any length never panic and
+            /// fail only as `InvalidSignature` (RFC 7515 §5.2 step 8; the
+            /// family contract in `jws/alg.rs`).
+            #[test]
+            fn arbitrary_signature_bytes_are_invalid_signature(
+                sig in proptest::collection::vec(any::<u8>(), 0..200),
+            ) {
+                for alg in &ALL {
+                    let public = private_key(alg).to_public().unwrap();
+                    prop_assert_eq!(verify(alg, &public, b"input", &sig), Err(Error::InvalidSignature));
+                }
+            }
+        }
+    }
+
     mod wycheproof {
         //! Wycheproof `ecdsa_*_p1363` suites (ADR 0008 layer 1): R‖S
         //! signatures, the JOSE form (RFC 7518 §3.4, RFC 8812 §3.2). No
