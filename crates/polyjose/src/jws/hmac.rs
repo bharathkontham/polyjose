@@ -516,7 +516,7 @@ mod tests {
             let opts = VerifyOptions::new(&[SigningAlg::HS256]).unwrap();
             let verified = verify_compact(&jws, &key, &opts).unwrap();
             assert_eq!(verified.alg, SigningAlg::HS256);
-            assert_eq!(verified.payload, payload);
+            assert_eq!(*verified.payload, payload);
         }
 
         #[test]
@@ -529,7 +529,7 @@ mod tests {
                 let jws = sign_compact(&protected, b"payload", &key, &SignOptions::new()).unwrap();
                 let verified = verify_compact(&jws, &key, &opts).unwrap();
                 assert_eq!(verified.alg, *alg);
-                assert_eq!(verified.payload, b"payload");
+                assert_eq!(*verified.payload, b"payload");
 
                 // RFC 7515 §5.2 step 8: any change to the signature fails.
                 let (head, sig) = jws.rsplit_once('.').unwrap();

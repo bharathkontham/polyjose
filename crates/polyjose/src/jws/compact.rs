@@ -220,7 +220,7 @@ pub(crate) fn verify_compact_with(
     let alg = verify_signature(families, &header, key, opts, &input, &signature)?;
     let (protected, _) = header.into_parts();
     // Only a verified payload is copied out.
-    let mut payload = match (decoded, opts.detached_payload) {
+    let payload = match (decoded, opts.detached_payload) {
         (Some(decoded), _) => decoded,
         (None, Some(detached)) => Zeroizing::new(detached.to_vec()),
         (None, None) => Zeroizing::new(payload_part.as_bytes().to_vec()),
@@ -229,8 +229,7 @@ pub(crate) fn verify_compact_with(
         alg,
         protected,
         unprotected: None,
-        // `Verified.payload` becomes `Zeroizing` in the next step.
-        payload: core::mem::take(&mut *payload),
+        payload,
         signature_index: 0,
     })
 }
@@ -312,7 +311,7 @@ mod tests {
             Some(Header::from_json(HS256.as_bytes()).unwrap())
         );
         assert_eq!(v.unprotected, None);
-        assert_eq!(v.payload, b"hello");
+        assert_eq!(*v.payload, b"hello");
         assert_eq!(v.signature_index, 0);
     }
 
@@ -388,7 +387,7 @@ mod tests {
         assert_eq!(verify(&jws), Err(Error::InvalidBase64));
         let canonical = forge(&A::HS256, HS256, &[0x41], false);
         assert_eq!(parts(&canonical)[1], "QQ");
-        assert_eq!(verify(&canonical).unwrap().payload, [0x41]);
+        assert_eq!(*verify(&canonical).unwrap().payload, [0x41]);
     }
 
     #[test]
@@ -453,7 +452,7 @@ mod tests {
         let detached = forge(&A::HS256, HS256, b"hello", true);
         assert!(detached.contains(".."));
         let v = verify_with(&detached, &opts).unwrap();
-        assert_eq!(v.payload, b"hello");
+        assert_eq!(*v.payload, b"hello");
         let wrong = VerifyOptions::new(ALLOW_HS256)
             .unwrap()
             .detached_payload(b"hellO");
@@ -465,7 +464,7 @@ mod tests {
         // RFC 7515 §7.1: BASE64URL of the empty octet sequence is "".
         let empty = forge(&A::HS256, HS256, b"", false);
         let v = verify(&empty).unwrap();
-        assert_eq!(v.payload, b"");
+        assert_eq!(*v.payload, b"");
         // A detached token's signature is over its real payload, not "".
         let detached = forge(&A::HS256, HS256, b"hello", true);
         assert_eq!(verify(&detached), Err(Error::InvalidSignature));
@@ -473,7 +472,7 @@ mod tests {
         let opts = VerifyOptions::new(ALLOW_HS256)
             .unwrap()
             .detached_payload(b"");
-        assert_eq!(verify_with(&empty, &opts).unwrap().payload, b"");
+        assert_eq!(*verify_with(&empty, &opts).unwrap().payload, b"");
     }
 
     #[test]
@@ -489,13 +488,13 @@ mod tests {
         ] {
             let jws = forge(&A::HS256, HS256_B64_FALSE, payload, false);
             let v = verify(&jws).unwrap();
-            assert_eq!(v.payload, payload, "{jws}");
+            assert_eq!(*v.payload, payload, "{jws}");
             assert_eq!(v.protected.unwrap().b64, Some(false));
         }
         // The same octets read as base64url would give another signing
         // input: "QQ" is not 0x41 here.
         let jws = forge(&A::HS256, HS256_B64_FALSE, b"QQ", false);
-        assert_eq!(verify(&jws).unwrap().payload, b"QQ");
+        assert_eq!(*verify(&jws).unwrap().payload, b"QQ");
     }
 
     #[test]
@@ -510,7 +509,7 @@ mod tests {
             .unwrap()
             .detached_payload(b"$.02");
         let v = verify_with(&jws, &opts).unwrap();
-        assert_eq!(v.payload, b"$.02");
+        assert_eq!(*v.payload, b"$.02");
         assert_eq!(v.alg, A::HS256);
         // The RFC's own token, with its real HMAC: well-formed through step
         // 8, rejected by the fake family at step 9.
@@ -540,7 +539,7 @@ mod tests {
         let v = verify(&format!("{input}.{sig}")).unwrap();
         assert_eq!(v.protected.unwrap().typ.as_deref(), Some("JWT"));
         assert_eq!(
-            v.payload,
+            *v.payload,
             b"{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}"
         );
     }
@@ -727,7 +726,7 @@ mod tests {
         let opts = VerifyOptions::new(ALLOW_HS256)
             .unwrap()
             .detached_payload(b"hello");
-        assert_eq!(verify_with(&jws, &opts).unwrap().payload, b"hello");
+        assert_eq!(*verify_with(&jws, &opts).unwrap().payload, b"hello");
     }
 
     #[test]
@@ -755,7 +754,7 @@ mod tests {
             let jws = sign(HS256_B64_FALSE, payload, false).unwrap();
             assert_eq!(jws, forge(&A::HS256, HS256_B64_FALSE, payload, false));
             assert_eq!(parts(&jws)[1].as_bytes(), payload);
-            assert_eq!(verify(&jws).unwrap().payload, payload);
+            assert_eq!(*verify(&jws).unwrap().payload, payload);
         }
     }
 
@@ -903,7 +902,7 @@ mod tests {
                 assert_eq!(v.alg, alg);
                 assert_eq!(v.protected.as_ref(), Some(header.header()));
                 assert_eq!(v.unprotected, None);
-                assert_eq!(v.payload, payload);
+                assert_eq!(*v.payload, payload);
                 assert_eq!(v.signature_index, 0);
             }
         }
@@ -920,7 +919,7 @@ mod tests {
             .unwrap()
             .detached_payload(&payload)
             .max_input_len(jws.len());
-        assert_eq!(verify_with(&jws, &opts).unwrap().payload, payload);
+        assert_eq!(*verify_with(&jws, &opts).unwrap().payload, payload);
     }
 
     #[test]

@@ -426,7 +426,7 @@ proptest! {
             let verified = case.verify(&jws, &keys[i].verify, &allowed, &case.payload).unwrap();
             let index = case.first_like(i);
             let first = &case.signers[index];
-            prop_assert_eq!(&verified.payload, &case.payload);
+            prop_assert_eq!(&*verified.payload, &case.payload);
             prop_assert_eq!(&verified.alg, &spec.alg);
             prop_assert_eq!(verified.signature_index, index);
             prop_assert_eq!(verified.protected, case.protected(first));
@@ -671,7 +671,7 @@ fn every_alg_serialization_and_b64_round_trips() {
                     let verified = case
                         .verify(&jws, &keys[target].verify, &allowed, &case.payload)
                         .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    assert_eq!(verified.payload, case.payload, "{what}");
+                    assert_eq!(*verified.payload, case.payload, "{what}");
                     assert_eq!(verified.signature_index, target, "{what}");
                     cells += 1;
                 }

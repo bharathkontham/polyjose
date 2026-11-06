@@ -76,7 +76,7 @@
 //!
 //! let allowed = [SigningAlg::HS256];
 //! let verified = jws::verify_compact(&token, &key, &VerifyOptions::new(&allowed)?)?;
-//! assert_eq!(verified.payload, b"hello");
+//! assert_eq!(*verified.payload, b"hello");
 //! assert_eq!(verified.alg, SigningAlg::HS256);
 //! # Ok::<(), polyjose::Error>(())
 //! ```
@@ -467,7 +467,30 @@ pub struct Verified {
     /// The JWS Payload (RFC 7515 §2): base64url-decoded, or the raw octets
     /// when `b64` is `false` (RFC 7797 §3), or a copy of the detached
     /// payload (RFC 7515 Appendix F).
-    pub payload: Vec<u8>,
+    ///
+    /// A payload may be secret, so it is wiped when dropped
+    /// (ADR 0049 §4, amending ADR 0030 §7). Read it through `Deref`:
+    /// `&*verified.payload` is a `&Vec<u8>`, `&verified.payload[..]` a
+    /// `&[u8]`. Copying it out (`to_vec`, `mem::take`) leaves the copy
+    /// unprotected.
+    ///
+    /// ```
+    /// # use polyjose::header::Header;
+    /// # use polyjose::jwa::SigningAlg;
+    /// # use polyjose::jwk::Jwk;
+    /// # use polyjose::jws::{self, ProtectedHeader, SignOptions, VerifyOptions};
+    /// use zeroize::Zeroizing;
+    ///
+    /// # let key = Jwk::from_json(br#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#)?;
+    /// # let mut header = Header::new();
+    /// # header.alg = Some("HS256".into());
+    /// # let token = jws::sign_compact(&ProtectedHeader::new(header)?, b"secret", &key, &SignOptions::new())?;
+    /// let verified = jws::verify_compact(&token, &key, &VerifyOptions::new(&[SigningAlg::HS256])?)?;
+    /// let payload: &Zeroizing<Vec<u8>> = &verified.payload;
+    /// assert_eq!(&payload[..], b"secret");
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    pub payload: Zeroizing<Vec<u8>>,
     /// The index of the signature that verified: `0` for compact and
     /// flattened, the position in `signatures` for general JSON
     /// (ADR 0026 §3).
@@ -677,6 +700,31 @@ mod tests {
     }
 
     #[test]
+    fn verified_payload_is_wiped_on_drop() {
+        // ADR 0049 §4 (amending ADR 0030 §7): the payload may be secret, so
+        // the public field is a `Zeroizing` buffer. Fails to compile if the
+        // type changes.
+        fn is_zeroizing(_: &Zeroizing<Vec<u8>>) {}
+        let key = Jwk::from_json(format!(r#"{{"kty":"oct","k":"{SECRET}"}}"#).as_bytes()).unwrap();
+        let protected = ProtectedHeader::new(hs256_header()).unwrap();
+        let jws = compact::sign_compact(&protected, b"secret", &key, &SignOptions::new()).unwrap();
+        let allowed = [SigningAlg::HS256];
+        let opts = VerifyOptions::new(&allowed).unwrap();
+        for verified in [
+            compact::verify_compact(&jws, &key, &opts).unwrap(),
+            compact::verify_compact(
+                &jws.replace(".c2VjcmV0.", ".."),
+                &key,
+                &opts.detached_payload(b"secret"),
+            )
+            .unwrap(),
+        ] {
+            is_zeroizing(&verified.payload);
+            assert_eq!(*verified.payload, b"secret");
+        }
+    }
+
+    #[test]
     fn verified_debug_hides_the_payload() {
         let mut protected = hs256_header();
         protected
@@ -686,7 +734,7 @@ mod tests {
             alg: SigningAlg::HS256,
             protected: Some(protected),
             unprotected: None,
-            payload: SECRET.as_bytes().to_vec(),
+            payload: Zeroizing::new(SECRET.as_bytes().to_vec()),
             signature_index: 0,
         };
         assert_no_marker(&v);

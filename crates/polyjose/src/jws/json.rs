@@ -377,13 +377,11 @@ pub(crate) fn verify_json_with(
         match verify_signature(families, &header, key, opts, &input, &signature) {
             Ok(alg) => {
                 let (protected, unprotected) = header.into_parts();
-                // `Verified.payload` becomes `Zeroizing` in the next step.
-                let mut payload = content.into_payload();
                 return Ok(Verified {
                     alg,
                     protected,
                     unprotected,
-                    payload: core::mem::take(&mut *payload),
+                    payload: content.into_payload(),
                     signature_index,
                 });
             }
@@ -723,7 +721,7 @@ mod tests {
         for jws in [flattened(&m), general(std::slice::from_ref(&m))] {
             let v = verify(&jws).unwrap();
             assert_eq!(v.alg, SigningAlg::HS256);
-            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(*v.payload, PAYLOAD);
             assert_eq!(v.signature_index, 0);
             assert_eq!(v.protected, Some(hs256()));
             assert_eq!(v.unprotected, Some(kid("k1")));
@@ -855,7 +853,7 @@ mod tests {
         let gen_ =
             format!(r#"{{"x":1,"payload":"{PAYLOAD_B64}","signatures":[{{"x":"y",{m}}}],"z":[]}}"#);
         for jws in [flat, gen_] {
-            assert_eq!(verify(&jws).unwrap().payload, PAYLOAD, "{jws}");
+            assert_eq!(*verify(&jws).unwrap().payload, PAYLOAD, "{jws}");
         }
     }
 
@@ -943,7 +941,7 @@ mod tests {
                 v.unprotected.as_ref().and_then(|h| h.kid.as_deref()),
                 Some("k")
             );
-            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(*v.payload, PAYLOAD);
         }
         // Signed as if the protected header were "e30" ({}): not the same.
         let wrong = members_signed(
@@ -1050,11 +1048,11 @@ mod tests {
             r#"{{"payload":"a \"quoted\" $.02\n","protected":"{p}","signature":"{signature}"}}"#
         );
         let v = verify(&jws).unwrap();
-        assert_eq!(v.payload, payload.as_bytes());
+        assert_eq!(*v.payload, payload.as_bytes());
         // Not base64url-decoded: "JC4wMg" stays six octets.
         let s = sig(SigningAlg::HS256, &p, PAYLOAD_B64);
         let jws = format!(r#"{{"payload":"{PAYLOAD_B64}","protected":"{p}","signature":"{s}"}}"#);
-        assert_eq!(verify(&jws).unwrap().payload, PAYLOAD_B64.as_bytes());
+        assert_eq!(*verify(&jws).unwrap().payload, PAYLOAD_B64.as_bytes());
     }
 
     #[test]
@@ -1190,7 +1188,7 @@ mod tests {
         for jws in [&detached, &general_detached] {
             assert_eq!(code(verify_opts(jws, &opts)), "InvalidFormat");
             let v = verify_opts(jws, &opts.detached_payload(PAYLOAD)).unwrap();
-            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(*v.payload, PAYLOAD);
         }
         // The signature covers the detached payload.
         assert_eq!(
@@ -1205,7 +1203,7 @@ mod tests {
         let s = b64url_encode(&fake_signature(&SigningAlg::HS256, &input));
         let jws = format!(r#"{{"protected":"{p}","signature":"{s}"}}"#);
         let v = verify_opts(&jws, &opts.detached_payload(&raw)).unwrap();
-        assert_eq!(v.payload, raw);
+        assert_eq!(*v.payload, raw);
     }
 
     // ---- Multiple signatures (ADR 0026 §3) ----
@@ -1418,7 +1416,7 @@ mod tests {
             jws,
             format!(r#"{{"payload":"{PAYLOAD_B64}","protected":"{a1}","signature":"{s}"}}"#)
         );
-        assert_eq!(verify(&jws).unwrap().payload, PAYLOAD);
+        assert_eq!(*verify(&jws).unwrap().payload, PAYLOAD);
     }
 
     #[test]
@@ -1451,7 +1449,7 @@ mod tests {
             let v = verify_allowing(&jws, std::slice::from_ref(&alg)).unwrap();
             assert_eq!(v.signature_index, index);
             assert_eq!(v.alg, alg);
-            assert_eq!(v.payload, PAYLOAD);
+            assert_eq!(*v.payload, PAYLOAD);
             assert_eq!(v.protected.is_some(), index != 1);
             assert_eq!(v.unprotected.is_some(), index != 0);
         }
@@ -1490,7 +1488,7 @@ mod tests {
         );
         let opts = VerifyOptions::new(HS256).unwrap().detached_payload(PAYLOAD);
         for jws in [flat, gen_] {
-            assert_eq!(verify_opts(&jws, &opts).unwrap().payload, PAYLOAD);
+            assert_eq!(*verify_opts(&jws, &opts).unwrap().payload, PAYLOAD);
         }
     }
 
@@ -1517,7 +1515,7 @@ mod tests {
         )
         .unwrap();
         for jws in [flat, gen_] {
-            assert_eq!(verify(&jws).unwrap().payload, payload.as_bytes());
+            assert_eq!(*verify(&jws).unwrap().payload, payload.as_bytes());
         }
 
         // Octets that are not UTF-8 cannot be a JSON string.
@@ -1539,11 +1537,11 @@ mod tests {
         let detached = SignOptions::new().detached(true);
         let jws = sign_flattened_with(&FAKE, &signer, &raw, &detached).unwrap();
         let opts = VerifyOptions::new(HS256).unwrap().detached_payload(&raw);
-        assert_eq!(verify_opts(&jws, &opts).unwrap().payload, raw);
+        assert_eq!(*verify_opts(&jws, &opts).unwrap().payload, raw);
         // b64 true: any octets, base64url-encoded.
         let plain = Signer::new(&k).protected(protected(P_HS256));
         let jws = sign_flattened_with(&FAKE, &plain, &raw, &attached()).unwrap();
-        assert_eq!(verify(&jws).unwrap().payload, raw);
+        assert_eq!(*verify(&jws).unwrap().payload, raw);
     }
 
     #[test]

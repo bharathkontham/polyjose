@@ -648,7 +648,7 @@ mod tests {
         let opts = VerifyOptions::new(&[A::EdDSA]).unwrap();
         let verified = verify_compact(A4_JWS, &keys::ed25519(""), &opts).unwrap();
         assert_eq!(verified.alg, A::EdDSA);
-        assert_eq!(verified.payload, b"Example of Ed25519 signing");
+        assert_eq!(*verified.payload, b"Example of Ed25519 signing");
         // A changed signature fails (ADR 0026 §2 step 9).
         let tampered = A4_JWS.replace("hgyY", "hgyZ");
         assert_eq!(
@@ -690,7 +690,7 @@ mod tests {
         let public = keys::ed25519(r#","alg":"Ed25519""#);
         let verified = verify_compact(&jws, &public, &opts).unwrap();
         assert_eq!(verified.alg, A::Ed25519);
-        assert_eq!(verified.payload, payload);
+        assert_eq!(*verified.payload, payload);
         // RFC 9864 §7, ADR 0026 §2 step 8: a key bound to `EdDSA` does not
         // verify an `Ed25519` JWS.
         let eddsa_key = keys::ed25519(r#","alg":"EdDSA""#);
@@ -710,7 +710,7 @@ mod tests {
             .unwrap()
             .detached_payload(payload);
         assert_eq!(
-            verify_compact(&detached, &public, &opts).unwrap().payload,
+            *verify_compact(&detached, &public, &opts).unwrap().payload,
             payload
         );
     }
