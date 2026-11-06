@@ -590,6 +590,120 @@ mod tests {
         }
     }
 
+    /// E = AES-CBC(ENC_KEY, IV, `blocks`) with no padding added, so the
+    /// "plaintext" ends however the test chooses.
+    fn cbc_raw(enc: &ContentEncAlg, k: &[u8], iv: &[u8], blocks: &[u8]) -> Vec<u8> {
+        use cbc::cipher::block_padding::NoPadding;
+        fn run<Enc: KeyIvInit + BlockModeEncrypt>(key: &[u8], iv: &[u8], blocks: &[u8]) -> Vec<u8> {
+            Enc::new_from_slices(key, iv)
+                .unwrap()
+                .encrypt_padded_vec::<NoPadding>(blocks)
+        }
+        let enc_key = &k[k.len() / 2..];
+        match enc {
+            ContentEncAlg::A128CbcHs256 => run::<cbc::Encryptor<Aes128>>(enc_key, iv, blocks),
+            ContentEncAlg::A192CbcHs384 => run::<cbc::Encryptor<Aes192>>(enc_key, iv, blocks),
+            ContentEncAlg::A256CbcHs512 => run::<cbc::Encryptor<Aes256>>(enc_key, iv, blocks),
+            _ => panic!("not A*CBC-HS*: {enc}"),
+        }
+    }
+
+    /// `(E, T)` with a valid tag over an E whose decryption ends in
+    /// `last_block`: forged under the known K, as only a key holder could.
+    fn forge(enc: &ContentEncAlg, k: &[u8], last_block: [u8; 16]) -> (Vec<u8>, Vec<u8>) {
+        let mut blocks = vec![0x42; 16];
+        blocks.extend_from_slice(&last_block);
+        let e = cbc_raw(enc, k, &IV, &blocks);
+        let t_len = k.len() / 2;
+        let t = full_mac(enc, k, &IV, AAD, &e)[..t_len].to_vec();
+        (e, t)
+    }
+
+    #[test]
+    fn a_padding_error_under_a_valid_tag_is_the_same_error_as_a_bad_tag() {
+        // RFC 7516 §11.5 (and RFC 7518 §5.2.2.2 step 3): a padding failure
+        // and a MAC failure must be indistinguishable to the sender. Here
+        // the tag is valid, so decryption runs and unpadding fails.
+        let bad_paddings = [
+            ("last octet 0", {
+                let mut b = [0x11; 16];
+                b[15] = 0;
+                b
+            }),
+            ("last octet 17", {
+                let mut b = [0x11; 16];
+                b[15] = 17;
+                b
+            }),
+            ("last octet 0xff", [0xff; 16]),
+            ("2 claimed, 1 present", {
+                let mut b = [0x11; 16];
+                b[15] = 2;
+                b
+            }),
+            ("16 claimed, one 15", {
+                let mut b = [16; 16];
+                b[0] = 15;
+                b
+            }),
+        ];
+        for (enc, k_len, _) in ENCS {
+            let k = key(k_len);
+            let (e, t) = encrypt(&enc, &k, &IV, AAD, PLAINTEXT).unwrap();
+            let mut bad_t = t.clone();
+            bad_t[0] ^= 1;
+            let (tag_error, n) = decrypt_counted(&enc, &k, &IV, AAD, &e, &bad_t);
+            assert_eq!(n, 0, "{enc}");
+            let tag_error = tag_error.unwrap_err();
+            // The forgery itself is sound: a well-padded block decrypts.
+            let (good_e, good_t) = forge(&enc, &k, [16; 16]);
+            let (good, n) = decrypt_counted(&enc, &k, &IV, AAD, &good_e, &good_t);
+            assert_eq!(&good.unwrap()[..], &[0x42; 16][..], "{enc}");
+            assert_eq!(n, 1, "{enc}");
+            for (what, last_block) in &bad_paddings {
+                let (e, t) = forge(&enc, &k, *last_block);
+                let (padding_error, n) = decrypt_counted(&enc, &k, &IV, AAD, &e, &t);
+                assert_eq!(n, 1, "{enc} {what}: the tag was valid, so AES-CBC ran");
+                let padding_error = padding_error.unwrap_err();
+                assert_eq!(padding_error, tag_error, "{enc} {what}");
+                assert_eq!(padding_error, Error::DecryptionFailed, "{enc} {what}");
+                assert_eq!(padding_error.code(), tag_error.code(), "{enc} {what}");
+                assert_eq!(
+                    format!("{padding_error:?}"),
+                    format!("{tag_error:?}"),
+                    "{enc} {what}"
+                );
+                assert_eq!(
+                    padding_error.to_string(),
+                    tag_error.to_string(),
+                    "{enc} {what}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_authentic_e_that_is_not_whole_blocks_fails_like_the_rest() {
+        // A PKCS #7 E is a non-empty multiple of the block size (RFC 7518
+        // §5.2.2.1 step 3). With a valid tag over any other E, decryption
+        // fails the same way as a padding or tag error.
+        for (enc, k_len, t_len) in ENCS {
+            let k = key(k_len);
+            let (e, _) = encrypt(&enc, &k, &IV, AAD, PLAINTEXT).unwrap();
+            for e in [&[][..], &e[..1], &e[..15], &e[..e.len() - 1]] {
+                let t = full_mac(&enc, &k, &IV, AAD, e)[..t_len].to_vec();
+                let (result, n) = decrypt_counted(&enc, &k, &IV, AAD, e, &t);
+                assert_eq!(
+                    result,
+                    Err(Error::DecryptionFailed),
+                    "{enc} E of {}",
+                    e.len()
+                );
+                assert!(n <= 1, "{enc} E of {}", e.len());
+            }
+        }
+    }
+
     /// M, the full HMAC output over A || IV || E || AL (RFC 7518 §5.2.2.1
     /// step 5), for forging test inputs under a known K.
     fn full_mac(enc: &ContentEncAlg, k: &[u8], iv: &[u8], a: &[u8], e: &[u8]) -> Vec<u8> {
