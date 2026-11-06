@@ -34,8 +34,9 @@ use p256::elliptic_curve::{
 use zeroize::{Zeroize, Zeroizing};
 
 use super::jwk_build;
-use super::types::KeySpec;
+use super::types::{JoseAlg, KeySpec};
 use crate::error::{Error, Result};
+use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use crate::jwk::{EcCurve, Jwk, OkpCurve};
 use crate::rng::CryptoRngAdapter;
 
@@ -215,6 +216,122 @@ where
     jwk_build::ec_jwk(crv, x, y, Some(&d), alg)
 }
 
+/// Generates a new private key for the algorithm `alg` from the OS CSPRNG
+/// (ADR 0005), and binds it to `alg` by setting the JWK `alg` member
+/// (RFC 7517 §4.4; RFC 8725 §3.1, ADR 0007: one key, one algorithm).
+///
+/// | `alg` / `enc` | Key |
+/// |---|---|
+/// | `HS256`, `HS384`, `HS512` | `oct`, 32/48/64 octets: the hash output size (RFC 7518 §3.2) |
+/// | `A128KW`, `A192KW`, `A256KW` | `oct`, 16/24/32 octets (RFC 7518 §4.4) |
+/// | `A128GCMKW`, `A192GCMKW`, `A256GCMKW` | `oct`, 16/24/32 octets (RFC 7518 §4.7) |
+/// | `A128GCM`, `A192GCM`, `A256GCM` | `oct`, 16/24/32 octets (RFC 7518 §5.3) |
+/// | `A128CBC-HS256`, `A192CBC-HS384`, `A256CBC-HS512` | `oct`, 32/48/64 octets (RFC 7518 §5.2.3–§5.2.5) |
+/// | `ES256`, `ES384`, `ES512` | EC P-256/P-384/P-521 (RFC 7518 §3.4) |
+/// | `ES256K` | EC secp256k1 (RFC 8812 §3.2) |
+/// | `EdDSA`, `Ed25519` | OKP Ed25519 (RFC 8037 §3.1, RFC 9864) |
+///
+/// A key for `dir` (RFC 7518 §4.5) is the key of its `enc`: call
+/// `generate_for(enc)`.
+///
+/// ```
+/// use polyjose::jwa::{ContentEncAlg, SigningAlg};
+/// use polyjose::keys::generate_for;
+///
+/// let signing = generate_for(SigningAlg::ES256)?;
+/// assert_eq!(signing.alg().map(|a| a.as_str()), Some("ES256"));
+/// let cek = generate_for(ContentEncAlg::A256GCM)?;
+/// assert_eq!(cek.alg().map(|a| a.as_str()), Some("A256GCM"));
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// - [`Error::InvalidKey`] (`"curve required"`) for `ECDH-ES` and
+///   `ECDH-ES+A128KW`/`+A192KW`/`+A256KW`: they work on several curves, so
+///   there is no default. Call [`generate`] with `KeySpec::Ec(crv)` or
+///   `KeySpec::Okp(OkpCurve::X25519)` instead.
+/// - [`Error::UnsupportedAlgorithm`] for the RSA algorithms (`RS*`, `PS*`,
+///   `RSA-OAEP-256`, `RSA-OAEP`, `RSA1_5`: no RSA key generation,
+///   ADR 0021), `PBES2-*` (passwords are not generated), `dir` (its key
+///   size depends on `enc`), `none` (no key), and any unknown value.
+/// - [`Error::RandomnessUnavailable`] if the OS CSPRNG fails; no key is
+///   returned (ADR 0005).
+pub fn generate_for(alg: impl Into<JoseAlg>) -> Result<Jwk> {
+    generate_for_with(&alg.into(), &mut CryptoRngAdapter::os())
+}
+
+/// [`generate_for`] with the RNG passed in.
+fn generate_for_with<R: TryCryptoRng + ?Sized>(alg: &JoseAlg, rng: &mut R) -> Result<Jwk> {
+    let name = Some(jose_alg_name(alg));
+    match spec_for(alg)? {
+        KeySpec::Oct { bytes } => oct_key(bytes, name, rng),
+        KeySpec::Ec(crv) => ec_key(crv, name, rng),
+        KeySpec::Okp(crv) => okp_key(crv, name, rng),
+    }
+}
+
+/// The key `generate_for(alg)` generates (the table on [`generate_for`],
+/// plan.md). Every variant is listed, with no wildcard, so a new algorithm
+/// does not compile until it is mapped here.
+fn spec_for(alg: &JoseAlg) -> Result<KeySpec> {
+    const CURVE_REQUIRED: Error = Error::InvalidKey("curve required");
+    let oct = |bytes| Ok(KeySpec::Oct { bytes });
+    match alg {
+        JoseAlg::Signing(alg) => match alg {
+            SigningAlg::HS256 => oct(32),
+            SigningAlg::HS384 => oct(48),
+            SigningAlg::HS512 => oct(64),
+            SigningAlg::ES256 => Ok(KeySpec::Ec(EcCurve::P256)),
+            SigningAlg::ES384 => Ok(KeySpec::Ec(EcCurve::P384)),
+            SigningAlg::ES512 => Ok(KeySpec::Ec(EcCurve::P521)),
+            SigningAlg::ES256K => Ok(KeySpec::Ec(EcCurve::Secp256k1)),
+            SigningAlg::EdDSA | SigningAlg::Ed25519 => Ok(KeySpec::Okp(OkpCurve::Ed25519)),
+            SigningAlg::RS256
+            | SigningAlg::RS384
+            | SigningAlg::RS512
+            | SigningAlg::PS256
+            | SigningAlg::PS384
+            | SigningAlg::PS512
+            | SigningAlg::None
+            | SigningAlg::Unknown(_) => Err(Error::UnsupportedAlgorithm),
+        },
+        JoseAlg::KeyMgmt(alg) => match alg {
+            KeyMgmtAlg::A128KW | KeyMgmtAlg::A128GCMKW => oct(16),
+            KeyMgmtAlg::A192KW | KeyMgmtAlg::A192GCMKW => oct(24),
+            KeyMgmtAlg::A256KW | KeyMgmtAlg::A256GCMKW => oct(32),
+            KeyMgmtAlg::EcdhEs
+            | KeyMgmtAlg::EcdhEsA128KW
+            | KeyMgmtAlg::EcdhEsA192KW
+            | KeyMgmtAlg::EcdhEsA256KW => Err(CURVE_REQUIRED),
+            KeyMgmtAlg::RsaOaep256
+            | KeyMgmtAlg::Dir
+            | KeyMgmtAlg::Pbes2Hs256A128KW
+            | KeyMgmtAlg::Pbes2Hs384A192KW
+            | KeyMgmtAlg::Pbes2Hs512A256KW
+            | KeyMgmtAlg::Unknown(_) => Err(Error::UnsupportedAlgorithm),
+        },
+        JoseAlg::ContentEnc(enc) => match enc {
+            ContentEncAlg::A128GCM => oct(16),
+            ContentEncAlg::A192GCM => oct(24),
+            ContentEncAlg::A256GCM => oct(32),
+            ContentEncAlg::A128CbcHs256 => oct(32),
+            ContentEncAlg::A192CbcHs384 => oct(48),
+            ContentEncAlg::A256CbcHs512 => oct(64),
+            ContentEncAlg::Unknown(_) => Err(Error::UnsupportedAlgorithm),
+        },
+    }
+}
+
+/// The registered name of `alg`, as written into the JWK `alg` member.
+fn jose_alg_name(alg: &JoseAlg) -> &str {
+    match alg {
+        JoseAlg::Signing(alg) => alg.as_str(),
+        JoseAlg::KeyMgmt(alg) => alg.as_str(),
+        JoseAlg::ContentEnc(enc) => enc.as_str(),
+    }
+}
+
 /// An `oct` key of `bytes` random octets from `rng` (RFC 7518 §6.4.1), with
 /// no `alg` member.
 fn generate_oct<R: TryCryptoRng + ?Sized>(bytes: usize, rng: &mut R) -> Result<Jwk> {
@@ -244,6 +361,7 @@ fn fill<R: TryCryptoRng + ?Sized>(rng: &mut R, dest: &mut [u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::Error;
+    use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
     use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, OkpCurve, OkpKey};
     use crate::rng::CryptoRngAdapter;
     use crate::rng::insecure_test_vectors::FixedRng;
@@ -611,5 +729,184 @@ mod tests {
             assert!(debug.contains(r#"d: "<redacted>""#), "{debug}");
             assert!(!debug.contains(&b64url_encode(&okp_d(&jwk))));
         }
+    }
+
+    /// What `generate_for(alg)` must produce: plan.md's table.
+    #[derive(Debug, PartialEq)]
+    enum Expect {
+        Key(KeySpec),
+        CurveRequired,
+        Unsupported,
+    }
+
+    fn expected(alg: &JoseAlg) -> Expect {
+        use Expect::{CurveRequired, Key, Unsupported};
+        let oct = |bytes| Key(KeySpec::Oct { bytes });
+        match alg.clone() {
+            // RFC 7518 §3.2: a key of the hash output size.
+            JoseAlg::Signing(SigningAlg::HS256) => oct(32),
+            JoseAlg::Signing(SigningAlg::HS384) => oct(48),
+            JoseAlg::Signing(SigningAlg::HS512) => oct(64),
+            JoseAlg::Signing(SigningAlg::ES256) => Key(KeySpec::Ec(EcCurve::P256)),
+            JoseAlg::Signing(SigningAlg::ES384) => Key(KeySpec::Ec(EcCurve::P384)),
+            JoseAlg::Signing(SigningAlg::ES512) => Key(KeySpec::Ec(EcCurve::P521)),
+            JoseAlg::Signing(SigningAlg::ES256K) => Key(KeySpec::Ec(EcCurve::Secp256k1)),
+            JoseAlg::Signing(SigningAlg::EdDSA | SigningAlg::Ed25519) => {
+                Key(KeySpec::Okp(OkpCurve::Ed25519))
+            }
+            // RFC 7518 §4.4, §4.7.
+            JoseAlg::KeyMgmt(KeyMgmtAlg::A128KW | KeyMgmtAlg::A128GCMKW) => oct(16),
+            JoseAlg::KeyMgmt(KeyMgmtAlg::A192KW | KeyMgmtAlg::A192GCMKW) => oct(24),
+            JoseAlg::KeyMgmt(KeyMgmtAlg::A256KW | KeyMgmtAlg::A256GCMKW) => oct(32),
+            JoseAlg::KeyMgmt(
+                KeyMgmtAlg::EcdhEs
+                | KeyMgmtAlg::EcdhEsA128KW
+                | KeyMgmtAlg::EcdhEsA192KW
+                | KeyMgmtAlg::EcdhEsA256KW,
+            ) => CurveRequired,
+            // RFC 7518 §5.3, §5.2.3–§5.2.5.
+            JoseAlg::ContentEnc(ContentEncAlg::A128GCM) => oct(16),
+            JoseAlg::ContentEnc(ContentEncAlg::A192GCM) => oct(24),
+            JoseAlg::ContentEnc(ContentEncAlg::A256GCM) => oct(32),
+            JoseAlg::ContentEnc(ContentEncAlg::A128CbcHs256) => oct(32),
+            JoseAlg::ContentEnc(ContentEncAlg::A192CbcHs384) => oct(48),
+            JoseAlg::ContentEnc(ContentEncAlg::A256CbcHs512) => oct(64),
+            // RS*/PS*/RSA-OAEP-256 (ADR 0021), PBES2-* (no passwords),
+            // dir (size depends on enc), none, and every unknown value.
+            _ => Unsupported,
+        }
+    }
+
+    /// Every known `alg` and `enc`, plus the registered names polyjose
+    /// keeps as `Unknown` (RSA-OAEP, RSA1_5) and an unregistered one.
+    fn every_alg() -> Vec<JoseAlg> {
+        let mut all: Vec<JoseAlg> = SigningAlg::KNOWN.iter().cloned().map(Into::into).collect();
+        all.extend(KeyMgmtAlg::KNOWN.iter().cloned().map(JoseAlg::from));
+        all.extend(ContentEncAlg::KNOWN.iter().cloned().map(JoseAlg::from));
+        all.push(KeyMgmtAlg::from("RSA-OAEP").into());
+        all.push(KeyMgmtAlg::from("RSA1_5").into());
+        all.push(SigningAlg::from("HS1").into());
+        all.push(ContentEncAlg::from("A512GCM").into());
+        all
+    }
+
+    fn alg_str(alg: &JoseAlg) -> &str {
+        match alg {
+            JoseAlg::Signing(a) => a.as_str(),
+            JoseAlg::KeyMgmt(a) => a.as_str(),
+            JoseAlg::ContentEnc(a) => a.as_str(),
+        }
+    }
+
+    /// The `KeySpec` that `jwk` is an instance of.
+    fn spec_of(jwk: &Jwk) -> KeySpec {
+        match jwk.material() {
+            KeyMaterial::Oct(key) => KeySpec::Oct {
+                bytes: key.k().len(),
+            },
+            KeyMaterial::Ec(key) => KeySpec::Ec(key.crv()),
+            KeyMaterial::Okp(key) => KeySpec::Okp(key.crv()),
+            other => panic!("generated an unexpected key type: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generate_for_follows_the_plan_table_and_sets_alg() {
+        // plan.md `generate_for` mapping; RFC 8725 §3.1 / ADR 0007: the key
+        // is bound to the requested algorithm by its `alg` member.
+        let mut keys = 0;
+        for alg in every_alg() {
+            let got = generate_for(alg.clone());
+            match expected(&alg) {
+                Expect::Key(spec) => {
+                    let jwk = got.unwrap_or_else(|e| panic!("{}: {e:?}", alg_str(&alg)));
+                    assert_eq!(spec_of(&jwk), spec, "{}", alg_str(&alg));
+                    assert!(!jwk.is_public());
+                    let member = jwk.alg().map(|a| a.as_str().to_owned());
+                    assert_eq!(member.as_deref(), Some(alg_str(&alg)));
+                    // The alg member survives the JSON round trip.
+                    let reparsed = Jwk::from_json(jwk.to_json().as_bytes()).unwrap();
+                    assert_eq!(*reparsed.to_json(), *jwk.to_json());
+                    keys += 1;
+                }
+                Expect::CurveRequired => assert_eq!(
+                    got.unwrap_err(),
+                    Error::InvalidKey("curve required"),
+                    "{}",
+                    alg_str(&alg)
+                ),
+                Expect::Unsupported => assert_eq!(
+                    got.unwrap_err(),
+                    Error::UnsupportedAlgorithm,
+                    "{}",
+                    alg_str(&alg)
+                ),
+            }
+        }
+        // 3 HS + 4 ES + 2 EdDSA/Ed25519 + 6 AES-KW/GCMKW + 6 enc.
+        assert_eq!(keys, 21);
+    }
+
+    #[test]
+    fn generate_for_rejects_what_it_cannot_generate() {
+        // Spelled out for the record (plan.md, ADR 0021).
+        for alg in [
+            JoseAlg::from(SigningAlg::RS256),
+            SigningAlg::PS512.into(),
+            SigningAlg::None.into(),
+            KeyMgmtAlg::RsaOaep256.into(),
+            KeyMgmtAlg::from("RSA1_5").into(),
+            KeyMgmtAlg::Pbes2Hs256A128KW.into(),
+            KeyMgmtAlg::Dir.into(),
+            SigningAlg::from("XS256").into(),
+        ] {
+            assert_eq!(generate_for(alg).unwrap_err(), Error::UnsupportedAlgorithm);
+        }
+        // ECDH-ES has no default curve (0005 Gate 1): the caller passes
+        // KeySpec::Ec(crv) or KeySpec::Okp(X25519) to generate.
+        assert_eq!(
+            generate_for(KeyMgmtAlg::EcdhEs).unwrap_err(),
+            Error::InvalidKey("curve required")
+        );
+    }
+
+    #[test]
+    fn generate_for_fails_closed_on_rng_failure() {
+        for alg in [
+            JoseAlg::from(SigningAlg::HS256),
+            ContentEncAlg::A256GCM.into(),
+            SigningAlg::ES256.into(),
+            SigningAlg::EdDSA.into(),
+        ] {
+            assert_eq!(
+                generate_for_with(
+                    &alg,
+                    &mut CryptoRngAdapter::failing(getrandom::Error::UNEXPECTED)
+                )
+                .unwrap_err(),
+                Error::RandomnessUnavailable
+            );
+            let mut fixed = FixedRng::new([]);
+            assert_eq!(
+                generate_for_with(&alg, &mut CryptoRngAdapter::fixed(&mut fixed)).unwrap_err(),
+                Error::RandomnessUnavailable
+            );
+        }
+    }
+
+    #[test]
+    fn generate_for_es256_reproduces_a_published_key_with_its_alg() {
+        // RFC 7517 A.2's P-256 d, bound to ES256 (RFC 7518 §3.4).
+        let published = published_ec_key(EcCurve::P256);
+        let mut fixed = FixedRng::new(ec_d(&published));
+        let jwk = generate_for_with(
+            &SigningAlg::ES256.into(),
+            &mut CryptoRngAdapter::fixed(&mut fixed),
+        )
+        .unwrap();
+        assert_eq!(ec_key(&jwk).x(), ec_key(&published).x());
+        assert_eq!(ec_key(&jwk).y(), ec_key(&published).y());
+        assert_eq!(ec_d(&jwk), ec_d(&published));
+        assert_eq!(jwk.alg().map(|a| a.as_str()), Some("ES256"));
     }
 }
