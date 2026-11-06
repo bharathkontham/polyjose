@@ -141,3 +141,170 @@ fn private_jwks_and_jwk_sets_stay_redacted() {
     assert_eq!(set.len(), 3);
     assert_redacted(&set);
 }
+
+// ---- tester probes (F02 test job r1) ----
+
+use std::collections::BTreeMap;
+
+/// Takes a nested array apart one level at a time, so that dropping a value
+/// deeper than the stack allows does not recurse.
+fn dismantle(mut v: Value) {
+    while let Value::Array(mut items) = v {
+        v = items.pop().unwrap_or(Value::Null);
+    }
+}
+
+#[test]
+fn a_value_wrapped_in_option_result_vec_and_map_is_redacted() {
+    let v = Value::from(SECRET);
+    assert_redacted(&Some(v.clone()));
+    assert_redacted(&Ok::<Value, ()>(v.clone()));
+    assert_redacted(&Err::<(), Value>(v.clone()));
+    assert_redacted(&vec![v.clone(), Value::Null]);
+    assert_redacted(&(1, v.clone()));
+    assert_redacted(&BTreeMap::from([("k", v)]));
+
+    let o = json::parse(oct_jwk().as_bytes())
+        .unwrap()
+        .into_object()
+        .unwrap();
+    assert_redacted(&Some(&o));
+    assert_redacted(&json::parse(oct_jwk().as_bytes()));
+    let h = Header::from_json(format!(r#"{{"jwk":{}}}"#, oct_jwk()).as_bytes());
+    assert_redacted(&h);
+}
+
+#[test]
+fn a_jws_style_header_with_escaped_and_spaced_input_is_redacted() {
+    // RFC 7515 §7.1 / App. A.1: whitespace and CRLF are allowed between
+    // tokens, and a string may spell its characters as \u escapes. The
+    // decoded secret must not print either way.
+    let escaped = SECRET.replacen('M', "\\u004d", 1);
+    let input = format!(
+        "{{\"typ\":\"JWT\",\r\n \"alg\":\"ES256\",\r\n \"jwk\":{{ \"kty\" : \"oct\", \"k\" : \"{escaped}\" }},\r\n \"x-d\":\"{escaped}\"}}"
+    );
+    let h = Header::from_json(input.as_bytes()).unwrap();
+    assert_redacted(&h);
+    assert!(!format!("{h:?}").contains("u004d"));
+}
+
+#[test]
+fn an_oct_only_jwk_set_and_its_other_params_are_redacted() {
+    let set = format!(
+        r#"{{"keys":[{{"kty":"oct","k":"{SECRET}","kid":"a"}},{{"kty":"oct","k":"{SECRET}","kid":"b"}}],"x-s":["{SECRET}",{{"k":"{SECRET}"}}]}}"#
+    );
+    let set = JwkSet::from_json(set.as_bytes()).unwrap();
+    assert_eq!(set.len(), 2);
+    assert_redacted(&set);
+    assert_redacted(set.other_params());
+    for key in set.keys() {
+        assert_redacted(key);
+    }
+}
+
+#[test]
+fn errors_from_malformed_secret_bearing_input_do_not_echo_it() {
+    // A private member that fails validation, a bad header and bad JSON
+    // that contain the secret: neither Debug nor Display of the error may
+    // repeat it (workspace rule: no key material in errors).
+    let bad_keys = [
+        format!(r#"{{"kty":"oct","k":"{SECRET}!!"}}"#),
+        format!(r#"{{"kty":"EC","crv":"P-256","x":"AA","y":"AA","d":"{SECRET}"}}"#),
+        format!(r#"{{"kty":"oct","k":"{SECRET}"#),
+        format!(r#"{{"kty":"RSA","n":"AQAB","e":"AQAB","d":"{SECRET}"}}"#),
+        format!(r#"{{"kty":"{SECRET}","k":"{SECRET}"}}"#),
+    ];
+    let mut errors = 0;
+    for bad in &bad_keys {
+        if let Err(e) = Jwk::from_json(bad.as_bytes()) {
+            errors += 1;
+            for text in [format!("{e:?}"), format!("{e:#?}"), e.to_string()] {
+                assert!(!text.contains(MARKER), "{text}");
+            }
+        }
+    }
+    assert!(
+        errors >= 3,
+        "the inputs must be rejected, got {errors} errors"
+    );
+    let bad_header = format!(r#"{{"alg":"{SECRET}","p2c":"{SECRET}","jwk":"{SECRET}"}}"#);
+    if let Err(e) = Header::from_json(bad_header.as_bytes()) {
+        for text in [format!("{e:?}"), e.to_string()] {
+            assert!(!text.contains(MARKER), "{text}");
+        }
+    }
+    let bad_json = format!(r#"{{"d":"{SECRET}","d":"{SECRET}"}}"#);
+    if let Err(e) = json::parse(bad_json.as_bytes()) {
+        for text in [format!("{e:?}"), e.to_string()] {
+            assert!(!text.contains(MARKER), "{text}");
+        }
+    }
+}
+
+#[test]
+fn formatter_flags_do_not_reveal_a_string() {
+    let v = Value::from(SECRET);
+    for text in [
+        format!("{v:>80?}"),
+        format!("{v:<80?}"),
+        format!("{v:.3?}"),
+        format!("{v:#10?}"),
+        format!("{v:#x?}"),
+    ] {
+        assert!(!text.contains(MARKER), "{text}");
+    }
+}
+
+#[test]
+fn debug_prints_128_levels_in_full_and_marks_the_129th() {
+    // The parser accepts 128 nested containers (Limits::MAX_DEPTH_CEILING).
+    let nest = |levels: usize| {
+        let mut v = Value::from(SECRET);
+        for _ in 0..levels {
+            v = Value::Array(vec![v]);
+        }
+        v
+    };
+    let v = nest(128);
+    let debug = format!("{v:?}");
+    assert_eq!(debug.matches("Array(").count(), 128);
+    assert!(debug.contains("String(\"<redacted>\")"));
+    assert!(!debug.contains("<too deep>") && !debug.contains(MARKER));
+    dismantle(v);
+
+    let v = nest(129);
+    let debug = format!("{v:?}");
+    assert_eq!(debug.matches("Array(").count(), 128);
+    assert_eq!(debug.matches("<too deep>").count(), 1);
+    assert!(
+        !debug.contains("String(") && !debug.contains(MARKER),
+        "{debug}"
+    );
+    dismantle(v);
+}
+
+#[test]
+fn debug_of_a_million_deep_hand_built_value_neither_overflows_nor_leaks() {
+    let mut v = Value::from(SECRET);
+    for _ in 0..1_000_000 {
+        v = Value::Array(vec![v]);
+    }
+    for debug in [format!("{v:?}"), format!("{v:#?}")] {
+        assert_eq!(debug.matches("<too deep>").count(), 1);
+        assert!(!debug.contains(MARKER));
+    }
+    // Dropping a hand-built value this deep recurses in the compiler's drop
+    // glue (see the F02 test report); take it apart iteratively here.
+    dismantle(v);
+}
+
+#[test]
+fn numbers_and_bools_print_but_hold_no_secret() {
+    let v = json::parse(br#"{"exp":1700000000,"p2c":1000,"ext":true,"n":null,"f":1.5e3}"#).unwrap();
+    let debug = format!("{v:?}");
+    assert!(
+        debug.contains("Bool(true)") && debug.contains("Null"),
+        "{debug}"
+    );
+    assert!(debug.contains("Number("), "{debug}");
+}
