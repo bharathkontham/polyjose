@@ -71,8 +71,13 @@ fn select_and_verify_using(
         }
     }
     // ADR 0026 §3 ranking over the failures in set order, ties to the
-    // lowest index. `candidates` is never empty, so `furthest` always has
-    // an error to return.
+    // lowest index. `candidates` is never empty (ADR 0029 §4), so
+    // `furthest` always has an error to return; the `NoMatchingKey`
+    // fallback is unreachable and only avoids a panic in release builds.
+    debug_assert!(
+        !failures.is_empty(),
+        "candidates() returns at least one key or NoMatchingKey (ADR 0029 §4)"
+    );
     Err(furthest(failures).unwrap_or(Error::NoMatchingKey))
 }
 
