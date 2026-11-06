@@ -27,12 +27,16 @@
 //! in [`Zeroizing`] buffers on the way.
 
 use p256::elliptic_curve::rand_core::TryCryptoRng;
-use zeroize::Zeroizing;
+use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, ToSec1Point};
+use p256::elliptic_curve::{
+    AffinePoint, CurveArithmetic, FieldBytesSize, Generate, NonZeroScalar, SecretKey,
+};
+use zeroize::{Zeroize, Zeroizing};
 
 use super::jwk_build;
 use super::types::KeySpec;
 use crate::error::{Error, Result};
-use crate::jwk::Jwk;
+use crate::jwk::{EcCurve, Jwk};
 use crate::rng::CryptoRngAdapter;
 
 /// The shortest `oct` key [`generate`] accepts: 16 octets, the smallest
@@ -48,6 +52,10 @@ const OCT_MAX_BYTES: usize = 512;
 ///
 /// - [`KeySpec::Oct`]: `bytes` random octets as `k` (RFC 7518 §6.4.1), for
 ///   16 ≤ `bytes` ≤ 512.
+/// - [`KeySpec::Ec`]: a private scalar d ∈ [1, n − 1] (SEC 1 v2 §3.2.1)
+///   and its public point; `x`, `y` and `d` are each the curve's full
+///   coordinate length (RFC 7518 §6.2.1.2–§6.2.1.3, §6.2.2.1; RFC 8812
+///   §3.1 for secp256k1).
 ///
 /// The returned JWK has no `alg` member; use [`generate_for`] to bind the
 /// key to one algorithm (RFC 8725 §3.1).
@@ -75,8 +83,97 @@ pub fn generate(spec: KeySpec) -> Result<Jwk> {
 fn generate_with<R: TryCryptoRng + ?Sized>(spec: KeySpec, rng: &mut R) -> Result<Jwk> {
     match spec {
         KeySpec::Oct { bytes } => generate_oct(bytes, rng),
-        KeySpec::Ec(_) | KeySpec::Okp(_) => Err(Error::UnsupportedAlgorithm),
+        KeySpec::Ec(crv) => generate_ec(crv, rng),
+        KeySpec::Okp(_) => Err(Error::UnsupportedAlgorithm),
     }
+}
+
+/// Generates a private EC key on `crv` from `rng`, as a validated JWK with
+/// `crv`, `x`, `y` and `d` and no `alg` member (RFC 7518 §6.2).
+///
+/// **This is the crate's single EC key generator**, and its signature is
+/// stable: [`generate`] uses it, and JWE uses it, through
+/// `crate::keys::generate::generate_ec`, for the fresh ephemeral key of
+/// every ECDH-ES operation (RFC 7518 §4.6.1: "a new ephemeral public key
+/// value MUST be generated for each key agreement operation"). It samples
+/// through [`generate_ec_secret`], the one EC sampling path.
+///
+/// # Errors
+///
+/// [`Error::RandomnessUnavailable`] if `rng` fails; no key is returned.
+pub(crate) fn generate_ec<R: TryCryptoRng + ?Sized>(crv: EcCurve, rng: &mut R) -> Result<Jwk> {
+    ec_key(crv, None, rng)
+}
+
+/// Samples a private EC scalar d ∈ [1, n − 1] for the curve `C` from `rng`
+/// (SEC 1 v2 §3.2.1), as the curve crate's `SecretKey`, which is wiped on
+/// drop.
+///
+/// **This is the crate's one EC sampling path,** with a stable signature:
+/// [`generate_ec`] builds its JWK from it, and JWE takes the `SecretKey`
+/// straight to `diffie_hellman` for its ECDH-ES ephemeral keys (RFC 7518
+/// §4.6), with no base64url round trip. `C` is `p256::NistP256`,
+/// `p384::NistP384`, `p521::NistP521` or `k256::Secp256k1`.
+///
+/// # Errors
+///
+/// [`Error::RandomnessUnavailable`] if `rng` fails, whatever its error
+/// type; no scalar is returned (ADR 0005).
+pub(crate) fn generate_ec_secret<C, R>(rng: &mut R) -> Result<SecretKey<C>>
+where
+    C: CurveArithmetic,
+    R: TryCryptoRng + ?Sized,
+{
+    // research.md §6: `NonZeroScalar::try_generate_from_rng`, not
+    // `SecretKey::try_generate_from_rng`. The latter samples through
+    // `ScalarValue::try_random_mod_vartime`, which can in principle return
+    // 0; this one draws a scalar below n by rejection sampling and redraws
+    // on 0, so d ∈ [1, n − 1] (SEC 1 v2 §3.2.1, Key Pair Generation
+    // Primitive step 1).
+    let mut scalar =
+        NonZeroScalar::<C>::try_generate_from_rng(rng).map_err(|_| Error::RandomnessUnavailable)?;
+    let secret = SecretKey::from(&scalar);
+    // NonZeroScalar does not wipe itself on drop; SecretKey does.
+    scalar.zeroize();
+    Ok(secret)
+}
+
+/// [`generate_ec`] with the optional `alg` member (RFC 7517 §4.4).
+fn ec_key<R: TryCryptoRng + ?Sized>(crv: EcCurve, alg: Option<&str>, rng: &mut R) -> Result<Jwk> {
+    match crv {
+        EcCurve::P256 => {
+            ec_jwk_from_secret(crv, &generate_ec_secret::<p256::NistP256, R>(rng)?, alg)
+        }
+        EcCurve::P384 => {
+            ec_jwk_from_secret(crv, &generate_ec_secret::<p384::NistP384, R>(rng)?, alg)
+        }
+        EcCurve::P521 => {
+            ec_jwk_from_secret(crv, &generate_ec_secret::<p521::NistP521, R>(rng)?, alg)
+        }
+        EcCurve::Secp256k1 => {
+            ec_jwk_from_secret(crv, &generate_ec_secret::<k256::Secp256k1, R>(rng)?, alg)
+        }
+    }
+}
+
+/// The JWK of `secret` on `crv`: the affine coordinates of Q = d·G
+/// (SEC 1 v2 §3.2.1 step 2) from the uncompressed SEC 1 encoding
+/// (§2.3.3), and d as big-endian bytes of the full field length
+/// (RFC 7518 §6.2.2.1), held in a [`Zeroizing`] buffer.
+fn ec_jwk_from_secret<C>(crv: EcCurve, secret: &SecretKey<C>, alg: Option<&str>) -> Result<Jwk>
+where
+    C: CurveArithmetic,
+    AffinePoint<C>: FromSec1Point<C> + ToSec1Point<C>,
+    FieldBytesSize<C>: ModulusSize,
+{
+    let point = secret.public_key().to_sec1_point(false);
+    // d ≠ 0 and G has order n, so Q is never the identity, which is the
+    // only point without coordinates.
+    let (Some(x), Some(y)) = (point.x(), point.y()) else {
+        return Err(Error::InvalidKey("EC public key is the identity"));
+    };
+    let d = Zeroizing::new(secret.to_bytes());
+    jwk_build::ec_jwk(crv, x, y, Some(&d), alg)
 }
 
 /// An `oct` key of `bytes` random octets from `rng` (RFC 7518 §6.4.1), with
@@ -108,9 +205,67 @@ fn fill<R: TryCryptoRng + ?Sized>(rng: &mut R, dest: &mut [u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::Error;
-    use crate::jwk::{Jwk, KeyMaterial};
+    use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial};
     use crate::rng::CryptoRngAdapter;
     use crate::rng::insecure_test_vectors::FixedRng;
+    use crate::util::b64url_encode;
+
+    const EC_CURVES: [EcCurve; 4] = [
+        EcCurve::P256,
+        EcCurve::P384,
+        EcCurve::P521,
+        EcCurve::Secp256k1,
+    ];
+
+    /// The coordinate and scalar length of `crv` (RFC 7518 §6.2.1.2,
+    /// §6.2.2.1; RFC 8812 §3.1 for secp256k1).
+    fn ec_len(crv: EcCurve) -> usize {
+        match crv {
+            EcCurve::P256 | EcCurve::Secp256k1 => 32,
+            EcCurve::P384 => 48,
+            EcCurve::P521 => 66,
+        }
+    }
+
+    /// A published private EC key per curve, as a JWK with its public
+    /// point: RFC 7517 Appendix A.2 (P-256), RFC 9500 §2.3 testECCP384 and
+    /// testECCP521, and RFC 7468 Figure 12 (secp256k1). The fixtures and
+    /// their provenance are under `tests/data/keys/rfc` (T01).
+    fn published_ec_key(crv: EcCurve) -> Jwk {
+        let json: &[u8] = match crv {
+            EcCurve::P256 => {
+                include_bytes!("../../tests/data/keys/rfc/rfc7517-a2-ec-p256-pkcs8.jwk.json")
+            }
+            EcCurve::P384 => {
+                include_bytes!("../../tests/data/keys/rfc/rfc9500-testECCP384-sec1.jwk.json")
+            }
+            EcCurve::P521 => {
+                include_bytes!("../../tests/data/keys/rfc/rfc9500-testECCP521-sec1.jwk.json")
+            }
+            EcCurve::Secp256k1 => {
+                include_bytes!("../../tests/data/keys/rfc/rfc7468-fig12-secp256k1-pkcs8.jwk.json")
+            }
+        };
+        Jwk::from_json(json).expect("the fixture is a valid private EC JWK")
+    }
+
+    fn ec_key(jwk: &Jwk) -> &EcKey {
+        let KeyMaterial::Ec(key) = jwk.material() else {
+            panic!("an EC key")
+        };
+        key
+    }
+
+    fn ec_d(jwk: &Jwk) -> Vec<u8> {
+        ec_key(jwk).d().expect("a private EC key").to_vec()
+    }
+
+    /// `generate_ec` over a `FixedRng` that holds exactly `bytes`.
+    fn ec_from_bytes(crv: EcCurve, bytes: &[u8]) -> (Result<Jwk>, usize) {
+        let mut fixed = FixedRng::new(bytes);
+        let jwk = generate_ec(crv, &mut CryptoRngAdapter::fixed(&mut fixed));
+        (jwk, fixed.remaining())
+    }
 
     /// The `k` of an `oct` JWK.
     fn oct_k(jwk: &Jwk) -> Vec<u8> {
@@ -174,5 +329,111 @@ mod tests {
             generate_with(spec, &mut CryptoRngAdapter::fixed(&mut fixed)).unwrap_err(),
             Error::RandomnessUnavailable
         );
+    }
+
+    #[test]
+    fn ec_keys_have_full_size_members_and_validate_after_a_json_round_trip() {
+        // RFC 7518 §6.2.1.2–§6.2.1.3, §6.2.2.1: x, y and d are exactly the
+        // coordinate length, leading zeros kept (32/48/66/32 octets).
+        for crv in EC_CURVES {
+            let jwk = generate(KeySpec::Ec(crv)).unwrap();
+            let key = ec_key(&jwk);
+            assert_eq!(key.crv(), crv);
+            assert_eq!(key.x().len(), ec_len(crv));
+            assert_eq!(key.y().len(), ec_len(crv));
+            assert_eq!(ec_d(&jwk).len(), ec_len(crv));
+            assert!(jwk.alg().is_none());
+
+            // Typed-JWK validation (lengths, on-curve, scalar range;
+            // ADR 0041 §4) accepts the serialized key, member by member.
+            let reparsed = Jwk::from_json(jwk.to_json().as_bytes()).unwrap();
+            let again = ec_key(&reparsed);
+            assert_eq!(again.crv(), crv);
+            assert_eq!(again.x(), key.x());
+            assert_eq!(again.y(), key.y());
+            assert_eq!(ec_d(&reparsed), ec_d(&jwk));
+            assert_eq!(*reparsed.to_json(), *jwk.to_json());
+
+            let public = jwk.to_public().expect("an EC key has a public part");
+            assert!(public.is_public());
+            assert_eq!(ec_key(&public).d(), None);
+            assert_eq!(ec_key(&public).x(), key.x());
+        }
+    }
+
+    #[test]
+    fn ec_secret_is_the_d_of_generate_ec() {
+        // One EC sampling path: generate_ec is generate_ec_secret plus the
+        // JWK, so the same FixedRng bytes give the same scalar.
+        fn secret_bytes<C: CurveArithmetic>(bytes: &[u8]) -> Vec<u8> {
+            let mut fixed = FixedRng::new(bytes);
+            let secret =
+                generate_ec_secret::<C, _>(&mut CryptoRngAdapter::fixed(&mut fixed)).unwrap();
+            assert_eq!(fixed.remaining(), 0);
+            secret.to_bytes().to_vec()
+        }
+        for crv in EC_CURVES {
+            // The published d, and 00 01 02 …: below every order, nonzero.
+            let counting: Vec<u8> = (0..ec_len(crv)).map(|i| i as u8).collect();
+            for bytes in [ec_d(&published_ec_key(crv)), counting] {
+                let (jwk, left) = ec_from_bytes(crv, &bytes);
+                assert_eq!(left, 0);
+                let secret = match crv {
+                    EcCurve::P256 => secret_bytes::<p256::NistP256>(&bytes),
+                    EcCurve::P384 => secret_bytes::<p384::NistP384>(&bytes),
+                    EcCurve::P521 => secret_bytes::<p521::NistP521>(&bytes),
+                    EcCurve::Secp256k1 => secret_bytes::<k256::Secp256k1>(&bytes),
+                };
+                assert_eq!(secret, ec_d(&jwk.unwrap()), "{crv:?}");
+                assert_eq!(secret, bytes, "{crv:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn ec_fails_closed_on_rng_failure() {
+        // ADR 0005: RandomnessUnavailable and no key, for an OS failure and
+        // for a FixedRng one byte short of a scalar.
+        for crv in EC_CURVES {
+            assert_eq!(
+                generate_ec(
+                    crv,
+                    &mut CryptoRngAdapter::failing(getrandom::Error::UNSUPPORTED)
+                )
+                .unwrap_err(),
+                Error::RandomnessUnavailable
+            );
+            let (jwk, _) = ec_from_bytes(crv, &vec![0x11u8; ec_len(crv) - 1]);
+            assert_eq!(jwk.unwrap_err(), Error::RandomnessUnavailable);
+            // Exhausted after rejecting a zero draw.
+            let (jwk, _) = ec_from_bytes(crv, &vec![0u8; ec_len(crv)]);
+            assert_eq!(jwk.unwrap_err(), Error::RandomnessUnavailable);
+        }
+        let failing = || CryptoRngAdapter::failing(getrandom::Error::UNEXPECTED);
+        assert!(matches!(
+            generate_ec_secret::<p256::NistP256, _>(&mut failing()),
+            Err(Error::RandomnessUnavailable)
+        ));
+        assert!(matches!(
+            generate_ec_secret::<p384::NistP384, _>(&mut failing()),
+            Err(Error::RandomnessUnavailable)
+        ));
+        assert!(matches!(
+            generate_ec_secret::<p521::NistP521, _>(&mut failing()),
+            Err(Error::RandomnessUnavailable)
+        ));
+        assert!(matches!(
+            generate_ec_secret::<k256::Secp256k1, _>(&mut failing()),
+            Err(Error::RandomnessUnavailable)
+        ));
+    }
+
+    #[test]
+    fn debug_of_a_generated_ec_key_redacts_d() {
+        // T05 behaviour, asserted on a generated key: d never reaches Debug.
+        let jwk = generate(KeySpec::Ec(EcCurve::P256)).unwrap();
+        let debug = format!("{jwk:?}");
+        assert!(debug.contains(r#"d: "<redacted>""#), "{debug}");
+        assert!(!debug.contains(&b64url_encode(&ec_d(&jwk))));
     }
 }

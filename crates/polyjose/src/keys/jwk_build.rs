@@ -52,13 +52,6 @@ fn finish(mut object: Object, alg: Option<&str>) -> Result<Jwk> {
 /// point off the curve or a scalar out of range, and
 /// [`Error::KeyAlgorithmMismatch`](crate::Error::KeyAlgorithmMismatch) for
 /// an `alg` this curve cannot serve; whatever [`Jwk::from_object`] returns.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by key generation (generate.rs) and the EC mapper (ec.rs)"
-    )
-)]
 pub(crate) fn ec_jwk(
     crv: EcCurve,
     x: &[u8],
