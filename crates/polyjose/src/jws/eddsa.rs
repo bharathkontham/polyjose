@@ -22,6 +22,11 @@
 //!   `verify_strict` and RFC 8032 §5.1.7 accept them: implementations
 //!   disagree on such keys. JWK import refuses them first; `verify`
 //!   re-checks.
+//! - **One public-key check.** `verify` runs JWK import's own Ed25519 check
+//!   (`jwk::ed25519_public_is_valid`, ADR 0041 §4): length, decoding, the
+//!   re-encode round trip that refuses a non-canonical y ≥ p (RFC 8032
+//!   §5.1.3 step 1), small order and torsion. The two cannot drift apart,
+//!   and a refused key gets the same [`Error::InvalidKey`] either way.
 
 use ed25519_dalek::{
     PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, Signature, Signer as _, SigningKey, VerifyingKey,
