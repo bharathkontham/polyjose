@@ -324,20 +324,12 @@ fn decoded_len(encoded_len: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 /// RFC 4648 §4 Table 1, "The Base 64 Alphabet": `+` and `/`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
-)]
 const STANDARD: Alphabet = Alphabet {
     c62: b'+',
     c63: b'/',
 };
 
 /// The pad character (RFC 4648 §3.2, §4).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
-)]
 const PAD: u8 = b'=';
 
 /// Length of the padded standard base64 encoding of `len` octets:
@@ -415,10 +407,6 @@ pub(crate) fn b64_encode_append(data: &[u8], out: &mut String) {
 ///   is `=`, which is the padding length.
 ///
 /// The error carries no input bytes (ADR 0007).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the PEM codec in keys/pem.rs")
-)]
 pub(crate) fn b64_decode_into(input: &[u8], out: &mut Vec<u8>) -> crate::Result<()> {
     use zeroize::Zeroize;
 
