@@ -68,6 +68,11 @@ for p in "${platforms[@]}"; do
       # The core's runtime tree matches deps-allowlist.txt and CREDITS.md (ADR 0016, ADR 0020).
       if have cargo; then run deps scripts/check-deps.sh
       else record deps "SKIPPED (cargo missing)"; fi
+      # The same ADR 0021 rule on compiled output (ADR 0049 §1), after the builds above and the
+      # text scan in deps: polyjose's and each binding's own object code holds no RSA private-key,
+      # signing or decryption symbol. Needs ar and nm (best: rustup component add llvm-tools).
+      if have cargo; then run rsa-symbols scripts/check-rsa-symbols.sh
+      else record rsa-symbols "SKIPPED (cargo missing)"; fi
       # The gate scripts' own negative tests (scripts/tests/*/*.sh), e.g. that check-deps.sh
       # still rejects RSA private-key use and the guarded groups' second paths.
       if have cargo; then run_negative_tests
