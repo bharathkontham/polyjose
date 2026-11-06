@@ -283,6 +283,10 @@ describe("gen.mjs: vector members", () => {
       keys,
     );
     assert.equal(v.source, `RFC 7519 §4.1.4; ${ORACLE_SOURCE}`);
+    assert.throws(
+      () => generate(entry({ jws: { header: { alg: "HS256" }, payload: "{}", key: "oct-32" } }, { source: 7 }), keys),
+      /source/,
+    );
   });
 
   it("keeps the spec file's shape: array, {vectors}, or a single entry", () => {

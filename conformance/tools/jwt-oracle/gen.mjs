@@ -580,10 +580,11 @@ function placeToken(value, built, used) {
 function buildVector(entry, keys) {
   if (!isObject(entry)) fail("a spec entry must be an object");
   for (const m of REQUIRED) if (entry[m] === undefined) fail(`missing "${m}"`);
+  if (entry.source !== undefined && typeof entry.source !== "string") fail('"source" must be a string');
   const resolved = resolveRefs(entry, keys);
   const built = buildToken(resolved, keys);
   const vector = {};
-  vector.source = typeof entry.source === "string" ? `${entry.source}; ${ORACLE_SOURCE}` : ORACLE_SOURCE;
+  vector.source = entry.source === undefined ? ORACLE_SOURCE : `${entry.source}; ${ORACLE_SOURCE}`;
   for (const m of ORDER.slice(1)) if (resolved[m] !== undefined) vector[m] = resolved[m];
   for (const [m, v] of Object.entries(resolved)) {
     if (!ORDER.includes(m) && !DIRECTIVES.includes(m)) vector[m] = v;
