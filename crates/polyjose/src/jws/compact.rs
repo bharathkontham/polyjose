@@ -848,4 +848,110 @@ mod tests {
             }
         }
     }
+
+    // ---- Edge cases ----
+
+    #[test]
+    fn max_input_len_does_not_count_the_detached_payload() {
+        // ADR 0026 §7: the limit is on the serialized JWS.
+        let payload = vec![b'a'; 4096];
+        let jws = forge(&A::HS256, HS256, &payload, true);
+        let opts = VerifyOptions::new(ALLOW_HS256)
+            .unwrap()
+            .detached_payload(&payload)
+            .max_input_len(jws.len());
+        assert_eq!(verify_with(&jws, &opts).unwrap().payload, payload);
+    }
+
+    #[test]
+    fn the_received_header_encoding_is_signed() {
+        // RFC 7515 §5.2 step 8 recomputes the input from the received
+        // parts: the same JSON with other octets is another signing input.
+        let jws = forge(&A::HS256, HS256, b"hello", false);
+        let [_, l, s] = parts(&jws);
+        let respaced = b64url_encode(br#"{ "alg":"HS256"}"#);
+        assert_eq!(
+            verify(&format!("{respaced}.{l}.{s}")),
+            Err(Error::InvalidSignature)
+        );
+        // Changing b64 changes the input, even for the same payload part.
+        let b64_false = forge(&A::HS256, HS256_B64_FALSE, b"aGVsbG8", false);
+        let [p, _, _] = parts(&b64_false);
+        assert_eq!(
+            verify(&format!("{p}.{l}.{s}")),
+            Err(Error::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn b64_of_the_wrong_type_is_invalid_header() {
+        // RFC 7797 §3: b64 is a boolean.
+        for header in [
+            r#"{"alg":"HS256","b64":"false","crit":["b64"]}"#,
+            r#"{"alg":"HS256","b64":0,"crit":["b64"]}"#,
+        ] {
+            let jws = format!("{}.$02.", b64url_encode(header.as_bytes()));
+            assert_eq!(verify_code(&jws), "InvalidHeader", "{header}");
+        }
+    }
+
+    #[test]
+    fn errors_carry_no_input() {
+        // ADR 0007: error text never contains token, payload or header
+        // octets.
+        const MARKER: &str = "MARKERxyz";
+        let marker_b64 = b64url_encode(MARKER.as_bytes());
+        let header_b64 = b64url_encode(format!(r#"{{"alg":"HS256","x":"{MARKER}"}}"#).as_bytes());
+        let detached = VerifyOptions::new(ALLOW_HS256)
+            .unwrap()
+            .detached_payload(MARKER.as_bytes());
+        let cases = [
+            (format!("{MARKER}.{MARKER}"), None),
+            (format!("{MARKER}.{MARKER}.{MARKER}"), None),
+            (format!("{header_b64}.{marker_b64}.{MARKER}="), None),
+            (format!("{marker_b64}.{marker_b64}."), None),
+            (format!("{header_b64}.{marker_b64}."), None),
+            (format!("{header_b64}.{marker_b64}."), Some(detached)),
+        ];
+        for (jws, opts) in cases {
+            let opts = opts.unwrap_or_else(|| VerifyOptions::new(ALLOW_HS256).unwrap());
+            let err = verify_with(&jws, &opts).unwrap_err();
+            for text in [err.to_string(), format!("{err:?}")] {
+                assert!(!text.contains(MARKER), "{text}");
+                assert!(!text.contains(&marker_b64), "{text}");
+            }
+        }
+        let err = sign(HS256_B64_FALSE, format!("{MARKER}.\n").as_bytes(), false).unwrap_err();
+        assert!(!err.to_string().contains(MARKER));
+    }
+
+    #[test]
+    fn public_functions_use_the_real_families() {
+        // Only outcomes decided before any family runs, so these hold
+        // whatever T06-T09 implement.
+        let opts = VerifyOptions::new(ALLOW_HS256).unwrap();
+        assert_eq!(
+            verify_compact("a.b", &hs_key(), &opts).map_err(|e| e.code()),
+            Err("InvalidFormat")
+        );
+        let sign_opts = SignOptions::new();
+        assert_eq!(
+            sign_compact(&protected(r#"{"alg":"none"}"#), b"x", &hs_key(), &sign_opts),
+            Err(Error::AlgorithmNotAllowed)
+        );
+        assert_eq!(
+            sign_compact(
+                &protected(r#"{"alg":"RS256"}"#),
+                b"x",
+                &keys::rsa(2048),
+                &sign_opts
+            ),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        assert_eq!(
+            sign_compact(&protected(HS256_B64_FALSE), b"$.02", &hs_key(), &sign_opts)
+                .map_err(|e| e.code()),
+            Err("InvalidFormat")
+        );
+    }
 }
