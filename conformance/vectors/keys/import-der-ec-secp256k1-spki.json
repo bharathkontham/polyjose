@@ -1,0 +1,18 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures)",
+  "description": "DER import of a secp256k1 public key as SPKI; expected JWK from openssl pkey -text.",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEKsgpxz5Gnh7fudPko_CBJQB91PsO1rPVyp3KtiRk_OJijr4Qaa6yzxlJ0Yz4Rkbb5SDS2cKyKF2Iw65_TBxQAg",
+    "format": "spki"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "secp256k1",
+      "x": "Ksgpxz5Gnh7fudPko_CBJQB91PsO1rPVyp3KtiRk_OI",
+      "y": "Yo6-EGmuss8ZSdGM-EZG2-Ug0tnCsihdiMOuf0wcUAI"
+    }
+  }
+}

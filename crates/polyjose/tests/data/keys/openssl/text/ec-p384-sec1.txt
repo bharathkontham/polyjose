@@ -1,0 +1,15 @@
+Private-Key: (384 bit field, 192 bit security level)
+priv:
+    4f:4a:0b:65:a9:1a:0d:cc:db:d4:12:24:ba:bc:5b:03:
+    e8:c3:b2:b2:72:5c:31:c5:db:15:57:c7:f9:f6:ea:9b:
+    c7:9c:be:97:79:1a:ab:00:78:ed:2a:a5:92:1d:65:b9
+pub:
+    04:64:04:c0:b8:aa:7e:df:c8:8f:3c:e0:fa:f7:fe:2b:
+    2d:2c:b7:d4:05:cb:34:b8:1a:c3:f2:4e:f1:57:f9:e2:
+    c2:a0:3c:6c:62:1d:fc:30:55:83:f5:2b:e7:a3:78:54:
+    b1:cc:5a:53:78:12:8e:39:a4:a6:f0:fc:7f:73:fa:ff:
+    44:a8:3a:2b:55:dc:7e:c2:a7:f2:7e:e0:45:74:f4:71:
+    b7:ad:05:84:61:45:d3:23:19:5d:e2:18:eb:e6:e1:3d:
+    71
+ASN1 OID: secp384r1
+NIST CURVE: P-384

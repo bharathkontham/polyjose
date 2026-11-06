@@ -1,0 +1,6 @@
+Public-Key: (256 bit field, 128 bit security level)
+pub:
+    02:2a:c8:29:c7:3e:46:9e:1e:df:b9:d3:e4:a3:f0:81:
+    25:00:7d:d4:fb:0e:d6:b3:d5:ca:9d:ca:b6:24:64:fc:
+    e2
+ASN1 OID: secp256k1

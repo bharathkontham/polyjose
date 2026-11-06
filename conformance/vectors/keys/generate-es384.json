@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §3.4",
+  "description": "Key generation for an algorithm: ES384 uses the P-384 curve (RFC 7518 §3.4); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "ES384"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "EC",
+      "crv": "P-384",
+      "alg": "ES384"
+    }
+  }
+}

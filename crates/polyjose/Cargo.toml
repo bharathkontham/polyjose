@@ -31,6 +31,7 @@ p384.workspace = true
 p521.workspace = true
 k256.workspace = true
 ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
 rsa.workspace = true
 
 [dev-dependencies]
@@ -41,3 +42,10 @@ base64ct.workspace = true
 # serde_json's double parsing correctly rounded, like core's str::parse::<f64>.
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip"] }
+# Oracles for the keys module's owned DER/PEM codecs (ADR 0016 §5, ADR 0018 §1); never shipped.
+der.workspace = true
+spki.workspace = true
+pkcs8.workspace = true
+sec1.workspace = true
+pkcs1.workspace = true
+pem-rfc7468.workspace = true

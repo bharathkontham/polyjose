@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"PS256\": RSA keys are never generated (ADR 0021).",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "PS256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §3.2",
+  "description": "Key generation for an algorithm: an HS384 key is 48 octets, the size of the SHA-384 output (RFC 7518 §3.2); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "HS384"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "HS384",
+      "k_octets": 48
+    }
+  }
+}

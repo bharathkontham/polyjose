@@ -1,0 +1,18 @@
+{
+  "source": "RFC 9500 §2.3",
+  "description": "PEM import of RFC 9500 testECCP256 as a SEC1 EC PRIVATE KEY (RFC 5915 §3).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIObLW92AqkWunJXowVR2Z5/+yVPBaFHnEedDk5WJxk/BoAoGCCqGSM49\nAwEHoUQDQgAEQiVI+I+3gv+17KN0RFLHKh5Vj71vc75eSOkyMsxFxbFsTNEMTLjV\nuKFxOelIgsiZJXKZNCX0FBmrfpCkKklCcg==\n-----END EC PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "QiVI-I-3gv-17KN0RFLHKh5Vj71vc75eSOkyMsxFxbE",
+      "y": "bEzRDEy41bihcTnpSILImSVymTQl9BQZq36QpCpJQnI",
+      "d": "5stb3YCqRa6clejBVHZnn_7JU8FoUecR50OTlYnGT8E"
+    }
+  }
+}

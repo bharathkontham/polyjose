@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7517 App. A.2",
+  "description": "DER export of the RFC 7517 A.2 private JWK as SPKI: its public half, the A.1 key, with an uncompressed point (RFC 5480 §2.2).",
+  "operation": "keys.export_der",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+      "d": "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"
+    },
+    "format": "spki"
+  },
+  "expect": {
+    "ok": true,
+    "der_b64u": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D7gS2XpJFbZiItSs3m9-9Ue6GnvHw_GW2ZZaVtszggXIw"
+  }
+}

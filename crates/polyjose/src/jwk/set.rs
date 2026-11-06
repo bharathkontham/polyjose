@@ -34,7 +34,7 @@ const NO_KEYS_ARRAY: &str = "a JWK Set must have a keys member that is an array"
 /// |---|---|
 /// | a valid, supported JWK | kept, in document order |
 /// | unsupported `kty`, or `EC`/`OKP` `crv` (`XYZ`, `Ed448`, `P-192`, ...) | skipped (RFC 7517 §5, ADR 0029 §3) |
-/// | otherwise invalid (not an object, missing or mistyped members, wrong lengths, bad base64url, RSA modulus under 2048 bits, an EC point off its curve, an EC `d` out of range, an invalid or small-order Ed25519 key, ...) | skipped (RFC 7517 §5, ADR 0041 §2) |
+/// | otherwise invalid (not an object, missing or mistyped members, wrong lengths, bad base64url, an RSA modulus under 2048 or over 8192 bits (`RSA_MODULUS_BITS`: RFC 7518 §3.3, ADR 0026 §2 step 8), an EC point off its curve, an EC `d` out of range, an invalid or small-order Ed25519 key, ...) | skipped (RFC 7517 §5, ADR 0041 §2) |
 /// | an `alg` of `RSA1_5` or `RSA-OAEP`, or one the key's family cannot serve (`oct` with `RS256`, `EC` `P-256` with `ES384`, ...) | skipped (RFC 7517 §4.4, §5; ADRs 0021, 0022) |
 /// | an RSA private key | the whole set fails, [`Error::UnsupportedAlgorithm`] (ADR 0021) |
 ///

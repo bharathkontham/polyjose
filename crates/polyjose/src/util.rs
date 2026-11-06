@@ -23,6 +23,13 @@
 //! guarantee about the machine code, as for any pure-Rust implementation.
 //! `base64ct` serves only as a dev-dependency oracle in the differential
 //! tests (`tests/base64url_differential.rs`).
+//!
+//! The same codec also has a crate-internal standard-alphabet, padded
+//! variant (RFC 4648 §4, Table 1), for the base64 inside RFC 7468 PEM
+//! blocks (`keys/pem.rs`). It is one implementation with the alphabet as a
+//! public parameter, not a second copy, so private-key PEM bodies get the
+//! same constant-time treatment. JOSE values themselves are always
+//! base64url.
 use subtle::{Choice, ConstantTimeEq};
 use zeroize::Zeroizing;
 
@@ -37,7 +44,7 @@ use zeroize::Zeroizing;
 /// `data` may be secret (exporting an `oct` `k` or a private JWK member), so
 /// the running time depends only on `data.len()`, which is public. Each
 /// 3-octet group (RFC 4648 §4) is split into 6-bit values and every value
-/// goes through `encode_symbol`, which is pure arithmetic: no branch and
+/// goes through `encode_symbol_in`, which is pure arithmetic: no branch and
 /// no table lookup depends on the octets. The only branches are on lengths.
 /// Each character pushed is ASCII, so `String::push` takes the same one-byte
 /// path for every input. The output is allocated once at its exact length
@@ -51,20 +58,31 @@ use zeroize::Zeroizing;
 /// ```
 pub fn b64url_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(encoded_len(data.len()));
+    encode_groups(data, URL_SAFE, &mut out);
+    out
+}
+
+/// Appends the symbols of `data` in `alphabet` to `out`, without padding:
+/// 1, 2 or 3 octets give 2, 3 or 4 symbols (RFC 4648 §4; RFC 7515 §2 for
+/// base64url). Shared by the base64url and the standard base64 encoders.
+///
+/// # Constant time
+///
+/// As for [`b64url_encode`]: every 6-bit value goes through
+/// [`encode_symbol_in`], and the only branches are on `data.len()`.
+fn encode_groups(data: &[u8], alphabet: Alphabet, out: &mut String) {
     for group in data.chunks(3) {
         // RFC 4648 §4: a short final group is padded with zero bits on the
         // right, which makes the pad bits zero (§3.5).
         let mut octets = [0u8; 3];
         octets[..group.len()].copy_from_slice(group);
         let bits = u32::from(octets[0]) << 16 | u32::from(octets[1]) << 8 | u32::from(octets[2]);
-        // 1, 2 or 3 octets give 2, 3 or 4 symbols, no `=` (RFC 7515 §2).
         for i in 0..=group.len() {
-            // Truncation is intended: encode_symbol uses only the low 6 bits.
+            // Truncation is intended: encode_symbol_in uses only the low 6 bits.
             let value = (bits >> (18 - 6 * i)) as u8;
-            out.push(char::from(encode_symbol(value)));
+            out.push(char::from(encode_symbol_in(value, alphabet)));
         }
     }
-    out
 }
 
 /// Length of the unpadded base64url encoding of `len` octets: ⌈4·len/3⌉
@@ -73,6 +91,26 @@ pub fn b64url_encode(data: &[u8]) -> String {
 fn encoded_len(len: usize) -> usize {
     len / 3 * 4 + (len % 3 * 4).div_ceil(3)
 }
+
+/// The two characters in which the base 64 alphabets of RFC 4648 differ:
+/// the symbols for values 62 and 63. Values 0–61 are `A`–`Z`, `a`–`z`,
+/// `0`–`9` in both (RFC 4648 §4 Table 1, §5 Table 2).
+///
+/// The alphabet is a public parameter of the codec, never data, so code may
+/// depend on it freely.
+#[derive(Clone, Copy)]
+struct Alphabet {
+    /// The symbol for value 62.
+    c62: u8,
+    /// The symbol for value 63.
+    c63: u8,
+}
+
+/// RFC 4648 §5 Table 2, "URL and Filename safe": `-` and `_`.
+const URL_SAFE: Alphabet = Alphabet {
+    c62: b'-',
+    c63: b'_',
+};
 
 /// `-1` (all bits set) if `x >= k`, else `0`, without a branch.
 ///
@@ -83,25 +121,37 @@ fn ge_mask(x: i16, k: i16) -> i16 {
     (k - 1 - x) >> 15
 }
 
-/// Maps the low 6 bits of `value` to its RFC 4648 §5 (Table 2) character.
+/// Maps the low 6 bits of `value` to its RFC 4648 §5 (Table 2) character:
+/// [`encode_symbol_in`] with the base64url alphabet, kept for the Table 2
+/// tests.
+#[cfg(test)]
+fn encode_symbol(value: u8) -> u8 {
+    encode_symbol_in(value, URL_SAFE)
+}
+
+/// Maps the low 6 bits of `value` to its character in `alphabet`
+/// (RFC 4648 §4 Table 1 or §5 Table 2).
 ///
 /// # Constant time
 ///
-/// Table 2 is five contiguous runs, each a fixed offset from the value:
+/// Both tables are five contiguous runs, each a fixed offset from the value:
 /// 0–25 → `'A' + v`, 26–51 → `'a' + (v - 26)`, 52–61 → `'0' + (v - 52)`,
-/// 62 → `'-'`, 63 → `'_'`. Instead of choosing a run with a branch or a
-/// table lookup indexed by the (secret) value, we start from the first
-/// run's offset and add the difference to the next run's offset under a
-/// mask from [`ge_mask`]. Every value runs the same instructions and touches
-/// no memory, so neither timing nor cache state depends on it.
+/// 62 → the alphabet's 62nd symbol (`-` or `+`), 63 → its 63rd (`_` or `/`).
+/// Instead of choosing a run with a branch or a table lookup indexed by the
+/// (secret) value, we start from the first run's offset and add the
+/// difference to the next run's offset under a mask from [`ge_mask`]. The
+/// alphabet only changes those public offsets. Every value runs the same
+/// instructions and touches no memory, so neither timing nor cache state
+/// depends on it.
 #[inline]
-fn encode_symbol(value: u8) -> u8 {
+fn encode_symbol_in(value: u8, alphabet: Alphabet) -> u8 {
     let v = i16::from(value & 0x3f);
+    let (c62, c63) = (i16::from(alphabet.c62), i16::from(alphabet.c63));
     let mut offset = i16::from(b'A');
     offset += ge_mask(v, 26) & ((i16::from(b'a') - 26) - i16::from(b'A'));
     offset += ge_mask(v, 52) & ((i16::from(b'0') - 52) - (i16::from(b'a') - 26));
-    offset += ge_mask(v, 62) & ((i16::from(b'-') - 62) - (i16::from(b'0') - 52));
-    offset += ge_mask(v, 63) & ((i16::from(b'_') - 63) - (i16::from(b'-') - 62));
+    offset += ge_mask(v, 62) & ((c62 - 62) - (i16::from(b'0') - 52));
+    offset += ge_mask(v, 63) & ((c63 - 63) - (c62 - 62));
     // In range: the sum is one of the 64 ASCII alphabet bytes.
     (v + offset) as u8
 }
@@ -129,7 +179,7 @@ fn encode_symbol(value: u8) -> u8 {
 /// private JWK member, RFC 7518 §6.3.2), so the running time and memory
 /// access pattern depend only on `s.len()`, which is public:
 ///
-/// - each byte goes through `decode_symbol`, which maps it to its 6-bit
+/// - each byte goes through `decode_symbol_in`, which maps it to its 6-bit
 ///   value with arithmetic range masks: no branch and no table index
 ///   depends on the byte;
 /// - a bad byte or non-zero pad bits do not stop decoding. They are folded
@@ -182,11 +232,19 @@ pub fn b64url_decode(s: &str) -> crate::Result<Vec<u8>> {
 /// after a fault, and faults are folded into the returned `Choice`, so the
 /// loop runs the same steps for every input of a given length.
 fn decode_into(input: &[u8], out: &mut [u8]) -> Choice {
+    decode_into_in(input, out, URL_SAFE)
+}
+
+/// [`decode_into`] for any `alphabet`: decodes unpadded symbols of
+/// `alphabet` into `out` and returns whether they were the canonical
+/// encoding of `out` (RFC 4648 §3.5). Same preconditions and the same
+/// constant-time structure.
+fn decode_into_in(input: &[u8], out: &mut [u8], alphabet: Alphabet) -> Choice {
     let mut valid = Choice::from(1);
     for (quantum, octets) in input.chunks(4).zip(out.chunks_mut(3)) {
         let mut bits = 0u32;
         for (i, &byte) in quantum.iter().enumerate() {
-            let (value, symbol_valid) = decode_symbol(byte);
+            let (value, symbol_valid) = decode_symbol_in(byte, alphabet);
             valid &= symbol_valid;
             bits |= u32::from(value) << (18 - 6 * i);
         }
@@ -214,18 +272,28 @@ fn in_range_mask(x: i16, lo: i16, hi: i16) -> i16 {
 }
 
 /// Maps a byte to its RFC 4648 §5 (Table 2) value and whether it is in the
-/// alphabet at all (RFC 4648 §3.3: any other byte makes the input invalid).
-/// A byte outside the alphabet yields value 0, so it adds no bits.
+/// alphabet: [`decode_symbol_in`] with the base64url alphabet, kept for the
+/// Table 2 tests.
+#[cfg(test)]
+fn decode_symbol(byte: u8) -> (u8, Choice) {
+    decode_symbol_in(byte, URL_SAFE)
+}
+
+/// Maps a byte to its value in `alphabet` (RFC 4648 §4 Table 1 or §5
+/// Table 2) and whether it is in the alphabet at all (RFC 4648 §3.3: any
+/// other byte makes the input invalid). A byte outside the alphabet yields
+/// value 0, so it adds no bits.
 ///
 /// # Constant time
 ///
 /// The alphabet is five disjoint byte ranges, `A`–`Z`, `a`–`z`, `0`–`9`,
-/// `-` and `_`, each a fixed offset from its value. Every range is tested
-/// with [`in_range_mask`]; the mask selects that range's value and marks
-/// the byte valid. All five tests always run and no memory is indexed by
-/// the byte, so neither timing nor cache state depends on it.
+/// and the single symbols for 62 and 63 (`-` and `_`, or `+` and `/`), each
+/// a fixed offset from its value. Every range is tested with
+/// [`in_range_mask`]; the mask selects that range's value and marks the byte
+/// valid. All five tests always run and no memory is indexed by the byte,
+/// so neither timing nor cache state depends on it. The alphabet is public.
 #[inline]
-fn decode_symbol(byte: u8) -> (u8, Choice) {
+fn decode_symbol_in(byte: u8, alphabet: Alphabet) -> (u8, Choice) {
     let c = i16::from(byte);
     let mut value = 0i16;
     let mut found = 0i16;
@@ -233,8 +301,8 @@ fn decode_symbol(byte: u8) -> (u8, Choice) {
         (b'A', b'Z', 0),
         (b'a', b'z', 26),
         (b'0', b'9', 52),
-        (b'-', b'-', 62),
-        (b'_', b'_', 63),
+        (alphabet.c62, alphabet.c62, 62),
+        (alphabet.c63, alphabet.c63, 63),
     ] {
         let (lo, hi) = (i16::from(lo), i16::from(hi));
         let mask = in_range_mask(c, lo, hi);
@@ -252,6 +320,123 @@ fn decode_symbol(byte: u8) -> (u8, Choice) {
 /// so that it cannot overflow.
 fn decoded_len(encoded_len: usize) -> usize {
     encoded_len / 4 * 3 + (encoded_len % 4) * 3 / 4
+}
+
+// ---------------------------------------------------------------------------
+// Standard base64 (RFC 4648 §4: Table 1 alphabet, `=` padding), for the
+// RFC 7468 PEM codec in `keys/pem.rs` (RFC 7468 §2: "base64 encoding
+// [RFC4648]"). The same constant-time arithmetic as base64url above, with
+// the `+`/`/` alphabet and padding. Crate-internal: JOSE itself only ever
+// uses base64url (RFC 7515 §2).
+// ---------------------------------------------------------------------------
+
+/// RFC 4648 §4 Table 1, "The Base 64 Alphabet": `+` and `/`.
+const STANDARD: Alphabet = Alphabet {
+    c62: b'+',
+    c63: b'/',
+};
+
+/// The pad character (RFC 4648 §3.2, §4).
+const PAD: u8 = b'=';
+
+/// Length of the padded standard base64 encoding of `len` octets:
+/// 4·⌈len/3⌉ characters (RFC 4648 §4). It cannot overflow for the length
+/// of any slice, which is at most `isize::MAX`.
+pub(crate) fn b64_encoded_len(len: usize) -> usize {
+    len / 3 * 4 + if len.is_multiple_of(3) { 0 } else { 4 }
+}
+
+/// Appends the padded standard base64 encoding of `data` (RFC 4648 §4) to
+/// `out`.
+///
+/// A final group of 1 or 2 octets gives 2 or 3 symbols followed by `==` or
+/// `=` (RFC 4648 §4 cases (2) and (3)), and its pad bits are zero (§3.5), so
+/// the output is the canonical encoding that [`b64_decode_into`] accepts.
+/// The caller reserves [`b64_encoded_len`] characters first, so that the
+/// string never reallocates and leaves a copy of a secret behind.
+///
+/// # Constant time
+///
+/// `data` may be a private key (a PKCS#8 or SEC1 body, RFC 7468 §10), so
+/// the running time depends only on `data.len()`, which is public. Every
+/// 6-bit value goes through `encode_symbol_in`, branch-free and table-free
+/// arithmetic over Table 1's five contiguous runs (the same mapping as
+/// base64url, with `+` and `/` for 62 and 63). The number of `=` characters
+/// depends only on `data.len() % 3`. Every character is ASCII, so
+/// `String::push` takes the same one-byte path for every input.
+pub(crate) fn b64_encode_append(data: &[u8], out: &mut String) {
+    encode_groups(data, STANDARD, out);
+    for _ in 0..(3 - data.len() % 3) % 3 {
+        out.push(char::from(PAD));
+    }
+}
+
+/// Strictly decodes padded standard base64 (RFC 4648 §4) into `out`.
+///
+/// `out` is resized to the decoded length, allocated once at exactly that
+/// length; pass an empty buffer that wipes on drop (`Zeroizing`). The empty
+/// input decodes to no octets (RFC 4648 §10). Everything that is not the
+/// canonical encoding of some octet string fails with
+/// [`Error::InvalidBase64`](crate::Error::InvalidBase64):
+///
+/// - a length that is not a multiple of 4, so missing padding (RFC 4648
+///   §3.2, §4: the output is always a whole number of 4-character quanta);
+/// - `=` anywhere except as the last one or two characters (§3.2, §4);
+/// - `-` and `_` (base64url, §5), whitespace, line breaks and every other
+///   byte outside Table 1 (§3.3). Line breaks are the PEM codec's job;
+/// - non-zero pad bits in the final quantum (§3.5: decoders MAY reject
+///   them; we do, so that each octet string has exactly one encoding).
+///
+/// On failure every decoded octet is wiped from `out` before returning, so
+/// a rejected private-key body leaves no partial key behind.
+///
+/// # Constant time
+///
+/// The running time and memory access pattern depend only on `input.len()`
+/// and on the number of trailing `=` characters, both public: the padding is
+/// fixed by the decoded length modulo 3 (RFC 4648 §4), and that length is
+/// the size of the output.
+///
+/// - Each symbol goes through `decode_symbol_in`, which maps it with
+///   arithmetic range masks: no branch and no table index depends on it.
+/// - A bad symbol or non-zero pad bits do not stop decoding. They are folded
+///   into one `subtle::Choice`, checked once at the end, so the work done
+///   does not reveal where the first fault is.
+/// - The only other branches look at whether each of the last two characters
+///   is `=`, which is the padding length.
+///
+/// The error carries no input bytes (ADR 0007).
+pub(crate) fn b64_decode_into(input: &[u8], out: &mut Vec<u8>) -> crate::Result<()> {
+    use zeroize::Zeroize;
+
+    // RFC 4648 §4: a padded encoding is a whole number of quanta.
+    if !input.len().is_multiple_of(4) {
+        return Err(crate::Error::InvalidBase64);
+    }
+    // RFC 4648 §4 cases (2) and (3): the final quantum ends in "==" or "=".
+    // Any other `=` stays in `body` and fails as a non-alphabet byte.
+    let pad = match input {
+        [.., a, b] if *a == PAD && *b == PAD => 2,
+        [.., b] if *b == PAD => 1,
+        _ => 0,
+    };
+    // The body's length is 0, 2 or 3 modulo 4, never 1, as decode_into_in
+    // requires.
+    let body = &input[..input.len() - pad];
+    let len = decoded_len(body.len());
+    // Wipe anything the caller left in `out`, then allocate it once at the
+    // exact length so no reallocation copies decoded octets.
+    out.zeroize();
+    out.reserve_exact(len);
+    out.resize(len, 0);
+    let valid = decode_into_in(body, out, STANDARD);
+    if bool::from(valid) {
+        Ok(())
+    } else {
+        // Every quantum has been written: wipe them all.
+        out.as_mut_slice().zeroize();
+        Err(crate::Error::InvalidBase64)
+    }
 }
 
 #[cfg(test)]
@@ -545,6 +730,340 @@ mod tests {
             ) {
                 if let Ok(bytes) = b64url_decode(&s) {
                     prop_assert_eq!(b64url_encode(&bytes), s);
+                }
+            }
+        }
+    }
+}
+
+/// Tests of the standard-alphabet, padded base64 (RFC 4648 §4) that the
+/// RFC 7468 PEM codec uses. Kept apart from the base64url tests above.
+#[cfg(test)]
+mod standard_tests {
+    use super::*;
+
+    /// Encodes with [`b64_encode_append`] into a fresh string.
+    fn encode(data: &[u8]) -> String {
+        let mut out = String::with_capacity(b64_encoded_len(data.len()));
+        b64_encode_append(data, &mut out);
+        out
+    }
+
+    /// Decodes with [`b64_decode_into`] into a fresh buffer.
+    fn decode(s: &str) -> crate::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        b64_decode_into(s.as_bytes(), &mut out).map(|()| out)
+    }
+
+    /// RFC 4648 §10 test vectors, verbatim (standard alphabet, padded).
+    const RFC4648_SECTION_10: [(&[u8], &str); 7] = [
+        (b"", ""),
+        (b"f", "Zg=="),
+        (b"fo", "Zm8="),
+        (b"foo", "Zm9v"),
+        (b"foob", "Zm9vYg=="),
+        (b"fooba", "Zm9vYmE="),
+        (b"foobar", "Zm9vYmFy"),
+    ];
+
+    #[test]
+    fn rfc4648_section_10_vectors_encode() {
+        for (bytes, encoded) in RFC4648_SECTION_10 {
+            assert_eq!(encode(bytes), encoded, "encode {bytes:?}");
+            assert_eq!(b64_encoded_len(bytes.len()), encoded.len());
+        }
+    }
+
+    #[test]
+    fn rfc4648_section_10_vectors_decode() {
+        for (bytes, encoded) in RFC4648_SECTION_10 {
+            assert_eq!(decode(encoded), Ok(bytes.to_vec()), "decode {encoded:?}");
+        }
+    }
+
+    /// RFC 4648 §4 Table 1 ("The Base 64 Alphabet"), written out
+    /// independently of the codec under test.
+    const TABLE_1: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    /// Every 6-bit value encodes as `TABLE_1[v]`, first and last in a
+    /// quantum, through the same arithmetic mapping as base64url.
+    #[test]
+    fn encode_maps_every_value_per_table_1() {
+        for (v, &symbol) in (0u8..).zip(TABLE_1.iter()) {
+            assert_eq!(encode_symbol_in(v, STANDARD), symbol, "value {v}");
+            assert_eq!(encode_symbol_in(v | 0xc0, STANDARD), symbol, "value {v}");
+            assert_eq!(encode(&[0, 0, v]).as_bytes(), [b'A', b'A', b'A', symbol]);
+        }
+        // 0xFB 0xFF = values 62, 63, 60 (RFC 4648 §4): "+/8=".
+        assert_eq!(encode(&[0xfb, 0xff]), "+/8=");
+    }
+
+    /// Every byte 0x00..=0xFF decodes to its Table 1 value if it is in the
+    /// alphabet and is rejected otherwise (RFC 4648 §3.3), so `-` and `_`
+    /// (base64url, §5) are rejected.
+    #[test]
+    fn decode_maps_every_byte_per_table_1() {
+        for b in 0u8..=0xff {
+            let (value, valid) = decode_symbol_in(b, STANDARD);
+            let mut out = Vec::new();
+            // First in the quantum, where `=` is never valid either.
+            let result = b64_decode_into(&[b, b'A', b'A', b'A'], &mut out);
+            match TABLE_1.iter().position(|&s| s == b) {
+                Some(v) => {
+                    assert_eq!(usize::from(value), v, "byte {b:#04x}");
+                    assert!(bool::from(valid));
+                    assert_eq!(result, Ok(()));
+                    assert_eq!(usize::from(out[0] >> 2), v);
+                }
+                None => {
+                    assert_eq!(value, 0, "byte {b:#04x} must contribute no bits");
+                    assert!(!bool::from(valid), "byte {b:#04x} must be invalid");
+                    assert_eq!(result, Err(crate::Error::InvalidBase64), "{b:#04x}");
+                }
+            }
+        }
+    }
+
+    fn assert_all_rejected(inputs: &[&str]) {
+        for input in inputs {
+            assert_eq!(
+                decode(input),
+                Err(crate::Error::InvalidBase64),
+                "{input:?} must be rejected"
+            );
+        }
+    }
+
+    /// RFC 4648 §3.2 and §4: the encoding is padded to a multiple of 4
+    /// characters, with `=` only at the end and at most two of them.
+    #[test]
+    fn rejects_missing_or_misplaced_padding() {
+        assert_all_rejected(&[
+            "Zg", "Zg=", "Zm8", "Zm9vYg", "Zm9vYg=", "Zm9vYmE", "Z", "Zm9vY", "=", "==", "===",
+            "====", "Z===", "Zg==Zg==", "Zm=v", "=m9v", "Zg==\n", "Zm9v====",
+        ]);
+    }
+
+    /// RFC 4648 §4: `-` and `_` are base64url (§5), not base64.
+    #[test]
+    fn rejects_url_alphabet_and_whitespace() {
+        assert_all_rejected(&["-_8=", "+_8=", "-/8=", "Zm9v YmFy", "Zm9v\nYmFy", " Zg=="]);
+    }
+
+    /// RFC 4648 §3.5: non-zero pad bits are rejected, so each octet string
+    /// has one encoding. "QQ==" is 0x41; "QR==" differs only in those bits.
+    #[test]
+    fn rejects_non_canonical_pad_bits() {
+        assert_eq!(decode("QQ=="), Ok(vec![0x41]));
+        assert_eq!(decode("QUE="), Ok(vec![0x41, 0x41]));
+        assert_all_rejected(&["QR==", "QS==", "Q/==", "QUF=", "QUH=", "Zh==", "Zm9vYmF="]);
+    }
+
+    /// A rejected decode leaves no decoded octets behind: the caller's
+    /// buffer is read back as all zeros, at its full decoded length, after
+    /// both a bad symbol and bad pad bits (workspace CLAUDE.md: key material
+    /// is zeroized).
+    #[test]
+    fn rejected_decode_wipes_the_output_buffer() {
+        for input in ["Zm9vYmFy*AAA", "Zm9vYmFyQR==", "Zm9vYmFyZm9v-A=="] {
+            let mut out = Vec::new();
+            assert_eq!(
+                b64_decode_into(input.as_bytes(), &mut out),
+                Err(crate::Error::InvalidBase64)
+            );
+            assert!(!out.is_empty(), "{input:?}: the buffer was written");
+            assert!(out.iter().all(|&b| b == 0), "{input:?}: {out:?}");
+        }
+    }
+
+    /// The output is allocated once at its exact length, so no reallocation
+    /// leaves a copy of decoded octets in freed memory; an encode into a
+    /// string reserved with [`b64_encoded_len`] never grows it either.
+    #[test]
+    fn buffers_are_sized_exactly() {
+        for n in 0..=50usize {
+            let data = vec![0xa5; n];
+            let encoded = encode(&data);
+            assert_eq!(encoded.len(), b64_encoded_len(n));
+            let mut out = Vec::new();
+            assert_eq!(b64_decode_into(encoded.as_bytes(), &mut out), Ok(()));
+            assert_eq!(out, data);
+            assert_eq!(out.capacity(), n, "{n} octets");
+        }
+    }
+
+    /// The decoded length `b64_decode_into` plans for `input` (a multiple of
+    /// 4 characters), worked out independently: 3 octets per quantum, less
+    /// one per trailing `=` (RFC 4648 §4 cases (2) and (3)).
+    fn planned_len(input: &[u8]) -> usize {
+        let pad = input
+            .iter()
+            .rev()
+            .take(2)
+            .take_while(|&&c| c == PAD)
+            .count();
+        input.len() / 4 * 3 - pad
+    }
+
+    /// [`b64_decode_into`] into `out`, then reads back its capacity
+    /// (F05): it is the capacity reserved before decoding, the larger of
+    /// what `out` already had and the planned length, so the buffer never
+    /// regrew while it held decoded octets. Returns the outcome.
+    fn check_planned_capacity(input: &[u8], out: &mut Vec<u8>) -> crate::Result<()> {
+        assert!(input.len().is_multiple_of(4));
+        let before = out.capacity();
+        let result = b64_decode_into(input, out);
+        let planned = planned_len(input);
+        assert_eq!(out.len(), planned);
+        assert_eq!(out.capacity(), before.max(planned), "{} octets", planned);
+        result
+    }
+
+    /// The capacity read-back over the key fixture corpus
+    /// (`tests/data/keys`): the DER of every `.der` file and every `.pem`
+    /// file that `pem-rfc7468` (dev-dependency oracle) decodes, encoded,
+    /// then decoded into a fresh buffer, a buffer with room to spare and a
+    /// used buffer that is too small.
+    #[test]
+    fn output_keeps_its_planned_capacity_across_the_key_corpus() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/keys");
+        let mut checked = 0;
+        for dir in ["openssl", "rfc", "negative"] {
+            for entry in std::fs::read_dir(root.join(dir)).unwrap() {
+                let path = entry.unwrap().path();
+                let der = match path.extension().and_then(|e| e.to_str()) {
+                    Some("der") => std::fs::read(&path).unwrap(),
+                    Some("pem") => match pem_rfc7468::decode_vec(&std::fs::read(&path).unwrap()) {
+                        Ok((_, der)) => der,
+                        Err(_) => continue,
+                    },
+                    _ => continue,
+                };
+                let encoded = encode(&der);
+                let mut fresh = Vec::new();
+                assert_eq!(
+                    check_planned_capacity(encoded.as_bytes(), &mut fresh),
+                    Ok(())
+                );
+                assert_eq!(fresh, der, "{}", path.display());
+                assert_eq!(fresh.capacity(), der.len(), "{}", path.display());
+
+                let mut roomy = Vec::with_capacity(der.len() + 100);
+                assert_eq!(
+                    check_planned_capacity(encoded.as_bytes(), &mut roomy),
+                    Ok(())
+                );
+                let mut used = vec![0xa5; der.len() / 2];
+                assert_eq!(
+                    check_planned_capacity(encoded.as_bytes(), &mut used),
+                    Ok(())
+                );
+                assert_eq!(used, der, "{}", path.display());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 100, "only {checked} fixtures");
+    }
+
+    /// Exhaustive comparison with `base64ct::Base64` (dev-dependency oracle,
+    /// ADR 0016 §5) over every string of up to three characters, and every
+    /// four-character string over a reduced alphabet, on accept/reject and
+    /// the decoded octets.
+    #[test]
+    fn exhaustive_short_strings_agree_with_base64ct() {
+        use base64ct::{Base64, Encoding};
+        let full: Vec<char> = "ABCDQRSTwxyz0189+/=-_ ".chars().collect();
+        let mut strings = vec![String::new()];
+        for &a in &full {
+            strings.push(format!("{a}"));
+            for &b in &full {
+                strings.push(format!("{a}{b}"));
+                for &c in &full {
+                    strings.push(format!("{a}{b}{c}"));
+                    for &d in &full {
+                        strings.push(format!("{a}{b}{c}{d}"));
+                    }
+                }
+            }
+        }
+        for s in strings {
+            assert_eq!(decode(&s).ok(), Base64::decode_vec(&s).ok(), "{s:?}");
+        }
+    }
+
+    mod properties {
+        use super::{check_planned_capacity, decode, encode};
+        use base64ct::{Base64, Encoding};
+        use proptest::prelude::*;
+
+        /// A valid oracle encoding with one character replaced: mostly
+        /// near-miss inputs (bad symbol, misplaced `=`, bad pad bits).
+        fn mutated_encoding() -> impl Strategy<Value = String> {
+            (
+                proptest::collection::vec(any::<u8>(), 1..64),
+                any::<prop::sample::Index>(),
+                prop::sample::select("AQgw+/RSTUVf09=-_ \n.".chars().collect::<Vec<char>>()),
+            )
+                .prop_map(|(bytes, at, with)| {
+                    let encoded = Base64::encode_string(&bytes);
+                    let i = at.index(encoded.len());
+                    format!("{}{with}{}", &encoded[..i], &encoded[i + 1..])
+                })
+        }
+
+        proptest! {
+            // ADR 0008 layer 2: at most 1,000 cases per property.
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            /// Our encoder matches `base64ct::Base64` (RFC 4648 §4), and
+            /// decoding inverts it.
+            #[test]
+            fn encode_matches_base64ct(bytes in proptest::collection::vec(any::<u8>(), 0..300)) {
+                let ours = encode(&bytes);
+                prop_assert_eq!(&ours, &Base64::encode_string(&bytes));
+                prop_assert_eq!(decode(&ours)?, bytes);
+            }
+
+            /// Accept/reject and the decoded octets match `base64ct::Base64`
+            /// for arbitrary text and for near-miss encodings.
+            #[test]
+            fn decode_matches_base64ct(
+                s in prop_oneof![
+                    "[A-Za-z0-9+/=_ \\n-]{0,40}",
+                    any::<String>(),
+                    mutated_encoding(),
+                ]
+            ) {
+                prop_assert_eq!(decode(&s).ok(), Base64::decode_vec(&s).ok(), "{:?}", s);
+            }
+
+            /// `check_planned_capacity` (F05) for any encoding, valid or
+            /// with one character replaced, decoded into a buffer that
+            /// already holds `prior` octets with `spare` more capacity: the
+            /// capacity is what was reserved before decoding, and a rejected
+            /// decode leaves only zeros.
+            #[test]
+            fn output_keeps_its_planned_capacity(
+                bytes in proptest::collection::vec(any::<u8>(), 0..600),
+                prior in proptest::collection::vec(any::<u8>(), 0..700),
+                spare in 0usize..64,
+                mutation in proptest::option::of((
+                    any::<prop::sample::Index>(),
+                    prop::sample::select("AQgw+/=-_ *".chars().collect::<Vec<char>>()),
+                )),
+            ) {
+                let mut encoded = encode(&bytes);
+                let mutated = mutation.is_some() && !encoded.is_empty();
+                if let (Some((at, with)), true) = (mutation, mutated) {
+                    let i = at.index(encoded.len());
+                    encoded.replace_range(i..=i, with.encode_utf8(&mut [0; 4]));
+                }
+                let mut out = prior;
+                out.reserve_exact(spare);
+                match check_planned_capacity(encoded.as_bytes(), &mut out) {
+                    Ok(()) if !mutated => prop_assert_eq!(out, bytes),
+                    Ok(()) => {}
+                    Err(_) => prop_assert!(out.iter().all(|&b| b == 0)),
                 }
             }
         }

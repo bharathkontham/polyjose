@@ -1,0 +1,16 @@
+{
+  "source": "RFC 8812 §3.2",
+  "description": "Key generation for an algorithm: ES256K uses the secp256k1 curve (RFC 8812 §3.2); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "ES256K"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "EC",
+      "crv": "secp256k1",
+      "alg": "ES256K"
+    }
+  }
+}

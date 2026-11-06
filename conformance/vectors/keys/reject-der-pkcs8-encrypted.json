@@ -1,0 +1,13 @@
+{
+  "source": "polyjose",
+  "description": "DER import rejects an EncryptedPrivateKeyInfo (RFC 5958 §3, made by OpenSSL 4.1.0 with PBES2/AES-256-CBC) as pkcs8: encrypted keys are out of scope (ADR 0018 §4).",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MIH0MF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBA2vZZhTefTLEkucb0-Xk6mAgIIADAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQvhmcJLxC66YzYmxn07jO9wSBkPvwyVuul3z747vxzgXxnacw_BJAeGHIpABu2W8bHKijflq21Wy2Bea_bjKo3JS-h2hqeH9KCCPknQTAlFCX-lgguib4vHHyIagEZ3aErWQB_p0INKCMUDTgNz3f8M-1rsITRVsho3CTg4AZ3xOZD2nmiB_xdpkGIemRi4MPHty_IKqdBaaW3PJ--6lpZoH99g",
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

@@ -12,6 +12,9 @@ repository = "https://github.com/bharathkontham/polyjose"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+# A stale `#[expect(...)]` fails the build on every toolchain (stable and the
+# 1.89 MSRV) instead of warning: expectations must not depend on the compiler.
+unfulfilled_lint_expectations = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
@@ -32,6 +35,17 @@ zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 # Default features (std, i128) off (ADR 0016 §3): polyjose uses only Choice and ConstantTimeEq on u32,
 # which need neither.
 subtle = { version = "2.6", default-features = false }
+# Dev-only test oracles for the keys module's own DER and PEM codecs (ADR 0016 §5, ADR 0018 §1):
+# the RustCrypto formats crates differential-test what polyjose parses and writes. ADR 0018 and
+# ADR 0020 keep them out of [dependencies]; `cargo tree -e normal` never shows them. They match the
+# der/sec1 versions the curve crates already use, and none of them enables a feature of `rsa`
+# (scripts/check-deps.sh, check 11).
+der = { version = "0.8.3", default-features = false, features = ["alloc", "oid", "pem"] }
+spki = { version = "0.8.1", default-features = false, features = ["alloc", "pem"] }
+pkcs8 = { version = "0.11.0", default-features = false, features = ["alloc", "pem"] }
+sec1 = { version = "0.8.1", default-features = false, features = ["alloc", "der", "point", "pem"] }
+pkcs1 = { version = "0.8.0", default-features = false, features = ["alloc", "pem"] }
+pem-rfc7468 = { version = "1.0.0", default-features = false, features = ["alloc"] }
 # Dev-only: property tests (ADR 0008 layer 2).
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 # OS CSPRNG: the only source of randomness (ADR 0005). Default features off (ADR 0016); polyjose uses
@@ -68,5 +82,11 @@ ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["zer
 # ignores the advisory only while that guard holds. Exact pin on a release candidate: the 0.10 API
 # may still change before 0.10.0, so moving to a newer rc is its own PR.
 rsa = { version = "=0.10.0-rc.20", default-features = false }
-# Still to come with their features: x25519-dalek 3, aes-gcm 0.11, aes-kw 0.3, cbc 0.2,
-# pbkdf2 0.13 (feature 0003).
+# X25519 (RFC 7748) keys for the OKP `X25519` curve (RFC 8037 §2, §3.2): key generation derives the
+# public `x` from a 32-octet private key (RFC 7748 §6.1), and feature 0003 runs ECDH-ES on it.
+# `static_secrets` gives `StaticSecret`, the reusable private key a JWK holds (an `EphemeralSecret`
+# cannot be built from stored bytes); `zeroize` wipes it on drop. `precomputed-tables` (a default)
+# stays off, as for ed25519-dalek. It reuses ed25519-dalek's curve25519-dalek, so it adds only itself
+# to the tree.
+x25519-dalek = { version = "=3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
+# Still to come with their features: aes-gcm 0.11, aes-kw 0.3, cbc 0.2, pbkdf2 0.13 (feature 0003).

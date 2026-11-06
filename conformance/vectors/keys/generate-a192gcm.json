@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7518 §5.3",
+  "description": "Key generation for an algorithm: an A192GCM content encryption key is 192 bits (RFC 7518 §5.3); the key is random, so only its shape is compared.",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A192GCM"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A192GCM",
+      "k_octets": 24
+    }
+  }
+}
