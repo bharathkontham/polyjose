@@ -3,9 +3,14 @@
 //! `sha2` (ADR 0002), in the scope of the ADR 0019 §5 audit. Filled in by
 //! T04.
 
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::{Error, Result};
+
+/// The SHA-256 output length in octets, the Concat KDF block size
+/// (NIST SP 800-56A §5.8.1.1, `hashlen`).
+const HASH_LEN: usize = 32;
 
 /// Derives `keydatalen_bits` bits from the shared secret `z` (RFC 7518
 /// §4.6.2):
@@ -25,13 +30,37 @@ use crate::{Error, Result};
 /// An error unless `keydatalen_bits` is a positive multiple of 8 and at
 /// most 512.
 pub(crate) fn derive(
-    _z: &[u8],
-    _alg_id: &str,
-    _apu: &[u8],
-    _apv: &[u8],
-    _keydatalen_bits: u32,
+    z: &[u8],
+    alg_id: &str,
+    apu: &[u8],
+    apv: &[u8],
+    keydatalen_bits: u32,
 ) -> Result<Zeroizing<Vec<u8>>> {
-    Err(Error::UnsupportedAlgorithm)
+    let keydatalen =
+        usize::try_from(keydatalen_bits / 8).map_err(|_| Error::UnsupportedAlgorithm)?;
+    let other_info = other_info(alg_id, apu, apv, keydatalen_bits)?;
+
+    let mut out = Zeroizing::new(Vec::with_capacity(keydatalen));
+    // Each K(i) lands here, never in an unwiped temporary.
+    let mut block = Zeroizing::new([0u8; HASH_LEN]);
+    // NIST SP 800-56A §5.8.1.1 step 4: `counter` starts at 1 and is a
+    // 32-bit big-endian integer.
+    let mut counter: u32 = 1;
+    while out.len() < keydatalen {
+        // `sha2`'s `zeroize` feature (workspace Cargo.toml) wipes the
+        // hasher, whose buffered block holds Z, when it is dropped.
+        let mut hash = Sha256::new();
+        hash.update(counter.to_be_bytes());
+        hash.update(z);
+        hash.update(&other_info);
+        hash.finalize_into((&mut *block).into());
+        // §5.8.1.1 steps 5–6: the leftmost keydatalen bits of
+        // K(1) || … || K(reps); only the last block is truncated.
+        let take = (keydatalen - out.len()).min(HASH_LEN);
+        out.extend_from_slice(&block[..take]);
+        counter = counter.checked_add(1).ok_or(Error::UnsupportedAlgorithm)?;
+    }
+    Ok(out)
 }
 
 /// Appends one NIST SP 800-56A §5.8.1.2 "Datalen || Data" field: a 32-bit
@@ -107,6 +136,27 @@ mod tests {
             other_info("A128GCM", b"Alice", b"Bob", 128).unwrap(),
             expected
         );
+    }
+
+    /// RFC 7518 Appendix C: the ECDH-ES shared secret Z of the printed
+    /// P-256 keys (Alice's ephemeral `d` with Bob's public key).
+    const APPENDIX_C_Z: [u8; 32] = [
+        158, 86, 217, 29, 129, 113, 53, 211, 114, 131, 66, 131, 191, 132, 38, 156, 251, 49, 110,
+        163, 218, 128, 106, 72, 246, 218, 167, 121, 140, 254, 144, 196,
+    ];
+
+    /// RFC 7518 Appendix C: direct ECDH-ES with A128GCM, `apu` "Alice" and
+    /// `apv` "Bob" derives `VqqN6vgjbSBcIijNcacQGg`.
+    #[test]
+    fn derive_matches_rfc7518_appendix_c() {
+        let k = derive(&APPENDIX_C_Z, "A128GCM", b"Alice", b"Bob", 128).unwrap();
+        assert_eq!(
+            k.as_slice(),
+            [
+                86, 170, 141, 234, 248, 35, 109, 32, 92, 34, 40, 205, 113, 167, 16, 26
+            ]
+        );
+        assert_eq!(crate::util::b64url_encode(&k), "VqqN6vgjbSBcIijNcacQGg");
     }
 
     /// RFC 7518 §4.6.2: an absent `apu`/`apv` is a zero Datalen with an
