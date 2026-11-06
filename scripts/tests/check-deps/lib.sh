@@ -1,8 +1,11 @@
-# Shared helpers for the negative tests of scripts/check-deps.sh. Sourced, not run.
+# shellcheck shell=bash
+# Shared helpers for the negative tests of scripts/check-deps.sh and the gates beside it (such as
+# scripts/check-rsa-symbols.sh). Sourced, not run.
 #
 # Each test copies the repository's working tree (tracked and untracked files, not ignored ones,
 # so no target/) into a temporary git repository, changes one thing in the copy, runs the copy's
-# check-deps.sh and checks that it fails for that reason and no other. The real checkout is
+# gate (check-deps.sh unless the test redefines run_gate) and checks that it fails for that reason
+# and no other. The real checkout is
 # never modified. Cargo resolves an added dependency from the local registry cache first
 # (--offline), and from crates.io only if that fails.
 #
@@ -40,6 +43,11 @@ sys.stdout.buffer.write(b"".join(n + b"\0" for n in names if os.path.lexists(os.
 git -C "$base" init -q || lib_die "git init failed"
 git -C "$base" add -A || lib_die "git add failed"
 
+# The gate under test: run_gate runs it in the current directory (a copy), and gate_name names it
+# in the results. A test of another gate redefines both after sourcing this file.
+gate_name=check-deps.sh
+run_gate() { scripts/check-deps.sh; }
+
 # new_case <name>: a fresh copy of the base in $case_dir.
 new_case() {
   case_dir="$scratch/case-$1"
@@ -71,30 +79,30 @@ relock() {
     || { cat "$scratch/relock.err" >&2; lib_die "cargo could not resolve the changed manifest"; }
 }
 
-# expect_pass <description>: the copy's check-deps.sh exits 0.
+# expect_pass <description>: the copy's gate exits 0.
 expect_pass() {
   local rc=0
   tests_run=$((tests_run + 1))
-  (cd "$case_dir" && scripts/check-deps.sh) >"$scratch/out" 2>&1 || rc=$?
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
-    echo "ok   - $1: check-deps.sh passes"
+    echo "ok   - $1: $gate_name passes"
   else
-    echo "FAIL - $1: check-deps.sh exited $rc, expected 0"
+    echo "FAIL - $1: $gate_name exited $rc, expected 0"
     sed 's/^/       /' "$scratch/out"
     tests_failed=$((tests_failed + 1))
   fi
 }
 
 # expect_fail <description> <required ERE> <ERE every FAIL line must match>: the copy's
-# check-deps.sh exits 1 (a check failed, not an error), its output matches the required pattern,
+# gate exits 1 (a check failed, not an error), its output matches the required pattern,
 # and every FAIL line is the expected kind, so no other check is what caught the change.
 expect_fail() {
   local rc=0 bad
   tests_run=$((tests_run + 1))
-  (cd "$case_dir" && scripts/check-deps.sh) >"$scratch/out" 2>&1 || rc=$?
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
   bad=$(grep '^FAIL: ' "$scratch/out" | grep -Ev -- "$3" || true)
   if [ "$rc" -eq 1 ] && grep -Eq -- "$2" "$scratch/out" && [ -z "$bad" ]; then
-    echo "ok   - $1: check-deps.sh fails as expected"
+    echo "ok   - $1: $gate_name fails as expected"
     grep -E -- "$2" "$scratch/out" | head -3 | sed 's/^/       /'
   else
     echo "FAIL - $1: exit $rc (expected 1), wanted output matching /$2/ and only FAIL lines matching /$3/"
