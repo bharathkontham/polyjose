@@ -17,11 +17,12 @@
 //! (`crate::test_support::wycheproof`) is `cfg(test)` only.
 
 use crate::Result;
+use crate::json::Object;
 use crate::jwa::SigningAlg;
 use crate::jwk::{EcCurve, Jwk, KeyAlg, KeyMaterial};
 use crate::test_support::wycheproof::{self, Deviation, Expected, Group, Outcome, Suite, Test};
 
-use super::{Verified, VerifyOptions, verify_compact};
+use super::{Verified, VerifyOptions, verify_compact, verify_json};
 
 /// The vendored suite.
 const SUITE: &str = "json_web_signature";
@@ -253,4 +254,80 @@ fn every_rejection_fails_at_its_adr_0026_step() {
         listed.len(),
         "ERRORS lists a tcId that is not in the suite"
     );
+}
+
+/// The test with `tc_id`, with its group.
+fn find(suite: &Suite, tc_id: u32) -> (&Group, &Test) {
+    suite
+        .tests()
+        .find(|(_, t)| t.tc_id == tc_id)
+        .unwrap_or_else(|| panic!("tcId {tc_id} is not in the suite"))
+}
+
+/// The flattened JWS JSON Serialization (RFC 7515 §7.2.2) of a compact
+/// JWS's three parts, or `None` if it does not have exactly three.
+fn flattened(compact: &str) -> Option<String> {
+    let parts: Vec<&str> = compact.split('.').collect();
+    let [protected, payload, signature] = parts[..] else {
+        return None;
+    };
+    let mut jws = Object::new();
+    jws.insert("payload", payload);
+    jws.insert("protected", protected);
+    jws.insert("signature", signature);
+    Some(jws.to_json())
+}
+
+#[test]
+fn verify_json_agrees_with_verify_compact() {
+    // Every three-part test, re-serialized as flattened JSON
+    // (RFC 7515 §7.2.2), has the same outcome and payload through
+    // verify_json. An empty `protected` is InvalidFormat in JSON
+    // (RFC 7515 §7.2.1, ADR 0026 §1) where compact says InvalidJson, so
+    // only the outcome is compared.
+    let suite = wycheproof::load(SUITE);
+    let mut compared = 0;
+    for (group, test) in suite.tests() {
+        let Some(json) = flattened(test.jws()) else {
+            continue;
+        };
+        let key = verification_key(group);
+        let allowed = [group_alg(&key)];
+        let opts = VerifyOptions::new(&allowed).unwrap();
+        let compact = verify_compact(test.jws(), &key, &opts);
+        let json = verify_json(&json, &key, &opts);
+        let id = test.tc_id;
+        assert_eq!(Outcome::of(&json), Outcome::of(&compact), "tcId {id}");
+        if let (Ok(json), Ok(compact)) = (json, compact) {
+            assert_eq!(json.payload, compact.payload, "tcId {id}");
+            assert_eq!(json.protected, compact.protected, "tcId {id}");
+        }
+        compared += 1;
+    }
+    // 401 tests, of which 18 do not have three parts.
+    assert_eq!(compared, 383);
+}
+
+#[test]
+fn json_serialization_case_through_verify_json() {
+    // tcId 17 is meant as a general JSON JWS (RFC 7515 §7.2.1) that a
+    // compact verifier must reject, and verify_compact does (see ERRORS).
+    // Upstream's text is truncated, though: it lacks the closing `]}`, so
+    // the JSON API rejects it as InvalidJson (RFC 8259 §2). Completed, it
+    // verifies, and its unprotected `header` is returned as data and
+    // selects nothing (ADR 0026 §2).
+    let suite = wycheproof::load(SUITE);
+    let (group, test) = find(&suite, 17);
+    assert!(test.has_flag("JsonSerialization"));
+    let key = verification_key(group);
+    let allowed = [SigningAlg::HS256];
+    let opts = VerifyOptions::new(&allowed).unwrap();
+    assert!(!test.jws().ends_with("]}"));
+    let error = verify_json(test.jws(), &key, &opts).map(drop).unwrap_err();
+    assert_eq!(error.code(), "InvalidJson");
+    let verified = verify_json(&format!("{}]}}", test.jws()), &key, &opts).unwrap();
+    assert_eq!(verified.payload, b"foo");
+    assert_eq!(verified.alg, SigningAlg::HS256);
+    assert_eq!(verified.signature_index, 0);
+    assert!(verified.unprotected.unwrap().contains("unknown"));
 }
