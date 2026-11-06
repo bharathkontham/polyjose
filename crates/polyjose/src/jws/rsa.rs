@@ -182,7 +182,11 @@ fn uint(bytes: &[u8]) -> Result<BoxedUint> {
 mod tests {
     use rsa::traits::PublicKeyParts;
 
+    use super::super::alg::{Operation, bind_key};
     use super::*;
+    use crate::test_support::wycheproof::{
+        self, Deviation, Group, Outcome, Schema, Suite, Summary,
+    };
     use crate::util::b64url_decode;
     use SigningAlg as A;
 
@@ -492,5 +496,86 @@ mod tests {
         }
         assert!(invalid_key(public_key(&even, F4)));
         assert!(invalid_key(public_key(&[], F4)));
+    }
+
+    /// Where polyjose's outcome differs from, or picks a side of,
+    /// Wycheproof's `result` in every `rsa_signature_*` suite.
+    const PKCS1V15_DEVIATIONS: &[Deviation] = &[Deviation::tests(
+        &[8],
+        Outcome::Reject,
+        "RFC 8017 §8.2.2 step 4, §9.2 note 1: EM' carries the DigestInfo \
+         with NULL hash parameters, so one without them (MissingNull) is \
+         an invalid signature",
+    )];
+
+    /// The PSS suites have no `acceptable` test and polyjose follows
+    /// every `result`.
+    const PSS_DEVIATIONS: &[Deviation] = &[];
+
+    /// The JWS `alg` for a Wycheproof group: RS* for the PKCS #1 v1.5
+    /// suites, PS* for the PSS ones (RFC 7518 §3.1). A PSS group must use
+    /// MGF1 over the message hash and a salt of the hash length, the only
+    /// parameters RFC 7518 §3.5 defines.
+    fn group_alg(suite: &Suite, group: &Group) -> SigningAlg {
+        let sha = group.sha.as_deref().unwrap_or_default();
+        let (alg, hash_len) = match (suite.schema, sha) {
+            (Schema::RsassaPkcs1Verify, "SHA-256") => (A::RS256, 32),
+            (Schema::RsassaPkcs1Verify, "SHA-384") => (A::RS384, 48),
+            (Schema::RsassaPkcs1Verify, "SHA-512") => (A::RS512, 64),
+            (Schema::RsassaPssVerify, "SHA-256") => (A::PS256, 32),
+            (Schema::RsassaPssVerify, "SHA-384") => (A::PS384, 48),
+            (Schema::RsassaPssVerify, "SHA-512") => (A::PS512, 64),
+            other => panic!("{}: no JWS alg for {other:?}", suite.name),
+        };
+        if suite.schema == Schema::RsassaPssVerify {
+            assert_eq!(group.mgf_sha.as_deref(), Some(sha), "{}", suite.name);
+            assert_eq!(group.salt_len, Some(hash_len), "{}", suite.name);
+        }
+        alg
+    }
+
+    /// Runs `suite` through key binding (ADR 0026 §2 step 8) and
+    /// [`verify`], with the group's `keyJwk`/`publicKeyJwk`. A rejection
+    /// must be [`Error::InvalidSignature`]: every Wycheproof key is valid.
+    fn run_wycheproof(suite: &Suite, deviations: &[Deviation]) -> Summary {
+        wycheproof::assert_conforms(suite, deviations, |group, test| {
+            let alg = group_alg(suite, group);
+            let key = Jwk::from_json(group.verification_jwk().as_bytes())
+                .unwrap_or_else(|e| panic!("{}: tcId {}: {e:?}", suite.name, test.tc_id));
+            assert_eq!(bind_key(&alg, &key, Operation::Verify), Ok(()));
+            let (msg, sig) = test.signature();
+            let result = verify(&alg, &key, msg, sig);
+            if let Err(err) = &result {
+                assert_eq!(
+                    *err,
+                    Error::InvalidSignature,
+                    "{}: tcId {}",
+                    suite.name,
+                    test.tc_id
+                );
+            }
+            Outcome::of(&result)
+        })
+    }
+
+    #[test]
+    fn wycheproof_rsa_signature_suites() {
+        // RFC 7518 §3.3 on every vendored rsa_signature_* file, 8192 bits
+        // included.
+        for name in wycheproof::names("rsa_signature_") {
+            let suite = wycheproof::load(name);
+            let summary = run_wycheproof(&suite, PKCS1V15_DEVIATIONS);
+            println!("{name}: {summary:?}");
+        }
+    }
+
+    #[test]
+    fn wycheproof_rsa_pss_suites() {
+        // RFC 7518 §3.5 on every vendored rsa_pss_* file.
+        for name in wycheproof::names("rsa_pss_") {
+            let suite = wycheproof::load(name);
+            let summary = run_wycheproof(&suite, PSS_DEVIATIONS);
+            println!("{name}: {summary:?}");
+        }
     }
 }
