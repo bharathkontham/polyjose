@@ -52,14 +52,18 @@ The five members below are required, `features` is optional, and no others are a
 | `keys.generate_for` | `alg` (any string) ([below](#keysgenerate_for)) | `shape` (the key without its random material) | yes |
 | `jwe.encrypt` | `serialization`, `enc`, `plaintext_b64u`, `recipients`, and optionally `protected`, `protected_b64u`, `unprotected`, `aad_b64u`, `compress`, `rng_b64u` ([below](#jweencrypt)) | `jwe` (exact), or `decrypt_with` (round trip) | yes |
 | `jwe.decrypt` | `jwe`, `key`, `allowed_algs`, `allowed_enc`, and optionally `understood_crit`, `max_input_len`, `max_recipients`, `max_pbes2_count`, `max_decompressed_len` ([below](#jwedecrypt)) | `plaintext_b64u`, `recipient` | yes |
-| `jwt.validate` | reserved | reserved | |
+| `jwt.validate` | `token`, `now`, `allowed_algs`, exactly one of `key` or `jwks`, and optionally `policy`, `decrypt` ([below](#jwtvalidate)) | `claims`, `alg`, and `key_index` exactly when the input has `jwks` | yes |
+| `jwt.issue` | `claims`, `alg`, `key`, and optionally `typ`, `encrypt`, `validate` ([below](#jwtissue)) | `token` (exact), or nothing (the runner validates the token itself) | yes |
 
-A reserved operation's input and output members are defined by the feature that implements it, which adds them to `schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails.
+`schema.json` may also reserve an operation for a later feature: its name is in the `operation` enum, but its input and output members are defined only by the feature that implements it, which adds them to `schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails. No operation is reserved today.
+
+A success expectation lists **exactly** the outputs: a runner fails a vector whose operation produced an output the expectation leaves out, as well as one that lacks an expected output.
 
 ### How bytes are written
 
 - **Codec operations (`b64url.*`, `jwk.thumbprint`): lowercase hex** (`bytes_hex`: two digits per octet, `""` for none), never base64url, so the base64url codec is never checked against itself.
 - **`keys.*` operations: PEM text, JWK objects and DER as canonical base64url** (`der_b64u`), never hex. A PEM block is a JSON string with `\n` line endings; JWK members are canonical base64url as RFC 7518 §6 and RFC 8037 §2 define them. A runner decodes `der_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome.
+- **`jwt.*` operations: tokens as text, keys as JWK and JWK Set objects, claims as a JSON object, time as integer seconds.** A token is passed to the library exactly as written (malformed tokens are under test), and claims under test that a JSON vector can't hold (duplicate names, `1e400`, non-UTF-8 octets) live inside the token's base64url payload.
 - **`jws.*` and `jwe.*` operations: canonical base64url** (members ending in `_b64u`). This is deliberate: the codec is no longer under test there (it has its own vectors), and every JWS field is natively base64url (RFC 7515 §2), so the RFC's values are copied as printed. A runner decodes `payload_b64u` and `detached_payload_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome. `protected_b64u` is passed to the library as text, unchanged.
 
 ## `jws.sign`
@@ -221,6 +225,79 @@ Expect `{ "ok": true, "plaintext_b64u", "recipient" }`: the plaintext and the in
 - **One fault per failure vector**, as for `jws.*`; the precedence vectors put every fault inside `jwe` itself.
 - Map `serialization` to the binding's compact and JSON encrypt functions, and the limits to its decrypt policy. Never substitute defaults of your own.
 
+## `jwt.validate`
+
+Validates a JWT (RFC 7519 §7.2) at the time `now`, with an allow-list (RFC 8725 §3.1) and the caller's keys (ADR 0029 §1), under ADR 0027's policy and processing order (§9). A three-part token goes to the library's signed-JWT validation; with `decrypt`, the token is a nested JWT (a compact JWE around a signed JWT, ADR 0027 §7) and goes to its nested validation.
+
+| Input member | Meaning |
+|---|---|
+| `token` | The token as given, any string (malformed tokens are under test). |
+| `now` | **Required.** The current time in whole seconds since the epoch (RFC 7519 §2), an integer within ±(2^53 − 1) (ADR 0027 §2). The runner builds a **fixed clock** from it and never reads its platform's clock (ADR 0028 §4), so every platform gives the same verdict on every day. |
+| `allowed_algs` | The JWS allow-list, names passed as given. An empty list, `"none"` or an unknown name is refused with `AlgorithmNotAllowed`. |
+| `key` | One verification JWK, a JSON object. Its `kid` is not compared with the header's (ADR 0029 §1). |
+| `jwks` | A JWK Set (RFC 7517 §5), a JSON object. Candidates are selected and tried in set order (ADR 0029 §2–§4). Exactly one of `key` and `jwks` is required (the schema's `oneOf`). |
+| `policy` | Optional; the [policy](#the-jwt-policy). Absent means the library defaults. |
+| `decrypt` | Optional; the outer JWE layer of a nested JWT: `{ "key", "allowed_algs", "allowed_enc", "max_pbes2_count"? }`, the decrypting JWK and allow-lists as `jwe.decrypt` takes them, and the PBES2 bound (ADR 0023; 10,000 when absent). |
+
+Expect `{ "ok": true, "claims", "alg", "key_index"? }`:
+
+- `claims`: the validated JWT Claims Set, a JSON object, compared as a JSON value: member order is ignored and numbers are compared as doubles (so `1300819380` and `1300819380.0` are equal), every string octet for octet;
+- `alg`: the JWS `alg` that verified (for a nested JWT, the inner one's);
+- `key_index`: the zero-based position in `jwks` of the member that verified (ADR 0029 §4). It is present **exactly** when the input has `jwks`.
+
+Or `{ "ok": false, "error": <code> }`.
+
+### The JWT policy
+
+Every member is optional. An absent member, or a boolean member set to `false`, keeps the library default; a runner never restates a default of its own.
+
+| Member | Meaning | Library default |
+|---|---|---|
+| `issuer` | The accepted issuer, a string, or a list of them (RFC 7519 §4.1.1, RFC 8725 §3.8). `iss` must equal one exactly. | none checked |
+| `audience` | The accepted audiences, an array (RFC 7519 §4.1.3). `aud` must contain one. | none accepted: a token **with** `aud` is rejected (ADR 0027 §4) |
+| `subject` | The expected `sub` (RFC 7519 §4.1.2). | not checked |
+| `leeway` | Clock skew in whole seconds on `exp`, `nbf` and `iat` (RFC 7519 §4.1.4–§4.1.5). Over 600 is refused with `InvalidClaim`. | 60 |
+| `max_age` | The oldest accepted `iat`, in seconds; makes `iat` required (RFC 7519 §4.1.6). | `iat` type-checked only |
+| `require` | Claim names that must be present, with any value (RFC 7519 §4). | none |
+| `allow_missing_exp` | `true` accepts a token without `exp` (the explicit opt-out of ADR 0007). | `exp` required |
+| `ignore_audience` | `true` accepts a token with `aud` when no audience is configured (RFC 8725 §3.9 warns against it). | rejected |
+| `typ` | `{ "mode": "default" }` (absent or `JWT`), `{ "mode": "exact", "value": <type> }` (present and equal as a media type, RFC 7515 §4.1.9) or `{ "mode": "any" }` (no check). `value` is required with `exact` and allowed with nothing else (ADR 0027 §5). | `default` |
+| `profile` | `"access_token"`: a JWT access token (RFC 9068 §4): `typ` `at+jwt`, the RFC 9068 §2.2 claims, `issuer` and `audience` both required (the library refuses the policy without them, `InvalidClaim`). A `typ` member then overrides the profile's `at+jwt`; mode `default` contradicts the profile and is a **broken vector**. | none |
+| `max_key_candidates` | The most `jwks` members tried for one token; more is `NoMatchingKey` (ADR 0029 §4). | 8 |
+
+## `jwt.issue`
+
+Issues a signed JWT (RFC 7519 §7.1; ADR 0027 §8) and, with `encrypt`, encrypts it as a nested JWT (sign-then-encrypt, RFC 7519 §11.2; ADR 0027 §7).
+
+| Input member | Meaning |
+|---|---|
+| `claims` | The JWT Claims Set, a JSON object. The library serializes the registered claims first, then the others in order (ADR 0027 §1). |
+| `alg` | The JWS `alg`, passed as given. RS\*/PS\* are `UnsupportedAlgorithm` (ADR 0021); `none` is `AlgorithmNotAllowed`. |
+| `key` | The signing JWK, a JSON object. |
+| `typ` | Optional. Absent: the library default `JWT`. A string sets it (`at+jwt` for an access token, RFC 9068 §2.1). `null` omits it (RFC 7519 §5.1). |
+| `encrypt` | Optional; `{ "alg", "enc", "key" }`: one recipient's key management `alg` and JWK (a public key, or an `oct` key) and the content encryption `enc`. The library puts `cty: "JWT"` in the protected header itself (RFC 7519 §5.2). |
+| `validate` | Optional; how the runner validates the token it issued: the `jwt.validate` input members other than `token`, with the same rules (`now` required, exactly one of `key` and `jwks`; `decrypt` for an encrypted token). |
+
+Expect one of:
+
+- **`{ "ok": true, "token": <token> }`** for a deterministic signature (HMAC, EdDSA): the exact compact token, compared as a string. Not allowed with `encrypt`, whose output is randomized (RFC 7516 §5.1). With `validate`, the runner also validates it.
+- **`{ "ok": true }`**: the runner checks the token itself. It must have three compact parts (a JWS, RFC 7515 §7.1), or five with `encrypt` (a JWE, RFC 7516 §7.1); then it must validate with `validate`, with the `alg` it was issued with, giving back the issued `claims` (compared as a JSON value). Any failure there, including a `validate` the library refuses, fails the vector. `validate` is required, unless `encrypt` is set: a recipient polyjose can't decrypt for (RSA-OAEP-256, ADR 0021) can only be checked by shape.
+- **`{ "ok": false, "error": <code> }`**, with no `validate`.
+
+## Rules for `jwt.*` runners
+
+- **The clock.** A runner builds a fixed clock from `now` (in Rust, `FixedClock(now)`; in each binding, its validate call's `now` option, ADR 0028 §4) and never reads its platform's clock. The Rust runner's `jwt_runner_never_reads_the_wall_clock` checks its own source for it.
+- **Step order**, the first error being the outcome:
+  1. `jwt.validate` (and `jwt.issue`'s `validate`): import `decrypt.key`, then build `decrypt`'s allow-lists and bound, then import `key` or `jwks`, then build the policy from `allowed_algs` and `policy` (the allow-list first, then the `leeway`).
+  2. `jwt.issue`: import `key`, then parse `claims`, then import `encrypt.key`, then sign, then encrypt.
+  3. Call the library.
+
+  So a **JWK or JWK Set import error is the vector's result**, compared like any other: an RSA private JWK (or a JWK Set holding one, ADR 0029 §3) is `UnsupportedAlgorithm` (ADR 0021), and a set without a `keys` array is `InvalidKey`. A set member that is merely invalid is skipped at import (RFC 7517 §5), which can leave `NoMatchingKey` at validation.
+- **One fault per failure vector**, as for `jws.*`; the ADR 0027 §9 precedence vectors put every fault inside `token` itself.
+- **Strictness.** The schema is closed at every level: a misspelled member anywhere (`allowed_alg`, `policy.audiences`), a missing `now`, or both `key` and `jwks` fail the run. The `jwt.issue` cross-member rules above (no exact `token` with `encrypt`; `validate` required for `{ "ok": true }` unless `encrypt` is set; no `validate` on a failure vector) and the `profile`/`typ` contradiction fail it too.
+- Map `policy` to the binding's validation options member by member, `typ` to its typing mode, `profile` to its access-token policy, `key`/`jwks` to its single-key and key-set forms, and `decrypt` to its nested-JWT call. Never substitute defaults of your own (ADR 0030).
+- **Nested JWTs** (`decrypt`, `encrypt`) are wired in every runner now. Their vectors land with the library's nested implementation (feature 0004 T13).
+
 ## Features
 
 A vector may need a cargo feature of polyjose, written in `features` as:
@@ -246,6 +323,13 @@ Every vector under `jws-*/`, `third_party/**/jws/`, `jwe/` and `keys/`, and ever
 - octets are base64url strings (`*_b64u`), never `*_hex` or raw bytes, and every one a runner decodes is canonical;
 - in a `keys.*` vector, every base64url member (`x`, `y`, `d`, `n`, `e`, `k`) of a `jwk` object is canonical.
 
+Every vector under `jwt/`, and every `jwt.*` vector anywhere, must be readable the same way; `jwt_vectors_are_binding_ready` checks it. It uses only strings, booleans, `null`, objects, arrays and numbers of magnitude at most 2^53 − 1 (9007199254740991, the NumericDate range, ADR 0027 §2), which every binding holds exactly, JavaScript's doubles included:
+
+- an integer is written plainly (`1300819380`, `-100`; never `1300819380.0` or `1.3e9`), so a binding reads `now` and every count as an integer;
+- a non-integral value (a fractional NumericDate, RFC 7519 §2, in expected `claims`) is a plain decimal (`1300819380.5`), no exponent;
+- values outside that range, which the library must reject (`exp: 2^53`, `1e400`), are tested **inside the base64url payload of `token`**, never in the vector JSON;
+- the `*_b64u` and `*_hex` rules above apply too.
+
 ## Rules for every runner
 
 Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
@@ -263,13 +347,13 @@ The Rust runner also checks `schema.json` against its own tables (`schema_and_ru
 
 Which operation families each platform's runner runs today. The rules above apply to every runner that exists. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
 
-| Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jws.*` | `keys.*` |
-|---|---|---|---|
-| Rust | `crates/polyjose/tests/conformance.rs` | runs | runs |
-| WASM | none yet (0006, over the 0013 surface) | no runner yet (0006) | not yet bound (0006–0009) |
-| Node | none yet (0007, over the 0013 surface) | no runner yet (0007) | not yet bound (0006–0009) |
-| Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) |
-| Swift | none yet (0009, over the 0013 surface) | no runner yet (0009) | not yet bound (0006–0009) |
+| Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jws.*` | `keys.*` | `jwt.*` |
+|---|---|---|---|---|
+| Rust | `crates/polyjose/tests/conformance.rs` | runs | runs | runs |
+| WASM | none yet (0006, over the 0013 surface) | no runner yet (0006) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0006) |
+| Node | none yet (0007, over the 0013 surface) | no runner yet (0007) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0007) |
+| Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0008) |
+| Swift | none yet (0009, over the 0013 surface) | no runner yet (0009) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0009) |
 
 When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row. ADR 0034's parity check then compares its results with the Rust reference run.
 
@@ -288,6 +372,7 @@ When a binding's runner lands it implements every family it binds, and the never
 - **Deterministic algorithms** (HMAC, EdDSA) also have `sign` vectors with an exact expected output. **Randomized ones** (ECDSA, JWE) are checked by round trip (`verify_with`) plus a `verify`/`decrypt` vector of the RFC's published output. RS\*/PS\* are verify-only (ADR 0021): only `verify` vectors, and `sign` vectors that expect `UnsupportedAlgorithm`.
 - **Negative vectors are mandatory:** tampered signatures, `alg: none`, alg/key mismatch, wrong `crit`, expired JWTs, invalid curve points, non-canonical encodings.
 - Imported upstream suites that every platform runs (the RFC 7520 cookbook) live in `vectors/third_party/`, converted to this format, with their licenses alongside them (non-JSON files are ignored).
+- JWT vectors live under `jwt/`, one vector per file like every other (ADR 0045), in one directory per origin: `jwt/rfc7519/` (the RFC 7519 §3.1 and §6.1 examples and the RFC 7515 A.2 token that is RFC 7519 A.2's inner JWT; `source` the RFC section), and the directories of feature 0004 T11–T13 (oracle positives, negatives, nested). Tokens that aren't RFC-published come from `tools/jwt-oracle` (`node:crypto`), never from polyjose; a spec given to it as a single entry writes a single vector, which is the form a vector file must have. An expected token or value an RFC doesn't print is derived independently and the `description` says how (for example `jwt/rfc7519/3-1-hs256-issue-exact.json`, an HMAC computed with Python's `hmac`).
 - **Wycheproof is not here.** It lives in `crates/polyjose/tests/third_party/wycheproof/`, in its upstream format, because it is a Rust-layer suite (ADR 0008 layer 1): it exercises the primitives through polyjose's JOSE layer, and the bindings add nothing to that.
 
 ## Tools
@@ -295,6 +380,7 @@ When a binding's runner lands it implements every family it binds, and the never
 The scripts that generated or check vectors live in [`tools/`](tools/). They read only data (the vendored ietf-jose cookbook and Wycheproof files, the RFC text, committed key files) and use only Node's built-ins (node:crypto, which is OpenSSL) and Python's standard library: no npm or pip packages, and none of them calls polyjose. Paths below are relative to this directory (`conformance/`). The index of the JWE vectors, with the generator of each directory, is [`vectors/jwe/README.md`](vectors/jwe/README.md).
 
 - **`tools/jwe/reproduce.sh <rfc-dir>`** re-runs every JWE generator below into a temporary directory and compares each file it writes with the committed vector, byte for byte; a historical generator is reported as such. `<rfc-dir>` holds `rfc7516.txt` and `rfc7517.txt` from `https://www.rfc-editor.org/rfc/` (the script checks their SHA-256). The Node generators write the Node and OpenSSL versions into `source` or `description`, so they reproduce byte for byte with the versions named in the committed files (Node.js 24.21.0, OpenSSL 3.5.8); another version changes only that text.
+- **`tools/jwt-oracle/gen.mjs <spec.json> <out.json>`** builds `jwt.validate` and `jwt.issue` vectors from a spec: compact and flattened JWSs over raw payload octets (so malformed claims sit behind valid signatures) and nested JWEs, with `node:crypto` only. Its [README](tools/jwt-oracle/README.md) has the spec format and the fixed test keys.
 - **`tools/rsa-oaep-oracle.mjs [vector-dir]`** checks every exact RSA-OAEP-256 `jwe.encrypt` vector in `vectors/jwe/rsa-oaep-256/` against its test-only private key (`keys/*.private.jwk`) with Node's built-in RSA, independently of polyjose, which has no RSA private-key code (ADR 0021).
 - **`tools/jwe/t09-extract-rfc-inputs.py <rfc7516.txt> <cookbook jwe dir> <out.json>`**: *historical.* Extracts the RFC 7516 App. A.1 and A.2 and RFC 7520 §5.1 and §5.2 compact JWEs and RSA public keys used by four `negative-structure/` vectors. The script that wrote `compact/` and `negative-structure/` (0003 T09) was not preserved, so those 60 files have no generator; `reproduce.sh` checks that the four extracted inputs match their vectors.
 - **`tools/jwe/t10-gcmkw.mjs <cookbook 5_7 json> <out-dir>`** writes the 24 0003 T10 files of `gcmkw/`: RFC 7520 §5.7 decrypt and exact encrypt from the cookbook, and A\*GCMKW tokens and negatives built with node:crypto from SHA-256-derived bytes.

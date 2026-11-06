@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §6.1",
+  "description": "The §6.1 Unsecured JWT (alg none, empty signature, the §3.1 claims) is never accepted, whatever the allow-list and key: AlgorithmNotAllowed (RFC 8725 §3.2, ADR 0007, ADR 0027 §6)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.",
+    "now": 1300819320,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "source": "RFC 7519 §3.1",
+  "description": "Issues the §3.1 claims with HS256 and no typ (RFC 7519 §5.1: OPTIONAL); the runner validates the issued token with the same key at now 1300819320 and gets the claims back unchanged (RFC 7519 §7.1, §7.2)",
+  "operation": "jwt.issue",
+  "input": {
+    "claims": {
+      "iss": "joe",
+      "exp": 1300819380,
+      "http://example.com/is_root": true
+    },
+    "alg": "HS256",
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "typ": null,
+    "validate": {
+      "now": 1300819320,
+      "allowed_algs": [
+        "HS256"
+      ],
+      "key": {
+        "kty": "oct",
+        "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+      }
+    }
+  },
+  "expect": {
+    "ok": true
+  }
+}
