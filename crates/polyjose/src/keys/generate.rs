@@ -5,7 +5,8 @@
 //! - EC P-256/P-384/P-521/secp256k1: a private scalar d in [1, n − 1]
 //!   (SEC 1 v2 §3.2.1) by rejection sampling;
 //! - Ed25519: 32 random octets (RFC 8032 §5.1.5);
-//! - X25519: 32 random octets (RFC 7748 §5, §6.1).
+//! - X25519: 32 random octets (RFC 7748 §5, §6.1), from
+//!   [`generate_x25519_secret`], which JWE's X25519 ECDH-ES shares.
 //!
 //! No RSA key generation (ADR 0021).
 //!
@@ -27,7 +28,8 @@
 //! bytes polyjose holds are in [`Zeroizing`] buffers or local copies that
 //! are zeroized before return. Copies made inside the curve and dalek
 //! crates (sampling candidates, by-value conversions) are best-effort:
-//! [`generate_ec_secret`], `ec_jwk_from_secret`, `okp::x25519_public` and
+//! [`generate_ec_secret`], `ec_jwk_from_secret`,
+//! [`generate_x25519_secret`], `okp::x25519_public` and
 //! `okp::ed25519_public` name each upstream API.
 
 use p256::elliptic_curve::rand_core::TryCryptoRng;
@@ -163,8 +165,10 @@ where
 /// "The private key is 32 octets (256 bits) of cryptographically secure
 /// random data"; X25519: RFC 7748 §5 and §6.1, 32 random bytes, clamped
 /// only when used). The public key `x` is derived by ed25519-dalek or
-/// x25519-dalek. Like [`generate_ec`], this is the crate-wide entry point,
-/// for X25519 ECDH-ES ephemeral keys too (RFC 8037 §3.1, RFC 7518 §4.6).
+/// x25519-dalek. An X25519 secret comes from [`generate_x25519_secret`],
+/// the crate-wide X25519 entry point, which JWE also calls for its X25519
+/// ECDH-ES ephemeral keys (RFC 8037 §3.2, RFC 7518 §4.6; F08, ADR 0050),
+/// as [`generate_ec_secret`] is for EC.
 ///
 /// # Errors
 ///
