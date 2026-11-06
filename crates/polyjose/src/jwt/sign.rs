@@ -34,6 +34,43 @@ const FORBIDDEN_PARAMS: [&str; 5] = ["b64", "crit", "cty", "zip", "enc"];
 /// unique (RFC 7515 §4).
 const OWNED_PARAMS: [&str; 3] = ["alg", "typ", "kid"];
 
+/// JWK members that hold secret or private key material: `k`, the
+/// symmetric key (RFC 7518 §6.4.1); `d`, the EC and OKP private key
+/// (RFC 7518 §6.2.2.1, RFC 8037 §2) and the RSA private exponent; and `p`,
+/// `q`, `dp`, `dq`, `qi`, `oth`, the other RSA private members (RFC 7518
+/// §6.3.2). [`check_public_jwk`] refuses each of them whatever the `kty`,
+/// so one that the key type does not define is not let through as an
+/// unknown member (RFC 7517 §4).
+const SECRET_JWK_MEMBERS: [&str; 8] = ["k", "d", "p", "q", "dp", "dq", "qi", "oth"];
+
+/// Checks the value of a `jwk` header parameter: "the public key that
+/// corresponds to the key used to digitally sign the JWS" (RFC 7515
+/// §4.1.3), so it must be a valid JWK (RFC 7517 §4) with no secret or
+/// private member.
+///
+/// A JWT header is readable by anyone who sees the token, so a secret or
+/// private member there would publish the key (CLAUDE.md secrets rule,
+/// ADR 0007).
+///
+/// # Errors
+///
+/// [`Error::InvalidHeader`]`("jwk")`, with no part of the value, when `v`
+/// is not a JSON object, has any of [`SECRET_JWK_MEMBERS`], is not a valid
+/// JWK ([`Jwk::from_object`], which also refuses an RSA private JWK,
+/// ADR 0021), or is not a public key ([`Jwk::is_public`]; an `oct` key
+/// never is, RFC 7518 §6.4).
+fn check_public_jwk(v: &Value) -> Result<()> {
+    let refused = || Error::InvalidHeader("jwk");
+    let object = v.as_object().ok_or_else(refused)?;
+    if SECRET_JWK_MEMBERS.iter().any(|n| object.contains(n)) {
+        return Err(refused());
+    }
+    match Jwk::from_object(object) {
+        Ok(key) if key.is_public() => Ok(()),
+        _ => Err(refused()),
+    }
+}
+
 /// How [`sign`] builds the JWS Protected Header of a JWT (RFC 7519 §5,
 /// §7.1).
 ///
@@ -115,7 +152,13 @@ impl IssueOptions {
     /// - for `alg`, `typ` and `kid`, which come from [`IssueOptions::new`],
     ///   the typ setters and the key (ADR 0027 §8);
     /// - for a registered parameter of the wrong JSON type (RFC 7515
-    ///   §4.1).
+    ///   §4.1);
+    /// - `InvalidHeader("jwk")` for a `jwk` that is not a valid public JWK
+    ///   (RFC 7515 §4.1.3, RFC 7517 §4) or that has any secret or private
+    ///   member, whatever its `kty`: `k`, `d`, `p`, `q`, `dp`, `dq`, `qi`
+    ///   or `oth` (RFC 7518 §6.2.2, §6.3.2, §6.4.1; RFC 8037 §2). The
+    ///   header is public, so such a member would publish the key. The
+    ///   error carries no part of the value.
     pub fn header_param(mut self, name: &str, v: impl Into<Value>) -> Result<Self> {
         if let Some(n) = FORBIDDEN_PARAMS.iter().find(|n| **n == name) {
             return Err(Error::InvalidHeader(n));
@@ -124,6 +167,9 @@ impl IssueOptions {
             return Err(Error::InvalidHeader(n));
         }
         let v = v.into();
+        if name == "jwk" {
+            check_public_jwk(&v)?;
+        }
         // RFC 7515 §4.1: type-check a registered parameter now, with the
         // header parser's own rules, so the error points at this call.
         let mut probe = Object::new();
