@@ -329,29 +329,36 @@ guarded_membership_rules() {
   done <"$work/guard-table"
 }
 
-check_group_rules() {
-  local group crate
-  # The table, with crate names normalized like the allowlist's and the tree's. Fails closed on a
-  # malformed row.
-  guarded_group_members | normalize >"$work/guard-table"
-  awk 'NF != 3 || $1 !~ /^[a-z0-9][a-z0-9-]*$/ { bad = 1 } END { exit bad || NR == 0 }' "$work/guard-table" \
-    || die "guarded_group_members in scripts/check-deps.sh is malformed"
-  guarded_membership_rules
-  # "<crate> <parent> <group>" for the path walk below.
-  awk '{ print $2, $3, $1 }' "$work/guard-table" >"$work/guarded"
-  # The graph is the tree of check 1 itself, printed with depths so that each line's parent is the
-  # nearest line above it one level up. cargo prints a repeated subtree only once (marked "(*)"),
-  # but every package's own dependencies appear at its first occurrence, so the edges are complete.
-  cargo tree --locked -p "$core_pkg" -e "normal,build" --all-features --target all --prefix depth \
-    >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree --prefix depth failed"; }
-  # Prints "<crate> <parent> <group> <path>" for each guarded crate reachable without its parent.
+# guarded_group_edges <group>: the edge kinds of `cargo tree -e` whose tree must not contain the
+# group's crates (ADR 0049 §5). Build-time crates are absent from the normal edges, so they reach
+# polyjose only as a build-dependency; the proc-macro group is absent from the normal edges that
+# avoid proc-macro crates, so it reaches polyjose only through a proc-macro. Neither links into the
+# artifact. A guarded group without a case here is an error.
+guarded_group_edges() {
+  case $1 in
+    dalek-proc-macro) echo normal,no-proc-macro ;;
+    dalek-build | num-traits-build) echo normal ;;
+    *) return 1 ;;
+  esac
+}
+
+# guarded_paths <edge kinds> <rules> <out>: for each rule "<crate> <avoid> <group>" in <rules>,
+# writes "<crate> <avoid> <group> <name>@<version> <path>" to <out> when <crate> is reachable from
+# polyjose in `cargo tree -p polyjose -e <edge kinds> --all-features --target all` without entering
+# a package named <avoid> ("-" avoids nothing: no crate has that name). <path> is a shortest such
+# path. The tree is printed with depths, so each line's parent is the nearest line above it one
+# level up. cargo prints a repeated subtree only once (marked "(*)"), but every package's own
+# dependencies appear at its first occurrence, so the edges are complete.
+guarded_paths() {
+  cargo tree --locked -p "$core_pkg" -e "$1" --all-features --target all --prefix depth </dev/null \
+    >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree -e $1 --prefix depth failed"; }
   python3 -I -c '
 import re, sys
-tree_path, guarded_path = sys.argv[1], sys.argv[2]
+tree_path, rules_path = sys.argv[1], sys.argv[2]
 def norm(name):
     return name.lower().replace("_", "-")
 line_re = re.compile(r"^([0-9]+)([A-Za-z0-9][A-Za-z0-9_-]*) (v[0-9][^ ]*)")
-edges, stack, root = {}, [], None
+edges, stack, root, spelled = {}, [], None, {}
 with open(tree_path, encoding="utf-8") as f:
     for number, line in enumerate(f, 1):
         line = line.rstrip("\r\n")
@@ -359,6 +366,7 @@ with open(tree_path, encoding="utf-8") as f:
         if m is None:
             sys.exit("unexpected cargo tree line %d: %s" % (number, line))
         depth, node = int(m.group(1)), (norm(m.group(2)), m.group(3))
+        spelled[node] = m.group(2)
         if depth == 0:
             if root is not None:
                 sys.exit("cargo tree printed more than one root")
@@ -371,16 +379,16 @@ with open(tree_path, encoding="utf-8") as f:
         stack.append(node)
 if root is None:
     sys.exit("cargo tree printed nothing")
-with open(guarded_path, encoding="utf-8") as f:
+with open(rules_path, encoding="utf-8") as f:
     rules = [line.split() for line in f if line.strip()]
-for crate, parent, group in rules:
-    # Breadth-first walk from polyjose that never enters a package named `parent`.
+for crate, avoid, group in rules:
+    # Breadth-first walk from polyjose that never enters a package named `avoid`.
     prev, todo, hit = {root: None}, [root], None
     while todo and hit is None:
         nxt = []
         for node in todo:
             for dep in sorted(edges.get(node, ())):
-                if dep in prev or dep[0] == parent:
+                if dep in prev or dep[0] == avoid:
                     continue
                 prev[dep] = node
                 if dep[0] == crate:
@@ -395,15 +403,48 @@ for crate, parent, group in rules:
         while node is not None:
             path.append(node[0])
             node = prev[node]
-        print("%s %s %s %s@%s %s" % (crate, parent, group, hit[0], hit[1][1:], " -> ".join(reversed(path))))
-' "$work/tree.depth" "$work/guarded" >"$work/guard-paths" \
-    || die "could not read the dependency graph for the guarded groups (see above)"
-  local parent spec path
+        print("%s %s %s %s@%s %s" % (crate, avoid, group, spelled[hit], hit[1][1:], " -> ".join(reversed(path))))
+' "$work/tree.depth" "$2" </dev/null >"$3" || die "could not read the dependency graph for the guarded groups (see above)"
+}
+
+check_group_rules() {
+  local group crate parent spec path kinds
+  # The table, with crate names normalized like the allowlist's and the tree's. Fails closed on a
+  # malformed row or a group without an edge rule.
+  guarded_group_members | normalize >"$work/guard-table"
+  awk 'NF != 3 || $1 !~ /^[a-z0-9][a-z0-9-]*$/ { bad = 1 } END { exit bad || NR == 0 }' "$work/guard-table" \
+    || die "guarded_group_members in scripts/check-deps.sh is malformed"
+  : >"$work/guard-edge-rules"
+  while read -r group crate parent; do
+    kinds=$(guarded_group_edges "$group") || die "guarded group $group has no case in guarded_group_edges (scripts/check-deps.sh)"
+    echo "$kinds $crate - $group" >>"$work/guard-edge-rules"
+  done <"$work/guard-table"
+  guarded_membership_rules
+
+  # Path rule: on the tree of check 1 (normal and build edges), every member is unreachable once
+  # its required parent is removed.
+  awk '{ print $2, $3, $1 }' "$work/guard-table" >"$work/guarded"
+  guarded_paths normal,build "$work/guarded" "$work/guard-paths"
   while read -r crate parent group spec path; do
     fail "$crate (guarded group $group) is reached without going through $parent (ADR 0025, ADR 0042 §2): $path"
     echo "  Every path to it (cargo tree -p $core_pkg -e normal,build --all-features --target all -i $spec):"
     cargo tree --locked -p "$core_pkg" -e normal,build --all-features --target all -i "$spec" </dev/null 2>&1 | sed 's/^/    /' || true
   done <"$work/guard-paths"
+
+  # Edge rule: no member is in its group's edge kinds of the tree at all (ADR 0049 §5).
+  awk '{ print $1 }' "$work/guard-edge-rules" | sort -u >"$work/guard-edge-kinds"
+  while read -r kinds; do
+    awk -v k="$kinds" '$1 == k { print $2, $3, $4 }' "$work/guard-edge-rules" >"$work/guard-edge-rules.k"
+    guarded_paths "$kinds" "$work/guard-edge-rules.k" "$work/guard-edge-paths"
+    while read -r crate parent group spec path; do
+      case $kinds in
+        normal) fail "$crate (guarded group $group) is in cargo tree -e $kinds: a build-time crate may be reached through build edges only (ADR 0049 §5): $path" ;;
+        *) fail "$crate (guarded group $group) is in cargo tree -e $kinds: it may be reached only through a proc-macro (ADR 0049 §5): $path" ;;
+      esac
+      echo "  Every path to it (cargo tree -p $core_pkg -e $kinds --all-features --target all -i $spec):"
+      cargo tree --locked -p "$core_pkg" -e "$kinds" --all-features --target all -i "$spec" </dev/null 2>&1 | sed 's/^/    /' || true
+    done <"$work/guard-edge-paths"
+  done <"$work/guard-edge-kinds"
 }
 
 # 6. Every package in the core's tree comes from crates.io. The walk follows normal and build
