@@ -174,6 +174,10 @@ use core::cmp::Ordering;
 use core::fmt;
 use std::collections::BTreeSet;
 
+use p256::elliptic_curve::sec1::{FromSec1Point, ModulusSize, Sec1Point, ToSec1Point};
+use p256::elliptic_curve::{
+    AffinePoint, Curve, CurveArithmetic, FieldBytes, FieldBytesSize, PublicKey, SecretKey,
+};
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::error::{Error, Result};
@@ -1659,7 +1663,103 @@ fn parse_ec(object: &Object, crv: EcCurve) -> Result<EcKey> {
     if d.as_ref().is_some_and(|d| d.len() != len) {
         return Err(Error::InvalidKey("d has the wrong length for crv"));
     }
+    // ADR 0041 §4, ADR 0007: the arithmetic checks, once every member is
+    // well-formed. The point first, then the scalar.
+    if !ec_point_is_valid(crv, &x, &y) {
+        return Err(Error::InvalidKey(EC_POINT_INVALID));
+    }
+    if d.as_ref().is_some_and(|d| !ec_scalar_is_valid(crv, d)) {
+        return Err(Error::InvalidKey(EC_SCALAR_INVALID));
+    }
     Ok(EcKey { crv, x, y, d })
+}
+
+/// Detail for an `EC` public point that is not on its curve.
+const EC_POINT_INVALID: &str = "EC point is not on the curve";
+/// Detail for an `EC` private scalar outside [1, n − 1].
+const EC_SCALAR_INVALID: &str = "EC private key d is out of range";
+/// Detail for an `OKP` `Ed25519` `x` that is not a usable public key.
+const ED25519_PUBLIC_INVALID: &str = "Ed25519 public key is invalid";
+
+/// Whether (`x`, `y`) is a point of `crv` other than the identity
+/// (ADR 0041 §4, ADR 0007; SEC 1 v2 §3.2.2.1 public key validation).
+///
+/// RFC 7518 §6.2.1.2–§6.2.1.3 give the coordinates as full-length
+/// big-endian field elements, which are exactly the octets of an
+/// uncompressed SEC 1 point (SEC 1 v2 §2.3.3) without its `0x04` tag. The
+/// curve crate decodes that point and checks, in its own constant-time
+/// arithmetic, that both coordinates are reduced field elements (0 ≤ x, y
+/// < p, SEC 1 §2.3.4) and satisfy the curve equation. The identity has no
+/// affine coordinates, so it cannot be spelled as (`x`, `y`): `(0, 0)` is
+/// off every one of these curves (b ≠ 0), and `PublicKey` rejects the
+/// identity in any case. The lengths were checked by the caller; a wrong
+/// length is treated as invalid here too.
+fn ec_point_is_valid(crv: EcCurve, x: &[u8], y: &[u8]) -> bool {
+    match crv {
+        EcCurve::P256 => point_on_curve::<p256::NistP256>(x, y),
+        EcCurve::P384 => point_on_curve::<p384::NistP384>(x, y),
+        EcCurve::P521 => point_on_curve::<p521::NistP521>(x, y),
+        EcCurve::Secp256k1 => point_on_curve::<k256::Secp256k1>(x, y),
+    }
+}
+
+/// Whether `d` is a private scalar of `crv` in [1, n − 1] (ADR 0041 §4;
+/// SEC 1 v2 §3.2.1: "an integer d in the interval [1, n − 1]";
+/// RFC 7518 §6.2.2.1). `d` is borrowed from its wiped-on-drop buffer, and
+/// the `SecretKey` the curve crate builds from it is wiped when dropped.
+fn ec_scalar_is_valid(crv: EcCurve, d: &[u8]) -> bool {
+    match crv {
+        EcCurve::P256 => scalar_in_range::<p256::NistP256>(d),
+        EcCurve::P384 => scalar_in_range::<p384::NistP384>(d),
+        EcCurve::P521 => scalar_in_range::<p521::NistP521>(d),
+        EcCurve::Secp256k1 => scalar_in_range::<k256::Secp256k1>(d),
+    }
+}
+
+/// See [`ec_point_is_valid`]: `PublicKey::from_sec1_point` on the
+/// uncompressed SEC 1 point (`0x04` ‖ `x` ‖ `y`).
+fn point_on_curve<C>(x: &[u8], y: &[u8]) -> bool
+where
+    C: CurveArithmetic,
+    AffinePoint<C>: FromSec1Point<C> + ToSec1Point<C>,
+    FieldBytesSize<C>: ModulusSize,
+{
+    let (Ok(x), Ok(y)) = (<&FieldBytes<C>>::try_from(x), <&FieldBytes<C>>::try_from(y)) else {
+        return false;
+    };
+    let point = Sec1Point::<C>::from_affine_coordinates(x, y, false);
+    PublicKey::<C>::from_sec1_point(&point)
+        .into_option()
+        .is_some()
+}
+
+/// See [`ec_scalar_is_valid`]: `SecretKey::from_bytes` rejects 0 and every
+/// value ≥ n.
+fn scalar_in_range<C: Curve>(d: &[u8]) -> bool {
+    <&FieldBytes<C>>::try_from(d).is_ok_and(|d| SecretKey::<C>::from_bytes(d).is_ok())
+}
+
+/// Whether `x` is a usable Ed25519 public key (ADR 0041 §4, ADR 0026 §6):
+///
+/// - it decodes to a curve point (RFC 8032 §5.1.3 steps 2–4), which
+///   `VerifyingKey::from_bytes` checks;
+/// - the encoding is canonical (RFC 8032 §5.1.3 step 1: "If the resulting
+///   y >= p, decoding fails"). `from_bytes` follows the more lenient
+///   ZIP-215 rules and accepts y ≥ p, so the decoded point is re-encoded
+///   by ed25519-dalek (`VerifyingKey::from(EdwardsPoint)`) and must give
+///   back the same 32 octets;
+/// - the point is not of small order (`VerifyingKey::is_weak`), since a
+///   small-order key "can be used to generate a signature that's valid for
+///   almost every message".
+fn ed25519_public_is_valid(x: &[u8]) -> bool {
+    let Ok(bytes) = <&[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]>::try_from(x) else {
+        return false;
+    };
+    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(bytes) else {
+        return false;
+    };
+    let canonical = ed25519_dalek::VerifyingKey::from(key.to_edwards()).to_bytes() == *bytes;
+    canonical && !key.is_weak()
 }
 
 /// `kty` `OKP` (RFC 8037 §2).
@@ -1680,6 +1780,18 @@ fn parse_okp(object: &Object, crv: OkpCurve) -> Result<OkpKey> {
     let d = optional_secret(object, "d", "d must be a string")?;
     if d.as_ref().is_some_and(|d| d.len() != len) {
         return Err(Error::InvalidKey("d has the wrong length for crv"));
+    }
+    // ADR 0041 §4: the arithmetic check of `x`, once the members are
+    // well-formed. An Ed25519 `d` is any 32-octet seed (RFC 8032 §5.1.5),
+    // so it has no range to check. An X25519 `x` keeps the length check
+    // only: every 32-octet string is a valid u-coordinate (RFC 7748 §5
+    // masks the top bit, and "Implementations MUST accept non-canonical
+    // values and process them as if they had been reduced modulo the field
+    // prime"), so it has no decoding failure. A small-order input shows up
+    // as an all-zero shared secret, which ECDH-ES checks where it computes
+    // one (RFC 7748 §6.1, feature 0003).
+    if crv == OkpCurve::Ed25519 && !ed25519_public_is_valid(&x) {
+        return Err(Error::InvalidKey(ED25519_PUBLIC_INVALID));
     }
     Ok(OkpKey { crv, x, d })
 }
