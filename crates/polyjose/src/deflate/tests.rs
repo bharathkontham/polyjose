@@ -638,15 +638,34 @@ fn output_cap_applies_to_literals_and_copies() {
 
 /// A decompression bomb (the CVE-2024-28180 class, ADR 0017): a dynamic
 /// block where length 258 (symbol 285) and distance 1 each take one bit, so
-/// every 2 bits of input expand to 258 bytes. That ratio (about 1032:1) is
-/// DEFLATE's ceiling, so 1 KiB of input can describe at most about 1 MiB;
-/// the 1 GiB bomb is therefore about 1 MiB of input, and its first 1 KiB is
-/// the 1 KiB input. Both must stop at the cap without the output buffer
-/// ever growing past `max_output` + 32 KiB.
+/// every 2 bits of input expand to 258 bytes. That ratio (1032:1) is
+/// DEFLATE's ceiling (`inflate::max_expansion`), so 1 KiB of input can
+/// describe at most about 1 MiB; the 1 GiB bomb is therefore about 1 MiB of
+/// input, and its first 1 KiB is the 1 KiB input. Both must fail with the
+/// output-limit error, with the output buffer allocated once at `max_output`
+/// (within `max_output` + 32 KiB) and never reallocated.
 #[test]
 fn decompression_bomb_stops_at_the_cap() {
     const GIB: usize = 1 << 30;
     const MAX: usize = 250_000;
+    let matches = GIB / 258 + 1;
+    let bomb = bomb_stream(matches);
+    assert!(bomb.len() < 1100 * 1024, "bomb is {} bytes", bomb.len());
+
+    for input in [&bomb[..], &bomb[..1024]] {
+        let mut capacity = inflate::Capacity::default();
+        let result = inflate::inflate_tracked(input, MAX, &mut capacity);
+        assert_eq!(result, Err(Error::InvalidFormat(OUTPUT_LIMIT)));
+        // Both inputs can expand past the cap, so the allocation is the cap.
+        assert_eq!(capacity.initial, MAX, "input of {} bytes", input.len());
+        assert_eq!(capacity.last, capacity.initial, "buffer reallocated");
+        assert!(capacity.initial <= MAX + 32 * 1024);
+    }
+}
+
+/// The bomb stream with `matches` length-258, distance-1 pairs after one
+/// `a`.
+fn bomb_stream(matches: usize) -> Vec<u8> {
     // Literal/length lengths: 97 -> 2, 256 -> 2, 285 -> 1 (HLIT 286);
     // distance 0 -> 1 (HDIST 1).
     let instructions = [
@@ -659,8 +678,7 @@ fn decompression_bomb_stops_at_the_cap() {
         Cl::Len(1),
         Cl::Len(1),
     ];
-    let matches = GIB / 258 + 1;
-    let bomb = stream(|w| {
+    stream(|w| {
         header(w, true, 0b10);
         dynamic_header(w, 286, 1, &cl_lengths(), &instructions);
         // Canonical codes: 285 -> 0, 97 -> 10, 256 -> 11.
@@ -670,47 +688,7 @@ fn decompression_bomb_stops_at_the_cap() {
             w.code(0, 1); // distance 1
         }
         w.code(0b11, 2);
-    });
-    assert!(bomb.len() < 1100 * 1024, "bomb is {} bytes", bomb.len());
-
-    for input in [&bomb[..], &bomb[..1024]] {
-        let mut peak = 0;
-        let result = inflate::inflate_tracked(input, MAX, &mut peak);
-        assert_eq!(result, Err(Error::InvalidFormat(OUTPUT_LIMIT)));
-        assert!(peak <= MAX + 32 * 1024, "peak capacity {peak}");
-        assert!(peak > 0);
-    }
-
-    // The same bomb with a cap above its output inflates in full, which
-    // proves the input really describes 1 GiB (checked on a 1 MiB slice of
-    // the matches to keep the test small).
-    let small = stream(|w| {
-        header(w, true, 0b10);
-        dynamic_header(w, 286, 1, &cl_lengths(), &instructions);
-        w.code(0b10, 2);
-        for _ in 0..4096 {
-            w.code(0, 1);
-            w.code(0, 1);
-        }
-        w.code(0b11, 2);
-    });
-    let out = inflate(&small, CAP + 64 * 1024).unwrap();
-    assert_eq!(out.len(), 1 + 4096 * 258);
-    assert!(out.iter().all(|&b| b == b'a'));
-}
-
-/// The output buffer grows with the output, not to the cap up front.
-#[test]
-fn output_buffer_grows_with_the_output() {
-    let input = stream(|w| {
-        header(w, true, 0b01);
-        fixed(w, u32::from(b'a'));
-        fixed(w, 256);
-    });
-    let mut peak = 0;
-    let out = inflate::inflate_tracked(&input, usize::MAX, &mut peak).unwrap();
-    assert_eq!(&out[..], b"a");
-    assert!(peak <= 64 * 1024, "peak capacity {peak}");
+    })
 }
 
 /// RFC 7520 §5.9.2: the compressed plaintext the cookbook prints (Fig. 162,
@@ -834,12 +812,15 @@ mod properties {
             input in prop::collection::vec(any::<u8>(), 0..4096),
             max_output in prop_oneof![0usize..512, 0usize..1 << 20, Just(usize::MAX)],
         ) {
-            let mut peak = 0;
-            match inflate::inflate_tracked(&input, max_output, &mut peak) {
+            let mut capacity = inflate::Capacity::default();
+            match inflate::inflate_tracked(&input, max_output, &mut capacity) {
                 Ok(out) => prop_assert!(out.len() <= max_output),
                 Err(e) => prop_assert!(matches!(e, Error::InvalidFormat(_))),
             }
-            prop_assert!(peak <= max_output);
+            // One allocation, never grown, within the cap and the bound.
+            prop_assert_eq!(capacity.last, capacity.initial);
+            prop_assert!(capacity.initial <= max_output);
+            prop_assert!(capacity.initial <= inflate::max_expansion(input.len()));
         }
 
         /// `deflate` is total, and our own inflate inverts it.

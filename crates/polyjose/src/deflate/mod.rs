@@ -75,6 +75,9 @@ const MISSING_END_OF_BLOCK: &str = "deflate: missing end-of-block code";
 const SINGLE_LENGTH_CODE: &str = "deflate: literal/length code with a single code";
 /// The output would exceed the caller's cap (ADR 0017 §1).
 const OUTPUT_LIMIT: &str = "deflate: output exceeds the limit";
+/// Output beyond `inflate::max_expansion` of the input. Unreachable when
+/// that bound holds; it stops decoding rather than reallocate the buffer.
+const EXPANSION_BOUND: &str = "deflate: output beyond the RFC 1951 expansion bound";
 /// The output buffer could not be allocated.
 const OUTPUT_ALLOCATION: &str = "deflate: output allocation failed";
 /// A length/distance pair in a block that declared no distance codes
@@ -85,9 +88,10 @@ const NO_DISTANCE_CODES: &str = "deflate: distance in a block with no distance c
 /// most `max_output` bytes.
 ///
 /// Decoding stops at the end of the block whose BFINAL bit is set (RFC 1951
-/// §3.2.3); any bytes after it are ignored. The output buffer grows with the
-/// output and its capacity never exceeds `max_output`; nothing else is
-/// allocated on the heap. Total for every input: no panic, no `unsafe`.
+/// §3.2.3); any bytes after it are ignored. The output buffer is allocated
+/// once, with capacity min(`max_output`, 1,032 × `input.len()`, RFC 1951's
+/// largest expansion), and never reallocated; nothing else is allocated on
+/// the heap. Total for every input: no panic, no `unsafe`.
 ///
 /// # Errors
 ///
@@ -98,8 +102,7 @@ const NO_DISTANCE_CODES: &str = "deflate: distance in a block with no distance c
 /// incomplete Huffman code, a missing end-of-block code), and as soon as the
 /// output would exceed `max_output`.
 pub(crate) fn inflate(input: &[u8], max_output: usize) -> Result<Zeroizing<Vec<u8>>> {
-    let mut peak = 0;
-    inflate::inflate_tracked(input, max_output, &mut peak)
+    inflate::inflate_tracked(input, max_output, &mut inflate::Capacity::default())
 }
 
 /// Compresses `input` into a raw DEFLATE stream (RFC 1951 §3.2): stored
