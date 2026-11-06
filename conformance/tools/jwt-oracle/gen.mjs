@@ -211,32 +211,121 @@ function payloadBytes(spec, what) {
   return utf8(JSON.stringify(spec.payload_json));
 }
 
-const JWS_MEMBERS = ["header", "header_text", "header_b64u", "payload", "payload_b64u", "payload_json", "key", "alg"];
+const JWS_MEMBERS = [
+  "header",
+  "header_text",
+  "header_b64u",
+  "payload",
+  "payload_b64u",
+  "payload_json",
+  "key",
+  "alg",
+  "corrupt_signature",
+  "signature_b64u",
+  "replace_after_signing",
+  "serialization",
+  "unprotected",
+];
+const REPLACE_MEMBERS = ["header", "header_text", "header_b64u", "payload", "payload_b64u", "payload_json"];
+
+function decodedHeader(protectedB64) {
+  try {
+    return JSON.parse(Buffer.from(protectedB64, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
 
 /**
- * Builds a compact JWS (RFC 7515 §7.1): BASE64URL(protected) '.'
- * BASE64URL(payload) '.' BASE64URL(signature), signed over the ASCII of the
- * first two parts (§5.1).
+ * The JWS Payload as written in the serialization: BASE64URL(payload)
+ * (RFC 7515 §7.1), or with `"b64": false` the octets themselves (RFC 7797
+ * §3), which in the compact form may not contain '.' (RFC 7797 §5.2).
+ */
+function payloadPart(payload, b64, serialization, what) {
+  if (b64) return b64u(payload);
+  const text = payload.toString("utf8");
+  if (!utf8(text).equals(payload)) fail(`${what}: a b64:false payload must be UTF-8 text here`);
+  if (serialization === "compact" && text.includes(".")) {
+    fail(`${what}: a b64:false compact payload must not contain '.' (RFC 7797 §5.2)`);
+  }
+  return text;
+}
+
+/**
+ * Builds a JWS from raw header and payload octets.
+ *
+ * - Compact (RFC 7515 §7.1): BASE64URL(protected) '.' payload '.'
+ *   BASE64URL(signature), signed over the ASCII of the first two parts
+ *   (§5.1), or over BASE64URL(protected) '.' payload octets when the header
+ *   says `"b64": false` (RFC 7797 §3).
+ * - Flattened (RFC 7515 §7.2.2): the same three values as `protected`,
+ *   `payload` and `signature`, plus the spec's `unprotected` object as the
+ *   unprotected `header` member. It is the compact JWS rewrapped: the
+ *   unprotected header is not signed, so the signature stays valid (the
+ *   ADR 0049 §2 vector).
+ *
+ * Negative entries: `alg: "none"` gives an empty signature (RFC 7519 §6.1);
+ * `signature_b64u` writes a given signature instead of signing;
+ * `corrupt_signature` flips the low bit of the last signature octet;
+ * `replace_after_signing` swaps the header and/or payload after signing.
  */
 function buildJws(spec, keys) {
   const what = "jws";
   if (!isObject(spec)) fail(`${what} must be an object`);
   onlyMembers(spec, JWS_MEMBERS, what);
-  const protectedB64 = encodeHeader(spec, what);
-  const payload = payloadBytes(spec, what);
-  let header = null;
-  try {
-    header = JSON.parse(Buffer.from(protectedB64, "base64url").toString("utf8"));
-  } catch {
-    header = null;
+  const serialization = spec.serialization ?? "compact";
+  if (serialization !== "compact" && serialization !== "flattened") {
+    fail(`${what}: serialization must be "compact" or "flattened"`);
   }
+  if (spec.unprotected !== undefined) {
+    if (serialization !== "flattened") fail(`${what}: "unprotected" needs serialization "flattened"`);
+    if (!isObject(spec.unprotected)) fail(`${what}: "unprotected" must be an object`);
+  }
+  let protectedB64 = encodeHeader(spec, what);
+  const header = decodedHeader(protectedB64);
+  const b64 = !(isObject(header) && header.b64 === false);
+  let payload = payloadBytes(spec, what);
   const alg = spec.alg ?? (isObject(header) ? header.alg : undefined);
-  if (typeof alg !== "string") fail(`${what}: no alg in the header; give "alg" to name the signing algorithm`);
-  if (spec.key === undefined) fail(`${what}: "key" is required`);
-  const payloadB64 = b64u(payload);
-  const input = ascii(`${protectedB64}.${payloadB64}`);
-  const sig = jwsSign(alg, signingKey(spec.key, keys, what), input);
-  return { token: `${protectedB64}.${payloadB64}.${b64u(sig)}`, json: null };
+
+  let sig;
+  if (spec.signature_b64u !== undefined) {
+    if (spec.key !== undefined || spec.corrupt_signature) {
+      fail(`${what}: signature_b64u takes no key and no corrupt_signature`);
+    }
+    sig = spec.signature_b64u; // verbatim
+  } else if (alg === "none") {
+    // RFC 7519 §6.1: an Unsecured JWT has an empty signature.
+    if (spec.key !== undefined) fail(`${what}: alg none takes no key`);
+    if (spec.corrupt_signature) fail(`${what}: alg none has no signature to corrupt`);
+    sig = "";
+  } else {
+    if (typeof alg !== "string") fail(`${what}: no alg in the header; give "alg" to name the signing algorithm`);
+    if (spec.key === undefined) fail(`${what}: "key" is required`);
+    const part = payloadPart(payload, b64, serialization, what);
+    const input = b64 ? ascii(`${protectedB64}.${part}`) : Buffer.concat([ascii(`${protectedB64}.`), payload]);
+    const raw = jwsSign(alg, signingKey(spec.key, keys, what), input);
+    if (spec.corrupt_signature === true) raw[raw.length - 1] ^= 0x01;
+    else if (spec.corrupt_signature !== undefined && spec.corrupt_signature !== false) {
+      fail(`${what}: corrupt_signature must be a boolean`);
+    }
+    sig = b64u(raw);
+  }
+
+  if (spec.replace_after_signing !== undefined) {
+    const r = spec.replace_after_signing;
+    const rw = `${what}.replace_after_signing`;
+    if (!isObject(r)) fail(`${rw} must be an object`);
+    onlyMembers(r, REPLACE_MEMBERS, rw);
+    if (["header", "header_text", "header_b64u"].some((m) => r[m] !== undefined)) protectedB64 = encodeHeader(r, rw);
+    if (["payload", "payload_b64u", "payload_json"].some((m) => r[m] !== undefined)) payload = payloadBytes(r, rw);
+  }
+
+  const part = payloadPart(payload, b64, serialization, what);
+  if (serialization === "compact") return { token: `${protectedB64}.${part}.${sig}`, json: null };
+  const json = { payload: part, protected: protectedB64 };
+  if (spec.unprotected !== undefined) json.header = spec.unprotected;
+  json.signature = sig;
+  return { token: JSON.stringify(json), json };
 }
 
 // ---------------------------------------------------------------------------
