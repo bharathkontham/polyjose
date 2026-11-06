@@ -23,6 +23,7 @@ mod api;
 mod der;
 mod ec;
 pub(crate) mod generate;
+mod jwk_build;
 mod oid;
 mod okp;
 #[cfg(test)]
