@@ -94,13 +94,6 @@ impl From<ContentEncAlg> for JoseAlg {
 ///
 /// Crate-internal: it classifies containers, unlike the public JWK `alg`
 /// member type [`crate::jwk::KeyAlg`].
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the PKCS#8/SPKI parsers in pkcs8.rs and spki.rs"
-    )
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum AlgId {
     /// id-ecPublicKey with a namedCurve (RFC 5480 §2.1.1, §2.1.1.1; SEC 2 v2
@@ -183,10 +176,6 @@ impl Label {
 /// It borrows `private_key` from the caller's buffer, which must be a
 /// zeroizing one. `Debug` prints neither key: `private_key` is redacted and
 /// `public_key` shows only its length.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "built by pkcs8.rs and read by the key mappers")
-)]
 #[derive(Clone, Copy)]
 pub(crate) struct Pkcs8Parts<'a> {
     /// `version`: v1(0), or v2(1) when `public_key` is present (RFC 5958 §2).
@@ -214,10 +203,6 @@ impl fmt::Debug for Pkcs8Parts<'_> {
 
 /// The fields of a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7), borrowed from
 /// the decoded DER. `Debug` shows only the key's length.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "built by spki.rs and read by the key mappers")
-)]
 #[derive(Clone, Copy)]
 pub(crate) struct SpkiParts<'a> {
     /// The classified `algorithm` (RFC 5280 §4.1.1.2).
@@ -238,13 +223,6 @@ impl fmt::Debug for SpkiParts<'_> {
 }
 
 /// Prints a byte string as `"<N octets>"`, never its content.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the Debug impls of Pkcs8Parts and SpkiParts, which are live once pkcs8.rs and spki.rs build them"
-    )
-)]
 struct Octets<'a>(&'a [u8]);
 
 impl fmt::Debug for Octets<'_> {
