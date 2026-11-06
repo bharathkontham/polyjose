@@ -450,4 +450,47 @@ mod tests {
         let result = import_pem(&pem_text("openssl", "reject-rsapss2048-private-pkcs8.pem"));
         assert!(is_unsupported(&result), "{:?}", result.err());
     }
+
+    #[test]
+    fn errors_carry_no_key_bytes() {
+        // Errors are static strings (T02 contract): no modulus octet, and no
+        // octet of a refused private key, reaches Debug or Display. 0xA5
+        // shows up as "a5"/"A5" in hex, "165" in decimal and "paWl" in
+        // base64url.
+        let marker = [0xA5u8; 128];
+        let mut even = [0xA5u8; 256];
+        even[255] = 0xA4;
+        let mut private = vec![0x30, 0x81, 0x00, 0x02, 0x01, 0x00];
+        for _ in 0..8 {
+            private.extend_from_slice(&[0x02, 0x10]);
+            private.extend_from_slice(&[0xA5; 16]);
+        }
+        private[2] = u8::try_from(private.len() - 3).unwrap();
+        let spki_of = |n: &[u8]| {
+            let pkcs1 = pkcs1::encode_public(n, &[0x01, 0x00, 0x01]).unwrap();
+            spki::encode(&SpkiParts {
+                alg: AlgId::RsaEncryption,
+                subject_public_key: &pkcs1,
+            })
+            .unwrap()
+        };
+        let errors = [
+            import_spki(&spki_of(&marker)).unwrap_err(),
+            import_spki(&spki_of(&even)).unwrap_err(),
+            from_pkcs1(&pkcs1::encode_public(&marker, &[0xA5]).unwrap()).unwrap_err(),
+            from_pkcs1(&private).unwrap_err(),
+        ];
+        assert_eq!(errors[3], Error::UnsupportedAlgorithm);
+        for error in errors {
+            for text in [
+                format!("{error:?}"),
+                format!("{error}"),
+                format!("{error:#?}"),
+            ] {
+                for needle in ["a5", "A5", "165", "paWl"] {
+                    assert!(!text.contains(needle), "{text}");
+                }
+            }
+        }
+    }
 }
