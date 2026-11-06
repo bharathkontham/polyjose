@@ -915,7 +915,7 @@ fn mutated_tokens_never_panic_and_never_verify() {
         assert!(jwt::verify(t, Keys::One(&key), &policy).is_err(), "{t}");
     }
     for i in 0..bytes.len() {
-        for sub in [b'A', b'.', b'=', b'\0', b'-'] {
+        for sub in *b"A.=\0-" {
             if bytes[i] == sub {
                 continue;
             }
