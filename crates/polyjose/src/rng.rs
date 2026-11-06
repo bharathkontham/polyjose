@@ -121,13 +121,6 @@ enum Source<'a> {
 #[cfg(not(any(test, feature = "insecure-test-vectors")))]
 const _: () = assert!(core::mem::size_of::<CryptoRngAdapter<'static>>() == 0);
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the RNG passed to ES* signing (T08), JWE (0003) and key generation (0005)"
-    )
-)]
 impl CryptoRngAdapter<'_> {
     /// An adapter over the OS CSPRNG ([`fill_random`], ADR 0005).
     pub(crate) fn os() -> Self {
