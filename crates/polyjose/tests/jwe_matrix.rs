@@ -24,7 +24,10 @@
 //!
 //! A deterministic sweep covers all 486 cells once with a flip in every
 //! segment; a property test (≤ 1,000 cases, pipeline rule 8) adds random
-//! plaintexts, AADs and flip positions.
+//! plaintexts, AADs and flip positions. Last, the mixed-family general JWE
+//! deferred from T14: A128KW, ECDH-ES+A128KW on P-256 and on X25519, PBES2
+//! and A256GCMKW recipients, where each key opens the message and reports
+//! its own index (RFC 7516 §7.2.1; plan.md "Recipient selection").
 #![allow(clippy::panic)] // test code: a panic is a failed assertion
 
 use std::ops::Range;
@@ -550,5 +553,128 @@ proptest! {
                 text_bit: text_flip,
             },
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mixed-family recipients (deferred from T14)
+// ---------------------------------------------------------------------------
+
+/// `key` with JWK `alg` set (RFC 7517 §4.4), so it serves that `alg` only.
+fn bound(key: &Jwk, alg: &KeyMgmtAlg) -> Jwk {
+    let mut object: Value = serde_json::from_str(&key.to_json()).unwrap_or_else(|e| panic!("{e}"));
+    object["alg"] = Value::String(alg.as_str().to_owned());
+    Jwk::from_json(object.to_string().as_bytes()).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// The five mixed-family recipients: (alg, encrypt-to key, decrypt key).
+fn mixed_recipients() -> Vec<(KeyMgmtAlg, Jwk, Jwk)> {
+    let oct = |len| generated(KeySpec::Oct { bytes: len });
+    let pair = |spec| {
+        let key = generated(spec);
+        (key.to_public().unwrap_or_else(|| panic!("no public")), key)
+    };
+    let a128kw = oct(16);
+    // A 16-octet password: also the right size for A128KW, so trial
+    // decryption must move past recipient 0 to reach it.
+    let password = oct(16);
+    let a256gcmkw = oct(32);
+    let (p256_pub, p256) = pair(KeySpec::Ec(EcCurve::P256));
+    let (x_pub, x) = pair(KeySpec::Okp(OkpCurve::X25519));
+    vec![
+        (A::A128KW, a128kw.clone(), a128kw),
+        (A::EcdhEsA128KW, p256_pub, p256),
+        (A::EcdhEsA128KW, x_pub, x),
+        (A::Pbes2Hs256A128KW, password.clone(), password),
+        (A::A256GCMKW, a256gcmkw.clone(), a256gcmkw),
+    ]
+}
+
+fn mixed_jwe(enc: &ContentEncAlg, recipients: &[(KeyMgmtAlg, Jwk, Jwk)]) -> String {
+    recipients
+        .iter()
+        .fold(
+            Encryptor::new(enc.clone()).aad(&b"to five recipients"[..]),
+            |e, (alg, to, _)| {
+                let r = Recipient::new(alg.clone(), to);
+                e.recipient(if alg == &A::Pbes2Hs256A128KW {
+                    r.p2c(1_000)
+                } else {
+                    r
+                })
+            },
+        )
+        .encrypt_json(PT, JsonForm::General)
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[test]
+fn each_key_of_a_mixed_family_jwe_opens_it_and_reports_its_index() {
+    for enc in ContentEncAlg::KNOWN {
+        let recipients = mixed_recipients();
+        let jwe = mixed_jwe(enc, &recipients);
+        let doc: Value = serde_json::from_str(&jwe).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(doc["recipients"].as_array().map(Vec::len), Some(5));
+        for (index, (alg, _, key)) in recipients.iter().enumerate() {
+            // Unbound keys: trial decryption over every candidate.
+            // Bound keys: only the recipient of their `alg` is a candidate.
+            for key in [key.clone(), bound(key, alg)] {
+                let d = decrypt_json(&jwe, &key, &policy())
+                    .unwrap_or_else(|e| panic!("{enc} recipient {index}: {e}"));
+                assert_eq!(d.plaintext(), PT);
+                assert_eq!(d.recipient(), index, "{enc} {alg}");
+                assert_eq!(d.aad(), Some(&b"to five recipients"[..]));
+                let header = d.recipient_header().unwrap_or_else(|| panic!("no header"));
+                assert_eq!(header.key_mgmt_alg().ok().as_ref(), Some(alg));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_mixed_family_jwe_with_a_flipped_shared_part_opens_for_no_key() {
+    let recipients = mixed_recipients();
+    let jwe = mixed_jwe(&E::A256GCM, &recipients);
+    let form = Serialization::Json(JsonForm::General);
+    for (segment, range) in segments(form, &jwe) {
+        if matches!(
+            segment,
+            Segment::Iv | Segment::Ciphertext | Segment::Tag | Segment::Aad
+        ) {
+            let flipped = flip_decoded(&jwe, range, 7);
+            for (_, _, key) in &recipients {
+                assert_eq!(
+                    decrypt(form, &flipped, key).err(),
+                    Some(Error::DecryptionFailed),
+                    "{segment:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_mixed_family_jwe_with_one_recipient_broken_still_opens_for_the_others() {
+    // Flip recipient 1's (P-256) encrypted key: its key now fails with the
+    // one DecryptionFailed, and every other key still opens the JWE.
+    let recipients = mixed_recipients();
+    let jwe = mixed_jwe(&E::A128CbcHs256, &recipients);
+    let mut doc: Value = serde_json::from_str(&jwe).unwrap_or_else(|e| panic!("{e}"));
+    let ek = doc["recipients"][1]["encrypted_key"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no encrypted key"))
+        .to_owned();
+    let mut octets = b64url_decode(&ek).unwrap_or_else(|e| panic!("{e}"));
+    octets[0] ^= 0x80;
+    doc["recipients"][1]["encrypted_key"] = Value::String(b64url_encode(&octets));
+    let broken = doc.to_string();
+    for (index, (_, _, key)) in recipients.iter().enumerate() {
+        let result = decrypt_json(&broken, key, &policy());
+        if index == 1 {
+            assert_eq!(result.err(), Some(Error::DecryptionFailed));
+        } else {
+            let d = result.unwrap_or_else(|e| panic!("recipient {index}: {e}"));
+            assert_eq!((d.recipient(), d.plaintext()), (index, PT));
+        }
     }
 }
