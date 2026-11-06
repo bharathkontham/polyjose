@@ -418,7 +418,8 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
                 shared_header: parts.shared.take(),
                 recipient_header: parts.recipients.swap_remove(index).header,
                 header: headers.swap_remove(index),
-                aad: parts.aad.take(),
+                // ADR 0050 §4: the AAD is wiped on drop.
+                aad: parts.aad.take().map(Zeroizing::new),
                 recipient: index,
             });
         }

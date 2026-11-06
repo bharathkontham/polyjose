@@ -187,7 +187,9 @@ pub struct Decrypted {
     pub(super) shared_header: Option<Header>,
     pub(super) recipient_header: Option<Header>,
     pub(super) header: Header,
-    pub(super) aad: Option<Vec<u8>>,
+    /// Wiped on drop: the AAD can carry application secrets (ADR 0050 §4,
+    /// ADR 0030 §7.2).
+    pub(super) aad: Option<Zeroizing<Vec<u8>>>,
     pub(super) recipient: usize,
 }
 
@@ -226,9 +228,11 @@ impl Decrypted {
         &self.header
     }
 
-    /// The JWE AAD (RFC 7516 §7.2.1 `aad`), decoded, JSON only.
+    /// The JWE AAD (RFC 7516 §7.2.1 `aad`), decoded, JSON only. It is
+    /// held in a buffer wiped on drop, as it can carry application secrets
+    /// (ADR 0050 §4, ADR 0030 §7.2), and `Debug` never prints it.
     pub fn aad(&self) -> Option<&[u8]> {
-        self.aad.as_deref()
+        self.aad.as_deref().map(Vec::as_slice)
     }
 
     /// The index of the recipient that decrypted, in the order of the JWE's
@@ -657,9 +661,11 @@ mod tests {
             shared_header: None,
             recipient_header: None,
             header: Header::new(),
-            aad: Some(b"MARKERaad".to_vec()),
+            aad: Some(Zeroizing::new(b"MARKERaad".to_vec())),
             recipient: 2,
         };
+        // ADR 0050 §4: the AAD is held in a buffer wiped on drop.
+        let _: &Option<Zeroizing<Vec<u8>>> = &d.aad;
         let debug = format!("{d:?}");
         assert!(!debug.contains("MARKER"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
