@@ -1252,3 +1252,40 @@ proptest! {
         prop_assert_eq!(code(decrypt_json(&other, &keys[0].1, &p)), "DecryptionFailed");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Property: untrusted input never panics and never decrypts (tester)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(500))]
+
+    /// A byte-mutated RFC 7516 A.4 / A.5 document, or arbitrary text, is
+    /// answered with an error code from the contract (or, for a mutation
+    /// outside any authenticated member, the original plaintext). Never a
+    /// panic, never a different plaintext.
+    #[test]
+    fn mutated_or_arbitrary_json_never_panics(
+        which in 0usize..2,
+        edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..4),
+        arbitrary in "\\PC{0,200}",
+        use_arbitrary in any::<bool>(),
+    ) {
+        let key = jwk(a4::KEY);
+        let p = a4_policy(&[A::A128KW]);
+        let base = [a4::GENERAL, a4::FLATTENED][which];
+        let mut bytes = base.as_bytes().to_vec();
+        for (index, byte) in &edits {
+            let i = index.index(bytes.len());
+            bytes[i] = *byte;
+        }
+        let text = if use_arbitrary {
+            arbitrary
+        } else {
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        if let Ok(d) = decrypt_json(&text, &key, &p) {
+            prop_assert_eq!(d.plaintext(), a4::PLAINTEXT);
+        }
+    }
+}
