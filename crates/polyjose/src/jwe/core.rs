@@ -163,17 +163,56 @@ fn jose_header(
     Ok(union)
 }
 
+/// For a direct mode, `dir` (RFC 7518 §4.5) or `ECDH-ES` Direct Key
+/// Agreement (RFC 7518 §4.6), requires `alg` **and** `enc` in the JWE
+/// Protected Header (ADR 0050 §1).
+///
+/// RFC 7516 §5.2 step 4 lets `alg` and `enc` sit in any of the three
+/// headers, but A*GCMKW wraps the CEK with AES-GCM under an **empty** AAD
+/// (RFC 7518 §4.7), and a JSON JWE with no protected header and no `aad`
+/// has the content AAD `""` too (RFC 7516 §5.1 step 14). A GCMKW
+/// recipient's (`iv`, `encrypted_key`, `tag`) would then decrypt as a
+/// `dir` ciphertext under an alg-less key, to the victim's CEK (security
+/// audit B1). With `alg` and `enc` protected, a direct message's content
+/// AAD is never empty, and the mode itself is integrity protected. Direct
+/// modes have exactly one recipient (RFC 7516 §5.1 steps 5–6), so no
+/// multi-recipient layout is lost; the non-direct modes are unaffected.
+///
+/// Runs in step 4, before any cryptographic operation, for compact and
+/// JSON alike (a compact header is always protected, RFC 7516 §7.1).
+///
+/// # Errors
+///
+/// [`Error::InvalidHeader`] if `union`'s `alg` is a direct mode and the
+/// protected header lacks `alg` or `enc`.
+fn check_direct_protected(union: &Header, protected: Option<&Header>) -> Result<()> {
+    let alg = KeyMgmtAlg::from(union.alg.as_deref().unwrap_or_default());
+    let direct = matches!(
+        keymgmt::mode(&alg),
+        Some(keymgmt::Mode::DirectEncryption | keymgmt::Mode::DirectAgreement)
+    );
+    let protected_alg_and_enc = protected.is_some_and(|p| p.alg.is_some() && p.enc.is_some());
+    if direct && !protected_alg_and_enc {
+        return Err(Error::InvalidHeader(
+            "dir and ECDH-ES need alg and enc in the protected header",
+        ));
+    }
+    Ok(())
+}
+
 /// The JOSE Header of every recipient, after RFC 7516 §5.2 steps 4–5:
 /// structure ([`jose_header`]), `alg` and `enc` present (§4.1.1–§4.1.2),
-/// one `enc` for the one ciphertext, and every `crit` name understood.
+/// for a direct mode both protected ([`check_direct_protected`], ADR 0050
+/// §1), one `enc` for the one ciphertext, and every `crit` name understood.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidFormat`] for no recipients or more than
 /// `max_recipients` (ADR 0026 §7); [`Error::InvalidHeader`] as
-/// [`jose_header`], for a missing `alg` or `enc`, or recipients that
-/// disagree on `enc`; [`Error::UnknownCritical`] for a `crit` name not in
-/// the policy's `understood_crit` (§4.1.13).
+/// [`jose_header`], for a missing `alg` or `enc`, a direct mode whose
+/// `alg` or `enc` is unprotected, or recipients that disagree on `enc`;
+/// [`Error::UnknownCritical`] for a `crit` name not in the policy's
+/// `understood_crit` (§4.1.13).
 fn jose_headers(parts: &JweParts, policy: &DecryptPolicy) -> Result<Vec<Header>> {
     if parts.recipients.is_empty() {
         return Err(Error::InvalidFormat("JWE has no recipients"));
@@ -194,6 +233,7 @@ fn jose_headers(parts: &JweParts, policy: &DecryptPolicy) -> Result<Vec<Header>>
         if union.enc.is_none() {
             return Err(Error::InvalidHeader("missing enc"));
         }
+        check_direct_protected(&union, parts.protected.as_ref())?;
         unions.push(union);
     }
     if unions.iter().any(|u| u.enc != unions[0].enc) {

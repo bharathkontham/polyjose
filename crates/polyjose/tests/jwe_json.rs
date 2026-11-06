@@ -1108,8 +1108,9 @@ fn header_rules_are_checked_for_every_recipient_before_any_crypto() {
 fn a_tampered_unprotected_alg_follows_the_error_contract() {
     // `alg` in a per-recipient header is not integrity protected. A
     // change is caught by the policy, the support check, the key binding,
-    // or, if the new alg is still a candidate, by key management
-    // (DecryptionFailed): never a wrong plaintext.
+    // the direct-mode header rule (ADR 0050 §1), or, if the new alg is
+    // still a candidate, by key management (DecryptionFailed): never a
+    // wrong plaintext.
     let jwe = Encryptor::new(E::A128GCM)
         .recipient(Recipient::new(A::A128KW, &oct(&K1)))
         .encrypt_json(b"x", JsonForm::General)
@@ -1122,9 +1123,9 @@ fn a_tampered_unprotected_alg_follows_the_error_contract() {
         ("RSA1_5", &all, "UnsupportedAlgorithm"),
         ("none", &all, "UnsupportedAlgorithm"),
         ("A256KW", &all, "KeyAlgorithmMismatch"),
-        // `dir` with a 16-octet key is a candidate for A128GCM, but the
-        // encrypted key must be empty (RFC 7518 §4.5).
-        ("dir", &all, "DecryptionFailed"),
+        // `dir` outside the protected header is refused before any
+        // cryptography (ADR 0050 §1, RFC 7518 §4.5).
+        ("dir", &all, "InvalidHeader"),
         ("A128GCMKW", &all, "DecryptionFailed"),
     ] {
         let tampered = set_header(&jwe, 0, "alg", alg);

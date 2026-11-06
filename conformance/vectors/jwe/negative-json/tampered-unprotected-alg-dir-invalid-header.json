@@ -1,6 +1,6 @@
 {
   "source": "polyjose",
-  "description": "RFC 7518 §4.5, RFC 7516 §11.4: the RFC 7520 §5.11 flattened JWE with its unprotected alg changed to dir, for which the alg-less 16-octet key is a candidate under A128GCM: the non-empty encrypted key fails key management: DecryptionFailed",
+  "description": "ADR 0050 §1, RFC 7518 §4.5, RFC 7516 §5.2 step 4: the RFC 7520 §5.11 flattened JWE with its unprotected alg changed to dir, with an alg-less 16-octet key allowed for dir under A128GCM: a direct mode needs alg and enc in the protected header, so InvalidHeader before any cryptography (was DecryptionFailed in key management before ADR 0050)",
   "operation": "jwe.decrypt",
   "input": {
     "jwe": {
@@ -28,6 +28,6 @@
   },
   "expect": {
     "ok": false,
-    "error": "DecryptionFailed"
+    "error": "InvalidHeader"
   }
 }
