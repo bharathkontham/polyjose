@@ -17,8 +17,11 @@
 //!   (ADR 0026 §2 step 8) checks this first; the family checks it again so
 //!   it never computes a MAC with a weak key, whoever calls it.
 //! - **Secrets.** The key is read in place from the `oct` JWK's zeroizing
-//!   buffer and never copied by this module; the keyed `Hmac` state is
-//!   wiped on drop (`hmac`'s `zeroize` feature). No error names the key.
+//!   buffer and never copied by this module. The keyed state, the inner
+//!   and outer SHA-2 cores of `Hmac` (RFC 2104 §2), is wiped on drop by
+//!   `sha2`'s `zeroize` feature. (`hmac` 0.13.0 does not wipe the
+//!   key-xor-pad block it builds on the stack while keying; that is
+//!   upstream code.) No error names the key.
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Sha256, Sha384, Sha512};
