@@ -588,3 +588,53 @@ test("ci-build.sh links the msvc addons' C runtime statically and checks they im
   assert.ok(insideIf(raw, check, gate), "the check runs only when crt_static is true");
   assert.ok(flags < build && build < check && check < pack, "flag, then build, then the check, then the pack");
 });
+
+/** The text of `const <name> = ...` in `src` up to its closing `\n}\n`. */
+function definition(src: string, name: string): string {
+  const start = src.indexOf(`const ${name} = `);
+  assert.ok(start >= 0, `${name} is defined`);
+  const end = src.indexOf("\n}\n", start);
+  assert.ok(end > start, `${name} ends`);
+  return src.slice(start, end);
+}
+
+/** The positions of `markers` in `src`, each found exactly once, in that order. */
+function inOrder(src: string, markers: readonly string[], where: string): void {
+  let last = -1;
+  for (const m of markers) {
+    const at = src.indexOf(m);
+    assert.ok(at >= 0, `${where}: ${m}`);
+    assert.equal(src.indexOf(m, at + 1), -1, `${where}: ${m} once`);
+    assert.ok(at > last, `${where}: ${m} comes after the previous probe`);
+    last = at;
+  }
+}
+
+test("ci-build.sh tells glibc from musl as the loader does: /usr/bin/ldd, the process report, ldd --version", () => {
+  // The generated loader (binding.cjs, built before the tests run): isMusl() tries its three
+  // probes in this order, each returning null to pass on (review-code.md N4).
+  const loader = read(path.join(pkgDir, "binding.cjs"));
+  inOrder(definition(loader, "isMusl"), ["isMuslFromFilesystem()", "isMuslFromReport()", "isMuslFromChildProcess()"], "binding.cjs isMusl");
+  assert.match(definition(loader, "isMuslFromFilesystem"), /readFileSync\('\/usr\/bin\/ldd', 'utf-8'\)\.includes\('musl'\)/);
+  const report = definition(loader, "isMuslFromReport");
+  assert.match(report, /process\.report\.excludeNetwork = true\s+report = process\.report\.getReport\(\)/);
+  assert.match(report, /glibcVersionRuntime\)\s*\{\s*return false/);
+  assert.match(definition(loader, "isFileMusl"), /f\.includes\('libc\.musl-'\) \|\| f\.includes\('ld-musl-'\)/);
+  assert.match(definition(loader, "isMuslFromChildProcess"), /execSync\('ldd --version', \{ encoding: 'utf8' \}\)\.includes\('musl'\)/);
+
+  // ci-build.sh's host check makes the same three probes, in the same order, with the same tests.
+  const script = codeLines(ciBuildFile).join("\n");
+  inOrder(
+    script,
+    [
+      'readFileSync("/usr/bin/ldd", "utf8").includes("musl")',
+      "process.report.excludeNetwork = true;",
+      "process.report.getReport()",
+      "report.header.glibcVersionRuntime",
+      'f.includes("libc.musl-") || f.includes("ld-musl-")',
+      'execSync("ldd --version", { encoding: "utf8" }).includes("musl")',
+    ],
+    "ci-build.sh",
+  );
+  assert.match(script, /name \+= isMusl\(\) \? "-musl" : "-gnu"/, "the libc suffix comes from that order alone");
+});
