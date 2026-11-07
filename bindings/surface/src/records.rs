@@ -35,14 +35,16 @@ use crate::secret::{SecretBytes, SecretString};
 // ------------------------------------------------------------------------------------------------
 
 /// Which member of a JWK Set [`jwks_select`](crate::jwk::jwks_select) picks (ADR 0030 §4, JWK;
-/// RFC 7517 §4.2, §4.4, §4.5, §5).
+/// ADR 0054 §1, §9; RFC 7517 §4.2, §4.4, §4.5, §5).
 ///
-/// Each `None` member places no constraint on the selection.
+/// Each `None` member places no constraint on the selection, so the default selector matches
+/// every member (ADR 0054 §1.3). The strings are parsed by the core, not here.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JwkSelector {
     /// The JWK `kid` to match exactly (RFC 7517 §4.5).
     pub kid: Option<String>,
-    /// The algorithm the key must serve, as registered (RFC 7517 §4.4, RFC 7518 §3.1, §4.1).
+    /// The algorithm the key must serve: a JWS algorithm or a JWE key management algorithm
+    /// polyjose implements, as registered (RFC 7517 §4.4, RFC 7518 §3.1, §4.1; ADR 0054 §1.1).
     pub alg: Option<String>,
     /// The JWK `use` to match, `sig` or `enc` (RFC 7517 §4.2). Named `key_use` because `use` is
     /// a Rust keyword; every host keeps the same name (ADR 0030 §4).

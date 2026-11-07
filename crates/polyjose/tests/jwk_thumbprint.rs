@@ -1,11 +1,15 @@
 //! JWK Thumbprints (RFC 7638 §3, §7) and Thumbprint URIs (RFC 9278 §3-§5)
 //! through the public API. Expected values not printed in an RFC were derived
 //! independently with Python `hashlib`/`base64` over the hand-written
-//! RFC 7638 §3.3 input, never with polyjose.
+//! RFC 7638 §3.3 input, never with polyjose. The SHA-384 and SHA-512 values
+//! (no RFC prints one) were computed with Node.js 24.21.0 `node:crypto`
+//! `createHash` over the hand-built RFC 7638 §3.3 input, as base64url, and
+//! equal feature 0015 research.md §4 (cross-checked there against
+//! panva/jose 6.2.15).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 use polyjose::Error;
-use polyjose::jwk::Jwk;
+use polyjose::jwk::{Jwk, ThumbprintHash};
 
 /// RFC 7638 §3.1 modulus.
 const RSA_N: &str = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw";
@@ -220,4 +224,157 @@ fn debug_of_an_oct_key_does_not_contain_k() {
     let key = jwk(r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#);
     let _ = key.thumbprint_sha256();
     assert!(!format!("{key:?}").contains("GawgguFyGrWKav7AX4VKUg"));
+}
+
+/// One key with its RFC 7638 §3 thumbprint under each hash (ADR 0054 §8).
+struct KnownAnswer {
+    what: &'static str,
+    /// JWKs of the same key: each must give the same values
+    /// (RFC 7638 §3.2.1, §3.2.2).
+    jwks: Vec<String>,
+    sha256: &'static str,
+    sha384: &'static str,
+    sha512: &'static str,
+}
+
+fn known_answers() -> Vec<KnownAnswer> {
+    vec![
+        KnownAnswer {
+            what: "RFC 7638 §3.1 RSA",
+            jwks: vec![
+                format!(
+                    r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","alg":"RS256","kid":"2011-04-29"}}"#
+                ),
+                format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB"}}"#),
+            ],
+            sha256: "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
+            sha384: "R9_OfJjSjaw8Fuum86UzK5ixTdN9bo9BaqPSiseq89DWfmqCdpSgUHus-cxDUNc8",
+            sha512: "DpvEwocfn3FjeWWQjcJHzWrpKTIymKwgoL1xVgQcud48-qZDSRCr1zfWZQdHAJn_ciqXqPTSARyg-L-NyNGpVA",
+        },
+        KnownAnswer {
+            // RFC 8037 A.2 public key, and the A.1 private key: a private
+            // key has the thumbprint of its public key (RFC 7638 §3.2.1).
+            what: "RFC 8037 A.1/A.2 Ed25519",
+            jwks: vec![
+                r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#
+                    .to_owned(),
+                r#"{"kty":"OKP","crv":"Ed25519","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+                    "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#
+                    .to_owned(),
+            ],
+            sha256: "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+            sha384: "ePy6LSb6I7JWK2uWQyYJQ4DBrwGE4QoxPl6INUviCtqplTLCwzo6fD9Eaw69Wvtt",
+            sha512: "SfSqAgfmPYvpuNzfHCiQXi6Mr51GG78hHopngoabsV9xvLR0hcUfVCoJLfyzi08Dbnds6kmcAt23CpNV-8qLTg",
+        },
+        KnownAnswer {
+            what: "RFC 7517 A.1 EC P-256",
+            jwks: vec![
+                r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+                    "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","use":"enc","kid":"1"}"#
+                    .to_owned(),
+            ],
+            sha256: "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s",
+            sha384: "bLeg0iV0lOxemYi1inZct_fpBVGT0PjmOJfkLKNQzwiVJph-qr70kbtxqtdk9pVx",
+            sha512: "87wrLaz3s_FhzVDc1S8PBGMBK7SlogjruZ8x3hrvMMS28Zq4-1ugZG2qoqUcBatvWxzlCLGqHCRv4eVefHCsyg",
+        },
+        KnownAnswer {
+            what: "RFC 7517 A.3 oct (A128KW)",
+            jwks: vec![r#"{"kty":"oct","alg":"A128KW","k":"GawgguFyGrWKav7AX4VKUg"}"#.to_owned()],
+            sha256: "k1JnWRfC-5zzmL72vXIuBgTLfVROXBakS4OmGcrMCoc",
+            sha384: "RWKwvfhC_aZql0lGhwOTuOYcIF3-SDe_AOe9odLrXTHbzzwFpG1XErxx8oku0UCe",
+            sha512: "EdMfw87VZ3q_6wWykCQSEVMV_H6Nq0t7GWvcH4Mp0zn7Qaq2Myj2_DsTxeb4fT8H_ls19_bAfTH84bOg0vniFg",
+        },
+    ]
+}
+
+/// RFC 7638 §3 with H = SHA-256, SHA-384 and SHA-512 (RFC 7638 §3.4), and
+/// the RFC 9278 §3 URI with the RFC 9278 §4 hash name of each.
+#[test]
+fn known_answers_for_every_hash() {
+    for answer in known_answers() {
+        for json in &answer.jwks {
+            let key = jwk(json);
+            for (hash, name, expected, len) in [
+                (ThumbprintHash::Sha256, "sha-256", answer.sha256, 43),
+                (ThumbprintHash::Sha384, "sha-384", answer.sha384, 64),
+                (ThumbprintHash::Sha512, "sha-512", answer.sha512, 86),
+            ] {
+                let what = format!("{} {name}", answer.what);
+                let thumbprint = key.thumbprint(hash);
+                assert_eq!(thumbprint, expected, "{what}");
+                // 32, 48 and 64 octets as unpadded base64url.
+                assert_eq!(thumbprint.len(), len, "{what}");
+                assert_eq!(
+                    key.thumbprint_uri(hash),
+                    format!("urn:ietf:params:oauth:jwk-thumbprint:{name}:{expected}"),
+                    "{what}"
+                );
+            }
+            // The SHA-256 shortcuts are unchanged.
+            assert_eq!(key.thumbprint_sha256(), answer.sha256, "{}", answer.what);
+            assert_eq!(
+                key.thumbprint_uri_sha256(),
+                format!("{URI_PREFIX}{}", answer.sha256),
+                "{}",
+                answer.what
+            );
+        }
+    }
+}
+
+/// RFC 9278 §6, byte for byte (the RFC breaks the line for display only).
+#[test]
+fn rfc9278_6_example_through_the_general_method() {
+    let key = jwk(&format!(
+        r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","alg":"RS256","kid":"2011-04-29"}}"#
+    ));
+    assert_eq!(
+        key.thumbprint_uri(ThumbprintHash::default()).as_bytes(),
+        b"urn:ietf:params:oauth:jwk-thumbprint:sha-256:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+    );
+}
+
+/// ADR 0054 §8.3: the URI always carries the IANA name, whichever of the
+/// nine accepted spellings chose the hash.
+#[test]
+fn uri_uses_the_iana_name_for_every_spelling() {
+    let key = jwk(r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#);
+    for (spellings, iana) in [
+        (["sha-256", "SHA-256", "sha256"], "sha-256"),
+        (["sha-384", "SHA-384", "sha384"], "sha-384"),
+        (["sha-512", "SHA-512", "sha512"], "sha-512"),
+    ] {
+        for spelling in spellings {
+            let hash = ThumbprintHash::from_name(spelling).unwrap();
+            assert_eq!(hash.hash_name(), iana);
+            let uri = key.thumbprint_uri(hash);
+            let rest = uri
+                .strip_prefix("urn:ietf:params:oauth:jwk-thumbprint:")
+                .unwrap();
+            assert_eq!(rest, format!("{iana}:{}", key.thumbprint(hash)));
+        }
+    }
+}
+
+/// ADR 0054 §8.2, ADR 0022: SHA-1 and every other unlisted name fail with
+/// `UnsupportedAlgorithm`.
+#[test]
+fn unlisted_hash_names_are_unsupported() {
+    for name in [
+        "",
+        "SHA-1",
+        "sha-1",
+        "sha1",
+        "sha-256-128",
+        "sha3-256",
+        "Sha-256",
+        "SHA256",
+        "sha-256 ",
+    ] {
+        assert_eq!(
+            ThumbprintHash::from_name(name),
+            Err(Error::UnsupportedAlgorithm),
+            "{name:?}"
+        );
+    }
 }

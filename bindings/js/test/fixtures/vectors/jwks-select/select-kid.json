@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): the one member whose kid matches, returned as a JWK object",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        { "kty": "oct", "k": "c2VjcmV0LWtleS1ieXRlcw", "kid": "a" },
+        { "kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo", "kid": "b" }
+      ]
+    },
+    "selector": { "kid": "b", "alg": "EdDSA", "key_use": "sig" }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": { "kid": "b", "kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo" }
+  }
+}
