@@ -18,6 +18,20 @@
 #        binding's objects and not polyjose's;
 #   9.   a `#[cfg(not(debug_assertions))]` public function (macro spelling), which only the
 #        release configuration compiles.
+#  17.   the 0008 security audit's L2 plant (feature 0013 F15): `#[cfg(target_os = "android")]` code
+#        in polyjose-ffi naming rsa::RsaPrivateKey, with rsa only under
+#        [target.'cfg(target_os = "android")'.dependencies], under --target aarch64-linux-android,
+#        in the dev and the release configuration; and the same plant in polyjose-surface, which
+#        polyjose-ffi links, in the dev configuration.
+# Documented residual (case 17, without --target): the default configurations build no Android
+# target, so the same plant passes; the callers that package or regress a target pass it with
+# --target (0008 F08 passes the four Android triples). The case asserts that it passes, so a
+# change of the default list shows up here.
+# Must fail closed (exit 2, before any build):
+#  18.   --target nonsense (not a triple rustc knows), and a known triple whose std is not
+#        installed. The Android std is required by case 17: if it is missing, that case FAILs
+#        (rustup target add), it is never SKIPPED (pipeline rule 9; `SKIPPED (host:<tool>)` is
+#        for host tools, and a rustup target is not on test-all.sh's owner-accepted list).
 # (An uncalled `#[inline] pub fn` and an uninstantiated generic `pub fn` are never codegened in
 # polyjose, so they have no symbol to find: the text scan's macro rule catches those, rsa-guard.sh.)
 # Must fail closed (exit 2, before any build):
@@ -55,12 +69,31 @@ dump_dir=""
 # symbol check catches it (each configuration is another full polyjose build); the clean tree,
 # the binding case and the look-alikes run every configuration.
 only=""
+# Extra --target triples (case 17 and 18), space-separated; none by default.
+targets=""
 gate_name=check-rsa-symbols.sh
 run_gate() {
   set -- --target-dir "$symbols_target"
   if [ -n "$dump_dir" ]; then set -- "$@" --dump "$dump_dir"; fi
-  if [ -n "$only" ]; then set -- "$@" --only "$only"; fi
+  for o in $only; do set -- "$@" --only "$o"; done
+  for t in $targets; do set -- "$@" --target "$t"; done
   scripts/check-rsa-symbols.sh "$@"
+}
+
+# expect_closed <description> <ERE>: the copy's gate exits 2 (could not run) with a line matching
+# the pattern.
+expect_closed() {
+  local rc=0
+  tests_run=$((tests_run + 1))
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq -- "$2" "$scratch/out"; then
+    echo "ok   - $1: $gate_name fails closed"
+    grep -E -- "$2" "$scratch/out" | head -1 | sed 's/^/       /'
+  else
+    echo "FAIL - $1: exit $rc (expected 2), wanted output matching /$2/"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
 }
 
 # expect_symbol <description> <fixed string>: the last run's dump (see run_gate) lists a symbol
@@ -408,5 +441,86 @@ else
   sed 's/^/       /' "$scratch/out"
   tests_failed=$((tests_failed + 1))
 fi
+
+# 17. The 0008 audit's L2 plant: RSA private-key code that only an Android build compiles, in
+#     polyjose-ffi (the crate the Android .so is built from, ADR 0033) and in polyjose-surface,
+#     which it links. rsa is reached only under a target-specific table, so no host build has it.
+android=aarch64-linux-android
+android_std=$(cd "$base" && rustc --print target-libdir --target "$android" 2>/dev/null) || android_std=""
+set -- "$android_std"/libstd-*.rlib
+if [ -z "$android_std" ] || [ ! -f "$1" ]; then
+  tests_run=$((tests_run + 1))
+  echo "FAIL - Android-only plant: the $android std is not installed (rustup target add $android; rust-toolchain.toml lists it), so the case cannot run"
+  tests_failed=$((tests_failed + 1))
+else
+  android_rsa='
+[target.'"'"'cfg(target_os = "android")'"'"'.dependencies]
+rsa = { workspace = true }'
+  android_body='/// Test only.
+#[cfg(target_os = "android")]
+#[doc(hidden)]
+pub fn evil(key: &rsa::RsaPrivateKey) -> rsa::RsaPrivateKey {
+    key.clone()
+}
+#[cfg(target_os = "android")]
+#[used]
+static KEEP: fn(&rsa::RsaPrivateKey) -> rsa::RsaPrivateKey = evil;'
+  for crate_dir in ffi surface; do
+    new_case "android-only-$crate_dir"
+    append_to "bindings/$crate_dir/Cargo.toml" "$android_rsa"
+    append_to "bindings/$crate_dir/src/lib.rs" "$android_body"
+    relock
+    crate=polyjose_$crate_dir
+    targets=$android
+    if [ "$crate_dir" = ffi ]; then configs="polyjose-ffi-$android polyjose-ffi-$android-release"; else configs="polyjose-ffi-$android"; fi
+    for config in $configs; do
+      case $config in *-release) label="polyjose-ffi --release ($android)" ;; *) label="polyjose-ffi ($android)" ;; esac
+      only=$config
+      dump_dir="$scratch/dump-$crate_dir-$config"
+      expect_fail "Android-only RsaPrivateKey in polyjose-$crate_dir, --target $android, $config" \
+        "matches rsa::private_key: RSA private keys" \
+        "$sym_fail in the objects of $crate \\($(printf '%s' "$label" | sed 's/[().]/\\&/g')\\)"
+      # The target's own objects were read: polyjose's dump for the triple has its RSA verification.
+      expect_symbol "Android-only plant, $config" "rsa::public_key::RsaPublicKey"
+      dump_dir=""
+    done
+    targets=""
+    # The documented residual: without --target, no configuration compiles the plant.
+    if [ "$crate_dir" = ffi ]; then
+      only="polyjose-ffi polyjose-ffi-release"
+      expect_pass "Android-only RsaPrivateKey in polyjose-ffi, no --target (documented residual: the caller passes the target)"
+      tests_run=$((tests_run + 1))
+      if grep -Eq '^ok: .* 2 configurations, ' "$scratch/out" && ! grep -q "$android" "$scratch/out"; then
+        echo "ok   - no --target: the host polyjose-ffi configurations ran, and none for $android"
+      else
+        echo "FAIL - no --target: expected the two host polyjose-ffi configurations and no $android one"
+        sed 's/^/       /' "$scratch/out"
+        tests_failed=$((tests_failed + 1))
+      fi
+    fi
+    only=""
+  done
+fi
+
+# 18. A target the check cannot build fails closed before any build: a name rustc does not know,
+#     and a known triple whose std is not installed (the first such one in rustc's list).
+new_case target-unknown
+targets=nonsense
+expect_closed "--target nonsense" '^ERROR: --target: nonsense is not a target rustc knows'
+missing=""
+for t in $(cd "$base" && rustc --print target-list); do
+  dir=$(cd "$base" && rustc --print target-libdir --target "$t" 2>/dev/null) || continue
+  set -- "$dir"/libstd-*.rlib
+  if [ ! -f "$1" ]; then missing=$t; break; fi
+done
+if [ -n "$missing" ]; then
+  targets=$missing
+  expect_closed "--target $missing (std not installed)" "^ERROR: --target: the std of $missing is not installed"
+else
+  tests_run=$((tests_run + 1))
+  echo "FAIL - every target rustc knows has its std installed; no triple to test the missing-std case with"
+  tests_failed=$((tests_failed + 1))
+fi
+targets=""
 
 finish
