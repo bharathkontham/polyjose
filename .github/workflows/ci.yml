@@ -179,7 +179,7 @@ jobs:
     timeout-minutes: 15
     env:
       # Must equal the workspace `rust-version` (checked below). 1.89 is the floor of the JWS and
-      # JWE crypto set: crypto-bigint 0.7.10, elliptic-curve 0.14.3 and rsa 0.10.0-rc.20 need
+      # JWE crypto set: crypto-bigint 0.7.10, elliptic-curve 0.14.3 and rsa 0.10.0-rc.21 need
       # 1.87, sha2 0.11.1 needs 1.88 and aes 0.9.4 needs 1.89 (ADR 0024, raised at 0003 Gate 1).
       MSRV: 1.89.0
     steps:
