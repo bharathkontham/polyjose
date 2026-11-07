@@ -936,3 +936,75 @@ fn no_failing_path_puts_a_key_or_payload_in_the_error() {
         assert_no_marker(what, jws_verify_json(jws, key, options));
     }
 }
+
+// --- Defaults stay in the core (ADR 0030 §3) --------------------------------------------------
+
+/// The default numbers of ADR 0017 (250 000), ADR 0023 (10 000), ADR 0026 §7 (1 MiB =
+/// 1 048 576 = 1024 * 1024, and 16 signatures) and the 1 000 000 the task names. The surface
+/// leaves every default to the core, so none may appear in its code.
+const CORE_DEFAULTS: [&str; 6] = ["10000", "1000000", "250000", "1048576", "16", "1024"];
+
+/// Numeric literals in `line` outside a `//` comment that equal a core default, ignoring `_`
+/// separators and type suffixes (`16u32`), and not counting digits that continue an identifier
+/// or a hex literal (`u16`, `0x16`).
+fn default_literals(line: &str) -> Vec<String> {
+    let code = line.split("//").next().unwrap_or_default();
+    let bytes = code.as_bytes();
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts_literal = bytes[i].is_ascii_digit()
+            && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'));
+        if starts_literal {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let digits: String = code[start..i].chars().filter(|c| *c != '_').collect();
+            if CORE_DEFAULTS.contains(&digits.as_str()) {
+                found.push(code[start..i].to_owned());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    found
+}
+
+#[test]
+fn the_default_scan_finds_literals_and_skips_comments() {
+    assert_eq!(default_literals("let n = 16;"), ["16"]);
+    assert_eq!(default_literals("opts.max(1_048_576)"), ["1_048_576"]);
+    assert_eq!(default_literals("x(16u32, 10_000)"), ["16", "10_000"]);
+    assert_eq!(default_literals("let m = 1024 * 1024;"), ["1024", "1024"]);
+    assert!(default_literals("/// the default is 16 signatures").is_empty());
+    assert!(default_literals("let a = b; // 16").is_empty());
+    assert!(default_literals("let x: u16 = 0x16; let y = 160;").is_empty());
+}
+
+#[test]
+fn no_core_default_is_written_in_the_surface() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned = Vec::new();
+    for entry in std::fs::read_dir(&src).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "rs") {
+            let source = std::fs::read_to_string(&path).unwrap();
+            for (n, line) in source.lines().enumerate() {
+                let found = default_literals(line);
+                assert!(
+                    found.is_empty(),
+                    "{}:{}: core default {found:?} written in the surface: {line}",
+                    path.display(),
+                    n + 1
+                );
+            }
+            scanned.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    assert!(scanned.iter().any(|f| f == "jws.rs"), "scanned {scanned:?}");
+    assert!(
+        scanned.iter().any(|f| f == "records.rs"),
+        "scanned {scanned:?}"
+    );
+}
