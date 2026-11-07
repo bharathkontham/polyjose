@@ -12,9 +12,10 @@
 //! never a panic (the JS facade always passes `now`).
 
 use polyjose::Error;
+use polyjose::json::{self, Object};
 use polyjose::jwa::SigningAlg;
 use polyjose::jwk::{Jwk, JwkSet};
-use polyjose::jwt::{self, Clock, FixedClock, Keys, Policy, VerifiedJwt};
+use polyjose::jwt::{self, Claims, Clock, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt};
 
 use crate::error::{SurfaceError, SurfaceResult};
 use crate::records::{
@@ -24,10 +25,27 @@ use crate::records::{
 
 /// Signs the JWT Claims Set `claims` (JSON text) with `key` into a compact JWS (ADR 0030 §4;
 /// RFC 7519 §7.1). RS*/PS* signing fails with `UnsupportedAlgorithm` (ADR 0021).
+///
+/// The steps run in the conformance order (conformance/README.md, "Step order"): import `key`
+/// (RFC 7517 §4), parse `claims` (RFC 7519 §4; ADR 0027 §1–§2), build the core
+/// `IssueOptions` from `options`, then the core's [`jwt::sign`]. The header holds `alg`, `typ`
+/// (the core default `JWT` when `typ` is `None`, RFC 7519 §5.1), the key's `kid`, then the
+/// `header` members in the caller's order (ADR 0027 §8).
+///
+/// `typ`, `omit_typ` and `access_token` each choose the `typ`, so at most one may be set:
+/// `typ` with either of the others fails with `InvalidHeader` (ADR 0030 §4), and so do
+/// `omit_typ` with `access_token`, which contradict each other the same way.
+///
+/// # Errors
+///
+/// The core's, from the key, the claims, `header_param` (`b64`, `crit`, `cty`, `alg`, `typ`,
+/// `kid` and mistyped registered members are `InvalidHeader`, ADR 0027 §6, §8) and signing; a
+/// `header` that is not a JSON object is `InvalidJson`.
 pub fn jwt_sign(claims: &str, key: &str, options: &JwtSignOptions) -> SurfaceResult<String> {
-    // stub: T09
-    let _ = (claims, key, options);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let key = Jwk::from_json(key.as_bytes())?;
+    let claims = Claims::from_json(claims.as_bytes())?;
+    let issue = issue_options(options)?;
+    Ok(jwt::sign(&claims, &issue, &key)?)
 }
 
 /// Verifies and validates the signed JWT `token` with one `key` (ADR 0030 §4; RFC 7519 §7.2,
@@ -236,6 +254,42 @@ fn policy<'a>(
     );
     p = apply(p, o.max_input_len.map(to_usize), Policy::max_input_len);
     Ok(p)
+}
+
+// ------------------------------------------------------------------------------------------------
+// Issuing (ADR 0030 §4, ADR 0027 §8)
+// ------------------------------------------------------------------------------------------------
+
+/// The core [`IssueOptions`] of `options` (ADR 0030 §4): `typ` → [`IssueOptions::typ`],
+/// `omit_typ` → [`IssueOptions::no_typ`], `access_token` → [`IssueOptions::access_token`], and
+/// one [`IssueOptions::header_param`] per `header` member, in order. `None`/`false` calls
+/// nothing, so the core's `typ: JWT` default stands.
+fn issue_options(o: &JwtSignOptions) -> polyjose::Result<IssueOptions> {
+    let typ_choices = [o.typ.is_some(), o.omit_typ, o.access_token];
+    if typ_choices.into_iter().filter(|chosen| *chosen).count() > 1 {
+        return Err(Error::InvalidHeader("typ"));
+    }
+    let mut issue = IssueOptions::new(SigningAlg::from(o.alg.as_str()));
+    issue = apply(issue, o.typ.as_deref(), IssueOptions::typ);
+    issue = apply_flag(issue, o.omit_typ, IssueOptions::no_typ);
+    issue = apply_flag(issue, o.access_token, IssueOptions::access_token);
+    match o.header.as_deref() {
+        Some(header) => json_object(header)?
+            .into_iter()
+            .try_fold(issue, |issue, (name, value)| {
+                issue.header_param(&name, value)
+            }),
+        None => Ok(issue),
+    }
+}
+
+/// Parses `text` as a JSON object with the core's I-JSON parser (RFC 7493, ADR 0016), keeping
+/// its member order. Anything else is `InvalidJson`, the code and detail the core's own header
+/// parser gives a non-object (RFC 7515 §4).
+fn json_object(text: &str) -> polyjose::Result<Object> {
+    json::parse(text.as_bytes())?
+        .into_object()
+        .ok_or(Error::InvalidJson("expected a JSON object"))
 }
 
 // ------------------------------------------------------------------------------------------------
