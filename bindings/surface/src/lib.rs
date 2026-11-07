@@ -3,6 +3,7 @@
 
 pub mod error;
 pub mod secret;
+pub mod util;
 
 pub use error::{SurfaceError, SurfaceResult};
 pub use secret::{SecretBytes, SecretString};
