@@ -69,11 +69,12 @@ check_binding() {
     diff "$scratch/got.txt" "$scratch/want.txt" | sed 's/^/    | /'
   fi
 
-  # Every third-party crate section carries at least one license text.
+  # Every third-party crate section carries at least one license text. (No `grep -q` after a pipe
+  # anywhere here: it would stop reading early, and under pipefail the writer's SIGPIPE fails it.)
   missing=""
   while read -r c; do
     # shellcheck disable=SC2086 # "<name> <version>" splits into the two arguments
-    crate_section "$out" $c | grep -q '^--- License text: ' || missing="$missing [$c]"
+    crate_section "$out" $c | grep '^--- License text: ' >/dev/null || missing="$missing [$c]"
   done <"$scratch/got.txt"
   if [ -z "$missing" ]; then pass "$pkg $target: every crate has a license text"
   else fail "$pkg $target: crates without a license text:$missing"; fi
@@ -88,14 +89,14 @@ check_binding polyjose-ffi aarch64-apple-ios "uniffi uniffi_core" "napi napi-sys
 # text from scripts/licenses/.
 node_out="$scratch/polyjose-node-aarch64-apple-darwin.txt"
 napi_ver=$(headings "$node_out" | sed -n 's/^napi \(.*\)$/\1/p')
-if [ -n "$napi_ver" ] && crate_section "$node_out" napi "$napi_ver" | grep -q '^--- License text: standard MIT' \
-  && crate_section "$node_out" napi "$napi_ver" | grep -q '^Permission is hereby granted'; then
+if [ -n "$napi_ver" ] && crate_section "$node_out" napi "$napi_ver" | grep '^--- License text: standard MIT' >/dev/null \
+  && crate_section "$node_out" napi "$napi_ver" | grep '^Permission is hereby granted' >/dev/null; then
   pass "napi (no license file): the standard MIT text"
 else fail "napi (no license file): no standard MIT text"; fi
 ffi_out="$scratch/polyjose-ffi-aarch64-apple-ios.txt"
 uc_ver=$(headings "$ffi_out" | sed -n 's/^uniffi_core \(.*\)$/\1/p')
-if [ -n "$uc_ver" ] && crate_section "$ffi_out" uniffi_core "$uc_ver" | grep -q '^--- License text: standard MPL-2.0' \
-  && crate_section "$ffi_out" uniffi_core "$uc_ver" | grep -q '^Mozilla Public License Version 2.0$'; then
+if [ -n "$uc_ver" ] && crate_section "$ffi_out" uniffi_core "$uc_ver" | grep '^--- License text: standard MPL-2.0' >/dev/null \
+  && crate_section "$ffi_out" uniffi_core "$uc_ver" | grep '^Mozilla Public License Version 2.0$' >/dev/null; then
   pass "uniffi_core (no license file): the standard MPL-2.0 text"
 else fail "uniffi_core (no license file): no standard MPL-2.0 text"; fi
 
