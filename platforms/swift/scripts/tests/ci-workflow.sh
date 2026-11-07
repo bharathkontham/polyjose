@@ -976,14 +976,17 @@ fi
 mutations=0
 mutations_failed=0
 mutate() {
-  local check=$1 anchor=$2 old=$3 new=$4 what=$5 copy
+  local check=$1 anchor=$2 old=$3 new=$4 what=$5 copy anchor_lit old_lit
   mutations=$((mutations + 1))
   copy=$(printf '%s/mutation-%03d.yml' "$work" "$mutations")
+  # The lines as awk will match them (awk -v turns \\ into \).
+  anchor_lit=$(awk -v s="$anchor" 'BEGIN { print s }')
+  old_lit=$(awk -v s="$old" 'BEGIN { print s }')
   if [ -n "$anchor" ]; then
-    [ "$(grep -cxF -- "$anchor" "$workflow")" = 1 ] ||
+    [ "$(grep -cxF -- "$anchor_lit" "$workflow")" = 1 ] ||
       { mutations_failed=1; echo "FAIL - self-test: $what: the anchor line is not unique: $anchor"; return; }
   else
-    [ "$(grep -cxF -- "$old" "$workflow")" = 1 ] ||
+    [ "$(grep -cxF -- "$old_lit" "$workflow")" = 1 ] ||
       { mutations_failed=1; echo "FAIL - self-test: $what: the line to replace is not unique: $old"; return; }
   fi
   if ! awk -v anchor="$anchor" -v old="$old" -v new="$new" '
@@ -1146,6 +1149,24 @@ mutate env "" "  CARGO_INCREMENTAL: 0" "  CARGO_INCREMENTAL: 0\n  BASH_ENV: /tmp
 mutate env "" "$mode_env" "$mode_env\n      POLYJOSE_LOCAL_XCFRAMEWORK: 0" "an extra job env variable"
 mutate structure "" "permissions:" "concurrency:\n  group: apple\npermissions:" "a top-level concurrency block"
 mutate structure "" "$runs_on" "$runs_on\n    container: ghcr.io/example/image:1" "a job container"
+
+# --- B05: escapes and folding in double-quoted free strings ---------------------------------------
+# (single-quoted here so that awk turns \\x into \x, writing the YAML escape itself)
+mutate quoting "" "      - name: conformance parity" '      - name: "\\x24\\x7b\\x7b \\x73ecrets.X \\x7d\\x7d"' "an escaped secrets expression in a step name"
+mutate quoting "" "      - name: conformance parity" '      - name: "\\x24\\x7b\\x7b github.\\x74oken \\x7d\\x7d"' "an escaped github.token expression in a step name"
+mutate quoting "" "          node-version: 24" '          node-version: "\\x24\\x7b\\x7b \\x73ecrets.X \\x7d\\x7d"' "an escaped expression in node-version"
+# shellcheck disable=SC2016 # literal workflow text
+mutate quoting "" "          node-version: 24" '          node-version: "${\\\n            { sec\\\n            rets.X }}"' "an expression folded over escaped line breaks in node-version"
+mutate quoting "          name: apple-xcframework" "          if-no-files-found: error" '          if-no-files-found: error\n          retention-days: "\\x24\\x7b\\x7b \\x73ecrets.X \\x7d\\x7d"' "an escaped expression in retention-days"
+# shellcheck disable=SC2016 # literal workflow text
+mutate quoting "" "$checkout_pin" '      - name: "$\\\n          {{ secrets.X }}"\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' "an action step name folded into an expression"
+mutate quoting "" "      - name: conformance parity" '      - name: "conformance\n          parity"' "a double-quoted step name folded over two lines"
+# shellcheck disable=SC2016 # literal workflow text
+mutate quoting "" "      - name: conformance parity" '      - name: "\\u0024{{ github.ref }}"' "a \$ written as an escape"
+# A single-quoted scalar holds a backslash literally (YAML has no escapes there): harmless.
+benign "" "      - name: conformance parity" "      - name: 'conformance parity (results in target\\\\conformance)'" "a single-quoted step name with a literal backslash"
+# B05 backlog: in a run block, a # line between backslash-continued lines is part of the script.
+mutate steps "" "          curl --proto '=https' --tlsv1.2 -fsSL -o \"\$dir/\$tarball\" \\\\" "          curl --proto '=https' --tlsv1.2 -fsSL -o \"\$dir/\$tarball\" \\\\\n          # a comment line that ends the command here" "a # line inside a backslash-continued command"
 
 # --- Benign: must still PASS ------------------------------------------------------------------
 benign "          name: apple-xcframework" "          if-no-files-found: error" "          if-no-files-found: error\n          retention-days: 30" "retention-days on an upload"
