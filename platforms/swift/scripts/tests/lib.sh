@@ -19,6 +19,10 @@ lib_die() { echo "ERROR: $*" >&2; exit 2; }
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-package-test.XXXXXX") || lib_die "mktemp failed"
 trap 'rm -rf "$scratch"' EXIT
+# SwiftPM leaves a lock file per package path in $TMPDIR; keep those inside the scratch directory.
+mkdir -p "$scratch/tmp"
+# shellcheck disable=SC2034 # read by the tests
+swift_tmp="$scratch/tmp"
 
 pass() { tests_run=$((tests_run + 1)); echo "ok   - $1"; }
 fail() { tests_run=$((tests_run + 1)); tests_failed=$((tests_failed + 1)); echo "FAIL - $1"; }

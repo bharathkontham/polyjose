@@ -109,7 +109,7 @@ check "the notices name no napi, wasm-bindgen, sha1 or uniffi_bindgen crate${pre
 
 # --- Checksum and stanza (ADR 0032 §6, ADR 0011) ----------------------------------------------
 sha=$(shasum -a 256 "$zip" | cut -d' ' -f1)
-spm_sha=$(swift package compute-checksum "$zip" 2>/dev/null)
+spm_sha=$(TMPDIR=$swift_tmp swift package compute-checksum "$zip" 2>/dev/null)
 check "the .sha256 file is one line, the zip's SHA-256 ($sha)" \
   "[ \"\$(cat '$zip.sha256')\" = '$sha' ] && [ \"\$(wc -l <'$zip.sha256' | tr -d ' ')\" = 1 ]"
 check "swift package compute-checksum agrees" "[ '$spm_sha' = '$sha' ]"
@@ -130,7 +130,7 @@ mkdir -p "$manifest"
   cat "$stanza"
   echo '])'
 } >"$manifest/Package.swift"
-if swift package --package-path "$manifest" dump-package >"$scratch/dump.json" 2>"$scratch/dump.err"; then
+if TMPDIR=$swift_tmp swift package --package-path "$manifest" dump-package >"$scratch/dump.json" 2>"$scratch/dump.err"; then
   check "the stanza is a valid binaryTarget in a manifest (dump-package)" \
     "python3 -I -c 'import json,sys; t=json.load(open(sys.argv[1]))[\"targets\"][0]; sys.exit(not (t[\"type\"]==\"binary\" and t[\"url\"]==sys.argv[2] and t[\"checksum\"]==sys.argv[3]))' '$scratch/dump.json' '$url' '$sha'"
 else
@@ -198,7 +198,7 @@ EOF
 
 smoke() {
   local label=$1 dir=$2
-  if swift run --package-path "$dir" Smoke >"$scratch/smoke.log" 2>&1 \
+  if TMPDIR=$swift_tmp swift run --package-path "$dir" Smoke >"$scratch/smoke.log" 2>&1 \
     && grep -qxF "polyjose-consumer: OK polyjose $version ES256 sign/verify" "$scratch/smoke.log"; then
     pass "$label: swift run signs and verifies, and rejects a tampered token"
   else
