@@ -3,10 +3,11 @@
  * Workers through the pinned `miniflare` dev-dependency; ADR 0034 §2 runner `wasm-pkg-workerd`):
  * 1. resolves the entry the package's exports give under wrangler's conditions (`workerd`,
  *    `worker`, `browser`, then `import`/`default`), which must be `workerd.mjs`;
- * 2. starts miniflare with the worker (`worker.ts`), its imports, and every module of the
- *    installed package (`.js`/`.mjs` as ES modules, the `.wasm` as a compiled module, as
- *    wrangler uploads it). workerd has no `node_modules` resolution, so, as a bundler does, the
- *    name `@polyjose/wasm` is one module re-exporting the resolved entry;
+ * 2. starts miniflare with the worker (`worker.ts`), its imports, every module of the staged
+ *    shared facade and runner (`js/`, so a file added there can't break this run; 0006 F08),
+ *    and every module of the installed package (`.js`/`.mjs` as ES modules, the `.wasm` as a
+ *    compiled module, as wrangler uploads it). workerd has no `node_modules` resolution, so, as a
+ *    bundler does, the name `@polyjose/wasm` is one module re-exporting the resolved entry;
  * 3. runs the security checks first (`GET /security`, `security-checks.ts`, review N8: the
  *    worker's first API call, so its input-copy check is cold), then the probe and the vectors
  *    (sent as the request body), and writes `target/conformance/wasm-pkg-workerd.json` from the
@@ -45,11 +46,16 @@ interface MiniflareModule {
   }) => MiniflareInstance;
 }
 
-/** Every module file of the installed package, by its path under the staging root. */
-function packageModules(dir: string, out: ModuleDefinition[]): void {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+/**
+ * Every module file under `dir`, by its path under the staging root, in name order (so the list
+ * is the same on every run): `.js`/`.mjs` as ES modules, `.wasm` as a compiled module. A module
+ * that nothing imports is registered but never evaluated.
+ */
+function modulesUnder(dir: string, out: ModuleDefinition[]): void {
+  const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) packageModules(full, out);
+    if (entry.isDirectory()) modulesUnder(full, out);
     else if (entry.isFile() && /\.m?js$/.test(entry.name)) out.push({ type: "ESModule", path: full });
     else if (entry.isFile() && entry.name.endsWith(".wasm")) out.push({ type: "CompiledWasm", path: full });
   }
@@ -87,15 +93,13 @@ async function main(): Promise<number> {
   const entry = resolveEntry(packageDir, ["workerd", "worker", "browser", "import", "default"]);
   if (entry !== "./workerd.mjs") throw new Error(`the workerd condition resolves ${entry}, expected ./workerd.mjs (ADR 0031 §3)`);
 
-  // The worker is the first module (the entry point). Its own imports, the shared runner's, and
-  // the package's are listed explicitly; workerd fails to start if one is missing.
+  // The worker is the first module (the entry point), then its own imports. The shared facade
+  // and runner (js/) and the package come from walking their directories: workerd fails to start
+  // if an imported module is missing, and a hand-kept list missed one (0013 F13's own.js).
   const modules: ModuleDefinition[] = [
     { type: "ESModule", path: path.join(stage, "dist", "worker.js") },
     { type: "ESModule", path: path.join(stage, "dist", "results.js") },
     { type: "ESModule", path: path.join(stage, "dist", "security-checks.js") },
-    { type: "ESModule", path: path.join(stage, "js", "conformance", "runner.js") },
-    { type: "ESModule", path: path.join(stage, "js", "conformance", "json-text.js") },
-    { type: "ESModule", path: path.join(stage, "js", "conformance", "schema.js") },
     // workerd resolves an import as a module name relative to the importing module's name, so the
     // worker's `@polyjose/wasm` is `dist/@polyjose/wasm`; it re-exports the resolved entry by its
     // absolute name.
@@ -105,7 +109,8 @@ async function main(): Promise<number> {
       contents: `export * from "/node_modules/@polyjose/wasm/${entry.slice(2)}";\n`,
     },
   ];
-  packageModules(packageDir, modules);
+  modulesUnder(path.join(stage, "js"), modules);
+  modulesUnder(packageDir, modules);
 
   const specifier = "miniflare";
   const { Miniflare } = (await import(specifier)) as MiniflareModule;

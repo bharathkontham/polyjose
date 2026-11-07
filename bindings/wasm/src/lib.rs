@@ -29,11 +29,14 @@
 //! What a call leaves in wasm memory is regression-tested in `tests/memory.rs`. Its `KNOWN` table
 //! lists every exception with its count, in Node and Chrome:
 //!
-//! - **No copy on the Rust heap**, with two exceptions:
-//!   - **JWT claims follow ADR 0058** (owner decision 2). They are plain text, so `jwtSign`,
-//!     `jwtVerify*` and `jwtDecryptNested*` leave up to two unwiped copies of claim values.
-//!   - **A serialized JWE JSON** carries the `aad` in the clear (RFC 7516 §7.2.1). As a public
-//!     result it is returned as an owned `String`, so one copy of the `aad`'s base64url stays.
+//! - **No copy on the Rust heap**, with one exception: **JWT claims follow ADR 0058** (owner
+//!   decision 2). They are plain text, so `jwtSign`, `jwtVerify*` and `jwtDecryptNested*` leave
+//!   up to two unwiped copies of claim values.
+//!
+//!   The base64url(`aad`) in a `jweEncryptJson` result is **output token content** (RFC 7516
+//!   §7.2.1), not residue: the JWE JSON Serialization carries the `aad` in the clear, and the
+//!   serialized JWE, a public result, is returned as an owned `String`, so the token's own copy
+//!   stays on the heap like any returned token. `KNOWN` asserts it all the same.
 //! - **The wasm shadow stack is not scrubbed.** It shares linear memory with the heap (the low
 //!   1 MiB, wasm-ld `--stack-first`), and the primitives' own frames keep fragments that
 //!   `Zeroizing` never reaches. Examples are the HS256 key in full (review S2), 16 bytes of a new
