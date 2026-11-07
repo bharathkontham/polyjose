@@ -352,6 +352,16 @@ impl JwkSet {
     /// - **A `kid` is only compared for equality**, exact and
     ///   case-sensitive, never used as a path, URL or query (RFC 8725
     ///   §3.10). A `kid` from an untrusted header is safe to select by.
+    /// - **The outcome reveals the set's structure** when the selector
+    ///   comes from an untrusted token (ADR 0054 §4):
+    ///   [`Error::NoMatchingKey`] says no member matches its `kid` (or
+    ///   `alg`), and [`Error::MultipleMatchingKeys`] says two or more do,
+    ///   so a prober learns which `kid`s exist and which repeat. That is
+    ///   nothing new for a public JWK Set, but it is for a set of secret
+    ///   `oct` keys. A server should map both, with the verify and
+    ///   decrypt codes, to one opaque client error, such as
+    ///   `invalid_token` (RFC 6750 §3.1); see
+    ///   [the error module](crate::error#codes-are-for-logs-not-for-clients).
     /// - **The result is the member as imported**, and may hold private
     ///   members (`EC`/`OKP` `d`, `oct` `k`): it is the caller's key. Call
     ///   [`Jwk::to_public`] before publishing it. RSA private members never
