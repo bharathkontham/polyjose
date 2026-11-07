@@ -3,7 +3,8 @@
 # scripts/check-binding-api.d/<mode>.sh is a mode, found without editing the main script; a mode
 # that skips prints `SKIPPED (<mode>: <reason>)` and never counts as passing (pipeline rule 9);
 # derive errors, malformed lines and code-order differences fail; unknown modes are usage errors.
-# Uses fixture modes, so it needs no node and no cargo.
+# Uses fixture modes, so it needs no node and no cargo. A case that runs every mode keeps only the
+# real surface and js modes of the copy, so the mode files binding features add do not change it.
 #
 # Usage: scripts/tests/check-binding-api/modes.sh (under /bin/bash 3.2 and bash 5).
 # The fixture mode bodies below are shell code for a mode file, single-quoted on purpose.
@@ -28,10 +29,28 @@ run_check kotlin
 check_last_line "a new mode file is a mode, without editing the main script" 0 \
   'check-binding-api: kotlin: PASS (32 operations, 0 records, 0 fields, 16 codes)'
 
-# all_modes_case <name> [<base>]: a case whose modes are the real surface (passes) and js (skips:
-# bindings/js is removed) and the fixtures kotlin (passes) and swift (skips).
+# only_modes <mode>...: removes every other mode file from the copy. The real tree gains a mode file
+# per binding feature, so a case that runs every mode keeps only the real ones it controls.
+only_modes() {
+  local f m
+  for m in "$@"; do
+    [ -f "$case_dir/scripts/check-binding-api.d/$m.sh" ] || lib_die "mode $m is not in the copy"
+  done
+  for f in "$case_dir"/scripts/check-binding-api.d/*.sh; do
+    m=${f##*/}
+    case " $* " in
+      *" ${m%.sh} "*) ;;
+      *) rm -f "$f" || lib_die "could not remove $m from the copy" ;;
+    esac
+  done
+}
+
+# all_modes_case <name> [<base>]: a case whose modes are exactly the real surface (passes) and js
+# (skips: bindings/js is removed) and the fixtures kotlin (passes) and swift (skips), whatever other
+# modes the tree has.
 all_modes_case() {
   new_case "$@"
+  only_modes surface js
   fixture_mode kotlin "$echo_mode"
   fixture_mode swift 'MODE_KINDS="op"
 mode_derive() { skip "swift missing"; }'
