@@ -25,7 +25,8 @@ pub fn error_codes() -> Vec<String> {
 ///
 /// The input may be key material, so it is wiped when the call returns (ADR 0030 §7.1). UniFFI
 /// 0.32.2 lifts a `Vec<u8>` argument by copying it out of a buffer it then frees unwiped; that
-/// copy is the documented residual of ADR 0030 §7.3.
+/// copy is the documented residual of ADR 0030 §7.3 (restated in ADR 0058). The result is a
+/// `String`, which leaves the 1 host-freed copy of ADR 0058.
 #[uniffi::export]
 pub fn base64url_encode(data: Vec<u8>) -> String {
     let data = Zeroizing::new(data);
@@ -35,9 +36,17 @@ pub fn base64url_encode(data: Vec<u8>) -> String {
 /// Decodes strict unpadded base64url (RFC 4648 §5, RFC 7515 §2): padding, characters outside the
 /// URL-safe alphabet, whitespace and non-canonical trailing bits fail with `InvalidBase64`.
 ///
-/// The text may encode key material, so it is wiped when the call returns (ADR 0030 §7.1); a
-/// `String` argument is UniFFI's only Rust-heap copy of it (0009 research §8). The returned bytes
-/// are lowered into a buffer the host frees unwiped (ADR 0030 §7.3).
+/// The text is wiped when the call returns, as a precaution (ADR 0030 §7.1); a `String`
+/// argument is UniFFI's only Rust-heap copy of it (0009 research §8; ADR 0030 §7.3, restated in
+/// ADR 0058).
+///
+/// The result is not treated as key material: base64url output is not on ADR 0030 §7's list of
+/// secret-bearing values, and the surface returns it as a plain `Vec<u8>`. UniFFI 0.32.2 lowers
+/// it like every `Vec<u8>` result, into a buffer that grows as it is written, and the host frees
+/// the final `RustBuffer`, all unwiped: **at least 2** full Rust-heap copies (the returned vector
+/// and the host-freed buffer), plus a full or partial copy for each move of the growing buffer
+/// (ADR 0058). Callers who decode secret bytes should wipe the `ByteArray`/`Data` they receive
+/// (ADR 0030 §7.4).
 #[uniffi::export]
 pub fn base64url_decode(text: String) -> Result<Vec<u8>, PolyjoseError> {
     let text = Zeroizing::new(text);
