@@ -12,7 +12,9 @@
 # 1. `./gradlew :polyjose-jvm:test`: the generated Kotlin on the host JVM through JNA and the host
 #    library (ADR 0033 §5). Always runs when its toolchain exists.
 # 2. `scripts/run-instrumented.sh` (feature 0008 T03): the instrumented suite on an emulator
-#    (polyjose-api36), runner `android-emulator`. Its output and exit status are this script's.
+#    (polyjose-api36), runner `android-emulator`, and in the same Gradle call the R8
+#    consumer-rules proof, :sample-minified's minified release test (ADR 0033 §2). Its output and
+#    exit status are this script's.
 #
 # Dispatch contract (scripts/test-all.sh): the exit status decides PASS or FAIL. When nothing can
 # run (no JDK, no cargo) the script exits 0 with `SKIPPED (<reason>)` as its last line, which is
