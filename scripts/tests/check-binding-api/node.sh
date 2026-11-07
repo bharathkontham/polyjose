@@ -80,10 +80,13 @@ fi
 
 # --- The real declarations pass ----------------------------------------------------------------------
 
+# The counts are the inventory's operations, records and fields and the core's codes (lib.sh), so
+# the case does not change when the API grows (0013 B08).
+n_codes=$(core_codes | awk 'END { print NR }')
 node_case pass
 run_check node
 check_last_line "the package's declarations match the inventory" 0 \
-  'check-binding-api: node: PASS (32 operations, 13 records, 74 fields, 16 codes)'
+  "check-binding-api: node: PASS ($(inventory_count op) operations, $(inventory_count record) records, $(inventory_count field) fields, $n_codes codes)"
 
 # --- A stale build -----------------------------------------------------------------------------------
 
