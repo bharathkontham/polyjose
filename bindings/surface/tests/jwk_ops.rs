@@ -204,10 +204,45 @@ fn to_public_reports_parse_errors_with_the_core_codes() {
 
 // --- jwk_thumbprint / jwk_thumbprint_uri ------------------------------------------------------
 
+/// The RFC 7638 §3.1 key's thumbprint with SHA-384 (RFC 7638 §3.4). No RFC prints it: the core's
+/// known answer (ADR 0054 §8.4), recomputed for this test with Python's `hashlib.sha384` over the
+/// hand-built RFC 7638 §3.3 input `{"e":"AQAB","kty":"RSA","n":"…"}`.
+const RFC7638_THUMBPRINT_SHA384: &str =
+    "R9_OfJjSjaw8Fuum86UzK5ixTdN9bo9BaqPSiseq89DWfmqCdpSgUHus-cxDUNc8";
+
+/// As [`RFC7638_THUMBPRINT_SHA384`], with SHA-512 (`hashlib.sha512`).
+const RFC7638_THUMBPRINT_SHA512: &str =
+    "DpvEwocfn3FjeWWQjcJHzWrpKTIymKwgoL1xVgQcud48-qZDSRCr1zfWZQdHAJn_ciqXqPTSARyg-L-NyNGpVA";
+
+/// The RFC 8037 A.2 key's thumbprint with SHA-384 (RFC 7638 §3.4): the core's known answer,
+/// recomputed with `hashlib.sha384` over `{"crv":"Ed25519","kty":"OKP","x":"…"}` (RFC 8037 A.3's
+/// input).
+const RFC8037_THUMBPRINT_SHA384: &str =
+    "ePy6LSb6I7JWK2uWQyYJQ4DBrwGE4QoxPl6INUviCtqplTLCwzo6fD9Eaw69Wvtt";
+
+/// As [`RFC8037_THUMBPRINT_SHA384`], with SHA-512 (`hashlib.sha512`).
+const RFC8037_THUMBPRINT_SHA512: &str =
+    "SfSqAgfmPYvpuNzfHCiQXi6Mr51GG78hHopngoabsV9xvLR0hcUfVCoJLfyzi08Dbnds6kmcAt23CpNV-8qLTg";
+
+/// The nine hash names the core's `ThumbprintHash::from_name` accepts (ADR 0054 §8.2), each with
+/// the IANA Named Information name the URI carries (RFC 9278 §4) and the RFC 7638 §3.1 key's
+/// thumbprint.
+const HASH_NAMES: [(&str, &str, &str); 9] = [
+    ("sha-256", "sha-256", RFC7638_THUMBPRINT),
+    ("SHA-256", "sha-256", RFC7638_THUMBPRINT),
+    ("sha256", "sha-256", RFC7638_THUMBPRINT),
+    ("sha-384", "sha-384", RFC7638_THUMBPRINT_SHA384),
+    ("SHA-384", "sha-384", RFC7638_THUMBPRINT_SHA384),
+    ("sha384", "sha-384", RFC7638_THUMBPRINT_SHA384),
+    ("sha-512", "sha-512", RFC7638_THUMBPRINT_SHA512),
+    ("SHA-512", "sha-512", RFC7638_THUMBPRINT_SHA512),
+    ("sha512", "sha-512", RFC7638_THUMBPRINT_SHA512),
+];
+
 #[test]
 fn thumbprint_reproduces_rfc7638_section_3_1() {
     assert_eq!(
-        jwk::jwk_thumbprint(RFC7638_RSA, "SHA-256").unwrap(),
+        jwk::jwk_thumbprint(RFC7638_RSA, Some("SHA-256")).unwrap(),
         RFC7638_THUMBPRINT
     );
 }
@@ -215,46 +250,114 @@ fn thumbprint_reproduces_rfc7638_section_3_1() {
 #[test]
 fn thumbprint_uri_reproduces_rfc9278() {
     assert_eq!(
-        jwk::jwk_thumbprint_uri(RFC7638_RSA, "SHA-256").unwrap(),
+        jwk::jwk_thumbprint_uri(RFC7638_RSA, Some("SHA-256")).unwrap(),
         RFC9278_URI
     );
 }
 
 #[test]
-fn thumbprint_of_a_private_key_is_that_of_its_public_key() {
-    // RFC 7638 §3.2.1, RFC 8037 Appendix A.3.
-    for key in [RFC8037_A1_ED25519_PRIVATE, RFC8037_A2_ED25519_PUBLIC] {
-        assert_eq!(
-            jwk::jwk_thumbprint(key, "SHA-256").unwrap(),
-            RFC8037_A3_THUMBPRINT
-        );
-        assert_eq!(
-            jwk::jwk_thumbprint_uri(key, "SHA-256").unwrap(),
-            format!("urn:ietf:params:oauth:jwk-thumbprint:sha-256:{RFC8037_A3_THUMBPRINT}")
-        );
-    }
+fn no_hash_is_the_core_default_sha_256() {
+    // ADR 0054 §9 / ADR 0030 §3: an absent `hash` is the core's `ThumbprintHash::default()`,
+    // SHA-256, the RFC 9278 §5 mandatory-to-implement hash (RFC 7638 §3.1, RFC 9278 §6).
     assert_eq!(
-        jwk::jwk_thumbprint(RFC7517_A2_P256_PRIVATE, "SHA-256").unwrap(),
-        jwk::jwk_thumbprint(RFC7517_A1_P256_PUBLIC, "SHA-256").unwrap()
+        jwk::jwk_thumbprint(RFC7638_RSA, None).unwrap(),
+        RFC7638_THUMBPRINT
+    );
+    assert_eq!(
+        jwk::jwk_thumbprint_uri(RFC7638_RSA, None).unwrap(),
+        RFC9278_URI
+    );
+    assert_eq!(
+        jwk::jwk_thumbprint(RFC8037_A2_ED25519_PUBLIC, None).unwrap(),
+        RFC8037_A3_THUMBPRINT
     );
 }
 
 #[test]
-fn every_hash_but_sha_256_is_unsupported_for_now() {
-    // ADR 0022 (no SHA-1) and the T06 interim rule (lead, 2026-11-07): only SHA-256 until the
-    // core gains SHA-384/SHA-512 thumbprints (feature 0015, task T14). Names are exact: the
-    // RFC 9278 §4 lower-case form and other spellings are not ADR 0030 §4 hash names.
+fn every_core_hash_name_gives_its_hash_and_the_iana_name_in_the_uri() {
+    // RFC 7638 §3.4 (the hash is the application's choice), ADR 0054 §8.2 (nine exact names)
+    // and §8.3 / RFC 9278 §3-§4 (the URI always carries the IANA name).
+    for (name, iana, thumbprint) in HASH_NAMES {
+        assert_eq!(
+            jwk::jwk_thumbprint(RFC7638_RSA, Some(name)).unwrap(),
+            thumbprint,
+            "{name}"
+        );
+        assert_eq!(
+            jwk::jwk_thumbprint_uri(RFC7638_RSA, Some(name)).unwrap(),
+            format!("urn:ietf:params:oauth:jwk-thumbprint:{iana}:{thumbprint}"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn thumbprint_lengths_are_those_of_the_hash() {
+    // RFC 7638 §3 output, base64url without padding (RFC 7515 §2): 32, 48 and 64 octets.
+    for (name, len) in [("sha-256", 43), ("sha-384", 64), ("sha-512", 86)] {
+        assert_eq!(
+            jwk::jwk_thumbprint(RFC7638_RSA, Some(name)).unwrap().len(),
+            len
+        );
+    }
+}
+
+#[test]
+fn thumbprint_of_a_private_key_is_that_of_its_public_key() {
+    // RFC 7638 §3.2.1, RFC 8037 Appendix A.3, for every hash.
+    for key in [RFC8037_A1_ED25519_PRIVATE, RFC8037_A2_ED25519_PUBLIC] {
+        for (hash, iana, thumbprint) in [
+            ("SHA-256", "sha-256", RFC8037_A3_THUMBPRINT),
+            ("SHA-384", "sha-384", RFC8037_THUMBPRINT_SHA384),
+            ("SHA-512", "sha-512", RFC8037_THUMBPRINT_SHA512),
+        ] {
+            assert_eq!(
+                jwk::jwk_thumbprint(key, Some(hash)).unwrap(),
+                thumbprint,
+                "{hash}"
+            );
+            assert_eq!(
+                jwk::jwk_thumbprint_uri(key, Some(hash)).unwrap(),
+                format!("urn:ietf:params:oauth:jwk-thumbprint:{iana}:{thumbprint}")
+            );
+        }
+    }
+    for hash in [None, Some("SHA-384"), Some("SHA-512")] {
+        assert_eq!(
+            jwk::jwk_thumbprint(RFC7517_A2_P256_PRIVATE, hash).unwrap(),
+            jwk::jwk_thumbprint(RFC7517_A1_P256_PUBLIC, hash).unwrap()
+        );
+    }
+}
+
+#[test]
+fn every_other_hash_name_is_unsupported() {
+    // ADR 0054 §8.2: the core matches exactly nine names, so SHA-1 in any spelling (ADR 0022),
+    // truncated and SHA-3 hashes, other case forms and padded names fail with
+    // `UnsupportedAlgorithm` (ADR 0030 §5), the core's code.
     for hash in [
-        "SHA-384", "SHA-512", "SHA-1", "sha-256", "SHA256", "sha256", " SHA-256", "SHA-256 ", "",
+        "SHA-1",
+        "sha-1",
+        "sha1",
+        "SHA1",
+        "sha-256-128",
+        "sha3-256",
+        "Sha-256",
+        "SHA256",
+        "Sha256",
+        "SHA-384 ",
+        " sha-512",
+        "sha_256",
+        "",
         "MD5",
     ] {
         assert_eq!(
-            code(jwk::jwk_thumbprint(RFC7638_RSA, hash)),
+            code(jwk::jwk_thumbprint(RFC7638_RSA, Some(hash))),
             "UnsupportedAlgorithm",
             "{hash:?}"
         );
         assert_eq!(
-            code(jwk::jwk_thumbprint_uri(RFC7638_RSA, hash)),
+            code(jwk::jwk_thumbprint_uri(RFC7638_RSA, Some(hash))),
             "UnsupportedAlgorithm",
             "{hash:?}"
         );
@@ -265,33 +368,54 @@ fn every_hash_but_sha_256_is_unsupported_for_now() {
 fn an_unknown_hash_is_reported_before_the_key_is_parsed() {
     // The hash name is checked first, so a bad key with a bad hash reports the hash.
     assert_eq!(
-        code(jwk::jwk_thumbprint("{", "SHA-1")),
+        code(jwk::jwk_thumbprint("{", Some("SHA-1"))),
         "UnsupportedAlgorithm"
     );
     assert_eq!(
-        code(jwk::jwk_thumbprint_uri("{", "SHA-1")),
+        code(jwk::jwk_thumbprint_uri("{", Some("SHA-1"))),
         "UnsupportedAlgorithm"
     );
 }
 
 #[test]
 fn thumbprint_reports_key_errors_with_the_core_codes() {
-    assert_eq!(code(jwk::jwk_thumbprint("{", "SHA-256")), "InvalidJson");
-    assert_eq!(code(jwk::jwk_thumbprint_uri("{", "SHA-256")), "InvalidJson");
-    // The RSA private key is rejected before any hash is computed (ADR 0021).
-    assert_eq!(
-        code(jwk::jwk_thumbprint(RFC7517_A2_RSA_PRIVATE, "SHA-256")),
-        "UnsupportedAlgorithm"
-    );
+    for hash in [None, Some("SHA-256"), Some("sha-512")] {
+        assert_eq!(code(jwk::jwk_thumbprint("{", hash)), "InvalidJson");
+        assert_eq!(code(jwk::jwk_thumbprint_uri("{", hash)), "InvalidJson");
+        // The RSA private key is rejected before any hash is computed (ADR 0021).
+        assert_eq!(
+            code(jwk::jwk_thumbprint(RFC7517_A2_RSA_PRIVATE, hash)),
+            "UnsupportedAlgorithm"
+        );
+    }
 }
 
 #[test]
 fn thumbprint_of_an_oct_key_hashes_k() {
     // RFC 7638 §3.2: the required members of an `oct` key are `k` and `kty`.
     assert_eq!(
-        jwk::jwk_thumbprint(RFC7517_A3_OCT, "SHA-256").unwrap(),
+        jwk::jwk_thumbprint(RFC7517_A3_OCT, Some("SHA-256")).unwrap(),
         "y_x3gCJnL6oKGBBIXScabduwxTVy2Wd2bzRVEUbdUzc"
     );
+}
+
+#[test]
+fn the_surface_has_no_hash_name_table_of_its_own() {
+    // feature 0015 plan, "0013 T14 wiring note": the surface parses with the core's
+    // `ThumbprintHash::from_name` (or takes `ThumbprintHash::default()`), so no hash name may
+    // appear in its code outside comments.
+    let source = include_str!("../src/jwk.rs");
+    let code = code_without_comments(source);
+    for name in [
+        "sha-256", "sha-384", "sha-512", "sha256", "sha384", "sha512",
+    ] {
+        assert!(
+            !code.to_ascii_lowercase().contains(name),
+            "bindings/surface/src/jwk.rs names the hash {name} outside a comment"
+        );
+    }
+    assert!(code.contains("ThumbprintHash::from_name"));
+    assert!(code.contains("ThumbprintHash::default()"));
 }
 
 // --- jwks_select ------------------------------------------------------------------------------
@@ -1027,10 +1151,11 @@ fn no_failing_path_puts_a_marked_private_member_into_its_error() {
     for key in marked_keys {
         assert_no_marker("jwk_parse", jwk::jwk_parse(key));
         assert_no_marker("jwk_to_public", jwk::jwk_to_public(key));
-        assert_no_marker("jwk_thumbprint", jwk::jwk_thumbprint(key, "SHA-256"));
+        assert_no_marker("jwk_thumbprint", jwk::jwk_thumbprint(key, Some("SHA-256")));
+        assert_no_marker("jwk_thumbprint", jwk::jwk_thumbprint(key, None));
         assert_no_marker(
             "jwk_thumbprint_uri",
-            jwk::jwk_thumbprint_uri(key, "SHA-256"),
+            jwk::jwk_thumbprint_uri(key, Some("SHA-512")),
         );
         for format in ["pkcs8", "sec1", "spki", "pkcs1"] {
             assert_no_marker("jwk_to_pem", keys::jwk_to_pem(key, format));
@@ -1044,14 +1169,14 @@ fn no_failing_path_puts_a_marked_private_member_into_its_error() {
         assert_no_marker("jwk_to_pem oct", keys::jwk_to_pem(&marked_oct, format));
         assert_no_marker("jwk_to_der oct", keys::jwk_to_der(&marked_oct, format));
     }
-    for hash in ["SHA-1", "SHA-384", MARKER] {
+    for hash in ["SHA-1", "Sha-384", MARKER] {
         assert_no_marker(
             "jwk_thumbprint hash",
-            jwk::jwk_thumbprint(&marked_oct, hash),
+            jwk::jwk_thumbprint(&marked_oct, Some(hash)),
         );
         assert_no_marker(
             "jwk_thumbprint_uri hash",
-            jwk::jwk_thumbprint_uri(&marked_oct, hash),
+            jwk::jwk_thumbprint_uri(&marked_oct, Some(hash)),
         );
     }
 

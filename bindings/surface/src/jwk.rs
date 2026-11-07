@@ -11,7 +11,7 @@
 //! `InvalidKey`, `KeyAlgorithmMismatch`, and `UnsupportedAlgorithm` for well-formed keys polyjose
 //! does not support, an RSA private key among them (ADR 0021).
 
-use polyjose::jwk::Jwk;
+use polyjose::jwk::{Jwk, ThumbprintHash};
 
 use crate::error::{SurfaceError, SurfaceResult};
 use crate::records::JwkSelector;
@@ -61,70 +61,63 @@ pub fn jwk_to_public(jwk: &str) -> SurfaceResult<String> {
     Ok(public.to_json().as_str().to_owned())
 }
 
-/// A hash function a JWK Thumbprint can be computed with (RFC 7638 §3, RFC 9278 §3).
+/// The core hash `hash` names, or the core default for `None` (ADR 0054 §8.2, §9; ADR 0030
+/// §3: defaults live in the core).
 ///
-/// Only SHA-256 for now, the hash RFC 9278 §5 makes mandatory to implement and the only one the
-/// core provides. `SHA-384` and `SHA-512` (ADR 0030 §4) are added here, and only here, once the
-/// core computes them (feature 0015, task T14); SHA-1 is never added (ADR 0022).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ThumbprintHash {
-    /// SHA-256 (FIPS 180-4), named `SHA-256` (ADR 0030 §4).
-    Sha256,
-}
-
-/// The hash the ADR 0030 §4 name `hash` stands for, matched exactly (case-sensitive, no
-/// trimming). This is the one place that maps hash names.
+/// The surface keeps no name table and no default of its own: `Some(name)` goes to
+/// [`ThumbprintHash::from_name`], which accepts exactly nine case-sensitive names (the IANA
+/// Named Information names of RFC 9278 §4, the ADR 0030 §4 upper-case forms and the panva/jose
+/// forms, for SHA-256, SHA-384 and SHA-512), and `None` is [`ThumbprintHash::default()`],
+/// SHA-256, the hash RFC 9278 §5 makes mandatory to implement.
 ///
 /// # Errors
 ///
-/// `UnsupportedAlgorithm` for any other name (ADR 0030 §5), including `SHA-1` (ADR 0022), the
-/// lower-case RFC 9278 §4 form `sha-256`, and, until the core supports them, `SHA-384` and
-/// `SHA-512`. The name is not echoed.
-fn thumbprint_hash(hash: &str) -> SurfaceResult<ThumbprintHash> {
-    match hash {
-        "SHA-256" => Ok(ThumbprintHash::Sha256),
-        _ => Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm)),
-    }
+/// `UnsupportedAlgorithm` from the core for any other name, SHA-1 among them (ADR 0022). The
+/// name is not echoed.
+fn thumbprint_hash(hash: Option<&str>) -> SurfaceResult<ThumbprintHash> {
+    Ok(match hash {
+        Some(name) => ThumbprintHash::from_name(name)?,
+        None => ThumbprintHash::default(),
+    })
 }
 
-/// The JWK Thumbprint of `jwk` under `hash`, base64url encoded without padding (ADR 0030 §4;
-/// RFC 7638 §3, RFC 7515 §2).
+/// The JWK Thumbprint of `jwk` under `hash`, base64url encoded without padding (ADR 0030 §4,
+/// ADR 0054 §9; RFC 7638 §3, §3.4, RFC 7515 §2): 43, 64 or 86 characters for SHA-256, SHA-384
+/// or SHA-512.
+///
+/// `hash` is optional: `None` is the core default, SHA-256 (RFC 9278 §5). A name is parsed by
+/// the core ([`ThumbprintHash::from_name`]): `sha-256` | `SHA-256` | `sha256`, and the same
+/// three forms for 384 and 512, matched exactly.
 ///
 /// The hash input holds only the key type's required members (RFC 7638 §3.2), so `kid`, `use`,
 /// `alg` and other members do not change the value, and a private key has the thumbprint of
 /// its public key (RFC 7638 §3.2.1). For an `oct` key the input is the secret `k`; see the
-/// RFC 7638 §7 caution on [`Jwk::thumbprint_sha256`].
+/// RFC 7638 §7 caution on [`Jwk::thumbprint`].
 ///
 /// # Errors
 ///
-/// - `UnsupportedAlgorithm` for any `hash` but `SHA-256`, matched exactly (ADR 0022, ADR 0030
-///   §5): `SHA-1` never, the lower-case RFC 9278 §4 form `sha-256` neither, and `SHA-384` and
-///   `SHA-512` not until the core computes them (feature 0015). The hash name is checked before
-///   the key is parsed.
+/// - `UnsupportedAlgorithm` for any other `hash` name, from the core (ADR 0054 §8.2, ADR 0022,
+///   ADR 0030 §5). The hash name is checked before the key is parsed.
 /// - The core's JWK parse errors (module docs).
-pub fn jwk_thumbprint(jwk: &str, hash: &str) -> SurfaceResult<String> {
+pub fn jwk_thumbprint(jwk: &str, hash: Option<&str>) -> SurfaceResult<String> {
     let hash = thumbprint_hash(hash)?;
-    let key = parse(jwk)?;
-    Ok(match hash {
-        ThumbprintHash::Sha256 => key.thumbprint_sha256(),
-    })
+    Ok(parse(jwk)?.thumbprint(hash))
 }
 
 /// The JWK Thumbprint URI of `jwk` under `hash`,
-/// `urn:ietf:params:oauth:jwk-thumbprint:<hash>:<thumbprint>` (ADR 0030 §4; RFC 9278 §3).
+/// `urn:ietf:params:oauth:jwk-thumbprint:<hash>:<thumbprint>` (ADR 0030 §4, ADR 0054 §9;
+/// RFC 9278 §3).
 ///
-/// `<hash>` is the IANA Named Information hash name (RFC 9278 §4), `sha-256` for `SHA-256`,
-/// written by the core.
+/// `hash` is as for [`jwk_thumbprint`]. `<hash>` is always the IANA Named Information hash name
+/// (RFC 9278 §4), whichever accepted spelling was passed, written by the core
+/// ([`Jwk::thumbprint_uri`], ADR 0054 §8.3).
 ///
 /// # Errors
 ///
 /// Those of [`jwk_thumbprint`], in the same order.
-pub fn jwk_thumbprint_uri(jwk: &str, hash: &str) -> SurfaceResult<String> {
+pub fn jwk_thumbprint_uri(jwk: &str, hash: Option<&str>) -> SurfaceResult<String> {
     let hash = thumbprint_hash(hash)?;
-    let key = parse(jwk)?;
-    Ok(match hash {
-        ThumbprintHash::Sha256 => key.thumbprint_uri_sha256(),
-    })
+    Ok(parse(jwk)?.thumbprint_uri(hash))
 }
 
 /// The member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4; RFC 7517 §5, §4.2,

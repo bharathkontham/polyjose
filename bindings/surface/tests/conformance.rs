@@ -674,8 +674,8 @@ fn jwk_thumbprint(input: &Object, out: &mut Object) -> Step<()> {
         return harness(format!("hash `{name}` has no surface name"));
     };
     let key = json_text(input, "jwk");
-    out.insert("thumbprint", jwk::jwk_thumbprint(&key, hash)?);
-    out.insert("thumbprint_uri", jwk::jwk_thumbprint_uri(&key, hash)?);
+    out.insert("thumbprint", jwk::jwk_thumbprint(&key, Some(hash))?);
+    out.insert("thumbprint_uri", jwk::jwk_thumbprint_uri(&key, Some(hash))?);
     Ok(())
 }
 
