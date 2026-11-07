@@ -724,3 +724,92 @@ fn jwt_decrypt_nested_with_jwks_reports_the_member_and_rejects_an_expired_inner_
         TokenExpired
     );
 }
+
+// --- No input in errors (ADR 0030 §5) ---------------------------------------------------------
+
+/// A distinctive value standing in for key material (the surface's marker style).
+const MARKER: &str = "pj-SECRET-marker-7f3a";
+
+/// Asserts that the failed `result` mentions the marker, raw or base64url-encoded, in none of
+/// what a Kotlin or Swift caller can print: `code()`, `detail`, `toString()`/`description`
+/// (`Display`) and `Debug`.
+fn assert_no_marker<T>(what: &str, result: Result<T, PolyjoseError>) {
+    let Err(err) = result else {
+        panic!("{what} succeeded");
+    };
+    let encoded = polyjose_ffi::util::base64url_encode(MARKER.as_bytes().to_vec());
+    for rendered in [
+        err.code(),
+        err.detail().to_owned(),
+        err.to_string(),
+        format!("{err:?}"),
+    ] {
+        for needle in [MARKER, encoded.as_str()] {
+            assert!(
+                !rendered.contains(needle),
+                "{what}: error leaks input: {rendered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn no_failing_export_puts_a_marked_private_member_into_its_error() {
+    let marked_b64 = polyjose_ffi::util::base64url_encode(MARKER.as_bytes().to_vec());
+    // The marker as a malformed EC `d`, as a well-formed `oct` key that fails later, and next to
+    // a JSON syntax error, where a quoting parser would echo it.
+    let marked_ec =
+        RFC7517_A2_P256_PRIVATE.replace("870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE", MARKER);
+    let marked_oct = format!(r#"{{"kty":"oct","k":"{marked_b64}"}}"#);
+    let marked_json = format!(r#"{{"kty":"oct","k":"{MARKER}" {MARKER}}}"#);
+    // The `oct` key is well formed, so only the two malformed keys fail to parse.
+    for key in [&marked_ec, &marked_json] {
+        assert_no_marker("jwk_parse", jwk_parse(key.clone()));
+    }
+    for key in [&marked_ec, &marked_oct, &marked_json] {
+        assert_no_marker("jwk_to_der", keys::jwk_to_der(key.clone(), s("sec1")));
+        assert_no_marker(
+            "jws_sign_compact",
+            jws_sign_compact(
+                a1_payload(),
+                key.clone(),
+                JwsSignOptions {
+                    protected_header: Some(s(r#"{"alg":"ES256"}"#)),
+                    protected_b64u: None,
+                    detached: false,
+                },
+            ),
+        );
+        assert_no_marker(
+            "jws_verify_compact",
+            jws_verify_compact(s(RFC7515_A1_JWS), key.clone(), verify_options(&["HS256"])),
+        );
+        assert_no_marker(
+            "jwe_decrypt_compact",
+            jwe_decrypt_compact(s(RFC7516_A3_JWE), key.clone(), a3_decrypt_options()),
+        );
+        assert_no_marker(
+            "jwt_verify",
+            jwt_verify(s(RFC7519_3_1_JWT), key.clone(), jwt_options(BEFORE_EXP)),
+        );
+        assert_no_marker(
+            "jwt_verify_with_jwks",
+            jwt_verify_with_jwks(
+                s(RFC7519_3_1_JWT),
+                format!(r#"{{"keys":[{key}]}}"#),
+                jwt_options(BEFORE_EXP),
+            ),
+        );
+    }
+    // A marked PEM body, and a marked plaintext that fails to encrypt (RFC 7516 §7.1).
+    assert_no_marker(
+        "jwk_from_pem",
+        keys::jwk_from_pem(format!(
+            "-----BEGIN PRIVATE KEY-----\n{marked_b64}\n-----END PRIVATE KEY-----\n"
+        )),
+    );
+    assert_no_marker(
+        "jwe_encrypt_compact",
+        jwe_encrypt_compact(MARKER.as_bytes().to_vec(), a3_encrypt_options(None, 2)),
+    );
+}
