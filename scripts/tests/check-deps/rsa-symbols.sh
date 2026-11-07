@@ -445,6 +445,8 @@ fi
 # 17. The 0008 audit's L2 plant: RSA private-key code that only an Android build compiles, in
 #     polyjose-ffi (the crate the Android .so is built from, ADR 0033) and in polyjose-surface,
 #     which it links. rsa is reached only under a target-specific table, so no host build has it.
+#     RsaPrivateKey::validate is neither generic nor #[inline], so the release profile cannot
+#     inline the call away and its symbol stays in the plant's objects (a clone() would be).
 android=aarch64-linux-android
 android_std=$(cd "$base" && rustc --print target-libdir --target "$android" 2>/dev/null) || android_std=""
 set -- "$android_std"/libstd-*.rlib
@@ -459,12 +461,12 @@ rsa = { workspace = true }'
   android_body='/// Test only.
 #[cfg(target_os = "android")]
 #[doc(hidden)]
-pub fn evil(key: &rsa::RsaPrivateKey) -> rsa::RsaPrivateKey {
-    key.clone()
+pub fn evil(key: &rsa::RsaPrivateKey) -> bool {
+    key.validate().is_ok()
 }
 #[cfg(target_os = "android")]
 #[used]
-static KEEP: fn(&rsa::RsaPrivateKey) -> rsa::RsaPrivateKey = evil;'
+static KEEP: fn(&rsa::RsaPrivateKey) -> bool = evil;'
   for crate_dir in ffi surface; do
     new_case "android-only-$crate_dir"
     append_to "bindings/$crate_dir/Cargo.toml" "$android_rsa"
@@ -481,7 +483,7 @@ static KEEP: fn(&rsa::RsaPrivateKey) -> rsa::RsaPrivateKey = evil;'
         "matches rsa::private_key: RSA private keys" \
         "$sym_fail in the objects of $crate \\($(printf '%s' "$label" | sed 's/[().]/\\&/g')\\)"
       # The target's own objects were read: polyjose's dump for the triple has its RSA verification.
-      expect_symbol "Android-only plant, $config" "rsa::public_key::RsaPublicKey"
+      expect_symbol "Android-only plant in polyjose-$crate_dir, $config" "rsa::public_key::RsaPublicKey"
       dump_dir=""
     done
     targets=""
