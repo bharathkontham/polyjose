@@ -1,0 +1,30 @@
+{
+  "source": "ADR 0054 §2.2; RFC 7517 §4.4, RFC 7518 §4.4",
+  "description": "A256KW on an oct key with alg A128KW and an oct key without alg returns the key without alg; decided by ADR 0054 §2.2 (JWK alg): member 0's alg A128KW is not A256KW, so it is out, and member 1 has none; both are oct (§2.1), neither has use (U = enc) or key_ops, and selection checks no key size (§2, not part of selection); outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "X8EwrK_w_mNZySX8TCh4Bw",
+          "alg": "A128KW"
+        },
+        {
+          "kty": "oct",
+          "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "A256KW"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  }
+}

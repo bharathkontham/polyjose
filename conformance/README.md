@@ -43,7 +43,8 @@ The five members below are required, `features` and `features_absent` are option
 |---|---|---|---|
 | `b64url.encode` | `bytes_hex` | `b64u` | no |
 | `b64url.decode` | `b64u` (any string) | `bytes_hex` | yes |
-| `jwk.thumbprint` | `jwk` (a JSON object), `hash` (`"sha-256"`) | `thumbprint`, `thumbprint_uri` | yes |
+| `jwk.thumbprint` | `jwk` (a JSON object), and optionally `hash` (any string; ADR 0054 §8.2 names, [below](#jwkthumbprint)) | `thumbprint`, `thumbprint_uri` | yes |
+| `jwks.select` | `jwks` (a JSON object), `selector` (`{ "kid"?, "alg"?, "key_use"? }`, each any string) ([below](#jwksselect)) | `jwk` (a JSON object, compared as a JSON value) | yes |
 | `jws.sign` | `serialization`, `payload_b64u`, `detached`, `signers` ([below](#jwssign)) | `jws` (exact), or `verify_with` (round trip) | yes |
 | `jws.verify` | `jws`, `key`, `allowed_algs`, and optionally `detached_payload_b64u`, `max_input_len`, `max_signatures` ([below](#jwsverify)) | `payload_b64u`, `alg`, `signature_index` | yes |
 | `keys.import_pem` | `pem` (any string) ([below](#keysimport_pem)) | `jwk` (a JSON object) | yes |
@@ -67,8 +68,48 @@ A success expectation lists **exactly** the outputs: a runner fails a vector who
 
 - **Codec operations (`b64url.*`, `jwk.thumbprint`): lowercase hex** (`bytes_hex`: two digits per octet, `""` for none), never base64url, so the base64url codec is never checked against itself.
 - **`keys.*` operations: PEM text, JWK objects and DER as canonical base64url** (`der_b64u`), never hex. A PEM block is a JSON string with `\n` line endings; JWK members are canonical base64url as RFC 7518 §6 and RFC 8037 §2 define them. A runner decodes `der_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome.
+- **`jwks.select`: JWK Set, selector and JWK as JSON objects**, as `jwt.*` gives keys. No octets are decoded; the selected key is compared as a JSON value.
 - **`jwt.*` operations: tokens as text, keys as JWK and JWK Set objects, claims as a JSON object, time as integer seconds.** A token is passed to the library exactly as written (malformed tokens are under test), and claims under test that a JSON vector can't hold (duplicate names, `1e400`, non-UTF-8 octets) live inside the token's base64url payload.
 - **`jws.*` and `jwe.*` operations: canonical base64url** (members ending in `_b64u`). This is deliberate: the codec is no longer under test there (it has its own vectors), and every JWS field is natively base64url (RFC 7515 §2), so the RFC's values are copied as printed. A runner decodes `payload_b64u` and `detached_payload_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome. `protected_b64u` is passed to the library as text, unchanged.
+
+## `jwk.thumbprint`
+
+Imports `jwk` and computes its JWK Thumbprint (RFC 7638 §3) and JWK Thumbprint URI (RFC 9278 §3).
+
+| Input member | Meaning |
+|---|---|
+| `jwk` | The key, as a JSON object. Its members are unconstrained: invalid keys are under test. |
+| `hash` | Optional, any string. Absent means the core default, SHA-256 (RFC 9278 §5); a runner passes no name rather than supplying one. The accepted names are exactly `sha-256`, `SHA-256`, `sha256` and the 384 and 512 forms, case-sensitive (ADR 0054 §8.2). Any other name, the empty string included, is a vector outcome (`UnsupportedAlgorithm`), never a schema error. |
+
+`thumbprint_uri` always carries the IANA Hash Name String (`sha-256`, `sha-384` or `sha-512`, RFC 9278 §4), whatever spelling `hash` uses. The SHA-384, SHA-512 and hash-name vectors (`jwk-thumbprint/sha384-*`, `sha512-*`, `hash-*`) come from [`tools/jwk-oracle/thumbprints.mjs`](tools/jwk-oracle/README.md).
+
+**Error order (ADR 0057 §2).** A runner imports `jwk` first and parses `hash` second, so the outcome is:
+
+1. the JWK import error (`InvalidJson`, `InvalidKey`, `InvalidBase64`, `UnsupportedAlgorithm` for an RSA private JWK, and so on)
+2. then `UnsupportedAlgorithm` for a `hash` name that isn't accepted
+
+`jwk-thumbprint/hash-reject-invalid-key-p256-off-curve.json` has both an invalid key and an invalid name, and expects the import error. This matches the `jwks.select` step order below (ADR 0054 §4: import, then the selector).
+
+## `jwks.select`
+
+Selects exactly one key from a JWK Set (RFC 7517 §5) with a selector, under ADR 0054 §1–§4. It is the binding operation `jwks_select(jwks, JwkSelector { kid?, alg?, key_use? }) -> jwk` of ADR 0030 §4, as amended by ADR 0054 §9.
+
+| Input member | Meaning |
+|---|---|
+| `jwks` | The JWK Set, a JSON object. Unconstrained: import errors and the members import skips are under test. A missing or non-array `keys` is `InvalidKey`, and an RSA private member fails the whole set with `UnsupportedAlgorithm` (ADR 0021, ADR 0029 §3). Members with an unknown `kty`/`crv`, or that are otherwise invalid, are skipped (ADR 0041 §2). |
+| `selector` | **Required**, closed: `kid`, `alg` and `key_use`, each optional and any string. `{}` selects every member (ADR 0054 §1.3). There is no `key_op` (ADR 0054 §9), so a vector with one is a broken vector. |
+
+Expect `{ "ok": true, "jwk" }`: the one matching member as the library serializes it, compared as a JSON value (member order ignored). It may hold private members (`EC` and `OKP` `d`, `oct` `k`, ADR 0054 §3). Or `{ "ok": false, "error": <code> }`.
+
+**Step order**, the first error being the outcome. This is ADR 0054 §4's precedence:
+
+1. Import `jwks` (Rust: `JwkSet::from_object`; a binding: the set's JSON text). Set import errors come first.
+2. Build the selector from an empty one, in the order `kid`, then `alg`, then `key_use`, calling the setter only for a member that is present. `alg` and `key_use` are passed **as given** (Rust: `KeyAlg::from`, `KeyUse::from`). The setters refuse an unsupported `alg` (`none`, `RSA1_5`, `RSA-OAEP`, an `enc` name, an unregistered or case-variant name, `""`) or a `key_use` other than `sig` or `enc` with `UnsupportedAlgorithm` (ADR 0054 §1.1). A runner never maps, normalizes or rejects a name itself, and never supplies a member the vector leaves out.
+3. Select: one match, or `NoMatchingKey` (none, an empty set included), or `MultipleMatchingKeys` (two or more; RFC 7517 §5.1 gives set order no meaning).
+
+A binding runner maps `selector` to its binding `JwkSelector` member by member, and parses the returned key (a secret-bearing string) as JSON before comparing it. The schema is closed at every level, as for `jwt.*`: a misspelled member anywhere fails the run.
+
+The vectors live in `jwks-select/`, one per file, named by outcome: `select-*`, `no-match-*`, `multiple-*`, `unsupported-*`, `invalid-key-*`, and `precedence-*` for the §4 order. Each `description` states the ADR 0054 rule that decides it. They come from [`tools/jwk-oracle/select.mjs`](tools/jwk-oracle/README.md) and its hand-written spec.
 
 ## `jws.sign`
 
@@ -363,7 +404,7 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 - **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks or whose `features_absent` it has, reported SKIPPED by name ([Features](#features));
 - **fail** when it finds no vector files, so a wrong path can't pass vacuously;
 - run every vector and report every failure, not only the first, each naming the file and its `source`;
-- write one results file, `target/conformance/<runner>.json`, with an entry for every vector file ([Binding runners](#binding-runners), ADR 0034 §2).
+- write one results file, `target/conformance/<runner>.json`, with an entry for every vector file ([Binding runners](#binding-runners), ADR 0034 §2), and the [vector-set digest](#the-vector-set-digest) of the files it read (ADR 0060).
 
 The Rust runner also checks `schema.json` against its own tables (`schema_and_runner_agree`), so the schema and the runner can't drift apart.
 
@@ -375,7 +416,7 @@ Every runner (the Rust reference run, the Rust surface run and each binding's) r
 
 Which operation families each platform's runner runs today. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
 
-| Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jws.*` | `keys.*` | `jwt.*` |
+| Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jwks.select`, `jws.*` | `keys.*` | `jwt.*` |
 |---|---|---|---|---|
 | Rust | `crates/polyjose/tests/conformance.rs` | runs | runs | runs |
 | Rust surface | `bindings/surface/tests/conformance.rs` (`polyjose-surface`, ADR 0030) | runs | runs | runs |
@@ -384,7 +425,9 @@ Which operation families each platform's runner runs today. A cell that isn't "r
 | Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0008) |
 | Swift | none yet (0009, over the 0013 surface) | no runner yet (0009) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0009) |
 
-When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row.
+`jwks.select`, and `jwk.thumbprint`'s optional `hash`, run through the surface (`rust-surface`, 0013 T14), and the shared JS runner implements both, so each binding runs them as soon as its runner lands. Until then, test reports list WASM, Node, Kotlin and Swift as **SKIPPED (no binding runner yet; 0006–0009)** for them, as for the other families.
+
+When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row. ADR 0034's parity check then compares its results with the Rust reference run.
 
 ### Runner names and results files
 
@@ -410,7 +453,9 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 ### The results file
 
 ```json
-{ "runner": "node", "polyjose": "0.1.0", "features": [], "error_codes": ["InvalidBase64", "…"],
+{ "runner": "node", "polyjose": "0.1.0",
+  "vectors_digest": "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1",
+  "features": [], "error_codes": ["InvalidBase64", "…"],
   "results": [
     { "id": "jws-rfc7515/a1-hs256-compact-verify.json#0", "source": "RFC 7515 App. A.1", "op": "jws.verify",
       "status": "pass", "actual": { "ok": true } },
@@ -420,7 +465,8 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 | Member | Rule |
 |---|---|
 | `runner` | The runner name above, without any file-name suffix. |
-| `polyjose` | The binding's `version()` (ADR 0030 §4); for the Rust runners, the crate version. |
+| `polyjose` | The binding's `version()` (ADR 0030 §4); for the Rust runners, the crate version. It must equal the reference's. |
+| `vectors_digest` | The [vector-set digest](#the-vector-set-digest) of the files the runner read: 64 lowercase hex characters (ADR 0060 §1). Required. It must equal the reference's. |
 | `features` | The vector feature names (see [Features](#features)) the build enables. `[]` for every binding and for the reference. |
 | `error_codes` | The binding's `error_codes()`, in its order; for the Rust runners, `Error::CODES`. It must equal the reference's list, in the same order (ADR 0034 §8). |
 | `results` | **One entry per `*.json` file** under `vectors/`, including a file that doesn't parse. Ids are unique; order is free. |
@@ -431,6 +477,48 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 | `results[].actual` | The outcome of the operation's calls in the [mapping](#operation-mapping): `{ "ok": true }` when every call returned, or `{ "ok": false, "error": <code> }` with the first call's error code. It's the library's outcome, recorded before any comparison, so a vector whose expectation is wrong still records what happened. Required for `pass`; on a `fail`, present when the operation completed, its runner checks included; never on a skip. The output comparison after the operation decides `pass` or `fail` but never changes `actual`. A runner check *inside* the operation (a shape or round-trip check of `verify_with`, `decrypt_with` or a `jwt.issue` round trip, or an input the runner can't decode) that fails makes the vector a `fail` **without** `actual`, as the Rust reference does. |
 | `results[].reason` | `skipped`: `feature:` and the feature names of [the skip rule](#the-skip-rule). `fail`: a message saying why (the file, the `source`, the problem). |
 
+### The vector-set digest
+
+`vectors_digest` binds a results file to the exact vector files the runner executed, so a copied, templated or stale results file, or an Android or iOS bundle whose copy of the vectors has drifted from the checkout, fails parity even when its ids and outcomes match (ADR 0060). Every runner computes it itself, while it reads the vectors:
+
+1. **One line per vector file read.** These are the `*.json` files under `vectors/` (recursively), exactly the files that get a results entry. `README.md`, `NOTICE.md`, the `.jwk` key files and `generate.mjs` aren't vectors and aren't hashed. A file the runner could not read, or a symbolic link, is a `fail` and gets **no line**.
+2. **The line** is `<id>` TAB `<hash>` LF, encoded as UTF-8. `<id>` is exactly the results entry's `id` (`jws/b.json#0`). `<hash>` is the lowercase hex SHA-256 of the file's **raw bytes as parsed**, with no line-ending, BOM or encoding change, and not taken from a second read, a manifest or a digest computed at build time. A runner with bundled vectors (Android assets, an iOS bundle, `include_bytes!`) hashes the bundled bytes it parsed.
+3. **Sort the encoded lines by their bytes** (unsigned, lexicographic; a shorter prefix first). Don't sort platform strings or paths by component: JS and Kotlin `String` order is UTF-16, Swift's `String <` is neither, and Rust's `Path` order puts `jws/b.json` before `jws-x/c.json`, while byte order puts `-` (0x2D) before `/` (0x2F).
+4. **`vectors_digest`** is the lowercase hex SHA-256 of the concatenated sorted lines.
+
+An empty corpus is invalid: a runner that read no vector file fails its run and writes no results file, and parity refuses the SHA-256 of the empty input, `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`, in any file.
+
+Each runner uses **its platform's own SHA-256, never polyjose's API under test** (ADR 0060 §5):
+
+| Runner(s) | SHA-256 | Where |
+|---|---|---|
+| `rust-core`, `rust-surface`, `wasm-node`, `wasm-chrome` | the `sha2` crate, called directly as a test oracle (a dev-dependency where the crate lacks it, ADR 0016 §5) | `crates/polyjose/tests/conformance.rs`, `bindings/surface/tests/conformance.rs`; 0006 for `wasm-*` |
+| `node`, `wasm-pkg-node` | `node:crypto` `createHash("sha256")`. `node-main.ts` reads each file once as bytes, hashes them, and only then decodes them as UTF-8 for the runner | `bindings/js/conformance/node-main.ts` |
+| `wasm-pkg-chrome`, `wasm-pkg-workerd` | `crypto.subtle.digest("SHA-256", bytes)`: the driver fetches each file as bytes and calls `vectorsDigest(files, subtleSha256)` from `bindings/js/conformance/runner.ts` | 0006 |
+| `jvm`, `android-emulator` | `java.security.MessageDigest.getInstance("SHA-256")` | 0008 |
+| `swift-macos`, `swift-ios-sim`, `swift-tvos-sim` | CryptoKit `SHA256` (or CommonCrypto `CC_SHA256`) | 0009 |
+
+**Every new runner (features 0006 to 0009) computes the digest from its first commit and unit-tests the worked example below.** A runner that can't compute it can't write a valid results file, so it fails parity; it is never skipped.
+
+**Worked example** (ADR 0060 §4). A directory standing in for `vectors/` holds `a.json` = `7b 7d` (`{}`), `jws/b.json` = `7b 7d 0a` (`{}` LF), `jws-x/c.json` = `ef bb bf 7b 7d` (a UTF-8 BOM, then `{}`) and `README.md` = `notes` (not a vector). The sorted lines (`→` is the TAB) are:
+
+```
+a.json#0→44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+jws-x/c.json#0→aa25e978046d680ef8740d837e6de5bc1e2a2dc6089dbda1012544b538d53f65
+jws/b.json#0→ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
+```
+
+and `vectors_digest` is `9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1`. The tests `vectors_digest_follows_the_adr_0060_worked_example` (both Rust runners) and `bindings/js/test/vectors-digest.test.ts` check it.
+
+**Shell reference**, an oracle independent of every runner (it assumes no newline or backslash in a file name, which the corpus never has; on Linux use `sha256sum` for `shasum -a 256`). When two digests differ, compare these per-file lines on both sides to find the file.
+
+```sh
+cd conformance/vectors &&
+find . -type f -name '*.json' | sed 's|^\./||' |
+  while IFS= read -r p; do printf '%s#0\t%s\n' "$p" "$(shasum -a 256 "$p" | cut -d' ' -f1)"; done |
+  LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1
+```
+
 ### The skip rule
 
 A vector is skipped **only** when its `features` lists a feature the runner's build doesn't enable (ADR 0034 §3), or its `features_absent` lists one the build enables (ADR 0056). `reason` is `feature:` followed by the missing `features` names in the vector's order, then each enabled `features_absent` name as `!<name>` in its order, comma-separated: `feature:fixed-rng`, `feature:deflate,fixed-rng`, `feature:!deflate`, `feature:fixed-rng,!deflate`. The vector is still validated against `schema.json` first, and a schema-invalid one is a `fail`.
@@ -439,13 +527,17 @@ The binding configuration for 0.1.0 is the core's default features: never `fixed
 
 ### The parity check
 
-`scripts/conformance-parity.sh [dir]` (default `target/conformance/`) needs `node` and nothing else. It validates every results file against `schema/results.schema.json`, checks that each file's `runner` matches its file name and that no id appears twice, then compares every file with `rust-core.json`. It checks for:
+`scripts/conformance-parity.sh [dir]` (default `target/conformance/`) needs `node` and nothing else. It validates every results file against `schema/results.schema.json` (so a file without a well-formed `vectors_digest` fails, the reference included), checks that each file's `runner` matches its file name, that no id appears twice and that its `vectors_digest` is not the SHA-256 of the empty input, then compares every file with `rust-core.json`. It checks for:
 
+- the same `polyjose` version, printing both on a mismatch, so equal results from another build or release don't pass;
+- the same `vectors_digest`, printing `FAIL: <file>: vectors_digest differs: rust-core <hex> | <runner> <hex>`, so results from another vector corpus don't pass even when every id, status and outcome agrees (ADR 0060 §6);
 - the same set of ids;
 - the same `status` per id, and the same `reason` for a skip;
 - the same `actual` (`ok`, and the error code) per executed id;
 - the same `error_codes` list;
 - no `fail` entry, in any file, the reference included.
+
+All of these are checked together, so a file can fail on several at once. The digest binds a file to a corpus and the version to a release; neither proves that a runner executed what it reports, so each runner's own expected-versus-actual check stays (ADR 0060 §6).
 
 Each difference is printed as a `FAIL:` line with the id and both outcomes, and the exit status is 1. A missing, malformed or feature-built `rust-core.json` also exits 1. A runner without a file is printed as `SKIPPED (no results: <runner>)`, never as passing, and doesn't fail the check. Usage and tool errors (no `node`) exit 2. The script's own tests are in `scripts/tests/conformance-parity/`. `scripts/test-all.sh` runs them with the other negative tests, and 0013 T04 wires the check itself in after the platform suites.
 
@@ -461,7 +553,8 @@ How each vector `operation` maps to the ADR 0030 operations. Names are the surfa
 |---|---|---|
 | `b64url.encode` | `base64url_encode(bytes)`, where `bytes` is `bytes_hex` decoded by the runner's own hex code | `b64u` = the result |
 | `b64url.decode` | `base64url_decode(b64u)` | `bytes_hex` = the result as lowercase hex |
-| `jwk.thumbprint` | `jwk_thumbprint(jwk, "SHA-256")`, then `jwk_thumbprint_uri(jwk, "SHA-256")`. The vector's `hash` (`"sha-256"`, the RFC 9278 hash name and the only value the schema allows) is passed as the surface name `"SHA-256"`. | `thumbprint`, `thumbprint_uri` |
+| `jwk.thumbprint` | `jwk_thumbprint(jwk, hash)`, then `jwk_thumbprint_uri(jwk, hash)`. The surface's `hash` is optional and takes the names of ADR 0054 §8.2, which the core parses (`ThumbprintHash::from_name`), so the vector's `hash` is passed exactly as given, with no runner mapping, and an absent `hash` is passed as absent (the core default, SHA-256; ADR 0054 §9). A name the core rejects is the vector's outcome. | `thumbprint`, `thumbprint_uri` |
+| `jwks.select` | `jwks_select(jwks, JwkSelector { kid, alg, key_use })`: `jwks` as JSON text, and each selector member that is present, as given; an absent one stays unset. The surface imports the set (`JwkSet::from_json`), builds the core selector (`kid`, then `alg` by `KeyAlg::from`, then `key_use` by `KeyUse::from`) and selects (ADR 0054 §4, §9), so the runner maps, normalizes or rejects nothing. Hosts name the member `keyUse`. | `jwk` = the returned key (a secret-bearing string) parsed as JSON and compared as a JSON value |
 | `jws.sign`, `serialization` `"compact"` | `jws_sign_compact(payload, signers[0].key, JwsSignOptions { protected_b64u: signers[0].protected_b64u, detached })`. The header always goes as `protected_b64u`, never as `protected_header`. | `jws` (a string, compared exactly), or the `verify_with` round trip |
 | `jws.sign`, `"flattened"` | `jws_sign_flattened(payload, JwsSigner { key, protected_b64u, unprotected_header: header }, detached)`, from `signers[0]`. A signer may have only `header` (note 11). | `jws`: the returned JSON text parsed and compared as a JSON value; or `verify_with` |
 | `jws.sign`, `"general"` | `jws_sign_general(payload, [JwsSigner, …], detached)`: one `JwsSigner` per `signers` entry, in order, built as for flattened | as flattened |
@@ -536,6 +629,7 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 - **Deterministic algorithms** (HMAC, EdDSA) also have `sign` vectors with an exact expected output. **Randomized ones** (ECDSA, JWE) are checked by round trip (`verify_with`) plus a `verify`/`decrypt` vector of the RFC's published output. RS\*/PS\* are verify-only (ADR 0021): only `verify` vectors, and `sign` vectors that expect `UnsupportedAlgorithm`.
 - **Negative vectors are mandatory:** tampered signatures, `alg: none`, alg/key mismatch, wrong `crit`, expired JWTs, invalid curve points, non-canonical encodings.
 - Imported upstream suites that every platform runs (the RFC 7520 cookbook) live in `vectors/third_party/`, converted to this format, with their licenses alongside them (non-JSON files are ignored).
+- JWK Set selection vectors live in `jwks-select/`, one per file (ADR 0045), named by outcome (see [`jwks.select`](#jwksselect)). `source` cites the ADR 0054 rule and the RFC section, and `description` states the rule that decides the outcome. That outcome is written by hand from the ADR 0054 text in `tools/jwk-oracle/specs/select.json`. It is never computed by polyjose, and the generator never decides one. Keys are the committed fixtures: RFC 7517 App. A, `tools/jwt-oracle/keys.json`, `crates/polyjose/tests/data/jwe/rsa-bound/rsa1024.jwk.json`, RFC 8037 A.6's X25519 key and the `jws-oracle` secp256k1 key. Edit the spec and rerun the generator; don't edit the files.
 - JWT vectors live under `jwt/`, one vector per file like every other (ADR 0045), in one directory per origin: `jwt/rfc7519/` (the RFC 7519 §3.1 and §6.1 examples and the RFC 7515 A.2 token that is RFC 7519 A.2's inner JWT; `source` the RFC section), and the directories of feature 0004 T11–T13 (oracle positives, negatives, nested). Tokens that aren't RFC-published come from `tools/jwt-oracle` (`node:crypto`), never from polyjose; a spec given to it as a single entry writes a single vector, which is the form a vector file must have. An expected token or value an RFC doesn't print is derived independently and the `description` says how (for example `jwt/rfc7519/3-1-hs256-issue-exact.json`, an HMAC computed with Python's `hmac`).
 - **`binding-surface/`** pins the core's defaults and security decisions that a binding could otherwise re-state or bypass (ADR 0034 §6), so the first vector to fail when a binding substitutes a default of its own is one of these. Each `source` names the ADR it pins. Apart from the two `features_absent` vectors below, they need no feature, so every platform runs them:
   - allow-lists (ADR 0007): `jws-verify-allowed-algs-{empty,none-only}`, `jwe-decrypt-allowed-algs-{empty,none-only}`, `jwe-decrypt-allowed-enc-empty`, all `AlgorithmNotAllowed`;
@@ -548,7 +642,7 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 
   Pins that existing vectors already make, which every platform runs too: a `dir` JWE with an unprotected `alg` is `InvalidHeader` (ADR 0050 §1: `jwe/negative-cross-mode/dir-alg-shared-enc-protected.json`, `dir-no-protected-header.json`); an unprotected-only JSON signer (ADR 0045 §1: `third_party/rfc7520/jws/4-7-unprotected-only-hs256-*.json`); an access token whose `client_id` is a number is `InvalidClaim` (ADR 0052: `jwt/negative/identity-access-token-client-id-not-string-number.json`); `jwk_generate_for_alg` per algorithm, by shape (`keys/generate-*.json`, `keys/reject-generate-*.json`, including `ECDH-ES` → `InvalidKey`).
 
-  Not pinned yet: a SHA-1 thumbprint → `UnsupportedAlgorithm` (`hash` allows only `sha-256`). It lands with 0013 T14, where the core's hash-taking thumbprint decides the code.
+  The SHA-1 thumbprint pin (ADR 0022, ADR 0054 §8.2) is made by feature 0015's `jwk-thumbprint/hash-reject-sha-1.json` and `hash-reject-upper-sha-1.json` (`UnsupportedAlgorithm` from the core's `ThumbprintHash::from_name`, through the optional `hash` of 0013 T14), with `hash-reject-invalid-key-p256-off-curve.json` for the ADR 0057 §2 order (the import error first). They need no feature, so every platform runs them; `binding-surface/` has no copy.
 
   `binding-surface/generate.mjs <repo-root> [<out-dir>]` writes them all: the RFC inputs come from the committed vectors it names, and the PBES2 tokens are built with node:crypto from SHA-256-derived bytes and opened with it before writing. Edit the script, not the files.
 - **Wycheproof is not here.** It lives in `crates/polyjose/tests/third_party/wycheproof/`, in its upstream format, because it is a Rust-layer suite (ADR 0008 layer 1): it exercises the primitives through polyjose's JOSE layer, and the bindings add nothing to that.
@@ -559,6 +653,8 @@ The scripts that generated or check vectors live in [`tools/`](tools/). They rea
 
 - **`tools/jwe/reproduce.sh <rfc-dir>`** re-runs every JWE generator below into a temporary directory and compares each file it writes with the committed vector, byte for byte; a historical generator is reported as such. `<rfc-dir>` holds `rfc7516.txt` and `rfc7517.txt` from `https://www.rfc-editor.org/rfc/` (the script checks their SHA-256). The Node generators write the Node and OpenSSL versions into `source` or `description`, so they reproduce byte for byte with the versions named in the committed files (Node.js 24.21.0, OpenSSL 3.5.8); another version changes only that text.
 - **`vectors/binding-surface/generate.mjs <repo-root> [<out-dir>]`**, the one generator kept beside its vectors, writes the 27 files of `binding-surface/` (0013 T11, T15, ADR 0034 §6; see [Writing vectors](#writing-vectors)) and reproduces them byte for byte with the Node version named in their descriptions.
+- **`tools/jwk-oracle/thumbprints.mjs <out-dir>`** writes the 25 `jwk-thumbprint/` files named `sha384-*`, `sha512-*` and `hash-*` (feature 0015 T03, ADR 0054 §8): SHA-384 and SHA-512 thumbprints of six RFC keys, the absent-hash default, the accepted aliases and the rejected names. It hand-builds the RFC 7638 §3.3 hash input and hashes it with node:crypto, after checking that it reproduces RFC 7638 §3.1, RFC 8037 A.3 and RFC 9278 §6. A re-run with Node.js 24.21.0 / OpenSSL 3.5.8 reproduces the files byte for byte. Its [README](tools/jwk-oracle/README.md) lists the keys and the panva/jose 6.2.15 cross-check.
+- **`tools/jwk-oracle/select.mjs <specs/select.json> <out-dir>`** writes the 64 `jwks-select/` files (feature 0015 T04, ADR 0054 §1–§4), one per entry of [`tools/jwk-oracle/specs/select.json`](tools/jwk-oracle/specs/select.json). It resolves key references into the committed fixtures and checks them (for example that RFC 7517 A.2's EC `d` gives A.1's point and its RSA `p · q` gives `n`). For each positive it checks that the expected `jwk` is one of the input members. It computes no outcome, so a rerun reproduces every file byte for byte on any Node 24. Its [README](tools/jwk-oracle/README.md) has the spec format and the panva/jose 6.2.15 cross-check.
 - **`tools/jwt-oracle/gen.mjs <spec.json> <out.json>`** builds `jwt.validate` and `jwt.issue` vectors from a spec: compact and flattened JWSs over raw payload octets (so malformed claims sit behind valid signatures) and nested JWEs, with `node:crypto` only. Its [README](tools/jwt-oracle/README.md) has the spec format and the fixed test keys.
 - **`tools/rsa-oaep-oracle.mjs [vector-dir]`** checks every exact RSA-OAEP-256 `jwe.encrypt` vector in `vectors/jwe/rsa-oaep-256/` against its test-only private key (`keys/*.private.jwk`) with Node's built-in RSA, independently of polyjose, which has no RSA private-key code (ADR 0021).
 - **`tools/jwe/t09-extract-rfc-inputs.py <rfc7516.txt> <cookbook jwe dir> <out.json>`**: *historical.* Extracts the RFC 7516 App. A.1 and A.2 and RFC 7520 §5.1 and §5.2 compact JWEs and RSA public keys used by four `negative-structure/` vectors. The script that wrote `compact/` and `negative-structure/` (0003 T09) was not preserved, so those 60 files have no generator; `reproduce.sh` checks that the four extracted inputs match their vectors.

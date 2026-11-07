@@ -11,8 +11,13 @@
 #        run) is compared like <runner>; a rust-core-<suffix>.json file (a Rust build with
 #        features) is not the reference and is ignored.
 #
-# Each file must be schema-valid, name its runner (`runner` equals the file's runner name), list
-# each id once, and hold no `fail`. Against rust-core.json each file must have:
+# Each file must be schema-valid (so it has a 64-hex `vectors_digest`, ADR 0060 §1), name its
+# runner (`runner` equals the file's runner name), list each id once, hold no `fail`, and not
+# carry the SHA-256 of the empty input as its `vectors_digest` (a run that read no vector file,
+# ADR 0060 §3). Against rust-core.json each file must have:
+#   - the same `polyjose` version, so a stale prebuild cannot pass on an older build's results;
+#   - the same `vectors_digest`, so a file from another vector corpus (a stale artifact, a copied
+#     or templated file, a drifted bundle) cannot pass with equal ids and outcomes (ADR 0060 §6);
 #   - the same set of ids;
 #   - the same status per id, and the same reason for a skip;
 #   - the same actual (ok, and the error code) per executed id;
@@ -44,6 +49,8 @@ const path = require('path');
 
 const [dir, schemaPath] = process.argv.slice(2);
 const REFERENCE = 'rust-core';
+// SHA-256 of the empty input: the vectors_digest of a run that read no vector file (ADR 0060 §3).
+const EMPTY_DIGEST = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 function toolError(message) {
   console.error(`ERROR: ${message}`);
@@ -193,6 +200,9 @@ function load(file, runner) {
   const invalid = validate(schema, doc, '');
   if (invalid) return { file, problems: [`not valid per conformance/schema/results.schema.json: ${invalid}`] };
   if (doc.runner !== runner) problems.push(`runner is ${JSON.stringify(doc.runner)}, but the file name is runner ${runner}'s`);
+  if (doc.vectors_digest === EMPTY_DIGEST) {
+    problems.push(`vectors_digest is ${EMPTY_DIGEST}, the SHA-256 of the empty input (no vector file was read; ADR 0060 §3)`);
+  }
   const byId = new Map();
   for (const result of doc.results) {
     if (byId.has(result.id)) problems.push(`${result.id}: listed twice`);
@@ -248,7 +258,7 @@ if (!files.includes(`${REFERENCE}.json`)) {
     for (const result of loaded.doc.results) {
       if (result.status === 'fail') fail(`${REFERENCE}.json: ${result.id}: ${outcome(result)}`);
     }
-    console.log(`reference: ${REFERENCE}.json (polyjose ${loaded.doc.polyjose}, ${loaded.byId.size} ids)`);
+    console.log(`reference: ${REFERENCE}.json (polyjose ${loaded.doc.polyjose}, vectors_digest ${loaded.doc.vectors_digest}, ${loaded.byId.size} ids)`);
   }
 }
 
@@ -281,6 +291,16 @@ for (const other of compared) {
   }
   if (reference !== null) {
     const ref = reference.doc;
+    // The version the runner tested (the binding's version(), ADR 0030 §4) is the reference's:
+    // equal results from another build prove nothing about this one (review N1).
+    if (ref.polyjose !== doc.polyjose) {
+      fail(`${file}: polyjose version differs: ${REFERENCE} ${ref.polyjose} | ${doc.runner} ${doc.polyjose}`);
+    }
+    // The vector corpus the runner read is the reference's (ADR 0060 §6.3), checked with the
+    // other comparisons, not instead of them.
+    if (ref.vectors_digest !== doc.vectors_digest) {
+      fail(`${file}: vectors_digest differs: ${REFERENCE} ${ref.vectors_digest} | ${doc.runner} ${doc.vectors_digest}`);
+    }
     if (!equal(ref.error_codes, doc.error_codes)) {
       fail(`${file}: error_codes differ: ${REFERENCE} ${JSON.stringify(ref.error_codes)} | ${doc.runner} ${JSON.stringify(doc.error_codes)}`);
     }

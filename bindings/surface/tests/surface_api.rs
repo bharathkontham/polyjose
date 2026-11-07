@@ -62,8 +62,11 @@ fn utilities() {
 fn jwk_operations() {
     let _: SurfaceResult<SecretString> = jwk::jwk_parse(OCT);
     let _: SurfaceResult<String> = jwk::jwk_to_public(OCT);
-    let _: SurfaceResult<String> = jwk::jwk_thumbprint(OCT, "SHA-256");
-    let _: SurfaceResult<String> = jwk::jwk_thumbprint_uri(OCT, "SHA-256");
+    // `hash: Option<&str>`: `None` is the core default, SHA-256 (ADR 0054 §9).
+    let _: SurfaceResult<String> = jwk::jwk_thumbprint(OCT, Some("SHA-256"));
+    let _: SurfaceResult<String> = jwk::jwk_thumbprint(OCT, None);
+    let _: SurfaceResult<String> = jwk::jwk_thumbprint_uri(OCT, Some("sha-384"));
+    let _: SurfaceResult<String> = jwk::jwk_thumbprint_uri(OCT, None);
     let selector = JwkSelector {
         kid: Some("k1".to_owned()),
         alg: Some("HS256".to_owned()),

@@ -21,6 +21,15 @@ function jwkImport(text: string): Obj {
   return jwk;
 }
 
+/** The core's thumbprint hash parse, modelled (ADR 0054 §8.2, §9): the IANA name of the hash. */
+function thumbprintHash(name: string | undefined): string {
+  if (name === undefined) return "sha-256";
+  for (const bits of ["256", "384", "512"]) {
+    if ([`sha-${bits}`, `SHA-${bits}`, `sha${bits}`].includes(name)) return `sha-${bits}`;
+  }
+  throw coded("UnsupportedAlgorithm", "hash");
+}
+
 function allowed(list: readonly string[], name: unknown): void {
   if (list.length === 0 || typeof name !== "string" || !list.includes(name)) throw coded("AlgorithmNotAllowed", "not allowed");
 }
@@ -50,12 +59,29 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
 
   const handlers: Partial<Record<Operation, Handler>> = {
     jwkParse: ((t: string) => JSON.stringify(jwkImport(t))) as Handler,
-    jwkThumbprint: ((t: string, h: string) => {
+    // ADR 0057 §2: the key is imported before the hash name is parsed.
+    jwkThumbprint: ((t: string, h: string | undefined) => {
       const kty = jwkImport(t)["kty"] as string;
-      if (h !== "SHA-256") throw coded("UnsupportedAlgorithm", "hash");
+      thumbprintHash(h);
       return `tp-${kty}`;
     }) as Handler,
-    jwkThumbprintUri: ((t: string) => `urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp-${jwkImport(t)["kty"] as string}`) as Handler,
+    jwkThumbprintUri: ((t: string, h: string | undefined) => {
+      const kty = jwkImport(t)["kty"] as string;
+      return `urn:ietf:params:oauth:jwk-thumbprint:${thumbprintHash(h)}:tp-${kty}`;
+    }) as Handler,
+    // ADR 0054 §4, modelled: set import, then the selector names, then exactly one match by kid
+    // (the toy checks no family or use).
+    jwksSelect: ((t: string, sel: { kid?: string; alg?: string; keyUse?: string }) => {
+      const keys = (JSON.parse(t) as Obj)["keys"];
+      if (!Array.isArray(keys)) throw coded("InvalidKey", "keys");
+      const members = keys.map((k) => jwkImport(JSON.stringify(k)));
+      if (sel.alg !== undefined && !["EdDSA", "ES256", "HS256", "A128KW"].includes(sel.alg)) throw coded("UnsupportedAlgorithm", "alg");
+      if (sel.keyUse !== undefined && sel.keyUse !== "sig" && sel.keyUse !== "enc") throw coded("UnsupportedAlgorithm", "use");
+      const found = members.filter((k) => sel.kid === undefined || k["kid"] === sel.kid);
+      if (found.length === 0) throw coded("NoMatchingKey", "none");
+      if (found.length > 1) throw coded("MultipleMatchingKeys", "several");
+      return JSON.stringify(found[0]);
+    }) as Handler,
     jwkFromPem: ((pem: string) => {
       if (!pem.includes("PUBLIC KEY")) throw coded("InvalidKey", "pem");
       return OKP;

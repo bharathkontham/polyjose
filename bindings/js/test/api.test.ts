@@ -88,6 +88,8 @@ test("strings stay strings and bytes are Uint8Array", async () => {
   assert.deepEqual(await api.base64urlDecode("-w"), new Uint8Array([0xfb]));
   assert.equal(await api.jwkThumbprint(KEY, "SHA-256"), "tp");
   assert.equal(await api.jwkThumbprintUri(KEY, "SHA-256"), "urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp");
+  assert.equal(await api.jwkThumbprint(KEY), "tp");
+  assert.equal(await api.jwkThumbprintUri(KEY), "urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp");
   assert.equal(await api.jwkToPem(KEY, "pkcs8"), "PEM");
   assert.deepEqual(await api.jwkToDer(KEY, "pkcs8"), new Uint8Array([1, 2]));
   assert.equal(await api.jwsSignCompact(new Uint8Array(), KEY, { protectedB64u: "e30" }), "a.b.c");
@@ -233,6 +235,24 @@ test("every core code maps to PolyjoseError", async () => {
   }
 });
 
+test("jwksSelect: no match and several matches reject with their codes (ADR 0054 §4, §5)", async () => {
+  for (const code of ["NoMatchingKey", "MultipleMatchingKeys"] as const) {
+    const fake = fakeBackend({ handlers: { jwksSelect: () => { throw coded(code, "selection"); } } });
+    const api = createApi(fake.backend);
+    await assert.rejects(api.jwksSelect({ keys: [] }, { alg: "ES256" }), (e: unknown) => {
+      assert.ok(e instanceof PolyjoseError);
+      assert.equal(e.code, code);
+      return true;
+    });
+    // The criteria reach the backend as given, with no name mapped (ADR 0054 §9).
+    assert.deepEqual(fake.of("jwksSelect")[0]?.args, ['{"keys":[]}', { alg: "ES256" }]);
+  }
+  // A selected private key comes back as the backend wrote it, `d` included (ADR 0054 §3).
+  const privateKey = '{"kty":"EC","crv":"P-256","x":"a","y":"b","d":"c","kid":"1"}';
+  const fake = fakeBackend({ handlers: { jwksSelect: () => privateKey } });
+  assert.deepEqual(await createApi(fake.backend).jwksSelect(`{"keys":[${privateKey}]}`, { kid: "1" }), JSON.parse(privateKey));
+});
+
 test("a napi argument error (InvalidArg, StringExpected) becomes a TypeError with the original message", async () => {
   for (const [code, how] of [["InvalidArg", "sync"], ["StringExpected", "async"]] as const) {
     const message = `Failed to convert JavaScript value (${code})`;
@@ -254,6 +274,78 @@ test("a code the backend's errorCodes() does not list is a TypeError", async () 
     handlers: { jwkParse: () => { throw coded("InvalidKey", "m"); } },
   });
   await assert.rejects(createApi(fake.backend).jwkParse(KEY), (e: unknown) => e instanceof TypeError && e.message === "m");
+});
+
+test("a code the backend lists but ERROR_CODES does not (a newer backend) is a TypeError, never a PolyjoseError", async () => {
+  // Review N2: `PolyjoseError.code` is always a member of the generated ErrorCode union.
+  for (const how of ["sync", "async"] as const) {
+    const fake = fakeBackend({
+      errorCodes: [...ERROR_CODES, "FutureCode"],
+      handlers: { jwkParse: () => (how === "sync" ? (() => { throw coded("FutureCode", "from the future"); })() : Promise.reject(coded("FutureCode", "from the future"))) },
+    });
+    await assert.rejects(createApi(fake.backend).jwkParse(KEY), (e: unknown) => {
+      assert.ok(e instanceof TypeError, `${how}: a TypeError`);
+      assert.ok(!(e instanceof PolyjoseError));
+      assert.equal(e.message, "from the future");
+      return true;
+    });
+  }
+});
+
+test("a code in ERROR_CODES maps only if the backend lists it too, and then maps normally", async () => {
+  const fake = fakeBackend({
+    errorCodes: ["InvalidKey", "FutureCode"],
+    handlers: { jwkParse: () => { throw coded("InvalidKey", "k"); }, jwkToPublic: () => { throw coded("InvalidSignature", "s"); } },
+  });
+  const api = createApi(fake.backend);
+  await assert.rejects(api.jwkParse(KEY), (e: unknown) => e instanceof PolyjoseError && e.code === "InvalidKey" && e.message === "k");
+  await assert.rejects(api.jwkToPublic(KEY), (e: unknown) => e instanceof TypeError && e.message === "s");
+});
+
+test("a backend whose errorCodes() throws fails loudly, naming the cause, instead of turning core errors into TypeErrors", async () => {
+  // Review N2: an empty code set would silently make every core failure a TypeError.
+  const cause = new Error("errorCodes is broken");
+  let listCalls = 0;
+  let broken = true;
+  const fake = fakeBackend({
+    handlers: {
+      errorCodes: () => {
+        listCalls++;
+        if (broken) throw cause;
+        return [...ERROR_CODES];
+      },
+      jwkParse: () => { throw coded("InvalidKey", "invalid JWK"); },
+    },
+  });
+  const api = createApi(fake.backend);
+  for (let i = 0; i < 2; i++) {
+    await assert.rejects(api.jwkParse(KEY), (e: unknown) => {
+      assert.ok(e instanceof Error);
+      assert.ok(!(e instanceof TypeError), "not a TypeError: the facade is miswired, not the caller");
+      assert.ok(!(e instanceof PolyjoseError));
+      assert.match(e.message, /errorCodes\(\)/);
+      assert.match(e.message, /errorCodes is broken/);
+      assert.equal(e.cause, cause);
+      return true;
+    });
+  }
+  assert.equal(listCalls, 2, "a failed errorCodes() is not cached: the next failure asks again");
+  // Once errorCodes() works, the same core failure is a PolyjoseError again.
+  broken = false;
+  await assert.rejects(api.jwkParse(KEY), (e: unknown) => e instanceof PolyjoseError && e.code === "InvalidKey");
+});
+
+test("a backend whose errorCodes() returns a non-array fails loudly too", async () => {
+  for (const listed of ["InvalidKey", undefined, { 0: "InvalidKey", length: 1 }]) {
+    const fake = fakeBackend({
+      handlers: { errorCodes: () => listed, jwkParse: () => { throw coded("InvalidKey", "invalid JWK"); } },
+    });
+    await assert.rejects(createApi(fake.backend).jwkParse(KEY), (e: unknown) => {
+      assert.ok(e instanceof Error && !(e instanceof TypeError) && !(e instanceof PolyjoseError), String(e));
+      assert.match(e.message, /errorCodes\(\)/);
+      return true;
+    });
+  }
 });
 
 test("errors without a code, and non-Error throws, become TypeErrors", async () => {
