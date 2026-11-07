@@ -2,6 +2,11 @@
 # risks: "AGP/Gradle versions move quickly"). The Gradle version is in gradle/wrapper.
 
 [versions]
+# Android API levels (ADR 0033 §1, §2): minSdk is also cargo-ndk's --platform, so the .so files
+# link against the same API level the AAR declares.
+androidCompileSdk = "36"
+androidMinSdk = "23"
+androidTargetSdk = "36"
 # Android Gradle Plugin 9.5: needs Gradle >= 9.6 and JDK 17+, compiles up to API 37; Kotlin is
 # built in, so the Android module applies only com.android.library (0008 research §3).
 agp = "9.5.1"
