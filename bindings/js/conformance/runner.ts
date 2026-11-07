@@ -25,7 +25,7 @@
  */
 
 import type { PolyjoseApi } from "../src/api.js";
-import type { EcCurve, JsonObject, JwtVerifyOptions, JweDecryptOptions, OkpCurve, ThumbprintHash } from "../src/types.js";
+import type { EcCurve, JsonObject, JwkSelector, JwtVerifyOptions, JweDecryptOptions, OkpCurve, ThumbprintHash } from "../src/types.js";
 import { scanJson, textAt, type JsonNode } from "./json-text.js";
 import { jsonEqual, schemaViolation } from "./schema.js";
 
@@ -322,6 +322,19 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
     const jwk = text.at("input", "jwk");
     out["thumbprint"] = await lib(api, () => api.jwkThumbprint(jwk, hash));
     out["thumbprint_uri"] = await lib(api, () => api.jwkThumbprintUri(jwk, hash));
+  },
+  // jwks.select → jwksSelect(jwks, { kid, alg, keyUse }) (RFC 7517 §5; ADR 0054 §1-§4, §9). The
+  // set goes as its own text, the selector member by member, each as given and only when present
+  // (`key_use` → `keyUse`): the core parses, validates and selects, so the runner maps nothing.
+  // The facade returns the selected key parsed, compared as a JSON value.
+  "jwks.select": async (api, input, _expect, text, out) => {
+    const criteria = input["selector"] as Out;
+    const selector: JwkSelector = {};
+    if (criteria["kid"] !== undefined) selector.kid = str(criteria["kid"]);
+    if (criteria["alg"] !== undefined) selector.alg = str(criteria["alg"]);
+    if (criteria["key_use"] !== undefined) selector.keyUse = str(criteria["key_use"]);
+    const jwks = text.at("input", "jwks");
+    out["jwk"] = await lib(api, () => api.jwksSelect(jwks, selector));
   },
 
   // jws.sign → jwsSignCompact / jwsSignFlattened / jwsSignGeneral (RFC 7515 §5.1, §7).
