@@ -8,7 +8,9 @@
 //!   `#[napi]` function, into the surface record that the task owns:
 //!   - a secret key `String` (`JwsSigner::key`, `JweRecipient::key`) is *moved* into a
 //!     [`SecretString`], so napi's single Rust-heap copy is the zeroizing one (ADR 0030 §7.1). It
-//!     is declared last, so napi converts it after every other field of its record;
+//!     is declared last, so napi converts it after every other field of its record, and
+//!     `JweEncryptOptions::recipients`, which holds those keys, is declared last for the same
+//!     reason;
 //!   - borrowed JS bytes (`detachedPayload`, `aad`, `apu`, `apv`) are copied out of the
 //!     `Uint8ArraySlice` while the call still runs, the secret ones (`detachedPayload`, `aad`)
 //!     into a [`SecretBytes`], so `compute` never reads JS memory (0007 research §4);
@@ -215,8 +217,6 @@ impl From<JweRecipient<'_>> for surface::JweRecipient {
 pub struct JweEncryptOptions<'a> {
     /// The content encryption algorithm, as registered (RFC 7518 §5.1).
     pub enc: String,
-    /// The recipients (exactly one for the compact form, RFC 7516 §7.1).
-    pub recipients: Vec<JweRecipient<'a>>,
     /// The JWE Protected Header as JSON text (RFC 7516 §7.2.1).
     pub protected_header: Option<String>,
     /// The JWE Shared Unprotected Header as JSON text (RFC 7516 §7.2.1).
@@ -225,6 +225,9 @@ pub struct JweEncryptOptions<'a> {
     pub aad: Option<Uint8ArraySlice<'a>>,
     /// Compress with DEFLATE before encryption (RFC 7516 §4.1.3). Absent: no compression.
     pub compress: Option<bool>,
+    /// The recipients (exactly one for the compact form, RFC 7516 §7.1). They hold the secret
+    /// keys, so they are declared last: see the module docs.
+    pub recipients: Vec<JweRecipient<'a>>,
 }
 
 impl From<JweEncryptOptions<'_>> for surface::JweEncryptOptions {

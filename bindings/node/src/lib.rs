@@ -34,7 +34,11 @@
 //!   of earlier `JwsSigner`/`JweRecipient` entries) are dropped by napi's generated code without
 //!   being wiped. The facade's type checks run first, so a call through `@polyjose/node` does not
 //!   reach this path. Closing it needs a hand-written `unsafe` `FromNapiValue`, which this crate
-//!   does not have. `key` is declared last in both records to keep the window small.
+//!   does not have. To keep the window small, the secrets are converted last: `key` is declared
+//!   last in `JwsSigner` and `JweRecipient`, and `recipients` last in `JweEncryptOptions`, so no
+//!   other field of the options (`aad`, `compress`, …) can fail after a recipient key has been
+//!   converted (review-code.md N1). A failure inside the recipients array, or in a later
+//!   argument, still drops the keys converted before it.
 //! - Nothing is logged, and no hand-written `unsafe` exists; the only `unsafe` is what
 //!   napi-derive generates.
 
