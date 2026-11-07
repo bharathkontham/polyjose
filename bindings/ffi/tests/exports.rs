@@ -108,12 +108,28 @@ fn jwk_to_public_drops_the_private_member_and_rejects_an_incomplete_key() {
 #[test]
 fn jwk_thumbprint_is_rfc7638_and_rejects_an_unsupported_hash() {
     assert_eq!(
-        jwk_thumbprint(s(RFC7638_RSA), s("SHA-256")).unwrap(),
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("SHA-256"))).unwrap(),
         RFC7638_THUMBPRINT
+    );
+    // ADR 0054 §9: an absent hash is the core default, SHA-256 (RFC 9278 §5).
+    assert_eq!(
+        jwk_thumbprint(s(RFC7638_RSA), None).unwrap(),
+        RFC7638_THUMBPRINT
+    );
+    // ADR 0054 §8.2: the core parses the name; SHA-384 is 64 base64url characters.
+    assert_eq!(
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("sha384"))).unwrap(),
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("sha-384"))).unwrap()
+    );
+    assert_eq!(
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("SHA-384")))
+            .unwrap()
+            .len(),
+        64
     );
     // ADR 0022: no SHA-1 thumbprints.
     assert_fails!(
-        jwk_thumbprint(s(RFC7638_RSA), s("SHA-1")),
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("SHA-1"))),
         UnsupportedAlgorithm
     );
 }
@@ -121,10 +137,21 @@ fn jwk_thumbprint_is_rfc7638_and_rejects_an_unsupported_hash() {
 #[test]
 fn jwk_thumbprint_uri_is_rfc9278_and_rejects_malformed_json() {
     assert_eq!(
-        jwk_thumbprint_uri(s(RFC7638_RSA), s("SHA-256")).unwrap(),
+        jwk_thumbprint_uri(s(RFC7638_RSA), Some(s("SHA-256"))).unwrap(),
         RFC9278_URI
     );
-    assert_fails!(jwk_thumbprint_uri(s("{"), s("SHA-256")), InvalidJson);
+    assert_eq!(
+        jwk_thumbprint_uri(s(RFC7638_RSA), None).unwrap(),
+        RFC9278_URI
+    );
+    // RFC 9278 §3, §4: the URI carries the IANA name whatever spelling was passed.
+    let sha512 = jwk_thumbprint_uri(s(RFC7638_RSA), Some(s("sha512"))).unwrap();
+    assert!(
+        sha512.starts_with("urn:ietf:params:oauth:jwk-thumbprint:sha-512:"),
+        "{sha512}"
+    );
+    assert_fails!(jwk_thumbprint_uri(s("{"), Some(s("SHA-256"))), InvalidJson);
+    assert_fails!(jwk_thumbprint_uri(s("{"), None), InvalidJson);
 }
 
 #[test]
