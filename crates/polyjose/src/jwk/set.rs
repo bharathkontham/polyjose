@@ -10,7 +10,9 @@ use core::fmt;
 
 use zeroize::ZeroizeOnDrop;
 
-use super::{Jwk, KeyAlg, KeyOp, MemberNames, is_rsa_private_key, is_unsupported_key_kind, member};
+use super::{
+    Jwk, KeyAlg, KeyOp, KeyUse, MemberNames, is_rsa_private_key, is_unsupported_key_kind, member,
+};
 use crate::error::{Error, Result};
 use crate::json::{self, Object, Value};
 use crate::jwa::SigningAlg;
@@ -265,6 +267,129 @@ impl JwkSet {
             .iter()
             .enumerate()
             .filter(move |(_, key)| is_verification_candidate(key, alg, kid))
+    }
+}
+
+/// Criteria for picking keys from a [`JwkSet`] (ADR 0054 §1): an optional
+/// `kid`, `alg`, `use` and `key_ops` operation.
+///
+/// Build one with [`JwkSelector::new`], which selects every member, and
+/// the setters, each of which narrows it. Every criterion is validated
+/// when it is set, before any set is read (ADR 0054 §1.1, §4), so a
+/// selector that exists is one polyjose can apply. The ADR 0054 §2 rule
+/// that applies it is `JwkSet::select` / `JwkSet::matching`.
+///
+/// ```
+/// use polyjose::Error;
+/// use polyjose::jwk::{JwkSelector, KeyAlg, KeyUse};
+///
+/// let selector = JwkSelector::new()
+///     .kid("2011-04-29")
+///     .alg(KeyAlg::from("ES256"))?
+///     .key_use(KeyUse::Sig)?;
+/// assert_ne!(selector, JwkSelector::new());
+///
+/// // RFC 8725 §3.1: `none` never selects a key, and neither does a
+/// // content encryption algorithm (ADR 0054 §1.1).
+/// assert_eq!(JwkSelector::new().alg(KeyAlg::from("none")), Err(Error::UnsupportedAlgorithm));
+/// assert_eq!(JwkSelector::new().alg(KeyAlg::from("A256GCM")), Err(Error::UnsupportedAlgorithm));
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+///
+/// # Security
+///
+/// A selector identifies keys; it never authorizes an algorithm. Pass a
+/// selected key only to operations that take an allow-list, as every
+/// polyjose verify and decrypt does (ADR 0054 §7, RFC 8725 §3.1). A `kid`
+/// is only ever compared for equality (RFC 8725 §3.10). No criterion is
+/// secret, so `Debug` prints them all.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct JwkSelector {
+    /// The `kid` a member must carry, exactly (RFC 7517 §4.5).
+    kid: Option<String>,
+    /// A JWS or JWE key management algorithm polyjose implements
+    /// (RFC 7517 §4.4; ADR 0054 §1.1).
+    alg: Option<KeyAlg>,
+    /// `sig` or `enc` (RFC 7517 §4.2).
+    key_use: Option<KeyUse>,
+    /// A registered operation (RFC 7517 §4.3).
+    key_op: Option<KeyOp>,
+}
+
+impl JwkSelector {
+    /// The empty selector, which every member matches (ADR 0054 §1.3).
+    pub fn new() -> JwkSelector {
+        JwkSelector::default()
+    }
+
+    /// Selects members whose `kid` equals `kid` exactly: case-sensitive
+    /// string equality, no normalization (RFC 7517 §4.5, ADR 0054 §1.2). A
+    /// member without a `kid` does not match. The value is never used as a
+    /// path, URL or query (RFC 8725 §3.10). A later call replaces it.
+    pub fn kid(mut self, kid: &str) -> JwkSelector {
+        self.kid = Some(kid.to_owned());
+        self
+    }
+
+    /// Selects members that may serve `alg` (ADR 0054 §2: family, JWK
+    /// `alg`, `use` and `key_ops`). A later call replaces it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedAlgorithm`] unless `alg` is a JWS algorithm
+    /// polyjose implements other than `none` ([`SigningAlg::KNOWN`],
+    /// RFC 7518 §3.1, RFC 8725 §3.1), or a JWE key management algorithm it
+    /// implements ([`KeyMgmtAlg::KNOWN`], RFC 7518 §4.1) (ADR 0054 §1.1).
+    /// So `none`, `RSA1_5` (ADR 0021), `RSA-OAEP` (ADR 0022), unregistered
+    /// names and content encryption names (`A256GCM`, RFC 7518 §5.1) are
+    /// refused; select a `dir` key with `dir`. The value is not echoed.
+    ///
+    /// [`SigningAlg::KNOWN`]: crate::jwa::SigningAlg::KNOWN
+    /// [`KeyMgmtAlg::KNOWN`]: crate::jwa::KeyMgmtAlg::KNOWN
+    pub fn alg(mut self, alg: KeyAlg) -> Result<JwkSelector> {
+        let implemented = match &alg {
+            KeyAlg::Signing(a) => a.is_known() && *a != SigningAlg::None,
+            KeyAlg::KeyMgmt(a) => a.is_known(),
+            KeyAlg::ContentEnc(_) | KeyAlg::Unknown(_) => false,
+        };
+        if !implemented {
+            return Err(Error::UnsupportedAlgorithm);
+        }
+        self.alg = Some(alg);
+        Ok(self)
+    }
+
+    /// Selects members whose `use` is absent or `key_use` (RFC 7517 §4.2,
+    /// ADR 0054 §2.3). A later call replaces it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedAlgorithm`] unless `key_use` is `sig` or `enc`
+    /// (ADR 0054 §1.1, ADR 0030 §5). The value is not echoed.
+    pub fn key_use(mut self, key_use: KeyUse) -> Result<JwkSelector> {
+        if !matches!(key_use, KeyUse::Sig | KeyUse::Enc) {
+            return Err(Error::UnsupportedAlgorithm);
+        }
+        self.key_use = Some(key_use);
+        Ok(self)
+    }
+
+    /// Selects members whose `key_ops`, if present, contain `key_op`, and
+    /// whose `use`, if present, is the use of `key_op` (RFC 7517 §4.2,
+    /// §4.3; ADR 0054 §2.3, §2.4). A later call replaces it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedAlgorithm`] unless `key_op` is one of the eight
+    /// operations RFC 7517 §4.3 registers (ADR 0054 §1.1). The value is
+    /// not echoed.
+    pub fn key_op(mut self, key_op: KeyOp) -> Result<JwkSelector> {
+        if matches!(key_op, KeyOp::Unknown(_)) {
+            return Err(Error::UnsupportedAlgorithm);
+        }
+        self.key_op = Some(key_op);
+        Ok(self)
     }
 }
 
@@ -1193,5 +1318,144 @@ mod tests {
                 prop_assert_eq!(candidates(&set, &alg, header_kid), oracle);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod selector_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
+
+    use crate::Error;
+    use crate::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
+    use crate::jwk::{JwkSelector, KeyAlg, KeyOp, KeyUse};
+
+    #[test]
+    fn new_is_the_empty_default_selector() {
+        // ADR 0054 §1.3: no criterion is required.
+        assert_eq!(JwkSelector::new(), JwkSelector::default());
+        assert_eq!(
+            format!("{:?}", JwkSelector::new()),
+            "JwkSelector { kid: None, alg: None, key_use: None, key_op: None }"
+        );
+    }
+
+    #[test]
+    fn alg_accepts_every_implemented_jws_alg_but_none() {
+        // ADR 0054 §1.1: the core's own list, not a copy.
+        for alg in SigningAlg::KNOWN {
+            let result = JwkSelector::new().alg(KeyAlg::Signing(alg.clone()));
+            if *alg == SigningAlg::None {
+                // RFC 8725 §3.1, ADR 0007: `none` never selects a key.
+                assert_eq!(result, Err(Error::UnsupportedAlgorithm));
+            } else {
+                assert!(result.is_ok(), "{alg}");
+            }
+        }
+    }
+
+    #[test]
+    fn alg_accepts_every_implemented_jwe_key_management_alg() {
+        // ADR 0054 §1.1, including `dir` (§2.2).
+        for alg in KeyMgmtAlg::KNOWN {
+            assert!(
+                JwkSelector::new().alg(KeyAlg::KeyMgmt(alg.clone())).is_ok(),
+                "{alg}"
+            );
+        }
+    }
+
+    #[test]
+    fn alg_rejects_none_unimplemented_unknown_and_enc_names() {
+        // ADR 0054 §1.1: `none` (RFC 8725 §3.1), `RSA1_5` (ADR 0021),
+        // `RSA-OAEP` (ADR 0022), unregistered names, and the names of
+        // RFC 7518 §5.1 content encryption algorithms.
+        let mut rejected: Vec<KeyAlg> = ["none", "RSA1_5", "RSA-OAEP", "Ed448", "XYZ", "", "hs256"]
+            .into_iter()
+            .map(KeyAlg::from)
+            .collect();
+        rejected.extend(ContentEncAlg::KNOWN.iter().cloned().map(KeyAlg::ContentEnc));
+        // Non-canonical values built by hand fail closed too.
+        rejected.push(KeyAlg::Signing(SigningAlg::Unknown("HS256".into())));
+        rejected.push(KeyAlg::KeyMgmt(KeyMgmtAlg::Unknown("A128KW".into())));
+        rejected.push(KeyAlg::ContentEnc(ContentEncAlg::Unknown("A128GCM".into())));
+        rejected.push(KeyAlg::Unknown("ES256".into()));
+        for alg in rejected {
+            assert_eq!(
+                JwkSelector::new().alg(alg.clone()),
+                Err(Error::UnsupportedAlgorithm),
+                "{alg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_use_accepts_sig_and_enc_only() {
+        // ADR 0054 §1.1, RFC 7517 §4.2.
+        assert!(JwkSelector::new().key_use(KeyUse::Sig).is_ok());
+        assert!(JwkSelector::new().key_use(KeyUse::Enc).is_ok());
+        for other in ["", "SIG", "signature", "x"] {
+            assert_eq!(
+                JwkSelector::new().key_use(KeyUse::from(other)),
+                Err(Error::UnsupportedAlgorithm),
+                "{other:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_op_accepts_the_registered_ops_only() {
+        // ADR 0054 §1.1, RFC 7517 §4.3.
+        for op in [
+            KeyOp::Sign,
+            KeyOp::Verify,
+            KeyOp::Encrypt,
+            KeyOp::Decrypt,
+            KeyOp::WrapKey,
+            KeyOp::UnwrapKey,
+            KeyOp::DeriveKey,
+            KeyOp::DeriveBits,
+        ] {
+            assert!(JwkSelector::new().key_op(op.clone()).is_ok(), "{op}");
+        }
+        for other in ["", "Sign", "VERIFY", "wrapkey", "x"] {
+            assert_eq!(
+                JwkSelector::new().key_op(KeyOp::from(other)),
+                Err(Error::UnsupportedAlgorithm),
+                "{other:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn setters_record_their_criteria_and_compare_by_value() {
+        let selector = JwkSelector::new()
+            .kid("2011-04-29")
+            .alg(KeyAlg::from("ES256"))
+            .unwrap()
+            .key_use(KeyUse::Sig)
+            .unwrap()
+            .key_op(KeyOp::Verify)
+            .unwrap();
+        // Debug shows every criterion: none is secret (ADR 0054 §1).
+        assert_eq!(
+            format!("{selector:?}"),
+            "JwkSelector { kid: Some(\"2011-04-29\"), alg: Some(Signing(ES256)), \
+             key_use: Some(Sig), key_op: Some(Verify) }"
+        );
+        // Setter order does not matter; a later call replaces an earlier one.
+        let reordered = JwkSelector::new()
+            .key_op(KeyOp::Verify)
+            .unwrap()
+            .key_use(KeyUse::Sig)
+            .unwrap()
+            .alg(KeyAlg::from("HS256"))
+            .unwrap()
+            .alg(KeyAlg::from("ES256"))
+            .unwrap()
+            .kid("other")
+            .kid("2011-04-29");
+        assert_eq!(reordered, selector);
+        assert_eq!(selector.clone(), selector);
+        assert_ne!(JwkSelector::new().kid("a"), JwkSelector::new().kid("A"));
     }
 }
