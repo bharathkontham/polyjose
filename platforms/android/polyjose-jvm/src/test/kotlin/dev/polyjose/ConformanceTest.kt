@@ -1,6 +1,7 @@
 package dev.polyjose
 
 import dev.polyjose.conformance.Runner
+import dev.polyjose.conformance.Status
 import dev.polyjose.conformance.VectorBytes
 import dev.polyjose.conformance.VectorInput
 import dev.polyjose.conformance.VectorUnreadable
@@ -11,9 +12,11 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 
 /**
@@ -75,6 +78,108 @@ class ConformanceTest {
         )
         assertEquals("9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1", VectorsDigest.of(files))
     }
+
+    /** A strict-JSON violation is a `fail` (RFC 7493 §2.3), and so is a schema-invalid vector, never a skip. */
+    @Test
+    fun duplicateMembersAndSchemaViolationsFail() {
+        val document = run(
+            "dup.json" to """{"source":"polyjose","source":"x","description":"d","operation":"b64url.decode","input":{"b64u":"Zg"},"expect":{"ok":true,"bytes_hex":"66"}}""",
+            "unknown-member.json" to decodeVector("Zg", """{"ok":true,"bytes_hex":"66"}""").replace("\"input\"", "\"extra\":1,\"input\""),
+            "lenient.json" to "{'source':'polyjose'}",
+            "ok.json" to decodeVector("Zg", """{"ok":true,"bytes_hex":"66"}"""),
+        )
+        assertEquals(Status.FAIL, document.result("dup.json#0").status)
+        assertTrue(document.result("dup.json#0").reason!!.contains("duplicate member"))
+        assertEquals(Status.FAIL, document.result("unknown-member.json#0").status)
+        assertTrue(document.result("unknown-member.json#0").reason!!.contains("/extra: unknown member"))
+        assertEquals(Status.FAIL, document.result("lenient.json#0").status)
+        assertEquals(Status.PASS, document.result("ok.json#0").status)
+    }
+
+    /** An operation the runner doesn't map is a `fail` (ADR 0034 §3), even under a schema that admits it. */
+    @Test
+    fun anUnmappedOperationFails() {
+        val vector = """{"operation":"jwx.future","input":{},"expect":{"ok":true}}"""
+        val document = Runner.run("jvm", listOf(VectorBytes("future.json", vector.toByteArray())), "true")
+        val result = document.result("future.json#0")
+        assertEquals(Status.FAIL, result.status)
+        assertNull(result.actual)
+        assertTrue(result.reason!!.contains("not implemented by the Kotlin runner")) { result.reason!! }
+    }
+
+    /** Bytes that aren't UTF-8 fail, and still count in the digest: the runner read them (ADR 0060 §2). */
+    @Test
+    fun nonUtf8BytesFailAndAreStillHashed() {
+        val bad = VectorBytes("bad.json", byteArrayOf(0x7b, 0xff.toByte(), 0x7d))
+        val ok = VectorBytes("ok.json", decodeVector("Zg", """{"ok":true,"bytes_hex":"66"}""").toByteArray())
+        val document = Runner.run("jvm", listOf(bad, ok), schemaText())
+        assertEquals(Status.FAIL, document.result("bad.json#0").status)
+        assertEquals(VectorsDigest.of(listOf(bad, ok)), document.vectorsDigest)
+    }
+
+    /** A symbolic link is a `fail` with no digest line; its target is never read (ADR 0060 §2). */
+    @Test
+    fun aSymbolicLinkFailsWithoutADigestLine(@TempDir dir: Path) {
+        Files.write(dir.resolve("ok.json"), decodeVector("Zg", """{"ok":true,"bytes_hex":"66"}""").toByteArray())
+        Files.createSymbolicLink(dir.resolve("link.json"), dir.resolve("ok.json"))
+        val inputs = loadVectorFiles(dir)
+        assertTrue(inputs.single { it.path == "link.json" } is VectorUnreadable)
+        val document = Runner.run("jvm", inputs, schemaText())
+        assertEquals(Status.FAIL, document.result("link.json#0").status)
+        assertEquals(VectorsDigest.of(inputs.filterIsInstance<VectorBytes>()), document.vectorsDigest)
+        assertEquals(1, inputs.filterIsInstance<VectorBytes>().size)
+    }
+
+    /** No vector file read: the run fails and no document exists (ADR 0060 §3). */
+    @Test
+    fun anEmptyCorpusFails(@TempDir dir: Path) {
+        Files.write(dir.resolve("README.md"), "notes".toByteArray())
+        assertThrows<IllegalStateException> { Runner.run("jvm", loadVectorFiles(dir), schemaText()) }
+        assertThrows<IllegalStateException> {
+            Runner.run("jvm", listOf(VectorUnreadable("x.json", "cannot read")), schemaText())
+        }
+        assertThrows<IllegalArgumentException> { Runner.run("node", listOf(VectorBytes("a.json", "{}".toByteArray())), schemaText()) }
+    }
+
+    /**
+     * The only skip is `feature:<names>`, missing names in the vector's order (ADR 0034 §3); the
+     * binding build enables no feature, so a `features_absent` vector runs (ADR 0056 §5).
+     */
+    @Test
+    fun skipsAreFeatureReasonsOnly() {
+        val needs = decodeVector("Zg", """{"ok":true,"bytes_hex":"66"}""").replace("{\"source\"", "{\"features\":[\"fixed-rng\",\"deflate\"],\"source\"")
+        val absent = decodeVector("Zg", """{"ok":true,"bytes_hex":"66"}""").replace("{\"source\"", "{\"features_absent\":[\"deflate\"],\"source\"")
+        val document = run("needs.json" to needs, "absent.json" to absent)
+        assertEquals(Status.SKIPPED, document.result("needs.json#0").status)
+        assertEquals("feature:fixed-rng,deflate", document.result("needs.json#0").reason)
+        assertEquals(Status.PASS, document.result("absent.json#0").status)
+    }
+
+    /** An error outcome is compared by `code()`; the wrong code is a `fail` that still records `actual`. */
+    @Test
+    fun errorsCompareByCode() {
+        val document = run(
+            "right.json" to decodeVector("Z", """{"ok":false,"error":"InvalidBase64"}"""),
+            "wrong.json" to decodeVector("Z", """{"ok":false,"error":"InvalidJson"}"""),
+        )
+        assertEquals(Status.PASS, document.result("right.json#0").status)
+        val wrong = document.result("wrong.json#0")
+        assertEquals(Status.FAIL, wrong.status)
+        assertEquals("InvalidBase64", wrong.actual?.error)
+        assertTrue(wrong.reason!!.contains("expected error InvalidJson, got error InvalidBase64")) { wrong.reason!! }
+    }
+
+    private fun run(vararg files: Pair<String, String>) =
+        Runner.run("jvm", files.map { (path, json) -> VectorBytes(path, json.toByteArray(Charsets.UTF_8)) }, schemaText())
+
+    private fun dev.polyjose.conformance.ResultsDocument.result(id: String) = results.single { it.id == id }
+
+    /** A `b64url.decode` vector (conformance/README.md "Operations"). */
+    private fun decodeVector(b64u: String, expect: String) =
+        """{"source":"polyjose","description":"d","operation":"b64url.decode","input":{"b64u":"$b64u"},"expect":$expect}"""
+
+    private fun schemaText(): String =
+        String(Files.readAllBytes(pathProperty("polyjose.vectors").resolveSibling("schema.json")), Charsets.UTF_8)
 
     private fun pathProperty(name: String): Path = Paths.get(
         System.getProperty(name) ?: error("system property $name is not set (platforms/android/polyjose-jvm/build.gradle.kts)"),
