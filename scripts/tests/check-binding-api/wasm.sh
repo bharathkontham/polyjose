@@ -7,7 +7,7 @@
 # Each case replaces the build script in the copy by a stub that writes a pkg/ and a dist/src/
 # from the inventory (so no wasm-pack run is needed), then changes one thing. The stub is a
 # fixture of the mode's contract, not of the real build, which build-package.sh itself guards.
-# Without cargo, wasm-pack, node, npm, gzip, brotli, openssl or the wasm32 target only the SKIPPED case
+# Without cargo, wasm-pack, node, npm, gzip, brotli or the wasm32 target only the SKIPPED case
 # runs.
 #
 # Usage: scripts/tests/check-binding-api/wasm.sh (under /bin/bash 3.2 and bash 5).
@@ -55,7 +55,7 @@ rc=0
 check_last_line "without wasm-pack the wasm mode is SKIPPED with the reason" 0 'SKIPPED (wasm: wasm-pack missing)'
 check_absent "a skipped wasm mode is not reported as passing" 'PASS'
 
-for tool in wasm-pack cargo node npm gzip brotli openssl; do
+for tool in wasm-pack cargo node npm gzip brotli; do
   command -v "$tool" >/dev/null 2>&1 || { echo "note: $tool missing; the stubbed-build cases did not run"; finish; exit; }
 done
 if command -v rustup >/dev/null 2>&1 \

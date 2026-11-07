@@ -31,7 +31,7 @@
 # Exit status: 0 done; 1 a step failed; 2 usage error; 3 the package is assembled but the .wasm
 # is over the size budget (no tarball is written). Runs on macOS /bin/bash 3.2 and Linux bash 5.
 # Needs cargo with the wasm32-unknown-unknown target, wasm-pack 0.15.1, node (>= 22.18, for the
-# facade's error-code generator), npm, gzip, brotli and openssl (the .wasm's SHA-384).
+# facade's error-code generator; it also hashes the .wasm), npm, gzip and brotli.
 set -euo pipefail
 export LC_ALL=C
 
@@ -80,7 +80,7 @@ for var in RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS CARGO_TARGET_
   [ -z "${!var:-}" ] || die "$var is set; unset it: the shipped .wasm is built without environment rustflags (0006 review N2, ADR 0005)"
 done
 
-for tool in cargo wasm-pack node npm gzip brotli openssl; do
+for tool in cargo wasm-pack node npm gzip brotli; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH"
 done
 
@@ -149,10 +149,14 @@ grep -q '@VERSION@' "$stage/package.json" && die "package.json still has a @VERS
 # run time from a mutable place: the version from the package.json just generated, and the
 # SHA-384 of the .wasm exactly as it is shipped (wasm-opt has run), in base64 as W3C Subresource
 # Integrity metadata writes it, for fetch's `integrity` and node:crypto alike.
+# sha384_b64 <file>: the SHA-384 (FIPS 180-4) of the file, base64, with node:crypto; node is
+# already required (tsc, the error-code generator), so the build needs no other hasher.
+sha384_b64() {
+  node -e 'process.stdout.write(require("node:crypto").createHash("sha384").update(require("node:fs").readFileSync(process.argv[1])).digest("base64"))' "$1"
+}
 pkg_version=$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$stage/package.json")
 [ "$pkg_version" = "$version" ] || die "the generated package.json has version '$pkg_version', expected '$version'"
-wasm_sha384=$(openssl dgst -sha384 -binary "$glue/polyjose_wasm_bg.wasm" | openssl base64 -A) \
-  || die "openssl could not hash polyjose_wasm_bg.wasm"
+wasm_sha384=$(sha384_b64 "$glue/polyjose_wasm_bg.wasm") || die "node could not hash polyjose_wasm_bg.wasm"
 [ ${#wasm_sha384} -eq 64 ] || die "the SHA-384 of polyjose_wasm_bg.wasm is not 64 base64 characters: '$wasm_sha384'"
 echo "$me: polyjose_wasm_bg.wasm: sha384-$wasm_sha384"
 
@@ -223,7 +227,7 @@ cp "$stage/package.json" "$pkg/package.json"
   -o "$pkg/THIRD-PARTY-NOTICES.txt" || die "scripts/third-party-notices.sh failed"
 
 echo "==> $me: the shipped .wasm has the SHA-384 the entries check (0006 F05)"
-shipped=$(openssl dgst -sha384 -binary "$pkg/polyjose_wasm_bg.wasm" | openssl base64 -A)
+shipped=$(sha384_b64 "$pkg/polyjose_wasm_bg.wasm") || die "node could not hash pkg/polyjose_wasm_bg.wasm"
 [ "$shipped" = "$wasm_sha384" ] || die "pkg/polyjose_wasm_bg.wasm is sha384-$shipped, integrity.js has sha384-$wasm_sha384"
 grep -qF "\"$wasm_sha384\"" "$pkg/integrity.js" || die "integrity.js does not hold sha384-$wasm_sha384"
 grep -qF "\"$pkg_version\"" "$pkg/integrity.js" || die "integrity.js does not hold the version $pkg_version"
