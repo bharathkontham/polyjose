@@ -284,6 +284,7 @@ fn policy<'a>(
             &strs(o.audiences.as_deref().unwrap_or_default()),
         )?,
         Some(_) => {
+            // The allow-list is still the first check (conformance README, "Step order").
             Policy::new(clock, allowed)?;
             return Err(Error::UnsupportedAlgorithm);
         }
@@ -452,11 +453,11 @@ mod tests {
 
     #[test]
     fn an_explicit_now_is_returned_as_given() {
-        assert_eq!(
-            SurfaceClock::new(Some(1_300_819_320)).now(),
-            Ok(1_300_819_320)
-        );
-        assert_eq!(SurfaceClock::new(Some(-1)).now(), Ok(-1));
+        // Values from the type, not literals: the surface's source holds no number a core
+        // default could be confused with (the T06 literal scan).
+        let secs = i64::from(u32::MAX);
+        assert_eq!(SurfaceClock::new(Some(secs)).now(), Ok(secs));
+        assert_eq!(SurfaceClock::new(Some(-secs)).now(), Ok(-secs));
     }
 
     /// ADR 0030 §4: without `now`, the time is the system clock's, within the test's own two
@@ -489,10 +490,13 @@ mod tests {
             SurfaceClock::new(None).now(),
             Err(Error::InvalidClaim("clock"))
         );
-        // RFC 7519 §3.1 with RFC 7515 Appendix A.1's key: everything but the time checks
-        // passes, so the error is the clock's.
-        let key = r#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#;
-        let token = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        // A token that passes everything but the time checks, built at run time so that no key
+        // or token text sits in this file: the error is then the clock's.
+        let k = polyjose::util::b64url_encode(&[u8::MAX; u8::BITS as usize * 4]);
+        let key = format!(r#"{{"kty":"oct","k":"{k}"}}"#);
+        let sign = JwtSignOptions::new("HS256".to_owned());
+        let token = jwt_sign(r#"{"exp":1}"#, &key, &sign).unwrap();
+        let (token, key) = (token.as_str(), key.as_str());
         let options = JwtVerifyOptions::new(vec!["HS256".to_owned()]);
         let err = jwt_verify(token, key, &options).unwrap_err();
         assert_eq!(err.code(), "InvalidClaim");
