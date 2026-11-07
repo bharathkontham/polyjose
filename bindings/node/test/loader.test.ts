@@ -52,7 +52,9 @@ interface Host {
   getBuiltinModule(id: "node:url"): NodeUrl;
 }
 const host = (globalThis as unknown as { process: Host }).process;
+const cp = host.getBuiltinModule("node:child_process");
 const fs = host.getBuiltinModule("node:fs");
+const os = host.getBuiltinModule("node:os");
 const thisFile = host.getBuiltinModule("node:url").fileURLToPath((import.meta as unknown as { url: string }).url);
 /** bindings/node: this file is bindings/node/dist/loader.test.js. */
 const pkgDir = path.resolve(path.dirname(thisFile), "..");
@@ -215,4 +217,220 @@ test("the loader side effects the README documents are still the loader's (N7)",
 
 test("the in-process backend is the native addon", () => {
   assert.equal((backend as unknown as { __napiBindingTarget?: unknown }).__napiBindingTarget, "native");
+});
+
+// ---- Fail closed, in child processes on a temporary copy of the package ----
+
+/** The host's built addon, `polyjose.<platform>.node` (scripts/build.sh builds the host only). */
+const hostAddon = ((): string => {
+  const addons = fs.readdirSync(pkgDir).filter((f) => /^polyjose\.[a-z0-9-]+\.node$/.test(f));
+  assert.equal(addons.length, 1, `exactly one built addon in bindings/node (found ${addons.join(", ")})`);
+  return addons[0] ?? "";
+})();
+
+/** Marker files the sentinels write when they are loaded; none is ever written by a real build. */
+const LOCAL_SENTINEL = "local-wasi-sentinel-loaded";
+const PACKAGE_SENTINEL = "package-wasi-sentinel-loaded";
+
+interface CopyOptions {
+  /** Copy the host addon next to the loader (the native load then succeeds). */
+  readonly addon: boolean;
+  /** Plant `./polyjose.wasi.cjs` and a `.wasm` artifact, the loader's local WASI candidate. */
+  readonly localWasi?: boolean;
+  /** Plant `node_modules/@polyjose/node-wasm32-wasi`, the loader's WASI package candidate. */
+  readonly packageWasi?: boolean;
+  /** Overrides package.json's version (the load-time version check). */
+  readonly version?: string;
+}
+
+/**
+ * A temporary copy of what the package ships that the load path reads: index.js, backend.js,
+ * facade/, binding.cjs, package.json and optionally the addon and WASI sentinels. Real path, since
+ * `require.cache` keys are real paths (macOS's tmpdir is a symlink).
+ */
+function packageCopy(options: CopyOptions): string {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-node-loader-")));
+  for (const f of ["index.js", "backend.js", "binding.cjs"]) fs.copyFileSync(path.join(pkgDir, f), path.join(dir, f));
+  fs.cpSync(path.join(pkgDir, "facade"), path.join(dir, "facade"), { recursive: true });
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as Record<string, unknown>;
+  if (options.version !== undefined) pkg["version"] = options.version;
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2));
+  if (options.addon) fs.copyFileSync(path.join(pkgDir, hostAddon), path.join(dir, hostAddon));
+  const sentinel = (marker: string): string =>
+    `require("fs").writeFileSync(${JSON.stringify(path.join(dir, marker))}, "loaded");\nmodule.exports = {};\n`;
+  if (options.localWasi === true) {
+    fs.writeFileSync(path.join(dir, "polyjose.wasi.cjs"), sentinel(LOCAL_SENTINEL));
+    fs.writeFileSync(path.join(dir, "polyjose.wasm32-wasi.wasm"), "");
+  }
+  if (options.packageWasi === true) {
+    const p = path.join(dir, "node_modules", "@polyjose", "node-wasm32-wasi");
+    fs.mkdirSync(p, { recursive: true });
+    fs.writeFileSync(path.join(p, "package.json"), JSON.stringify({ name: "@polyjose/node-wasm32-wasi", version: "0.1.0", main: "index.js" }));
+    fs.writeFileSync(path.join(p, "index.js"), sentinel(PACKAGE_SENTINEL));
+  }
+  return dir;
+}
+
+/** The parent's environment without any NAPI_RS_* variable, plus `extra`. */
+function childEnv(extra: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(host.env)) if (v !== undefined && !k.startsWith("NAPI_RS_")) env[k] = v;
+  return { ...env, ...extra };
+}
+
+/** What a child that imported the package saw. */
+interface ImportOutcome {
+  readonly loaded: boolean;
+  readonly error: string | null;
+  /** The package copy's files in the CommonJS module cache: what was loaded through `require`. */
+  readonly required: string[];
+}
+
+/** Imports the copy's index.js in a fresh `node`, from a neutral working directory. */
+function importInChild(dir: string, env: Record<string, string> = {}): ImportOutcome {
+  const script = [
+    'import { createRequire } from "node:module";',
+    'import { pathToFileURL } from "node:url";',
+    'import { join, sep } from "node:path";',
+    "const dir = process.argv[1];",
+    "const out = { loaded: false, error: null, required: [] };",
+    'try { await import(pathToFileURL(join(dir, "index.js")).href); out.loaded = true; }',
+    "catch (e) { out.error = e instanceof Error ? e.message : String(e); }",
+    'out.required = Object.keys(createRequire(join(dir, "probe.cjs")).cache)',
+    "  .filter((k) => k.startsWith(dir + sep)).map((k) => k.slice(dir.length + 1)).sort();",
+    "process.stdout.write(JSON.stringify(out));",
+  ].join("\n");
+  const r = cp.spawnSync(host.execPath, ["--input-type=module", "-e", script, dir], {
+    env: childEnv(env),
+    encoding: "utf8",
+    cwd: os.tmpdir(),
+  });
+  assert.equal(r.error, undefined, "spawn node");
+  assert.equal(r.status, 0, `the probe exits 0 (stderr: ${r.stderr})`);
+  return JSON.parse(r.stdout) as ImportOutcome;
+}
+
+/** Requires the copy's raw binding.cjs in a fresh `node`; returns its exit status. */
+function requireRawLoader(dir: string): number | null {
+  const r = cp.spawnSync(host.execPath, ["-e", 'require(require("path").join(process.argv[1], "binding.cjs"))', dir], {
+    env: childEnv({}),
+    encoding: "utf8",
+    cwd: os.tmpdir(),
+  });
+  assert.equal(r.error, undefined, "spawn node");
+  return r.status;
+}
+
+/** Runs `body` on a fresh copy and removes it afterwards. */
+function withCopy(options: CopyOptions, body: (dir: string) => void): void {
+  const dir = packageCopy(options);
+  try {
+    body(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Neither sentinel ran, and neither the loader nor the addon nor a sentinel was required. */
+function nothingLoaded(dir: string, outcome: ImportOutcome, what: string): void {
+  assert.equal(outcome.loaded, false, `${what}: the import throws`);
+  assert.ok(!fs.existsSync(path.join(dir, LOCAL_SENTINEL)), `${what}: the local WASI sentinel did not load`);
+  assert.ok(!fs.existsSync(path.join(dir, PACKAGE_SENTINEL)), `${what}: the WASI package sentinel did not load`);
+  assert.deepEqual(
+    outcome.required.filter((f) => f === "binding.cjs" || f.endsWith(".node") || f.includes("wasi")),
+    [],
+    `${what}: no loader, addon or WASI file was required`,
+  );
+}
+
+test("the copy harness: with the addon and nothing planted, the package loads the native addon", () => {
+  withCopy({ addon: true }, (dir) => {
+    const outcome = importInChild(dir);
+    assert.equal(outcome.error, null);
+    assert.equal(outcome.loaded, true);
+    assert.ok(outcome.required.includes("binding.cjs") && outcome.required.includes(hostAddon), "loader and addon loaded");
+  });
+});
+
+test("control: with no addon, the raw loader does reach a planted WASI sentinel (both candidates)", () => {
+  withCopy({ addon: false, localWasi: true }, (dir) => {
+    assert.equal(requireRawLoader(dir), 0, "the raw loader loads ./polyjose.wasi.cjs");
+    assert.ok(fs.existsSync(path.join(dir, LOCAL_SENTINEL)), "the local sentinel ran");
+  });
+  withCopy({ addon: false, packageWasi: true }, (dir) => {
+    assert.equal(requireRawLoader(dir), 0, "the raw loader loads @polyjose/node-wasm32-wasi");
+    assert.ok(fs.existsSync(path.join(dir, PACKAGE_SENTINEL)), "the package sentinel ran");
+  });
+});
+
+test("a failed native load never reaches the WASI chain: the package throws, the sentinel does not load", () => {
+  withCopy({ addon: false, localWasi: true }, (dir) => {
+    const outcome = importInChild(dir);
+    nothingLoaded(dir, outcome, "local ./polyjose.wasi.cjs");
+    assert.match(outcome.error ?? "", /polyjose\.wasi\.cjs/);
+  });
+  withCopy({ addon: false, packageWasi: true }, (dir) => {
+    const outcome = importInChild(dir);
+    nothingLoaded(dir, outcome, "@polyjose/node-wasm32-wasi");
+    assert.match(outcome.error ?? "", /@polyjose\/node-wasm32-wasi/);
+  });
+});
+
+test("a planted WASI candidate is refused even when the native addon is present", () => {
+  withCopy({ addon: true, localWasi: true, packageWasi: true }, (dir) => {
+    nothingLoaded(dir, importInChild(dir), "addon present");
+  });
+});
+
+test("with no addon and no WASI candidate, the import throws the loader's own error", () => {
+  withCopy({ addon: false }, (dir) => {
+    const outcome = importInChild(dir);
+    assert.equal(outcome.loaded, false);
+    assert.match(outcome.error ?? "", /Cannot find native binding/);
+  });
+});
+
+test("the WASI variables are refused, whatever their value, and nothing loads", () => {
+  const cases: Record<string, string>[] = [
+    { NAPI_RS_FORCE_WASI: "true" },
+    { NAPI_RS_FORCE_WASI: "1" },
+    { NAPI_RS_FORCE_WASI: "error" },
+    { NAPI_RS_FORCE_WASI: "false" },
+    { NAPI_RS_FORCE_WASI: "" },
+    { NAPI_RS_WASI_FLAVOR: "wasm32-wasi" },
+    { NAPI_RS_WASI_FLAVOR: "" },
+  ];
+  for (const env of cases) {
+    const [name, value] = Object.entries(env)[0] ?? ["", ""];
+    // The addon is present: without the refusal, `true`, `error` and the flavor would skip it.
+    withCopy({ addon: true }, (dir) => {
+      const outcome = importInChild(dir, env);
+      nothingLoaded(dir, outcome, `${name}=${JSON.stringify(value)}`);
+      assert.match(outcome.error ?? "", new RegExp(name), `${name}=${JSON.stringify(value)}: the error names it`);
+    });
+  }
+});
+
+test("NAPI_RS_NATIVE_LIBRARY_PATH: the addon at that path loads; a WASI-stamped module there is refused", () => {
+  withCopy({ addon: true }, (dir) => {
+    const outcome = importInChild(dir, { NAPI_RS_NATIVE_LIBRARY_PATH: path.join(dir, hostAddon) });
+    assert.equal(outcome.error, null);
+    assert.equal(outcome.loaded, true);
+  });
+  withCopy({ addon: true }, (dir) => {
+    // A generated WASI loader stamps itself; the napi loader adopts that flavor (binding.cjs).
+    const fake = path.join(dir, "fake-wasi-loader.cjs");
+    fs.writeFileSync(fake, 'module.exports = { __napiBindingTarget: "wasm32-wasi", version: () => "0.1.0" };\n');
+    const outcome = importInChild(dir, { NAPI_RS_NATIVE_LIBRARY_PATH: fake });
+    assert.equal(outcome.loaded, false);
+    assert.match(outcome.error ?? "", /native/);
+  });
+});
+
+test("an addon whose version() is not the package version is refused", () => {
+  withCopy({ addon: true, version: "0.0.0-mismatch" }, (dir) => {
+    const outcome = importInChild(dir);
+    assert.equal(outcome.loaded, false);
+    assert.match(outcome.error ?? "", /0\.0\.0-mismatch/);
+  });
 });
