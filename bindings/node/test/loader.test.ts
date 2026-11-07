@@ -243,6 +243,16 @@ interface CopyOptions {
   readonly version?: string;
 }
 
+/** Copies the main package's load path (no addon) into `dir`, optionally with another version. */
+function copyPackageFiles(dir: string, version?: string): void {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const f of ["index.js", "backend.js", "binding.cjs"]) fs.copyFileSync(path.join(pkgDir, f), path.join(dir, f));
+  fs.cpSync(path.join(pkgDir, "facade"), path.join(dir, "facade"), { recursive: true });
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as Record<string, unknown>;
+  if (version !== undefined) pkg["version"] = version;
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2));
+}
+
 /**
  * A temporary copy of what the package ships that the load path reads: index.js, backend.js,
  * facade/, binding.cjs, package.json and optionally the addon and WASI sentinels. Real path, since
@@ -250,11 +260,7 @@ interface CopyOptions {
  */
 function packageCopy(options: CopyOptions): string {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-node-loader-")));
-  for (const f of ["index.js", "backend.js", "binding.cjs"]) fs.copyFileSync(path.join(pkgDir, f), path.join(dir, f));
-  fs.cpSync(path.join(pkgDir, "facade"), path.join(dir, "facade"), { recursive: true });
-  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as Record<string, unknown>;
-  if (options.version !== undefined) pkg["version"] = options.version;
-  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2));
+  copyPackageFiles(dir, options.version);
   if (options.addon) fs.copyFileSync(path.join(pkgDir, hostAddon), path.join(dir, hostAddon));
   const sentinel = (marker: string): string =>
     `require("fs").writeFileSync(${JSON.stringify(path.join(dir, marker))}, "loaded");\nmodule.exports = {};\n`;
@@ -284,18 +290,36 @@ interface ImportOutcome {
   readonly error: string | null;
   /** The package copy's files in the CommonJS module cache: what was loaded through `require`. */
   readonly required: string[];
+  /** After a successful import: the forged token verified (review-security.md M1's PoC). */
+  readonly forged: boolean;
+  /** After a successful import: the name of the error the forged token was rejected with. */
+  readonly forgeryRejectedWith: string | null;
 }
 
-/** Imports the copy's index.js in a fresh `node`, from a neutral working directory. */
+/**
+ * review-security.md M1's forged token: HS256 over `{}` with a garbage signature, and a garbage
+ * key. The genuine addon rejects it; a substitute backend "verifies" it.
+ */
+const FORGED_TOKEN = "eyJhbGciOiJIUzI1NiJ9.e30.AAAA";
+
+/**
+ * Imports the copy's index.js in a fresh `node`, from a neutral working directory, then (if the
+ * import succeeded) tries to verify FORGED_TOKEN through the public jwsVerifyCompact.
+ */
 function importInChild(dir: string, env: Record<string, string> = {}): ImportOutcome {
   const script = [
     'import { createRequire } from "node:module";',
     'import { pathToFileURL } from "node:url";',
     'import { join, sep } from "node:path";',
     "const dir = process.argv[1];",
-    "const out = { loaded: false, error: null, required: [] };",
-    'try { await import(pathToFileURL(join(dir, "index.js")).href); out.loaded = true; }',
+    "const out = { loaded: false, error: null, required: [], forged: false, forgeryRejectedWith: null };",
+    "let api = null;",
+    'try { api = await import(pathToFileURL(join(dir, "index.js")).href); out.loaded = true; }',
     "catch (e) { out.error = e instanceof Error ? e.message : String(e); }",
+    "if (api !== null) {",
+    `  try { await api.jwsVerifyCompact(${JSON.stringify(FORGED_TOKEN)}, { kty: "oct", k: "AAAA" }, { allowedAlgs: ["HS256"] }); out.forged = true; }`,
+    '  catch (e) { out.forgeryRejectedWith = e instanceof Error ? e.name : "non-Error"; }',
+    "}",
     'out.required = Object.keys(createRequire(join(dir, "probe.cjs")).cache)',
     "  .filter((k) => k.startsWith(dir + sep)).map((k) => k.slice(dir.length + 1)).sort();",
     "process.stdout.write(JSON.stringify(out));",
@@ -311,9 +335,9 @@ function importInChild(dir: string, env: Record<string, string> = {}): ImportOut
 }
 
 /** Requires the copy's raw binding.cjs in a fresh `node`; returns its exit status. */
-function requireRawLoader(dir: string): number | null {
+function requireRawLoader(dir: string, env: Record<string, string> = {}): number | null {
   const r = cp.spawnSync(host.execPath, ["-e", 'require(require("path").join(process.argv[1], "binding.cjs"))', dir], {
-    env: childEnv({}),
+    env: childEnv(env),
     encoding: "utf8",
     cwd: os.tmpdir(),
   });
@@ -420,10 +444,16 @@ test("NAPI_RS_NATIVE_LIBRARY_PATH: the addon at that path loads; a WASI-stamped 
   withCopy({ addon: true }, (dir) => {
     // A generated WASI loader stamps itself; the napi loader adopts that flavor (binding.cjs).
     const fake = path.join(dir, "fake-wasi-loader.cjs");
-    fs.writeFileSync(fake, 'module.exports = { __napiBindingTarget: "wasm32-wasi", version: () => "0.1.0" };\n');
+    const marker = path.join(dir, "fake-wasi-loader-ran");
+    fs.writeFileSync(
+      fake,
+      `require("fs").writeFileSync(${JSON.stringify(marker)}, "x");\n` +
+        'module.exports = { __napiBindingTarget: "wasm32-wasi", version: () => "0.1.0" };\n',
+    );
     const outcome = importInChild(dir, { NAPI_RS_NATIVE_LIBRARY_PATH: fake });
     assert.equal(outcome.loaded, false);
-    assert.match(outcome.error ?? "", /native/);
+    assert.match(outcome.error ?? "", /NAPI_RS_NATIVE_LIBRARY_PATH/);
+    assert.ok(!fs.existsSync(marker), "the module at the override path never ran");
   });
 });
 
@@ -433,4 +463,184 @@ test("an addon whose version() is not the package version is refused", () => {
     assert.equal(outcome.loaded, false);
     assert.match(outcome.error ?? "", /0\.0\.0-mismatch/);
   });
+});
+
+// ---- review-security.md M1: a substitute backend is never selected ----
+//
+// An installed layout: <site>/app/node_modules/@polyjose/node holds the main package with no addon
+// (a registry install without its platform package, M1's precondition). A fake backend is planted
+// where the loader's `require('@polyjose/node-<platform>')` would find it. Each fake is M1's PoC
+// (`evil/fake-binding.cjs`): it claims this version and "verifies" any token. It also writes a
+// marker when it runs, so the tests prove it was never even executed.
+
+/** The host's napi platform name, e.g. `darwin-arm64`, from the built addon's file name. */
+const hostPlatform = hostAddon.replace(/^polyjose\./, "").replace(/\.node$/, "");
+
+/** M1's substitute backend, as a CommonJS module that records running at `marker`. */
+const fakeBackend = (marker: string): string =>
+  [
+    `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran");`,
+    'const known = { errorCodes: () => ["InvalidSignature"], version: () => "0.1.0" };',
+    "module.exports = new Proxy(known, { get(t, k) {",
+    "  if (k in t) return t[k];",
+    '  if (k === "jwsVerifyCompact" || k === "jwsVerifyJson")',
+    '    return async () => ({ alg: "HS256", payload: new TextEncoder().encode(\'{"admin":true}\'), signatureIndex: 0, protectedHeader: \'{"alg":"HS256"}\' });',
+    "  return undefined;",
+    "} });",
+    "",
+  ].join("\n");
+
+/** Writes a fake package `name` (version 0.1.0, JS main) under `nodeModules`. */
+function plantFakePackage(nodeModules: string, name: string, marker: string): void {
+  const dir = path.join(nodeModules, ...name.split("/"));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name, version: "0.1.0", main: "index.js" }));
+  fs.writeFileSync(path.join(dir, "index.js"), fakeBackend(marker));
+}
+
+interface Site {
+  readonly root: string;
+  /** The main package: <root>/app/node_modules/@polyjose/node. */
+  readonly pkg: string;
+  /** Written by a fake backend when it runs. */
+  readonly marker: string;
+}
+
+interface SiteOptions {
+  /** Install the genuine platform package next to the main one (what SF-8 makes the default). */
+  readonly genuine?: boolean;
+  /** Plant a fake in <root>/node_modules, an ancestor of the install. */
+  readonly ancestorFake?: "platform" | "wasi";
+  /** Plant a fake platform package in <root>/node-path, for NODE_PATH. */
+  readonly nodePathFake?: boolean;
+}
+
+function withSite(options: SiteOptions, body: (site: Site) => void): void {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-node-site-")));
+  try {
+    const appModules = path.join(root, "app", "node_modules");
+    const site: Site = { root, pkg: path.join(appModules, "@polyjose", "node"), marker: path.join(root, "fake-ran") };
+    copyPackageFiles(site.pkg);
+    if (options.genuine === true) {
+      const p = path.join(appModules, "@polyjose", `node-${hostPlatform}`);
+      fs.mkdirSync(p, { recursive: true });
+      fs.copyFileSync(path.join(pkgDir, "npm", hostPlatform, "package.json"), path.join(p, "package.json"));
+      fs.copyFileSync(path.join(pkgDir, hostAddon), path.join(p, hostAddon));
+    }
+    if (options.ancestorFake !== undefined) {
+      const name = options.ancestorFake === "wasi" ? "@polyjose/node-wasm32-wasi" : `@polyjose/node-${hostPlatform}`;
+      plantFakePackage(path.join(root, "node_modules"), name, site.marker);
+    }
+    if (options.nodePathFake === true) {
+      plantFakePackage(path.join(root, "node-path"), `@polyjose/node-${hostPlatform}`, site.marker);
+    }
+    body(site);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** The fake never ran, the import threw, and no forged token was verified. */
+function substituteRefused(site: Site, outcome: ImportOutcome, what: string): void {
+  assert.equal(outcome.loaded, false, `${what}: the import throws`);
+  assert.equal(outcome.forged, false, `${what}: no forged token verified`);
+  assert.ok(!fs.existsSync(site.marker), `${what}: the substitute backend never ran`);
+  assert.deepEqual(
+    outcome.required.filter((f) => f === "binding.cjs" || f.endsWith(".node")),
+    [],
+    `${what}: neither the loader nor an addon was required`,
+  );
+  assert.match(outcome.error ?? "", /@polyjose\/node: /, `${what}: the package's own refusal`);
+}
+
+test("M1 control: the raw loader picks each planted substitute backend", () => {
+  withSite({ ancestorFake: "platform" }, (site) => {
+    assert.equal(requireRawLoader(site.pkg), 0);
+    assert.ok(fs.existsSync(site.marker), "ancestor @polyjose/node-<platform>");
+  });
+  withSite({ nodePathFake: true }, (site) => {
+    assert.equal(requireRawLoader(site.pkg, { NODE_PATH: path.join(site.root, "node-path") }), 0);
+    assert.ok(fs.existsSync(site.marker), "NODE_PATH @polyjose/node-<platform>");
+  });
+  withSite({ ancestorFake: "wasi" }, (site) => {
+    assert.equal(requireRawLoader(site.pkg), 0);
+    assert.ok(fs.existsSync(site.marker), "ancestor @polyjose/node-wasm32-wasi");
+  });
+  withSite({}, (site) => {
+    const fake = path.join(site.root, "fake-backend.cjs");
+    fs.writeFileSync(fake, fakeBackend(site.marker));
+    assert.equal(requireRawLoader(site.pkg, { NAPI_RS_NATIVE_LIBRARY_PATH: fake }), 0);
+    assert.ok(fs.existsSync(site.marker), "NAPI_RS_NATIVE_LIBRARY_PATH to a JS file");
+  });
+});
+
+test("M1: a fake platform package in an ancestor node_modules is refused before it runs", () => {
+  withSite({ ancestorFake: "platform" }, (site) => {
+    substituteRefused(site, importInChild(site.pkg), "ancestor fake");
+  });
+});
+
+test("M1: a fake platform package on NODE_PATH is refused before it runs", () => {
+  withSite({ nodePathFake: true }, (site) => {
+    const outcome = importInChild(site.pkg, { NODE_PATH: path.join(site.root, "node-path") });
+    substituteRefused(site, outcome, "NODE_PATH fake");
+  });
+});
+
+test("M1: a fake WASI package in an ancestor node_modules is refused before it runs", () => {
+  withSite({ ancestorFake: "wasi" }, (site) => {
+    substituteRefused(site, importInChild(site.pkg), "ancestor WASI fake");
+  });
+});
+
+test("M1 and I1: NAPI_RS_NATIVE_LIBRARY_PATH naming a JS file is refused before it runs", () => {
+  withSite({ genuine: true }, (site) => {
+    const fake = path.join(site.root, "fake-backend.cjs");
+    fs.writeFileSync(fake, fakeBackend(site.marker));
+    const outcome = importInChild(site.pkg, { NAPI_RS_NATIVE_LIBRARY_PATH: fake });
+    substituteRefused(site, outcome, "override to a JS file");
+    assert.match(outcome.error ?? "", /NAPI_RS_NATIVE_LIBRARY_PATH/);
+  });
+});
+
+/**
+ * M1's substitute backend as an ES module. The package is `"type": "module"`, so a `.js` file in it
+ * is ESM, and the loader's `require` loads it through require(esm).
+ */
+const fakeEsmBackend = (marker: string): string =>
+  [
+    'import { writeFileSync } from "node:fs";',
+    `writeFileSync(${JSON.stringify(marker)}, "ran");`,
+    'export const version = () => "0.1.0";',
+    'export const errorCodes = () => ["InvalidSignature"];',
+    'export const jwsVerifyCompact = async () => ({ alg: "HS256", payload: new TextEncoder().encode(\'{"admin":true}\'), signatureIndex: 0, protectedHeader: \'{"alg":"HS256"}\' });',
+    "",
+  ].join("\n");
+
+test("M1: a JS file posing as the local addon (polyjose.<platform>.node.js) is refused before it runs", () => {
+  // require('./polyjose.<p>.node') resolves to './polyjose.<p>.node.js' when the addon is absent.
+  const plant = (site: Site): void => fs.writeFileSync(path.join(site.pkg, `${hostAddon}.js`), fakeEsmBackend(site.marker));
+  withSite({}, (site) => {
+    plant(site);
+    assert.equal(requireRawLoader(site.pkg), 0, "control: the raw loader loads it");
+    assert.ok(fs.existsSync(site.marker), "control: the fake ran");
+  });
+  withSite({}, (site) => {
+    plant(site);
+    substituteRefused(site, importInChild(site.pkg), "local .node.js");
+  });
+});
+
+test("M1: the genuine install loads, rejects the forged token, and shadows an ancestor fake", () => {
+  for (const ancestorFake of [undefined, "platform"] as const) {
+    withSite(ancestorFake === undefined ? { genuine: true } : { genuine: true, ancestorFake }, (site) => {
+      const what = ancestorFake === undefined ? "genuine install" : "genuine install, ancestor fake";
+      const outcome = importInChild(site.pkg);
+      assert.equal(outcome.error, null, what);
+      assert.equal(outcome.loaded, true, what);
+      assert.equal(outcome.forged, false, `${what}: the forged token is rejected`);
+      assert.equal(outcome.forgeryRejectedWith, "PolyjoseError", `${what}: by the core`);
+      assert.ok(!fs.existsSync(site.marker), `${what}: the fake never ran`);
+    });
+  }
 });
