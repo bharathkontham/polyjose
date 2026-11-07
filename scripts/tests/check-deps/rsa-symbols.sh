@@ -36,8 +36,8 @@
 #        a dev-dependency enabling its test-RNG feature through a TOML escape (the feature itself
 #        is check-test-vectors-off.sh's; here the dev tree holding polyjose is what stops the gate).
 # The shipped build's extra Cargo arguments (feature 0006 F06, security audit L2): the gate builds
-# polyjose-wasm for wasm32 with the one WASM_CARGO_ARGS line of bindings/wasm/scripts/build-package.sh
-# (ADR 0059), so it reads the code that ships:
+# polyjose-wasm for wasm32 with the one WASM_CARGO_ARGS line of bindings/wasm/scripts/wasm-cargo-args.sh
+# (ADR 0059), which build-package.sh sources, so it reads the code that ships:
 #  17.   the unchanged tree's wasm32 configurations are labelled with that line's arguments;
 #  18.   a `#[cfg(polyjose_f06)]` RSA private-key function passes while nothing sets the cfg, and
 #        fails once the line (and, in the copy, check-no-cargo-config.sh's allowlist entry, as an
@@ -115,13 +115,13 @@ else
   echo "FAIL - unchanged tree: no line saying polyjose-uniffi-bindgen was skipped"
   tests_failed=$((tests_failed + 1))
 fi
-# 17. The wasm32 configurations are built with build-package.sh's WASM_CARGO_ARGS (ADR 0059).
+# 17. The wasm32 configurations are built with wasm-cargo-args.sh's WASM_CARGO_ARGS (ADR 0059).
 cfg="-""-config" # cargo's config flag, in two pieces: check-no-cargo-config.sh scans this file
 wasm_args="$cfg 'profile.release.opt-level=\"z\"'"
 for suffix in "" " --release"; do
   tests_run=$((tests_run + 1))
   if grep -Fqx "  polyjose-wasm $wasm_args$suffix (wasm32-unknown-unknown): polyjose, polyjose_wasm" "$scratch/out"; then
-    echo "ok   - unchanged tree: polyjose-wasm$suffix (wasm32) is built with build-package.sh's WASM_CARGO_ARGS"
+    echo "ok   - unchanged tree: polyjose-wasm$suffix (wasm32) is built with wasm-cargo-args.sh's WASM_CARGO_ARGS"
   else
     echo "FAIL - unchanged tree: no polyjose-wasm $wasm_args$suffix (wasm32-unknown-unknown) configuration"
     tests_failed=$((tests_failed + 1))
@@ -239,6 +239,8 @@ append_to bindings/wasm/src/lib.rs '/// Test only.
 pub fn evil() -> bool {
     polyjose::evil(0u8)
 }'
+# polyjose-wasm reaches polyjose through polyjose-surface only; the plant calls it directly.
+replace_in bindings/wasm/Cargo.toml $'[dependencies]\npolyjose-surface' $'[dependencies]\npolyjose.workspace = true\npolyjose-surface'
 expect_fail "generic polyjose fn instantiated by polyjose-wasm only" \
   "<rsa::private_key::RsaPrivateKey>::new" "$sym_fail in the objects of polyjose_wasm \\("
 
@@ -375,7 +377,15 @@ $dep = $spec"
   fi
 done
 
-# 15. The security audit's L1 plant, as written (feature 0013 review-security.md).
+# 15. The security audit's L1 plant, as written (feature 0013 review-security.md), with the rsa
+#     version Cargo.lock pins today (the audit's was =0.10.0-rc.20), so the copy resolves.
+rsa_version=$(python3 -I -c '
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+versions = re.findall(r"\[\[package\]\]\nname = \"rsa\"\nversion = \"([^\"]+)\"", text)
+print(versions[0] if len(versions) == 1 else "")
+' "$repo/Cargo.lock")
+[ -n "$rsa_version" ] || lib_die "Cargo.lock does not pin exactly one rsa"
 new_case tool-audit-l1
 append_to tools/evil/Cargo.toml '[package]
 name = "polyjose-evil-tool"
@@ -384,7 +394,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rsa = { version = "=0.10.0-rc.20", optional = true, default-features = false }
+rsa = { version = "='"$rsa_version"'", optional = true, default-features = false }
 polyjose = { path = "../../crates/polyjose", optional = true }
 
 [features]
@@ -451,10 +461,10 @@ with open(path, "w", encoding="utf-8") as f:
 ' "$case_dir/$1" "$2" "$3" || lib_die "could not edit $1 in the copy"
 }
 
-# allow_line <WASM_CARGO_ARGS line>: build-package.sh holds the line, and the copy's
+# allow_line <WASM_CARGO_ARGS line>: wasm-cargo-args.sh holds the line, and the copy's
 # check-no-cargo-config.sh allows exactly it (what an ADR superseding ADR 0059 would change).
 allow_line() {
-  set_line bindings/wasm/scripts/build-package.sh '^WASM_CARGO_ARGS=' "$1"
+  set_line bindings/wasm/scripts/wasm-cargo-args.sh '^WASM_CARGO_ARGS=' "$1"
   set_line scripts/check-no-cargo-config.sh '^allowed_line=' "allowed_line=$(printf '%s' "$1" | python3 -I -c 'import shlex, sys; print(shlex.quote(sys.stdin.read()))')"
 }
 
@@ -474,7 +484,7 @@ expect_pass "a #[cfg(polyjose_f06)] RsaPrivateKey::new while nothing sets the cf
 new_case wasm-args-cfg-set
 append_to "$lib_rs" "$cfg_plant"
 allow_line "WASM_CARGO_ARGS=($wasm_args $cfg 'build.rustflags=[\"--cfg\",\"polyjose_f06\",\"--check-cfg\",\"cfg(polyjose_f06)\"]')"
-expect_fail "the same plant with build.rustflags --cfg polyjose_f06 in build-package.sh's WASM_CARGO_ARGS (wasm32)" \
+expect_fail "the same plant with build.rustflags --cfg polyjose_f06 in wasm-cargo-args.sh's WASM_CARGO_ARGS (wasm32)" \
   "<rsa::private_key::RsaPrivateKey>::new" \
   "$sym_fail in the objects of polyjose \\(polyjose-wasm .*polyjose_f06.* \\(wasm32-unknown-unknown\\)\\)"
 only=""
@@ -483,10 +493,10 @@ only=""
 for variant in missing expansion; do
   new_case "wasm-args-$variant"
   case $variant in
-    missing) set_line bindings/wasm/scripts/build-package.sh '^WASM_CARGO_ARGS=' ""
-      want='^ERROR: bindings/wasm/scripts/build-package\.sh has no WASM_CARGO_ARGS=\(\.\.\.\) line' ;;
+    missing) set_line bindings/wasm/scripts/wasm-cargo-args.sh '^WASM_CARGO_ARGS=' ""
+      want='^ERROR: bindings/wasm/scripts/wasm-cargo-args\.sh has no WASM_CARGO_ARGS=\(\.\.\.\) line' ;;
     *) allow_line "WASM_CARGO_ARGS=($cfg \"\$F06_ARGS\")"
-      want='^ERROR: cannot read the WASM_CARGO_ARGS line of bindings/wasm/scripts/build-package\.sh as plain words' ;;
+      want='^ERROR: cannot read the WASM_CARGO_ARGS line of bindings/wasm/scripts/wasm-cargo-args\.sh as plain words' ;;
   esac
   tests_run=$((tests_run + 1))
   rc=0

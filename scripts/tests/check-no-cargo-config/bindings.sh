@@ -2,10 +2,11 @@
 # Negative test of rule 2 of scripts/check-no-cargo-config.sh for bindings/** (feature 0006 F06,
 # security audit L2): Cargo configuration passed on a command line (`--config`, `-Z`), a CARGO_* or
 # RUST* variable assignment, or a `.cargo/config` write in any file under bindings/ fails, as under
-# scripts/ and .github/. The one exception is ADR 0059's line in bindings/wasm/scripts/build-package.sh,
-# allowed by path and exact text, once; `WASM_CARGO_ARGS` may be read but not assigned anywhere
-# else under bindings/, so that line is the whole of the shipped build's extra Cargo arguments
-# (which scripts/check-rsa-symbols.sh reads too).
+# scripts/ and .github/. The one exception is ADR 0059's line in
+# bindings/wasm/scripts/wasm-cargo-args.sh, which build-package.sh and test.sh source, allowed by
+# path and exact text, once; `WASM_CARGO_ARGS` may be read but not assigned anywhere else under
+# bindings/, so that line is the whole of the shipped build's extra Cargo arguments (which
+# scripts/check-rsa-symbols.sh reads too).
 #
 # Must pass:
 #   1. the unchanged tree, which holds the ADR 0059 line;
@@ -16,9 +17,11 @@
 # Must fail, on rule 2 only, naming the file and line:
 #   3. the audit's plant: the ADR 0059 line plus a `build.rustflags` --cfg and a `[patch]`;
 #   4. the ADR 0059 line with another value (opt-level "s"), and emptied (`WASM_CARGO_ARGS=()`);
-#   5. the exact ADR 0059 line a second time in build-package.sh, and once in another file;
+#   5. the exact ADR 0059 line a second time in wasm-cargo-args.sh, and once in another file
+#      (build-package.sh, where it was before, and a new one);
 #   6. `WASM_CARGO_ARGS+=(...)` after it, with no Cargo flag;
-#   7. `--config` on another command line in a bindings script;
+#   7. `--config` on another command line in a bindings script, among them a second literal
+#      opt-level override on test.sh's release memory run;
 #   8. `-Z` (attached and separate) in a bindings script, and `-Z` in a scripts/ file;
 #   9. a RUSTFLAGS prefix assignment, an exported CARGO_TARGET_<triple>_RUSTFLAGS, a
 #      `RUSTFLAGS:` key in a TypeScript file, and a `.cargo/config.toml` write, under bindings/;
@@ -46,7 +49,7 @@ cfg="-""-config"
 zf="-""Z"
 rf="RUST""FLAGS"
 dotcargo=".car""go"
-build_package=bindings/wasm/scripts/build-package.sh
+args_file=bindings/wasm/scripts/wasm-cargo-args.sh
 adr0059_line="WASM_CARGO_ARGS=($cfg 'profile.release.opt-level=\"z\"')"
 rule2='^FAIL: scripts, workflows or bindings set cargo configuration'
 
@@ -79,17 +82,17 @@ expect_also() {
 
 # The ADR 0059 line is in the tree as this test expects it, or every case below tests nothing.
 tests_run=$((tests_run + 1))
-if [ "$(grep -cFx -- "$adr0059_line" "$repo/$build_package" || true)" = 1 ]; then
-  echo "ok   - $build_package holds the ADR 0059 line once"
+if [ "$(grep -cFx -- "$adr0059_line" "$repo/$args_file" 2>/dev/null || true)" = 1 ]; then
+  echo "ok   - $args_file holds the ADR 0059 line once"
 else
-  echo "FAIL - $build_package does not hold the ADR 0059 line exactly once: $adr0059_line"
+  echo "FAIL - $args_file does not hold the ADR 0059 line exactly once: $adr0059_line"
   tests_failed=$((tests_failed + 1))
 fi
 
 # --- Must pass ------------------------------------------------------------------------------------
 
 new_case unchanged
-expect_pass "the unchanged tree (the ADR 0059 line in $build_package)"
+expect_pass "the unchanged tree (the ADR 0059 line in $args_file)"
 expect_also "rule 2 says it read bindings/" '^ok: no script, workflow or binding '
 
 new_case look-alikes
@@ -105,42 +108,52 @@ expect_pass "comments, regexes, env!(CARGO_MANIFEST_DIR) and reads of WASM_CARGO
 # --- Must fail ------------------------------------------------------------------------------------
 
 new_case audit-plant
-edit_in "$build_package" "$adr0059_line" \
+edit_in "$args_file" "$adr0059_line" \
   "WASM_CARGO_ARGS=($cfg 'profile.release.opt-level=\"z\"' $cfg 'build.rustflags=[\"--cfg\",\"polyjose_audit\"]' $cfg 'patch.crates-io.aes.path=\"/tmp/evil-aes\"')"
 expect_fail "the audit's plant (rustflags --cfg and a [patch] added to the ADR 0059 line)" \
-  "^  - bindings/wasm/scripts/build-package\\.sh:[0-9]+: WASM_CARGO_ARGS=\\(.*polyjose_audit" "$rule2"
+  "^  - bindings/wasm/scripts/wasm-cargo-args\\.sh:[0-9]+: WASM_CARGO_ARGS=\\(.*polyjose_audit" "$rule2"
 
 new_case other-value
-edit_in "$build_package" "$adr0059_line" "WASM_CARGO_ARGS=($cfg 'profile.release.opt-level=\"s\"')"
+edit_in "$args_file" "$adr0059_line" "WASM_CARGO_ARGS=($cfg 'profile.release.opt-level=\"s\"')"
 expect_fail "the ADR 0059 line with opt-level \"s\"" \
-  "^  - bindings/wasm/scripts/build-package\\.sh:[0-9]+: WASM_CARGO_ARGS=\\(.*opt-level=\"s\"" "$rule2"
+  "^  - bindings/wasm/scripts/wasm-cargo-args\\.sh:[0-9]+: WASM_CARGO_ARGS=\\(.*opt-level=\"s\"" "$rule2"
 
 new_case emptied
-edit_in "$build_package" "$adr0059_line" "WASM_CARGO_ARGS=()"
+edit_in "$args_file" "$adr0059_line" "WASM_CARGO_ARGS=()"
 expect_fail "the ADR 0059 line emptied" \
-  '^  - bindings/wasm/scripts/build-package\.sh:[0-9]+: WASM_CARGO_ARGS=\(\)$' "$rule2"
+  '^  - bindings/wasm/scripts/wasm-cargo-args\.sh:[0-9]+: WASM_CARGO_ARGS=\(\)$' "$rule2"
 
 new_case twice
-edit_in "$build_package" "$adr0059_line" "$adr0059_line
+edit_in "$args_file" "$adr0059_line" "$adr0059_line
 $adr0059_line"
-expect_fail "the ADR 0059 line twice in $build_package" \
-  "^  - bindings/wasm/scripts/build-package\\.sh:[0-9]+: WASM_CARGO_ARGS=\\($cfg 'profile" "$rule2"
+expect_fail "the ADR 0059 line twice in $args_file" \
+  "^  - bindings/wasm/scripts/wasm-cargo-args\\.sh:[0-9]+: WASM_CARGO_ARGS=\\($cfg 'profile" "$rule2"
 
 new_case other-file
 append_to bindings/node/scripts/f06.sh "$adr0059_line"
 expect_fail "the exact ADR 0059 line in another file" \
   "^  - bindings/node/scripts/f06\\.sh:1: WASM_CARGO_ARGS=" "$rule2"
 
+new_case old-place
+append_to bindings/wasm/scripts/build-package.sh "$adr0059_line"
+expect_fail "the exact ADR 0059 line in build-package.sh, where it was before" \
+  "^  - bindings/wasm/scripts/build-package\\.sh:[0-9]+: WASM_CARGO_ARGS=" "$rule2"
+
 new_case appended
-edit_in "$build_package" "$adr0059_line" "$adr0059_line
+edit_in "$args_file" "$adr0059_line" "$adr0059_line
 WASM_CARGO_ARGS+=(--locked)"
 expect_fail "WASM_CARGO_ARGS+=(...) after the ADR 0059 line" \
-  '^  - bindings/wasm/scripts/build-package\.sh:[0-9]+: WASM_CARGO_ARGS\+=\(--locked\)$' "$rule2"
+  '^  - bindings/wasm/scripts/wasm-cargo-args\.sh:[0-9]+: WASM_CARGO_ARGS\+=\(--locked\)$' "$rule2"
 
 new_case config-elsewhere
 append_to bindings/wasm/test.sh "cargo build $cfg 'build.rustc-wrapper=\"/tmp/wrap\"' -p polyjose-wasm"
 expect_fail "$cfg on another command line in bindings/wasm/test.sh" \
   "^  - bindings/wasm/test\\.sh:[0-9]+: cargo build $cfg " "$rule2"
+
+new_case test-sh-override
+append_to bindings/wasm/test.sh "memory_release_run --release --node -- $cfg 'profile.release.opt-level=\"z\"' --test memory"
+expect_fail "a second literal opt-level override on test.sh's release memory run" \
+  "^  - bindings/wasm/test\\.sh:[0-9]+: memory_release_run --release --node -- $cfg " "$rule2"
 
 new_case z-attached
 append_to bindings/wasm/test.sh "cargo ${zf}build-std build --target wasm32-unknown-unknown"
