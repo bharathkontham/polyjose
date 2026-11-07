@@ -3,8 +3,8 @@
 //!
 //! Keys are JWK JSON text, borrowed or held as [`SecretString`](crate::secret::SecretString)
 //! (ADR 0030 §7.1). Plaintext is borrowed on the way in, and decrypted plaintext and `aad` are
-//! [`SecretBytes`](crate::secret::SecretBytes) (ADR 0030 §7.2, ADR 0050 §4). Decryption takes the
-//! caller's `alg` and `enc` allow-lists (ADR 0007, RFC 8725 §3.1).
+//! [`SecretBytes`] (ADR 0030 §7.2, ADR 0050 §4). Decryption takes the caller's `alg` and `enc`
+//! allow-lists (ADR 0007, RFC 8725 §3.1).
 
 use polyjose::header::Header;
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
@@ -131,6 +131,22 @@ fn recipient(recipient: &JweRecipient) -> polyjose::Result<Recipient> {
 /// §7.1).
 ///
 /// Only [`JweDecrypted::protected_header`] is integrity-protected (ADR 0050 §3).
+///
+/// # Errors
+///
+/// The core's codes (ADR 0030 §5). The key is imported first, then the policy is built, then the
+/// JWE is decrypted, as every conformance runner does (conformance/README.md); the first error
+/// wins. Notably:
+///
+/// - `AlgorithmNotAllowed` for an empty `allowed_algs` or `allowed_enc`, or a JWE whose `alg` or
+///   `enc` is not in them (ADR 0007, RFC 8725 §3.1);
+/// - `InvalidHeader` for `dir` or `ECDH-ES` without both `alg` and `enc` in the JWE Protected
+///   Header, before any cryptography (ADR 0050 §1);
+/// - `UnsupportedAlgorithm` for `RSA-OAEP-256`, which polyjose only encrypts to (ADR 0021), and
+///   for `RSA-OAEP`, `RSA1_5` (ADR 0022) and `zip` (no `deflate` in the bindings, ADR 0034 §3);
+/// - `DecryptionFailed`, the same code and message for every failure once key management starts,
+///   including a PBES2 JWE over the `max_pbes2_count` budget (RFC 7516 §11.4–§11.5, ADR 0007,
+///   ADR 0023, ADR 0050 §2).
 pub fn jwe_decrypt_compact(
     token: &str,
     key: &str,
@@ -146,6 +162,16 @@ pub fn jwe_decrypt_compact(
 ///
 /// Only [`JweDecrypted::protected_header`] is integrity-protected: the shared and per-recipient
 /// unprotected headers, and the merged [`JweDecrypted::header`], are not (ADR 0050 §3).
+///
+/// With several recipients, each one `key` can serve is tried in order and the first that
+/// decrypts is reported as [`JweDecrypted::recipient_index`] (RFC 7516 §7.2.1). The PBES2 budget
+/// is spent across all of them: one token never costs more than `max_pbes2_count` PBKDF2
+/// iterations (ADR 0050 §2).
+///
+/// # Errors
+///
+/// As [`jwe_decrypt_compact`], plus `InvalidFormat` for a JSON shape RFC 7516 §7.2 forbids or
+/// more recipients than `max_recipients` (ADR 0026 §7).
 pub fn jwe_decrypt_json(
     jwe: &str,
     key: &str,
