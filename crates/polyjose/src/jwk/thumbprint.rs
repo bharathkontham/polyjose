@@ -1,35 +1,211 @@
 //! JWK Thumbprints (RFC 7638) and JWK Thumbprint URIs (RFC 9278).
 //!
-//! A thumbprint is the SHA-256 hash of the key's required members in a
-//! canonical JSON form (RFC 7638 §3). It identifies the key, not the JWK
-//! it came in, so it is a stable `kid` candidate (RFC 7638 §3.4).
-//! Only SHA-256 is provided: it is the hash RFC 9278 §5 makes mandatory.
+//! A thumbprint is the hash of the key's required members in a canonical
+//! JSON form (RFC 7638 §3). It identifies the key, not the JWK it came in,
+//! so it is a stable `kid` candidate (RFC 7638 §3.4). RFC 7638 §3.4 leaves
+//! the hash to the application: polyjose offers SHA-256, SHA-384 and
+//! SHA-512 ([`ThumbprintHash`], ADR 0054 §8), with SHA-256, the hash
+//! RFC 9278 §5 makes mandatory to implement, as the default.
 //!
 //! The canonical form is unique per key because [`Jwk`] accepts only
 //! canonical base64url and minimal RSA integers (RFC 7638 §7: thumbprints
 //! are unique only if the implementation validates the representation).
 
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha384, Sha512};
 use zeroize::Zeroizing;
 
 use super::Jwk;
+use crate::error::{Error, Result};
 use crate::json::Object;
 use crate::util::b64url_encode;
 
 /// The RFC 9278 §3 URI prefix, `urn:ietf:params:oauth:jwk-thumbprint`,
-/// the colon separator, the RFC 9278 §4 hash name for SHA-256 and the
-/// colon before the thumbprint.
-const SHA256_URI_PREFIX: &str = "urn:ietf:params:oauth:jwk-thumbprint:sha-256:";
+/// and the colon before the hash name.
+const URI_PREFIX: &str = "urn:ietf:params:oauth:jwk-thumbprint:";
+
+/// The hash function H of a JWK Thumbprint (RFC 7638 §3, §3.4).
+///
+/// RFC 7638 §3.4 lets the application choose H. polyjose offers the SHA-2
+/// hashes of the IANA "Named Information Hash Algorithm Registry" that its
+/// `sha2` dependency already provides (ADR 0054 §8.1, ADR 0016), and never
+/// SHA-1 (ADR 0022). The default is SHA-256, the hash RFC 9278 §5 makes
+/// mandatory to implement.
+///
+/// ```
+/// use polyjose::jwk::{Jwk, ThumbprintHash};
+///
+/// // RFC 7517 Appendix A.3, the AES key wrap key.
+/// let jwk = Jwk::from_json(br#"{"kty":"oct","alg":"A128KW","k":"GawgguFyGrWKav7AX4VKUg"}"#)?;
+/// let hash = ThumbprintHash::from_name("sha384")?;
+/// assert_eq!(hash, ThumbprintHash::Sha384);
+/// assert_eq!(
+///     jwk.thumbprint_uri(hash),
+///     "urn:ietf:params:oauth:jwk-thumbprint:sha-384:\
+///      RWKwvfhC_aZql0lGhwOTuOYcIF3-SDe_AOe9odLrXTHbzzwFpG1XErxx8oku0UCe"
+/// );
+/// # Ok::<(), polyjose::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ThumbprintHash {
+    /// SHA-256 (FIPS 180-4): IANA Named Information ID 1, `sha-256`. The
+    /// default (RFC 9278 §5).
+    #[default]
+    Sha256,
+    /// SHA-384 (FIPS 180-4): IANA Named Information ID 7, `sha-384`.
+    Sha384,
+    /// SHA-512 (FIPS 180-4): IANA Named Information ID 8, `sha-512`.
+    Sha512,
+}
+
+impl ThumbprintHash {
+    /// The hash named `name`, which must be one of exactly nine strings,
+    /// compared case-sensitively (ADR 0054 §8.2):
+    ///
+    /// | Hash | IANA name (canonical, RFC 9278 §4) | ADR 0030 §4 | panva/jose |
+    /// |---|---|---|---|
+    /// | SHA-256 | `sha-256` | `SHA-256` | `sha256` |
+    /// | SHA-384 | `sha-384` | `SHA-384` | `sha384` |
+    /// | SHA-512 | `sha-512` | `SHA-512` | `sha512` |
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedAlgorithm`] for every other string, including
+    /// SHA-1 in any spelling (ADR 0022), truncated hashes such as
+    /// `sha-256-128`, SHA-3 hashes, other case forms such as `Sha-256`,
+    /// and names with surrounding whitespace. The IANA registry lists its
+    /// names in lowercase, and RFC 6920 erratum 8174 leaves case
+    /// insensitivity open, so polyjose matches exactly. The name is not
+    /// echoed.
+    pub fn from_name(name: &str) -> Result<ThumbprintHash> {
+        match name {
+            "sha-256" | "SHA-256" | "sha256" => Ok(ThumbprintHash::Sha256),
+            "sha-384" | "SHA-384" | "sha384" => Ok(ThumbprintHash::Sha384),
+            "sha-512" | "SHA-512" | "sha512" => Ok(ThumbprintHash::Sha512),
+            _ => Err(Error::UnsupportedAlgorithm),
+        }
+    }
+
+    /// The IANA Named Information "Hash Name String" of the hash, as the
+    /// JWK Thumbprint URI carries it (RFC 9278 §4): `sha-256`, `sha-384`
+    /// or `sha-512`.
+    pub fn hash_name(self) -> &'static str {
+        match self {
+            ThumbprintHash::Sha256 => "sha-256",
+            ThumbprintHash::Sha384 => "sha-384",
+            ThumbprintHash::Sha512 => "sha-512",
+        }
+    }
+}
 
 impl Jwk {
-    /// The JWK SHA-256 Thumbprint of the key (RFC 7638 §3), base64url
-    /// encoded without padding (RFC 7515 §2).
+    /// The JWK Thumbprint of the key with hash function `hash`
+    /// (RFC 7638 §3, §3.4), base64url encoded without padding
+    /// (RFC 7515 §2): 43, 64 or 86 characters for SHA-256, SHA-384 or
+    /// SHA-512.
     ///
     /// The hash input holds only the required members of the key type
     /// (RFC 7638 §3.2), so `kid`, `use`, `alg`, unknown members and any
     /// other optional member never change the value (RFC 7638 §3.2.2).
     /// A private key has the thumbprint of its public key
-    /// (RFC 7638 §3.2.1).
+    /// (RFC 7638 §3.2.1). The input is the same for every hash; only H
+    /// changes (RFC 7638 §3 step 2).
+    ///
+    /// ```
+    /// use polyjose::jwk::{Jwk, ThumbprintHash};
+    ///
+    /// // RFC 8037 Appendix A.2.
+    /// let jwk = Jwk::from_json(br#"{"kty":"OKP","crv":"Ed25519",
+    ///     "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#)?;
+    /// assert_eq!(
+    ///     jwk.thumbprint(ThumbprintHash::Sha256),
+    ///     "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+    /// );
+    /// assert_eq!(jwk.thumbprint(ThumbprintHash::Sha512).len(), 86);
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    ///
+    /// # Security
+    ///
+    /// For every hash (RFC 7638 §7):
+    ///
+    /// - **`oct` keys:** the hash input is the secret `k`. A hash of a
+    ///   symmetric key can leak information about it, so its thumbprint
+    ///   should be kept from parties that do not hold the key unless the
+    ///   application knows the hash protects it well enough. polyjose
+    ///   wipes the hash input and the hash state; the returned thumbprint
+    ///   is not secret material and is not wiped.
+    /// - **Passwords and other low-entropy `oct` keys:** never publish
+    ///   the thumbprint of a password or other low-entropy `oct` key,
+    ///   such as a PBES2 key, whose `k` is the password (RFC 7518 §4.8),
+    ///   and never use it as a `kid`, although RFC 7638 §3.4 suggests
+    ///   thumbprints as `kid` values: a `kid` is readable in every token
+    ///   header. The thumbprint is an unsalted fast hash of the secret,
+    ///   so whoever sees it can test password guesses offline at hash
+    ///   speed. Publishing it undoes the protection of PBES2's salt
+    ///   (`p2s`) and iteration count (`p2c`) (RFC 7518 §4.8.1.1,
+    ///   §4.8.1.2). SHA-384 and SHA-512 do not change this.
+    /// - **Not a blocklist:** an attacker can transform a key (an RSA
+    ///   modulus 3·N, say) so it gets another thumbprint, so comparing
+    ///   thumbprints cannot reliably exclude a key.
+    pub fn thumbprint(&self, hash: ThumbprintHash) -> String {
+        // RFC 7638 §3 step 2, with H chosen by the caller (RFC 7638 §3.4).
+        let input = self.canonical_input();
+        match hash {
+            ThumbprintHash::Sha256 => digest_b64url::<Sha256>(input.as_bytes()),
+            ThumbprintHash::Sha384 => digest_b64url::<Sha384>(input.as_bytes()),
+            ThumbprintHash::Sha512 => digest_b64url::<Sha512>(input.as_bytes()),
+        }
+    }
+
+    /// The JWK Thumbprint URI of the key with hash function `hash`
+    /// (RFC 9278 §3): `urn:ietf:params:oauth:jwk-thumbprint:`, the
+    /// [`ThumbprintHash::hash_name`] (RFC 9278 §4), `:` and
+    /// [`Jwk::thumbprint`].
+    ///
+    /// The URI always carries the IANA name (`sha-256`, `sha-384`,
+    /// `sha-512`), whichever spelling [`ThumbprintHash::from_name`] was
+    /// given (ADR 0054 §8.3).
+    ///
+    /// ```
+    /// use polyjose::jwk::{Jwk, ThumbprintHash};
+    ///
+    /// // RFC 9278 §6, the RFC 7638 §3.1 key.
+    /// let jwk = Jwk::from_json(br#"{"kty":"RSA",
+    ///     "n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+    ///     "e":"AQAB","alg":"RS256","kid":"2011-04-29"}"#)?;
+    /// assert_eq!(
+    ///     jwk.thumbprint_uri(ThumbprintHash::Sha256),
+    ///     "urn:ietf:params:oauth:jwk-thumbprint:sha-256:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+    /// );
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    ///
+    /// # Security
+    ///
+    /// The [`Jwk::thumbprint`] cautions apply (RFC 9278 §7, RFC 7638 §7).
+    /// In particular, never publish the URI of a password or other
+    /// low-entropy `oct` key (PBES2, RFC 7518 §4.8), or use it as a `kid`
+    /// (RFC 7638 §3.4): it carries an unsalted fast hash of the secret,
+    /// which undoes PBES2's `p2s`/`p2c` protection whatever the hash.
+    /// For X25519
+    /// several public keys are equivalent to one another (RFC 7748 §7), so
+    /// a URI used as an identifier should be bound to the actual key, for
+    /// instance by a signature over that key (RFC 9278 §7.1).
+    pub fn thumbprint_uri(&self, hash: ThumbprintHash) -> String {
+        let name = hash.hash_name();
+        let thumbprint = self.thumbprint(hash);
+        let mut uri = String::with_capacity(URI_PREFIX.len() + name.len() + 1 + thumbprint.len());
+        uri.push_str(URI_PREFIX);
+        uri.push_str(name);
+        uri.push(':');
+        uri.push_str(&thumbprint);
+        uri
+    }
+
+    /// The JWK SHA-256 Thumbprint of the key (RFC 7638 §3), base64url
+    /// encoded without padding (RFC 7515 §2): the same as
+    /// [`Jwk::thumbprint`] with [`ThumbprintHash::Sha256`].
     ///
     /// ```
     /// use polyjose::jwk::Jwk;
@@ -44,24 +220,15 @@ impl Jwk {
     ///
     /// # Security
     ///
-    /// - **`oct` keys:** the hash input is the secret `k`. A hash of a
-    ///   symmetric key can leak information about it, so its thumbprint
-    ///   should be kept from parties that do not hold the key unless the
-    ///   application knows SHA-256 protects it well enough (RFC 7638 §7).
-    ///   polyjose wipes the hash input and the hash state; the returned
-    ///   thumbprint is not secret material and is not wiped.
-    /// - **Not a blocklist:** an attacker can transform a key (an RSA
-    ///   modulus 3·N, say) so it gets another thumbprint, so comparing
-    ///   thumbprints cannot reliably exclude a key (RFC 7638 §7).
+    /// The [`Jwk::thumbprint`] cautions apply (RFC 7638 §7).
     pub fn thumbprint_sha256(&self) -> String {
-        // RFC 7638 §3 step 2, with H = SHA-256 (RFC 7638 §3.4).
-        let digest = Sha256::digest(self.canonical_input().as_bytes());
-        b64url_encode(&digest)
+        self.thumbprint(ThumbprintHash::Sha256)
     }
 
     /// The JWK Thumbprint URI of the key with SHA-256 (RFC 9278 §3):
     /// `urn:ietf:params:oauth:jwk-thumbprint:sha-256:` followed by
-    /// [`Jwk::thumbprint_sha256`].
+    /// [`Jwk::thumbprint_sha256`], the same as [`Jwk::thumbprint_uri`]
+    /// with [`ThumbprintHash::Sha256`].
     ///
     /// `sha-256` is the IANA Named Information "Hash Name String" for
     /// SHA-256 (RFC 9278 §4), the hash RFC 9278 §5 makes mandatory to
@@ -82,17 +249,9 @@ impl Jwk {
     ///
     /// # Security
     ///
-    /// The [`Jwk::thumbprint_sha256`] cautions apply (RFC 9278 §7). For
-    /// X25519 several public keys are equivalent to one another
-    /// (RFC 7748 §7), so a URI used as an identifier should be bound to the
-    /// actual key, for instance by a signature over that key
-    /// (RFC 9278 §7.1).
+    /// The [`Jwk::thumbprint_uri`] cautions apply (RFC 9278 §7, §7.1).
     pub fn thumbprint_uri_sha256(&self) -> String {
-        let thumbprint = self.thumbprint_sha256();
-        let mut uri = String::with_capacity(SHA256_URI_PREFIX.len() + thumbprint.len());
-        uri.push_str(SHA256_URI_PREFIX);
-        uri.push_str(&thumbprint);
-        uri
+        self.thumbprint_uri(ThumbprintHash::Sha256)
     }
 
     /// The RFC 7638 §3 step 1 hash input: a JSON object of the required
@@ -122,6 +281,15 @@ impl Jwk {
 fn canonical_json(mut members: Object) -> Zeroizing<String> {
     members.sort_members();
     Zeroizing::new(members.to_json())
+}
+
+/// Hashes `input` with `D` (RFC 7638 §3 step 2) and base64url-encodes the
+/// digest without padding (RFC 7515 §2).
+///
+/// The one-shot `digest` keeps the hash state inside `D`, which `sha2`'s
+/// `zeroize` feature wipes on drop (ADR 0054 §8.5).
+fn digest_b64url<D: Digest>(input: &[u8]) -> String {
+    b64url_encode(&D::digest(input))
 }
 
 #[cfg(test)]
@@ -288,7 +456,7 @@ mod tests {
             assert_eq!(thumbprint.len(), 43);
             assert_eq!(
                 key.thumbprint_uri_sha256(),
-                format!("{SHA256_URI_PREFIX}{expected}")
+                format!("{URI_PREFIX}sha-256:{expected}")
             );
         }
     }
@@ -409,6 +577,84 @@ mod tests {
             as_ed25519.thumbprint_sha256(),
             as_x25519.thumbprint_sha256()
         );
+    }
+
+    #[test]
+    fn hash_names_are_the_iana_hash_name_strings() {
+        // RFC 9278 §4: the IANA Named Information Hash Name Strings
+        // (IDs 1, 7, 8).
+        assert_eq!(ThumbprintHash::Sha256.hash_name(), "sha-256");
+        assert_eq!(ThumbprintHash::Sha384.hash_name(), "sha-384");
+        assert_eq!(ThumbprintHash::Sha512.hash_name(), "sha-512");
+        // RFC 9278 §5: SHA-256 is mandatory to implement, and the default.
+        assert_eq!(ThumbprintHash::default(), ThumbprintHash::Sha256);
+    }
+
+    #[test]
+    fn from_name_accepts_exactly_the_nine_spellings() {
+        // ADR 0054 §8.2: IANA, ADR 0030 §4 and panva/jose spellings.
+        let cases = [
+            ("sha-256", ThumbprintHash::Sha256),
+            ("SHA-256", ThumbprintHash::Sha256),
+            ("sha256", ThumbprintHash::Sha256),
+            ("sha-384", ThumbprintHash::Sha384),
+            ("SHA-384", ThumbprintHash::Sha384),
+            ("sha384", ThumbprintHash::Sha384),
+            ("sha-512", ThumbprintHash::Sha512),
+            ("SHA-512", ThumbprintHash::Sha512),
+            ("sha512", ThumbprintHash::Sha512),
+        ];
+        for (name, hash) in cases {
+            assert_eq!(ThumbprintHash::from_name(name), Ok(hash), "{name}");
+        }
+        // Every hash round-trips through its canonical name.
+        for (_, hash) in cases {
+            assert_eq!(ThumbprintHash::from_name(hash.hash_name()), Ok(hash));
+        }
+    }
+
+    #[test]
+    fn from_name_rejects_every_other_string() {
+        // ADR 0054 §8.2: SHA-1 (ADR 0022), truncated and SHA-3 hashes,
+        // other case forms and padded names are UnsupportedAlgorithm.
+        for name in [
+            "",
+            "SHA-1",
+            "sha-1",
+            "sha1",
+            "sha-256-128",
+            "sha3-256",
+            "Sha-256",
+            "SHA256",
+            "sha-256 ",
+            " sha-256",
+            "sha_256",
+            "SHA-384 ",
+            "Sha512",
+            "sha-224",
+            "sha-512/256",
+        ] {
+            assert_eq!(
+                ThumbprintHash::from_name(name),
+                Err(crate::Error::UnsupportedAlgorithm),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sha256_methods_delegate_to_the_general_ones() {
+        for json in [RFC7638_RSA, RFC8037_ED25519_PRIVATE, RFC7517_OCT_AES] {
+            let key = jwk(json);
+            assert_eq!(
+                key.thumbprint_sha256(),
+                key.thumbprint(ThumbprintHash::Sha256)
+            );
+            assert_eq!(
+                key.thumbprint_uri_sha256(),
+                key.thumbprint_uri(ThumbprintHash::Sha256)
+            );
+        }
     }
 
     mod properties {

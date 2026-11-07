@@ -1,0 +1,15 @@
+{
+  "source": "ADR 0054 §1.3, §4; RFC 7517 §5",
+  "description": "The empty selector on a set with an empty keys array fails with NoMatchingKey; decided by ADR 0054 §4: zero matches is NoMatchingKey, an empty set included; the empty selector (§1.3) has no member to match; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": []
+    },
+    "selector": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

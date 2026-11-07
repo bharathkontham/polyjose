@@ -1,0 +1,36 @@
+{
+  "source": "ADR 0054 §2.3; RFC 7517 §4.2, RFC 7518 §4.3",
+  "description": "RSA-OAEP-256 on an RSA key with use sig and an RSA key with use enc returns the use enc key; decided by ADR 0054 §2.3 (purpose): RSA-OAEP-256 implies U = enc, so the use sig member is out and the use enc member stays; both are RSA (§2.1), neither has alg or key_ops, and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "RSA",
+          "kid": "bilbo.baggins@hobbiton.example",
+          "use": "sig",
+          "n": "n4EPtAOCc9AlkeQHPzHStgAbgs7bTZLwUBZdR8_KuKPEHLd4rHVTeT-O-XV2jRojdNhxJWTDvNd7nqQ0VEiZQHz_AJmSCpMaJMRBSFKrKb2wqVwGU_NsYOYL-QtiWN2lbzcEe6XC0dApr5ydQLrHqkHHig3RBordaZ6Aj-oBHqFEHYpPe7Tpe-OfVfHd1E6cS6M1FZcD1NNLYD5lFHpPI9bTwJlsde3uhGqC0ZCuEHg8lhzwOHrtIQbS0FVbb9k3-tVTU4fg_3L_vniUFAKwuCLqKnS2BYwdq_mzSnbLY7h_qixoR7jig3__kRhuaxwUkRz5iaiQkqgc5gHdrNP5zw",
+          "e": "AQAB"
+        },
+        {
+          "kty": "RSA",
+          "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+          "e": "AQAB",
+          "use": "enc"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "RSA-OAEP-256"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "RSA",
+      "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+      "e": "AQAB",
+      "use": "enc"
+    }
+  }
+}

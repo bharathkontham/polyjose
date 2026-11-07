@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 // The harness's JSON parser and writer (README "Binding runners": "the harness's JSON parsing").
 use polyjose::json::{self, Number, Object, Value};
 use polyjose_surface::records::{
-    JweDecryptOptions, JweEncryptOptions, JweRecipient, JwsSignOptions, JwsSigner,
+    JweDecryptOptions, JweEncryptOptions, JweRecipient, JwkSelector, JwsSignOptions, JwsSigner,
     JwsVerifyOptions, JwtSignOptions, JwtVerified, JwtVerifyOptions,
 };
 use polyjose_surface::{SecretString, SurfaceError, jwe, jwk, jws, jwt, keys, util};
@@ -45,9 +45,6 @@ const RUNNER: &str = "rust-surface";
 
 /// The vector-file name of `polyjose/deflate` (conformance/README.md "Features").
 const DEFLATE: &str = "deflate";
-
-/// The `jwk.thumbprint` hash names of the schema, mapped to the surface's (ADR 0030 §4).
-const HASHES: &[(&str, &str)] = &[("sha-256", "SHA-256")];
 
 // ---------------------------------------------------------------------------------------------
 // Paths
@@ -651,6 +648,7 @@ fn execute(vector: &Value) -> Result<Outcome, String> {
         "b64url.encode" => b64url_encode(input, &mut out),
         "b64url.decode" => b64url_decode(input, &mut out),
         "jwk.thumbprint" => jwk_thumbprint(input, &mut out),
+        "jwks.select" => jwks_select(input, &mut out),
         "jws.sign" => jws_sign(input, expect, &mut out),
         "jws.verify" => jws_verify(input, &mut out),
         "keys.import_pem" => keys_import_pem(input, &mut out),
@@ -697,15 +695,45 @@ fn b64url_decode(input: &Object, out: &mut Object) -> Step<()> {
     Ok(())
 }
 
-/// `jwk.thumbprint` → `jwk_thumbprint`, then `jwk_thumbprint_uri` (RFC 7638 §3, RFC 9278 §3).
+/// `jwk.thumbprint` → `jwk_thumbprint(jwk, hash)`, then `jwk_thumbprint_uri(jwk, hash)`
+/// (RFC 7638 §3, §3.4, RFC 9278 §3).
+///
+/// The vector's `hash` is passed unchanged, and an absent one as `None`, the core default
+/// (ADR 0054 §9). The core parses the name (`ThumbprintHash::from_name`, ADR 0054 §8.2), so the
+/// runner keeps no name table and a name the core rejects is the vector's outcome.
 fn jwk_thumbprint(input: &Object, out: &mut Object) -> Step<()> {
-    let name = str_of(input, "hash");
-    let Some((_, hash)) = HASHES.iter().find(|(vector, _)| *vector == name) else {
-        return harness(format!("hash `{name}` has no surface name"));
-    };
+    let hash = input.get("hash").and_then(Value::as_str);
     let key = json_text(input, "jwk");
     out.insert("thumbprint", jwk::jwk_thumbprint(&key, hash)?);
     out.insert("thumbprint_uri", jwk::jwk_thumbprint_uri(&key, hash)?);
+    Ok(())
+}
+
+/// `jwks.select` → `jwks_select(jwks, JwkSelector { kid, alg, key_use })` (RFC 7517 §5;
+/// ADR 0054 §1-§4, §9; README `jwks.select`).
+///
+/// The set goes as JSON text, unchanged in member order, and the selector member by member, each
+/// as given and only when present: the surface and the core parse, validate and select, so the
+/// runner maps, normalizes and pre-checks nothing. The returned key (a secret-bearing string) is
+/// parsed as JSON and compared as a JSON value.
+fn jwks_select(input: &Object, out: &mut Object) -> Step<()> {
+    let criteria = input
+        .get("selector")
+        .and_then(Value::as_object)
+        .expect("validated");
+    let member = |name: &str| {
+        criteria
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    let selector = JwkSelector {
+        kid: member("kid"),
+        alg: member("alg"),
+        key_use: member("key_use"),
+    };
+    let selected = jwk::jwks_select(&json_text(input, "jwks"), &selector)?;
+    out.insert("jwk", parse_output(selected.as_str(), "the selected JWK")?);
     Ok(())
 }
 
