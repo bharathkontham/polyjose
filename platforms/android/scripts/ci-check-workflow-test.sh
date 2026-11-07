@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Negative tests of ci-check-workflow.sh (feature 0008 T05): the real
+# Negative tests of ci-check-workflow.sh (feature 0008 T05, F03, F08): the real
 # .github/workflows/binding-android.yml must pass, and each mutated copy of it (in a temporary
 # directory, never in the checkout) must fail with the rule it breaks.
 #

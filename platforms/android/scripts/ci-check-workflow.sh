@@ -14,6 +14,19 @@
 #   actions      every `uses:` is `<owner>/<repo>@<40-hex commit> # v<version>` and that exact
 #                action, SHA and version is one of ci.yml's own pins (the same SHAs) or one of the
 #                three first-party pins below; no local, docker or unpinned action.
+#   with:        each step's `with:` is a block whose keys are on its action's allow-list
+#                (with_allow below): actions/checkout takes only `persist-credentials: false`,
+#                which every checkout must have, and a numeric `fetch-depth` (no repository, ref,
+#                path, ssh-key or token: the steps would run another tree's scripts); the other
+#                actions take only the inputs this workflow uses; an action not listed takes none.
+#   shell        every `shell:`, also `defaults.run.shell`, is exactly `bash`.
+#   guards       no `continue-on-error` anywhere (a failing step or job fails the run), and no
+#                `container:` or `services:` (an image would run the steps).
+#   downloads    no curl or wget output run as code in a run: script: piped into a shell or an
+#                interpreter (also through sudo, env, a path, a subshell, $VAR, source or
+#                tee >(sh)), or feeding a shell, eval or source through <( ), $( ) or backticks.
+#                Each logical line is checked (joined at a trailing \ or |, folded as YAML folds
+#                a > block or a plain scalar). A download to a file passes.
 #   credentials  no `secrets` context or `secrets:` key, no token (github.token, GITHUB_TOKEN, a
 #                `token`/`github-token` input), no deployment `environment:`, no password,
 #                username or credential, no Maven Central, Sonatype, OSSRH, Nexus or Central
@@ -28,7 +41,12 @@
 #   structure    no YAML anchors, aliases or merge keys, no second document, no tab indentation,
 #                no flow-style `uses:`, and only plain keys: no quoted ("uses": / 'uses':),
 #                explicit (? uses) or tagged (!!str uses:) key; a quoted uses key also fails the
-#                actions rule.
+#                actions rule. No flow-style `with:` or `run:`, and no second `uses:` or `with:`
+#                in one step. Keys are matched in lower case, so `Uses:` or `RUN:` meet the same
+#                rules, and a case variant of a workflow keyword (on, permissions, uses, with,
+#                run, shell, defaults, secrets, container, services, continue-on-error,
+#                environment) fails; an env: name equal to one of them in another case (SHELL:)
+#                fails too, so rename it.
 #   scripts      the steps call each of ci-host-natives.sh, ci-android-sdk.sh, ci-emulator.sh,
 #                ci-assemble-jar.sh and ci-parity.sh, and every platforms/android/scripts/ci-*.sh
 #                the workflow names exists and is executable.
