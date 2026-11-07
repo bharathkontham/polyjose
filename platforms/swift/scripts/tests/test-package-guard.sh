@@ -7,6 +7,9 @@
 #     unreadable or unknown build stamp is refused even with it (ADR 0032 §1);
 #   - a stale build (its stamp names a commit the checkout does not have) is refused;
 #   - an XCFramework without all 9 libraries of ADR 0032 §1 is refused;
+#   - an Apple target whose crate set differs from aarch64-apple-ios's is refused, in either
+#     direction and on any target, and identical sets pass (ADR 0032 §6, ADR 0020 §4: the notices
+#     are generated for aarch64-apple-ios only); a stand-in cargo from lib.sh makes one set differ;
 #   - a zip of 25 MB or more is refused (feature 0009 T04, the hard size stop);
 #   - a refusal leaves the output directory as it was;
 #   - with --allow-dev, a development build is packaged, with its `watchos-arm64` library.
@@ -130,6 +133,23 @@ run_package_fake_cargo aarch64-apple-ios --allow-dev --xcframework "$xcf" --out-
 check "a crate that only aarch64-apple-ios compiles is refused" \
   "[ $rc -eq 1 ] && log_has 'compiles other crates than aarch64-apple-ios' && log_has '< $fake_extra_crate'"
 check "that refusal leaves the output directory as it was, too" untouched
+
+# Identical sets pass: the stand-in is on PATH but adds its crate to a non-Apple target only.
+same_out="$scratch/same-out"
+run_package_fake_cargo x86_64-unknown-linux-gnu --allow-dev --xcframework "$xcf" --out-dir "$same_out"
+check "identical crate sets on all Apple targets do not trip the check" \
+  "[ $rc -eq 0 ] && log_has 'same crate set on all 12 Apple targets'"
+[ "$rc" -eq 0 ] || show_log
+check "identical crate sets are packaged" "[ -s '$same_out/PolyjoseFFI.xcframework.zip' ]"
+# The Rust targets of the 9 libraries (ADR 0032 §1), each of which package.sh must compare.
+missing_targets=""
+for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim \
+  x86_64-apple-ios aarch64-apple-tvos aarch64-apple-tvos-sim aarch64-apple-visionos \
+  aarch64-apple-visionos-sim aarch64-apple-watchos aarch64-apple-watchos-sim arm64_32-apple-watchos; do
+  grep -qxF "tree $t" "$fake_cargo_log" || missing_targets="$missing_targets $t"
+done
+check "package.sh ran cargo tree for each of the 12 Apple targets" "[ -z '$missing_targets' ]"
+[ -z "$missing_targets" ] || echo "    | no cargo tree for:$missing_targets"
 
 # 9 incompressible libraries of 2.9 MB each: about 26 MB zipped, over the 25,000,000-byte stop.
 # --allow-dev also lets the stale check pass when this checkout has uncommitted Rust inputs.
