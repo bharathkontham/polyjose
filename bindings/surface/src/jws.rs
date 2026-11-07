@@ -10,10 +10,12 @@
 use polyjose::Error;
 use polyjose::header::Header;
 use polyjose::jwk::Jwk;
-use polyjose::jws::{ProtectedHeader, SignOptions};
+use polyjose::jws::{ProtectedHeader, SignOptions, Signer};
 
 use crate::error::{SurfaceError, SurfaceResult};
-use crate::records::{JwsSignOptions, JwsSigner, JwsVerified, JwsVerifyOptions, apply_flag};
+use crate::records::{
+    JwsSignOptions, JwsSigner, JwsVerified, JwsVerifyOptions, apply, apply_flag,
+};
 
 /// Header-form misuse (ADR 0030 §4, §5): a signer sets both `protected_header` and
 /// `protected_b64u`.
@@ -59,29 +61,67 @@ pub fn jws_sign_compact(
 }
 
 /// Signs `payload` into a flattened JWS JSON Serialization with one `signer` (ADR 0030 §4;
-/// RFC 7515 §7.2.2). `detached` leaves the payload out (RFC 7515 Appendix F).
+/// RFC 7515 §7.2.2). `detached` leaves the `payload` member out (RFC 7515 Appendix F).
 ///
-/// The signer may carry only an unprotected header (RFC 7515 §7.2.1, ADR 0045 §1).
+/// The signer sets at most one of `protected_header` and `protected_b64u` (both →
+/// `InvalidHeader`, ADR 0030 §4). It may carry only an `unprotected_header`: the signing input
+/// is then `"." || payload` (RFC 7515 §5.1, §7.2.1; ADR 0045 §1; RFC 7520 §4.7). Its `alg` may
+/// be in either header, and a member may not be in both (RFC 7515 §4, §5.2 step 4): the core
+/// checks both rules.
+///
+/// # Errors
+///
+/// As [`jws_sign_general`] with one signer.
 pub fn jws_sign_flattened(
     payload: &[u8],
     signer: &JwsSigner,
     detached: bool,
 ) -> SurfaceResult<String> {
-    // stub: T07
-    let _ = (payload, signer, detached);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let (key, protected, unprotected) = signer_parts(signer)?;
+    let signer = core_signer(&key, protected, unprotected);
+    Ok(polyjose::jws::sign_flattened(
+        &signer,
+        payload,
+        &sign_options(detached),
+    )?)
 }
 
 /// Signs `payload` into a general JWS JSON Serialization, one signature per signer, in order
-/// (ADR 0030 §4; RFC 7515 §7.2.1). `detached` leaves the payload out (RFC 7515 Appendix F).
+/// (ADR 0030 §4; RFC 7515 §7.2.1). `detached` leaves the `payload` member out (RFC 7515
+/// Appendix F).
+///
+/// Each signer follows the rules of [`jws_sign_flattened`]; an unprotected-only signer is
+/// allowed (ADR 0045 §1).
+///
+/// # Errors
+///
+/// Signer by signer, in order: the core's code for a bad key, header JSON or header type, and
+/// `InvalidHeader` for both protected forms (ADR 0030 §4). Then every error of
+/// `polyjose::jws::sign_general`: `InvalidFormat` for no signers (RFC 7515 §7.2.1),
+/// `InvalidHeader` for a missing `alg` or a member in both headers (RFC 7515 §4.1.1, §5.2
+/// step 4), `UnsupportedAlgorithm` for RS*/PS* (ADR 0021), and the rest of its list.
 pub fn jws_sign_general(
     payload: &[u8],
     signers: &[JwsSigner],
     detached: bool,
 ) -> SurfaceResult<String> {
-    // stub: T07
-    let _ = (payload, signers, detached);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let mut keys = Vec::with_capacity(signers.len());
+    let mut headers = Vec::with_capacity(signers.len());
+    for signer in signers {
+        let (key, protected, unprotected) = signer_parts(signer)?;
+        keys.push(key);
+        headers.push((protected, unprotected));
+    }
+    let signers: Vec<Signer<'_>> = keys
+        .iter()
+        .zip(headers)
+        .map(|(key, (protected, unprotected))| core_signer(key, protected, unprotected))
+        .collect();
+    Ok(polyjose::jws::sign_general(
+        &signers,
+        payload,
+        &sign_options(detached),
+    )?)
 }
 
 /// Verifies the JWS Compact Serialization `token` with `key` (ADR 0030 §4; RFC 7515 §5.2,
@@ -136,6 +176,37 @@ fn protected_header(
         (None, Some(encoded)) => ProtectedHeader::from_encoded(encoded).map(Some),
         (None, None) => Ok(None),
     }
+}
+
+/// One surface signer as its core parts: the key, then the JWS Protected Header (at most one
+/// form), then the JWS Unprotected Header (RFC 7515 §7.2.1 `header`), parsed in the order of the
+/// core's `jws.sign` conformance runner, so a signer that is wrong in two ways fails with the
+/// same code on every platform.
+fn signer_parts(
+    signer: &JwsSigner,
+) -> polyjose::Result<(Jwk, Option<ProtectedHeader>, Option<Header>)> {
+    let key = parse_key(signer.key.as_str())?;
+    let protected = protected_header(
+        signer.protected_header.as_deref(),
+        signer.protected_b64u.as_deref(),
+    )?;
+    let unprotected = signer
+        .unprotected_header
+        .as_deref()
+        .map(|json| Header::from_json(json.as_bytes()))
+        .transpose()?;
+    Ok((key, protected, unprotected))
+}
+
+/// The core signer over `key`, with each header set only when present (ADR 0030 §3). The
+/// headers are moved in, not copied.
+fn core_signer(
+    key: &Jwk,
+    protected: Option<ProtectedHeader>,
+    unprotected: Option<Header>,
+) -> Signer<'_> {
+    let signer = apply(Signer::new(key), protected, Signer::protected);
+    apply(signer, unprotected, Signer::unprotected)
 }
 
 /// The core sign options: `detached: false` calls nothing, so the core default (attached)
