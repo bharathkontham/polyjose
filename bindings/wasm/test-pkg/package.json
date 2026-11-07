@@ -1,0 +1,14 @@
+{
+  "name": "@polyjose/wasm-test-pkg",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Tests of the packed @polyjose/wasm tarball in Node, headless Chrome and workerd (feature 0006 T04; ADR 0031 §3, ADR 0034). Never published.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "devDependencies": {
+    "miniflare": "4.20260730.0"
+  }
+}
