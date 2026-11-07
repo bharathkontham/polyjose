@@ -4,6 +4,7 @@
 # never silently passed; a suite that exists always runs and can FAIL.
 # wasm, node, android and apple run their binding's own script when it exists (bindings/wasm/test.sh,
 # bindings/node/test.sh, platforms/android/test.sh, platforms/swift/test.sh; see dispatch below).
+# After the suites, scripts/conformance-parity.sh compares their conformance results (ADR 0034 §5).
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 platforms=("$@"); [ ${#platforms[@]} -eq 0 ] && platforms=(rust wasm node android apple)
@@ -76,6 +77,11 @@ run_negative_tests() {
   done
   if [ "$found" -eq 0 ]; then echo "no negative tests found (scripts/tests/*/*.sh)"; record negative-tests FAIL; fi
 }
+
+# Conformance results files (ADR 0034 §2) left by an earlier run must never count in the parity
+# check below: each run starts with an empty target/conformance/, which this run's suites refill.
+results_dir=target/conformance
+rm -rf "$results_dir" || { echo "could not clear $results_dir"; exit 2; }
 
 for p in "${platforms[@]}"; do
   case $p in
@@ -151,6 +157,26 @@ for p in "${platforms[@]}"; do
     *) echo "unknown platform: $p"; exit 2 ;;
   esac
 done
+
+# Conformance parity (ADR 0034 §5), after every platform suite: scripts/conformance-parity.sh
+# (feature 0013 T02) compares each runner's results file in target/conformance/ with the reference
+# rust-core.json, which the rust platform writes, and prints `SKIPPED (no results: <runner>)` for
+# each runner that wrote none; those lines go into the summary under parity. Without the script or
+# the reference, parity is SKIPPED (pipeline rule 9: never counted as passing).
+parity=scripts/conformance-parity.sh
+if [ ! -e "$parity" ] && [ ! -L "$parity" ]; then record parity "SKIPPED ($parity missing)"
+elif [ ! -f "$parity" ] || [ ! -x "$parity" ]; then
+  echo "$parity exists but is not an executable file (chmod +x $parity)"; record parity FAIL
+elif [ ! -f "$results_dir/rust-core.json" ]; then
+  record parity "SKIPPED (no reference results: $results_dir/rust-core.json; the rust platform writes it)"
+else
+  echo "==> parity"
+  "$parity" "$results_dir" </dev/null 2>&1 | tee "$scratch/parity.out"
+  if [ "${PIPESTATUS[0]}" -eq 0 ]; then record parity PASS; else record parity FAIL; fi
+  skipped_runners=$(sed -n 's/^[[:space:]]*\(SKIPPED (no results: .*)\)[[:space:]]*$/    \1/p' "$scratch/parity.out")
+  [ -z "$skipped_runners" ] || summary="$summary
+$skipped_runners"
+fi
 
 printf "\nSummary:%b\n" "$summary"
 exit $status
