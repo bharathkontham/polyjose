@@ -17,7 +17,11 @@
 #      writes target/conformance/swift-macos.json (ADR 0034 §2, ADR 0060; POLYJOSE_CONFORMANCE_OUT).
 #      The suite fails unless that file was written. The test's one-line copy of the document
 #      (POLYJOSE-CONFORMANCE-RESULTS ...) is left out of this script's output;
-#   4. platforms/swift/scripts/test-simulators.sh, when it exists (feature 0009 T03: the iOS
+#   4. the packaging tests, platforms/swift/scripts/tests/test-*.sh (feature 0009 T04): the guards
+#      of package.sh on stand-in XCFrameworks, and the zip package.sh makes from the build of step 1
+#      (contents, notices, checksum, binaryTarget stanza, a consumer `swift run`), each into its own
+#      temporary directory, so dist/apple/ is not written;
+#   5. platforms/swift/scripts/test-simulators.sh, when it exists (feature 0009 T03: the iOS
 #      Simulator run, swift-ios-sim).
 #
 # Not on macOS, or without swift, the suite cannot run: it prints `SKIPPED (<reason>)` as its last
@@ -63,6 +67,11 @@ POLYJOSE_LOCAL_XCFRAMEWORK=1 POLYJOSE_CONFORMANCE_OUT="$results" \
   swift test -Xswiftc -warnings-as-errors 2>&1 | grep -v '^POLYJOSE-CONFORMANCE-RESULTS '
 [ -f "$results" ] || { echo "$me: swift test passed but wrote no $results"; exit 1; }
 echo "$me: wrote $results"
+
+for packaging_test in "$swift_dir"/scripts/tests/test-*.sh; do
+  echo "==> $me: ${packaging_test#"$root"/}"
+  "$packaging_test"
+done
 
 simulators="$swift_dir/scripts/test-simulators.sh"
 if [ -e "$simulators" ]; then
