@@ -1034,3 +1034,51 @@ fn no_core_default_is_written_in_the_surface() {
         "scanned {scanned:?}"
     );
 }
+
+// --- Tester additions (T07 r1): the allow-list and the caller's key are the only selectors ----
+
+#[test]
+fn verify_alg_outside_the_allow_list_fails_even_with_a_key_that_would_verify() {
+    // RFC 8725 §3.1, ADR 0007: an HS384 token under the right key is refused when only HS256 is
+    // allowed, and an HS256 token under the right key when only HS384 is.
+    for (signed, allowed) in [("HS384", "HS256"), ("HS256", "HS384")] {
+        let mut signer = JwsSigner::new(secret(OCT));
+        signer.protected_header = Some(format!(r#"{{"alg":"{signed}"}}"#));
+        let compact =
+            jws_sign_compact(b"p", OCT, &header_json(&format!(r#"{{"alg":"{signed}"}}"#))).unwrap();
+        let flattened = jws_sign_flattened(b"p", &signer, false).unwrap();
+        let options = JwsVerifyOptions::new(list(&[allowed]));
+        assert_eq!(
+            code(jws_verify_compact(&compact, OCT, &options)),
+            "AlgorithmNotAllowed"
+        );
+        assert_eq!(
+            code(jws_verify_json(&flattened, OCT, &options)),
+            "AlgorithmNotAllowed"
+        );
+    }
+}
+
+#[test]
+fn verify_embedded_jwk_and_kid_never_select_the_key() {
+    // ADR 0026 §2: the token carries the signing key in its own header; verifying under a
+    // different caller key must fail, never succeed with the embedded one.
+    let other = r#"{"kty":"oct","k":"hJtXIZ2uSN5kbQfbtTNWbpdmhkV8FJG-Onbc6mxCcYg"}"#;
+    let embedded = format!(r#"{{"alg":"HS256","kid":"k1","jwk":{OCT}}}"#);
+    let compact = jws_sign_compact(b"p", OCT, &header_json(&embedded)).unwrap();
+    let mut signer = JwsSigner::new(secret(OCT));
+    signer.protected_header = Some(embedded);
+    let flattened = jws_sign_flattened(b"p", &signer, false).unwrap();
+    let options = JwsVerifyOptions::new(list(&["HS256"]));
+    assert_eq!(
+        code(jws_verify_compact(&compact, other, &options)),
+        "InvalidSignature"
+    );
+    assert_eq!(
+        code(jws_verify_json(&flattened, other, &options)),
+        "InvalidSignature"
+    );
+    // The same tokens verify under the caller's own (right) key.
+    assert!(jws_verify_compact(&compact, OCT, &options).is_ok());
+    assert!(jws_verify_json(&flattened, OCT, &options).is_ok());
+}
