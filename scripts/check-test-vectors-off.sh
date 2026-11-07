@@ -6,8 +6,10 @@
 # output that doesn't look as expected, is a FAIL, never a pass.
 #   1. No bindings/**/Cargo.toml mentions the feature, and each one is a workspace member, so
 #      the cargo checks below see it.
-#   2. Per binding package: the inverted feature tree of polyjose with ALL of the binding's
-#      features on (optional ones too), every dependency kind and every target shows no
+#   2. Per workspace member other than polyjose (every binding package, and any other member,
+#      such as build tooling under tools/; feature 0013 security audit I4): the inverted feature
+#      tree of polyjose with ALL of the member's features on (optional ones too), every
+#      dependency kind (dev-dependencies included) and every target shows no
 #      `insecure-test-vectors` node. A member is skipped only when its whole tree (every
 #      dependency kind, all features, every target) holds no polyjose package, as for build
 #      tooling such as polyjose-uniffi-bindgen: it cannot enable a feature of a crate it never
@@ -53,15 +55,20 @@ name_re='insecure[-_]test[-_]vectors'
 status=0
 fail() { echo "FAIL: $*"; status=1; }
 
-# --- Binding packages: workspace members under bindings/ -----------------------------------------
+# --- Workspace members: every one but polyjose (check 2), and those under bindings/ (check 1) ------
 # One line per member: "<name> v<version> [(proc-macro)] (<path>)"; the path is the last group.
 if ! members=$(cargo tree --locked --workspace -e normal --depth 0 --prefix none 2>&1); then
   echo "FAIL: cargo tree could not list the workspace members:"; echo "$members"; exit 1
 fi
-pkgs=(); member_dirs=""
+pkgs=(); member_dirs=""; checked=(); core_seen=0
 while IFS= read -r line; do
   case $line in *" v"*" ("*")") ;; *) continue ;; esac
   name=${line%% *}; path=${line##*(}; path=${path%)}
+  # polyjose itself is not a check 2 root: --all-features would switch its own feature on.
+  case $path in
+    "$root/crates/polyjose" | "$root_physical/crates/polyjose") core_seen=1; continue ;;
+  esac
+  checked+=("$name")
   case $path in
     "$root/bindings/"*) rel=${path#"$root/"} ;;
     "$root_physical/bindings/"*) rel=${path#"$root_physical/"} ;;
@@ -72,6 +79,7 @@ while IFS= read -r line; do
 done <<<"$members"
 # Fail loudly rather than pass vacuously if cargo's output format or the layout changes.
 [ ${#pkgs[@]} -gt 0 ] || { echo "FAIL: found no binding packages under bindings/; check the script"; exit 1; }
+[ "$core_seen" = 1 ] || { echo "FAIL: found no polyjose member at crates/polyjose; check the script"; exit 1; }
 
 # --- 1. Binding manifests -------------------------------------------------------------------------
 # Tracked and untracked (not ignored) manifests, so a new binding is checked before it is committed.
@@ -90,8 +98,8 @@ while IFS= read -r manifest; do
 done <<<"$manifests"
 [ $status -eq 0 ] && echo "ok: no binding manifest mentions $feature, and every one is a workspace member"
 
-# --- 2. Per binding: inverted feature tree, all features, every target -----------------------------
-for pkg in "${pkgs[@]}"; do
+# --- 2. Per member: inverted feature tree, all features, every target ------------------------------
+for pkg in "${checked[@]}"; do
   # `cargo tree -i polyjose` errors on a member that never builds polyjose (build tooling such as
   # polyjose-uniffi-bindgen, the UniFFI bindgen CLI of feature 0013 T10). Such a member cannot
   # enable a polyjose feature, so it is skipped, but only when its whole tree (every dependency
