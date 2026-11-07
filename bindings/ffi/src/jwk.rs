@@ -96,16 +96,23 @@ pub fn jwk_thumbprint_uri(jwk: String, hash: Option<String>) -> Result<String, P
     )?)
 }
 
-/// The member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4; RFC 7517 §5, §4.2,
-/// §4.4, §4.5). `kid` selects a key only here, by the caller's choice, never during
+/// The one member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4, ADR 0054 §9;
+/// RFC 7517 §5, §4.2, §4.4, §4.5), by the core rule (`JwkSet::select`, ADR 0054 §2 as ADR 0057
+/// §1 amends it). `kid` selects a key only here, by the caller's choice, never during
 /// verification (ADR 0026 §2, ADR 0030 §6).
 ///
-/// The member may be private (module docs; ADR 0030 §7.2, ADR 0058).
+/// The member may be private (module docs; ADR 0030 §7.2, ADR 0058): call `jwkToPublic` before
+/// publishing it. Selection never authorizes an algorithm; pass the key only to an operation
+/// with an allow-list, and pair a `kid` from an untrusted header with `alg` (ADR 0054 §7). A
+/// server maps `NoMatchingKey` and `MultipleMatchingKeys` to one opaque client error, such as
+/// `invalid_token` (RFC 6750 §3.1).
 ///
 /// # Errors
 ///
-/// Whatever the surface returns: for now always `UnsupportedAlgorithm`, until the core's JWK
-/// Set selection arrives with feature 0015 (feature 0013 T14), behind this same signature.
+/// In this order (ADR 0054 §4): the set's import errors (`InvalidJson`, `InvalidKey`,
+/// `UnsupportedAlgorithm` for an RSA private member); `UnsupportedAlgorithm` for an `alg` or
+/// `key_use` the core refuses; `NoMatchingKey` for no match, `MultipleMatchingKeys` for two or
+/// more.
 #[uniffi::export]
 pub fn jwks_select(jwks: String, selector: JwkSelector) -> Result<String, PolyjoseError> {
     let jwks = Zeroizing::new(jwks);
