@@ -97,8 +97,10 @@ fn thumbprint_hash(hash: &str) -> SurfaceResult<ThumbprintHash> {
 ///
 /// # Errors
 ///
-/// - `UnsupportedAlgorithm` for any `hash` but `SHA-256` (see [`thumbprint_hash`]; ADR 0022,
-///   ADR 0030 §5). The hash name is checked before the key is parsed.
+/// - `UnsupportedAlgorithm` for any `hash` but `SHA-256`, matched exactly (ADR 0022, ADR 0030
+///   §5): `SHA-1` never, the lower-case RFC 9278 §4 form `sha-256` neither, and `SHA-384` and
+///   `SHA-512` not until the core computes them (feature 0015). The hash name is checked before
+///   the key is parsed.
 /// - The core's JWK parse errors (module docs).
 pub fn jwk_thumbprint(jwk: &str, hash: &str) -> SurfaceResult<String> {
     let hash = thumbprint_hash(hash)?;
