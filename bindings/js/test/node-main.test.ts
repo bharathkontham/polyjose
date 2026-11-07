@@ -191,3 +191,31 @@ test("the results file validates against conformance/schema/results.schema.json 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("vectors_digest over an edge corpus equals the independent oracle (non-ASCII ids by UTF-8 bytes, non-UTF-8 bytes as read, symlink without a line)", async () => {
+  // Expected value: a Python hashlib walk and the ADR 0060 §4 shell reference over the same files.
+  const root = scratchRoot(() => false);
+  const vectors = path.join(root, "conformance/vectors");
+  try {
+    const files: [string, number[]][] = [
+      ["a.json", [0x7b, 0x7d]],
+      ["jws/b.json", [0x7b, 0x7d, 0x0a]],
+      ["jws-x/c.json", [0xef, 0xbb, 0xbf, 0x7b, 0x7d]],
+      ["\u{e9}/d.json", [0x7b, 0x7d]],
+      ["\u{ff61}.json", [0x31]],
+      ["\u{1f600}.json", [0x32]],
+      ["bad.json", [0xff, 0xfe, 0x7b, 0x7d]],
+    ];
+    for (const [rel, octets] of files) {
+      fs.mkdirSync(path.dirname(path.join(vectors, rel)), { recursive: true });
+      fs.writeFileSync(path.join(vectors, rel), Uint8Array.from(octets) as unknown as string /* the shim types only string data; Node writes the bytes */);
+    }
+    fs.symlinkSync("a.json", path.join(vectors, "link.json"));
+    const summary = await runConformance(api(), { runner: "node", root });
+    assert.equal(summary.total, 8, "7 files and the link (a fail, no digest line)");
+    const written = JSON.parse(fs.readFileSync(summary.file, "utf8")) as { vectors_digest: string };
+    assert.equal(written.vectors_digest, "c743cb52d786b61176972303ee0cfa56b8940d655723a9a3debfe691760ead93");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

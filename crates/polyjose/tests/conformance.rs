@@ -8162,6 +8162,50 @@ fn run_dir_records_one_result_per_vector() {
     assert!(!report.complete && report.results.is_empty(), "{report:?}");
 }
 
+/// Tester edge corpus for ADR 0060 §2: non-ASCII ids sorted by UTF-8 bytes (U+FF61 is
+/// EF BD A1, U+1F600 is F0 9F 98 80, so U+FF61 first), bytes that are not UTF-8 hashed
+/// as read, a `jws-x/` before `jws/` pair, and a symbolic link that gets no line. The
+/// expected digest is from an independent Python `hashlib` walk and the POSIX shell
+/// reference of the ADR.
+#[test]
+fn vectors_digest_edge_corpus_matches_the_independent_oracle() {
+    let dir = TempDir::new("digest-edge");
+    let files: [(&str, &[u8]); 7] = [
+        ("a.json", b"{}"),
+        ("jws/b.json", b"{}\n"),
+        ("jws-x/c.json", b"\xef\xbb\xbf{}"),
+        ("\u{e9}/d.json", b"{}"),
+        ("\u{ff61}.json", b"1"),
+        ("\u{1f600}.json", b"2"),
+        ("bad.json", b"\xff\xfe{}"),
+    ];
+    for (relative, bytes) in files {
+        let path = dir.0.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+    std::fs::write(dir.0.join("README.md"), "notes").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("a.json", dir.0.join("link.json")).unwrap();
+    let report = run_dir_with(&dir.0, &[]);
+    // The link is a walk failure (the run is incomplete, so no results file), not a digest line.
+    #[cfg(unix)]
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.contains("link.json: symbolic links are not allowed")),
+        "{:?}",
+        report.failures
+    );
+    assert!(!report.complete);
+    assert_eq!(report.digest_lines.len(), 7);
+    assert_eq!(
+        report.vectors_digest().as_deref(),
+        Some("c743cb52d786b61176972303ee0cfa56b8940d655723a9a3debfe691760ead93")
+    );
+}
+
 /// The worked example of ADR 0060 §4: one line per `*.json` file read
 /// (`README.md` is not a vector), `<id>` TAB `<sha256 of the raw bytes>` LF,
 /// sorted by bytes (`jws-x/` before `jws/`, unlike `Path` order), whatever
