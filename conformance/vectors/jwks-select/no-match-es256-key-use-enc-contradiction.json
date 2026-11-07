@@ -1,0 +1,25 @@
+{
+  "source": "ADR 0054 §2.3, §4; RFC 7517 §4.2",
+  "description": "ES256 with key_use enc fails with NoMatchingKey on a P-256 key that either part alone would select; decided by ADR 0054 §2.3 (purpose): key_use enc disagrees with the sig that ES256 implies, so the selector matches nothing; the member, a P-256 key without use or key_ops, matches ES256 alone and key_use enc alone; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "ES256",
+      "key_use": "enc"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

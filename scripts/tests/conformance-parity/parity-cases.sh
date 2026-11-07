@@ -109,6 +109,25 @@ put swift-macos.json "$(edit "$(as_runner swift-macos)" '"InvalidBase64","Invali
 expect_fail "(f') error_codes in another order" \
   '^FAIL: swift-macos\.json: error_codes differ: ' '^FAIL: swift-macos\.json: error_codes differ: '
 
+# (i) Another polyjose version (review N1): a stale prebuild with every result equal still fails,
+# printing both versions; a CI matrix file is compared the same way.
+new_case version-differs
+put rust-core.json "$REFERENCE"
+put node.json "$(edit "$(as_runner node)" '"polyjose":"0.1.0"' '"polyjose":"0.0.9"')"
+put jvm-linux-x86-64.json "$(as_runner jvm)"
+expect_fail "(i) a different polyjose version" \
+  '^FAIL: node\.json: polyjose version differs: rust-core 0\.1\.0 \| node 0\.0\.9$' \
+  '^FAIL: node\.json: polyjose version differs: '
+grep -q '^PASS: jvm-linux-x86-64\.json ' "$scratch/out" || {
+  echo "FAIL - (i): the file with the reference's version does not pass"; tests_failed=$((tests_failed + 1))
+}
+new_case version-matrix
+put rust-core.json "$REFERENCE"
+put node-x86_64-unknown-linux-musl.json "$(edit "$(as_runner node)" '"polyjose":"0.1.0"' '"polyjose":"0.2.0-rc.1"')"
+expect_fail "(i') a different polyjose version under a CI matrix suffix" \
+  '^FAIL: node-x86_64-unknown-linux-musl\.json: polyjose version differs: rust-core 0\.1\.0 \| node 0\.2\.0-rc\.1$' \
+  '^FAIL: node-x86_64-unknown-linux-musl\.json: polyjose version differs: '
+
 # (h) ADR 0056: a reference with a features_absent skip (feature:!deflate, as an --all-features
 # build would give) and a skip of both kinds; an identical binding passes.
 ABSENT_REFERENCE=$(edit "$REFERENCE" '"reason":"feature:fixed-rng"}' \

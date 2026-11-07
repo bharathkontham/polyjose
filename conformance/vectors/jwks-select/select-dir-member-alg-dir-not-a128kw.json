@@ -1,0 +1,32 @@
+{
+  "source": "ADR 0054 §2.2; RFC 7517 §4.4, RFC 7518 §4.5",
+  "description": "dir on an oct key with alg A128KW and an oct key with alg dir returns the alg dir key; decided by ADR 0054 §2.2 (JWK alg): member 1's alg is exactly dir; member 0's A128KW is neither dir nor a content encryption algorithm, so the §2.2 exception does not apply; both are oct (§2.1), neither has use or key_ops; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "X8EwrK_w_mNZySX8TCh4Bw",
+          "alg": "A128KW"
+        },
+        {
+          "kty": "oct",
+          "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA",
+          "alg": "dir"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "dir"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA",
+      "alg": "dir"
+    }
+  }
+}
