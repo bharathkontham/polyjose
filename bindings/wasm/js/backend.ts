@@ -25,6 +25,14 @@
  * - the module's `version()` must equal this package's version, baked in at build time.
  * Any script in the same JS realm can still patch `WebAssembly`, `crypto` or `fetch`; those
  * are trusted, and the package can't defend against them.
+ *
+ * A trap (review S3). A `WebAssembly.RuntimeError` (for example an allocation failure, which
+ * wasm32 turns into `unreachable`) leaves the instance mid-call: no Rust destructor ran, so no
+ * `Zeroizing` buffer of that call was wiped, and the glue's shadow-stack pointer is not
+ * restored. The instance is then poisoned: the error is rethrown unchanged, and every later
+ * operation, `version()`, `errorCodes()` and `ready()` throw an `Error` that says to reload
+ * the module. `PolyjoseError`s and the adapter's reader `TypeError`s are ordinary results of a
+ * completed call and don't poison.
  */
 import type {
   Backend,
@@ -43,6 +51,7 @@ import { PACKAGE_VERSION } from "./integrity.js";
 export type Loader = () => WebAssembly.Module | Promise<WebAssembly.Module>;
 
 /** Captured at evaluation, so a later reassignment of the global doesn't change the check. */
+const RuntimeError = WebAssembly.RuntimeError;
 const WasmModule = WebAssembly.Module;
 
 let loader: Loader | undefined;
@@ -52,6 +61,8 @@ let started = false;
 let instantiating: Promise<void> | undefined;
 /** Set for good when the glue holds a module this package didn't check, or the wrong version. */
 let refused: Error | undefined;
+/** Set for good when a call trapped (review S3). */
+let trapped = false;
 
 /**
  * Registers how this runtime finds the module. Called once, by the package entry that the
@@ -65,6 +76,12 @@ export function setLoader(load: Loader): void {
     throw new Error("polyjose: the WebAssembly loader is already registered (or initialisation has begun); it can't be replaced");
   }
   loader = load;
+}
+
+function trapError(): Error {
+  return new Error(
+    "polyjose: the WebAssembly instance trapped in an earlier call and is unusable; secrets of that call may remain in its memory. Reload @polyjose/wasm (restart the process or worker, or reload the page)",
+  );
 }
 
 /**
@@ -103,9 +120,10 @@ async function instantiate(load: Loader): Promise<void> {
 
 /**
  * Awaited by the facade before its first call; if it rejects, the call rejects with this error
- * and the next call tries again (BACKEND.md). A refusal is final.
+ * and the next call tries again (BACKEND.md). A refusal or a trap is final.
  */
 async function ready(): Promise<void> {
+  if (trapped) throw trapError();
   if (refused !== undefined) throw refused;
   const load = loader;
   if (load === undefined) {
@@ -119,7 +137,34 @@ async function ready(): Promise<void> {
   return instantiating;
 }
 
+/**
+ * `call`, refused once the instance has trapped; a `WebAssembly.RuntimeError` from the glue
+ * poisons the instance and is rethrown unchanged (review S3). V8 reports stack exhaustion
+ * inside wasm as a `RangeError`, which leaves the instance in the same state, so it poisons
+ * too. Nothing else does.
+ */
+function guarded<A extends unknown[], R>(call: (...args: A) => R): (...args: A) => R {
+  return (...args: A): R => {
+    if (trapped) throw trapError();
+    try {
+      return call(...args);
+    } catch (e) {
+      if (e instanceof RuntimeError || e instanceof RangeError) trapped = true;
+      throw e;
+    }
+  };
+}
+
+/** Every glue call of the backend, each one {@link guarded}. */
 type Operations = Omit<Backend, "ready">;
+
+function guardAll(ops: Operations): Operations {
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const [name, call] of Object.entries(ops) as [string, (...args: unknown[]) => unknown][]) {
+    out[name] = guarded(call);
+  }
+  return out as unknown as Operations;
+}
 
 const operations: Operations = {
   version: () => glue.version(),
@@ -164,4 +209,4 @@ const operations: Operations = {
 };
 
 /** The glue as the facade's backend (BACKEND.md). */
-export const backend: Backend = Object.freeze({ ready, ...operations });
+export const backend: Backend = Object.freeze({ ready, ...guardAll(operations) });
