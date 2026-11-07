@@ -94,14 +94,23 @@ fn thumbprint_hash(hash: Option<&str>) -> SurfaceResult<ThumbprintHash> {
 /// its public key (RFC 7638 §3.2.1). For an `oct` key the input is the secret `k`; see the
 /// RFC 7638 §7 caution on [`Jwk::thumbprint`].
 ///
+/// # Security
+///
+/// Never publish the thumbprint of a password (a PBES2 `oct` key) or any other low-entropy `oct`
+/// key, and never use it as a `kid`: it is an unsalted fast hash of the secret (ADR 0057 §4,
+/// RFC 7638 §7).
+///
 /// # Errors
 ///
-/// - `UnsupportedAlgorithm` for any other `hash` name, from the core (ADR 0054 §8.2, ADR 0022,
-///   ADR 0030 §5). The hash name is checked before the key is parsed.
-/// - The core's JWK parse errors (module docs).
+/// In this order, the first being the outcome (ADR 0057 §2):
+///
+/// 1. the core's JWK parse errors (module docs), an RSA private JWK's `UnsupportedAlgorithm`
+///    among them;
+/// 2. `UnsupportedAlgorithm` for any other `hash` name, from the core (ADR 0054 §8.2, ADR 0022,
+///    ADR 0030 §5).
 pub fn jwk_thumbprint(jwk: &str, hash: Option<&str>) -> SurfaceResult<String> {
-    let hash = thumbprint_hash(hash)?;
-    Ok(parse(jwk)?.thumbprint(hash))
+    let key = parse(jwk)?;
+    Ok(key.thumbprint(thumbprint_hash(hash)?))
 }
 
 /// The JWK Thumbprint URI of `jwk` under `hash`,
@@ -116,8 +125,8 @@ pub fn jwk_thumbprint(jwk: &str, hash: Option<&str>) -> SurfaceResult<String> {
 ///
 /// Those of [`jwk_thumbprint`], in the same order.
 pub fn jwk_thumbprint_uri(jwk: &str, hash: Option<&str>) -> SurfaceResult<String> {
-    let hash = thumbprint_hash(hash)?;
-    Ok(parse(jwk)?.thumbprint_uri(hash))
+    let key = parse(jwk)?;
+    Ok(key.thumbprint_uri(thumbprint_hash(hash)?))
 }
 
 /// The member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4; RFC 7517 §5, §4.2,
