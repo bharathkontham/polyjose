@@ -111,11 +111,12 @@ pending_readiness() {
 serial=$("$adb" devices 2>/dev/null | awk 'NR > 1 && $1 ~ /^emulator-[0-9]+$/ && $2 == "device" { print $1; exit }')
 if [ -n "$serial" ]; then
   echo "android-emulator: using the running emulator $serial (left running)"
-  waited=0
-  until boot_completed "$serial"; do
-    [ "$waited" -lt "$boot_timeout" ] ||
-      waive emulator-boot-timeout "the running emulator $serial did not report sys.boot_completed within ${boot_timeout} s"
-    sleep 2; waited=$((waited + 2))
+  # The same readiness wait and budget as a boot; on a timeout it is waived, never stopped.
+  start=$SECONDS
+  until pending=$(pending_readiness "$serial"); do
+    [ $((SECONDS - start)) -lt "$boot_timeout" ] ||
+      waive emulator-boot-timeout "the running emulator $serial was not ready within ${boot_timeout} s (still waiting for $pending)"
+    sleep 2
   done
 else
   [ -x "$emulator" ] || waive no-android-sdk "no emulator binary at $emulator"
