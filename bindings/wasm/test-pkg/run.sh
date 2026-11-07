@@ -20,7 +20,9 @@
 #      copy's js/ (bindings/js/dist is never touched), and test-pkg/src compiled with the same tsc
 #      and the ADR 0047 options (extending bindings/js/tsconfig.json);
 #   5. Node: node --test over the compiled tests -> target/conformance/wasm-pkg-node.json;
-#   6. Chrome: a static page under headless Chrome -> wasm-pkg-chrome.json, or SKIPPED (no Chrome);
+#   6. Chrome: a static page under headless Chrome -> wasm-pkg-chrome.json; without Chrome the run
+#      is SKIPPED and this script prints `SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)`, the
+#      waiver of scripts/test-all.sh (ADR 0060 §7);
 #   7. workerd: a worker under miniflare -> wasm-pkg-workerd.json.
 #
 # Then run scripts/conformance-parity.sh against a fresh rust-core reference
@@ -129,7 +131,11 @@ echo "==> $me: Chrome (headless, --dump-dom)"
 if out=$(cd "$stage" && node dist/chrome.js); then
   echo "$out"
   case $out in
-    SKIPPED*) record chrome "$(head -n 1 <<<"$out")" ;;
+    SKIPPED*)
+      record chrome "$(head -n 1 <<<"$out")"
+      # The waiver of scripts/test-all.sh (ADR 0060 §7, feature 0013 F05): wasm-pkg-chrome is a
+      # `?` runner of its `wasm` line, so the platform still passes and parity reports it SKIPPED.
+      echo "SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)" ;;
     *) record chrome PASS ;;
   esac
 else
