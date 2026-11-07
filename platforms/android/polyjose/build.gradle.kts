@@ -2,6 +2,7 @@
 // UniFFI-generated Kotlin (shared with `:polyjose-jvm`) plus libpolyjose_ffi.so for the four ABIs
 // from cargo-ndk. AGP 9 compiles Kotlin itself, so no Kotlin plugin is applied here.
 
+import com.android.build.api.variant.DeviceTestBuilder
 import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.SourcesJar
@@ -54,11 +55,46 @@ android {
         named("androidTest") {
             // The conformance runner shared with the JVM tests (feature 0008 T02).
             kotlin.directories.add(rootDir.resolve("shared-test/kotlin").path)
-            // The conformance vectors as test-APK assets, read through
-            // InstrumentationRegistry.getInstrumentation().context.assets (ADR 0033 §5).
-            assets.directories.add(repoRoot.resolve("conformance/vectors").path)
+            // The conformance vectors and schema are test-APK assets too: see ConformanceAssets.
         }
     }
+}
+
+/**
+ * The test APK's conformance assets (ADR 0033 §5, ADR 0060 §2), read on the device through
+ * `InstrumentationRegistry.getInstrumentation().context.assets`: everything under
+ * `conformance/vectors/` at `conformance/vectors/`, and `conformance/schema.json` at
+ * `conformance/schema.json`, as in the checkout. The prefix keeps the vectors apart from the
+ * framework's own assets and the schema outside the vector listing, so the asset paths under
+ * `conformance/vectors` are the vector ids (ADR 0045 §4). Copied without filters, so the bytes stay
+ * those of the checkout; the device hashes the bytes it parses, and a bundle that differs fails
+ * parity (ADR 0060 §2, §6).
+ */
+abstract class ConformanceAssets @Inject constructor(private val fs: FileSystemOperations) : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val vectors: DirectoryProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val schema: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun sync() {
+        fs.sync {
+            from(vectors) { into("conformance/vectors") }
+            from(schema) { into("conformance") }
+            into(outputDir)
+        }
+    }
+}
+
+val conformanceAssets = tasks.register<ConformanceAssets>("conformanceAssets") {
+    vectors = layout.dir(provider { repoRoot.resolve("conformance/vectors") })
+    schema = layout.file(provider { repoRoot.resolve("conformance/schema.json") })
 }
 
 /**
@@ -108,6 +144,9 @@ androidComponents {
         variant.sources.jniLibs?.addGeneratedSourceDirectory(jniLibs, SyncFromRootBuild::outputDir)
         // Java resources end up in classes.jar.
         variant.sources.resources?.addGeneratedSourceDirectory(thirdPartyNotices, ThirdPartyNotices::getOutputDir)
+        // The instrumented test's vectors and schema (ConformanceAssets above).
+        variant.deviceTests[DeviceTestBuilder.ANDROID_TEST_TYPE]?.sources?.assets
+            ?.addGeneratedSourceDirectory(conformanceAssets, ConformanceAssets::outputDir)
     }
 }
 
