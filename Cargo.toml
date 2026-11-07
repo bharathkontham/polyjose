@@ -9,6 +9,17 @@ rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/bharathkontham/polyjose"
 
+# The shipped artifacts (napi .node, wasm, cdylib/staticlib for Kotlin and Swift) are built with
+# the release profile: one codegen unit and fat LTO across polyjose and its primitives, symbols
+# stripped from the linked output (ADR 0031 §3, ADR 0033 §1). opt-level stays 3; the WASM size
+# comes from wasm-opt -Oz (ADR 0031 §3). Only feature 0013 T01 sets this profile; a binding
+# feature never edits it. Stripping applies to linked outputs only, so the rlibs that
+# scripts/check-rsa-symbols.sh reads keep their symbols.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
