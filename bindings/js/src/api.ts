@@ -111,10 +111,18 @@ export interface PolyjoseApi {
   jwkParse(jwk: Jwk): Promise<JwkObject>;
   /** The public half of a JWK (RFC 7517 §4, RFC 7518 §6.2.1, §6.3.1). */
   jwkToPublic(jwk: Jwk): Promise<JwkObject>;
-  /** The JWK Thumbprint (RFC 7638 §3), base64url. */
-  jwkThumbprint(jwk: Jwk, hash: ThumbprintHash): Promise<string>;
-  /** The JWK Thumbprint URI (RFC 9278 §3). */
-  jwkThumbprintUri(jwk: Jwk, hash: ThumbprintHash): Promise<string>;
+  /**
+   * The JWK Thumbprint (RFC 7638 §3, §3.4), base64url: 43, 64 or 86 characters for SHA-256,
+   * SHA-384 or SHA-512. An absent `hash` (or `null`) is the core default, SHA-256 (ADR 0054 §9,
+   * RFC 9278 §5). Any other name fails with `UnsupportedAlgorithm` from the core.
+   */
+  jwkThumbprint(jwk: Jwk, hash?: ThumbprintHash): Promise<string>;
+  /**
+   * The JWK Thumbprint URI (RFC 9278 §3), `urn:ietf:params:oauth:jwk-thumbprint:<name>:<thumbprint>`,
+   * always with the IANA hash name (`sha-256`, `sha-384`, `sha-512`; RFC 9278 §4). `hash` is as
+   * for `jwkThumbprint`.
+   */
+  jwkThumbprintUri(jwk: Jwk, hash?: ThumbprintHash): Promise<string>;
   /** Selects one key of a JWK Set (RFC 7517 §5) by `kid`, `alg` and `use`. */
   jwksSelect(jwks: JwkSet, selector?: JwkSelector): Promise<JwkObject>;
   /** A random `oct` key of `lenBytes` octets (RFC 7518 §6.4), from the OS CSPRNG (ADR 0005). */
@@ -493,14 +501,16 @@ export function createApi(backend: Backend): PolyjoseApi {
       const k = json(key, "jwkToPublic: jwk");
       return jwk(await invoke(() => b.jwkToPublic(k)), "jwkToPublic");
     },
+    // `hash` is optional (ADR 0054 §9): null and undefined reach the backend as undefined, so
+    // the core's default applies; a name is passed as given, for the core to parse (§8.2).
     jwkThumbprint: async (key, hash) => {
       const k = json(key, "jwkThumbprint: jwk");
-      const h = str(hash, "jwkThumbprint: hash");
+      const h = optStr(hash, "jwkThumbprint: hash");
       return outStr(await invoke(() => b.jwkThumbprint(k, h)), "jwkThumbprint");
     },
     jwkThumbprintUri: async (key, hash) => {
       const k = json(key, "jwkThumbprintUri: jwk");
-      const h = str(hash, "jwkThumbprintUri: hash");
+      const h = optStr(hash, "jwkThumbprintUri: hash");
       return outStr(await invoke(() => b.jwkThumbprintUri(k, h)), "jwkThumbprintUri");
     },
     jwksSelect: async (jwks, criteria) => {

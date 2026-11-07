@@ -88,6 +88,8 @@ test("strings stay strings and bytes are Uint8Array", async () => {
   assert.deepEqual(await api.base64urlDecode("-w"), new Uint8Array([0xfb]));
   assert.equal(await api.jwkThumbprint(KEY, "SHA-256"), "tp");
   assert.equal(await api.jwkThumbprintUri(KEY, "SHA-256"), "urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp");
+  assert.equal(await api.jwkThumbprint(KEY), "tp");
+  assert.equal(await api.jwkThumbprintUri(KEY), "urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp");
   assert.equal(await api.jwkToPem(KEY, "pkcs8"), "PEM");
   assert.deepEqual(await api.jwkToDer(KEY, "pkcs8"), new Uint8Array([1, 2]));
   assert.equal(await api.jwsSignCompact(new Uint8Array(), KEY, { protectedB64u: "e30" }), "a.b.c");

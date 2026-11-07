@@ -41,8 +41,23 @@ export type JwkSet = string | JwkSetObject;
 /** A JSON object argument (a header, a Claims Set, a JWS/JWE JSON serialization): text or a plain object. */
 export type JsonInput = string | JsonObject;
 
-/** JWK Thumbprint hashes (RFC 7638 §3, RFC 9278); SHA-1 is not offered (ADR 0022). */
-export type ThumbprintHash = "SHA-256" | "SHA-384" | "SHA-512";
+/**
+ * JWK Thumbprint hash names (RFC 7638 §3.4, RFC 9278 §4): the nine names the core accepts,
+ * matched exactly (ADR 0054 §8.2). Each hash has its IANA Named Information name (`sha-256`,
+ * canonical, the one the URI carries), the ADR 0030 §4 form (`SHA-256`) and the panva/jose form
+ * (`sha256`). SHA-1 is not offered (ADR 0022). The core parses the name; the facade passes it
+ * as given.
+ */
+export type ThumbprintHash =
+  | "sha-256"
+  | "SHA-256"
+  | "sha256"
+  | "sha-384"
+  | "SHA-384"
+  | "sha384"
+  | "sha-512"
+  | "SHA-512"
+  | "sha512";
 
 /** EC curves `jwkGenerateEc` takes (RFC 7518 §6.2.1.1, RFC 8812 §3.1). */
 export type EcCurve = "P-256" | "P-384" | "P-521" | "secp256k1";
