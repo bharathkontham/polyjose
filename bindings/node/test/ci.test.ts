@@ -688,3 +688,40 @@ test("binding-node.yml runs the compiled tests on Node 22.12.0 exactly, the engi
   const parity = jobBlock(lines, "parity").map((l) => l.text).join("\n");
   assert.ok(parity.includes(label), `parity requires node-${label}.json`);
 });
+
+test("every prebuild job runs the RSA symbol guard on its own runner after the build (review-security.md L2)", () => {
+  const { lines } = workflow();
+  const guard = "scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release";
+  const steps = stepsOf(jobBlock(lines, "prebuild"));
+  assert.equal(steps.map((s) => s.text.split(guard).length - 1).reduce((a, b) => a + b, 0), 2, "the guard runs twice in the job text: native and Alpine");
+
+  // Native runners (every target but musl): a step after ci-build.sh (native), with llvm-tools.
+  const build = steps.findIndex((s) => /^name: ci-build\.sh \(native\)$/m.test(s.text));
+  const native = steps.findIndex((s) => s.text.includes(guard) && !/docker run/.test(s.text));
+  assert.ok(build >= 0 && native > build, "the native guard step comes after the native build");
+  const nativeText = steps[native]?.text ?? "";
+  assert.match(nativeText, /^if: \$\{\{ !matrix\.image \}\}$/m, "on the same jobs as the native build");
+  assert.ok(nativeText.indexOf("rustup component add llvm-tools") >= 0, "the toolchain's llvm-nm and llvm-ar");
+  assert.ok(nativeText.indexOf("rustup component add llvm-tools") < nativeText.indexOf(guard));
+
+  // musl: inside the same Alpine container, right after ci-build.sh.
+  const alpine = steps.find((s) => /^name: ci-build\.sh \(Alpine\)$/m.test(s.text))?.text ?? "";
+  assert.match(alpine, /^if: \$\{\{ matrix\.image \}\}$/m);
+  const tools = alpine.indexOf("rustup component add llvm-tools");
+  const ciBuild = alpine.indexOf('bindings/node/scripts/ci-build.sh "$TARGET"');
+  const inAlpine = alpine.indexOf(guard);
+  assert.ok(tools >= 0 && tools < ciBuild && ciBuild < inAlpine, "llvm-tools, then ci-build.sh, then the guard, in Alpine");
+});
+
+test("check-rsa-symbols.sh's residual-risk note names the node prebuild targets only binding-node.yml reads", () => {
+  const src = read(path.join(repo, "scripts", "check-rsa-symbols.sh"));
+  const start = src.indexOf("# Residual risk:");
+  assert.ok(start >= 0, "the guard has a residual-risk note");
+  const note = src.slice(start, src.indexOf("\n#\n", start));
+  // The guard itself builds for the host (aarch64-apple-darwin here); every other napi target is
+  // read only by the prebuild job on its own runner.
+  for (const target of napiTargets().filter((t) => t !== "aarch64-apple-darwin")) {
+    assert.ok(note.includes(target), `the note names ${target}`);
+  }
+  assert.ok(note.includes("binding-node.yml"), "and where they are checked");
+});
