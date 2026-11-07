@@ -336,6 +336,19 @@ export function outIndex(v: unknown, at: string): number {
   return v;
 }
 
+/**
+ * A list result (`errorCodes()`), item by item, copied: only the array's own elements below its
+ * `length` are read, so a hole reaches `item` as `undefined` (a TypeError naming its index) and is
+ * never read through a polluted `Array.prototype` (0013 F09).
+ */
+export function outList<T>(v: unknown, at: string, item: (x: unknown, at: string) => T): T[] {
+  if (!Array.isArray(v)) throw badResult(at, "an array");
+  const n = v.length;
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) out.push(item(Object.hasOwn(v, i) ? v[i] : undefined, `${at}[${i}]`));
+  return out;
+}
+
 /** JSON text the core serialized, parsed to an object (ADR 0030 §2: JWKs, headers, claims). */
 export function outObject(v: unknown, at: string): JsonObject {
   let parsed: unknown;
