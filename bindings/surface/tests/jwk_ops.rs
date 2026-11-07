@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 use polyjose_surface::records::JwkSelector;
-use polyjose_surface::{SecretString, SurfaceError, jwk, keys, util};
+use polyjose_surface::{SecretBytes, SecretString, SurfaceError, jwk, keys, util};
 
 /// RFC 7517 Appendix A.2: the P-256 private key (with `use` and `kid`).
 const RFC7517_A2_P256_PRIVATE: &str = r#"{"kty":"EC",
@@ -503,5 +503,296 @@ fn generate_for_alg_leaves_the_ecdh_es_curve_to_the_caller() {
         "ECDH-ES+A256KW",
     ] {
         assert_eq!(code(keys::jwk_generate_for_alg(alg)), "InvalidKey", "{alg}");
+    }
+}
+
+// --- jwk_from_pem / jwk_from_der / jwk_to_pem / jwk_to_der ------------------------------------
+
+/// One committed 0005 key fixture (OpenSSL 4.1.0, `crates/polyjose/tests/data/keys/openssl`): its
+/// PEM, its DER, the format both are in, and the JWK the core reads from them.
+struct Fixture {
+    name: &'static str,
+    format: &'static str,
+    pem: &'static str,
+    der: &'static [u8],
+    jwk: &'static str,
+}
+
+macro_rules! fixture {
+    ($name:literal, $format:literal) => {
+        fixture!($name, $name, $format)
+    };
+    ($name:literal, $file:literal, $format:literal) => {
+        Fixture {
+            name: $name,
+            format: $format,
+            pem: include_str!(concat!(
+                "../../../crates/polyjose/tests/data/keys/openssl/",
+                $file,
+                ".pem"
+            )),
+            der: include_bytes!(concat!(
+                "../../../crates/polyjose/tests/data/keys/openssl/",
+                $file,
+                ".der"
+            )),
+            jwk: include_str!(concat!(
+                "../../../crates/polyjose/tests/data/keys/openssl/expected/",
+                $file,
+                ".jwk.json"
+            )),
+        }
+    };
+}
+
+/// Every 0005 fixture type: EC on the four curves in PKCS#8 (RFC 5958 §2), SEC1 (RFC 5915 §3)
+/// and SPKI (RFC 5280 §4.1.2.7); Ed25519 and X25519 in PKCS#8 and SPKI (RFC 8410 §4, §7); the
+/// RSA public key in SPKI and PKCS#1 (RFC 8017 App. A.1.1).
+fn fixtures() -> [Fixture; 18] {
+    [
+        fixture!("ec-p256-pkcs8", "pkcs8"),
+        fixture!("ec-p256-sec1", "sec1"),
+        fixture!("ec-p256-spki", "spki"),
+        fixture!("ec-p384-pkcs8", "pkcs8"),
+        fixture!("ec-p384-sec1", "sec1"),
+        fixture!("ec-p384-spki", "spki"),
+        fixture!("ec-p521-pkcs8", "pkcs8"),
+        fixture!("ec-p521-sec1", "sec1"),
+        fixture!("ec-p521-spki", "spki"),
+        fixture!("ec-secp256k1-pkcs8", "pkcs8"),
+        fixture!("ec-secp256k1-sec1", "sec1"),
+        fixture!("ec-secp256k1-spki", "spki"),
+        fixture!("ed25519-pkcs8", "pkcs8"),
+        fixture!("ed25519-spki", "spki"),
+        fixture!("x25519-pkcs8", "pkcs8"),
+        fixture!("x25519-spki", "spki"),
+        fixture!("rsa2048-spki", "spki"),
+        fixture!("rsa2048-pkcs1-pub", "pkcs1"),
+    ]
+}
+
+#[test]
+fn from_pem_reads_every_fixture_type_to_its_jwk() {
+    for f in fixtures() {
+        let key: SecretString = keys::jwk_from_pem(f.pem).unwrap();
+        assert_eq!(
+            key.as_str(),
+            jwk::jwk_parse(f.jwk).unwrap().as_str(),
+            "{}",
+            f.name
+        );
+    }
+}
+
+#[test]
+fn from_der_reads_every_fixture_type_to_its_jwk() {
+    for f in fixtures() {
+        let key: SecretString = keys::jwk_from_der(f.der, f.format).unwrap();
+        assert_eq!(
+            key.as_str(),
+            jwk::jwk_parse(f.jwk).unwrap().as_str(),
+            "{}",
+            f.name
+        );
+    }
+}
+
+#[test]
+fn every_fixture_type_round_trips_byte_for_byte() {
+    // ADR 0018 §3: export writes the layout OpenSSL writes, so PEM -> JWK -> PEM and
+    // DER -> JWK -> DER reproduce the fixture exactly (RFC 7468 §2 for the PEM framing).
+    for f in fixtures() {
+        let key = keys::jwk_from_pem(f.pem).unwrap();
+        let pem: SecretString = keys::jwk_to_pem(key.as_str(), f.format).unwrap();
+        assert_eq!(pem.as_str(), f.pem, "{}", f.name);
+        let der: SecretBytes = keys::jwk_to_der(key.as_str(), f.format).unwrap();
+        assert_eq!(der.as_bytes(), f.der, "{}", f.name);
+        let again = keys::jwk_from_der(der.as_bytes(), f.format).unwrap();
+        assert_eq!(again.as_str(), key.as_str(), "{}", f.name);
+    }
+}
+
+#[test]
+fn a_private_key_exports_its_public_half_as_spki() {
+    // RFC 5280 §4.1.2.7: SPKI holds the public key; each curve's fixtures are one key.
+    for f in fixtures().iter().filter(|f| f.format == "pkcs8") {
+        let spki_name = f.name.replace("pkcs8", "spki");
+        let spki = fixtures()
+            .into_iter()
+            .find(|g| g.name == spki_name)
+            .unwrap();
+        let pem = keys::jwk_to_pem(f.jwk, "spki").unwrap();
+        assert_eq!(pem.as_str(), spki.pem, "{}", f.name);
+        let public = jwk::jwk_to_public(f.jwk).unwrap();
+        assert_eq!(
+            keys::jwk_from_pem(spki.pem).unwrap().as_str(),
+            public,
+            "{}",
+            f.name
+        );
+    }
+}
+
+#[test]
+fn generated_keys_round_trip_through_pkcs8() {
+    for key in [
+        keys::jwk_generate_ec("P-256").unwrap(),
+        keys::jwk_generate_ec("secp256k1").unwrap(),
+        keys::jwk_generate_okp("Ed25519").unwrap(),
+        keys::jwk_generate_okp("X25519").unwrap(),
+    ] {
+        let der = keys::jwk_to_der(key.as_str(), "pkcs8").unwrap();
+        let back = keys::jwk_from_der(der.as_bytes(), "pkcs8").unwrap();
+        assert_eq!(back.as_str(), key.as_str());
+    }
+}
+
+#[test]
+fn only_the_four_format_names_are_accepted() {
+    // ADR 0030 §4 names `pkcs8`, `sec1`, `spki` and `pkcs1`, matched exactly; anything else is
+    // `UnsupportedAlgorithm` (ADR 0030 §5), checked before the key or the DER is looked at.
+    let f = &fixtures()[0];
+    for format in [
+        "PKCS8",
+        "pkcs#8",
+        "PKCS#8",
+        "der",
+        "pem",
+        "x509",
+        "spki ",
+        "",
+        "jwk",
+        "pkcs1-private",
+    ] {
+        assert_eq!(
+            code(keys::jwk_from_der(f.der, format)),
+            "UnsupportedAlgorithm",
+            "{format:?}"
+        );
+        assert_eq!(
+            code(keys::jwk_to_pem(f.jwk, format)),
+            "UnsupportedAlgorithm",
+            "{format:?}"
+        );
+        assert_eq!(
+            code(keys::jwk_to_der(f.jwk, format)),
+            "UnsupportedAlgorithm",
+            "{format:?}"
+        );
+        assert_eq!(
+            code(keys::jwk_from_der(b"", format)),
+            "UnsupportedAlgorithm",
+            "{format:?}"
+        );
+        assert_eq!(
+            code(keys::jwk_to_pem("{", format)),
+            "UnsupportedAlgorithm",
+            "{format:?}"
+        );
+        assert_eq!(
+            code(keys::jwk_to_der("{", format)),
+            "UnsupportedAlgorithm",
+            "{format:?}"
+        );
+    }
+}
+
+#[test]
+fn import_rejects_what_the_core_rejects() {
+    for (name, pem, expected) in [
+        // ADR 0021: RSA private keys in any form.
+        (
+            "rsa private pkcs8",
+            include_str!(
+                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs8.pem"
+            ),
+            "UnsupportedAlgorithm",
+        ),
+        (
+            "rsa private pkcs1",
+            include_str!(
+                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs1.pem"
+            ),
+            "UnsupportedAlgorithm",
+        ),
+        // ADR 0018 §4: encrypted keys are out of scope (RFC 5958 §3).
+        (
+            "encrypted pkcs8",
+            include_str!(
+                "../../../crates/polyjose/tests/data/keys/openssl/reject-ec-p256-pkcs8-encrypted.pem"
+            ),
+            "UnsupportedAlgorithm",
+        ),
+        // RFC 7468 §5: a certificate is not a key.
+        (
+            "certificate",
+            include_str!(
+                "../../../crates/polyjose/tests/data/keys/openssl/reject-ec-p256-cert.pem"
+            ),
+            "UnsupportedAlgorithm",
+        ),
+        (
+            "not pem",
+            "-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----\n",
+            "InvalidKey",
+        ),
+        ("empty", "", "InvalidKey"),
+    ] {
+        assert_eq!(code(keys::jwk_from_pem(pem)), expected, "{name}");
+    }
+    let spki = &fixtures()[2];
+    assert_eq!(spki.format, "spki");
+    // DER of another structure than the named format (ADR 0018 §3: no sniffing).
+    assert_eq!(code(keys::jwk_from_der(spki.der, "pkcs8")), "InvalidKey");
+    assert_eq!(code(keys::jwk_from_der(spki.der, "sec1")), "InvalidKey");
+    assert_eq!(code(keys::jwk_from_der(b"", "spki")), "InvalidKey");
+    assert_eq!(
+        code(keys::jwk_from_der(
+            include_bytes!(
+                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs8.der"
+            ),
+            "pkcs8"
+        )),
+        "UnsupportedAlgorithm"
+    );
+}
+
+#[test]
+fn export_rejects_what_the_core_rejects() {
+    // ADR 0018 §3 format matrix, in the core's check order.
+    let ec_private = fixtures()[0].jwk;
+    for (name, key, format, expected) in [
+        ("oct pkcs8", RFC7517_A3_OCT, "pkcs8", "UnsupportedAlgorithm"),
+        ("oct spki", RFC7517_A3_OCT, "spki", "UnsupportedAlgorithm"),
+        (
+            "ed25519 sec1",
+            RFC8037_A1_ED25519_PRIVATE,
+            "sec1",
+            "UnsupportedAlgorithm",
+        ),
+        ("ec pkcs1", ec_private, "pkcs1", "UnsupportedAlgorithm"),
+        (
+            "ec public pkcs8",
+            RFC7517_A1_P256_PUBLIC,
+            "pkcs8",
+            "InvalidKey",
+        ),
+        (
+            "ec public sec1",
+            RFC7517_A1_P256_PUBLIC,
+            "sec1",
+            "InvalidKey",
+        ),
+        ("rsa pkcs8", RFC7638_RSA, "pkcs8", "InvalidKey"),
+        (
+            "rsa private",
+            RFC7517_A2_RSA_PRIVATE,
+            "spki",
+            "UnsupportedAlgorithm",
+        ),
+        ("bad json", "{", "spki", "InvalidJson"),
+    ] {
+        assert_eq!(code(keys::jwk_to_pem(key, format)), expected, "{name}");
+        assert_eq!(code(keys::jwk_to_der(key, format)), expected, "{name}");
     }
 }
