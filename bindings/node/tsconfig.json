@@ -1,0 +1,19 @@
+// The @polyjose/node entry and backend adapter (ADR 0031 §2, ADR 0047). The compiler options are
+// bindings/js's (strict, exactOptionalPropertyTypes, noUncheckedIndexedAccess, nodenext, ES2022,
+// declarations with maps; lib ES2022 only, no @types/node), so both packages build alike.
+//
+// src/*.ts compile to the package root (index.js, backend.js and their .d.ts), next to the
+// generated napi loader (binding.cjs, binding.d.ts) and the facade copied into facade/ by
+// scripts/build.sh. rootDirs makes src/ and the package root one directory at compile time, so
+// `./facade/api.js` and `./binding.js` resolve in the source exactly as they do in the output.
+// The tests are a separate project, test/tsconfig.json.
+{
+  "extends": "../js/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "rootDirs": ["src", "."],
+    "outDir": "."
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": []
+}
