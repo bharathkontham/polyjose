@@ -61,10 +61,14 @@
 #                test-simulators.sh (`SKIPPED-RUNNER (swift-ios-sim: ...` and `SKIPPED (no iOS
 #                simulator runtime)`) and on a missing swift-ios-sim.json; the step that accepts
 #                the waiver does so only when "$MODE" is ci.
+#   quoting      outside run values, no backslash in a double-quoted scalar and no quoted scalar
+#                continued onto the next line (B05): YAML escapes and escaped line breaks could
+#                spell an expression or a context name no other check sees.
 #   continue     no `continue-on-error` anywhere.
 #   steps        every run step equals, exactly, one of the canonical steps held in this script,
 #                each once and in order (compared without its name line, trailing whitespace,
-#                trailing blank lines and comment lines; B04). Changing a run step of the
+#                trailing blank lines and YAML comment lines; B04; a # line inside a
+#                block-scalar run body is script text and is compared). Changing a run step of the
 #                workflow means changing its canonical text here, on purpose.
 #   actions      only actions/checkout, Swatinem/rust-cache, actions/setup-node and
 #                actions/upload-artifact, each with exactly its keys, inputs (an upload may add
@@ -158,8 +162,10 @@ awk -v out="$work/steps" '
   $0 == "    steps:" { in_steps = 1; next }
   in_steps {
     if ($0 ~ /^[ ]*$/) { if (f != "") print > f; next }
-    if ($0 ~ /^[ ]*#/) next
     match($0, /^ */)
+    # A # line inside a block-scalar run body is script text (it can end a backslash-continued
+    # command), so it is kept and compared; any other comment line is dropped.
+    if ($0 ~ /^[ ]*#/) { if (blk && RLENGTH >= 10 && f != "") print > f; next }
     if (RLENGTH == 6 && substr($0, 7, 2) == "- ") {
       if (f != "") close(f)
       n++
@@ -167,8 +173,10 @@ awk -v out="$work/steps" '
       line = $0
       sub(/^      - /, "        ", line)
       print line > f
+      blk = (line ~ /^        run: [|>]/)
     } else if (RLENGTH >= 8 && f != "") {
       print > f
+      if (RLENGTH == 8) blk = ($0 ~ /^        run: [|>]/)
     } else {
       in_steps = 0
     }
@@ -562,6 +570,50 @@ while IFS="$(printf '\t')" read -r kind n rest; do
 done <"$work/expr"
 [ "$expr_ok" = 1 ] && ok "expressions: only in name:, if:, env: and with: values, and only inputs.mode and the main-ref test; if: conditions from the allow-list"
 
+# --- quoting (B05) --------------------------------------------------------------------------
+# A YAML double-quoted scalar decodes escapes (\x24\x7b\x7b is `${{`, s is `s`) and an escaped
+# line break joins two lines with nothing, so its text can spell an expression or a context name
+# that no check here sees. Escapes are not decoded here (fragile); outside the run values (which
+# "steps" compares exactly) a double-quoted scalar may not hold a backslash, and no quoted scalar
+# may continue onto the next line. Free strings are plain or single-quoted on one line (a
+# single-quoted scalar has no escapes, so a backslash in it is literal and allowed).
+awk '
+  function indent(l) { match(l, /^ */); return RLENGTH }
+  {
+    line = $0
+    if (line ~ /^[ ]*$/) next
+    i = indent(line); rest = substr(line, i + 1); k = i
+    if (substr(rest, 1, 2) == "- ") { k = i + 2; rest = substr(rest, 3) }
+    if (inrun && i <= rind) inrun = 0
+    if (inrun) next
+    if (rest ~ /^#/) next
+    if (rest ~ /^["\047]?run["\047]?:/) { inrun = 1; rind = k; next }
+    q = ""; prev = " "
+    for (c = i + 1; c <= length(line); c++) {
+      ch = substr(line, c, 1)
+      if (q == "\"") {
+        if (ch == "\\") { print FNR "\ta backslash in a double-quoted scalar"; q = "x"; break }
+        if (ch == "\"") q = ""
+      } else if (q == "\047") {
+        if (ch == "\047") { if (substr(line, c + 1, 1) == "\047") c++; else q = "" }
+      } else if (prev ~ /[ \[{,]/ && (ch == "\"" || ch == "\047")) {
+        q = ch
+      } else if (ch == "#" && prev == " ") {
+        break
+      }
+      prev = ch
+    }
+    if (q == "\"" || q == "\047") print FNR "\ta quoted scalar that continues onto the next line"
+  }
+' "$workflow" >"$work/quoting"
+if [ -s "$work/quoting" ]; then
+  while IFS="$(printf '\t')" read -r n why; do
+    bad "quoting" "$why (line $n); write free strings plain or single-quoted, on one line"
+  done <"$work/quoting"
+else
+  ok "quoting: no backslash in a double-quoted scalar and no quoted scalar over several lines (outside run values)"
+fi
+
 # --- xcode ----------------------------------------------------------------------------------
 dev_dir_version=$(sed -n 's|^      DEVELOPER_DIR: /Applications/Xcode_\([0-9][0-9.]*\)\.app/Contents/Developer$|\1|p' "$code" | head -n 1)
 xcode_version=$(sed -n 's/^      XCODE_VERSION: "\([0-9][0-9.]*\)"$/\1/p' "$code" | head -n 1)
@@ -613,7 +665,8 @@ fi
 # Text greps cannot show that a command runs and that its failure fails the job, so every run
 # step must be, exactly, one of the canonical steps below, each once and in this order. A step
 # is compared without its name line (renaming is harmless), with trailing whitespace and trailing
-# blank lines stripped, and without comment lines (the step files drop them). Any edit to a run
+# blank lines stripped, and without YAML comment lines (the step files drop them; a # line inside
+# a block-scalar run body is script text and stays). Any edit to a run
 # step of the workflow therefore needs the same edit here, on purpose, where a reviewer sees it.
 # Action (uses:) steps are checked by "actions".
 mkdir -p "$work/canon"
