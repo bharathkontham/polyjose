@@ -2443,8 +2443,6 @@ fn check_jwt_issue_round_trip(
     Ok(())
 }
 
-/// Runs the operation through the public API: the success outputs, or the
-/// library's error.
 /// `jwks.select` (ADR 0054 §1–§4; the binding `jwks_select` of ADR 0030
 /// §4 as amended by ADR 0054 §9). The steps run in the order
 /// conformance/README.md fixes, and the first error is the outcome, which
@@ -2477,6 +2475,8 @@ fn run_jwks_select(input: &Object, out: &mut Object) -> Result<(), Error> {
     Ok(())
 }
 
+/// Runs the operation through the public API: the success outputs, or the
+/// library's error.
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
     let input = &vector.input;
     let mut out = Object::new();
