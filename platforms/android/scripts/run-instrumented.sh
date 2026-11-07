@@ -91,6 +91,22 @@ emulator=$sdk/emulator/emulator
 # The serials adb lists, in any state (device, offline, unauthorized).
 listed_serials() { "$adb" devices 2>/dev/null | awk 'NR > 1 && NF >= 2 { print $1 }'; }
 boot_completed() { [ "$("$adb" -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; }
+# pending_readiness <serial>: returns 0 when the device is ready for Gradle; otherwise prints what
+# it still waits for and returns 1. sys.boot_completed alone is not enough: right after it the
+# package manager may not answer yet, and AGP then reports "No compatible devices connected" on a
+# cold boot (feature 0008 F02). Ready is, in order: sys.boot_completed = 1, init.svc.bootanim =
+# stopped (only when the image has that property), and `pm path android` exits 0 printing package:.
+pending_readiness() {
+  local v
+  boot_completed "$1" || { echo "sys.boot_completed"; return 1; }
+  v=$("$adb" -s "$1" shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r') ||
+    { echo "init.svc.bootanim (adb shell failed)"; return 1; }
+  [ -z "$v" ] || [ "$v" = stopped ] || { echo "the boot animation (init.svc.bootanim=$v)"; return 1; }
+  if ! v=$("$adb" -s "$1" shell pm path android 2>/dev/null | tr -d '\r') ||
+    ! printf '%s\n' "$v" | grep -q '^package:'; then
+    echo "the package manager (pm path android)"; return 1
+  fi
+}
 
 serial=$("$adb" devices 2>/dev/null | awk 'NR > 1 && $1 ~ /^emulator-[0-9]+$/ && $2 == "device" { print $1; exit }')
 if [ -n "$serial" ]; then
@@ -119,18 +135,19 @@ else
     </dev/null >"$work/emulator.log" 2>&1 &
   started_pid=$!
   start=$SECONDS
-  until boot_completed "$serial"; do
+  # One budget for the whole wait: sys.boot_completed and then the rest of pending_readiness.
+  until pending=$(pending_readiness "$serial"); do
     if ! kill -0 "$started_pid" 2>/dev/null; then
       started_pid=""
-      echo "android-emulator: the emulator exited before it booted; the end of its log:"
+      echo "android-emulator: the emulator exited before it was ready; the end of its log:"
       tail -n 15 "$work/emulator.log" | sed 's/^/    /'
-      waive emulator-exited "the emulator $avd exited before sys.boot_completed"
+      waive emulator-exited "the emulator $avd exited while waiting for $pending"
     fi
     [ $((SECONDS - start)) -lt "$boot_timeout" ] ||
-      waive emulator-boot-timeout "$avd did not report sys.boot_completed within ${boot_timeout} s"
+      waive emulator-boot-timeout "$avd was not ready within ${boot_timeout} s (still waiting for $pending)"
     sleep 2
   done
-  echo "android-emulator: $serial booted in $((SECONDS - start)) s"
+  echo "android-emulator: $serial booted and ready in $((SECONDS - start)) s"
 fi
 
 prop() { "$adb" -s "$serial" shell getprop "$1" 2>/dev/null | tr -d '\r'; }
