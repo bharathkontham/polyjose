@@ -442,7 +442,7 @@ expect_fail "sha1 dependency, allowlisted and credited" "^FAIL: sha1 is in the c
 # `foo = { package = "rsa" }` lets code write `foo::pkcs1v15::SigningKey`, which no source rule can
 # tie to rsa, so the rename itself fails, in any workspace member and any dependency table.
 rename_fail='^FAIL: the rsa package is a dependency under another name'
-rsa_pub='rsa_pub = { package = "rsa", version = "=0.10.0-rc.20", default-features = false }'
+rsa_pub='rsa_pub = { package = "rsa", version = "=0.10.0-rc.21", default-features = false }'
 
 new_case renamed-binding
 replace_in bindings/wasm/Cargo.toml 'wasm-bindgen = "0.2.130"' $'wasm-bindgen = "0.2.130"\n'"$rsa_pub"
@@ -451,8 +451,8 @@ expect_fail "package = \"rsa\" renamed in a binding, used as rsa_pub::pkcs1v15::
   "^  - polyjose-wasm \\(bindings/wasm/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
 
 new_case renamed-workspace-dependency
-replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.20", default-features = false }' \
-  $'rsa = { version = "=0.10.0-rc.20", default-features = false }\n'"$rsa_pub"
+replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.21", default-features = false }' \
+  $'rsa = { version = "=0.10.0-rc.21", default-features = false }\n'"$rsa_pub"
 replace_in bindings/ffi/Cargo.toml 'polyjose.workspace = true' $'polyjose.workspace = true\nrsa_pub.workspace = true'
 expect_fail "package = \"rsa\" renamed in [workspace.dependencies], inherited by a binding" \
   "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
@@ -460,8 +460,8 @@ expect_fail "package = \"rsa\" renamed in [workspace.dependencies], inherited by
 # cargo refuses a second name for a package a crate already depends on, so the core's own rsa
 # dependency is the one renamed (each edit relocks, so the workspace keeps `rsa` too).
 new_case renamed-core-dependency
-replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.20", default-features = false }' \
-  $'rsa = { version = "=0.10.0-rc.20", default-features = false }\n'"$rsa_pub"
+replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.21", default-features = false }' \
+  $'rsa = { version = "=0.10.0-rc.21", default-features = false }\n'"$rsa_pub"
 replace_in crates/polyjose/Cargo.toml $'\nrsa.workspace = true\n' $'\nrsa_pub.workspace = true\n'
 expect_fail "the core's rsa dependency renamed through [workspace.dependencies]" \
   "^  - polyjose \\(crates/polyjose/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
@@ -473,15 +473,15 @@ expect_fail "package = \"rsa\" renamed in a binding's [dev-dependencies]" \
   "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dev-dependencies\\]$" "$rename_fail"
 
 new_case renamed-target-dependency
-append_to bindings/node/Cargo.toml $'\n[target."cfg(unix)".dependencies]\nr = { package = "rsa", version = "=0.10.0-rc.20", default-features = false }'
+append_to bindings/node/Cargo.toml $'\n[target."cfg(unix)".dependencies]\nr = { package = "rsa", version = "=0.10.0-rc.21", default-features = false }'
 relock
 expect_fail "package = \"rsa\" renamed in a [target.*.dependencies] table" \
   "^  - polyjose-node \\(bindings/node/Cargo.toml\\): rsa as r in \\[target\\.cfg\\(unix\\)\\.dependencies\\]$" "$rename_fail"
 
 # --- Check 11: rsa features ------------------------------------------------------------------------
 new_case rsa-feature
-replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.20", default-features = false }' \
-  'rsa = { version = "=0.10.0-rc.20", default-features = false, features = ["hazmat"] }'
-expect_fail "rsa feature" "^  - rsa 0\\.10\\.0-rc\\.20 with features: hazmat$" "^FAIL: rsa must be built with no features"
+replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.21", default-features = false }' \
+  'rsa = { version = "=0.10.0-rc.21", default-features = false, features = ["hazmat"] }'
+expect_fail "rsa feature" "^  - rsa 0\\.10\\.0-rc\\.21 with features: hazmat$" "^FAIL: rsa must be built with no features"
 
 finish
