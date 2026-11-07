@@ -7586,6 +7586,15 @@ const RESULT_ID_PATTERN: &str = "^[^#/\\\\][^#\\\\]*\\.json#0$";
 /// feature names, comma-separated (ADR 0034 §3).
 const SKIP_REASON_PATTERN: &str = "^feature:!?[a-z0-9-]+(,!?[a-z0-9-]+)*$";
 
+/// `properties/vectors_digest/pattern`: a SHA-256 digest as exactly 64
+/// lowercase hex characters, no prefix or separator (ADR 0060 §1).
+const VECTORS_DIGEST_PATTERN: &str = "^[0-9a-f]{64}$";
+
+/// [`VECTORS_DIGEST_PATTERN`], by hand (no regex crate, ADR 0016).
+fn is_vectors_digest(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// [`RESULT_ID_PATTERN`], by hand (no regex crate, ADR 0016).
 fn is_result_id(s: &str) -> bool {
     let Some(path) = s.strip_suffix("#0") else {
@@ -7622,6 +7631,7 @@ fn results_pattern(pattern: &str) -> Option<fn(&str) -> bool> {
     match pattern {
         RESULT_ID_PATTERN => Some(is_result_id),
         SKIP_REASON_PATTERN => Some(is_skip_reason),
+        VECTORS_DIGEST_PATTERN => Some(is_vectors_digest),
         _ => None,
     }
 }
@@ -7845,6 +7855,20 @@ fn results_schema_uses_only_supported_keywords() {
         ("deflate", false),
     ] {
         assert_eq!(is_skip_reason(reason), ok, "{reason:?}");
+    }
+    let hex64 = "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1";
+    for (digest, ok) in [
+        (hex64.to_owned(), true),
+        ("0".repeat(64), true),
+        (hex64.to_uppercase(), false),
+        (hex64[..63].to_owned(), false),
+        (format!("{hex64}0"), false),
+        (format!("sha256:{}", &hex64[7..]), false),
+        (hex64.replacen('9', "g", 1), false),
+        (format!(" {}", &hex64[1..]), false),
+        (String::new(), false),
+    ] {
+        assert_eq!(is_vectors_digest(&digest), ok, "{digest:?}");
     }
     // An unknown keyword or pattern is refused, not ignored.
     let unknown: serde_json::Value =

@@ -28,6 +28,11 @@
       "description": "The polyjose version the runner tested: the binding's version() (ADR 0030 §4), or the crate version for the Rust runners.",
       "$ref": "#/$defs/text"
     },
+    "vectors_digest": {
+      "description": "The vector set the runner read (ADR 0060 §1-§3): the lowercase hex SHA-256 over the byte-sorted lines <id> TAB <lowercase hex SHA-256 of the file's raw bytes> LF, one per vector file whose bytes the runner read and parsed, computed by the runner with its platform's own SHA-256, never polyjose's (ADR 0060 §5). scripts/conformance-parity.sh requires it to equal rust-core.json's and refuses the digest of the empty input (ADR 0060 §6). conformance/README.md (Binding runners) has the definition and a shell reference.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "features": {
       "description": "The vector feature names (conformance/README.md, Features) this build enables, in the order of conformance/schema.json's features enum. The bindings and the rust-core reference build enable none (ADR 0034 §3, §4).",
       "type": "array",
