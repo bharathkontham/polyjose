@@ -12,14 +12,19 @@
 //!   owners, and [`JweEncryptOptions`] (recipient keys, `aad`) is converted into the surface's
 //!   record, whose secret fields are `SecretString`/`SecretBytes`, in the first statements.
 //!   UniFFI 0.32.2 lifted each `Vec<u8>` argument, and each `String` or `Vec<u8>` inside a record
-//!   argument, by copying it out of a `RustBuffer` that it then freed unwiped: the documented
-//!   residual of ADR 0030 §7.3 (ADR 0030 §7.1).
+//!   argument, by copying it out of a `RustBuffer` that it then freed unwiped: 1 copy each
+//!   (ADR 0030 §7.1, §7.3; restated in ADR 0058).
 //! - **Outputs.** [`JweDecrypted::plaintext`] and [`JweDecrypted::aad`] are copied once from the
 //!   surface's `SecretBytes`, which are wiped when the surface record drops (ADR 0030 §7.2,
-//!   ADR 0050 §4). UniFFI 0.32.2 serializes the record into a buffer that grows as it is written
-//!   (earlier allocations of it are freed unwiped), drops the record unwiped, and the host frees
-//!   the `RustBuffer` unwiped: the documented residual of ADR 0030 §7.3, which the adapter cannot
-//!   reach without `unsafe`.
+//!   ADR 0050 §4). UniFFI 0.32.2 then writes the record into a buffer that grows as it is written
+//!   and drops the record, and the host frees the final `RustBuffer`, all unwiped. So each of
+//!   the two fields leaves **at least 2** full Rust-heap copies (the adapter's vector and the
+//!   host-freed buffer), plus a full or partial copy for each move of the growing buffer,
+//!   depending on the size, the fields written after it and the platform allocator (2 to 5 full
+//!   copies of the plaintext and 2 to 3 of the aad measured on macOS). These are the measured
+//!   residual of ADR 0058, which supersedes ADR 0030 §7.3 for outputs; the adapter cannot reach
+//!   them without `unsafe`. Callers should wipe the `ByteArray`/`Data` they receive (ADR 0030
+//!   §7.4).
 
 use polyjose_surface::records as surface;
 use zeroize::Zeroizing;

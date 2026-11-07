@@ -10,8 +10,9 @@
 //! unwiped remains on the Rust side (ADR 0030 §7.1). A result that may be private comes from the
 //! surface as a `SecretString`: the adapter copies it once into the `String` that UniFFI lowers,
 //! as is, into the `RustBuffer` the host reads and then frees unwiped; the surface's buffer is
-//! wiped when it drops at the end of the statement. That one copy is the documented residual of
-//! ADR 0030 §7.3.
+//! wiped when it drops at the end of the statement (ADR 0030 §7.2). So each `String` result
+//! leaves exactly **1** unwiped Rust-heap copy, the host-freed buffer: the measured UniFFI 0.32.2
+//! residual of ADR 0058, which supersedes ADR 0030 §7.3 for outputs.
 
 use polyjose_surface::records as surface;
 use zeroize::Zeroizing;
@@ -22,7 +23,7 @@ use crate::records::JwkSelector;
 /// Parses and validates `jwk` and returns the core's re-serialization of it, members in core
 /// order (ADR 0030 §4; RFC 7517 §4, RFC 7518 §6, RFC 8037 §2).
 ///
-/// The result may hold private members (module docs, ADR 0030 §7.2–§7.3).
+/// The result may hold private members (module docs; ADR 0030 §7.2, ADR 0058).
 ///
 /// # Errors
 ///
@@ -76,7 +77,7 @@ pub fn jwk_thumbprint_uri(jwk: String, hash: String) -> Result<String, PolyjoseE
 /// §4.4, §4.5). `kid` selects a key only here, by the caller's choice, never during
 /// verification (ADR 0026 §2, ADR 0030 §6).
 ///
-/// The member may be private (module docs, ADR 0030 §7.2–§7.3).
+/// The member may be private (module docs; ADR 0030 §7.2, ADR 0058).
 ///
 /// # Errors
 ///

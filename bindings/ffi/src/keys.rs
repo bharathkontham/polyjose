@@ -10,16 +10,23 @@
 //! - **Inputs.** A JWK or PEM `String` argument is moved into a [`Zeroizing`] owner in the first
 //!   statement, and is UniFFI's only Rust-heap copy of it (0009 research §8). A DER `Vec<u8>`
 //!   argument is moved into a [`Zeroizing`] owner the same way; UniFFI 0.32.2 lifted it by
-//!   copying it out of a `RustBuffer` that it then freed unwiped, which is the documented
-//!   residual of ADR 0030 §7.3 (ADR 0030 §7.1).
+//!   copying it out of a `RustBuffer` that it then freed unwiped: 1 copy per `Vec<u8>` argument
+//!   (ADR 0030 §7.1, §7.3; restated in ADR 0058).
 //! - **Outputs.** Generated keys, imported keys, and the PEM or DER of a private key come from
 //!   the surface as `SecretString`/`SecretBytes`. The adapter copies each once into the value
 //!   UniFFI lowers, and the surface's buffer is wiped when it drops at the end of the statement
-//!   (ADR 0030 §7.2). A `String` result becomes the host's `RustBuffer` as is. A `Vec<u8>`
-//!   result is serialized by UniFFI 0.32.2 into a buffer that grows as it is written (so earlier
-//!   allocations of it are freed unwiped too), and the vector is then dropped unwiped. The host
-//!   frees the `RustBuffer` unwiped. These framework copies, which the adapter cannot reach
-//!   without `unsafe`, are the documented residual of ADR 0030 §7.3.
+//!   (ADR 0030 §7.2). The unwiped Rust-heap copies UniFFI 0.32.2 then leaves are measured in
+//!   ADR 0058 (which supersedes ADR 0030 §7.3 for outputs); the adapter cannot reach them
+//!   without `unsafe`:
+//!   - a `String` result (every export here but `jwk_to_der`) becomes the host's `RustBuffer` as
+//!     is, and leaves exactly **1** copy, that buffer, freed unwiped by the host;
+//!   - the `Vec<u8>` result of `jwk_to_der` leaves **at least 2** full copies: the adapter's
+//!     vector, which UniFFI writes into a growing buffer and then drops, and the final buffer the
+//!     host frees. Each move of the growing buffer adds a full or partial copy, depending on the
+//!     size and the platform allocator (2 to 3 full copies of `d` measured on macOS, ADR 0058).
+//!
+//!   Callers should wipe the `ByteArray`/`Data` they receive (ADR 0030 §7.4); the opaque key
+//!   handles planned for 0.2.0 remove these copies for keys (ADR 0058, ADR 0030 option C2).
 
 use zeroize::Zeroizing;
 

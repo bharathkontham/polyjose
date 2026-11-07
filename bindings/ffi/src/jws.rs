@@ -11,14 +11,18 @@
 //!   surface's records, whose secret fields are `SecretString`/`SecretBytes`, in the first
 //!   statements. A payload `Vec<u8>` is moved into a [`Zeroizing`] owner the same way. UniFFI
 //!   0.32.2 lifted each `Vec<u8>` argument, and each `String` inside a record argument, by
-//!   copying it out of a `RustBuffer` that it then freed unwiped: the documented residual of
-//!   ADR 0030 §7.3 (ADR 0030 §7.1).
+//!   copying it out of a `RustBuffer` that it then freed unwiped: 1 copy each (ADR 0030 §7.1,
+//!   §7.3; restated in ADR 0058).
 //! - **Outputs.** [`JwsVerified::payload`] is copied once from the surface's `SecretBytes`, which
-//!   is wiped when the surface record drops (ADR 0030 §7.2, ADR 0049 §4). UniFFI 0.32.2
-//!   serializes the record into a buffer that grows as it is written (earlier allocations of it
-//!   are freed unwiped), drops the record unwiped, and the host frees the `RustBuffer` unwiped:
-//!   the documented residual of ADR 0030 §7.3, which the adapter cannot reach without `unsafe`. The signed serializations are the surface's plain
-//!   `String`s (they are the transmitted token).
+//!   is wiped when the surface record drops (ADR 0030 §7.2, ADR 0049 §4). UniFFI 0.32.2 then
+//!   writes the record into a buffer that grows as it is written and drops the record, and the
+//!   host frees the final `RustBuffer`, all unwiped. So the payload leaves **at least 2** full
+//!   Rust-heap copies (the adapter's vector and the host-freed buffer), plus a full or partial
+//!   copy for each move of the growing buffer, depending on the size and the platform allocator
+//!   (2 to 3 full copies measured on macOS). These are the measured residual of ADR 0058, which
+//!   supersedes ADR 0030 §7.3 for outputs; the adapter cannot reach them without `unsafe`.
+//!   Callers should wipe the `ByteArray`/`Data` they receive (ADR 0030 §7.4). The signed
+//!   serializations are the surface's plain `String`s (they are the transmitted token).
 
 use polyjose_surface::records as surface;
 use zeroize::Zeroizing;

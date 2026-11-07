@@ -16,8 +16,14 @@
 //! such `String` argument is moved into a [`Zeroizing`] owner in the first statements, and is
 //! UniFFI's only Rust-heap copy of it (0009 research §8; ADR 0030 §7.1). [`JweEncryptOptions`]
 //! is converted into the surface's record (`SecretString` recipient keys, `SecretBytes` `aad`)
-//! in the first statement; the copies UniFFI 0.32.2 made while lifting its fields out of a
-//! `RustBuffer` it then freed unwiped are the documented residual of ADR 0030 §7.3.
+//! in the first statement; UniFFI 0.32.2 made 1 copy of each secret field while lifting it out of
+//! a `RustBuffer` it then freed unwiped (ADR 0030 §7.1, §7.3; restated in ADR 0058).
+//!
+//! **Claims are not secret outputs (ADR 0058, owner decision 2026-11-07).** `JwtVerified.claims`
+//! and the inner claims of `JwtNestedVerified` are plain `String`s, outside ADR 0030 §7's secret
+//! handling, decrypted nested claims included: the surface does not zeroize them, and UniFFI
+//! leaves the copies of any record `String` field. Claims are usually not secret; carry secrets
+//! in a JWE payload instead.
 
 use polyjose_surface::records as surface;
 use zeroize::Zeroizing;
