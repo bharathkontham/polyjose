@@ -14,7 +14,7 @@
 //! engine would throw.
 
 use js_sys::{Object, Reflect, Uint8Array};
-use polyjose_surface::records::{JweDecrypted, JwsVerified};
+use polyjose_surface::records::{JweDecrypted, JwsVerified, JwtNestedVerified, JwtVerified};
 use wasm_bindgen::JsValue;
 
 /// A JS object being filled.
@@ -75,6 +75,29 @@ pub(crate) fn jwe_decrypted(v: JweDecrypted) -> Result<Object, JsValue> {
     if let Some(aad) = &v.aad {
         o.bytes("aad", aad.as_bytes())?;
     }
+    o.u32("recipientIndex", v.recipient_index)?;
+    Ok(o.0)
+}
+
+/// `{ claims, header, alg, keyIndex?, kid? }` (RFC 7519 §7.2; ADR 0027 §1, ADR 0029).
+pub(crate) fn jwt_verified(v: JwtVerified) -> Result<Object, JsValue> {
+    let o = Out::new();
+    o.str("claims", &v.claims)?;
+    o.str("header", &v.header)?;
+    o.str("alg", &v.alg)?;
+    if let Some(index) = v.key_index {
+        o.u32("keyIndex", index)?;
+    }
+    o.opt_str("kid", v.kid.as_deref())?;
+    Ok(o.0)
+}
+
+/// `{ inner, outerHeader, recipientIndex }` (RFC 7519 §5.2, §11.2; ADR 0027 §7).
+pub(crate) fn jwt_nested_verified(v: JwtNestedVerified) -> Result<Object, JsValue> {
+    let o = Out::new();
+    let inner = jwt_verified(v.inner)?;
+    o.set("inner", &inner)?;
+    o.str("outerHeader", &v.outer_header)?;
     o.u32("recipientIndex", v.recipient_index)?;
     Ok(o.0)
 }

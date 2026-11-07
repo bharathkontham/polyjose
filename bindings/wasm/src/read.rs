@@ -26,7 +26,7 @@
 use js_sys::{Array, Reflect, Uint8Array};
 use polyjose_surface::records::{
     JweDecryptOptions, JweEncryptOptions, JweRecipient, JwkSelector, JwsSignOptions, JwsSigner,
-    JwsVerifyOptions,
+    JwsVerifyOptions, JwtSignOptions, JwtVerifyOptions,
 };
 use polyjose_surface::{SecretBytes, SecretString};
 use wasm_bindgen::{JsCast, JsValue};
@@ -35,6 +35,9 @@ use crate::error::type_error;
 
 /// A reader's result: the value, or the JS error to throw.
 type Read<T> = Result<T, JsValue>;
+
+/// The largest integer a JS number holds exactly, `Number.MAX_SAFE_INTEGER` (ECMA-262, 2^53 - 1).
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 /// A record argument: one plain object, as the facade builds it (BACKEND.md, "Records").
 struct Record<'a> {
@@ -109,6 +112,16 @@ impl<'a> Record<'a> {
                     Ok(n as u32)
                 }
                 _ => Err(self.wrong(key, "an integer in 0..=4294967295")),
+            })
+            .transpose()
+    }
+
+    /// Whole seconds since the epoch, a safe integer (ADR 0028, ADR 0030 §2).
+    fn opt_safe_i64(&self, key: &str) -> Read<Option<i64>> {
+        self.get(key)?
+            .map(|v| match v.as_f64() {
+                Some(n) if n.fract() == 0.0 && n.abs() <= MAX_SAFE_INTEGER => Ok(n as i64),
+                _ => Err(self.wrong(key, "a safe integer")),
             })
             .transpose()
     }
@@ -246,5 +259,45 @@ pub(crate) fn jwe_decrypt_options(value: &JsValue) -> Read<JweDecryptOptions> {
         max_input_len: r.opt_u32("maxInputLen")?,
         max_recipients: r.opt_u32("maxRecipients")?,
         understood_crit: r.opt_strings("understoodCrit")?,
+    })
+}
+
+/// `{ alg, typ?, omitTyp?, accessToken?, header? }` (RFC 7519 §5.1, RFC 9068 §2.1).
+pub(crate) fn jwt_sign_options(value: &JsValue) -> Read<JwtSignOptions> {
+    let r = Record::new(value, "JwtSignOptions")?;
+    Ok(JwtSignOptions {
+        alg: r.string("alg")?,
+        typ: r.opt_string("typ")?,
+        omit_typ: r.flag("omitTyp")?,
+        access_token: r.flag("accessToken")?,
+        header: r.opt_string("header")?,
+    })
+}
+
+/// `{ allowedAlgs, now, issuers?, audiences?, subject?, leeway?, maxAge?, requiredClaims?,
+/// allowMissingExp?, ignoreAudience?, typ?, anyTyp?, profile?, maxKeyCandidates?,
+/// maxInputLen? }` (RFC 7519 §4.1, §7.2; RFC 8725 §3.1; RFC 9068 §4; ADR 0027).
+///
+/// `now` is passed through as given: the facade always supplies it (ADR 0030 §4, BACKEND.md),
+/// and this adapter never reads a clock. Absent, it stays `None`, which the surface answers with
+/// `InvalidClaim("clock")` on `wasm32-unknown-unknown` (ADR 0028 §1).
+pub(crate) fn jwt_verify_options(value: &JsValue) -> Read<JwtVerifyOptions> {
+    let r = Record::new(value, "JwtVerifyOptions")?;
+    Ok(JwtVerifyOptions {
+        allowed_algs: r.strings("allowedAlgs")?,
+        now: r.opt_safe_i64("now")?,
+        issuers: r.opt_strings("issuers")?,
+        audiences: r.opt_strings("audiences")?,
+        subject: r.opt_string("subject")?,
+        leeway: r.opt_u32("leeway")?,
+        max_age: r.opt_u32("maxAge")?,
+        required_claims: r.opt_strings("requiredClaims")?,
+        allow_missing_exp: r.flag("allowMissingExp")?,
+        ignore_audience: r.flag("ignoreAudience")?,
+        typ: r.opt_string("typ")?,
+        any_typ: r.flag("anyTyp")?,
+        profile: r.opt_string("profile")?,
+        max_key_candidates: r.opt_u32("maxKeyCandidates")?,
+        max_input_len: r.opt_u32("maxInputLen")?,
     })
 }
