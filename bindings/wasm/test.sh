@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The WASM platform's test suite (feature 0006 T02, T04; ADR 0008 layer 4, ADR 0031 §3, ADR 0034),
+# The WASM platform's test suite (feature 0006 T02, T04, F08; ADR 0008 layer 4, ADR 0031 §3, ADR 0034),
 # run by scripts/test-all.sh's `wasm` platform (its dispatch rules: the exit status decides PASS or
 # FAIL, and `SKIPPED (<reason>)` as the last line with exit 0 is reported as SKIPPED).
 #
@@ -7,23 +7,35 @@
 #
 #   1. tests/vector_index.rs on the host: the runner's embedded vector index lists exactly the
 #      files under conformance/vectors/ (a stale index would run fewer vectors);
-#   2. `wasm-pack test --node`: the adapter's wasm-bindgen-test suites in Node, and the
-#      conformance results line -> target/conformance/wasm-node.json;
+#   2. `wasm-pack test --node`: the adapter's wasm-bindgen-test suites in Node (tests/conformance.rs,
+#      tests/engine.rs and tests/memory.rs, dev profile), and the conformance results line ->
+#      target/conformance/wasm-node.json;
 #   3. `wasm-pack test --headless --chrome --chromedriver <driver> --features browser`: the same in
 #      headless Chrome -> target/conformance/wasm-chrome.json, with the chromedriver of
 #      scripts/chromedriver.sh (a driver of another major version refuses Chrome);
+#   3b. `wasm-pack test --release --node -- --config 'profile.release.opt-level="z"' --test memory`:
+#      tests/memory.rs once more, in Node, at the opt-level the shipped .wasm is built with
+#      (ADR 0059). Its stack counts depend on code generation, and the release column of its
+#      KNOWN table (the package's stack exceptions, review S2 and audit L3) only shows in this
+#      build. It prints how long it took (18 s here with a warm target dir, 2026-11-07). A Chrome
+#      run of the same build is left out: it measures the same module, whose counts F03 found
+#      equal in both engines, and would add about 10 s;
 #   4. always: scripts/build-package.sh (the tarball, with the ADR 0059 size override and the 1 MiB
 #      check), then test-pkg/run.sh (wasm-pkg-node, -chrome, -workerd). A missing or
 #      non-executable run.sh is a FAIL, never a silent drop of those three runners (review N6).
 #
-# A wasm-pack run passes only if it exits 0, prints exactly one POLYJOSE-CONFORMANCE-RESULTS line
-# and ran at least one test in tests/conformance.rs and tests/engine.rs: a run whose tests all
-# skip ("only configured to run in…", or a stray argument taken as a test filter: "no tests to
-# run!") exits 0 too, and must fail here (0006 research §7). The results line is written even when
-# the run fails, so the parity check sees what failed.
+# A wasm-pack run of steps 2 and 3 passes only if it exits 0, prints exactly one
+# POLYJOSE-CONFORMANCE-RESULTS line and ran at least one test in each of tests/conformance.rs,
+# tests/engine.rs and tests/memory.rs; the run of step 3b, only if it exits 0 and ran at least one
+# test in tests/memory.rs. A run whose tests all skip ("only configured to run in…", or a stray
+# argument taken as a test filter: "no tests to run!") exits 0 too, and must fail here (0006
+# research §7). The results line is written even when the run fails, so the parity check sees what
+# failed.
 #
-# Argument order matters to wasm-pack 0.15.1: its own options (--chromedriver) come first, since
-# everything from the first cargo option (--features) on is passed to cargo; and the runner's
+# Argument order matters to wasm-pack 0.15.1: its own options (--release, --chromedriver) come
+# first, since everything from the first cargo option (--features) on is passed to cargo, and so is
+# everything after a first `--` (step 3b's --config and --test; a Chrome form would put them after
+# --features: `--headless --chrome --features browser --test memory`); and the runner's
 # --nocapture (which prints the results line of a passing test) goes after `-- --` when no cargo
 # option precedes it, and after `--` when one does.
 #
@@ -98,7 +110,7 @@ wasm_pack_run() {
   fi
   [ "$rc" -eq 0 ] || fail "$runner: wasm-pack test exited $rc"
   [ "$lines" -eq 1 ] || fail "$runner: $lines results line(s), expected exactly 1 (did the conformance test run?)"
-  for t in conformance engine; do
+  for t in conformance engine memory; do
     tests_ran "$log" "$t" || fail "$runner: tests/$t.rs ran no test (all skipped or filtered out)"
   done
 }
@@ -120,6 +132,22 @@ else
     *) fail "wasm-chrome: scripts/chromedriver.sh printed \"$driver\", not a path or SKIPPED (<reason>)" ;;
   esac
 fi
+
+# --- 3b. tests/memory.rs at the shipped opt-level (ADR 0059) ---------------------------------
+
+# memory_release_run <wasm-pack arguments...>: one run of tests/memory.rs, checked. It runs no
+# conformance test, so it writes no results file and is not a parity runner.
+memory_release_run() {
+  local log="$work/memory-release.log" rc=0 start=$SECONDS
+  echo "==> $me: tests/memory.rs at the shipped opt-level: wasm-pack test $*"
+  wasm-pack test "$@" >"$log" 2>&1 || rc=$?
+  cat "$log"
+  [ "$rc" -eq 0 ] || fail "memory (release, opt-level z): wasm-pack test exited $rc"
+  tests_ran "$log" memory || fail "memory (release, opt-level z): tests/memory.rs ran no test (all skipped or filtered out)"
+  echo "$me: tests/memory.rs at the shipped opt-level took $((SECONDS - start)) s"
+}
+
+memory_release_run --release --node -- --config 'profile.release.opt-level="z"' --test memory
 
 # --- 4. The package tests (T04) --------------------------------------------------------------
 
