@@ -119,8 +119,9 @@ val cargoCrossBuilds: Map<String, TaskProvider<Exec>> = crossPrefixes.associateW
         inputs.files(rustLibraryInputs).withPropertyName("rustSources").withPathSensitivity(PathSensitivity.RELATIVE)
         outputs.file(cargoTargetDir.resolve("$triple/release/${libraryName(prefix)}")).withPropertyName("library")
         workingDir(repoRoot)
-        // `-p polyjose-ffi` alone, as cargoHostBuild: uniffi's `cli` feature never reaches the library.
-        commandLine("cargo", "build", "--release", "--lib", "-p", "polyjose-ffi", "--target", triple)
+        // `-p polyjose-ffi` alone, as cargoHostBuild: uniffi's `cli` feature never reaches the
+        // library. `--locked`, as cargoHostBuild: a stale Cargo.lock fails instead of re-resolving.
+        commandLine("cargo", "build", "--locked", "--release", "--lib", "-p", "polyjose-ffi", "--target", triple)
     }
 }
 

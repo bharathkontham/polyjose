@@ -80,8 +80,10 @@ val cargoHostBuild = tasks.register<Exec>("cargoHostBuild") {
     outputs.file(hostLibrary).withPropertyName("hostLibrary")
     workingDir(repoRoot)
     // `-p polyjose-ffi` alone, so uniffi's `cli` feature (bindgen only) is never unified into the
-    // shipped library (bindings/ffi/Cargo.toml).
-    commandLine("cargo", "build", "--release", "--lib", "-p", "polyjose-ffi")
+    // shipped library (bindings/ffi/Cargo.toml). `--locked`: a Cargo.lock that does not match the
+    // manifests fails the build instead of being re-resolved, so the library holds exactly the
+    // reviewed crate versions that scripts/third-party-notices.sh (`--locked`) lists.
+    commandLine("cargo", "build", "--locked", "--release", "--lib", "-p", "polyjose-ffi")
 }
 
 val uniffiKotlinDir: File = layout.buildDirectory.dir("generated/uniffi/kotlin").get().asFile
@@ -102,8 +104,9 @@ val uniffiGenerate = tasks.register<Exec>("uniffiGenerate") {
     doFirst { outDir.deleteRecursively() }
     workingDir(repoRoot)
     // `--no-format`: no ktlint (0008 research §1). Library mode is automatic in uniffi 0.32.
+    // `--locked`, as cargoHostBuild: the generator is built from the reviewed Cargo.lock only.
     commandLine(
-        "cargo", "run", "-p", "polyjose-uniffi-bindgen", "--",
+        "cargo", "run", "--locked", "-p", "polyjose-uniffi-bindgen", "--",
         "generate", hostLibrary.path, "--language", "kotlin", "--no-format", "--out-dir", outDir.path,
     )
 }
@@ -118,13 +121,14 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
     val outDir = jniLibsDir
     doFirst { outDir.deleteRecursively() }
     workingDir(repoRoot)
-    // --platform is the AAR's minSdk (ADR 0033 §2), from the version catalog.
+    // --platform is the AAR's minSdk (ADR 0033 §2), from the version catalog. cargo-ndk passes
+    // everything after `build` to cargo, `--locked` included (as cargoHostBuild).
     commandLine(
         "cargo", "ndk",
         "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64", "-t", "x86",
         "--platform", libs.versions.androidMinSdk.get(),
         "-o", outDir.path,
-        "build", "--release", "--lib", "-p", "polyjose-ffi",
+        "build", "--locked", "--release", "--lib", "-p", "polyjose-ffi",
     )
 }
 
