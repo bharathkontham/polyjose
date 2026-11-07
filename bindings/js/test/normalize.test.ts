@@ -83,9 +83,14 @@ test("bytes accept Uint8Array and Buffer, and nothing else", async () => {
   const buf = NodeBuffer.from([3]);
   await fn("base64urlEncode")(u8);
   await fn("base64urlEncode")(buf);
-  const passed = fake.of("base64urlEncode").map((c) => c.args[0]);
-  assert.equal(passed[0], u8, "passed as given, not copied");
-  assert.equal(passed[1], buf);
+  // Each is passed as a fresh Uint8Array copy with the same bytes (ADR 0030 §7; 0013 B06).
+  const calls = fake.of("base64urlEncode");
+  for (const [i, given] of [u8, buf].entries()) {
+    const received = calls[i]?.received[0];
+    assert.ok(received instanceof Uint8Array && received !== given, "a copy, not the caller's array");
+    assert.equal(Object.getPrototypeOf(received), Uint8Array.prototype, "a plain Uint8Array, even for a Buffer");
+    assert.deepEqual(Array.from(calls[i]?.args[0] as Uint8Array), Array.from(given));
+  }
   for (const bad of ["AQI", [1, 2], new ArrayBuffer(2), new DataView(new ArrayBuffer(2)), new Uint16Array(2), new Int8Array(2), null, undefined, { length: 0 }]) {
     await rejectsType(fake, fn("base64urlEncode")(bad), "base64urlEncode");
   }
