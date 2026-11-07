@@ -30,12 +30,19 @@ const JWE_A3 =
   "U0m_YmjN04DJvceFICbCVQ";
 const KEY_A3 = { kty: "oct", k: "GawgguFyGrWKav7AX4VKUg" };
 
+/** A header's members as sorted `[name, value]` pairs: the core re-serializes headers, so their
+ * member order is not the token's (a JSON object is unordered, RFC 8259 §4). */
+function members(header: unknown): [string, unknown][] {
+  assert.ok(header !== null && typeof header === "object", "a header is an object");
+  return Object.entries(header as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 async function checkJws(): Promise<void> {
   const r = await api.jwsVerifyCompact(JWS_A1, KEY_A1, { allowedAlgs: ["HS256"] });
   assert.deepEqual(Object.keys(r).sort(), ["alg", "payload", "protectedHeader", "signatureIndex"]);
   assert.equal(r.alg, "HS256");
   assert.deepEqual(Array.from(r.payload), Array.from(new TextEncoder().encode(PAYLOAD_A1)));
-  assert.equal(JSON.stringify(r.protectedHeader), '{"typ":"JWT","alg":"HS256"}');
+  assert.deepEqual(members(r.protectedHeader), [["alg", "HS256"], ["typ", "JWT"]]);
   assert.equal(r.signatureIndex, 0);
   assert.ok(!Object.hasOwn(r, "unprotectedHeader"), "a compact JWS has no unprotected header (RFC 7515 §7.1)");
 }
@@ -44,8 +51,8 @@ async function checkJwe(): Promise<void> {
   const r = await api.jweDecryptCompact(JWE_A3, KEY_A3, { allowedAlgs: ["A128KW"], allowedEnc: ["A128CBC-HS256"] });
   assert.deepEqual(Object.keys(r).sort(), ["header", "plaintext", "protectedHeader", "recipientIndex"]);
   assert.equal(new TextDecoder().decode(r.plaintext), "Live long and prosper.");
-  assert.equal(JSON.stringify(r.header), '{"alg":"A128KW","enc":"A128CBC-HS256"}');
-  assert.equal(JSON.stringify(r.protectedHeader), '{"alg":"A128KW","enc":"A128CBC-HS256"}');
+  assert.deepEqual(members(r.header), [["alg", "A128KW"], ["enc", "A128CBC-HS256"]]);
+  assert.deepEqual(members(r.protectedHeader), [["alg", "A128KW"], ["enc", "A128CBC-HS256"]]);
   assert.equal(r.recipientIndex, 0);
   for (const name of ["sharedUnprotectedHeader", "recipientHeader", "aad"]) {
     assert.ok(!Object.hasOwn(r, name), `a compact JWE has no ${name} (RFC 7516 §7.1)`);
