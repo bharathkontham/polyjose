@@ -1,0 +1,33 @@
+{
+  "name": "@polyjose/js-facade",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The TypeScript facade shared unchanged by @polyjose/node and @polyjose/wasm (ADR 0031 §1, ADR 0047), and their conformance runner. Not published on its own.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/api.d.ts",
+      "default": "./dist/src/api.js"
+    },
+    "./conformance/runner": {
+      "types": "./dist/conformance/runner.d.ts",
+      "default": "./dist/conformance/runner.js"
+    },
+    "./conformance/node-main": {
+      "types": "./dist/conformance/node-main.d.ts",
+      "default": "./dist/conformance/node-main.js"
+    }
+  },
+  "scripts": {
+    "gen": "node tools/gen-error-codes.ts",
+    "build": "node tools/gen-error-codes.ts && tsc -p .",
+    "test": "./test.sh"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}
