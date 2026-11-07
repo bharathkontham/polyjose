@@ -13,9 +13,10 @@
 #   3. `wasm-pack test --headless --chrome --chromedriver <driver> --features browser`: the same in
 #      headless Chrome -> target/conformance/wasm-chrome.json, with the chromedriver of
 #      scripts/chromedriver.sh (a driver of another major version refuses Chrome);
-#   3b. `wasm-pack test --release --node -- --config 'profile.release.opt-level="z"' --test memory`:
-#      tests/memory.rs once more, in Node, at the opt-level the shipped .wasm is built with
-#      (ADR 0059). Its stack counts depend on code generation, and the release column of its
+#   3b. `wasm-pack test --release --node -- <WASM_CARGO_ARGS> --test memory`: tests/memory.rs once
+#      more, in Node, at the opt-level the shipped .wasm is built with (ADR 0059: the arguments
+#      come from scripts/wasm-cargo-args.sh, the one definition build-package.sh uses too, so
+#      the two cannot drift; 0006 F06). Its stack counts depend on code generation, and the release column of its
 #      KNOWN table (the package's stack exceptions, review S2 and audit L3) only shows in this
 #      build. It prints how long it took (18 s here with a warm target dir, 2026-11-07). A Chrome
 #      run of the same build is left out: it measures the same module, whose counts F03 found
@@ -147,7 +148,13 @@ memory_release_run() {
   echo "$me: tests/memory.rs at the shipped opt-level took $((SECONDS - start)) s"
 }
 
-memory_release_run --release --node -- --config 'profile.release.opt-level="z"' --test memory
+# The shipped build's extra Cargo arguments, from their one definition (ADR 0059; 0006 F06).
+# shellcheck source=scripts/wasm-cargo-args.sh
+if . "$here/scripts/wasm-cargo-args.sh"; then
+  memory_release_run --release --node -- "${WASM_CARGO_ARGS[@]}" --test memory
+else
+  fail "memory (release, opt-level z): cannot read scripts/wasm-cargo-args.sh"
+fi
 
 # --- 4. The package tests (T04) --------------------------------------------------------------
 
