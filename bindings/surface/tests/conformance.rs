@@ -11,9 +11,10 @@
 //! - every vector file is checked against `conformance/schema.json` itself, with a small checker
 //!   of exactly the JSON Schema 2020-12 keywords the schema uses (any other keyword, or a pattern
 //!   it doesn't know, fails the run), plus the cross-member rules the schema can't state;
-//! - a vector is skipped only when its `features` lists one this build lacks (ADR 0034 §3); the
-//!   surface never offers the deterministic test RNG (ADR 0005), so `fixed-rng` is never enabled,
-//!   and `deflate` is enabled exactly when the core under it has it (probed through the surface);
+//! - a vector is skipped only when its `features` lists one this build lacks (ADR 0034 §3), or
+//!   its `features_absent` one this build has (ADR 0056); the surface never offers the
+//!   deterministic test RNG (ADR 0005), so `fixed-rng` is never enabled, and `deflate` is enabled
+//!   exactly when the core under it has it (probed through the surface);
 //! - an unknown or unmapped operation, a broken vector, a panic, and any failure of a runner
 //!   check (a round trip, a shape) is a `fail`, never an outcome;
 //! - a `SurfaceError` is the library's outcome and is compared by its code (ADR 0030 §5);
@@ -346,7 +347,9 @@ type Outcome = Result<Object, &'static str>;
 /// A vector's status for the results file (ADR 0034 §2).
 enum Status {
     Pass,
-    /// Skipped for these missing features, in the vector's order (ADR 0034 §3).
+    /// Skipped for these features, as the results-file `reason` lists them: the missing
+    /// `features` in the vector's order (ADR 0034 §3), then each enabled `features_absent` one as
+    /// `!<name>` in its order (ADR 0056 §2).
     Skipped(Vec<String>),
     Fail(String),
 }
@@ -401,20 +404,28 @@ fn run_vector(
     if let Err(e) = cross_member_rules(&value) {
         return fail(e);
     }
-    let features: Vec<String> = value
-        .get("features")
-        .and_then(Value::as_array)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect();
-    let missing: Vec<String> = features
+    let names = |member: &str| -> Vec<String> {
+        value
+            .get(member)
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    };
+    let mut skip: Vec<String> = names("features")
         .into_iter()
         .filter(|f| !enabled.contains(&f.as_str()))
         .collect();
-    if !missing.is_empty() {
-        return Status::Skipped(missing);
+    skip.extend(
+        names("features_absent")
+            .into_iter()
+            .filter(|f| enabled.contains(&f.as_str()))
+            .map(|f| format!("!{f}")),
+    );
+    if !skip.is_empty() {
+        return Status::Skipped(skip);
     }
     let outcome = match catch_unwind(AssertUnwindSafe(|| execute(&value))) {
         Err(_) => return fail("panicked while running".to_owned()),
@@ -443,23 +454,39 @@ fn cross_member_rules(vector: &Value) -> Result<(), String> {
         .get("expect")
         .and_then(Value::as_object)
         .expect("validated");
-    let listed = |feature: &str| {
+    let listed_in = |member: &str, feature: &str| {
         vector
-            .get("features")
+            .get(member)
             .and_then(Value::as_array)
             .is_some_and(|items| items.iter().any(|f| f.as_str() == Some(feature)))
     };
+    let listed = |feature: &str| listed_in("features", feature);
+    // ADR 0056 §3: no name both needed and forbidden.
+    let absent = vector
+        .get("features_absent")
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    if let Some(both) = absent.iter().filter_map(Value::as_str).find(|f| listed(f)) {
+        return Err(format!(
+            "schema: /features_absent: \"{both}\" is listed in `features` too"
+        ));
+    }
     if operation == "jwe.encrypt" {
-        for (member, feature) in [
-            ("rng_b64u", "fixed-rng"),
-            ("protected_b64u", "fixed-rng"),
-            ("compress", DEFLATE),
-        ] {
+        for (member, feature) in [("rng_b64u", "fixed-rng"), ("protected_b64u", "fixed-rng")] {
             if input.contains(member) && !listed(feature) {
                 return Err(format!(
                     "schema: /features: `input/{member}` needs \"{feature}\" listed in `features`"
                 ));
             }
+        }
+        // ADR 0056 §4: `deflate` in either list.
+        if input.contains("compress") && !listed(DEFLATE) && !listed_in("features_absent", DEFLATE)
+        {
+            return Err(
+                "schema: /features: `input/compress` needs \"deflate\" listed in `features` or \
+                 `features_absent`"
+                    .to_owned(),
+            );
         }
     }
     if operation == "jwt.issue" {
@@ -1633,6 +1660,85 @@ fn vectors_needing_a_disabled_feature_are_skipped_by_name() {
     assert!(matches!(&status, Status::Skipped(f) if f == &["fixed-rng"]));
     let (status, _) = status_of(&needs, &["deflate", "fixed-rng"]);
     assert!(matches!(status, Status::Pass));
+}
+
+/// A vector that must run without a feature this build has is skipped with `!<name>`, after
+/// the missing `features` names; with every forbidden feature off it runs (ADR 0056 §2).
+#[test]
+fn vectors_forbidding_an_enabled_feature_are_skipped_by_name() {
+    let forbids = vector(
+        "b64url.decode",
+        r#"{"b64u":"AQI"}"#,
+        r#"{"ok":true,"bytes_hex":"0102"}"#,
+        r#","features_absent":["deflate","fixed-rng"]"#,
+    );
+    let (status, trace) = status_of(&forbids, &["deflate", "fixed-rng"]);
+    assert!(matches!(&status, Status::Skipped(f) if f == &["!deflate", "!fixed-rng"]));
+    assert!(trace.actual.is_none());
+    let entry = result_entry("a.json#0".to_owned(), trace, &status);
+    assert_eq!(
+        entry.get("reason").and_then(Value::as_str),
+        Some("feature:!deflate,!fixed-rng")
+    );
+    let (status, _) = status_of(&forbids, &["deflate"]);
+    assert!(matches!(&status, Status::Skipped(f) if f == &["!deflate"]));
+    let (status, _) = status_of(&forbids, &[]);
+    assert!(matches!(status, Status::Pass));
+    // Needed and forbidden at once: the missing names first.
+    let mixed = vector(
+        "b64url.decode",
+        r#"{"b64u":"AQI"}"#,
+        r#"{"ok":true,"bytes_hex":"0102"}"#,
+        r#","features":["fixed-rng"],"features_absent":["deflate"]"#,
+    );
+    let (status, trace) = status_of(&mixed, &["deflate"]);
+    let entry = result_entry("a.json#0".to_owned(), trace, &status);
+    assert_eq!(
+        entry.get("reason").and_then(Value::as_str),
+        Some("feature:fixed-rng,!deflate")
+    );
+}
+
+/// `features_absent` is strict (ADR 0056 §1, §3, §4): known names, each once, at least one,
+/// none also in `features`; `compress` may list `deflate` in either list.
+#[test]
+fn features_absent_is_strict() {
+    let input = r#"{"b64u":"AQI"}"#;
+    let ok = r#"{"ok":true,"bytes_hex":"0102"}"#;
+    for (extra, needle) in [
+        (r#","features_absent":["zip"]"#, "/features_absent/0"),
+        (r#","features_absent":["deflate","deflate"]"#, "repeats"),
+        (r#","features_absent":[]"#, "/features_absent"),
+        (r#","features_absent":"deflate""#, "/features_absent"),
+        (
+            r#","features":["deflate"],"features_absent":["deflate"]"#,
+            "is listed in `features` too",
+        ),
+        (r#","feature_absent":["deflate"]"#, "unknown member"),
+    ] {
+        assert_fails(&vector("b64url.decode", input, ok, extra), needle);
+    }
+    let encrypt = |extra: &str| {
+        vector(
+            "jwe.encrypt",
+            r#"{"serialization":"compact","enc":"A128GCM","plaintext_b64u":"AQI","compress":true,"recipients":[{"alg":"dir","key":{"kty":"oct","k":"AAECAwQFBgcICQoLDA0ODw"}}]}"#,
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+            extra,
+        )
+    };
+    assert_fails(
+        &encrypt(r#","features_absent":["fixed-rng"]"#),
+        "listed in `features` or `features_absent`",
+    );
+    // Without `deflate` in the core under the surface, `compress` is UnsupportedAlgorithm.
+    let pin = encrypt(r#","features_absent":["deflate"]"#);
+    let (status, trace) = status_of(&pin, &enabled_features());
+    if deflate_enabled() {
+        assert!(matches!(&status, Status::Skipped(f) if f == &["!deflate"]));
+    } else {
+        assert!(matches!(status, Status::Pass));
+        assert_eq!(trace.actual, Some(Err("UnsupportedAlgorithm")));
+    }
 }
 
 /// The runner calls the surface only: `polyjose::` appears only for the harness's JSON, and no
