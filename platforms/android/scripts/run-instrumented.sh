@@ -14,11 +14,18 @@
 #    is ready for Gradle: sys.boot_completed = 1, init.svc.bootanim = stopped (when the property
 #    exists) and `pm path android` answers (pending_readiness; feature 0008 F02). Each of those
 #    adb shell calls is bounded to 10 s by timeout/gtimeout where available (F06).
-# 2. `./gradlew --no-daemon :polyjose:connectedDebugAndroidTest` with ANDROID_SERIAL=<serial>.
-# 3. Judged by the JUnit XML under polyjose/build/outputs/androidTest-results/connected/, not by
-#    Gradle's exit status alone (AGP can report BUILD SUCCESSFUL when the instrumentation crashed,
-#    feature 0008 T04): FAIL when it is missing, names no test, has a failure, an error or a skipped
-#    test, or lacks the conformance test case.
+# 2. One Gradle call with ANDROID_SERIAL=<serial>:
+#      ./gradlew --no-daemon --continue :polyjose:connectedDebugAndroidTest \
+#        :sample-minified:connectedReleaseAndroidTest
+#    the instrumented suite, then the R8 consumer-rules proof: the minified release build of
+#    :sample-minified, shrunk under the AAR's consumer-rules.pro alone (ADR 0033 §2; review S5,
+#    feature 0008 F06). --continue runs the second task when the first fails, so both are judged.
+# 3. Judged by the JUnit XML, not by Gradle's exit status alone (AGP can report BUILD SUCCESSFUL
+#    when the instrumentation crashed, feature 0008 T04), by the same rules for each task's XML
+#    under <module>/build/outputs/androidTest-results/connected/: FAIL when it is missing, names no
+#    test, has a failure, an error or a skipped test, or lacks a required test case. Required:
+#    ConformanceInstrumentedTest.everyVectorRunsOnTheEmulator for :polyjose, and the three
+#    R8ProbeTest cases for :sample-minified. Gradle's exit status must be 0 as well.
 # 4. The results document: the test writes it to the test app's files dir and to AGP's additional
 #    test output dir on the device, which AGP pulls to
 #    polyjose/build/outputs/connected_android_test_additional_output/ before it uninstalls the test
@@ -51,6 +58,7 @@ esac
 results=$repo/target/conformance/android-emulator.json
 outputs=$android_dir/polyjose/build/outputs
 xml_dir=$outputs/androidTest-results/connected
+r8_xml_dir=$android_dir/sample-minified/build/outputs/androidTest-results/connected
 pulled_dir=$outputs/connected_android_test_additional_output
 
 # The emulator this script started (its serial and PID) and its log dir, removed on exit.
@@ -178,29 +186,43 @@ else
   echo "android: 16 KB page-size runtime: SKIPPED (the device has ${page_size:-unknown}-byte pages; 16 KB alignment is checked statically)"
 fi
 
-rm -rf "$xml_dir" "$pulled_dir"
-echo "==> android: ./gradlew :polyjose:connectedDebugAndroidTest (ANDROID_SERIAL=$serial)"
-ANDROID_SERIAL=$serial ./gradlew --no-daemon :polyjose:connectedDebugAndroidTest
+rm -rf "$xml_dir" "$r8_xml_dir" "$pulled_dir"
+tasks=":polyjose:connectedDebugAndroidTest :sample-minified:connectedReleaseAndroidTest"
+echo "==> android: ./gradlew --continue $tasks (ANDROID_SERIAL=$serial)"
+# shellcheck disable=SC2086 # $tasks is two task names
+ANDROID_SERIAL=$serial ./gradlew --no-daemon --continue $tasks
 gradle_rc=$?
 
-failed=0
-# The JUnit XML (see the header).
-xml_files=$(find "$xml_dir" -type f -name 'TEST-*.xml' 2>/dev/null)
-if [ -z "$xml_files" ]; then
-  echo "android-emulator: no JUnit XML under ${xml_dir#"$android_dir/"}"; failed=1
-else
-  counts=$(printf '%s\n' "$xml_files" | while IFS= read -r f; do grep -o '<testsuite [^>]*>' "$f"; done | awk '
+# judge_xml <label> <dir> <classname> <test case>...: the JUnit XML rules of the header for one
+# task's results. Prints the counts and every problem; returns 1 on any problem.
+judge_xml() {
+  local label=$1 dir=$2 class=$3 files counts tests failures errors skipped bad=0 name; shift 3
+  files=$(find "$dir" -type f -name 'TEST-*.xml' 2>/dev/null)
+  if [ -z "$files" ]; then echo "$label: no JUnit XML under ${dir#"$android_dir/"}"; return 1; fi
+  counts=$(printf '%s\n' "$files" | while IFS= read -r f; do grep -o '<testsuite [^>]*>' "$f"; done | awk '
     { for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2) { gsub(/"/, "", kv[2]); n[kv[1]] += kv[2] } }
     END { printf "%d %d %d %d\n", n["tests"], n["failures"], n["errors"], n["skipped"] }')
   read -r tests failures errors skipped <<<"$counts"
-  echo "android-emulator: JUnit XML: $tests tests, $failures failures, $errors errors, $skipped skipped"
-  if [ "$tests" -eq 0 ] || [ "$failures" -ne 0 ] || [ "$errors" -ne 0 ] || [ "$skipped" -ne 0 ]; then failed=1; fi
-  if ! printf '%s\n' "$xml_files" | while IFS= read -r f; do cat "$f"; done |
-    grep -q '<testcase name="everyVectorRunsOnTheEmulator" classname="dev.polyjose.ConformanceInstrumentedTest"'; then
-    echo "android-emulator: the JUnit XML has no ConformanceInstrumentedTest.everyVectorRunsOnTheEmulator"; failed=1
-  fi
+  echo "$label: JUnit XML: $tests tests, $failures failures, $errors errors, $skipped skipped"
+  if [ "$tests" -eq 0 ] || [ "$failures" -ne 0 ] || [ "$errors" -ne 0 ] || [ "$skipped" -ne 0 ]; then bad=1; fi
+  for name in "$@"; do
+    if ! printf '%s\n' "$files" | while IFS= read -r f; do cat "$f"; done |
+      grep -q "<testcase name=\"$name\" classname=\"$class\""; then
+      echo "$label: the JUnit XML has no ${class##*.}.$name"; bad=1
+    fi
+  done
+  return "$bad"
+}
+
+failed=0
+judge_xml android-emulator "$xml_dir" dev.polyjose.ConformanceInstrumentedTest everyVectorRunsOnTheEmulator || failed=1
+if judge_xml "android-r8" "$r8_xml_dir" dev.polyjose.sample.R8ProbeTest theLibraryLoadsAndReportsItsVersion \
+  anEs256RoundTripReturnsThePayload anInvalidJwkIsReportedByItsCode; then
+  echo "android-r8: the minified :sample-minified release passed R8ProbeTest (consumer-rules.pro, ADR 0033 §2)"
+else
+  failed=1
 fi
-[ "$gradle_rc" -eq 0 ] || { echo "android-emulator: :polyjose:connectedDebugAndroidTest exited $gradle_rc"; failed=1; }
+[ "$gradle_rc" -eq 0 ] || { echo "android-emulator: ./gradlew $tasks exited $gradle_rc"; failed=1; }
 
 # The results document AGP pulled (see the header).
 pulled=$(find "$pulled_dir" -type f -name android-emulator.json 2>/dev/null)
