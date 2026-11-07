@@ -261,17 +261,19 @@ test("errorCodes(): a hole in the backend's list is a TypeError, never read thro
 test("a backend error's code is mapped only from the backend's own errorCodes() entries", async () => {
   // A hole in errorCodes() must not let Array.prototype[1] add a code to the mapping set.
   const holey = ["InvalidJson", , "InvalidKey"];
+  const unlisted = coded("InvalidSignature", "x");
   const fake = fakeBackend({
     handlers: {
       errorCodes: () => holey,
       jwkParse: () => {
-        throw coded("InvalidSignature", "x");
+        throw unlisted;
       },
     },
   });
   const api = createApi(fake.backend);
+  // An unlisted code is not a PolyjoseError; it is passed through unchanged (0013 F12).
   await assert.rejects(
     polluted(Array.prototype, 1, "InvalidSignature", () => api.jwkParse(KEY)),
-    (e: unknown) => e instanceof TypeError && !(e instanceof PolyjoseError),
+    (e: unknown) => e === unlisted && !(e instanceof PolyjoseError),
   );
 });
