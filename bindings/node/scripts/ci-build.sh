@@ -23,7 +23,10 @@
 #        CARGO_BUILD_TARGET=<target>          napi build and cargo both read it, so the addon and
 #                                             the reference run are built for exactly <target>
 #        POLYJOSE_CONFORMANCE_SUFFIX=<label>  test/conformance.test.ts writes node-<label>.json
-#   3. checks that target/conformance/node-<label>.json was written;
+#      and, for the two *-pc-windows-msvc targets, RUSTFLAGS with -C target-feature=+crt-static
+#      (review-code.md SF-1);
+#   3. checks that target/conformance/node-<label>.json was written, and for msvc that the addon
+#      imports no VCRUNTIME*.dll or MSVCP*.dll (python3 -I scripts/pe-imports.py --deny-crt);
 #   4. scripts/pack-platform.sh <platform> <target> dist/npm/ (shared with scripts/pack.sh):
 #      dist/npm/polyjose-node-<platform>-<version>.tgz, then checks its file list.
 #
@@ -72,11 +75,33 @@ process.stdout.write(name);
 ')
 [ "$host" = "$platform" ] || die "$target ($platform) is not this host ($host); run it on a native $platform runner"
 
+# The msvc addons link the C runtime statically (review-code.md SF-1). Rust's *-pc-windows-msvc
+# targets link it dynamically (/MD) by default, so the addon would import VCRUNTIME140.dll, which
+# comes from the VC++ Redistributable, not from Windows: official Node builds link their CRT
+# statically and don't ship it, so the addon would not load on a clean machine, Server Core or a
+# nanoserver container. napi-rs's project template sets the same flag in .cargo/config.toml, which
+# this repository forbids (scripts/check-no-cargo-config.sh). napi build appends its own flags to
+# RUSTFLAGS and always passes --target, so the flag reaches the target's crates only, never build
+# scripts or proc macros. test.sh's rust-core reference run is built with it too.
+crt_static=false
+case $target in *-pc-windows-msvc) crt_static=true ;; esac
+if [ "$crt_static" = true ]; then
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static"
+fi
+
 echo "==> @polyjose/node ci-build: $target ($platform), results node-$label.json"
 CARGO_BUILD_TARGET=$target POLYJOSE_CONFORMANCE_SUFFIX=$label ./test.sh
 
 results=../../target/conformance/node-$label.json
 [ -f "$results" ] || die "$results was not written"
+
+# The static CRT took effect: the addon imports no VCRUNTIME*.dll or MSVCP*.dll (SF-1). The
+# reader, scripts/pe-imports.py (python3 standard library only), prints every imported DLL and
+# fails closed on anything it cannot parse; test/ci.test.ts checks it on test/fixtures/pe/.
+if [ "$crt_static" = true ]; then
+  echo "==> @polyjose/node ci-build: polyjose.$platform.node imports no VC++ runtime DLL"
+  python3 -I scripts/pe-imports.py --deny-crt "polyjose.$platform.node"
+fi
 
 echo "==> @polyjose/node ci-build: pack @polyjose/node-$platform"
 scripts/pack-platform.sh "$platform" "$target" dist/npm
