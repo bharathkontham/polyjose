@@ -2,7 +2,7 @@
 // recorded twice: `args` as the arguments were at the call (byte arrays copied, because the facade
 // wipes the copies it hands the backend once the call settles) and `received` exactly as passed.
 // An operation without a scripted handler throws a plain Error (no `code`), which the
-// facade turns into a TypeError, so a test can never pass through an unscripted path silently.
+// facade passes through unchanged (0013 F12), so a test can never pass through an unscripted path silently.
 import type { Backend } from "../src/backend.js";
 import { ERROR_CODES } from "../src/error-codes.js";
 
