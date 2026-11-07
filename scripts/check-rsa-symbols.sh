@@ -53,9 +53,18 @@
 # llvm-ar/llvm-nm on PATH, then ar/nm (Xcode's are LLVM's; GNU binutils' nm reads ELF but not
 # wasm). CI installs llvm-tools.
 #
-# Residual risk: code compiled only for a target that is not built here (the Android and Apple
-# targets of rust-toolchain.toml) is seen by the text scan only, until those binding jobs add
-# their target to this check. Code that is never compiled (unreachable private code) ships nothing
+# Residual risk: code compiled only for a target that is not built here is seen by the text scan
+# only, except where the job that builds that target runs this check too:
+#   - the Android and Apple targets of rust-toolchain.toml: the text scan only, until those
+#     binding jobs add their target to this check;
+#   - the @polyjose/node prebuild targets other than this Mac's (aarch64-apple-darwin):
+#     x86_64-apple-darwin, x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
+#     x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, x86_64-pc-windows-msvc and
+#     aarch64-pc-windows-msvc. .github/workflows/binding-node.yml runs this check with `--only
+#     polyjose-node --only polyjose-node-release` on each target's own runner, so their
+#     target-only code is read only when that workflow runs: at the release candidate, never on a
+#     PR (ADR 0044; review-security.md L2).
+# Code that is never compiled (unreachable private code) ships nothing
 # and has no symbol; the text scan covers it. Public code that polyjose never codegens (an uncalled
 # `#[inline] pub fn`, a generic `pub fn` it never instantiates) has no symbol here either, yet a
 # downstream crate can call it and compile it there: the text scan covers it, its macro rule

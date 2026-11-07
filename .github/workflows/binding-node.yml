@@ -1,16 +1,20 @@
 # @polyjose/node prebuilds (feature 0007 T05; ADR 0031 §2, ADR 0034 §2 and §5, ADR 0037 §1).
 #
 # Builds, tests and packs the addon for each of the eight napi targets of bindings/node/package.json
-# on a native runner, runs the suite on Node 22, 24 and 26 on linux-x64, then checks conformance
-# parity over every results file. All of the build logic is in bindings/node/scripts/ci-build.sh, so a
-# local run (`scripts/ci-build.sh aarch64-apple-darwin`) and a CI run check the same things.
+# on a native runner, runs the suite on Node 22, 24 and 26 on linux-x64 and the compiled tests on
+# Node 22.12.0 (the engines floor), then checks conformance parity over every results file. All of
+# the build logic is in bindings/node/scripts/ci-build.sh, so a local run (`scripts/ci-build.sh
+# aarch64-apple-darwin`) and a CI run check the same things.
 #
 # When it runs (ADR 0044; owner, 2026-11-07): never on PRs or pushes. The platform matrix runs once,
 # at the 0.1.0 release candidate, inside the release workflow of feature 0012, which turns this file
 # into a reusable workflow (0012 T03 adds `workflow_call` next to `workflow_dispatch`, and its
 # `mode` input, ADR 0037 §1). Until then the only trigger is a manual dispatch, and nobody dispatches
 # it without the owner. It is shaped for that change:
-#   - no inputs yet; any added later are declared identically under both triggers;
+#   - no inputs yet; any added later are declared identically under both triggers, and reach a
+#     script only through a step's `env:` (read there as "$MODE"), never as
+#     `${{ inputs.mode }}` inside `run:`, so an input value is data, never shell code
+#     (review-security.md I6). test/ci.test.ts rejects any inputs expression in a run: block;
 #   - nothing reads PR or event context, only `matrix.*`;
 #   - artifact names are fixed: npm-<target> (the platform tarball) and conformance-node-<label>
 #     (target/conformance/node-<label>.json), ADR 0037 §1;
@@ -24,6 +28,18 @@
 # Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
 # that SHA was resolved from. Bump both together (ci.yml's convention). The Alpine images are pinned
 # by digest the same way.
+#
+# Exception, apk packages (review-code.md N3): inside that image, `apk add` installs bash,
+# build-base, git, python3 and rustup at the versions Alpine's v3.23 repository holds when the
+# job runs, unpinned. Alpine keeps one build of each package per release branch: measured on
+# 2026-11-07, the v3.23 main and community indexes held exactly one version of each of these
+# (and of 27,428 of their 27,433 packages), so a `pkg=version-rN` pin would fail the job as soon
+# as Alpine replaces that build, and there is no dated snapshot to pin to.
+# What stays fixed: the image digest fixes the base system, the repository branch and apk's
+# signing keys, against which apk checks every index and package; the Rust toolchain comes from
+# rust-toolchain.toml's exact channel through rustup, not from apk. What can move between runs
+# is the C toolchain of build-base (gcc, binutils' linker, musl-dev), which links the musl
+# addons, plus bash, git, python3 and rustup itself.
 name: binding-node
 
 on:
@@ -114,9 +130,25 @@ jobs:
         if: ${{ !matrix.image }}
         run: bindings/node/scripts/ci-build.sh "${{ matrix.target }}"
 
-      # musl jobs: the same script inside Alpine. rustup comes from Alpine's own package; the
-      # container's default target is the runner's musl target, built dynamically linked (napi
-      # build adds -crt-static for musl).
+      # The RSA symbol guard (ADR 0049 §1) for this job's target (review-security.md L2). The guard
+      # builds for the host, and on these runners the host is the target (ci-build.sh checked
+      # that), so code compiled only for linux, musl or windows is read as object code too, not only
+      # by check-deps.sh's text scan. It needs the toolchain's llvm-nm and llvm-ar (llvm-tools); it
+      # looks for them in the toolchain without an .exe suffix, so on Windows their directory goes
+      # on PATH, where its PATH lookup finds them. The musl jobs run it inside Alpine, below.
+      - name: RSA symbol guard (native)
+        if: ${{ !matrix.image }}
+        run: |
+          rustup component add llvm-tools
+          if [ "$RUNNER_OS" = Windows ]; then
+            host=$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')
+            PATH="$(cygpath -u "$(rustc --print sysroot)")/lib/rustlib/$host/bin:$PATH"
+          fi
+          scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
+
+      # musl jobs: the same script inside Alpine, then the RSA symbol guard there (L2, above).
+      # rustup comes from Alpine's own package; the container's default target is the runner's
+      # musl target, built dynamically linked (napi build adds -crt-static for musl).
       - name: ci-build.sh (Alpine)
         if: ${{ matrix.image }}
         env:
@@ -131,8 +163,10 @@ jobs:
               . "$HOME/.cargo/env"
               rustup toolchain install
               rustup target add "$TARGET"
+              rustup component add llvm-tools
               rustup show
               bindings/node/scripts/ci-build.sh "$TARGET"
+              scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
             '
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -147,8 +181,9 @@ jobs:
           path: target/conformance/node-${{ matrix.target }}.json
           if-no-files-found: error
 
-  # The Node-API floor and the current releases (ADR 0031 §2: engines >= 22.12; Node 22, 24 and 26).
-  # Each run has its own results label, so parity sees all three.
+  # The Node-API floor and the current releases (ADR 0031 §2: engines >= 22.12; Node 22, 24 and 26),
+  # plus the compiled tests on Node 22.12.0 itself on the Node 22 leg. Each run has its own results
+  # label, so parity sees all four.
   node-versions:
     name: node ${{ matrix.node }} (x86_64-unknown-linux-gnu)
     strategy:
@@ -183,6 +218,38 @@ jobs:
         with:
           name: conformance-node-x86_64-unknown-linux-gnu-node${{ matrix.node }}
           path: target/conformance/node-x86_64-unknown-linux-gnu-node${{ matrix.node }}.json
+          if-no-files-found: error
+
+      # The engines floor itself, exactly (review-code.md SF-7). The build above needs Node 22.18 or
+      # later (bindings/js's gen-error-codes.ts uses type stripping), so `22` gives the newest 22.x;
+      # this leg then installs 22.12.0 and runs the already compiled tests on it, against the addon
+      # built above: test.sh's list (every dist/*.test.js except package.test.js, which pack.sh
+      # runs), with its own results label. Nothing is built or installed on 22.12.0.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.node == 22
+        with:
+          node-version: 22.12.0
+          package-manager-cache: false
+
+      - name: node --test on Node 22.12.0 (the engines floor)
+        if: matrix.node == 22
+        working-directory: bindings/node
+        env:
+          POLYJOSE_CONFORMANCE_SUFFIX: x86_64-unknown-linux-gnu-node22.12
+        run: |
+          [ "$(node --version)" = v22.12.0 ] || { echo "::error::expected Node v22.12.0, got $(node --version)"; exit 1; }
+          tests=()
+          for f in dist/*.test.js; do
+            [ "$f" = dist/package.test.js ] || tests+=("$f")
+          done
+          [ "${#tests[@]}" -gt 0 ] || { echo "::error::no compiled tests in bindings/node/dist"; exit 1; }
+          node --test --test-reporter=spec "${tests[@]}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.node == 22
+        with:
+          name: conformance-node-x86_64-unknown-linux-gnu-node22.12
+          path: target/conformance/node-x86_64-unknown-linux-gnu-node22.12.json
           if-no-files-found: error
 
   # ADR 0034 §5: every results file against a fresh rust-core reference (default features, ADR 0034
@@ -228,7 +295,8 @@ jobs:
             x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
             x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
             x86_64-pc-windows-msvc aarch64-pc-windows-msvc \
-            x86_64-unknown-linux-gnu-node22 x86_64-unknown-linux-gnu-node24 x86_64-unknown-linux-gnu-node26; do
+            x86_64-unknown-linux-gnu-node22 x86_64-unknown-linux-gnu-node24 x86_64-unknown-linux-gnu-node26 \
+            x86_64-unknown-linux-gnu-node22.12; do
             f=target/conformance/node-$label.json
             if [ -f "$f" ]; then echo "present: $f"; else echo "::error::missing $f"; missing=1; fi
           done

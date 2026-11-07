@@ -16,12 +16,33 @@
 //     the scripts run passes `--locked`, and every `npm ci` passes `--ignore-scripts`.
 // The YAML is read with the minimal line reader below (indentation, keys, flow mappings), enough
 // for the shape this workflow uses; no YAML dependency (ADR 0047: typescript is the only one).
-import { assert, fs, path, test } from "../../js/dist/node/builtins.js";
+import { assert, fs, os, path, test } from "../../js/dist/node/builtins.js";
 
 interface NodeUrl {
   fileURLToPath(url: string): string;
 }
-const host = (globalThis as unknown as { process: { getBuiltinModule(id: "node:url"): NodeUrl } }).process;
+interface SpawnResult {
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly error?: Error;
+}
+interface NodeChildProcess {
+  spawnSync(file: string, args: readonly string[], options: { encoding: "utf8" }): SpawnResult;
+}
+interface NodeFsBytes {
+  readFileSync(path: string): Uint8Array;
+  writeFileSync(path: string, data: Uint8Array): void;
+}
+interface Host {
+  readonly platform: string;
+  getBuiltinModule(id: "node:url"): NodeUrl;
+  getBuiltinModule(id: "node:child_process"): NodeChildProcess;
+  getBuiltinModule(id: "node:fs"): NodeFsBytes;
+}
+const host = (globalThis as unknown as { process: Host }).process;
+const cp = host.getBuiltinModule("node:child_process");
+const fsb = host.getBuiltinModule("node:fs");
 const thisFile = host.getBuiltinModule("node:url").fileURLToPath((import.meta as unknown as { url: string }).url);
 /** bindings/node: this file is bindings/node/dist/ci.test.js. */
 const pkgDir = path.resolve(path.dirname(thisFile), "..");
@@ -423,4 +444,337 @@ test("every npm ci in the build scripts passes --ignore-scripts", () => {
     }
   }
   assert.equal(runs, 4, "test.sh and build.sh each run npm ci in bindings/node and bindings/js");
+});
+
+// --- The PE import reader (review-code.md SF-1) -----------------------------------------------------
+
+const peReader = path.join(pkgDir, "scripts", "pe-imports.py");
+const peFixture = (name: string): string => path.join(pkgDir, "test", "fixtures", "pe", name);
+/** As ci-build.sh runs it. Windows runners have python.exe only; their python3 is a shim for bash. */
+const python = host.platform === "win32" ? "python" : "python3";
+
+function peImports(...args: string[]): { status: number | null; lines: string[]; stderr: string } {
+  const r = cp.spawnSync(python, ["-I", peReader, ...args], { encoding: "utf8" });
+  assert.equal(r.error, undefined, `${python} runs`);
+  return { status: r.status, lines: r.stdout.split(/\r?\n/).filter((l) => l !== ""), stderr: r.stderr };
+}
+
+/** A scratch directory for edited copies of the fixtures, removed after `fn`. */
+function withScratch(fn: (dir: string) => void): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-pe-"));
+  try {
+    fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** `bytes` with every ASCII occurrence of `from` replaced by `to` (the same length). */
+function replaceAscii(bytes: Uint8Array, from: string, to: string): Uint8Array {
+  assert.equal(from.length, to.length);
+  const out = Uint8Array.from(bytes);
+  let hits = 0;
+  for (let i = 0; i + from.length <= out.length; i++) {
+    if ([...from].every((c, j) => out[i + j] === c.charCodeAt(0))) {
+      [...to].forEach((c, j) => (out[i + j] = c.charCodeAt(0)));
+      hits += 1;
+    }
+  }
+  assert.ok(hits > 0, `${from} occurs in the fixture`);
+  return out;
+}
+
+test("the PE import reader lists the DLLs a PE file imports (fixtures: test/fixtures/pe/regen.sh)", () => {
+  const dynamic = peImports(peFixture("crt-dynamic-x64.dll"));
+  assert.equal(dynamic.status, 0, dynamic.stderr);
+  assert.deepEqual(dynamic.lines, ["KERNEL32.dll", "VCRUNTIME140.dll", "MSVCP140.dll"], "x86-64, in import-table order");
+  const stat = peImports(peFixture("crt-static-arm64.dll"));
+  assert.equal(stat.status, 0, stat.stderr);
+  assert.deepEqual(stat.lines, ["KERNEL32.dll"], "ARM64");
+});
+
+test("--deny-crt fails on a VCRUNTIME*.dll or MSVCP*.dll import, in any case, and passes a static-CRT DLL", () => {
+  const dynamic = peImports("--deny-crt", peFixture("crt-dynamic-x64.dll"));
+  assert.equal(dynamic.status, 1, "the dynamic-CRT DLL fails");
+  assert.match(dynamic.stderr, /VCRUNTIME140\.dll/);
+  assert.match(dynamic.stderr, /MSVCP140\.dll/);
+  assert.equal(peImports("--deny-crt", peFixture("crt-static-arm64.dll")).status, 0, "the static-CRT DLL passes");
+  withScratch((dir) => {
+    const original = fsb.readFileSync(peFixture("crt-dynamic-x64.dll"));
+    // DLL names are case-insensitive on Windows: each forbidden name alone, lowercased, still
+    // fails. The other forbidden name is renamed to a harmless one of the same length.
+    for (const { lower, upper, other, harmless } of [
+      { lower: "vcruntime140.dll", upper: "VCRUNTIME140.dll", other: "MSVCP140.dll", harmless: "WS2_32XX.dll" },
+      { lower: "msvcp140.dll", upper: "MSVCP140.dll", other: "VCRUNTIME140.dll", harmless: "BCRYPTPRIMXX.dll" },
+    ]) {
+      const file = path.join(dir, lower);
+      fsb.writeFileSync(file, replaceAscii(replaceAscii(original, other, harmless), upper, lower));
+      assert.deepEqual(peImports(file).lines, ["KERNEL32.dll", ...(upper === "VCRUNTIME140.dll" ? [lower, harmless] : [harmless, lower])]);
+      const r = peImports("--deny-crt", file);
+      assert.equal(r.status, 1, `${lower} alone fails`);
+      assert.ok(r.stderr.includes(lower), `the failure names ${lower}`);
+      assert.ok(!r.stderr.includes(harmless), `and not ${harmless}`);
+    }
+  });
+});
+
+test("the PE import reader fails closed (exit 2) on anything that is not a well-formed PE file", () => {
+  withScratch((dir) => {
+    const original = fsb.readFileSync(peFixture("crt-dynamic-x64.dll"));
+    const cases: [string, Uint8Array][] = [
+      ["empty", new Uint8Array(0)],
+      ["the DOS header only", original.slice(0, 64)],
+      ["headers without the import table", original.slice(0, 512)],
+      ["not a PE file", Uint8Array.from("{\"name\": \"x\"}", (c) => c.charCodeAt(0))],
+    ];
+    // e_lfanew (offset 0x3c) pointing past the end of the file.
+    const lfanew = Uint8Array.from(original);
+    lfanew.set([0xf0, 0xff, 0x00, 0x00], 0x3c);
+    cases.push(["e_lfanew past the end", lfanew]);
+    for (const [what, bytes] of cases) {
+      const file = path.join(dir, "case.dll");
+      fsb.writeFileSync(file, bytes);
+      for (const args of [[file], ["--deny-crt", file]]) {
+        const r = peImports(...args);
+        assert.equal(r.status, 2, `${what} (${args.join(" ")}): exit 2, not a pass; stderr: ${r.stderr}`);
+        assert.deepEqual(r.lines, [], `${what}: no import is listed`);
+      }
+    }
+    assert.equal(peImports(path.join(dir, "missing.dll")).status, 2, "a missing file");
+    assert.equal(peImports().status, 2, "no file");
+    assert.equal(peImports("--deny-crt").status, 2, "--deny-crt and no file");
+  });
+});
+
+/** The index of the only line of `lines` matching `pattern`. */
+function onlyLine(lines: readonly string[], pattern: RegExp, what: string): number {
+  const found = lines.flatMap((line, i) => (pattern.test(line) ? [i] : []));
+  assert.equal(found.length, 1, `${what}: exactly one line (found ${found.length})`);
+  return found[0] ?? -1;
+}
+
+/** Whether line `at` is inside an `if <condition>; then ... fi` whose condition line matches `cond`. */
+function insideIf(lines: readonly string[], at: number, cond: RegExp): boolean {
+  let depth = 0;
+  for (let i = at - 1; i >= 0; i--) {
+    const line = (lines[i] ?? "").trim();
+    if (/^fi\b/.test(line)) depth += 1;
+    else if (/^if\b/.test(line)) {
+      if (depth === 0) return cond.test(line);
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
+test("ci-build.sh links the msvc addons' C runtime statically and checks they import no VC++ runtime DLL", () => {
+  const raw = codeLines(ciBuildFile);
+  const gate = /^if \[ "\$crt_static" = true \]; then$/;
+  onlyLine(raw, /^\s*case \$target in \*-pc-windows-msvc\) crt_static=true ;; esac$/, "crt_static is set for the *-pc-windows-msvc targets only");
+  onlyLine(raw, /^\s*crt_static=false$/, "and false otherwise");
+  const flags = onlyLine(
+    raw,
+    /^\s*export RUSTFLAGS="\$\{RUSTFLAGS:\+\$RUSTFLAGS \}-C target-feature=\+crt-static"$/,
+    "RUSTFLAGS gains -C target-feature=+crt-static (napi build appends its own flags to it)",
+  );
+  const build = onlyLine(raw, /^\s*CARGO_BUILD_TARGET=\S+ POLYJOSE_CONFORMANCE_SUFFIX=\S+ \.\/test\.sh$/, "the build and test run");
+  const check = onlyLine(
+    raw,
+    /^\s*python3 -I scripts\/pe-imports\.py --deny-crt "polyjose\.\$platform\.node"$/,
+    "the import check on the built addon",
+  );
+  const pack = onlyLine(raw, /^\s*scripts\/pack-platform\.sh /, "the platform pack");
+  assert.ok(insideIf(raw, flags, gate), "the flag is set only when crt_static is true");
+  assert.ok(insideIf(raw, check, gate), "the check runs only when crt_static is true");
+  assert.ok(flags < build && build < check && check < pack, "flag, then build, then the check, then the pack");
+});
+
+/** The text of `const <name> = ...` in `src` up to its closing `\n}\n`. */
+function definition(src: string, name: string): string {
+  const start = src.indexOf(`const ${name} = `);
+  assert.ok(start >= 0, `${name} is defined`);
+  const end = src.indexOf("\n}\n", start);
+  assert.ok(end > start, `${name} ends`);
+  return src.slice(start, end);
+}
+
+/** The positions of `markers` in `src`, each found exactly once, in that order. */
+function inOrder(src: string, markers: readonly string[], where: string): void {
+  let last = -1;
+  for (const m of markers) {
+    const at = src.indexOf(m);
+    assert.ok(at >= 0, `${where}: ${m}`);
+    assert.equal(src.indexOf(m, at + 1), -1, `${where}: ${m} once`);
+    assert.ok(at > last, `${where}: ${m} comes after the previous probe`);
+    last = at;
+  }
+}
+
+test("ci-build.sh tells glibc from musl as the loader does: /usr/bin/ldd, the process report, ldd --version", () => {
+  // The generated loader (binding.cjs, built before the tests run): isMusl() tries its three
+  // probes in this order, each returning null to pass on (review-code.md N4).
+  const loader = read(path.join(pkgDir, "binding.cjs"));
+  inOrder(definition(loader, "isMusl"), ["isMuslFromFilesystem()", "isMuslFromReport()", "isMuslFromChildProcess()"], "binding.cjs isMusl");
+  assert.match(definition(loader, "isMuslFromFilesystem"), /readFileSync\('\/usr\/bin\/ldd', 'utf-8'\)\.includes\('musl'\)/);
+  const report = definition(loader, "isMuslFromReport");
+  assert.match(report, /process\.report\.excludeNetwork = true\s+report = process\.report\.getReport\(\)/);
+  assert.match(report, /glibcVersionRuntime\)\s*\{\s*return false/);
+  assert.match(definition(loader, "isFileMusl"), /f\.includes\('libc\.musl-'\) \|\| f\.includes\('ld-musl-'\)/);
+  assert.match(definition(loader, "isMuslFromChildProcess"), /execSync\('ldd --version', \{ encoding: 'utf8' \}\)\.includes\('musl'\)/);
+
+  // ci-build.sh's host check makes the same three probes, in the same order, with the same tests.
+  const script = codeLines(ciBuildFile).join("\n");
+  inOrder(
+    script,
+    [
+      'readFileSync("/usr/bin/ldd", "utf8").includes("musl")',
+      "process.report.excludeNetwork = true;",
+      "process.report.getReport()",
+      "report.header.glibcVersionRuntime",
+      'f.includes("libc.musl-") || f.includes("ld-musl-")',
+      'execSync("ldd --version", { encoding: "utf8" }).includes("musl")',
+    ],
+    "ci-build.sh",
+  );
+  assert.match(script, /name \+= isMusl\(\) \? "-musl" : "-gnu"/, "the libc suffix comes from that order alone");
+});
+
+/** The steps of a job block: each `- ...` item of its `steps:` list with the lines under it. */
+function stepsOf(job: readonly Line[]): { line: Line; text: string }[] {
+  const at = job.findIndex((l) => l.text === "steps:");
+  assert.ok(at >= 0, "the job has steps");
+  const block = blockUnder(job, at);
+  const items = entriesOf(block).map((e) => block.indexOf(e.line));
+  return items.map((start, i) => ({
+    line: block[start] as Line,
+    text: block
+      .slice(start, items[i + 1] ?? block.length)
+      .map((l) => l.text.replace(/^-\s+/, ""))
+      .join("\n"),
+  }));
+}
+
+test("binding-node.yml runs the compiled tests on Node 22.12.0 exactly, the engines floor, with its own label", () => {
+  const { lines } = workflow();
+  const pkg: unknown = JSON.parse(read(path.join(pkgDir, "package.json")));
+  assert.ok(isRecord(pkg) && isRecord(pkg["engines"]));
+  assert.equal(pkg["engines"]["node"], ">=22.12", "the floor the run below proves (ADR 0031 §2)");
+  const floor = "22.12.0";
+  const label = "x86_64-unknown-linux-gnu-node22.12";
+
+  const steps = stepsOf(jobBlock(lines, "node-versions"));
+  const build = steps.findIndex((s) => /ci-build\.sh x86_64-unknown-linux-gnu /.test(s.text));
+  assert.ok(build >= 0, "node-versions builds with ci-build.sh first");
+  const setup = steps.findIndex((s) => /^uses: actions\/setup-node@/.test(s.text) && /node-version: 22\.12\.0$/m.test(s.text));
+  assert.ok(setup > build, `after the build, setup-node installs exactly ${floor} (not a range or 22.x)`);
+  const run = steps.findIndex((s) => /\bnode --test\b/.test(s.text));
+  assert.ok(run > setup, "then runs node --test");
+  const upload = steps.findIndex((s) => s.text.includes(`name: conformance-node-${label}`));
+  assert.ok(upload > run, "then uploads its results");
+  for (const i of [setup, run, upload]) {
+    assert.match(steps[i]?.text ?? "", /^if: matrix\.node == 22$/m, "on the Node 22 leg, whose build is the newest 22.x");
+  }
+
+  const floorRun = steps[run]?.text ?? "";
+  assert.match(floorRun, /^working-directory: bindings\/node$/m);
+  assert.match(floorRun, new RegExp(`^POLYJOSE_CONFORMANCE_SUFFIX: ${label.replace(/\./g, "\\.")}$`, "m"), "its own results label");
+  assert.match(floorRun, /\[ "\$\(node --version\)" = v22\.12\.0 \]/, "it checks that the Node it runs is 22.12.0");
+  assert.match(floorRun, /for f in dist\/\*\.test\.js; do/, "the already compiled tests ...");
+  assert.match(floorRun, /\[ "\$f" = dist\/package\.test\.js \] \|\| tests\+=\("\$f"\)/, "... except package.test.js, as in test.sh");
+  assert.match(floorRun, /node --test --test-reporter=spec "\$\{tests\[@\]\}"/);
+  assert.doesNotMatch(floorRun, /\b(npm|npx|napi|cargo|tsc)\b|test\.sh|build\.sh/, "nothing is built or installed on 22.12.0");
+  assert.match(steps[upload]?.text ?? "", new RegExp(`path: target/conformance/node-${label.replace(/\./g, "\\.")}\\.json`));
+
+  const parity = jobBlock(lines, "parity").map((l) => l.text).join("\n");
+  assert.ok(parity.includes(label), `parity requires node-${label}.json`);
+});
+
+test("every prebuild job runs the RSA symbol guard on its own runner after the build (review-security.md L2)", () => {
+  const { lines } = workflow();
+  const guard = "scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release";
+  const steps = stepsOf(jobBlock(lines, "prebuild"));
+  assert.equal(steps.map((s) => s.text.split(guard).length - 1).reduce((a, b) => a + b, 0), 2, "the guard runs twice in the job text: native and Alpine");
+
+  // Native runners (every target but musl): a step after ci-build.sh (native), with llvm-tools.
+  const build = steps.findIndex((s) => /^name: ci-build\.sh \(native\)$/m.test(s.text));
+  const native = steps.findIndex((s) => s.text.includes(guard) && !/docker run/.test(s.text));
+  assert.ok(build >= 0 && native > build, "the native guard step comes after the native build");
+  const nativeText = steps[native]?.text ?? "";
+  assert.match(nativeText, /^if: \$\{\{ !matrix\.image \}\}$/m, "on the same jobs as the native build");
+  assert.ok(nativeText.indexOf("rustup component add llvm-tools") >= 0, "the toolchain's llvm-nm and llvm-ar");
+  assert.ok(nativeText.indexOf("rustup component add llvm-tools") < nativeText.indexOf(guard));
+
+  // musl: inside the same Alpine container, right after ci-build.sh.
+  const alpine = steps.find((s) => /^name: ci-build\.sh \(Alpine\)$/m.test(s.text))?.text ?? "";
+  assert.match(alpine, /^if: \$\{\{ matrix\.image \}\}$/m);
+  const tools = alpine.indexOf("rustup component add llvm-tools");
+  const ciBuild = alpine.indexOf('bindings/node/scripts/ci-build.sh "$TARGET"');
+  const inAlpine = alpine.indexOf(guard);
+  assert.ok(tools >= 0 && tools < ciBuild && ciBuild < inAlpine, "llvm-tools, then ci-build.sh, then the guard, in Alpine");
+});
+
+test("check-rsa-symbols.sh's residual-risk note names the node prebuild targets only binding-node.yml reads", () => {
+  const src = read(path.join(repo, "scripts", "check-rsa-symbols.sh"));
+  const start = src.indexOf("# Residual risk:");
+  assert.ok(start >= 0, "the guard has a residual-risk note");
+  const note = src.slice(start, src.indexOf("\n#\n", start));
+  // The guard itself builds for the host (aarch64-apple-darwin here); every other napi target is
+  // read only by the prebuild job on its own runner.
+  for (const target of napiTargets().filter((t) => t !== "aarch64-apple-darwin")) {
+    assert.ok(note.includes(target), `the note names ${target}`);
+  }
+  assert.ok(note.includes("binding-node.yml"), "and where they are checked");
+});
+
+/** The workflow's header comment (the lines before `name:`) as one line of prose, without the `#`s. */
+const headerProse = (src: string): string =>
+  src
+    .slice(0, src.indexOf("\nname:"))
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^#\s?/, "").trim())
+    .join(" ")
+    .replace(/\s+/g, " ");
+
+/** The text of every `run:` of a workflow: the value and, for a block scalar, the lines under it. */
+function runBlocks(lines: readonly Line[]): { line: Line; text: string }[] {
+  return lines.flatMap((line, i) => {
+    const kv = keyOf(line.text.replace(/^-\s+/, ""));
+    if (kv?.key !== "run") return [];
+    return [{ line, text: [kv.value, ...blockUnder(lines, i).map((l) => l.text)].join("\n") }];
+  });
+}
+
+test("no run: block of binding-node.yml interpolates an input; inputs reach scripts through env: (review-security.md I6)", () => {
+  // The reader itself: an inputs expression in a block or inline run is found, in env: it is not.
+  const sample = yamlLines(
+    ["steps:", "  - env:", "      MODE: ${{ inputs.mode }}", "    run: |", '      echo "$MODE"', "  - run: echo ${{ inputs.mode }}"].join("\n"),
+  );
+  assert.deepEqual(
+    runBlocks(sample).map((r) => r.text.includes("${{ inputs.")),
+    [false, true],
+  );
+  const { src, lines } = workflow();
+  const runs = runBlocks(lines);
+  assert.ok(runs.length > 5, "binding-node.yml has run steps");
+  for (const r of runs) {
+    assert.ok(!r.text.includes("${{ inputs."), `binding-node.yml:${r.line.no}: an input inside run: (pass it through env:)`);
+  }
+  // The rule is stated where 0012 will add the inputs.
+  assert.ok(headerProse(src).includes("never as `${{ inputs.mode }}` inside `run:`"), "the header states the env:-only rule");
+});
+
+test("binding-node.yml pins the Alpine packages, or states the exception and its reason (review-code.md N3)", () => {
+  const { src } = workflow();
+  const apk = [...src.matchAll(/^\s*apk add (.*)$/gm)];
+  assert.equal(apk.length, 1, "one apk add");
+  const packages = (apk[0]?.[1] ?? "").split(/\s+/).filter((p) => p !== "" && !p.startsWith("-"));
+  assert.ok(packages.length > 0);
+  const unpinned = packages.filter((p) => !/^[a-z0-9+._-]+=\S+$/.test(p));
+  if (unpinned.length === 0) return;
+  const header = headerProse(src);
+  const at = header.indexOf("Exception, apk packages (review-code.md N3):");
+  assert.ok(at >= 0, "the header states the exception");
+  const exception = header.slice(at);
+  for (const p of unpinned) assert.ok(exception.includes(p), `the exception names ${p}`);
+  assert.ok(exception.includes("keeps one build of each package per release branch"), "and why a version pin would not hold");
 });
