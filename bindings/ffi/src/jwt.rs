@@ -36,7 +36,8 @@ use crate::records::{
 ///
 /// `InvalidHeader` for `typ` with `omit_typ` or `access_token`, or `omit_typ` with
 /// `access_token` (ADR 0030 §4), and for reserved `header` members (ADR 0027 §6, §8);
-/// `UnsupportedAlgorithm` for RS*/PS* signing (ADR 0021); the core's key and claims errors.
+/// `UnsupportedAlgorithm` for RSA signing, `RS*` and `PS*` (ADR 0021); the core's key and claims
+/// errors.
 #[uniffi::export]
 pub fn jwt_sign(
     claims: String,

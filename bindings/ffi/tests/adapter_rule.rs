@@ -220,3 +220,37 @@ fn the_scan_rejects_a_body_that_does_more_than_convert() {
         Some("signers")
     );
 }
+
+#[test]
+fn no_doc_comment_can_end_or_nest_a_generated_block_comment() {
+    // UniFFI copies each doc comment verbatim into a `/** ... */` block of the generated Kotlin
+    // and Swift. A `*/` inside ends that block early and a `/*` opens a nested one (both
+    // languages nest block comments), so either breaks compilation of the generated sources:
+    // write `RS*` and `PS*`, never `RS*/PS*`.
+    let dir = format!("{}/src", env!("CARGO_MANIFEST_DIR"));
+    let mut scanned = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+        for (number, line) in source.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("///") || trimmed.starts_with("//!") {
+                let text = &trimmed[3..];
+                assert!(
+                    !text.contains("*/") && !text.contains("/*"),
+                    "{}:{}: a doc comment holds `*/` or `/*`: {line}",
+                    path.display(),
+                    number + 1
+                );
+            }
+        }
+        scanned += 1;
+    }
+    assert!(
+        scanned >= SOURCES.len(),
+        "scanned only {scanned} files in {dir}"
+    );
+}
