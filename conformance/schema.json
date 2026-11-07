@@ -348,7 +348,8 @@
         "InvalidClaim",
         "RandomnessUnavailable",
         "InvalidFormat",
-        "NoMatchingKey"
+        "NoMatchingKey",
+        "MultipleMatchingKeys"
       ]
     },
     "failure": {

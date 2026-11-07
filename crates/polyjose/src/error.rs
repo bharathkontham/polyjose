@@ -37,6 +37,11 @@
 //!   JWK `alg` is shorter than the hash output of the token's `HS*`
 //!   (RFC 7518 §3.2).
 //!
+//! Selecting one key from a set (`JwkSet::select`, ADR 0054 §4) is
+//! likewise caller-driven diagnostics: [`Error::MultipleMatchingKeys`]
+//! against [`Error::NoMatchingKey`] says whether the selector matched
+//! several members or none, so it is not for a client either.
+//!
 //! The codes stay deterministic and stable regardless (ADR 0007); only
 //! what reaches the client should be opaque.
 //!
@@ -227,6 +232,21 @@ pub enum Error {
     /// checked before any signature is computed (ADR 0029 §4). Neither the
     /// `kid` nor any key is echoed.
     NoMatchingKey,
+
+    /// More than one key of a JWK Set matches the caller's selector
+    /// (ADR 0054 §4, §5).
+    ///
+    /// A JWK Set's keys have no order of preference (RFC 7517 §5.1), and
+    /// distinct `kid` values within a set are only a SHOULD
+    /// (RFC 7517 §4.5), so two members can share a `kid`. polyjose refuses
+    /// to guess between two equally valid members.
+    ///
+    /// Only `JwkSet::select` (and the bindings' `jwks_select`) raises it.
+    /// JWT verification against a set never does: it tries every candidate
+    /// in order, and more candidates than its bound is
+    /// [`Error::NoMatchingKey`] (ADR 0029 §4). Neither the selector nor
+    /// any key is echoed.
+    MultipleMatchingKeys,
 }
 
 impl Error {
@@ -251,6 +271,7 @@ impl Error {
         "RandomnessUnavailable",
         "InvalidFormat",
         "NoMatchingKey",
+        "MultipleMatchingKeys",
     ];
 
     /// The stable, cross-platform code for this error (ADR 0007).
@@ -275,6 +296,7 @@ impl Error {
             Error::RandomnessUnavailable => "RandomnessUnavailable",
             Error::InvalidFormat(_) => "InvalidFormat",
             Error::NoMatchingKey => "NoMatchingKey",
+            Error::MultipleMatchingKeys => "MultipleMatchingKeys",
         }
     }
 }
@@ -304,6 +326,7 @@ impl core::fmt::Display for Error {
             Error::RandomnessUnavailable => f.write_str("randomness unavailable"),
             Error::InvalidFormat(detail) => write!(f, "invalid format: {detail}"),
             Error::NoMatchingKey => f.write_str("no matching key"),
+            Error::MultipleMatchingKeys => f.write_str("several keys match"),
         }
     }
 }
@@ -343,6 +366,7 @@ mod tests {
             Error::RandomnessUnavailable,
             Error::InvalidFormat("compact JWS must have three parts"),
             Error::NoMatchingKey,
+            Error::MultipleMatchingKeys,
         ]
     }
 
@@ -365,6 +389,7 @@ mod tests {
             Error::RandomnessUnavailable => 13,
             Error::InvalidFormat(_) => 14,
             Error::NoMatchingKey => 15,
+            Error::MultipleMatchingKeys => 16,
         }
     }
 
@@ -389,9 +414,28 @@ mod tests {
             "RandomnessUnavailable",
             "InvalidFormat",
             "NoMatchingKey",
+            "MultipleMatchingKeys",
         ];
         let actual: Vec<&str> = one_of_each().iter().map(Error::code).collect();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn multiple_matching_keys_is_appended_last() {
+        // ADR 0054 §5: a new code is appended, so every released index
+        // keeps its meaning.
+        assert_eq!(Error::CODES.len(), 17);
+        assert_eq!(Error::CODES[15], "NoMatchingKey");
+        assert_eq!(Error::CODES[16], "MultipleMatchingKeys");
+        assert_eq!(Error::MultipleMatchingKeys.code(), "MultipleMatchingKeys");
+        assert_eq!(
+            Error::MultipleMatchingKeys.to_string(),
+            "several keys match"
+        );
+        assert_eq!(
+            format!("{:?}", Error::MultipleMatchingKeys),
+            "MultipleMatchingKeys"
+        );
     }
 
     #[test]
@@ -440,6 +484,7 @@ mod tests {
             "randomness unavailable",
             "invalid format: compact JWS must have three parts",
             "no matching key",
+            "several keys match",
         ];
         let actual: Vec<String> = one_of_each().iter().map(Error::to_string).collect();
         assert_eq!(actual, expected);
