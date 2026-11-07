@@ -2,10 +2,13 @@
 // UniFFI-generated Kotlin (shared with `:polyjose-jvm`) plus libpolyjose_ffi.so for the four ABIs
 // from cargo-ndk. AGP 9 compiles Kotlin itself, so no Kotlin plugin is applied here.
 
+import dev.polyjose.gradle.ThirdPartyNotices
 import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.library)
+    // Group, workspace version, thirdPartyNotices and the POM (build-logic).
+    id("polyjose.packaging")
 }
 
 /** The polyjose repository root (the cargo workspace). */
@@ -73,6 +76,15 @@ abstract class SyncFromRootBuild @Inject constructor(private val fs: FileSystemO
     }
 }
 
+// META-INF/polyjose/THIRD-PARTY-NOTICES.txt inside the AAR's classes.jar (ADR 0020 §4, ADR 0033 §4;
+// a subfolder of META-INF, which AGP's packaging does not exclude). Generated for arm64-v8a; the
+// task fails if the crates of another ABI's library are not all listed in it. armeabi-v7a has one
+// crate fewer (no cpufeatures), so the file covers all four (feature 0008 T04).
+val thirdPartyNotices = tasks.named<ThirdPartyNotices>("thirdPartyNotices") {
+    primaryTarget = "aarch64-linux-android"
+    targets.addAll("armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android")
+}
+
 androidComponents {
     onVariants { variant ->
         val name = variant.name.replaceFirstChar { it.uppercase() }
@@ -86,6 +98,8 @@ androidComponents {
             source.from(files(sharedBuild.dir("jniLibs")).builtBy(":cargoNdkBuild"))
         }
         variant.sources.jniLibs?.addGeneratedSourceDirectory(jniLibs, SyncFromRootBuild::outputDir)
+        // Java resources end up in classes.jar.
+        variant.sources.resources?.addGeneratedSourceDirectory(thirdPartyNotices, ThirdPartyNotices::getOutputDir)
     }
 }
 
