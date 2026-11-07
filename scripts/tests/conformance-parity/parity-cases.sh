@@ -163,6 +163,7 @@ grep -q "^FAIL: node\\.json: vectors_digest differs: rust-core $DIGEST | node $O
 
 # (k) The SHA-256 of the empty input (a runner that read no vector file) fails in any file, the
 # reference included (ADR 0060 §3, §6.2).
+EMPTY_DIGEST=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 new_case empty-digest-binding
 put rust-core.json "$REFERENCE"
 put node.json "$(edit "$(as_runner node)" "\"vectors_digest\":\"$DIGEST\"" "\"vectors_digest\":\"$EMPTY_DIGEST\"")"
