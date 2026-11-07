@@ -56,7 +56,8 @@ pin_re='^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-
 pin_of() { sed -E "s|$pin_re|\\2|" | sed -E 's/[[:space:]]+#[[:space:]]+/ # /'; }
 pins_of() { grep -E "$pin_re" "$1" | pin_of; }
 allowed=$( { pins_of "$ci"; printf '%s\n' "$extra_pins"; } | sort -u)
-uses=$(grep -nE '^[[:space:]]*(-[[:space:]]+)?uses[[:space:]]*:' "$wf")
+# Every uses key, also a quoted one ("uses" or 'uses'), which pin_re then rejects.
+uses=$(grep -nE "^[[:space:]]*(-[[:space:]]+)?(uses|\"uses\"|'uses')[[:space:]]*:" "$wf")
 if [ -z "$uses" ]; then fail "actions: no uses: line"; fi
 while IFS= read -r line; do
   [ -n "$line" ] || continue
