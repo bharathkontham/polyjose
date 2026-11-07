@@ -61,8 +61,8 @@ pub fn jwk_to_public(jwk: &str) -> SurfaceResult<String> {
     Ok(public.to_json().as_str().to_owned())
 }
 
-/// The core hash `hash` names, or the core default for `None` (ADR 0054 §8.2, §9; ADR 0030
-/// §3: defaults live in the core).
+/// The core hash that `hash` names, or the core default for `None` (ADR 0054 §8.2, §9;
+/// ADR 0030 §3: defaults live in the core).
 ///
 /// The surface keeps no name table and no default of its own: `Some(name)` goes to
 /// [`ThumbprintHash::from_name`], which accepts exactly nine case-sensitive names (the IANA
