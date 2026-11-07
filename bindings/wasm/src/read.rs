@@ -18,10 +18,14 @@
 //!   and counts, and a safe integer (`|n| <= 2^53-1`) for JWT `now` (ADR 0030 §2, ADR 0028).
 //!   The facade already checked them (BACKEND.md); this is the type check of the conversion.
 //! - **Secrets** (ADR 0030 §7.1): a key is read with `JsValue::as_string`, which hands Rust the
-//!   only wasm-memory copy (like a by-value `String` parameter, research §3), and moved straight
-//!   into a [`SecretString`]; secret bytes (`detachedPayload`, `aad`) are copied once out of the
-//!   `Uint8Array` into a new `Vec<u8>` that moves straight into a [`SecretBytes`]. A reader that
-//!   fails half-way drops what it has read, wiping it.
+//!   only wasm-memory copy (the glue's `passStringToWasm0`, as for a by-value `String` parameter,
+//!   research §3), and moved straight into a [`SecretString`]; secret bytes (`detachedPayload`,
+//!   `aad`) are copied once out of the `Uint8Array` into a new `Vec<u8>` of exact capacity that
+//!   moves straight into a [`SecretBytes`]. A reader that fails half-way drops what it has read,
+//!   wiping it. So a record leaves no copy on the Rust heap (regression-tested in
+//!   `tests/memory.rs`, a reader that fails after the key included); the wasm shadow stack is not
+//!   scrubbed; JWT claims follow ADR 0058. A non-ASCII key string shares the glue's `realloc` edge
+//!   (`lib.rs`, "Secrets", review N7).
 
 use js_sys::{Array, Reflect, Uint8Array};
 use polyjose_surface::records::{
