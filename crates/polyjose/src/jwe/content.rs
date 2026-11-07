@@ -142,11 +142,19 @@ pub(crate) fn generate_iv(enc: &ContentEncAlg, rng: &mut dyn RandomSource) -> Re
 /// produced on encrypt), never a re-serialization (RFC 7516 §5.2 step 14;
 /// erratum 8676). It is empty when a JSON JWE has no protected header
 /// (RFC 7516 §7.2.1).
-pub(crate) fn aad(encoded_protected: &str, jwe_aad: Option<&[u8]>) -> Vec<u8> {
-    let mut out = encoded_protected.as_bytes().to_vec();
-    if let Some(jwe_aad) = jwe_aad {
+///
+/// The JWE AAD can carry application secrets (ADR 0050 §4, ADR 0030 §7.2),
+/// so its encoding and the result are wiped on drop, and the result is
+/// allocated once at its final size, so no reallocation frees an unwiped
+/// prefix.
+pub(crate) fn aad(encoded_protected: &str, jwe_aad: Option<&[u8]>) -> Zeroizing<Vec<u8>> {
+    let encoded = jwe_aad.map(|jwe_aad| Zeroizing::new(b64url_encode(jwe_aad)));
+    let len = encoded_protected.len() + encoded.as_ref().map_or(0, |e| 1 + e.len());
+    let mut out = Zeroizing::new(Vec::with_capacity(len));
+    out.extend_from_slice(encoded_protected.as_bytes());
+    if let Some(encoded) = encoded {
         out.push(b'.');
-        out.extend_from_slice(b64url_encode(jwe_aad).as_bytes());
+        out.extend_from_slice(encoded.as_bytes());
     }
     out
 }
@@ -327,11 +335,32 @@ mod tests {
 
     #[test]
     fn aad_is_the_encoded_protected_header_and_the_encoded_jwe_aad() {
-        assert_eq!(aad("eyJ9", None), b"eyJ9");
-        assert_eq!(aad("eyJ9", Some(b"\xff")), b"eyJ9._w");
+        assert_eq!(*aad("eyJ9", None), b"eyJ9");
+        assert_eq!(*aad("eyJ9", Some(b"\xff")), b"eyJ9._w");
         // No protected header (RFC 7516 §7.2.1): the '.' still separates.
-        assert_eq!(aad("", Some(b"\xff")), b"._w");
-        assert_eq!(aad("", None), b"");
+        assert_eq!(*aad("", Some(b"\xff")), b"._w");
+        assert_eq!(*aad("", None), b"");
+    }
+
+    /// The AAD holds `BASE64URL(JWE AAD)`, which can carry application
+    /// secrets (ADR 0050 §4), so it is wiped on drop and allocated once at
+    /// its final size: a reallocation would free an unwiped prefix (0006
+    /// security audit L3).
+    #[test]
+    fn aad_is_zeroizing_and_never_reallocated() {
+        for (protected, jwe_aad) in [
+            ("", None),
+            ("eyJ9", None),
+            ("", Some(&b"\xff"[..])),
+            (
+                "eyJlbmMiOiJBMTI4R0NNIn0",
+                Some(&b"0123456789abcdef0123456789abcdef"[..]),
+            ),
+            ("eyJ9", Some(&[7u8; 1000][..])),
+        ] {
+            let full: Zeroizing<Vec<u8>> = aad(protected, jwe_aad);
+            assert_eq!(full.capacity(), full.len(), "{protected} {jwe_aad:?}");
+        }
     }
 
     /// The content-encryption part of one RFC 7520 §5 example, read from
@@ -473,10 +502,13 @@ mod tests {
         let expected = format!("{}.{printed}", example.protected_b64);
         assert!(expected.starts_with("eyJhbGciOiJBMTI4S1ciLCJraWQiOiI4MWIy"));
         assert!(expected.ends_with(".WyJ2Y2FyZCIsW1sidmVyc2lvbiIse30sInRleHQiLCI0LjAiXSxbImZuIix7fSwidGV4dCIsIk1lcmlhZG9jIEJyYW5keWJ1Y2siXSxbIm4iLHt9LCJ0ZXh0IixbIkJyYW5keWJ1Y2siLCJNZXJpYWRvYyIsIk1yLiIsIiJdXSxbImJkYXkiLHt9LCJ0ZXh0IiwiVEEgMjk4MiJdLFsiZ2VuZGVyIix7fSwidGV4dCIsIk0iXV1d"));
-        assert_eq!(aad(&example.protected_b64, Some(&raw)), expected.as_bytes());
+        assert_eq!(
+            *aad(&example.protected_b64, Some(&raw)),
+            expected.as_bytes()
+        );
         // Without the JWE AAD only the protected header is authenticated.
         assert_eq!(
-            aad(&example.protected_b64, None),
+            *aad(&example.protected_b64, None),
             example.protected_b64.as_bytes()
         );
     }
@@ -488,10 +520,10 @@ mod tests {
         let example = cookbook(RFC7520_5_12);
         assert_eq!(example.protected_b64, "");
         assert!(example.jwe_aad.is_none());
-        assert_eq!(aad(&example.protected_b64, None), b"");
+        assert_eq!(*aad(&example.protected_b64, None), b"");
         // An empty protected header with a JWE AAD keeps the '.'.
         assert_eq!(
-            aad("", Some(b"[\"vcard\"]")),
+            *aad("", Some(b"[\"vcard\"]")),
             format!(".{}", b64url_encode(b"[\"vcard\"]")).as_bytes()
         );
     }
