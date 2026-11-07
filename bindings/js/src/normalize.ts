@@ -63,7 +63,7 @@ export function bytes(v: unknown, at: string, copies: Uint8Array[]): Uint8Array 
   } catch {
     throw fail(at, "a Uint8Array over an attached ArrayBuffer");
   }
-  copies.push(copy);
+  append(copies, copy);
   return copy;
 }
 
@@ -235,7 +235,7 @@ export function list<T>(v: unknown, at: string, item: (x: unknown, at: string) =
   const out: T[] = [];
   for (let i = 0; i < n; i++) {
     if (!Object.hasOwn(v, i)) throw fail(`${at}[${i}]`, "present: an array without holes");
-    out.push(item(v[i], `${at}[${i}]`));
+    append(out, item(v[i], `${at}[${i}]`));
   }
   return out;
 }
@@ -293,9 +293,38 @@ export function record(v: unknown, at: string, members: readonly string[]): Reco
   return out;
 }
 
-/** Sets `out[key]` only when `value` is present, so absent optional fields are left out. */
+/**
+ * Creates `out[key]` as an own, enumerable, writable, configurable data property holding `value`
+ * (ECMA-262 ValidateAndApplyPropertyDescriptor), the descriptor an object literal's member gets
+ * (CreateDataProperty). Never an assignment (0013 F13, security audit M1 follow-up): an assignment
+ * to a member `out` doesn't own consults `out`'s prototype (OrdinarySet), so on a result, which
+ * keeps `Object.prototype`, an accessor a pollution bug put on `Object.prototype.aad` would run
+ * its setter with the secret `aad` (ADR 0030 §7) and leave the result without it, and a
+ * non-writable inherited member would make the write a TypeError.
+ *
+ * The descriptor itself has no prototype: `Object.defineProperty` reads `value`, `get`, `set`,
+ * `writable`, ... through the descriptor's prototype chain (ToPropertyDescriptor), so with an
+ * ordinary descriptor object a polluted `Object.prototype.get` would make every write a TypeError.
+ */
+export function define<T extends object, K extends keyof T>(out: T, key: K, value: T[K]): void {
+  Object.defineProperty(out, key, bare<PropertyDescriptor>({ value, enumerable: true, writable: true, configurable: true }));
+}
+
+/** {@link define}s `out[key]` only when `value` is present, so absent optional fields are left out. */
 export function put<T extends object, K extends keyof T>(out: T, key: K, value: T[K] | undefined): void {
-  if (value !== undefined) out[key] = value;
+  if (value !== undefined) define(out, key, value);
+}
+
+/**
+ * Adds `value` at the end of `out` as an own data element ({@link define} at index `length`,
+ * which also grows `length`, ECMA-262 ArrayDefineOwnProperty). Never `push`: `push` assigns the
+ * next index (Array.prototype.push, Set(O, len, E, true)), so an accessor a pollution bug put on
+ * `Array.prototype[0]` or `Object.prototype[0]` would receive the element (a byte copy of a
+ * secret, a `JweRecipient` with its key) and leave a hole, and a non-writable one would make the
+ * call a TypeError (0013 F13).
+ */
+export function append<T>(out: T[], value: T): void {
+  define(out, out.length, value);
 }
 
 // --- outputs (what the backend returned) -------------------------------------------------
@@ -317,6 +346,19 @@ export function outBytes(v: unknown, at: string): Uint8Array {
 export function outIndex(v: unknown, at: string): number {
   if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > U32_MAX) throw badResult(at, "an index");
   return v;
+}
+
+/**
+ * A list result (`errorCodes()`), item by item, copied: only the array's own elements below its
+ * `length` are read, so a hole reaches `item` as `undefined` (a TypeError naming its index) and is
+ * never read through a polluted `Array.prototype` (0013 F09).
+ */
+export function outList<T>(v: unknown, at: string, item: (x: unknown, at: string) => T): T[] {
+  if (!Array.isArray(v)) throw badResult(at, "an array");
+  const n = v.length;
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) append(out, item(Object.hasOwn(v, i) ? v[i] : undefined, `${at}[${i}]`));
+  return out;
 }
 
 /** JSON text the core serialized, parsed to an object (ADR 0030 §2: JWKs, headers, claims). */
