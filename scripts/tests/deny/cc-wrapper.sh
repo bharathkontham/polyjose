@@ -12,12 +12,19 @@
 #   2. cc as a build-dependency of crates/polyjose: reached through a crate other than minicov;
 #   3. cc as a dev-dependency of bindings/wasm, beside minicov: one allowed and one other direct
 #      dependent, which the wrapper must not cover.
+# The wrapper cannot say "only as a dev-dependency", so the allowlist is the backstop (feature 0006
+# F06, security audit I3, code review N5):
+#   4. minicov as a normal dependency of bindings/wasm, which would put cc's build script in the
+#      shipped crate's tree: `cargo deny check bans` passes (cc's only direct dependent is still
+#      minicov), and scripts/check-deps.sh fails, on check 13 only (minicov is not in
+#      bindings/deps-allowlist/wasm.txt).
 #
-# Offline only: the planted dependency is the cc version Cargo.lock already pins, resolved from the
-# local registry cache (`cargo metadata --offline`), and cargo-deny runs with `--offline`. If that
-# can't work here (no cargo-deny, cc not cached), the script prints `SKIPPED (<reason>)` as its last
-# line and exits 2: scripts/test-all.sh's negative step reads the exit status only, so a skip shows
-# as FAIL there, never as a vacuous PASS.
+# Offline only: the planted dependencies are the cc and minicov versions Cargo.lock already pins,
+# resolved from the local registry cache (`cargo metadata --offline`), and cargo-deny runs with
+# `--offline`. If that can't work here (no cargo-deny, a crate not cached), the script prints
+# `SKIPPED (<reason>)` as its last line and exits 2: scripts/test-all.sh's negative step FAILs a
+# non-zero exit (it reports SKIPPED only for `SKIPPED (host:<tool>)` with exit 0 and an allowlisted
+# tool, feature 0013 F10), so a skip is never a vacuous PASS.
 #
 # Usage: scripts/tests/deny/cc-wrapper.sh
 set -euo pipefail
@@ -30,14 +37,25 @@ command -v cargo-deny >/dev/null 2>&1 || skip "cargo-deny not on PATH; cargo ins
 # shellcheck source=../check-deps/lib.sh
 . "$(dirname "$0")/../check-deps/lib.sh"
 
-# The cc version Cargo.lock pins (minicov's build-dependency), so planting it needs no download.
-cc_version=$(python3 -I -c '
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh): the
+# EXIT trap of check-deps/lib.sh again, with the sentinel, which the last line sets.
+completed=""
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "${0##*/}: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
+
+# locked_version <crate>: the one version of the crate that Cargo.lock pins, or nothing.
+locked_version() {
+  python3 -I -c '
 import re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
-versions = re.findall(r"\[\[package\]\]\nname = \"cc\"\nversion = \"([^\"]+)\"", text)
+versions = re.findall(r"\[\[package\]\]\nname = \"%s\"\nversion = \"([^\"]+)\"" % re.escape(sys.argv[2]), text)
 print(versions[0] if len(versions) == 1 else "")
-' "$repo/Cargo.lock")
+' "$repo/Cargo.lock" "$1"
+}
+# The versions Cargo.lock pins (cc is minicov's build-dependency), so planting them needs no download.
+cc_version=$(locked_version cc)
 [ -n "$cc_version" ] || lib_die "Cargo.lock does not pin exactly one cc (expected minicov's build-dependency)"
+minicov_version=$(locked_version minicov)
+[ -n "$minicov_version" ] || lib_die "Cargo.lock does not pin exactly one minicov (expected wasm-bindgen-test's)"
 
 # add_dependency <manifest in the copy> <table> <toml line>: adds the line under the table, which
 # must exist exactly once, then relocks the copy offline.
@@ -90,7 +108,7 @@ expect_cc_banned() {
     && ! grep -Ev "^error\[banned\]: crate 'cc = $cc_version' is explicitly banned$" <<<"$errors" | grep -q . \
     && grep -Eq -- "$2" "$scratch/out"; then
     echo "ok   - $1: cargo deny fails on the cc ban"
-    sed 's/^/       /' <<<"$errors"
+    grep -E '^error(\[|:)' "$scratch/out" | sed 's/^/       /'
   else
     echo "FAIL - $1: exit $rc; wanted only the cc ban as an error, and output matching /$2/"
     sed 's/^/       /' "$scratch/out"
@@ -109,4 +127,21 @@ new_case beside-minicov
 add_dependency bindings/wasm/Cargo.toml dev-dependencies "cc = \"=$cc_version\""
 expect_cc_banned "cc as a dev-dependency of bindings/wasm, beside minicov" '\(dev\) polyjose-wasm v'
 
-finish
+new_case minicov-normal
+add_dependency bindings/wasm/Cargo.toml dependencies "minicov = \"=$minicov_version\""
+expect_deny_pass "minicov as a normal dependency of bindings/wasm (cc still only below minicov)"
+# The backstop: check-deps.sh (lib.sh's run_gate) on the same copy.
+not_allowed='^FAIL: the tree of polyjose-wasm \(bindings/wasm\) contains crates that bindings/deps-allowlist/wasm\.txt does not allow'
+expect_fail "minicov as a normal dependency of bindings/wasm" "$not_allowed" "$not_allowed"
+tests_run=$((tests_run + 1))
+if grep -Fqx '  - minicov' "$scratch/out"; then
+  echo "ok   - minicov as a normal dependency of bindings/wasm: check-deps.sh names minicov"
+else
+  echo "FAIL - minicov as a normal dependency of bindings/wasm: check-deps.sh does not name minicov"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+
+finish_rc=0
+finish || finish_rc=$?
+completed=1; exit "$finish_rc"
