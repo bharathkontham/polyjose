@@ -424,6 +424,75 @@ The binding configuration for 0.1.0 is the core's default features: never `fixed
 
 Each difference is printed as a `FAIL:` line with the id and both outcomes, and the exit status is 1. A missing, malformed or feature-built `rust-core.json` also exits 1. A runner without a file is printed as `SKIPPED (no results: <runner>)`, never as passing, and doesn't fail the check. Usage and tool errors (no `node`) exit 2. The script's own tests are in `scripts/tests/conformance-parity/`. `scripts/test-all.sh` runs them with the other negative tests, and 0013 T04 wires the check itself in after the platform suites.
 
+### Operation mapping
+
+How each vector `operation` maps to the ADR 0030 operations. Names are the surface's (`snake_case`); hosts call the `camelCase` form (`jws_verify_compact` → `jwsVerifyCompact`, `protected_b64u` → `protectedB64u`, `allowed_algs` → `allowedAlgs`). Record fields not listed are left unset, so the core default applies. A runner never writes a default of its own (ADR 0030 §3).
+
+- **Arguments.** JSON-valued arguments (a JWK, a JWK Set, a header, a JSON JWS or JWE, claims) are passed as **JSON text**: the vector's own text for that member, or an order-preserving re-serialization of it (see implementer note 4 for claims). `*_b64u` members are decoded by the runner to bytes, and a non-canonical value fails the vector (it's never an outcome). Strings and integers are passed as given.
+- **Outputs.** Byte results are written back as canonical base64url (RFC 4648 §5, no padding) with any correct encoder. JSON results are parsed and compared as JSON values, as each operation's section says.
+- **Calls.** The runner makes exactly the calls in the table, in that order, and none of its own before them (no `jwk_parse` to pre-check a key). The per-family step orders above happen inside each surface call, and the `rust-surface` run's parity with `rust-core` proves they match. `actual` is the outcome of these calls; the round-trip calls in the last column are checks, so they never set `actual`.
+
+| Vector `operation` | ADR 0030 call(s), with the vector members they take | Outputs and checks |
+|---|---|---|
+| `b64url.encode` | `base64url_encode(bytes)`, where `bytes` is `bytes_hex` decoded by the runner's own hex code | `b64u` = the result |
+| `b64url.decode` | `base64url_decode(b64u)` | `bytes_hex` = the result as lowercase hex |
+| `jwk.thumbprint` | `jwk_thumbprint(jwk, "SHA-256")`, then `jwk_thumbprint_uri(jwk, "SHA-256")`. The vector's `hash` (`"sha-256"`, the RFC 9278 hash name and the only value the schema allows) is passed as the surface name `"SHA-256"`. | `thumbprint`, `thumbprint_uri` |
+| `jws.sign`, `serialization` `"compact"` | `jws_sign_compact(payload, signers[0].key, JwsSignOptions { protected_b64u: signers[0].protected_b64u, detached })`. The header always goes as `protected_b64u`, never as `protected_header`. | `jws` (a string, compared exactly), or the `verify_with` round trip |
+| `jws.sign`, `"flattened"` | `jws_sign_flattened(payload, JwsSigner { key, protected_b64u, unprotected_header: header }, detached)`, from `signers[0]`. A signer may have only `header` (note 11). | `jws`: the returned JSON text parsed and compared as a JSON value; or `verify_with` |
+| `jws.sign`, `"general"` | `jws_sign_general(payload, [JwsSigner, …], detached)`: one `JwsSigner` per `signers` entry, in order, built as for flattened | as flattened |
+| `jws.sign` round trip (`verify_with`) | check: the output's shape (three compact parts; `signature` without `signatures`; one `signatures` entry per signer), then `jws_verify_compact` or `jws_verify_json` with `verify_with.key` and `JwsVerifyOptions { allowed_algs: verify_with.allowed_algs, detached_payload: payload when detached }` | the verified payload equals `payload_b64u`; any failure here is a `fail` |
+| `jws.verify` | a string `jws`: `jws_verify_compact(jws, key, options)`; an object: `jws_verify_json(<its JSON text>, key, options)`, with `JwsVerifyOptions { allowed_algs, detached_payload: detached_payload_b64u, max_input_len, max_signatures }` | `payload_b64u` = `JwsVerified.payload`, `alg`, `signature_index` |
+| `keys.import_pem` | `jwk_from_pem(pem)` | `jwk` = the result as an object; an `oct` result fails the vector |
+| `keys.export_pem` | `jwk_to_pem(jwk, format)`; `format` is passed as given (`pkcs8`, `sec1`, `spki`, `pkcs1`) | `pem` (exact text) |
+| `keys.import_der` | `jwk_from_der(der, format)`, where `der` is `der_b64u` decoded | `jwk`, as `keys.import_pem` |
+| `keys.export_der` | `jwk_to_der(jwk, format)` | `der_b64u` = the result |
+| `keys.generate_for` | `jwk_generate_for_alg(alg)`, `alg` passed as given | `shape`, after the checks of [`keys.generate_for`](#keysgenerate_for). The import-back check is `jwk_parse(<the generated JWK>)`, compared with it as a JSON value. |
+| `jwe.encrypt`, `"compact"` | `jwe_encrypt_compact(plaintext, options)` | `jwe` (a string), or the `decrypt_with` round trip |
+| `jwe.encrypt`, `"flattened"` or `"general"` | `jwe_encrypt_json(plaintext, options, serialization)` | `jwe`: the JSON text parsed and compared as a JSON value; or `decrypt_with` |
+| `jwe.encrypt` options | `JweEncryptOptions { enc, recipients, protected_header: protected, shared_unprotected_header: unprotected, aad: aad_b64u, compress }`, with one `JweRecipient { alg, key, header, apu: apu_b64u, apv: apv_b64u, p2c, p2s_len }` per `recipients` entry, in order. `rng_b64u` and `protected_b64u` occur only in `fixed-rng` vectors, which every binding skips, so they have no mapping. | |
+| `jwe.encrypt` round trip (`decrypt_with`) | check: the output's shape (five compact parts; `ciphertext` without `recipients`; one `recipients` entry per recipient), then `jwe_decrypt_compact` or `jwe_decrypt_json` with `decrypt_with.key` and `JweDecryptOptions { allowed_algs, allowed_enc }` from `decrypt_with` | the plaintext equals `plaintext_b64u`; any failure here is a `fail` |
+| `jwe.decrypt` | a string `jwe`: `jwe_decrypt_compact(jwe, key, options)`; an object: `jwe_decrypt_json(<its JSON text>, key, options)`, with `JweDecryptOptions { allowed_algs, allowed_enc, understood_crit, max_input_len, max_recipients, max_pbes2_count, max_decompressed_len }` | `plaintext_b64u` = `JweDecrypted.plaintext`, `recipient` = `recipient_index` |
+| `jwt.validate`, no `decrypt` | `key`: `jwt_verify(token, key, options)`; `jwks`: `jwt_verify_with_jwks(token, jwks, options)` | `claims` = `JwtVerified.claims` (a JSON value, numbers as doubles, note 1), `alg`, and `key_index` exactly when the input has `jwks` (note 2) |
+| `jwt.validate`, with `decrypt` | `key`: `jwt_decrypt_nested(token, decrypt.key, JweDecryptOptions { allowed_algs: decrypt.allowed_algs, allowed_enc: decrypt.allowed_enc, max_pbes2_count: decrypt.max_pbes2_count }, key, options)`; `jwks`: `jwt_decrypt_nested_with_jwks(…, jwks, options)` | as above, from `JwtNestedVerified.inner` |
+| `jwt.validate` options | `JwtVerifyOptions` from `now`, `allowed_algs` and `policy`, member by member (the table below) | |
+| `jwt.issue` | `jwt_sign(claims, key, JwtSignOptions { alg, … })`, where `typ` absent sets nothing (the default `JWT`), a string sets `typ`, and `null` sets `omit_typ: true` (note 3). `access_token` and `header` are never set: an access token's `typ` comes as the string `at+jwt`. With `encrypt`: then `jwt_encrypt_nested(<the signed JWT>, JweEncryptOptions { enc: encrypt.enc, recipients: [JweRecipient { alg: encrypt.alg, key: encrypt.key }] })`. | `token` (exact), or the `{ "ok": true }` checks (note 10); with `validate`, the token also validates as for `jwt.validate` |
+
+`policy` → `JwtVerifyOptions`, for `jwt.validate` and `jwt.issue`'s `validate`:
+
+| Vector member | `JwtVerifyOptions` field |
+|---|---|
+| `now` | `now` (always present: no runner reads a clock, ADR 0028 §4) |
+| `allowed_algs` | `allowed_algs` |
+| `policy.issuer` | `issuers`: a string becomes a one-element list, an array is passed as given |
+| `policy.audience` | `audiences` (an array only) |
+| `policy.subject` | `subject` |
+| `policy.leeway` | `leeway` |
+| `policy.max_age` | `max_age` |
+| `policy.require` | `required_claims` |
+| `policy.allow_missing_exp` | `allow_missing_exp: true` when `true`; `false` or absent sets nothing (note 6) |
+| `policy.ignore_audience` | `ignore_audience: true` when `true`; `false` or absent sets nothing |
+| `policy.typ` | mode `default`: nothing; mode `exact`: `typ: value`; mode `any`: `any_typ: true` |
+| `policy.profile` | `profile: "access_token"`. With `typ` mode `default` the vector is broken: a `fail` |
+| `policy.max_key_candidates` | `max_key_candidates` |
+| (none) | `max_input_len` is never set by a vector |
+
+### Implementer notes
+
+Points the sections above imply but that are easy to get wrong in a binding runner (from the 0004 T10 test report, and ADR 0045):
+
+1. **Claims numbers are compared as doubles.** Normalize both sides to IEEE 754 doubles before comparing `claims`: a Kotlin `Long` or Swift `Int` from the vector's parser against the `Double` the library's claims parse to, and vice versa. Vector JSON never holds an integer beyond 2^53 − 1 ([Binding readiness](#binding-readiness)), so the conversion is exact. Larger values appear only inside token payloads, where the library rejects them.
+2. **`key_index` is present exactly when the input has `jwks`, and `0` is a value.** Treat the binding's absent form (`undefined`, `null`, Kotlin `null`, Swift `nil`) as absent, and test for presence, never truthiness: JavaScript's `if (keyIndex)` drops index `0`.
+3. **`typ: null` is not an absent `typ`** in `jwt.issue`. `null` omits the header parameter (`omit_typ: true`), while an absent member keeps the default `JWT` (nothing set). The runner's JSON model must keep the two apart. `JSON.parse` does; Swift `Codable` decodes both as `nil` unless the runner checks `contains`, and a Kotlin `JsonObject` needs `containsKey` plus a `JsonNull` check.
+4. **Claims member order matters for exact tokens.** The library serializes the registered claims first, then the others in the order given (ADR 0027 §1). So `claims` goes to `jwt_sign` as **ordered JSON text**: the exact slice of the vector file, or the output of an order-preserving parser. A JavaScript object moves integer-like keys (`"1"`) to the front, and a Swift dictionary has no order, so neither may produce that text. The current vectors have no integer-like claim name. A runner that can't keep the order must fail such a vector, not reorder it.
+5. **`now` and every count are JSON integers.** Read them as integers and pass them as integers. JSON Schema's `integer` also admits `1300819439.0`, but the vectors never use that form ([Binding readiness](#binding-readiness)). A runner treats a fraction or exponent there as a broken vector (`fail`), as the Rust runner does, and never writes one.
+6. **`policy.audience` is an array only; `policy.issuer` is a string or an array.** A boolean member set to `false` (`allow_missing_exp`, `ignore_audience`) means "keep the default". Leave the option unset. Never call an opt-out, or set a field the core reads as configured, because of a `false`.
+7. **The policy is built before the token is parsed.** The Rust runner builds the policy, checking the allow-list and then `leeway` (over 600 is `InvalidClaim`), before the library looks at the token, and the surface's `jwt_verify*` and `jwt_decrypt_nested*` calls must do the same (the `rust-surface` parity run checks it). A binding must not validate its options lazily after reading the token. A vector with a bad `leeway` and a bad token would then report the other error. The one-fault rule keeps today's vectors from depending on this, but only by convention.
+8. **The outcome's `error` is the core code.** Read it from the binding's error: JS `PolyjoseError.code`, Kotlin `PolyjoseException.code()`, Swift `PolyjoseError.code()` (ADR 0030 §5), never from a class name or message. Any other thrown error is not an outcome, and the vector is a `fail`. That covers a JS `TypeError`, a napi `InvalidArg` and a Kotlin `IllegalArgumentException`.
+9. **JWK Set import is lenient, as in the core.** A member that is merely invalid is skipped (RFC 7517 §5), which can leave `NoMatchingKey` at validation. So the runner passes the vector's `jwks` text to the surface unchanged, and never parses, filters or pre-validates the set itself. A set without a `keys` array is `InvalidKey`, and a set holding an RSA private JWK is `UnsupportedAlgorithm` (ADR 0021, ADR 0029 §3).
+10. **`jwt.issue` `{ "ok": true }` is runner logic.** The runner checks that the token has three compact parts (five with `encrypt`), then validates it with `validate` through the `jwt.validate` mapping. The validated `alg` must be the issued one, and the claims must equal the issued `claims` as a JSON value. Any failure there is a `fail`; `actual` stays the outcome of `jwt_sign` and `jwt_encrypt_nested`.
+11. **A `jws.sign` signer may have only an unprotected header** (RFC 7515 §7.2.1, ADR 0045 §1): `header` and no `protected_b64u`, in the flattened and general serializations. It maps to a `JwsSigner` with `unprotected_header` only, and the surface signs it over `"." || payload`. Compact signers always have `protected_b64u`.
+12. **The RFC 7520 §4.7 vectors are never skipped.** `third_party/rfc7520/jws/4-7-unprotected-only-hs256-{flattened,general}-{sign,verify}.json` need no feature, so every binding runs them (ADR 0045 §1), like every other vector without `features`.
+
 ## Writing vectors
 
 - Name files after what they check, grouped by operation: `vectors/b64url/encode-rfc4648-10-foo.json`, `vectors/jwk-thumbprint/reject-oct-k-padded.json`.
