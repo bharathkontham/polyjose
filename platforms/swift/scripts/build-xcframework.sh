@@ -55,12 +55,13 @@
 # XCFrameworks). The generated Polyjose.swift is left in platforms/swift/build/generated/.
 #
 # Checks (any failure exits non-zero): each per-target archive cargo builds is under 10 MB; its
-# stripped copy contains polyjose-ffi's UniFFI exports but no uniffi_bindgen symbol; the
-# XCFramework's Info.plist lists exactly the expected library identifiers. Prints the size of
-# every archive before and after stripping, the size of every library, the time each Rust target
-# took, and the XCFramework's size.
+# stripped copy has no __DWARF section left and contains polyjose-ffi's UniFFI exports but no
+# uniffi_bindgen symbol; the XCFramework's Info.plist lists exactly the expected library
+# identifiers. Prints the size of every archive before and after stripping, the size of every
+# library, the time each Rust target took, and the XCFramework's size.
 #
-# Needs macOS with Xcode (xcodebuild, lipo, nm, plutil, xcrun strip) and cargo; rustup for the nightly slice.
+# Needs macOS with Xcode (xcodebuild, lipo, nm, otool, plutil, xcrun strip) and cargo; rustup for
+# the nightly slice.
 # Bash 3.2 compatible (macOS /bin/bash).
 set -euo pipefail
 
@@ -79,7 +80,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(uname -s)" = Darwin ] || die "the XCFramework can only be built on macOS"
-for tool in cargo xcodebuild lipo nm plutil xcrun; do
+for tool in cargo xcodebuild lipo nm otool plutil xcrun; do
   command -v "$tool" >/dev/null 2>&1 || die "'$tool' is not on PATH"
 done
 
@@ -150,9 +151,13 @@ build_target() {
     die "$triple: $(mb "$bytes") archive is not under 10 MB (is LTO off, or is uniffi/cli linked in?)"
   stripped="$stage/archives/$triple/libpolyjose_ffi.a"
   mkdir -p "$(dirname "$stripped")"
-  xcrun strip -S -D -o "$stripped" "$archive" ||
+  xcrun strip -S -D -o "$stripped" "$archive" >&2 ||
     die "$triple: xcrun strip -S could not strip $archive"
   [ -f "$stripped" ] || die "$triple: xcrun strip -S did not write $stripped"
+  local load_commands dwarf
+  load_commands="$(otool -l "$stripped" 2>/dev/null)" || die "$triple: otool could not read $stripped"
+  dwarf="$(grep -c 'segname __DWARF' <<<"$load_commands" || true)"
+  [ "$dwarf" = 0 ] || die "$triple: $dwarf __DWARF sections are left in $stripped after strip -S"
   # --no-llvm-bc: the prebuilt compiler_builtins objects embed LLVM bitcode (__LLVM,__bitcode)
   # from Rust's newer LLVM, which Xcode's nm cannot parse; the Mach-O symbol tables are what the
   # linker reads (it ignores embedded bitcode), so those are what is checked.
