@@ -1996,6 +1996,250 @@ mod tests {
         }
     }
 
+    /// ADR 0054 §4 (results) and §7 (misuse resistance).
+    mod results {
+        use core::cell::Cell;
+
+        use super::*;
+        use crate::jwa::SigningAlg;
+        use crate::jwk::set::{Criteria, exactly_one};
+        use crate::jwk::{JwkSelector, KeyUse};
+        use crate::jws::{VerifyOptions, verify_compact};
+
+        /// The index `select` returns, checking the key is the member at
+        /// that index of `keys()`.
+        fn selected(set: &JwkSet, selector: &JwkSelector) -> Result<usize, Error> {
+            set.select(selector).map(|(index, key)| {
+                assert!(core::ptr::eq(key, &set.keys()[index]));
+                index
+            })
+        }
+
+        fn by_alg(alg: &str) -> JwkSelector {
+            JwkSelector::new().alg(KeyAlg::from(alg)).unwrap()
+        }
+
+        /// One match: its `key_index`, an index into `keys()` that leaves
+        /// skipped entries out (ADR 0029 §4).
+        #[test]
+        fn select_returns_the_one_match_with_its_key_index() {
+            let set = set_from(&[
+                r#"{"kty":"XYZ","kid":"b"}"#.to_owned(),
+                with(OCT, r#""kid":"a""#),
+                "{}".to_owned(),
+                with(OCT, r#""kid":"b""#),
+            ]);
+            assert_eq!(set.skipped(), 2);
+            assert_eq!(selected(&set, &JwkSelector::new().kid("b")), Ok(1));
+            assert_eq!(selected(&set, &JwkSelector::new().kid("a")), Ok(0));
+            let rfc_a1 = parse(A1).unwrap();
+            assert_eq!(
+                selected(&rfc_a1, &by_alg("ES256")),
+                Err(Error::NoMatchingKey)
+            );
+            assert_eq!(selected(&rfc_a1, &by_alg("ECDH-ES")), Ok(0));
+            assert_eq!(selected(&rfc_a1, &by_alg("RS256")), Ok(1));
+        }
+
+        /// Zero matches is `NoMatchingKey`, also for an empty set and a set
+        /// whose every entry was skipped.
+        #[test]
+        fn no_match_is_no_matching_key() {
+            let empty = parse(r#"{"keys":[]}"#).unwrap();
+            let all_skipped = set_from(&[r#"{"kty":"XYZ"}"#.to_owned(), "{}".to_owned()]);
+            assert!(all_skipped.is_empty());
+            let one = set_from(&[with(OCT, r#""kid":"a""#)]);
+            for (set, selector) in [
+                (&empty, JwkSelector::new()),
+                (&empty, by_alg("HS256")),
+                (&all_skipped, JwkSelector::new()),
+                (&one, JwkSelector::new().kid("b")),
+                (&one, by_alg("ES256")),
+            ] {
+                assert_eq!(
+                    selected(set, &selector),
+                    Err(Error::NoMatchingKey),
+                    "{selector:?}"
+                );
+                assert_eq!(set.matching(&selector).count(), 0);
+            }
+        }
+
+        /// Two or more matches is `MultipleMatchingKeys` (RFC 7517 §5.1:
+        /// the order of a set's keys "does not imply an order of
+        /// preference"), and `matching` yields them all, in order.
+        #[test]
+        fn several_matches_is_multiple_matching_keys() {
+            let set = parse(A3).unwrap();
+            assert_eq!(
+                selected(&set, &JwkSelector::new()),
+                Err(Error::MultipleMatchingKeys)
+            );
+            let all: Vec<usize> = set.matching(&JwkSelector::new()).map(|(i, _)| i).collect();
+            assert_eq!(all, [0, 1]);
+            // The A128KW member's own `alg` rules it out for HS256.
+            assert_eq!(selected(&set, &by_alg("HS256")), Ok(1));
+
+            let set = set_from(&[
+                with(OCT, r#""kid":"k""#),
+                EC_P256.to_owned(),
+                with(OCT, r#""kid":"k""#),
+                with(OCT, r#""kid":"k""#),
+            ]);
+            let selector = JwkSelector::new().kid("k");
+            assert_eq!(selected(&set, &selector), Err(Error::MultipleMatchingKeys));
+            let all: Vec<usize> = set.matching(&selector).map(|(i, _)| i).collect();
+            assert_eq!(all, [0, 2, 3]);
+        }
+
+        /// The empty selector (ADR 0054 §1.3) on a one-key set returns
+        /// that key, whatever its family.
+        #[test]
+        fn the_empty_selector_returns_the_only_key() {
+            for member in [OCT, RSA_2048, EC_P256, ED25519, X25519] {
+                let set = set_from(&[member.to_owned()]);
+                assert_eq!(selected(&set, &JwkSelector::new()), Ok(0), "{member}");
+            }
+        }
+
+        /// ADR 0054 §4: the scan stops at the second match. The counting
+        /// predicate wraps the one used by `select`, through the same scan
+        /// (`filter_keys`) and the same `exactly_one`.
+        #[test]
+        fn the_scan_stops_at_the_second_match() {
+            let set = set_from(&[
+                OCT.to_owned(),
+                EC_P256.to_owned(),
+                OCT.to_owned(),
+                OCT.to_owned(),
+                OCT.to_owned(),
+                OCT.to_owned(),
+            ]);
+            let selector = by_alg("HS256");
+            let criteria = Criteria::of(&selector);
+            let scanned = Cell::new(0);
+            let counting = |key: &Jwk| {
+                scanned.set(scanned.get() + 1);
+                criteria.matches(key)
+            };
+            let result = exactly_one(set.filter_keys(counting)).map(|(i, _)| i);
+            assert_eq!(result, Err(Error::MultipleMatchingKeys));
+            // Members 0 (match), 1 (no match) and 2 (second match).
+            assert_eq!(scanned.get(), 3);
+
+            // A single match reads to the end, to prove there is no other.
+            let selector = by_alg("ES256");
+            let criteria = Criteria::of(&selector);
+            scanned.set(0);
+            let counting = |key: &Jwk| {
+                scanned.set(scanned.get() + 1);
+                criteria.matches(key)
+            };
+            assert_eq!(
+                exactly_one(set.filter_keys(counting)).map(|(i, _)| i),
+                Ok(1)
+            );
+            assert_eq!(scanned.get(), set.len());
+
+            // `select` gives the same answers.
+            assert_eq!(
+                selected(&set, &by_alg("HS256")),
+                Err(Error::MultipleMatchingKeys)
+            );
+            assert_eq!(selected(&set, &by_alg("ES256")), Ok(1));
+        }
+
+        /// `matching` is lazy and never errors; `select` agrees with it.
+        #[test]
+        fn select_agrees_with_matching() {
+            let set = set_from(&[
+                with(EC_P256, r#""kid":"1","use":"enc""#),
+                with(OCT, r#""kid":"1""#),
+                with(X25519, r#""kid":"2""#),
+                RSA_2048.to_owned(),
+            ]);
+            let selectors = [
+                JwkSelector::new(),
+                JwkSelector::new().kid("1"),
+                JwkSelector::new().kid("2"),
+                JwkSelector::new().kid("3"),
+                by_alg("ECDH-ES"),
+                by_alg("ECDH-ES").kid("1"),
+                by_alg("RSA-OAEP-256"),
+                by_alg("RS256"),
+                JwkSelector::new().key_use(KeyUse::Enc).unwrap(),
+            ];
+            for selector in &selectors {
+                let all: Vec<usize> = set.matching(selector).map(|(i, _)| i).collect();
+                let expected = match all.as_slice() {
+                    [] => Err(Error::NoMatchingKey),
+                    [one] => Ok(*one),
+                    _ => Err(Error::MultipleMatchingKeys),
+                };
+                assert_eq!(selected(&set, selector), expected, "{selector:?}");
+            }
+        }
+
+        /// ADR 0054 §7: without an `alg`, a selector may return any
+        /// family, so pass the key only to an operation with an allow-list.
+        #[test]
+        fn without_alg_any_family_may_be_selected() {
+            let set = set_from(&[
+                with(OCT, r#""kid":"o""#),
+                with(EC_P256, r#""kid":"e""#),
+                with(RSA_2048, r#""kid":"r""#),
+                with(X25519, r#""kid":"x""#),
+            ]);
+            for (index, kid) in ["o", "e", "r", "x"].into_iter().enumerate() {
+                assert_eq!(selected(&set, &JwkSelector::new().kid(kid)), Ok(index));
+            }
+            let enc = JwkSelector::new().key_use(KeyUse::Enc).unwrap();
+            assert_eq!(set.matching(&enc).count(), set.len());
+        }
+
+        /// ADR 0054 §7: selection never authorizes an algorithm. A key
+        /// selected for HS256 still verifies only under an allow-list that
+        /// holds HS256 (RFC 8725 §3.1).
+        #[test]
+        fn selection_never_authorizes_an_alg() {
+            // RFC 7515 Appendix A.1, signed with the RFC 7517 A.3 HMAC key.
+            const RFC7515_A1: &str = concat!(
+                "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9",
+                ".eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ",
+                ".dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+            );
+            let set = parse(A3).unwrap();
+            let (_, key) = set.select(&by_alg("HS256")).unwrap();
+            let only_hs384 = [SigningAlg::HS384];
+            assert_eq!(
+                verify_compact(RFC7515_A1, key, &VerifyOptions::new(&only_hs384).unwrap())
+                    .map(drop),
+                Err(Error::AlgorithmNotAllowed)
+            );
+            let hs256 = [SigningAlg::HS256];
+            assert!(verify_compact(RFC7515_A1, key, &VerifyOptions::new(&hs256).unwrap()).is_ok());
+        }
+
+        /// ADR 0054 §3, §7: the selected key is the member as imported,
+        /// private members included (EC/OKP `d`, `oct` `k`); it is the
+        /// caller's key, and `to_public` gives what may be published.
+        #[test]
+        fn the_selected_key_keeps_its_private_members() {
+            let ec_private = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE","kid":"ec"}"#;
+            let set = set_from(&[ec_private.to_owned(), with(OCT, r#""kid":"oct""#)]);
+            let (_, ec) = set.select(&JwkSelector::new().kid("ec")).unwrap();
+            assert!(!ec.is_public());
+            let KeyMaterial::Ec(material) = ec.material() else {
+                unreachable!()
+            };
+            assert!(material.is_private());
+            assert!(ec.to_public().unwrap().is_public());
+            let (_, oct) = set.select(&JwkSelector::new().kid("oct")).unwrap();
+            assert!(!oct.is_public());
+            assert!(oct.to_public().is_none());
+        }
+    }
+
     /// ADR 0054 §6 (Gate 1, owner): `verification_candidates` re-based on
     /// the one candidate rule yields exactly what today's ADR 0029 §2
     /// filter yields, on generated sets.
