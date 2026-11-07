@@ -60,8 +60,9 @@ pin_re='^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-
 pin_of() { sed -E "s|$pin_re|\\2|" | sed -E 's/[[:space:]]+#[[:space:]]+/ # /'; }
 pins_of() { grep -E "$pin_re" "$1" | pin_of; }
 allowed=$( { pins_of "$ci"; printf '%s\n' "$extra_pins"; } | sort -u)
-# Every uses key, also a quoted one ("uses" or 'uses'), which pin_re then rejects.
-uses=$(grep -nE "^[[:space:]]*(-[[:space:]]+)?(uses|\"uses\"|'uses')[[:space:]]*:" "$wf")
+# Every uses key, also a quoted one ("uses" or 'uses') or one in another case (Uses, USES), which
+# pin_re (lower case only) then rejects.
+uses=$(grep -inE "^[[:space:]]*(-[[:space:]]+)?(uses|\"uses\"|'uses')[[:space:]]*:" "$wf")
 if [ -z "$uses" ]; then fail "actions: no uses: line"; fi
 while IFS= read -r line; do
   [ -n "$line" ] || continue
@@ -231,6 +232,11 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
     if (in_on && indent > 0) fail("trigger: not a key under on:")
     next
   }
+  # Keys are matched in lower case, so that Uses:, RUN: or Permissions: cannot slip past a rule if
+  # the Actions reader matches keys case-insensitively; a case variant of a workflow keyword fails.
+  rawkey = key; key = tolower(key)
+  if (key != rawkey && key ~ /^(on|true|permissions|uses|with|run|shell|defaults|secrets|container|services|continue-on-error|environment)$/)
+    fail("structure: \"" rawkey "\" is a case variant of " key ": (keys are lower case)")
 
   # Top-level keys.
   if (indent == 0 && keycol == 0) {
