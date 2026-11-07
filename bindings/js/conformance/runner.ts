@@ -460,14 +460,13 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
 
   // jwt.issue → jwtSign, then jwtEncryptNested with `encrypt` (RFC 7519 §7.1; ADR 0027 §7-§8).
   "jwt.issue": async (api, input, expect, text, out) => {
-    // README step order: import key, parse claims, import encrypt.key, sign, encrypt. The facade
-    // parses claims inside jwtSign, so the two imports are done first with jwkParse.
+    // Exactly the calls of the README "Binding runners" table, in order, and none of the runner's
+    // own (no jwkParse pre-check, B02): jwtSign (which imports `key`, then parses `claims`), then
+    // jwtEncryptNested with `encrypt` (which imports `encrypt.key`).
     const key = text.at("input", "key");
-    await lib(api, () => api.jwkParse(key));
     const claims = text.at("input", "claims");
     const encrypt = isObject(input["encrypt"]) ? input["encrypt"] : undefined;
     const encryptKey = encrypt === undefined ? undefined : text.at("input", "encrypt", "key");
-    if (encryptKey !== undefined) await lib(api, () => api.jwkParse(encryptKey));
     const alg = str(input["alg"]);
     const opts: { alg: string; typ?: string; omitTyp?: boolean } = { alg };
     // `typ`: absent → the core default JWT; null → omitted (RFC 7519 §5.1); a string → set.

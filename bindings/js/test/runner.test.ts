@@ -122,19 +122,22 @@ test("jwt.issue {ok:true}: shape check, then a round trip validating alg and cla
   assert.equal(refused.actual, undefined);
 });
 
-test("jwt.issue imports key and encrypt.key before signing (README step order)", async () => {
+test("jwt.issue makes exactly the README calls: jwtSign, then jwtEncryptNested, no jwkParse pre-check (B02)", async () => {
   const fake = toyBackend();
-  await one(fixture("jwt/issue-encrypted.json"), fake);
+  assert.equal((await one(fixture("jwt/issue-encrypted.json"), fake)).status, "pass");
   assert.deepEqual(
     fake.calls.filter((c) => c.op !== "errorCodes").map((c) => c.op),
-    ["jwkParse", "jwkParse", "jwtSign", "jwtEncryptNested"],
+    ["jwtSign", "jwtEncryptNested"],
   );
-  const badEncKey = await one(
-    fixture("jwt/issue-encrypted.json"),
-    toyBackend({ jwkParse: ((t: string) => { if (t.includes('"dir"')) return t; throw coded("InvalidKey", "k"); }) as never }),
-  );
-  assert.equal(badEncKey.status, "fail", "the expectation is ok:true, so an import error fails it");
-  assert.deepEqual(badEncKey.actual, { ok: false, error: "InvalidKey" });
+  const signed = toyBackend();
+  await one(fixture("jwt/issue-typ-null-exact.json"), signed);
+  assert.deepEqual(signed.calls.filter((c) => c.op !== "errorCodes").map((c) => c.op), ["jwtSign"]);
+  // An encrypt.key the library refuses is the outcome of jwtEncryptNested, after jwtSign.
+  const badEncKey = toyBackend({ jwtEncryptNested: () => { throw coded("InvalidKey", "k"); } });
+  const result = await one(fixture("jwt/issue-encrypted.json"), badEncKey);
+  assert.equal(result.status, "fail", "the expectation is ok:true, so an import error fails it");
+  assert.deepEqual(result.actual, { ok: false, error: "InvalidKey" });
+  assert.deepEqual(badEncKey.calls.filter((c) => c.op !== "errorCodes").map((c) => c.op), ["jwtSign", "jwtEncryptNested"]);
 });
 
 test("key_index 0 is a real index: kept, compared, and not dropped as falsy", async () => {
