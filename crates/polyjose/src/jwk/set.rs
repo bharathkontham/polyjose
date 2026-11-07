@@ -11,11 +11,13 @@ use core::fmt;
 use zeroize::ZeroizeOnDrop;
 
 use super::{
-    Jwk, KeyAlg, KeyOp, KeyUse, MemberNames, is_rsa_private_key, is_unsupported_key_kind, member,
+    Jwk, KeyAlg, KeyMaterial, KeyOp, KeyUse, MemberNames, is_rsa_private_key,
+    is_unsupported_key_kind, member,
 };
 use crate::error::{Error, Result};
 use crate::json::{self, Object, Value};
-use crate::jwa::SigningAlg;
+use crate::jwa::{KeyMgmtAlg, SigningAlg};
+use crate::jwe::key_ops_either_direction;
 
 /// Detail for a JWK Set document that is valid JSON but not an object.
 const NOT_AN_OBJECT: &str = "a JWK Set must be a JSON object";
@@ -263,10 +265,262 @@ impl JwkSet {
         alg: &'a SigningAlg,
         kid: Option<&'a str>,
     ) -> impl Iterator<Item = (usize, &'a Jwk)> + 'a {
+        // ADR 0054 §6: the one candidate rule with
+        // `{ alg: Signing(alg), key_op: verify, kid }`.
+        let criteria = Criteria::new(
+            Some(SelectorAlg::Signing(alg)),
+            None,
+            Some(KeyOp::Verify),
+            kid,
+        );
+        self.filter_keys(move |key| criteria.matches(key))
+    }
+
+    /// The one key `selector` matches, as `(key_index, key)`, where
+    /// `key_index` indexes [`JwkSet::keys`] (ADR 0054 §4, ADR 0029 §4).
+    ///
+    /// A member matches by the rule documented on [`JwkSelector`]
+    /// (ADR 0054 §2), the same rule [`JwkSet::matching`] and
+    /// [`JwkSet::verification_candidates`] apply.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NoMatchingKey`] if no member matches, including when the
+    ///   set is empty or every entry was skipped on import.
+    /// - [`Error::MultipleMatchingKeys`] if two or more members match. The
+    ///   scan stops at the second match. RFC 7517 §5.1 gives the order of
+    ///   a set no meaning, so polyjose does not guess: narrow the selector
+    ///   (a `kid`, RFC 7517 §4.5), or try each of [`JwkSet::matching`].
+    ///
+    /// Neither error says which members were looked at.
+    pub fn select(&self, selector: &JwkSelector) -> Result<(usize, &Jwk)> {
+        let criteria = Criteria::of(selector);
+        exactly_one(self.filter_keys(|key| criteria.matches(key)))
+    }
+
+    /// Every member `selector` matches, in set order, as
+    /// `(key_index, key)`, where `key_index` indexes [`JwkSet::keys`]
+    /// (ADR 0054 §4).
+    ///
+    /// The rule is that of [`JwkSet::select`] (ADR 0054 §2). This never
+    /// fails and has no bound: selection computes no cryptography, so
+    /// bounding how many keys a caller then tries is the caller's choice
+    /// (ADR 0029 §4's `max_key_candidates` is a verification policy).
+    pub fn matching<'a>(
+        &'a self,
+        selector: &'a JwkSelector,
+    ) -> impl Iterator<Item = (usize, &'a Jwk)> + 'a {
+        let criteria = Criteria::of(selector);
+        self.filter_keys(move |key| criteria.matches(key))
+    }
+
+    /// The members `keep` accepts, in set order, as `(key_index, key)`:
+    /// the one scan behind [`JwkSet::matching`], [`JwkSet::select`] and
+    /// [`JwkSet::verification_candidates`].
+    ///
+    /// The iterator lives as long as both `self` and `keep`, while its
+    /// items borrow only `self`, so [`JwkSet::select`] can return a key
+    /// that outlives its selector.
+    fn filter_keys(
+        &self,
+        mut keep: impl FnMut(&Jwk) -> bool,
+    ) -> impl Iterator<Item = (usize, &Jwk)> {
         self.keys
             .iter()
             .enumerate()
-            .filter(move |(_, key)| is_verification_candidate(key, alg, kid))
+            .filter(move |(_, key)| keep(key))
+    }
+}
+
+/// The only item of `found`, reading at most two (ADR 0054 §4): none is
+/// [`Error::NoMatchingKey`], a second is [`Error::MultipleMatchingKeys`].
+fn exactly_one<'a>(mut found: impl Iterator<Item = (usize, &'a Jwk)>) -> Result<(usize, &'a Jwk)> {
+    let first = found.next().ok_or(Error::NoMatchingKey)?;
+    match found.next() {
+        None => Ok(first),
+        Some(_) => Err(Error::MultipleMatchingKeys),
+    }
+}
+
+/// A selector `alg`, borrowed (ADR 0054 §1.1).
+#[derive(Clone, Copy, Debug)]
+enum SelectorAlg<'a> {
+    /// A JWS algorithm (RFC 7518 §3.1).
+    Signing(&'a SigningAlg),
+    /// A JWE key management algorithm (RFC 7518 §4.1).
+    KeyMgmt(&'a KeyMgmtAlg),
+    /// Anything [`JwkSelector::alg`] refuses. A selector cannot hold one,
+    /// but if it did, no member would serve it: selection fails closed.
+    Unservable,
+}
+
+impl SelectorAlg<'_> {
+    /// ADR 0054 §2 item 1: the member's `kty`/`crv` serves the `alg`, by
+    /// the core's only family tables (ADR 0026 §2 step 8).
+    fn served_by(self, material: &KeyMaterial) -> bool {
+        match self {
+            SelectorAlg::Signing(alg) => material.serves_signing_alg(alg),
+            SelectorAlg::KeyMgmt(alg) => material.serves_key_mgmt_alg(alg),
+            SelectorAlg::Unservable => false,
+        }
+    }
+
+    /// ADR 0054 §2 item 2: a member `alg` that is present allows this
+    /// `alg` only if it is exactly this `alg` (RFC 7517 §4.4, RFC 8725
+    /// §3.1; `EdDSA` ≠ `Ed25519`, RFC 9864 §2.2). The one exception: for
+    /// `dir`, a member `alg` naming a content encryption algorithm, since
+    /// a `dir` key is the CEK of that `enc` (RFC 7518 §4.5, RFC 7520
+    /// §5.6.1); JWE key binding checks the exact `enc` at use.
+    fn named_by(self, key_alg: &KeyAlg) -> bool {
+        match (self, key_alg) {
+            (SelectorAlg::Signing(alg), KeyAlg::Signing(key_alg)) => alg == key_alg,
+            (SelectorAlg::KeyMgmt(KeyMgmtAlg::Dir), KeyAlg::ContentEnc(_)) => true,
+            (SelectorAlg::KeyMgmt(alg), KeyAlg::KeyMgmt(key_alg)) => alg == key_alg,
+            _ => false,
+        }
+    }
+
+    /// ADR 0054 §2 item 3: the use the `alg` implies, `sig` for JWS and
+    /// `enc` for JWE key management (RFC 7517 §4.2).
+    fn key_use(self) -> Option<KeyUse> {
+        match self {
+            SelectorAlg::Signing(_) => Some(KeyUse::Sig),
+            SelectorAlg::KeyMgmt(_) => Some(KeyUse::Enc),
+            SelectorAlg::Unservable => None,
+        }
+    }
+
+    /// ADR 0054 §2 item 4: whether `key_ops` holds an operation this `alg`
+    /// performs in either direction (RFC 7517 §4.3): `sign` or `verify`
+    /// for JWS, and for JWE the `jwe/key.rs` `key_op` rows (`wrapKey` or
+    /// `unwrapKey`, `encrypt` or `decrypt`, `deriveKey`).
+    fn performed_by_any(self, key_ops: &[KeyOp]) -> bool {
+        match self {
+            SelectorAlg::Signing(_) => key_ops
+                .iter()
+                .any(|op| matches!(op, KeyOp::Sign | KeyOp::Verify)),
+            SelectorAlg::KeyMgmt(alg) => key_ops_either_direction(alg)
+                .iter()
+                .flatten()
+                .any(|op| key_ops.contains(op)),
+            SelectorAlg::Unservable => false,
+        }
+    }
+}
+
+/// The effective use U of a selector (ADR 0054 §2 item 3).
+#[derive(Clone, Debug)]
+enum Purpose {
+    /// No part implies a use, so `use` is not checked.
+    Unchecked,
+    /// Every part that implies a use implies this one.
+    Use(KeyUse),
+    /// Two parts disagree (`alg: ES256` with `key_use: enc`): the selector
+    /// matches nothing.
+    Conflict,
+}
+
+impl Purpose {
+    /// U from `key_use`, then the use of `key_op` (`KeyOp::key_use`), then
+    /// the use `alg` implies; parts given together must agree.
+    fn of(key_use: Option<&KeyUse>, key_op: Option<&KeyOp>, alg: Option<SelectorAlg<'_>>) -> Self {
+        let parts = [
+            key_use.cloned(),
+            key_op.and_then(KeyOp::key_use),
+            alg.and_then(SelectorAlg::key_use),
+        ];
+        let mut purpose = Purpose::Unchecked;
+        for part in parts.into_iter().flatten() {
+            purpose = match purpose {
+                Purpose::Unchecked => Purpose::Use(part),
+                Purpose::Use(u) if u == part => Purpose::Use(u),
+                Purpose::Use(_) | Purpose::Conflict => return Purpose::Conflict,
+            };
+        }
+        purpose
+    }
+}
+
+/// A selector, borrowed, with its effective use worked out once: the one
+/// candidate rule of ADR 0054 §2. [`JwkSet::verification_candidates`]
+/// builds one directly, so it allocates nothing.
+#[derive(Clone, Debug)]
+struct Criteria<'a> {
+    alg: Option<SelectorAlg<'a>>,
+    key_op: Option<KeyOp>,
+    kid: Option<&'a str>,
+    purpose: Purpose,
+}
+
+impl<'a> Criteria<'a> {
+    fn new(
+        alg: Option<SelectorAlg<'a>>,
+        key_use: Option<&KeyUse>,
+        key_op: Option<KeyOp>,
+        kid: Option<&'a str>,
+    ) -> Self {
+        let purpose = Purpose::of(key_use, key_op.as_ref(), alg);
+        Criteria {
+            alg,
+            key_op,
+            kid,
+            purpose,
+        }
+    }
+
+    fn of(selector: &'a JwkSelector) -> Self {
+        let alg = selector.alg.as_ref().map(|alg| match alg {
+            KeyAlg::Signing(alg) => SelectorAlg::Signing(alg),
+            KeyAlg::KeyMgmt(alg) => SelectorAlg::KeyMgmt(alg),
+            KeyAlg::ContentEnc(_) | KeyAlg::Unknown(_) => SelectorAlg::Unservable,
+        });
+        Criteria::new(
+            alg,
+            selector.key_use.as_ref(),
+            selector.key_op.clone(),
+            selector.kid.as_deref(),
+        )
+    }
+
+    /// ADR 0054 §2: all five checks, in order; an absent selector part
+    /// skips its check.
+    fn matches(&self, key: &Jwk) -> bool {
+        // 1. Family.
+        self.alg.is_none_or(|alg| alg.served_by(key.material()))
+            // 2. JWK `alg`: absent or exactly the selector's.
+            && self
+                .alg
+                .is_none_or(|alg| key.alg().is_none_or(|key_alg| alg.named_by(key_alg)))
+            // 3. Purpose: the member's `use` absent or U (RFC 7517 §4.2).
+            && match &self.purpose {
+                Purpose::Unchecked => true,
+                Purpose::Use(u) => key.key_use().is_none_or(|key_use| key_use == u),
+                Purpose::Conflict => false,
+            }
+            // 4. `key_ops` (RFC 7517 §4.3).
+            && self.key_ops_allow(key)
+            // 5. `kid`: exact, case-sensitive equality only (RFC 7517 §4.5,
+            //    RFC 8725 §3.10).
+            && self.kid.is_none_or(|kid| key.kid() == Some(kid))
+    }
+
+    /// ADR 0054 §2 item 4: a member's `key_ops`, if present, must contain
+    /// the `key_op` ([`Jwk::permits`]); otherwise an operation of the
+    /// `alg` in either direction; otherwise a registered operation of U.
+    fn key_ops_allow(&self, key: &Jwk) -> bool {
+        if let Some(op) = &self.key_op {
+            return key.permits(op);
+        }
+        let Some(key_ops) = key.key_ops() else {
+            return true;
+        };
+        if let Some(alg) = self.alg {
+            return alg.performed_by_any(key_ops);
+        }
+        match &self.purpose {
+            Purpose::Use(u) => key_ops.iter().any(|op| op.key_use().as_ref() == Some(u)),
+            Purpose::Unchecked | Purpose::Conflict => true,
+        }
     }
 }
 
@@ -391,18 +645,6 @@ impl JwkSelector {
         self.key_op = Some(key_op);
         Ok(self)
     }
-}
-
-/// The ADR 0029 §2 filter, in its order (see
-/// [`JwkSet::verification_candidates`]).
-fn is_verification_candidate(key: &Jwk, alg: &SigningAlg, kid: Option<&str>) -> bool {
-    key.material().serves_signing_alg(alg)
-        && key
-            .alg()
-            .is_none_or(|key_alg| matches!(key_alg, KeyAlg::Signing(a) if a == alg))
-        // `use` absent or `sig`, `key_ops` absent or containing `verify`.
-        && key.permits(&KeyOp::Verify)
-        && kid.is_none_or(|kid| key.kid() == Some(kid))
 }
 
 /// Imports one `keys` entry: `Ok(Some)` to keep it, `Ok(None)` to skip it,
@@ -1327,7 +1569,7 @@ mod tests {
         use proptest::prelude::*;
 
         use super::*;
-        use crate::jwk::KeyOp;
+        use crate::jwk::{JwkSelector, KeyOp};
 
         /// The ADR 0029 §2 filter exactly as it stood before ADR 0054
         /// (polyjose 0a7ea3c), kept verbatim as the reference for the
@@ -1596,6 +1838,25 @@ mod tests {
                 let expected = reference(&set, &alg, kid);
                 let actual: Vec<(usize, &Jwk)> = set.verification_candidates(&alg, kid).collect();
                 prop_assert!(same(&actual, &expected), "{alg} {kid:?}: {actual:?} vs {expected:?}");
+
+                // The public selector `{ alg, key_op: verify, kid }` gives the
+                // same sequence. `none` and unknown names cannot be put into
+                // a selector at all (ADR 0054 §1.1), and select nothing above.
+                match JwkSelector::new().alg(KeyAlg::Signing(alg.clone())) {
+                    Ok(selector) => {
+                        let mut selector = selector.key_op(KeyOp::Verify).unwrap();
+                        if let Some(kid) = kid {
+                            selector = selector.kid(kid);
+                        }
+                        let matched: Vec<(usize, &Jwk)> = set.matching(&selector).collect();
+                        prop_assert!(same(&matched, &expected), "{selector:?}: {matched:?} vs {expected:?}");
+                    }
+                    Err(e) => {
+                        prop_assert_eq!(e, Error::UnsupportedAlgorithm);
+                        prop_assert!(alg == SigningAlg::None || !alg.is_known(), "{alg}");
+                        prop_assert!(expected.is_empty());
+                    }
+                }
             }
         }
     }
