@@ -423,17 +423,25 @@ function field(e: unknown, name: string): unknown {
   return (typeof e === "object" && e !== null) || typeof e === "function" ? (e as Record<string, unknown>)[name] : undefined;
 }
 
+/** One of the generated {@link ERROR_CODES}, the core's `Error::CODES` this facade was built from. */
+function isErrorCode(code: string): code is ErrorCode {
+  return (ERROR_CODES as readonly string[]).includes(code);
+}
+
 /**
- * A backend failure as the facade reports it (ADR 0030 §5, ADR 0031 §1): a `code` the backend's
- * `errorCodes()` lists gives a `PolyjoseError` with the backend's message; anything else (napi's
- * own `InvalidArg`/`StringExpected`, a `TypeError` of the wasm reader) is a host `TypeError`
- * with the original message.
+ * A backend failure as the facade reports it (ADR 0030 §5, ADR 0031 §1): a `code` that is both
+ * in the backend's `errorCodes()` and in the generated {@link ERROR_CODES} gives a
+ * `PolyjoseError` with the backend's message, so `PolyjoseError.code` is always an
+ * {@link ErrorCode} even if the backend and the facade versions drift (0013 F04, review N2).
+ * Anything else (a code only one side knows, napi's own `InvalidArg`/`StringExpected`, a
+ * `TypeError` of the wasm reader) is a host `TypeError` with the original message. `codes`
+ * throws if the backend can't list its codes; that error is reported instead.
  */
 function mapError(e: unknown, codes: () => ReadonlySet<string>): Error {
   const code = field(e, "code");
   const message = field(e, "message");
   const text = typeof message === "string" ? message : describe(e);
-  if (typeof code === "string" && codes().has(code)) return new PolyjoseError(code as ErrorCode, text);
+  if (typeof code === "string" && codes().has(code) && isErrorCode(code)) return new PolyjoseError(code, text);
   return new TypeError(text);
 }
 
@@ -473,14 +481,25 @@ export function createApi(backend: Backend): PolyjoseApi {
     return pending;
   }
 
+  /**
+   * The backend's `errorCodes()`, read once, on the first failure to map (0013 F04, review N2).
+   * If the backend can't list them (it throws, or returns no array), the facade can't tell a core
+   * failure from a host one, so it throws an `Error` naming the cause rather than reporting every
+   * core failure as a `TypeError`; nothing is cached, and the next failure asks again.
+   */
   const codes = (): ReadonlySet<string> => {
-    if (codeSet === undefined) {
-      try {
-        codeSet = new Set(backend.errorCodes());
-      } catch {
-        return new Set();
-      }
+    if (codeSet !== undefined) return codeSet;
+    let listed: unknown;
+    try {
+      listed = backend.errorCodes();
+    } catch (e) {
+      const why = field(e, "message");
+      throw new Error(`polyjose: the backend's errorCodes() failed (${typeof why === "string" ? why : describe(e)}), so a backend error can't be mapped`, {
+        cause: e,
+      });
     }
+    if (!Array.isArray(listed)) throw new Error("polyjose: the backend's errorCodes() did not return an array, so a backend error can't be mapped");
+    codeSet = new Set(listed.filter((c: unknown): c is string => typeof c === "string"));
     return codeSet;
   };
 
