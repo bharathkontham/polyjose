@@ -4,6 +4,9 @@
 // Versions live in gradle/libs.versions.toml; the Gradle version in gradle/wrapper.
 
 pluginManagement {
+    // `polyjose.packaging` (notices, version, POM) shared by the two published modules; core
+    // Gradle plugins only (build-logic/settings.gradle.kts).
+    includeBuild("build-logic")
     repositories {
         // Google's repository serves only the Android and AndroidX groups; everything else comes
         // from Maven Central or the plugin portal, so no artifact can be shadowed from a second source.
