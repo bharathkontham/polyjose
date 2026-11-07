@@ -22,19 +22,6 @@ build_only="napi-derive napi-derive-backend wasm-bindgen-macro wasm-bindgen-macr
 uniffi_macros curve25519-dalek-derive syn quote proc-macro2 napi-build autocfg rustc_version"
 dev_only="proptest miniz_oxide base64ct pkcs8 spki pkcs1 pem-rfc7468"
 
-# headings <notices file>: the "<name> <version>" heading of every third-party crate section.
-headings() {
-  awk -v rule="$rule" 'prev == rule && $0 ~ /^[A-Za-z0-9_-]+ [0-9][^ ]*$/ { print } { prev = $0 }' "$1" | sort
-}
-
-# tree_crates <package> <target>: "<name> <version>" of every registry crate in the artifact's
-# tree, as cargo prints it; the workspace's own path crates are covered by the polyjose section.
-tree_crates() {
-  (cd "$repo" && cargo tree --locked --offline -p "$1" --target "$2" -e normal,no-proc-macro \
-    --prefix none -f '{p}') |
-    sed 's/ (\*)$//' | grep -v ' (/' | sed 's/^\([^ ]*\) v\([^ ]*\)$/\1 \2/' | sort -u
-}
-
 check_binding() {
   local pkg=$1 target=$2 frameworks=$3 foreign=$4 out c missing
   out="$scratch/$pkg-$target.txt"

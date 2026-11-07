@@ -15,7 +15,8 @@
 #     right before the last statement exit 2 after reaching the injected line, under the bash that
 #     runs this test; the same copy without the error exits 0. Also for the scripts without a trap
 #     (conformance-parity.sh exits 2; a broken check-binding-api.d mode file fails its mode, exit
-#     1) and for scripts/tests/test-all/lib.sh, whose tests source it.
+#     1) and for scripts/tests/test-all/lib.sh and scripts/tests/third-party-notices/lib.sh, whose
+#     tests source them.
 #
 # Usage: /bin/bash scripts/tests/syntax/guards.sh checks bash 3.2; a Linux bash checks bash 5.
 # Needs git, cargo, rustc, python3 and node.
@@ -84,6 +85,22 @@ for name in $trap_scripts; do
   else fail "$name: no completed=\"\" line before its trap"; fi
 done
 
+# Sourced test helpers with an EXIT trap (F14): the trap fails closed without the sentinel, which
+# their finish (each test's last statement) sets.
+sourced_helpers="scripts/tests/third-party-notices/lib.sh"
+for name in $sourced_helpers; do
+  f=$repo/$name
+  traps=$(grep -Ec '^[[:space:]]*trap .*EXIT$' "$f" || true)
+  # shellcheck disable=SC2016 # a pattern for the script's text, not an expansion
+  sentinel_traps=$(grep -Ec '^trap .*\[ -n "\$\{completed:-\}" \].*\[ "\$rc" -ne 0 \].*rc=2.*exit "\$rc"'"'"' EXIT$' "$f" || true)
+  if [ "$traps" = 1 ] && [ "$sentinel_traps" = 1 ] && grep -Eq '^completed=""$' "$f"; then
+    pass "$name: its one EXIT trap fails closed without the sentinel, which starts unset"
+  else fail "$name: $traps EXIT trap(s), $sentinel_traps of the fail-closed form, or no completed=\"\" line"; fi
+  if awk '/^finish\(\) \{$/ { on = 1 } on && /^  completed=1$/ { found = 1 } on && /^\}$/ { on = 0 } END { exit !found }' "$f" \
+    && [ "$(grep -c 'completed=1' "$f")" = 1 ]; then pass "$name: finish, and only finish, sets the sentinel"
+  else fail "$name: the sentinel is not set by finish alone"; fi
+done
+
 # --- Copies with an injected syntax error --------------------------------------------------------------
 
 host=$(rustc -vV | sed -n 's/^host: //p')
@@ -143,6 +160,14 @@ setup_test_all_lib() {
   { git -C "$case_dir" init -q && git -C "$case_dir" add -A; } || die "could not make $case_dir a git work tree"
 }
 invoke_test_all_lib() { "$BASH" scripts/tests/test-all/probe.sh; }
+# The same for scripts/tests/third-party-notices/lib.sh (feature 0013 F14).
+setup_notices_lib() {
+  copy scripts/tests/third-party-notices/lib.sh
+  # shellcheck disable=SC2016 # the probe's own text
+  printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' '. "$(dirname "$0")/lib.sh"' 'echo probe ran' 'finish' \
+    >"$case_dir/scripts/tests/third-party-notices/probe.sh"
+}
+invoke_notices_lib() { "$BASH" scripts/tests/third-party-notices/probe.sh; }
 
 # The injected lines: what bash rejects, after a marker that shows the copy got there.
 token_error='echo F10-REACHED
@@ -228,6 +253,8 @@ guard "check-binding-api.d/surface.sh (sourced mode)" check_binding_api scripts/
 # The test-all tests source scripts/tests/test-all/lib.sh, which installs the EXIT trap.
 guard "scripts/tests/test-all/lib.sh (sourced by its tests)" test_all_lib scripts/tests/test-all/probe.sh 2 \
   after '^echo probe ran$' before '^finish$'
+guard "scripts/tests/third-party-notices/lib.sh (sourced by its tests)" notices_lib \
+  scripts/tests/third-party-notices/probe.sh 2 after '^echo probe ran$' before '^finish$'
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
