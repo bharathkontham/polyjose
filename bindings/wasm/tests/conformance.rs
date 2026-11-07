@@ -41,8 +41,9 @@
 //! - **The clock** is the vector's `now`, always (ADR 0028 §4); this runner never reads one.
 //! - **The corpus digest** (ADR 0060): the SHA-256 over the byte-sorted `<id>\t<sha256>` lines
 //!   of the embedded bytes it parsed (`tests/digest/mod.rs`, with `sha2` as the oracle, never
-//!   polyjose). An empty corpus fails before any results line. It goes into the results document
-//!   once [`EMIT_VECTORS_DIGEST`] is on; until then it is printed in the summary line.
+//!   polyjose). An empty corpus fails before any results line. It is the results document's
+//!   required `vectors_digest` member (ADR 0060 §1, `conformance/schema/results.schema.json`),
+//!   which parity compares with `rust-core`'s (ADR 0060 §6), and is printed in the summary line.
 //!
 //! The browser can't write files, so the ADR 0034 §2 results document is printed as one line
 //! prefixed `POLYJOSE-CONFORMANCE-RESULTS ` (before any assertion, so a failing run is recorded),
@@ -68,18 +69,6 @@ const SCHEMA: &str = include_str!("../../../conformance/schema.json");
 
 /// The prefix of the one results line that `bindings/wasm/test.sh` extracts.
 const MARKER: &str = "POLYJOSE-CONFORMANCE-RESULTS ";
-
-/// Whether the results document carries the ADR 0060 `vectors_digest` member.
-///
-/// ADR 0060 §1 makes it a required member of every results file. On this base
-/// `conformance/schema/results.schema.json` does not define it yet and closes the top level
-/// (`additionalProperties: false`), so `scripts/conformance-parity.sh`, which validates every
-/// results file against that schema, would reject `wasm-node.json` and `wasm-chrome.json` with it.
-/// The digest is still computed and checked on every run (`conformance_vectors`, and
-/// `tests/vector_index.rs` against the ADR's shell reference); only writing it waits.
-/// **Flip this to `true` when feature 0013 F08 makes `results.schema.json` require the member**
-/// (0006 T06; decided with the 0006 lead, 2026-11-07).
-const EMIT_VECTORS_DIGEST: bool = false;
 
 /// The vector-file name of `polyjose/deflate` (README "Features").
 const DEFLATE: &str = "deflate";
@@ -1812,12 +1801,13 @@ fn run_all(enabled: &[&str]) -> Report {
 }
 
 /// The ADR 0034 §2 results document on one line: the runner, the adapter's `version()`, the
-/// enabled features, its `errorCodes()` (ADR 0034 §8), one result per vector file and, once
-/// [`EMIT_VECTORS_DIGEST`] is on, the ADR 0060 `vectors_digest`.
+/// ADR 0060 §1 `vectors_digest`, the enabled features, its `errorCodes()` (ADR 0034 §8) and one
+/// result per vector file.
 fn results_document(enabled: &[&str], results: Vec<JsValue>, digest: &str) -> String {
     let doc = Rec::new();
     doc.set("runner", common::RUNNER);
     doc.set("polyjose", util::version());
+    doc.set("vectors_digest", digest);
     doc.set(
         "features",
         array_of(enabled.iter().map(|f| JsValue::from_str(f)).collect()),
@@ -1832,9 +1822,6 @@ fn results_document(enabled: &[&str], results: Vec<JsValue>, digest: &str) -> St
         ),
     );
     doc.set("results", array_of(results));
-    if EMIT_VECTORS_DIGEST {
-        doc.set("vectors_digest", digest);
-    }
     stringify(&doc.value())
 }
 
@@ -2214,7 +2201,7 @@ fn the_results_document_names_this_runner_and_the_adapter_codes() {
     let doc = JSON::parse(&results_document(&[], Vec::new(), &some)).unwrap();
     assert_eq!(
         get(&doc, "vectors_digest").and_then(|d| d.as_string()),
-        EMIT_VECTORS_DIGEST.then_some(some)
+        Some(some)
     );
     assert_eq!(
         get(&doc, "runner").and_then(|r| r.as_string()).as_deref(),
