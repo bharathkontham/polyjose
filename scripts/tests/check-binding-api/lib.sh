@@ -116,7 +116,7 @@ check_diffs() {
   local what=$1 ok=1
   shift
   [ "$rc" -eq 1 ] || ok=0
-  grep -E '^  (missing from|extra in|defined twice in) ' "$scratch/out" | sed 's/^  //' | sort >"$scratch/got"
+  { grep -E '^  (missing from|extra in|defined twice in) ' "$scratch/out" || true; } | sed 's/^  //' | sort >"$scratch/got"
   printf '%s\n' "$@" | sort >"$scratch/want"
   cmp -s "$scratch/got" "$scratch/want" || ok=0
   report "$what" "$ok" "exit $rc (expected 1); wanted exactly these differences: $(tr '\n' ';' <"$scratch/want")"
