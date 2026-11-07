@@ -13,6 +13,8 @@
  * No Node-only imports: the runner also runs in browsers and workerd.
  */
 
+import { add } from "./own.js";
+
 export type JsonNode =
   | { readonly kind: "object"; readonly start: number; readonly end: number; readonly members: ReadonlyMap<string, JsonNode> }
   | { readonly kind: "array"; readonly start: number; readonly end: number; readonly items: readonly JsonNode[] }
@@ -87,7 +89,7 @@ export function scanJson(text: string): JsonNode {
         return { kind: "array", start, end: pos, items };
       }
       for (;;) {
-        items.push(value());
+        add(items, value());
         ws();
         if (text[pos] === ",") {
           pos++;

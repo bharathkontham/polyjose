@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Negative test of check 2 of scripts/check-test-vectors-off.sh (ADR 0005): which binding members
-# the per-member inverted feature tree may skip.
+# Negative test of check 2 of scripts/check-test-vectors-off.sh (ADR 0005): which workspace
+# members the per-member inverted feature tree checks, and which it may skip.
 #
 # The gate skips a workspace member under bindings/ only when its whole tree (every dependency
 # kind, all features, every target) holds no polyjose package, as for build tooling such as
@@ -14,6 +14,12 @@
 #   it and the cargo trees (checks 2 and 3) are what catch it.
 #   4. the whole-tree probe of polyjose-uniffi-bindgen fails (a cargo shim exits 101): no skip.
 #   5. the probe exits 0 with no output: no skip on output that does not look like a tree.
+#   12-13. a member outside bindings/ (tools/probe, with a library target) enabling the feature
+#        through a normal or a build-dependency (feature 0013 security audit I4: check 2 covers
+#        every workspace member but polyjose, not only bindings/);
+#   14. the audit's I4 plant as written: such a tools/ member whose only polyjose edge is a
+#        dev-dependency with the feature. Check 3 reads no dev edge, but check 2's inverted tree
+#        reads every dependency kind, so it fails too.
 # Must pass:
 #   6. the unchanged tree: polyjose-uniffi-bindgen is the only member skipped, and every binding
 #      (polyjose-ffi, -node, -surface, -wasm) is checked;
@@ -192,5 +198,27 @@ expect_pass "member reaching polyjose, probe output with warning lines"
 expect_no_skip "member reaching polyjose, probe output with warning lines" "$probe"
 expect_line "member reaching polyjose, probe output with warning lines" "$(ok_line "$probe")"
 path_prefix=""
+
+# 12-14. A member outside bindings/ with a library target (so check-rsa-symbols.sh builds it and
+#        does not stop on it): check 2 checks it, whichever kind of dependency enables the feature.
+add_tool_probe() {
+  new_case "$1"
+  append_to tools/probe/Cargo.toml "[package]
+name = \"$probe\"
+version = \"0.0.0\"
+edition = \"2024\"
+publish = false
+
+$2"
+  append_to tools/probe/src/lib.rs '//! Test only.'
+  replace_in Cargo.toml 'members = [' 'members = ["tools/probe", '
+}
+for kind in dependencies build-dependencies dev-dependencies; do
+  add_tool_probe "tool-$kind" "[$kind]
+polyjose = { path = \"../../crates/polyjose\", features = [$escaped] }"
+  if [ "$kind" = build-dependencies ]; then append_to tools/probe/build.rs 'fn main() {}'; fi
+  expect_fail "tools/ member enabling the feature in $kind" "$enable_fail" "$any_enable_fail"
+  expect_no_skip "tools/ member enabling the feature in $kind" "$probe"
+done
 
 finish

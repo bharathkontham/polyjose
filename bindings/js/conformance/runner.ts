@@ -27,6 +27,7 @@
 import type { PolyjoseApi } from "../src/api.js";
 import type { EcCurve, JsonObject, JwkSelector, JwtVerifyOptions, JweDecryptOptions, OkpCurve, ThumbprintHash } from "../src/types.js";
 import { scanJson, textAt, type JsonNode } from "./json-text.js";
+import { add, rec } from "./own.js";
 import { jsonEqual, schemaViolation } from "./schema.js";
 
 /** One vector file: its path under `conformance/vectors` (`/`-separated) and its JSON text. */
@@ -177,7 +178,7 @@ async function sha256Hex(sha256: Sha256, bytes: Uint8Array): Promise<string> {
 export async function vectorsDigest(files: readonly DigestInput[], sha256: Sha256): Promise<string> {
   if (files.length === 0) throw new Error("polyjose conformance: no vector file was read, so there is no vectors digest");
   const lines: Uint8Array[] = [];
-  for (const file of files) lines.push(utf8(`${file.id}\t${await sha256Hex(sha256, file.bytes)}\n`));
+  for (const file of files) add(lines, utf8(`${file.id}\t${await sha256Hex(sha256, file.bytes)}\n`));
   lines.sort(compareBytes);
   const all = new Uint8Array(lines.reduce((n, line) => n + line.length, 0));
   let at = 0;
@@ -191,7 +192,7 @@ export async function vectorsDigest(files: readonly DigestInput[], sha256: Sha25
 /** Runs every file and returns one result per file, in order. */
 export async function runVectors(api: PolyjoseApi, files: readonly VectorFile[], options: RunOptions): Promise<VectorResult[]> {
   const results: VectorResult[] = [];
-  for (const file of files) results.push(await runOne(api, file, options));
+  for (const file of files) add(results, await runOne(api, file, options));
   return results;
 }
 
@@ -355,7 +356,9 @@ const str = (v: unknown): string => v as string;
 const strs = (v: unknown): string[] => [...(v as string[])];
 
 async function execute(api: PolyjoseApi, vector: { operation: string; input: Out; expect: Out }, text: Text): Promise<Outcome> {
-  const out: Out = {};
+  // Prototype-less, like every record the runner builds (own.ts): an output such as
+  // `plaintext_b64u` or an imported private `jwk` is never seen by an inherited setter (0013 F13).
+  const out = rec<Out>({});
   const handler = Object.hasOwn(OPERATIONS, vector.operation) ? OPERATIONS[vector.operation] : undefined;
   if (handler === undefined) {
     throw new HarnessError(`operation \`${vector.operation}\` is not implemented by the JS runner; a vector is never skipped`);
@@ -401,7 +404,7 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
   // The facade returns the selected key parsed, compared as a JSON value.
   "jwks.select": async (api, input, _expect, text, out) => {
     const criteria = input["selector"] as Out;
-    const selector: JwkSelector = {};
+    const selector = rec<JwkSelector>({});
     if (criteria["kid"] !== undefined) selector.kid = str(criteria["kid"]);
     if (criteria["alg"] !== undefined) selector.alg = str(criteria["alg"]);
     if (criteria["key_use"] !== undefined) selector.keyUse = str(criteria["key_use"]);
@@ -415,7 +418,7 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
     const payload = await decode(api, input["payload_b64u"], "payload_b64u");
     const detached = input["detached"] === true;
     const signers = (input["signers"] as Out[]).map((s, i) => {
-      const signer: { key: string; protectedB64u?: string; unprotectedHeader?: string } = { key: text.at("input", "signers", i, "key") };
+      const signer = rec<{ key: string; protectedB64u?: string; unprotectedHeader?: string }>({ key: text.at("input", "signers", i, "key") });
       if (typeof s["protected_b64u"] === "string") signer.protectedB64u = s["protected_b64u"];
       const header = text.opt("input", "signers", i, "header");
       if (header !== undefined) signer.unprotectedHeader = header; // RFC 7515 §7.2.1; ADR 0045 §1
@@ -424,7 +427,7 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
     const first = signers[0] as (typeof signers)[number];
     let signed: string;
     if (serialization === "compact") {
-      const opts: { protectedB64u?: string; detached?: boolean } = {};
+      const opts = rec<{ protectedB64u?: string; detached?: boolean }>({});
       if (first.protectedB64u !== undefined) opts.protectedB64u = first.protectedB64u;
       if (detached) opts.detached = true;
       signed = await lib(api, () => api.jwsSignCompact(payload, first.key, opts));
@@ -448,7 +451,7 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
           : isObject(jws) && Array.isArray(jws["signatures"]) && jws["signatures"].length === signers.length;
     if (!shapeOk) throw new HarnessError(`round trip: the output is not a ${serialization} JWS with ${signers.length} signature(s)`);
     const key = text.at("expect", "verify_with", "key");
-    const opts: { allowedAlgs: string[]; detachedPayload?: Uint8Array } = { allowedAlgs: strs(verifyWith["allowed_algs"]) };
+    const opts = rec<{ allowedAlgs: string[]; detachedPayload?: Uint8Array }>({ allowedAlgs: strs(verifyWith["allowed_algs"]) });
     if (detached) opts.detachedPayload = payload;
     const verified = await check(api, "round trip: the signed JWS does not verify with verify_with", () =>
       serialization === "compact" ? api.jwsVerifyCompact(signed, key, opts) : api.jwsVerifyJson(signed, key, opts),
@@ -460,9 +463,9 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
   // jws.verify → jwsVerifyCompact (string) / jwsVerifyJson (object, as its text); RFC 7515 §5.2.
   "jws.verify": async (api, input, _expect, text, out) => {
     const key = text.at("input", "key");
-    const opts: { allowedAlgs: string[]; detachedPayload?: Uint8Array; maxInputLen?: number; maxSignatures?: number } = {
+    const opts = rec<{ allowedAlgs: string[]; detachedPayload?: Uint8Array; maxInputLen?: number; maxSignatures?: number }>({
       allowedAlgs: strs(input["allowed_algs"]),
-    };
+    });
     if (Object.hasOwn(input, "detached_payload_b64u")) opts.detachedPayload = await decode(api, input["detached_payload_b64u"], "detached_payload_b64u");
     if (typeof input["max_input_len"] === "number") opts.maxInputLen = input["max_input_len"];
     if (typeof input["max_signatures"] === "number") opts.maxSignatures = input["max_signatures"];
@@ -527,24 +530,24 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
     const serialization = str(input["serialization"]);
     const plaintext = await decode(api, input["plaintext_b64u"], "plaintext_b64u");
     const recipientsIn = input["recipients"] as Out[];
-    const recipients = [];
+    const recipients: { alg: string; key: string; header?: string; apu?: Uint8Array; apv?: Uint8Array; p2c?: number; p2sLen?: number }[] = [];
     for (const [i, r] of recipientsIn.entries()) {
-      const recipient: { alg: string; key: string; header?: string; apu?: Uint8Array; apv?: Uint8Array; p2c?: number; p2sLen?: number } = {
+      const recipient = rec<(typeof recipients)[number]>({
         alg: str(r["alg"]),
         key: text.at("input", "recipients", i, "key"),
-      };
+      });
       const header = text.opt("input", "recipients", i, "header");
       if (header !== undefined) recipient.header = header;
       if (Object.hasOwn(r, "apu_b64u")) recipient.apu = await decode(api, r["apu_b64u"], "apu_b64u");
       if (Object.hasOwn(r, "apv_b64u")) recipient.apv = await decode(api, r["apv_b64u"], "apv_b64u");
       if (typeof r["p2c"] === "number") recipient.p2c = r["p2c"];
       if (typeof r["p2s_len"] === "number") recipient.p2sLen = r["p2s_len"];
-      recipients.push(recipient);
+      add(recipients, recipient);
     }
-    const opts: { enc: string; recipients: typeof recipients; protectedHeader?: string; sharedUnprotectedHeader?: string; aad?: Uint8Array; compress?: boolean } = {
+    const opts = rec<{ enc: string; recipients: typeof recipients; protectedHeader?: string; sharedUnprotectedHeader?: string; aad?: Uint8Array; compress?: boolean }>({
       enc: str(input["enc"]),
       recipients,
-    };
+    });
     const protectedHeader = text.opt("input", "protected");
     if (protectedHeader !== undefined) opts.protectedHeader = protectedHeader;
     const shared = text.opt("input", "unprotected");
@@ -608,7 +611,7 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
     const encrypt = isObject(input["encrypt"]) ? input["encrypt"] : undefined;
     const encryptKey = encrypt === undefined ? undefined : text.at("input", "encrypt", "key");
     const alg = str(input["alg"]);
-    const opts: { alg: string; typ?: string; omitTyp?: boolean } = { alg };
+    const opts = rec<{ alg: string; typ?: string; omitTyp?: boolean }>({ alg });
     // `typ`: absent → the core default JWT; null → omitted (RFC 7519 §5.1); a string → set.
     if (Object.hasOwn(input, "typ")) {
       if (input["typ"] === null) opts.omitTyp = true;
@@ -668,7 +671,7 @@ async function generatedShape(api: PolyjoseApi, jwk: JsonObject, members: Member
   }
   const again = await check(api, "the generated JWK does not import", () => api.jwkParse(JSON.stringify(jwk)));
   if (!jsonEqual(again, jwk)) throw new HarnessError("the generated JWK imports as a different key");
-  const shape: Out = {};
+  const shape = rec<Out>({});
   for (const name of ["kty", "crv", "alg"]) if (Object.hasOwn(jwk, name)) shape[name] = jwk[name];
   if (typeof jwk["k"] === "string") shape["k_octets"] = (await decode(api, jwk["k"], "the generated k")).length;
   return shape;
@@ -718,7 +721,7 @@ async function checkUseWith(api: PolyjoseApi, jwk: JsonObject, useWith: Out): Pr
 
 /** The decrypt options of `jwe.decrypt` and of a nested JWT's `decrypt` (Rust `jwe_policy`). */
 function jweDecryptOptions(object: Out): JweDecryptOptions {
-  const opts: {
+  const opts = rec<{
     allowedAlgs: string[];
     allowedEnc: string[];
     understoodCrit?: string[];
@@ -726,7 +729,7 @@ function jweDecryptOptions(object: Out): JweDecryptOptions {
     maxRecipients?: number;
     maxPbes2Count?: number;
     maxDecompressedLen?: number;
-  } = { allowedAlgs: strs(object["allowed_algs"]), allowedEnc: strs(object["allowed_enc"]) };
+  }>({ allowedAlgs: strs(object["allowed_algs"]), allowedEnc: strs(object["allowed_enc"]) });
   if (Object.hasOwn(object, "understood_crit")) opts.understoodCrit = strs(object["understood_crit"]);
   for (const [member, field] of [
     ["max_input_len", "maxInputLen"],
@@ -746,7 +749,7 @@ function jweDecryptOptions(object: Out): JweDecryptOptions {
  */
 function jwtVerifyOptions(object: Out): JwtVerifyOptions {
   const policy = isObject(object["policy"]) ? object["policy"] : {};
-  const opts: {
+  const opts = rec<{
     allowedAlgs: string[];
     now: number;
     issuers?: string[];
@@ -761,7 +764,7 @@ function jwtVerifyOptions(object: Out): JwtVerifyOptions {
     anyTyp?: boolean;
     profile?: JwtVerifyOptions["profile"];
     maxKeyCandidates?: number;
-  } = { allowedAlgs: strs(object["allowed_algs"]), now: object["now"] as number };
+  }>({ allowedAlgs: strs(object["allowed_algs"]), now: object["now"] as number });
   const typ = isObject(policy["typ"]) ? policy["typ"] : undefined;
   if (policy["profile"] !== undefined && typ?.["mode"] === "default") {
     throw new HarnessError(
