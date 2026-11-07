@@ -1,0 +1,91 @@
+{
+  "source": "ADR 0026 §7; ADR 0034 §6",
+  "description": "ADR 0026 §7: the general JWS of jws-negative/general-17-signatures.json (17 copies of one valid HS256 signature over \"Payload\", RFC 7515 A.1 key) is InvalidFormat under the default max_signatures of 16, given no limit; no binding may raise the default",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "UGF5bG9hZA",
+      "signatures": [
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        },
+        {
+          "protected": "eyJhbGciOiJIUzI1NiJ9",
+          "signature": "bhZ260_Cju4l6tL6oPRe0hGeKENS1K0Elt9MePq21vc"
+        }
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

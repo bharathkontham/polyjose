@@ -1,0 +1,22 @@
+{
+  "source": "ADR 0023; ADR 0034 §6",
+  "description": "ADR 0023, RFC 7518 §8.8 (CVE-2022-36083): a compact PBES2-HS256+A128KW + A128GCM JWE with p2c 10001 (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8) from SHA-256-derived bytes) is DecryptionFailed under the default max_pbes2_count of 10,000, before any PBKDF2 work; no binding may raise the default",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJQQkVTMi1IUzI1NitBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwicDJzIjoiclZOMThORkhoUnVERnp0VTRDb2FQUSIsInAyYyI6MTAwMDF9.6nAFIsCxpNLjVihZbazNwJxWU2XSI3-J.Ko2BYj6wn6tkbBDT.rPeF5tstNTA0uEmt0QQQlDST2u0a1eXaTb4NFw.pYqGsXVemkDnSL-lYH6qEA",
+    "key": {
+      "kty": "oct",
+      "k": "YmluZGluZyBzdXJmYWNlIHBhc3N3b3Jk"
+    },
+    "allowed_algs": [
+      "PBES2-HS256+A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

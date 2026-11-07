@@ -1,0 +1,47 @@
+{
+  "source": "ADR 0050 §2; ADR 0034 §6",
+  "description": "ADR 0050 §2: a general JWE (RFC 7516 §7.2.1) with two kid-less PBES2-HS256+A128KW + A128GCM recipients of p2c 6000, a decoy password first and this password second (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8) from SHA-256-derived bytes) decrypts as recipient 1 once max_pbes2_count is raised to 12,000, the sum of p2c over both candidates",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": {
+      "protected": "eyJlbmMiOiJBMTI4R0NNIn0",
+      "recipients": [
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "Sgo3BcK_wWg7PtAWhRYcPw",
+            "p2c": 6000
+          },
+          "encrypted_key": "DnowCx_aD07tmcN_u9RGOoDlV3yFTrWY"
+        },
+        {
+          "header": {
+            "alg": "PBES2-HS256+A128KW",
+            "p2s": "TLNabiIN-jJoeY9_19Mgsg",
+            "p2c": 6000
+          },
+          "encrypted_key": "J-093UdMUsSQ5OYu3t1FUwmwTLJaHmdf"
+        }
+      ],
+      "iv": "T0FEwQe_2idjxQWb",
+      "ciphertext": "9AAk6oSknNtKwMv18VXaBTWRcWrkxKbspNweXQ",
+      "tag": "MRmjWyP95BhpQQTdUgRPIA"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "YmluZGluZyBzdXJmYWNlIHBhc3N3b3Jk"
+    },
+    "allowed_algs": [
+      "PBES2-HS256+A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ],
+    "max_pbes2_count": 12000
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "RGVmYXVsdHMgY29tZSBmcm9tIHRoZSBjb3JlLg",
+    "recipient": 1
+  }
+}
