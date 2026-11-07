@@ -40,6 +40,8 @@
 //! [`JwkSet::verification_candidates`](crate::jwk::JwkSet::verification_candidates)
 //! picks the keys that may verify a JWS by family, `alg`, `use`, `key_ops`
 //! and `kid` (ADR 0029 §2).
+//! [`JwkSelector`](crate::jwk::JwkSelector) holds validated `kid`, `alg`,
+//! `use` and `key_ops` criteria for picking keys from a set (ADR 0054 §1).
 //!
 //! # Thumbprints
 //!
@@ -220,7 +222,7 @@ mod set;
 mod thumbprint;
 pub(crate) mod x25519_consistency;
 
-pub use set::JwkSet;
+pub use set::{JwkSelector, JwkSet};
 pub use thumbprint::ThumbprintHash;
 use x25519_consistency::{X25519_PRIVATE_MISMATCH, x25519_private_matches};
 
