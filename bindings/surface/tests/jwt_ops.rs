@@ -52,7 +52,10 @@ fn parse(text: &str) -> Value {
 
 /// A conformance vector's `input` (ADR 0034: the surface and the core read the same files).
 fn vector_input(path: &str) -> Object {
-    let file = format!("{}/../../conformance/vectors/{path}", env!("CARGO_MANIFEST_DIR"));
+    let file = format!(
+        "{}/../../conformance/vectors/{path}",
+        env!("CARGO_MANIFEST_DIR")
+    );
     let text = std::fs::read_to_string(&file).expect("vector file");
     parse(&text)
         .get("input")
@@ -150,7 +153,10 @@ fn rfc7519_3_1_verifies_before_exp_with_its_exact_claims() {
     let verified: JwtVerified = jwt_verify(RFC7519_3_1, OCT, &hs256()).unwrap();
     assert_eq!(parse(&verified.claims), parse(RFC7519_3_1_CLAIMS));
     assert_eq!(verified.alg, "HS256");
-    assert_eq!(parse(&verified.header), parse(r#"{"alg":"HS256","typ":"JWT"}"#));
+    assert_eq!(
+        parse(&verified.header),
+        parse(r#"{"alg":"HS256","typ":"JWT"}"#)
+    );
     // ADR 0029 §4, 0004 implementer note 2: a single key has no index.
     assert_eq!(verified.key_index, None);
     assert_eq!(verified.kid, None);
@@ -159,7 +165,10 @@ fn rfc7519_3_1_verifies_before_exp_with_its_exact_claims() {
 #[test]
 fn rfc7519_3_1_matches_its_conformance_vector() {
     let input = vector_input("jwt/rfc7519/3-1-hs256-before-exp.json");
-    let mut options = at(input.get("now").and_then(Value::as_i64).unwrap(), &["HS256"]);
+    let mut options = at(
+        input.get("now").and_then(Value::as_i64).unwrap(),
+        &["HS256"],
+    );
     options.allowed_algs = list(&["HS256"]);
     let verified = jwt_verify(
         &member_str(&input, "token"),
@@ -284,7 +293,10 @@ fn a_jwe_or_a_json_jws_is_not_a_signed_jwt() {
 #[test]
 fn a_tampered_token_or_the_wrong_key_fails_the_signature() {
     let tampered = format!("{}A", &RFC7519_3_1[..RFC7519_3_1.len() - 1]);
-    assert_eq!(code(jwt_verify(&tampered, OCT, &hs256())), "InvalidSignature");
+    assert_eq!(
+        code(jwt_verify(&tampered, OCT, &hs256())),
+        "InvalidSignature"
+    );
     assert_eq!(
         code(jwt_verify(RFC7519_3_1, DECOY, &hs256())),
         "InvalidSignature"
@@ -313,13 +325,15 @@ fn a_kid_less_token_tries_the_set_in_order_and_reports_the_index() {
 #[test]
 fn the_verifying_members_kid_is_reported() {
     let with_kid = OCT.replace(r#""kty""#, r#""kid":"k2","kty""#);
-    let verified =
-        jwt_verify_with_jwks(RFC7519_3_1, &jwks(&[DECOY, &with_kid]), &hs256()).unwrap();
+    let verified = jwt_verify_with_jwks(RFC7519_3_1, &jwks(&[DECOY, &with_kid]), &hs256()).unwrap();
     assert_eq!(verified.key_index, Some(1));
     assert_eq!(verified.kid.as_deref(), Some("k2"));
     // A single key reports its own kid, never the header's (ADR 0029 §1).
     let single = jwt_verify(RFC7519_3_1, &with_kid, &hs256()).unwrap();
-    assert_eq!((single.key_index, single.kid.as_deref()), (None, Some("k2")));
+    assert_eq!(
+        (single.key_index, single.kid.as_deref()),
+        (None, Some("k2"))
+    );
 }
 
 #[test]
@@ -394,26 +408,38 @@ fn issuers_and_subject_reach_the_core() {
     options.issuers = Some(list(&["bob", "joe"]));
     assert_eq!(code(jwt_verify(&token, OCT, &options)), "ok");
     options.issuers = Some(list(&["bob"]));
-    assert_eq!(message(jwt_verify(&token, OCT, &options)), "invalid claim: iss");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &options)),
+        "invalid claim: iss"
+    );
 
     let mut options = hs256();
     options.subject = Some("alice".to_owned());
     assert_eq!(code(jwt_verify(&token, OCT, &options)), "ok");
     options.subject = Some("Alice".to_owned());
-    assert_eq!(message(jwt_verify(&token, OCT, &options)), "invalid claim: sub");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &options)),
+        "invalid claim: sub"
+    );
 }
 
 #[test]
 fn audiences_and_ignore_audience_reach_the_core() {
     let token = sign(r#"{"aud":["api","web"],"exp":1300819380}"#);
     // The core default: a token with aud and no audience configured is rejected.
-    assert_eq!(message(jwt_verify(&token, OCT, &hs256())), "invalid claim: aud");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &hs256())),
+        "invalid claim: aud"
+    );
 
     let mut options = hs256();
     options.audiences = Some(list(&["web"]));
     assert_eq!(code(jwt_verify(&token, OCT, &options)), "ok");
     options.audiences = Some(list(&["other"]));
-    assert_eq!(message(jwt_verify(&token, OCT, &options)), "invalid claim: aud");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &options)),
+        "invalid claim: aud"
+    );
 
     let mut options = hs256();
     options.ignore_audience = true;
@@ -428,7 +454,10 @@ fn max_age_reaches_the_core() {
     options.max_age = Some(100);
     assert_eq!(code(jwt_verify(&token, OCT, &options)), "ok");
     options.max_age = Some(99);
-    assert_eq!(message(jwt_verify(&token, OCT, &options)), "invalid claim: iat");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &options)),
+        "invalid claim: iat"
+    );
 }
 
 #[test]
@@ -458,7 +487,10 @@ fn required_claims_reach_the_core_in_order() {
 #[test]
 fn allow_missing_exp_reaches_the_core() {
     let token = sign(r#"{"iss":"joe"}"#);
-    assert_eq!(message(jwt_verify(&token, OCT, &hs256())), "invalid claim: exp");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &hs256())),
+        "invalid claim: exp"
+    );
     let mut options = hs256();
     options.allow_missing_exp = true;
     assert_eq!(code(jwt_verify(&token, OCT, &options)), "ok");
@@ -476,7 +508,10 @@ fn typ_and_any_typ_reach_the_core() {
     let mut options = hs256();
     options.typ = Some("secevent+jwt".to_owned());
     assert_eq!(code(jwt_verify(&typed, OCT, &options)), "ok");
-    assert_eq!(code(jwt_verify(RFC7519_3_1, OCT, &options)), "InvalidHeader");
+    assert_eq!(
+        code(jwt_verify(RFC7519_3_1, OCT, &options)),
+        "InvalidHeader"
+    );
 
     let mut options = hs256();
     options.any_typ = true;
@@ -489,7 +524,10 @@ fn typ_together_with_any_typ_is_invalid_header() {
     let mut options = hs256();
     options.typ = Some("JWT".to_owned());
     options.any_typ = true;
-    assert_eq!(code(jwt_verify(RFC7519_3_1, OCT, &options)), "InvalidHeader");
+    assert_eq!(
+        code(jwt_verify(RFC7519_3_1, OCT, &options)),
+        "InvalidHeader"
+    );
     assert_eq!(
         code(jwt_verify_with_jwks(RFC7519_3_1, &jwks(&[OCT]), &options)),
         "InvalidHeader"
@@ -502,7 +540,10 @@ fn typ_together_with_any_typ_is_invalid_header() {
 fn max_input_len_reaches_the_core() {
     let mut options = hs256();
     options.max_input_len = Some(16);
-    assert_eq!(code(jwt_verify(RFC7519_3_1, OCT, &options)), "InvalidFormat");
+    assert_eq!(
+        code(jwt_verify(RFC7519_3_1, OCT, &options)),
+        "InvalidFormat"
+    );
     options.max_input_len = Some(u32::try_from(RFC7519_3_1.len()).unwrap());
     assert_eq!(code(jwt_verify(RFC7519_3_1, OCT, &options)), "ok");
 }
@@ -515,10 +556,19 @@ fn false_flags_call_nothing() {
     options.ignore_audience = false;
     options.any_typ = false;
     let no_exp = sign(r#"{"iss":"joe"}"#);
-    assert_eq!(message(jwt_verify(&no_exp, OCT, &options)), "invalid claim: exp");
+    assert_eq!(
+        message(jwt_verify(&no_exp, OCT, &options)),
+        "invalid claim: exp"
+    );
     let with_aud = sign(r#"{"aud":"api","exp":1300819380}"#);
-    assert_eq!(message(jwt_verify(&with_aud, OCT, &options)), "invalid claim: aud");
-    let typed = sign_with(r#"{"exp":1300819380}"#, |o| o.typ = Some("x+jwt".to_owned())).unwrap();
+    assert_eq!(
+        message(jwt_verify(&with_aud, OCT, &options)),
+        "invalid claim: aud"
+    );
+    let typed = sign_with(r#"{"exp":1300819380}"#, |o| {
+        o.typ = Some("x+jwt".to_owned())
+    })
+    .unwrap();
     assert_eq!(code(jwt_verify(&typed, OCT, &options)), "InvalidHeader");
 }
 
@@ -567,29 +617,50 @@ fn access_options() -> JwtVerifyOptions {
 #[test]
 fn the_access_token_profile_accepts_an_rfc9068_token() {
     let token = access_token(r#""s6BhdRkqt3""#);
-    assert_eq!(protected_header(&token).get("typ").and_then(Value::as_str), Some("at+jwt"));
+    assert_eq!(
+        protected_header(&token).get("typ").and_then(Value::as_str),
+        Some("at+jwt")
+    );
     let verified = jwt_verify(&token, OCT, &access_options()).unwrap();
-    assert_eq!(parse(&verified.claims), parse(&access_claims(r#""s6BhdRkqt3""#)));
+    assert_eq!(
+        parse(&verified.claims),
+        parse(&access_claims(r#""s6BhdRkqt3""#))
+    );
     // RFC 6749 §2.2 sets no minimum length (ADR 0052 §1).
-    assert_eq!(code(jwt_verify(&access_token(r#""""#), OCT, &access_options())), "ok");
+    assert_eq!(
+        code(jwt_verify(&access_token(r#""""#), OCT, &access_options())),
+        "ok"
+    );
 }
 
 #[test]
 fn the_access_token_profile_requires_at_jwt_issuers_and_audiences() {
     // A generic JWT typ is not at+jwt (RFC 9068 §4).
     let generic = sign(&access_claims(r#""c""#));
-    assert_eq!(code(jwt_verify(&generic, OCT, &access_options())), "InvalidHeader");
+    assert_eq!(
+        code(jwt_verify(&generic, OCT, &access_options())),
+        "InvalidHeader"
+    );
 
     let token = access_token(r#""c""#);
     let mut options = access_options();
     options.issuers = None;
-    assert_eq!(message(jwt_verify(&token, OCT, &options)), "invalid claim: iss");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &options)),
+        "invalid claim: iss"
+    );
     let mut options = access_options();
     options.audiences = None;
-    assert_eq!(message(jwt_verify(&token, OCT, &options)), "invalid claim: aud");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &options)),
+        "invalid claim: aud"
+    );
     let mut options = access_options();
     options.issuers = Some(list(&["https://other.example"]));
-    assert_eq!(message(jwt_verify(&token, OCT, &options)), "invalid claim: iss");
+    assert_eq!(
+        message(jwt_verify(&token, OCT, &options)),
+        "invalid claim: iss"
+    );
 }
 
 #[test]
@@ -725,9 +796,14 @@ fn omit_typ_access_token_and_typ_set_the_header() {
     let none = sign_with(RFC7519_3_1_CLAIMS, |o| o.omit_typ = true).unwrap();
     assert_eq!(protected_header(&none), parse(r#"{"alg":"HS256"}"#));
     let at = sign_with(RFC7519_3_1_CLAIMS, |o| o.access_token = true).unwrap();
-    assert_eq!(protected_header(&at), parse(r#"{"alg":"HS256","typ":"at+jwt"}"#));
-    let custom = sign_with(RFC7519_3_1_CLAIMS, |o| o.typ = Some("secevent+jwt".to_owned()))
-        .unwrap();
+    assert_eq!(
+        protected_header(&at),
+        parse(r#"{"alg":"HS256","typ":"at+jwt"}"#)
+    );
+    let custom = sign_with(RFC7519_3_1_CLAIMS, |o| {
+        o.typ = Some("secevent+jwt".to_owned())
+    })
+    .unwrap();
     assert_eq!(
         protected_header(&custom),
         parse(r#"{"alg":"HS256","typ":"secevent+jwt"}"#)
@@ -804,11 +880,19 @@ fn rsa_signing_is_unsupported_and_none_is_not_allowed() {
         );
     }
     assert_eq!(
-        code(jwt_sign(RFC7519_3_1_CLAIMS, RSA_PRIVATE, &JwtSignOptions::new("HS256".to_owned()))),
+        code(jwt_sign(
+            RFC7519_3_1_CLAIMS,
+            RSA_PRIVATE,
+            &JwtSignOptions::new("HS256".to_owned())
+        )),
         "UnsupportedAlgorithm"
     );
     assert_eq!(
-        code(jwt_sign(RFC7519_3_1_CLAIMS, OCT, &JwtSignOptions::new("none".to_owned()))),
+        code(jwt_sign(
+            RFC7519_3_1_CLAIMS,
+            OCT,
+            &JwtSignOptions::new("none".to_owned())
+        )),
         "AlgorithmNotAllowed"
     );
 }
@@ -818,10 +902,19 @@ fn bad_claims_and_keys_are_the_cores_errors() {
     let options = JwtSignOptions::new("HS256".to_owned());
     assert_eq!(code(jwt_sign("[]", OCT, &options)), "InvalidJson");
     assert_eq!(code(jwt_sign("{", OCT, &options)), "InvalidJson");
-    assert_eq!(code(jwt_sign(r#"{"exp":"soon"}"#, OCT, &options)), "InvalidClaim");
-    assert_eq!(code(jwt_sign("{}", r#"{"kty":"oct"}"#, &options)), "InvalidKey");
+    assert_eq!(
+        code(jwt_sign(r#"{"exp":"soon"}"#, OCT, &options)),
+        "InvalidClaim"
+    );
+    assert_eq!(
+        code(jwt_sign("{}", r#"{"kty":"oct"}"#, &options)),
+        "InvalidKey"
+    );
     // Conformance README "Step order": the key is imported before the claims are parsed.
-    assert_eq!(code(jwt_sign("[]", r#"{"kty":"oct"}"#, &options)), "InvalidKey");
+    assert_eq!(
+        code(jwt_sign("[]", r#"{"kty":"oct"}"#, &options)),
+        "InvalidKey"
+    );
     let (_, ec_public) = key_pair(KeySpec::Ec(EcCurve::P256));
     let es256 = JwtSignOptions::new("ES256".to_owned());
     assert_ne!(code(jwt_sign("{}", &ec_public, &es256)), "ok");
@@ -912,7 +1005,13 @@ fn a_signed_jwt_is_not_a_nested_jwt() {
     let (key, _) = key_pair(KeySpec::Oct { bytes: 16 });
     let decrypt = a128kw_decrypt();
     assert_eq!(
-        code(jwt_decrypt_nested(RFC7519_3_1, &key, &decrypt, OCT, &hs256())),
+        code(jwt_decrypt_nested(
+            RFC7519_3_1,
+            &key,
+            &decrypt,
+            OCT,
+            &hs256()
+        )),
         "InvalidFormat"
     );
     assert_eq!(
@@ -981,7 +1080,13 @@ fn the_nested_policies_reach_the_core() {
     // The wrong key-encryption key.
     let (wrong, _) = key_pair(KeySpec::Oct { bytes: 16 });
     assert_eq!(
-        code(jwt_decrypt_nested(&nested, &wrong, &a128kw_decrypt(), OCT, &hs256())),
+        code(jwt_decrypt_nested(
+            &nested,
+            &wrong,
+            &a128kw_decrypt(),
+            OCT,
+            &hs256()
+        )),
         "DecryptionFailed"
     );
 }
@@ -995,7 +1100,13 @@ fn nested_inputs_are_read_in_the_conformance_order() {
     options.leeway = Some(601);
     let empty = JweDecryptOptions::new(Vec::new(), list(&["A128GCM"]));
     assert_eq!(
-        code(jwt_decrypt_nested(&nested, r#"{"kty":"oct"}"#, &empty, "{}", &options)),
+        code(jwt_decrypt_nested(
+            &nested,
+            r#"{"kty":"oct"}"#,
+            &empty,
+            "{}",
+            &options
+        )),
         "InvalidKey"
     );
     assert_eq!(
@@ -1003,15 +1114,33 @@ fn nested_inputs_are_read_in_the_conformance_order() {
         "AlgorithmNotAllowed"
     );
     assert_eq!(
-        code(jwt_decrypt_nested(&nested, &key, &a128kw_decrypt(), "{}", &options)),
+        code(jwt_decrypt_nested(
+            &nested,
+            &key,
+            &a128kw_decrypt(),
+            "{}",
+            &options
+        )),
         "InvalidKey"
     );
     assert_eq!(
-        code(jwt_decrypt_nested_with_jwks(&nested, &key, &a128kw_decrypt(), "{}", &options)),
+        code(jwt_decrypt_nested_with_jwks(
+            &nested,
+            &key,
+            &a128kw_decrypt(),
+            "{}",
+            &options
+        )),
         "InvalidKey"
     );
     assert_eq!(
-        message(jwt_decrypt_nested("garbage", &key, &a128kw_decrypt(), OCT, &options)),
+        message(jwt_decrypt_nested(
+            "garbage",
+            &key,
+            &a128kw_decrypt(),
+            OCT,
+            &options
+        )),
         "invalid claim: leeway"
     );
     assert_eq!(
@@ -1035,8 +1164,7 @@ fn encrypt_nested_options_reach_the_core() {
     let mut options = JweEncryptOptions::new("A128GCM".to_owned(), vec![recipient()]);
     options.protected_header = Some(r#"{"kid":"kek-1"}"#.to_owned());
     let nested = jwt_encrypt_nested(RFC7519_3_1, &options).unwrap();
-    let verified =
-        jwt_decrypt_nested(&nested, &key, &a128kw_decrypt(), OCT, &hs256()).unwrap();
+    let verified = jwt_decrypt_nested(&nested, &key, &a128kw_decrypt(), OCT, &hs256()).unwrap();
     let outer = parse(&verified.outer_header);
     assert_eq!(outer.get("kid").and_then(Value::as_str), Some("kek-1"));
     assert_eq!(outer.get("cty").and_then(Value::as_str), Some("JWT"));
@@ -1044,19 +1172,31 @@ fn encrypt_nested_options_reach_the_core() {
     // A caller cty other than JWT, and compression (RFC 8725 §3.6), are refused by the core.
     let mut options = JweEncryptOptions::new("A128GCM".to_owned(), vec![recipient()]);
     options.protected_header = Some(r#"{"cty":"json"}"#.to_owned());
-    assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &options)), "InvalidHeader");
+    assert_eq!(
+        code(jwt_encrypt_nested(RFC7519_3_1, &options)),
+        "InvalidHeader"
+    );
     let mut options = JweEncryptOptions::new("A128GCM".to_owned(), vec![recipient()]);
     options.compress = true;
-    assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &options)), "InvalidHeader");
+    assert_eq!(
+        code(jwt_encrypt_nested(RFC7519_3_1, &options)),
+        "InvalidHeader"
+    );
 
     // Compact output: exactly one recipient, no unprotected header and no AAD (RFC 7516 §7.1).
     let two = JweEncryptOptions::new("A128GCM".to_owned(), vec![recipient(), recipient()]);
     assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &two)), "InvalidFormat");
     let none = JweEncryptOptions::new("A128GCM".to_owned(), Vec::new());
-    assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &none)), "InvalidFormat");
+    assert_eq!(
+        code(jwt_encrypt_nested(RFC7519_3_1, &none)),
+        "InvalidFormat"
+    );
     let mut shared = JweEncryptOptions::new("A128GCM".to_owned(), vec![recipient()]);
     shared.shared_unprotected_header = Some(r#"{"x":1}"#.to_owned());
-    assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &shared)), "InvalidFormat");
+    assert_eq!(
+        code(jwt_encrypt_nested(RFC7519_3_1, &shared)),
+        "InvalidFormat"
+    );
     let mut aad = JweEncryptOptions::new("A128GCM".to_owned(), vec![recipient()]);
     aad.aad = Some(polyjose_surface::SecretBytes::from(b"aad".to_vec()));
     assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &aad)), "InvalidFormat");
@@ -1071,9 +1211,15 @@ fn encrypt_nested_options_reach_the_core() {
     assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &bad)), "InvalidJson");
     let bad_key = JweEncryptOptions::new(
         "A128GCM".to_owned(),
-        vec![JweRecipient::new("A128KW".to_owned(), secret(r#"{"kty":"oct"}"#))],
+        vec![JweRecipient::new(
+            "A128KW".to_owned(),
+            secret(r#"{"kty":"oct"}"#),
+        )],
     );
-    assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &bad_key)), "InvalidKey");
+    assert_eq!(
+        code(jwt_encrypt_nested(RFC7519_3_1, &bad_key)),
+        "InvalidKey"
+    );
 
     // The inner token must be a signed compact JWS (RFC 7519 §5.2, RFC 8725 §3.2).
     let options = JweEncryptOptions::new("A128GCM".to_owned(), vec![recipient()]);
@@ -1115,7 +1261,10 @@ fn pbes2_recipient_options_reach_the_core() {
     let mut low = JweRecipient::new("PBES2-HS256+A128KW".to_owned(), secret(password));
     low.p2c = Some(1);
     let options = JweEncryptOptions::new("A128GCM".to_owned(), vec![low]);
-    assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &options)), "InvalidKey");
+    assert_eq!(
+        code(jwt_encrypt_nested(RFC7519_3_1, &options)),
+        "InvalidKey"
+    );
 }
 
 // --- Secrets and defaults (ADR 0030 §3, §7) --------------------------------------------------
