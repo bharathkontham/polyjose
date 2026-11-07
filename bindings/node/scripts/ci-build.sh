@@ -25,8 +25,10 @@
 #        POLYJOSE_CONFORMANCE_SUFFIX=<label>  test/conformance.test.ts writes node-<label>.json
 #      and, for the two *-pc-windows-msvc targets, RUSTFLAGS with -C target-feature=+crt-static
 #      (review-code.md SF-1);
-#   3. checks that target/conformance/node-<label>.json was written, and for msvc that the addon
-#      imports no VCRUNTIME*.dll or MSVCP*.dll (python3 -I scripts/pe-imports.py --deny-crt);
+#   3. checks that target/conformance/node-<label>.json was written, for msvc that the addon
+#      imports no VCRUNTIME*.dll or MSVCP*.dll (python3 -I scripts/pe-imports.py --deny-crt), and
+#      for the two *-unknown-linux-gnu targets that it requires no GLIBC_ symbol version above the
+#      floor, 2.28 (scripts/glibc-floor.sh; review-code.md SF-2);
 #   4. scripts/pack-platform.sh <platform> <target> dist/npm/ (shared with scripts/pack.sh):
 #      dist/npm/polyjose-node-<platform>-<version>.tgz, then checks its file list.
 #
@@ -125,6 +127,23 @@ results=../../target/conformance/node-$label.json
 if [ "$crt_static" = true ]; then
   echo "==> @polyjose/node ci-build: polyjose.$platform.node imports no VC++ runtime DLL"
   python3 -I scripts/pe-imports.py --deny-crt "polyjose.$platform.node"
+fi
+
+# The glibc floor of the gnu addons (review-code.md SF-2, feature 0007 F04): the addon must
+# require no GLIBC_ symbol version above 2.28, the floor the README states, or it would not load
+# on the distributions the README lists (the loader then reports "Cannot find native binding").
+# binding-node.yml builds these targets inside the manylinux_2_28 images, whose glibc is 2.28;
+# this check fails any gnu build that needs more, for example one on the runner itself (glibc
+# 2.39 there; a build on glibc 2.41 measured GLIBC_2.34). 2.28 is also Node 22's own Linux floor
+# (Node's BUILDING.md: glibc >= 2.28), so no distribution that runs official Node 22 or later is
+# left out. scripts/glibc-floor.sh reads readelf (or objdump) output, compares as integers and
+# fails closed; test/ci.test.ts checks it on test/fixtures/glibc/. Skipped on every other target.
+glibc_floor=2.28
+glibc_check=false
+case $target in *-unknown-linux-gnu) glibc_check=true ;; esac
+if [ "$glibc_check" = true ]; then
+  echo "==> @polyjose/node ci-build: polyjose.$platform.node requires glibc $glibc_floor at most"
+  scripts/glibc-floor.sh "$glibc_floor" "polyjose.$platform.node"
 fi
 
 echo "==> @polyjose/node ci-build: pack @polyjose/node-$platform"

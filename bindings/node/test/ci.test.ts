@@ -53,6 +53,21 @@ const packPlatformFile = path.join(pkgDir, "scripts", "pack-platform.sh");
 const buildFile = path.join(pkgDir, "scripts", "build.sh");
 const testShFile = path.join(pkgDir, "test.sh");
 
+/**
+ * The glibc floor of the gnu addons and the images that build them (review-code.md SF-2, feature
+ * 0007 F04; confirmed 2026-11-07): ci-build.sh's floor, the README and the workflow's images agree.
+ * pypa's manylinux_2_28 images (AlmaLinux 8, glibc 2.28) are one repository per architecture, so
+ * each gnu job pins its own digest, resolved 2026-11-07 (builds of 2026-11-06). Bump a digest
+ * deliberately, here and in binding-node.yml together.
+ */
+const glibcFloorValue = "2.28";
+const manylinuxImages: Readonly<Record<string, string>> = {
+  "x86_64-unknown-linux-gnu":
+    "quay.io/pypa/manylinux_2_28_x86_64@sha256:ae830e2ecbf4568743f8b760920cd7483538375b6b242a9fb02b5b2ad0245f68",
+  "aarch64-unknown-linux-gnu":
+    "quay.io/pypa/manylinux_2_28_aarch64@sha256:6c4f9b6d9453bb47b21b4c1e4f04f3c662584f60f4ed8455f4561a336ff19414",
+};
+
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
@@ -309,6 +324,15 @@ test("binding-node.yml builds the eight napi targets with ci-build.sh and upload
     const musl = (e["target"] ?? "").endsWith("-musl");
     assert.equal(/^node:\d+-alpine[\w.]*@sha256:[0-9a-f]{64}$/.test(e["image"] ?? ""), musl, `${e["target"]}: Alpine image iff musl, by digest`);
   }
+  // gnu runs inside the manylinux_2_28 image of its architecture, by digest (F04); no other does.
+  for (const e of entries) {
+    const target = e["target"] ?? "";
+    assert.equal(e["manylinux"], manylinuxImages[target], `${target}: the pinned manylinux image iff gnu`);
+    assert.ok(e["image"] === undefined || e["manylinux"] === undefined, `${target}: one image at most`);
+  }
+  for (const image of Object.values(manylinuxImages)) {
+    assert.ok(image.includes(`/manylinux_${glibcFloorValue.replace(".", "_")}_`), `${image}: the image's glibc is the floor`);
+  }
   const text = prebuild.map((l) => l.text).join("\n");
   assert.match(text, /bindings\/node\/scripts\/ci-build\.sh "?\$\{\{ matrix\.target \}\}"?/, "each target runs ci-build.sh <target>");
   assert.match(text, /name: npm-\$\{\{ matrix\.target \}\}/, "platform tarball artifact npm-<target>");
@@ -325,7 +349,8 @@ test("binding-node.yml runs Node 22, 24 and 26 on linux-x64 and the parity check
   assert.deepEqual(flowItems(node.value), ["22", "24", "26"]);
   const vtext = versions.map((l) => l.text).join("\n");
   assert.match(vtext, /runs-on: ubuntu-latest/, "on linux-x64");
-  assert.match(vtext, /ci-build\.sh x86_64-unknown-linux-gnu "?x86_64-unknown-linux-gnu-node\$\{\{ matrix\.node \}\}"?/);
+  assert.match(vtext, /^LABEL: x86_64-unknown-linux-gnu-node\$\{\{ matrix\.node \}\}$/m, "each Node version writes its own results file");
+  assert.match(vtext, /bindings\/node\/scripts\/ci-build\.sh x86_64-unknown-linux-gnu "\$LABEL"/);
 
   const parity = jobBlock(lines, "parity");
   const ptext = parity.map((l) => l.text).join("\n");
@@ -546,6 +571,109 @@ test("the PE import reader fails closed (exit 2) on anything that is not a well-
   });
 });
 
+// --- The glibc floor check (review-code.md SF-2, feature 0007 F04) ---------------------------------
+
+const glibcCheck = path.join(pkgDir, "scripts", "glibc-floor.sh");
+const glibcFixture = (name: string): string => path.join(pkgDir, "test", "fixtures", "glibc", name);
+
+function glibcFloor(...args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const r = cp.spawnSync("bash", [glibcCheck, ...args], { encoding: "utf8" });
+  assert.equal(r.error, undefined, "bash runs");
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+/** glibc-floor.sh --output <floor> on `text`, a tool output written to a scratch file. */
+function glibcFloorOn(floor: string, text: string): { status: number | null; stdout: string; stderr: string } {
+  let r = { status: null as number | null, stdout: "", stderr: "" };
+  withScratch((dir) => {
+    const file = path.join(dir, "output.txt");
+    fs.writeFileSync(file, text);
+    r = glibcFloor("--output", floor, file);
+  });
+  return r;
+}
+
+test("the glibc floor check passes the 2.28 fixtures and fails the 2.34 ones, readelf and objdump (fixtures: test/fixtures/glibc/regen.sh)", () => {
+  for (const tool of ["readelf", "objdump"]) {
+    const pass = glibcFloor("--output", "2.28", glibcFixture(`floor-2.28-arm64.${tool}.txt`));
+    assert.equal(pass.status, 0, `${tool}: 2.28 at floor 2.28 passes; stderr: ${pass.stderr}`);
+    assert.match(pass.stdout, /highest GLIBC_2\.28 \(floor 2\.28\)/, `${tool}: names the highest version`);
+
+    const fail = glibcFloor("--output", "2.28", glibcFixture(`above-2.34-x64.${tool}.txt`));
+    assert.equal(fail.status, 1, `${tool}: 2.34 at floor 2.28 fails`);
+    assert.match(fail.stderr, /GLIBC_2\.34/, `${tool}: the failure names GLIBC_2.34`);
+    assert.doesNotMatch(fail.stderr, /GLIBC_2\.28\b|GLIBC_2\.2\.5/, `${tool}: and only the versions above the floor`);
+
+    // The floor is the only threshold: the same outputs at other floors.
+    assert.equal(glibcFloor("--output", "2.34", glibcFixture(`above-2.34-x64.${tool}.txt`)).status, 0, `${tool}: 2.34 at floor 2.34`);
+    assert.equal(glibcFloor("--output", "2.27", glibcFixture(`floor-2.28-arm64.${tool}.txt`)).status, 1, `${tool}: 2.28 at floor 2.27`);
+  }
+});
+
+test("the glibc floor check compares versions as integers, not text (no sort -V on macOS bash 3.2)", () => {
+  const out = (...versions: string[]): string =>
+    versions.map((v, i) => `  0x00${i}0:   Name: GLIBC_${v}  Flags: none  Version: ${i + 2}\n`).join("");
+  const cases: [string, string[], number][] = [
+    ["2.28", ["2.9"], 0], // 9 < 28, though "2.9" > "2.28" as text
+    ["2.28", ["2.2.5", "2.3.4", "2.17"], 0], // x86-64's three-component base versions
+    ["2.28", ["2.28"], 0],
+    ["2.28", ["2.29"], 1],
+    ["2.28", ["2.100"], 1], // 100 > 28, though "2.100" < "2.28" as text
+    ["2.28", ["3.0"], 1],
+    ["2.28", ["2.28.1"], 1], // above 2.28 itself
+    ["2.28", ["2.08"], 0], // a leading zero is decimal, not octal
+    ["2.9", ["2.10"], 1],
+    ["2.34", ["2.17", "2.34", "2.28"], 0], // the maximum, in any order
+  ];
+  for (const [floor, versions, status] of cases) {
+    const r = glibcFloorOn(floor, out(...versions));
+    assert.equal(r.status, status, `floor ${floor}, ${versions.join(" ")}: exit ${status}; stderr: ${r.stderr}`);
+  }
+  // Versions of other libraries are not glibc's: libgcc_s's GCC_*, libstdc++'s GLIBCXX_*.
+  assert.equal(glibcFloorOn("2.28", out("2.17") + "  Name: GCC_7.0.0\n  Name: GLIBCXX_3.4.30\n").status, 0);
+});
+
+test("the glibc floor check fails on GLIBC_PRIVATE and any other unnumbered glibc version", () => {
+  const base = fs.readFileSync(glibcFixture("floor-2.28-arm64.readelf.txt"), "utf8");
+  // GLIBC_PRIVATE is glibc's internal ABI, which changes between builds of the same release;
+  // GLIBC_ABI_DT_RELR is written by a link with -z pack-relative-relocs and needs glibc 2.36.
+  for (const name of ["GLIBC_PRIVATE", "GLIBC_ABI_DT_RELR"]) {
+    const r = glibcFloorOn("2.28", `${base}  0x0090:   Name: ${name}  Flags: none  Version: 7\n`);
+    assert.equal(r.status, 1, `${name}: exit 1`);
+    assert.ok(r.stderr.includes(name), `the failure names ${name}`);
+  }
+  const objdump = fs.readFileSync(glibcFixture("floor-2.28-arm64.objdump.txt"), "utf8");
+  const priv = glibcFloorOn("2.28", `${objdump}0000000000000000      DF *UND*\t0000000000000000 (GLIBC_PRIVATE) _dl_x\n`);
+  assert.equal(priv.status, 1, "GLIBC_PRIVATE in objdump -T output");
+});
+
+test("the glibc floor check fails closed (exit 2) when it finds no glibc version or cannot run", () => {
+  withScratch((dir) => {
+    const empty = path.join(dir, "empty.txt");
+    fs.writeFileSync(empty, "");
+    const musl = path.join(dir, "musl.txt");
+    fs.writeFileSync(musl, "\nVersion needs section '.gnu.version_r' contains 1 entries:\n  0x0000: Version: 1  File: libgcc_s.so.1  Cnt: 1\n  0x0010:   Name: GCC_3.0  Flags: none  Version: 2\n");
+    const none = path.join(dir, "none.txt");
+    fs.writeFileSync(none, "\nNo version information found in this file.\n");
+    for (const [what, file] of [["empty output", empty], ["no GLIBC_ version (musl, libgcc_s only)", musl], ["no version information", none]] as const) {
+      const r = glibcFloor("--output", "2.28", file);
+      assert.equal(r.status, 2, `${what}: exit 2, not a pass; stderr: ${r.stderr}`);
+      assert.match(r.stderr, /no GLIBC_ symbol version/, `${what}: says why`);
+    }
+    // The addon mode: a file that is not an ELF object fails, whatever tool reads it.
+    const notElf = path.join(dir, "polyjose.linux-x64-gnu.node");
+    fs.writeFileSync(notElf, "{}\n");
+    assert.notEqual(glibcFloor("2.28", notElf).status, 0, "a file that is not ELF");
+    assert.equal(glibcFloor("2.28", path.join(dir, "missing.node")).status, 2, "a missing addon");
+    assert.equal(glibcFloor("--output", "2.28", path.join(dir, "missing.txt")).status, 2, "a missing output file");
+  });
+  assert.equal(glibcFloor().status, 2, "no arguments");
+  assert.equal(glibcFloor("2.28").status, 2, "no file");
+  for (const floor of ["", "2", "2.28.1", "v2.28", "2.x", "2.1000"]) {
+    assert.equal(glibcFloor("--output", floor, glibcFixture("floor-2.28-arm64.readelf.txt")).status, 2, `floor '${floor}' is rejected`);
+  }
+});
+
 /** The index of the only line of `lines` matching `pattern`. */
 function onlyLine(lines: readonly string[], pattern: RegExp, what: string): number {
   const found = lines.flatMap((line, i) => (pattern.test(line) ? [i] : []));
@@ -587,6 +715,43 @@ test("ci-build.sh links the msvc addons' C runtime statically and checks they im
   assert.ok(insideIf(raw, flags, gate), "the flag is set only when crt_static is true");
   assert.ok(insideIf(raw, check, gate), "the check runs only when crt_static is true");
   assert.ok(flags < build && build < check && check < pack, "flag, then build, then the check, then the pack");
+});
+
+test("ci-build.sh checks the gnu addons' glibc floor after the build, and only on the gnu targets", () => {
+  const raw = codeLines(ciBuildFile);
+  const gate = /^if \[ "\$glibc_check" = true \]; then$/;
+  onlyLine(raw, new RegExp(`^glibc_floor=${glibcFloorValue.replace(".", "\\.")}$`), `the floor is ${glibcFloorValue}`);
+  onlyLine(raw, /^\s*glibc_check=false$/, "glibc_check is false by default");
+  onlyLine(raw, /^\s*case \$target in \*-unknown-linux-gnu\) glibc_check=true ;; esac$/, "and true for the *-unknown-linux-gnu targets only");
+  const build = onlyLine(raw, /^\s*CARGO_BUILD_TARGET=\S+ POLYJOSE_CONFORMANCE_SUFFIX=\S+ \.\/test\.sh$/, "the build and test run");
+  const check = onlyLine(
+    raw,
+    /^\s*scripts\/glibc-floor\.sh "\$glibc_floor" "polyjose\.\$platform\.node"$/,
+    "the check on the built addon, the file pack-platform.sh packs",
+  );
+  const pack = onlyLine(raw, /^\s*scripts\/pack-platform\.sh /, "the platform pack");
+  assert.ok(insideIf(raw, check, gate), "the check runs only when glibc_check is true");
+  assert.ok(build < check && check < pack, "build, then the check, then the pack");
+  assert.ok(!raw.some((l) => /glibc_check=true/.test(l) && !/-unknown-linux-gnu\)/.test(l)), "nothing else turns it on");
+  assert.deepEqual(
+    napiTargets().filter((t) => t.endsWith("-unknown-linux-gnu")),
+    ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"],
+    "the pattern matches the two gnu targets of package.json",
+  );
+});
+
+test("the README states the glibc floor, the distributions it covers, and that Amazon Linux 2 is not supported (F04)", () => {
+  const readme = read(path.join(pkgDir, "README.md")).replace(/\s+/g, " ");
+  const at = readme.indexOf("### Linux glibc floor");
+  assert.ok(at >= 0, "the README has a glibc floor section");
+  const end = readme.indexOf(" ## ", at);
+  const section = readme.slice(at, end < 0 ? undefined : end);
+  assert.ok(section.includes(`glibc ${glibcFloorValue} or later`), `it states the floor, ${glibcFloorValue}`);
+  for (const distro of ["RHEL", "Debian 11", "Debian 12", "Ubuntu 20.04", "Ubuntu 22.04", "Ubuntu 24.04", "Amazon Linux 2023"]) {
+    assert.ok(section.includes(distro), `it lists ${distro}`);
+  }
+  assert.match(section, /Amazon Linux 2 \(glibc 2\.26\) is not supported/, "and says Amazon Linux 2 is not");
+  assert.ok(section.includes("manylinux_2_28"), "and how the floor is reached");
 });
 
 /** The text of `const <name> = ...` in `src` up to its closing `\n}\n`. */
@@ -689,18 +854,82 @@ test("binding-node.yml runs the compiled tests on Node 22.12.0 exactly, the engi
   assert.ok(parity.includes(label), `parity requires node-${label}.json`);
 });
 
+/** The `docker run` of a manylinux step: its read-only mounts, its image, and the script it runs. */
+function manylinuxRun(step: string, where: string): string {
+  assert.match(step, /^rust=\$\(rustc --print sysroot\)$/m, `${where}: the runner's toolchain, as rust-toolchain.toml resolved it`);
+  assert.match(step, /^node=\$\(dirname "\$\(dirname "\$\(node -p process\.execPath\)"\)"\)$/m, `${where}: setup-node's Node`);
+  const at = step.indexOf("docker run ");
+  assert.ok(at >= 0, `${where}: docker run`);
+  const run = step.slice(at);
+  assert.match(run, /^docker run --rm -v "\$PWD:\/work" -w \/work -v "\$rust:\/opt\/rust:ro" -v "\$node:\/opt\/node:ro" \\$/m, `${where}: the checkout, and Rust and Node read-only`);
+  assert.equal((run.match(/ -v /g) ?? []).length, 3, `${where}: no other mount`);
+  assert.match(run, /^"\$IMAGE" bash -euc '$/m, `${where}: the image from env:`);
+  assert.match(run, /^export PATH="\/opt\/rust\/bin:\/opt\/node\/bin:\/opt\/python\/cp313-cp313\/bin:\$PATH"$/m, `${where}: the mounted Rust and Node first`);
+  assert.match(run, /^git config --global --add safe\.directory \/work$/m);
+  // The image adds no toolchain of its own: nothing is downloaded or installed inside it.
+  assert.doesNotMatch(run, /\b(curl|wget|rustup|yum|dnf|pip|npx)\b/, `${where}: no download or install inside the image`);
+  return run;
+}
+
+test("the gnu jobs build inside the pinned manylinux_2_28 image with the runner's Rust and Node read-only (F04)", () => {
+  const { lines } = workflow();
+  const steps = stepsOf(jobBlock(lines, "prebuild"));
+  const at = steps.findIndex((s) => /^name: ci-build\.sh \(manylinux\)$/m.test(s.text));
+  assert.ok(at >= 0, "prebuild has a manylinux build step");
+  const step = steps[at]?.text ?? "";
+  assert.match(step, /^IMAGE: \$\{\{ matrix\.manylinux \}\}$/m, "the image of the matrix entry (by digest, above)");
+  assert.match(step, /^TARGET: \$\{\{ matrix\.target \}\}$/m);
+  const run = manylinuxRun(step, "prebuild");
+  assert.match(run, /-e TARGET -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL/);
+  assert.match(run, /^bindings\/node\/scripts\/ci-build\.sh "\$TARGET"$/m, "ci-build.sh, whose glibc check then runs on the addon");
+
+  // Rust (with this target's std) and Node are installed on the runner first, by the steps the
+  // native jobs use, which run for the gnu jobs too (they have no Alpine image).
+  const setupNode = steps.findIndex((s) => /^uses: actions\/setup-node@/.test(s.text));
+  const install = steps.findIndex((s) => /^name: Install toolchain \(rust-toolchain\.toml\)$/m.test(s.text));
+  for (const [i, what] of [[setupNode, "setup-node"], [install, "the toolchain install"]] as const) {
+    assert.ok(i >= 0 && i < at, `${what} comes before the manylinux build`);
+    assert.match(steps[i]?.text ?? "", /^if: \$\{\{ !matrix\.image \}\}$/m, `${what} runs for every job without an Alpine image`);
+  }
+  assert.match(steps[install]?.text ?? "", /^rustup target add "\$\{\{ matrix\.target \}\}"$/m);
+});
+
+test("the node-versions job builds inside the same x86_64 manylinux image, so it tests the addon as it ships (F04)", () => {
+  const { lines } = workflow();
+  const steps = stepsOf(jobBlock(lines, "node-versions"));
+  const builds = steps.filter((s) => /ci-build\.sh/.test(s.text));
+  assert.equal(builds.length, 1, "one build, the manylinux one");
+  const step = builds[0]?.text ?? "";
+  assert.match(step, /^name: ci-build\.sh \(manylinux\)$/m);
+  assert.match(step, new RegExp(`^IMAGE: ${(manylinuxImages["x86_64-unknown-linux-gnu"] ?? "").replace(/[.]/g, "\\.")}$`, "m"), "the linux-x64-gnu prebuild's digest");
+  const run = manylinuxRun(step, "node-versions");
+  assert.match(run, /-e LABEL -e HOST_IDS="\$\(id -u\):\$\(id -g\)" -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL/);
+  const ciBuild = run.indexOf('bindings/node/scripts/ci-build.sh x86_64-unknown-linux-gnu "$LABEL"');
+  // The Node 22.12.0 step runs on the runner afterwards and writes its results file, so the tree
+  // goes back to the runner's user (the container runs as root).
+  const chown = run.indexOf('chown -R "$HOST_IDS" /work');
+  assert.ok(ciBuild >= 0 && chown > ciBuild, "ci-build.sh, then the tree back to the runner's user");
+  const setupNode = steps.findIndex((s) => /^uses: actions\/setup-node@/.test(s.text) && /node-version: \$\{\{ matrix\.node \}\}$/m.test(s.text));
+  assert.ok(setupNode >= 0 && setupNode < steps.indexOf(builds[0] as (typeof steps)[number]), "this leg's Node is installed first, and mounted");
+});
+
 test("every prebuild job runs the RSA symbol guard on its own runner after the build (review-security.md L2)", () => {
   const { lines } = workflow();
   const guard = "scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release";
   const steps = stepsOf(jobBlock(lines, "prebuild"));
-  assert.equal(steps.map((s) => s.text.split(guard).length - 1).reduce((a, b) => a + b, 0), 2, "the guard runs twice in the job text: native and Alpine");
+  assert.equal(
+    steps.map((s) => s.text.split(guard).length - 1).reduce((a, b) => a + b, 0),
+    3,
+    "the guard runs three times in the job text: native, manylinux and Alpine",
+  );
 
-  // Native runners (every target but musl): a step after ci-build.sh (native), with llvm-tools.
+  // Native runners (macOS and Windows): a step after ci-build.sh (native), with llvm-tools.
   const build = steps.findIndex((s) => /^name: ci-build\.sh \(native\)$/m.test(s.text));
+  assert.match(steps[build]?.text ?? "", /^if: \$\{\{ !matrix\.image && !matrix\.manylinux \}\}$/m, "the native build runs on neither image");
   const native = steps.findIndex((s) => s.text.includes(guard) && !/docker run/.test(s.text));
   assert.ok(build >= 0 && native > build, "the native guard step comes after the native build");
   const nativeText = steps[native]?.text ?? "";
-  assert.match(nativeText, /^if: \$\{\{ !matrix\.image \}\}$/m, "on the same jobs as the native build");
+  assert.match(nativeText, /^if: \$\{\{ !matrix\.image && !matrix\.manylinux \}\}$/m, "on the same jobs as the native build");
   assert.ok(nativeText.indexOf("rustup component add llvm-tools") >= 0, "the toolchain's llvm-nm and llvm-ar");
   assert.ok(nativeText.indexOf("rustup component add llvm-tools") < nativeText.indexOf(guard));
 
@@ -711,6 +940,16 @@ test("every prebuild job runs the RSA symbol guard on its own runner after the b
   const ciBuild = alpine.indexOf('bindings/node/scripts/ci-build.sh "$TARGET"');
   const inAlpine = alpine.indexOf(guard);
   assert.ok(tools >= 0 && tools < ciBuild && ciBuild < inAlpine, "llvm-tools, then ci-build.sh, then the guard, in Alpine");
+
+  // gnu: inside the same manylinux container, right after ci-build.sh; llvm-tools comes from the
+  // runner's toolchain, which the container mounts, so it is added before docker run.
+  const many = steps.find((s) => /^name: ci-build\.sh \(manylinux\)$/m.test(s.text))?.text ?? "";
+  assert.match(many, /^if: \$\{\{ matrix\.manylinux \}\}$/m);
+  const manyTools = many.indexOf("rustup component add llvm-tools");
+  const docker = many.indexOf("docker run ");
+  const manyBuild = many.indexOf('bindings/node/scripts/ci-build.sh "$TARGET"');
+  const inMany = many.indexOf(guard);
+  assert.ok(manyTools >= 0 && manyTools < docker && docker < manyBuild && manyBuild < inMany, "llvm-tools, docker run, ci-build.sh, then the guard");
 });
 
 test("check-rsa-symbols.sh's residual-risk note names the node prebuild targets only binding-node.yml reads", () => {

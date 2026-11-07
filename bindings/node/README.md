@@ -18,6 +18,28 @@ arm64), Linux glibc and musl (x64, arm64) and Windows (x64, arm64). Each is an o
 dependency at exactly this package's version, and npm installs only the one for your platform.
 If you install with `--omit=optional`, no addon is installed and the import throws.
 
+### Linux glibc floor
+
+The Linux glibc addons (`linux-x64-gnu`, `linux-arm64-gnu`) need **glibc 2.28 or later**. That is
+also the floor of the official Node.js 22 and later Linux builds, so any glibc system that runs
+official Node 22 can load the addon. They are built in the `manylinux_2_28` images (glibc 2.28),
+and the build fails if an addon needs a newer glibc symbol version.
+
+| Distribution | glibc |
+|---|---|
+| RHEL, AlmaLinux, Rocky Linux 8 | 2.28 |
+| Debian 11 | 2.31 |
+| Ubuntu 20.04 | 2.31 |
+| RHEL, AlmaLinux, Rocky Linux 9 | 2.34 |
+| Amazon Linux 2023, AWS Lambda `nodejs22.x` and `nodejs24.x` | 2.34 |
+| Ubuntu 22.04 | 2.35 |
+| Debian 12 | 2.36 |
+| Ubuntu 24.04 | 2.39 |
+
+Any later release of these works too. Amazon Linux 2 (glibc 2.26) is not supported: it reached its
+end of life on 2026-06-30, and official Node 22 doesn't run on it either. Alpine and other musl
+systems use the `linux-x64-musl` and `linux-arm64-musl` addons instead.
+
 ## Module format
 
 - The package is **ESM only** and needs **Node.js 22.12 or later**.
