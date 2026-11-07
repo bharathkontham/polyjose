@@ -45,13 +45,38 @@ export function optStr(v: unknown, at: string): string | undefined {
   return isAbsent(v) ? undefined : str(v, at);
 }
 
-export function bytes(v: unknown, at: string): Uint8Array {
+/**
+ * A byte input, as a fresh copy (ADR 0030 §7; 0013 B06). The facade calls this synchronously,
+ * when the operation is called and before it awaits the backend's lazy `ready()` (ADR 0031 §3),
+ * so a caller that reuses its array after starting a call can't change what is signed or
+ * encrypted. The copy is a plain `Uint8Array` holding exactly the view's bytes (a `Buffer` or a
+ * subarray shares no memory with it) and is pushed onto `copies`, which the facade wipes once the
+ * backend call settles; the caller's own array is never wiped. A view over a detached buffer
+ * can't be copied and is a TypeError.
+ */
+export function bytes(v: unknown, at: string, copies: Uint8Array[]): Uint8Array {
   if (!isUint8Array(v)) throw fail(at, "a Uint8Array");
-  return v;
+  let copy: Uint8Array;
+  try {
+    // The TypedArray constructor reads the internal slots, not `length` or an iterator.
+    copy = new Uint8Array(v);
+  } catch {
+    throw fail(at, "a Uint8Array over an attached ArrayBuffer");
+  }
+  copies.push(copy);
+  return copy;
 }
 
-export function optBytes(v: unknown, at: string): Uint8Array | undefined {
-  return isAbsent(v) ? undefined : bytes(v, at);
+export function optBytes(v: unknown, at: string, copies: Uint8Array[]): Uint8Array | undefined {
+  return isAbsent(v) ? undefined : bytes(v, at, copies);
+}
+
+/**
+ * Wipes the copies {@link bytes} made with `fill(0)` (ADR 0030 §7). JS gives no guarantee that
+ * the engine kept no other copy (ADR 0030 §7 rule 4); this removes the facade's own.
+ */
+export function wipe(copies: readonly Uint8Array[]): void {
+  for (const copy of copies) copy.fill(0);
 }
 
 export function bool(v: unknown, at: string): boolean {
