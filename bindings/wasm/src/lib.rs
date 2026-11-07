@@ -38,7 +38,9 @@
 
 mod error;
 mod read;
+mod write;
 
 pub mod jwk;
+pub mod jws;
 pub mod keys;
 pub mod util;
