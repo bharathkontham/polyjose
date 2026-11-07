@@ -414,6 +414,17 @@ pub(crate) mod tests {
                 "{name} is listed as non-secret but not declared"
             );
         }
+        // The JWK results that may be private (ADR 0030 §7, ADR 0054 §9: `jwksSelect` returns a
+        // whole member, `d` included) resolve through `SecretString` by name.
+        for name in ["JwkParseTask", "JwksSelectTask"] {
+            assert!(!NON_SECRET_TASKS.contains(&name), "{name}");
+            assert!(
+                tasks
+                    .iter()
+                    .any(|(task, out)| task == name && out == "SecretString"),
+                "{name} resolves through SecretString: {tasks:?}"
+            );
+        }
     }
 
     /// The text of the block that starts at `header` in `text`, up to its closing `}` at column 0.
