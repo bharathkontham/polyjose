@@ -34,9 +34,10 @@
 #                conformance-parity.sh.
 #   one job      a single job on a macOS runner with a timeout, so the rust-core reference, the
 #                Swift results and the parity check share one checkout (ADR 0060).
-#   order        test.sh (whose step requires its PASS line), then the rust-core reference
-#                (`cargo test --locked -p polyjose --test conformance`), then parity; none of the
-#                three is conditional.
+#   order        test.sh, then the rust-core reference (`cargo test --locked -p polyjose --test
+#                conformance`), then parity, none of them conditional. The test.sh step first
+#                empties target/conformance/, so that parity sees only this job's results, and
+#                requires test.sh's PASS line.
 #   modes        release mode installs the pinned nightly (platforms/swift/nightly-toolchain) with
 #                rust-src, builds with build-xcframework.sh --release and runs package.sh without
 #                --allow-dev; ci mode runs package.sh too (it may pass --allow-dev); --allow-dev
@@ -383,12 +384,16 @@ else
       bad "order" "step $i ($(step_key "$(step_file "$i")" name)) must not be conditional"
     fi
   done
+  if ! run_has "$(step_file "$i_test")" 'rm -rf target/conformance'; then
+    order_ok=0
+    bad "order" "the test.sh step must empty target/conformance/ first (a restored cache could hold old results)"
+  fi
   if ! run_has "$(step_file "$i_test")" 'platforms/swift/test.sh: PASS'; then
     order_ok=0
     bad "order" "the test.sh step must require test.sh's PASS line (it prints SKIPPED and exits 0 without its tools)"
   fi
 fi
-[ "$order_ok" = 1 ] && ok "order: test.sh (PASS line required), rust-core reference, parity, unconditional"
+[ "$order_ok" = 1 ] && ok "order: test.sh (on an empty target/conformance/, PASS line required), rust-core reference, parity, unconditional"
 
 # --- modes ----------------------------------------------------------------------------------
 modes_ok=1
@@ -567,6 +572,7 @@ mutate order "" "$core_run" "        if: inputs.mode == 'release'\n$core_run" "a
 mutate order "" "      - name: conformance parity" "      - name: conformance parity\n        if: inputs.mode == 'release'" "a conditional parity check"
 # shellcheck disable=SC2016 # literal workflow text
 mutate order "" '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then' "          if false; then" "test.sh's PASS line not required"
+mutate order "" "          rm -rf target/conformance" "          mkdir -p target/conformance" "results files left from a restored cache"
 mutate modes "" "$release_package" "$release_package --allow-dev" "--allow-dev in release mode"
 mutate modes "      - name: package.sh (ci mode, a development build allowed)" "        if: inputs.mode == 'ci'" "        if: always()" "the --allow-dev step in every mode"
 # shellcheck disable=SC2016 # literal workflow text

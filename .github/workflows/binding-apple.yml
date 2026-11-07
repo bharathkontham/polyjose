@@ -213,9 +213,11 @@ jobs:
       # The suite: the XCFramework (rebuilt when stale), check-generated, swift test on the macOS
       # host (swift-macos), the packaging tests, the workflow check and the iOS Simulator run
       # (swift-ios-sim). test.sh prints SKIPPED and exits 0 when its tools are missing, so the step
-      # requires its PASS line.
+      # requires its PASS line. target/conformance/ is emptied first (as scripts/test-all.sh does),
+      # so parity sees only this job's results files, even after rust-cache restored target/.
       - name: platforms/swift/test.sh (macOS host and the iOS Simulator)
         run: |
+          rm -rf target/conformance
           platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
           if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then
             echo "::error::platforms/swift/test.sh did not end with its PASS line"
