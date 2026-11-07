@@ -43,4 +43,159 @@ pub(crate) mod tests {
     /// Compiles only if `value`'s type wipes itself on drop (ADR 0030 §7.7: the secret-input
     /// path compiles to a zeroizing owner).
     pub(crate) fn wipes_on_drop<T: ZeroizeOnDrop>(_value: &T) {}
+
+    /// Every source file of the crate, for the source checks below.
+    const SOURCES: [(&str, &str); 11] = [
+        ("lib.rs", include_str!("lib.rs")),
+        ("error.rs", include_str!("error.rs")),
+        ("task.rs", include_str!("task.rs")),
+        ("records.rs", include_str!("records.rs")),
+        ("util.rs", include_str!("util.rs")),
+        ("jwk.rs", include_str!("jwk.rs")),
+        ("keys.rs", include_str!("keys.rs")),
+        ("jws.rs", include_str!("jws.rs")),
+        ("jwe.rs", include_str!("jwe.rs")),
+        ("jwt.rs", include_str!("jwt.rs")),
+        ("../build.rs", include_str!("../build.rs")),
+    ];
+
+    /// Tasks whose result is not secret and may resolve as plain `String`s: tokens, JSON
+    /// serializations, thumbprints, a public JWK and the JWT records (ADR 0030 §4, §7). Every
+    /// other task must resolve through `SecretString`, `SecretBytes` or a record that copies its
+    /// secret fields.
+    const NON_SECRET_TASKS: [&str; 14] = [
+        "JwkToPublicTask",
+        "JwkThumbprintTask",
+        "JwkThumbprintUriTask",
+        "JwsSignCompactTask",
+        "JwsSignFlattenedTask",
+        "JwsSignGeneralTask",
+        "JweEncryptCompactTask",
+        "JweEncryptJsonTask",
+        "JwtSignTask",
+        "JwtEncryptNestedTask",
+        // The JWT results are records of non-secret strings (claims and headers, ADR 0030 §4).
+        "JwtVerifyTask",
+        "JwtVerifyWithJwksTask",
+        "JwtDecryptNestedTask",
+        "JwtDecryptNestedWithJwksTask",
+    ];
+
+    /// The result types a secret-output task may resolve through: each builds its JS value by
+    /// copying from a borrow (`env.create_string`, `Uint8ArraySlice::copy_from`).
+    const SECRET_OUTPUTS: [&str; 4] = [
+        "SecretString",
+        "SecretBytes",
+        "surface::JwsVerified",
+        "surface::JweDecrypted",
+    ];
+
+    /// `(task name, result type)` of every `surface_task!` in the crate.
+    fn declared_tasks() -> Vec<(String, String)> {
+        let mut tasks = Vec::new();
+        for (file, text) in SOURCES {
+            for (start, _) in text.match_indices(concat!("surface_task!", " {\n")) {
+                let body = &text[start..];
+                let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+                let name = body
+                    .lines()
+                    .skip(1)
+                    .map(str::trim)
+                    .find(|line| !line.starts_with("///") && !line.starts_with("#["))
+                    .and_then(|line| line.split([' ', '{']).next())
+                    .unwrap_or_else(|| panic!("{file}: a surface_task! without a name"));
+                let out = body
+                    .split_once("} -> ")
+                    .map(|(_, rest)| rest.lines().next().unwrap_or("").trim())
+                    .unwrap_or_else(|| panic!("{file}: {name} has no result type"));
+                tasks.push((name.to_owned(), out.to_owned()));
+            }
+        }
+        tasks
+    }
+
+    #[test]
+    fn no_hand_written_unsafe() {
+        // The needles are split with concat! so this test does not match itself.
+        let needles = [
+            concat!("unsafe", " {"),
+            concat!("unsafe", " fn"),
+            concat!("unsafe", " impl"),
+            concat!("allow(", "unsafe"),
+            concat!("expect(", "unsafe"),
+        ];
+        for (file, text) in SOURCES {
+            for needle in needles {
+                assert!(!text.contains(needle), "{file} contains `{needle}`");
+            }
+        }
+    }
+
+    #[test]
+    fn no_owned_buffer_is_handed_to_napi() {
+        // ADR 0030 §7.2: these give napi a Rust allocation that is then never wiped (0007
+        // research §4). Secret and non-secret outputs alike are built by copying from a borrow.
+        let needles = [
+            concat!("Buffer", "::from("),
+            concat!("Buffer", "::new("),
+            concat!("Uint8Array", "::new("),
+            concat!("Uint8Array", "::from("),
+            concat!("ArrayBuffer", "::from_data("),
+            concat!("BufferSlice", "::from_data("),
+            concat!("Uint8ArraySlice", "::from_data("),
+            concat!("create_string", "_from_std("),
+            concat!("create_buffer", "_with_data("),
+            concat!("create_arraybuffer", "_with_data("),
+        ];
+        for (file, text) in SOURCES {
+            for needle in needles {
+                assert!(!text.contains(needle), "{file} contains `{needle}`");
+            }
+        }
+    }
+
+    #[test]
+    fn secret_outputs_never_resolve_as_a_plain_string() {
+        let tasks = declared_tasks();
+        // 31 operations plus the test task of task.rs; version and errorCodes are synchronous.
+        assert_eq!(tasks.len(), 32, "{tasks:?}");
+        for (name, out) in &tasks {
+            if NON_SECRET_TASKS.contains(&name.as_str()) {
+                continue;
+            }
+            assert!(
+                SECRET_OUTPUTS.contains(&out.as_str()),
+                "{name} resolves through `{out}`: a task not listed as non-secret must resolve \
+                 through one of {SECRET_OUTPUTS:?}"
+            );
+        }
+        for name in NON_SECRET_TASKS {
+            assert!(
+                tasks.iter().any(|(task, _)| task == name),
+                "{name} is listed as non-secret but not declared"
+            );
+        }
+    }
+
+    #[test]
+    fn secret_record_fields_are_copied_slices() {
+        let records = include_str!("records.rs");
+        for field in [
+            "pub payload: Uint8ArraySlice<'env>,",
+            "pub plaintext: Uint8ArraySlice<'env>,",
+            "pub aad: Option<Uint8ArraySlice<'env>>,",
+            "payload: Uint8ArraySlice::copy_from(env, self.payload.as_bytes())?,",
+            "plaintext: Uint8ArraySlice::copy_from(env, self.plaintext.as_bytes())?,",
+            ".map(|aad| Uint8ArraySlice::copy_from(env, aad.as_bytes()))",
+        ] {
+            assert!(records.contains(field), "records.rs lacks `{field}`");
+        }
+        let task = include_str!("task.rs");
+        for conversion in [
+            "env.create_string(self.as_str())",
+            "Uint8ArraySlice::copy_from(env, self.as_bytes())",
+        ] {
+            assert!(task.contains(conversion), "task.rs lacks `{conversion}`");
+        }
+    }
 }
