@@ -40,17 +40,27 @@
 # `platforms:` of Package.swift (ADR 0032 §1); Rust's defaults differ per target. rustc raises
 # aarch64-apple-watchos to its own minimum, watchOS 26.0, the first release for arm64 watches.
 #
+# Debug info (owner decision 2026-11-07, feature 0009 F02): each archive carries about 3.2 MB of
+# DWARF, mostly std's line tables pulled in by LTO, and the release profile's `strip` applies only
+# to linked outputs, never to a staticlib. So every per-target archive, arm64_32 included, is
+# copied through `xcrun strip -S -D` into the staging directory before lipo and
+# -create-xcframework. -S removes only debug info: global and local symbols stay, so consumers
+# link as before and their crash reports name polyjose frames, without file and line. -D gives
+# the archive header fixed defaults, so the output is byte-stable. cargo's own archive in target/
+# is never modified, which keeps its fingerprints and the no-op run intact.
+#
 # Headers (ADR 0032 §2): polyjose-uniffi-bindgen generates the Swift sources from the macOS
 # arm64 dylib in library mode; PolyjoseFFI.h and module.modulemap go under
 # Headers/PolyjoseFFI/ of every library (a subdirectory avoids header collisions with other
 # XCFrameworks). The generated Polyjose.swift is left in platforms/swift/build/generated/.
 #
-# Checks (any failure exits non-zero): each per-target archive is under 10 MB and contains
-# polyjose-ffi's UniFFI exports but no uniffi_bindgen symbol; the XCFramework's Info.plist lists
-# exactly the expected library identifiers. Prints the size of every archive and library, the
-# time each Rust target took, and the XCFramework's size.
+# Checks (any failure exits non-zero): each per-target archive cargo builds is under 10 MB; its
+# stripped copy contains polyjose-ffi's UniFFI exports but no uniffi_bindgen symbol; the
+# XCFramework's Info.plist lists exactly the expected library identifiers. Prints the size of
+# every archive before and after stripping, the size of every library, the time each Rust target
+# took, and the XCFramework's size.
 #
-# Needs macOS with Xcode (xcodebuild, lipo, nm, plutil) and cargo; rustup for the nightly slice.
+# Needs macOS with Xcode (xcodebuild, lipo, nm, plutil, xcrun strip) and cargo; rustup for the nightly slice.
 # Bash 3.2 compatible (macOS /bin/bash).
 set -euo pipefail
 
@@ -69,7 +79,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(uname -s)" = Darwin ] || die "the XCFramework can only be built on macOS"
-for tool in cargo xcodebuild lipo nm plutil; do
+for tool in cargo xcodebuild lipo nm plutil xcrun; do
   command -v "$tool" >/dev/null 2>&1 || die "'$tool' is not on PATH"
 done
 
@@ -121,10 +131,11 @@ mkdir -p "$build_dir"
 stage="$(mktemp -d "$build_dir/.stage.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 
-# Builds one Rust target's LTO'd static archive and checks it (see the header).
-# $1: target triple; $2: "stable" or "nightly". Prints the archive path on stdout.
+# Builds one Rust target's LTO'd static archive, strips its debug info into the staging directory
+# and checks it (see the header).
+# $1: target triple; $2: "stable" or "nightly". Prints the stripped archive's path on stdout.
 build_target() {
-  local triple="$1" toolchain="$2" start="$SECONDS" archive syms
+  local triple="$1" toolchain="$2" start="$SECONDS" archive stripped syms
   log "building $triple ($toolchain)"
   if [ "$toolchain" = nightly ]; then
     cargo "+$nightly" rustc -Zbuild-std=std,panic_abort -p polyjose-ffi --release \
@@ -137,14 +148,19 @@ build_target() {
   local bytes; bytes="$(size_of "$archive")"
   [ "$bytes" -lt "$max_archive_bytes" ] ||
     die "$triple: $(mb "$bytes") archive is not under 10 MB (is LTO off, or is uniffi/cli linked in?)"
+  stripped="$stage/archives/$triple/libpolyjose_ffi.a"
+  mkdir -p "$(dirname "$stripped")"
+  xcrun strip -S -D -o "$stripped" "$archive" ||
+    die "$triple: xcrun strip -S could not strip $archive"
+  [ -f "$stripped" ] || die "$triple: xcrun strip -S did not write $stripped"
   # --no-llvm-bc: the prebuilt compiler_builtins objects embed LLVM bitcode (__LLVM,__bitcode)
   # from Rust's newer LLVM, which Xcode's nm cannot parse; the Mach-O symbol tables are what the
   # linker reads (it ignores embedded bitcode), so those are what is checked.
-  syms="$(nm --no-llvm-bc "$archive" 2>/dev/null)" || die "$triple: nm could not read $archive"
-  case "$syms" in *uniffi_polyjose_ffi_*) ;; *) die "$triple: no polyjose-ffi UniFFI export in $archive" ;; esac
-  case "$syms" in *uniffi_bindgen*) die "$triple: uniffi_bindgen symbols are linked into $archive" ;; esac
-  log "  $triple: $(mb "$bytes") in $((SECONDS - start)) s"
-  printf '%s\n' "$archive"
+  syms="$(nm --no-llvm-bc "$stripped" 2>/dev/null)" || die "$triple: nm could not read $stripped"
+  case "$syms" in *uniffi_polyjose_ffi_*) ;; *) die "$triple: no polyjose-ffi UniFFI export in $stripped" ;; esac
+  case "$syms" in *uniffi_bindgen*) die "$triple: uniffi_bindgen symbols are linked into $stripped" ;; esac
+  log "  $triple: $(mb "$(size_of "$stripped")") stripped, $(mb "$bytes") before strip -S, in $((SECONDS - start)) s"
+  printf '%s\n' "$stripped"
 }
 
 # One XCFramework library: lipo-merges the given archives into stage/libs/<id>/.
