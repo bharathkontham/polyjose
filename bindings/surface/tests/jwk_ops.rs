@@ -974,3 +974,115 @@ fn no_surface_source_restates_a_core_default() {
         }
     }
 }
+
+// --- No input in errors (ADR 0030 §5) ---------------------------------------------------------
+
+/// A distinctive value standing in for key material (the surface's and the core's marker style).
+const MARKER: &str = "pj-SECRET-marker-7f3a";
+
+fn assert_no_marker<T: std::fmt::Debug>(what: &str, result: Result<T, SurfaceError>) {
+    let err = result.expect_err(what);
+    let encoded = util::base64url_encode(MARKER.as_bytes());
+    for rendered in [
+        err.code().to_owned(),
+        err.message().to_owned(),
+        err.to_string(),
+        format!("{err:?}"),
+        format!("{err:#?}"),
+    ] {
+        for needle in [MARKER, encoded.as_str()] {
+            assert!(
+                !rendered.contains(needle),
+                "{what}: error leaks input: {rendered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn no_failing_path_puts_a_marked_private_member_into_its_error() {
+    let marked_b64 = util::base64url_encode(MARKER.as_bytes());
+    // Private members holding the marker: as raw text (21 characters, a length no base64url
+    // has), base64url-encoded in a well-formed `oct` key (which parses, then fails later), in an
+    // RSA private key (ADR 0021), and next to a JSON syntax error, where a quoting parser would
+    // echo it.
+    let marked_ec = format!(
+        r#"{{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"{MARKER}"}}"#
+    );
+    let marked_okp =
+        format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{MARKER}","d":"{marked_b64}"}}"#);
+    let marked_oct = format!(r#"{{"kty":"oct","k":"{marked_b64}"}}"#);
+    let marked_oct_raw = format!(r#"{{"kty":"oct","k":"{MARKER}"}}"#);
+    let marked_rsa =
+        RFC7517_A2_RSA_PRIVATE.replace(r#""kid":"2011-04-29""#, &format!(r#""p2":"{marked_b64}""#));
+    let marked_json = format!(r#"{{"kty":"oct","k":"{MARKER}" {MARKER}}}"#);
+    let marked_keys = [
+        &marked_ec,
+        &marked_okp,
+        &marked_oct_raw,
+        &marked_rsa,
+        &marked_json,
+    ];
+
+    for key in marked_keys {
+        assert_no_marker("jwk_parse", jwk::jwk_parse(key));
+        assert_no_marker("jwk_to_public", jwk::jwk_to_public(key));
+        assert_no_marker("jwk_thumbprint", jwk::jwk_thumbprint(key, "SHA-256"));
+        assert_no_marker(
+            "jwk_thumbprint_uri",
+            jwk::jwk_thumbprint_uri(key, "SHA-256"),
+        );
+        for format in ["pkcs8", "sec1", "spki", "pkcs1"] {
+            assert_no_marker("jwk_to_pem", keys::jwk_to_pem(key, format));
+            assert_no_marker("jwk_to_der", keys::jwk_to_der(key, format));
+        }
+    }
+
+    // A well-formed secret key on the paths that fail after parsing.
+    assert_no_marker("jwk_to_public oct", jwk::jwk_to_public(&marked_oct));
+    for format in ["pkcs8", "spki", MARKER] {
+        assert_no_marker("jwk_to_pem oct", keys::jwk_to_pem(&marked_oct, format));
+        assert_no_marker("jwk_to_der oct", keys::jwk_to_der(&marked_oct, format));
+    }
+    for hash in ["SHA-1", "SHA-384", MARKER] {
+        assert_no_marker(
+            "jwk_thumbprint hash",
+            jwk::jwk_thumbprint(&marked_oct, hash),
+        );
+        assert_no_marker(
+            "jwk_thumbprint_uri hash",
+            jwk::jwk_thumbprint_uri(&marked_oct, hash),
+        );
+    }
+
+    // JWK Sets holding the marked keys.
+    let jwks = format!(r#"{{"keys":[{marked_oct},{marked_ec}]}}"#);
+    let selector = JwkSelector {
+        kid: Some(MARKER.to_owned()),
+        alg: Some(MARKER.to_owned()),
+        key_use: Some(MARKER.to_owned()),
+    };
+    assert_no_marker("jwks_select", jwk::jwks_select(&jwks, &selector));
+    assert_no_marker(
+        "jwks_select",
+        jwk::jwks_select(&marked_json, &JwkSelector::default()),
+    );
+
+    // PEM and DER carrying the marker: in the base64 body, in the label, and as the DER itself.
+    let pem_body = format!("-----BEGIN PRIVATE KEY-----\n{MARKER}\n-----END PRIVATE KEY-----\n");
+    let pem_label = format!("-----BEGIN {MARKER}-----\nMAA=\n-----END {MARKER}-----\n");
+    for pem in [pem_body.as_str(), pem_label.as_str(), MARKER] {
+        assert_no_marker("jwk_from_pem", keys::jwk_from_pem(pem));
+    }
+    for format in ["pkcs8", "sec1", "spki", "pkcs1", MARKER] {
+        assert_no_marker(
+            "jwk_from_der",
+            keys::jwk_from_der(MARKER.as_bytes(), format),
+        );
+    }
+
+    // Marked names on the generation paths.
+    assert_no_marker("jwk_generate_ec", keys::jwk_generate_ec(MARKER));
+    assert_no_marker("jwk_generate_okp", keys::jwk_generate_okp(MARKER));
+    assert_no_marker("jwk_generate_for_alg", keys::jwk_generate_for_alg(MARKER));
+}
