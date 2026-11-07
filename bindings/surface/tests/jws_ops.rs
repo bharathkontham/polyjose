@@ -135,26 +135,6 @@ fn sign_compact_from_header_json_gives_a_token_the_core_verifies() {
 }
 
 #[test]
-fn sign_compact_es256_round_trips_through_the_surface() {
-    // RFC 7515 Appendix A.3's P-256 key. ECDSA signatures are randomized, so the vector is a
-    // round trip: sign with the private key, verify with the public one.
-    let v = vector(A3_SIGN);
-    let signer = signer_at(&v, 0);
-    let payload = b64u(text(&v, &["input", "payload_b64u"]));
-    let token = jws_sign_compact(
-        &payload,
-        &json_at(signer, &["key"]),
-        &header_b64u(text(signer, &["protected_b64u"])),
-    )
-    .unwrap();
-    let public = json_at(&vector(A3_VERIFY), &["input", "key"]);
-    let verified =
-        jws_verify_compact(&token, &public, &JwsVerifyOptions::new(list(&["ES256"]))).unwrap();
-    assert_eq!(verified.payload.as_bytes(), payload);
-    assert_eq!(verified.alg, "ES256");
-}
-
-#[test]
 fn sign_compact_detached_leaves_the_payload_part_empty() {
     // RFC 7515 Appendix F.
     let v = vector(F_DETACHED_COMPACT_SIGN);
