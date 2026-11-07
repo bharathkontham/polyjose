@@ -530,13 +530,14 @@ fi
 # mutate <check> <anchor> <old> <new> <what>: copies the workflow and replaces the first line
 # equal to <old> (after the line equal to <anchor>, when one is given; otherwise <old> must occur
 # exactly once) with <new> (`\n` separates inserted lines). Each copy is then checked with --check
-# (below), which must fail with `FAIL - <check>:`.
+# (below), which must fail with `FAIL - <check>:`. benign <anchor> <old> <new> <what> makes a
+# copy the same way that must still PASS, so that the checks are not simply brittle.
 mutations=0
 mutations_failed=0
 mutate() {
   local check=$1 anchor=$2 old=$3 new=$4 what=$5 copy
   mutations=$((mutations + 1))
-  copy=$(printf '%s/mutation-%02d.yml' "$work" "$mutations")
+  copy=$(printf '%s/mutation-%03d.yml' "$work" "$mutations")
   if [ -n "$anchor" ]; then
     [ "$(grep -cxF -- "$anchor" "$workflow")" = 1 ] ||
       { mutations_failed=1; echo "FAIL - self-test: $what: the anchor line is not unique: $anchor"; return; }
@@ -558,6 +559,8 @@ mutate() {
   fi
   printf '%s\n%s\n' "$check" "$what" >"$copy.meta"
 }
+benigns=0
+benign() { benigns=$((benigns + 1)); mutate PASS "$@"; }
 
 checkout_pin='      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
 cache_pin='      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3'
@@ -631,6 +634,87 @@ mutate continue "" "$runs_on" "$runs_on\n    continue-on-error: true" "a job-lev
 mutate actionlint "" "$runs_on" "    runs_on: macos-latest" "a misspelled runs-on key"
 mutate actionlint "" "    timeout-minutes: 180" "    timeout-minutes: three hours" "a timeout that is not a number"
 
+# --- B02: secrets, the token and publishing in any spelling --------------------------------------
+mutate forbidden "" "$mode_env" "$mode_env\n      T: \${{ SECRETS.X }}" "secrets in upper case"
+mutate forbidden "" "$mode_env" "$mode_env\n      T: \${{ secrets['X'] }}" "secrets in bracket form"
+mutate forbidden "" "$mode_env" "$mode_env\n      T: \${{ secrets[\"X\"] }}" "secrets in double-quoted bracket form"
+mutate forbidden "" "$mode_env" "$mode_env\n      T: \${{ toJSON(secrets) }}" "toJSON(secrets)"
+mutate forbidden "" "$mode_env" "$mode_env\n      T: \${{ github.Token }}" "github.Token in mixed case"
+mutate forbidden "" "$mode_env" "$mode_env\n      T: \${{ github['token'] }}" "github['token']"
+mutate forbidden "" "$mode_env" "$mode_env\n      T: \${{ github['event'].pull_request.title }}" "github['event']"
+mutate forbidden "" "$runs_on" "$runs_on\n    secrets: inherit" "secrets: inherit"
+mutate forbidden "" "$mode_env" "$mode_env\n      GH_TOKEN: abc" "a literal token variable"
+mutate forbidden "" "$parity_run" "        run: gh run download 1 && scripts/conformance-parity.sh" "gh run download"
+mutate forbidden "" "$release_package" "$release_package && gh  release upload v0.1.0 dist/apple/PolyjoseFFI.xcframework.zip" "gh release with two spaces"
+mutate forbidden "" "$release_package" "$release_package && curl -T dist/apple/PolyjoseFFI.xcframework.zip https://example.com/up" "curl -T"
+mutate forbidden "" "$release_package" "$release_package && curl --upload-file dist/apple/PolyjoseFFI.xcframework.zip https://example.com/up" "curl --upload-file"
+mutate forbidden "" "$release_package" "$release_package && curl -fsF file=@dist/apple/PolyjoseFFI.xcframework.zip https://example.com/up" "curl -F in a flag cluster"
+mutate forbidden "" "$release_package" "$release_package && curl --data-binary @dist/apple/PolyjoseFFI.xcframework.zip https://example.com/up" "curl --data-binary @"
+mutate forbidden "" "$release_package" "$release_package && npm  publish" "npm publish with two spaces"
+mutate forbidden "" "$release_package" "$release_package && cargo   publish -p polyjose" "cargo publish with three spaces"
+mutate forbidden "" "$release_package" "$release_package && ./gradlew publishToMavenCentral" "a gradle publish task"
+mutate forbidden "" "$release_package" "$release_package && pod trunk push Polyjose.podspec" "pod trunk push"
+mutate forbidden "" "$release_package" "$release_package && swift package-registry publish polyjose.Polyjose 0.1.0" "swift package-registry publish"
+mutate forbidden "" "$parity_run" "        run: scripts/conformance-parity.sh || :" "|| :"
+mutate forbidden "" "          rm -rf target/conformance" "          set +e\n          rm -rf target/conformance" "set +e"
+mutate forbidden "" "$parity_run" "        run: scripts/conformance-parity.sh; exit 0" "exit 0"
+
+# --- B03: no expression in any run script, whatever its form; expressions only where listed ----
+mutate expressions "" "      - name: rust-core reference" "      - name: extra\n        run: >-\n          echo \${{ inputs.mode }}\n\n      - name: rust-core reference" "an expression in a run: >- script"
+mutate expressions "" "      - name: rust-core reference" "      - name: extra\n        run: >\n          echo \${{ inputs.mode }}\n\n      - name: rust-core reference" "an expression in a run: > script"
+mutate expressions "" "      - name: rust-core reference" "      - name: extra\n        run: |-\n          echo \${{ inputs.mode }}\n\n      - name: rust-core reference" "an expression in a run: |- script"
+mutate expressions "" "      - name: rust-core reference" "      - name: extra\n        run: |+\n          echo \${{ inputs.mode }}\n\n      - name: rust-core reference" "an expression in a run: |+ script"
+mutate expressions "" "      - name: rust-core reference" "      - name: extra\n        run: echo\n          \${{ inputs.mode }}\n\n      - name: rust-core reference" "an expression in a plain multi-line run script"
+mutate expressions "" "      - name: rust-core reference" "      - run: echo \${{ inputs.mode }}\n\n      - name: rust-core reference" "an expression in a - run: item"
+mutate expressions "" "    timeout-minutes: 180" "    timeout-minutes: \${{ inputs.mode == 'ci' && 180 || 200 }}" "an expression outside the listed keys"
+mutate expressions "" "$mode_env" "$mode_env\n      T: \${{ github.actor }}" "a context outside the allow-list"
+mutate expressions "" "$mode_env" "$mode_env\n      T: \"\${{ \\\\u0073ecrets.X }}\"" "a YAML escape inside an expression"
+mutate expressions "      - name: conformance parity" "$parity_run" "        if: \${{ always() }}\n$parity_run" "an if: condition outside the allow-list"
+
+# --- B04: the required steps are exactly what they must be ----------------------------------------
+mutate steps "" "$parity_run" "$parity_run || true" "parity || true"
+mutate steps "" "$parity_run" "        run: echo scripts/conformance-parity.sh" "parity only echoed"
+mutate steps "" "$parity_run" "        run: scripts/conformance-parity.sh /nonexistent" "parity over another directory"
+mutate steps "" "$core_run" "$core_run || true" "rust-core || true"
+mutate steps "" "$core_run" "        run: echo cargo test --locked -p polyjose --test conformance" "rust-core only echoed"
+mutate steps "" "$release_package" "$release_package || true" "release package.sh || true"
+mutate steps "" "$release_package" "        run: echo platforms/swift/scripts/package.sh" "release package.sh only echoed"
+mutate steps "" "        run: platforms/swift/scripts/build-xcframework.sh --release" "        run: echo platforms/swift/scripts/build-xcframework.sh --release" "the release build only echoed"
+mutate steps "" "$release_package" "        run: |\n          platforms/swift/scripts/package.sh --allow-d\\\\\n          ev" "--allow-dev split over a line continuation"
+# shellcheck disable=SC2016 # literal workflow text
+mutate steps "" '          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' '          platforms/swift/scripts/test-simulators.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' "test.sh replaced while its PASS text stays"
+# shellcheck disable=SC2016 # literal workflow text
+mutate steps "" '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then' '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ] && false; then' "the PASS check ending in && false"
+mutate steps "" "          rm -rf target/conformance" "          echo rm -rf target/conformance" "the results reset only echoed"
+# shellcheck disable=SC2016 # literal workflow text
+mutate steps "" '          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' '          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"\n          rm -rf target/conformance' "the results reset after test.sh"
+mutate steps '            echo "::error::release mode requires the iOS Simulator run; test-simulators.sh skipped it (no iOS 27.2 runtime on the runner)"' "            exit 1" "            exit 0" "the release iOS check exiting 0 on a skip line"
+mutate steps '            echo "::error::release mode requires target/conformance/swift-ios-sim.json"' "            exit 1" "            exit 0" "the release iOS check exiting 0 on a missing file"
+# shellcheck disable=SC2016 # literal workflow text
+mutate steps "" '          log="$RUNNER_TEMP/swift-test.log"' '          log="$RUNNER_TEMP/other.log"' "the release iOS check reading another log"
+mutate steps '            echo "::error::missing target/conformance/swift-macos.json"' "            exit 1" "            exit 0" "the results step passing without swift-macos.json"
+mutate steps '            echo "::error::missing target/conformance/swift-ios-sim.json (and no ci-mode waiver from test-simulators.sh)"' "            exit 1" "            exit 0" "the results step passing without swift-ios-sim.json"
+mutate steps "" '            *) echo "::error::the mode input must be ci or release"; exit 1 ;;' '            *) echo "::error::the mode input must be ci or release"; exit 0 ;;' "mode validation exiting 0"
+mutate steps "" "      - name: every results file is present" "      - name: extra\n        run: rm -f target/conformance/swift-ios-sim.json\n\n      - name: every results file is present" "an extra run step"
+mutate actions "" "          save-if: \${{ github.ref == 'refs/heads/main' }}" "          save-if: true" "rust-cache saving from every ref"
+mutate actions "" "      - name: rust-core reference" "      - uses: softprops/action-gh-release@0123456789abcdef0123456789abcdef01234567 # v2.0.0\n        with:\n          draft: true\n\n      - name: rust-core reference" "an action outside the allow-list"
+mutate shell "" "    shell: bash" "    working-directory: ." "the default shell removed"
+mutate shell "" "$parity_run" "        shell: sh\n$parity_run" "a step overriding the shell"
+mutate env "" "  CARGO_INCREMENTAL: 0" "  CARGO_INCREMENTAL: 0\n  BASH_ENV: /tmp/x" "BASH_ENV in the workflow env"
+mutate env "" "$mode_env" "$mode_env\n      POLYJOSE_LOCAL_XCFRAMEWORK: 0" "an extra job env variable"
+mutate structure "" "permissions:" "concurrency:\n  group: apple\npermissions:" "a top-level concurrency block"
+mutate structure "" "$runs_on" "$runs_on\n    container: ghcr.io/example/image:1" "a job container"
+
+# --- Benign: must still PASS ------------------------------------------------------------------
+benign "          name: apple-xcframework" "          if-no-files-found: error" "          if-no-files-found: error\n          retention-days: 30" "retention-days on an upload"
+benign "          name: conformance-swift-macos" "          if-no-files-found: error" "          if-no-files-found: error\n          compression-level: 9" "compression-level on an upload"
+benign "" "      - name: conformance parity" "      - name: parity of every results file (ADR 0034, ADR 0060)" "a step renamed"
+benign "" "      - name: rust-core reference" "      # a note for readers\n      - name: rust-core reference" "a comment line between steps"
+benign "" "$parity_run" "$parity_run\n          # not a step key: a comment inside the step" "a comment line inside a step"
+benign "" "      - name: rust-core reference" "\n      - name: rust-core reference" "a blank line between steps"
+benign "" "    timeout-minutes: 180" "    timeout-minutes: 200" "a longer job timeout"
+benign "" "          node-version: 24" "          node-version: 22" "another Node major for parity"
+
 # Check the copies, six at a time (each check is about a second of short-lived processes).
 batch=0
 for copy in "$work"/mutation-*.yml; do
@@ -645,7 +729,15 @@ for copy in "$work"/mutation-*.yml; do
   check=$(sed -n 1p "$copy.meta")
   what=$(sed -n 2p "$copy.meta")
   rc=$(cat "$copy.rc")
-  if [ "$rc" = 1 ] && grep -qF -- "FAIL - $check:" "$copy.log"; then
+  if [ "$check" = PASS ]; then
+    if [ "$rc" = 0 ]; then
+      echo "ok   - self-test: $what still passes"
+    else
+      mutations_failed=1
+      echo "FAIL - self-test: $what (benign) was rejected (exit $rc)"
+      sed 's/^/    | /' "$copy.log"
+    fi
+  elif [ "$rc" = 1 ] && grep -qF -- "FAIL - $check:" "$copy.log"; then
     echo "ok   - self-test: $what is rejected ($check)"
   else
     mutations_failed=1
@@ -655,7 +747,7 @@ for copy in "$work"/mutation-*.yml; do
 done
 
 if [ "$mutations_failed" = 0 ]; then
-  echo "$me: PASS (${workflow#"$root"/}; self-test: $mutations mutations rejected)"
+  echo "$me: PASS (${workflow#"$root"/}; self-test: $((mutations - benigns)) mutations rejected, $benigns benign ones accepted)"
   exit 0
 fi
 echo "$me: FAIL (self-test)"
