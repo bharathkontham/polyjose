@@ -422,7 +422,9 @@ pub struct Encryptor {
     pub(super) enc: ContentEncAlg,
     pub(super) protected: Option<Header>,
     pub(super) shared: Option<Header>,
-    pub(super) aad: Option<Vec<u8>>,
+    /// Wiped on drop, in every clone: the AAD can carry application
+    /// secrets (ADR 0050 §4, ADR 0030 §7.2).
+    pub(super) aad: Option<Zeroizing<Vec<u8>>>,
     /// Set only with the `deflate` feature (RFC 7516 §4.1.3).
     pub(super) compress: bool,
     pub(super) recipients: Vec<Recipient>,
@@ -483,9 +485,13 @@ impl Encryptor {
 
     /// The JWE AAD (RFC 7516 §7.2.1 `aad`), integrity protected but not
     /// encrypted, JSON only.
+    ///
+    /// The encryptor keeps it in a buffer wiped on drop, as it can carry
+    /// application secrets (ADR 0050 §4, ADR 0030 §7.2), and `Debug` prints
+    /// only its length. A `Vec<u8>` passed here is moved in, not copied.
     #[must_use]
     pub fn aad(mut self, aad: impl Into<Vec<u8>>) -> Self {
-        self.aad = Some(aad.into());
+        self.aad = Some(Zeroizing::new(aad.into()));
         self
     }
 
@@ -729,10 +735,30 @@ mod tests {
             .recipient(r);
         assert_eq!(e.enc, ContentEncAlg::A128GCM);
         assert!(e.protected.is_some() && e.shared.is_some());
-        assert_eq!(e.aad.as_deref(), Some(&b"aad"[..]));
+        assert_eq!(e.aad.as_deref().map(Vec::as_slice), Some(&b"aad"[..]));
         assert_eq!(e.recipients.len(), 2);
         assert!(!e.compress);
         assert!(e.compress().compress);
+    }
+
+    /// ADR 0050 §4, ADR 0030 §7.2: the JWE AAD (RFC 7516 §7.2.1 `aad`) can
+    /// carry application secrets, so the encryptor holds it, and every
+    /// clone of it, in a buffer wiped on drop (0006 security audit L3).
+    /// `Debug` still prints only its length (ADR 0030 §7.5).
+    #[test]
+    fn encryptor_holds_the_aad_in_a_buffer_wiped_on_drop() {
+        fn is_zeroizing(_: &Option<Zeroizing<Vec<u8>>>) {}
+        let e = Encryptor::new(ContentEncAlg::A128GCM).aad(b"MARKERaad".to_vec());
+        is_zeroizing(&e.aad);
+        let copy = e.clone();
+        is_zeroizing(&copy.aad);
+        assert_eq!(
+            copy.aad.as_deref().map(Vec::as_slice),
+            Some(&b"MARKERaad"[..])
+        );
+        let debug = format!("{e:?}");
+        assert!(!debug.contains("MARKER"), "{debug}");
+        assert!(debug.contains("aad: Some(<redacted, len=9>)"), "{debug}");
     }
 
     #[test]
