@@ -25,6 +25,10 @@
 #        whose tree holds a workspace member (here polyjose), which the gate cannot read.
 #  11-13. the same, whose tree holds rsa without polyjose: as a normal, a build- or a
 #        dev-dependency (the tree is read with -e normal,build,dev).
+#  14.   the same, with polyjose or rsa only behind an optional feature (an optional normal
+#        polyjose or rsa, an optional rsa build-dependency), which the default tree does not show
+#        but `--all-features` builds compile (the tree is the union of the default,
+#        --no-default-features and --all-features trees; review S1 of feature 0013).
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
 # so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
 # release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
@@ -297,6 +301,41 @@ rsa = { workspace = true }"
     echo "ok   - library-less member with rsa as a $kind: $gate_name fails closed"
   else
     echo "FAIL - library-less member with rsa as a $kind: exit $rc (expected 2) with the no-library-target error"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
+
+# 14. The same when polyjose or rsa is reached only through an optional dependency behind a
+#     feature: the default tree does not show it, but `cargo build --workspace --all-features`
+#     compiles it, so the skip reads every feature set (cargo has no optional dev-dependency).
+for variant in "dependencies polyjose" "dependencies rsa" "build-dependencies rsa"; do
+  kind=${variant% *}; dep=${variant#* }
+  case $dep in
+    polyjose) spec='{ path = "../../crates/polyjose", optional = true }' ;;
+    *) spec='{ workspace = true, optional = true }' ;;
+  esac
+  new_case "tool-with-optional-$dep-$kind"
+  append_to tools/rsa-tool/Cargo.toml "[package]
+name = \"rsa-tool\"
+version = \"0.0.0\"
+edition = \"2024\"
+publish = false
+
+[features]
+x = [\"dep:$dep\"]
+
+[$kind]
+$dep = $spec"
+  append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+  replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+  tests_run=$((tests_run + 1))
+  rc=0
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq "^ERROR: workspace member rsa-tool has no library target, and its tree contains ${dep}[;,]" "$scratch/out"; then
+    echo "ok   - library-less member with an optional $dep in [$kind] behind a feature: $gate_name fails closed"
+  else
+    echo "FAIL - library-less member with an optional $dep in [$kind] behind a feature: exit $rc (expected 2) with the no-library-target error"
     sed 's/^/       /' "$scratch/out"
     tests_failed=$((tests_failed + 1))
   fi
