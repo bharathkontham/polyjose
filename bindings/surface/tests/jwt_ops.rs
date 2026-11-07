@@ -6,6 +6,8 @@
 //! ADR 0029), and this file checks that each `JwtVerifyOptions`/`JwtSignOptions` member reaches
 //! exactly one core call, and `None`/`false` none (ADR 0030 §3–§4).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use polyjose::json::{self, Object, Value};
