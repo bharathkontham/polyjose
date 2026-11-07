@@ -40,9 +40,10 @@ test("writes target/conformance/<runner>.json with runner, version, features, er
     assert.equal(summary.skipped, 2);
     assert.equal(summary.passed + summary.skipped, summary.total);
     const written = JSON.parse(fs.readFileSync(summary.file, "utf8")) as Record<string, unknown>;
-    assert.deepEqual(Object.keys(written), ["runner", "polyjose", "features", "error_codes", "results"]);
+    assert.deepEqual(Object.keys(written), ["runner", "polyjose", "vectors_digest", "features", "error_codes", "results"]);
     assert.equal(written["runner"], "node");
     assert.equal(written["polyjose"], "0.1.0");
+    assert.match(String(written["vectors_digest"]), /^[0-9a-f]{64}$/);
     assert.deepEqual(written["features"], []);
     assert.deepEqual(written["error_codes"], [...ERROR_CODES]);
     const results = written["results"] as { id: string }[];
@@ -73,6 +74,42 @@ test("no vector files is a failure, never a vacuous pass", async () => {
   try {
     await assert.rejects(runConformance(api(), { runner: "node", root }), /no vector files/);
     assert.equal(await main(api(), { runner: "node", root }), 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("vectors_digest is the ADR 0060 §4 worked example's, from the raw bytes read (BOM and LF kept)", async () => {
+  const root = scratchRoot(() => false);
+  const vectors = path.join(root, "conformance/vectors");
+  try {
+    fs.mkdirSync(path.join(vectors, "jws"), { recursive: true });
+    fs.mkdirSync(path.join(vectors, "jws-x"), { recursive: true });
+    fs.writeFileSync(path.join(vectors, "a.json"), "{}");
+    fs.writeFileSync(path.join(vectors, "jws/b.json"), "{}\n");
+    fs.writeFileSync(path.join(vectors, "jws-x/c.json"), "\u{feff}{}");
+    fs.writeFileSync(path.join(vectors, "README.md"), "notes");
+    const summary = await runConformance(api(), { runner: "node", root });
+    assert.equal(summary.total, 3, "README.md is not a vector");
+    const written = JSON.parse(fs.readFileSync(summary.file, "utf8")) as { vectors_digest: string };
+    assert.equal(written.vectors_digest, "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a run that reads no vector file writes no results file (ADR 0060 §3)", async () => {
+  const root = scratchRoot((rel) => rel.startsWith("b64url"));
+  const vectors = path.join(root, "conformance/vectors");
+  try {
+    // Only a symbolic link: it fails and gets no digest line, so nothing was read.
+    const target = path.join(root, "outside.json");
+    fs.writeFileSync(target, fs.readFileSync(path.join(vectors, "b64url/encode.json"), "utf8"));
+    fs.rmSync(vectors, { recursive: true, force: true });
+    fs.mkdirSync(vectors, { recursive: true });
+    fs.symlinkSync(target, path.join(vectors, "link.json"));
+    await assert.rejects(runConformance(api(), { runner: "node", root }), /no vector file could be read/);
+    assert.ok(!fs.existsSync(path.join(root, "target/conformance/node.json")));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
