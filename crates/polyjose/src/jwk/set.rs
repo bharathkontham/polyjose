@@ -1,10 +1,16 @@
-//! JWK Set (RFC 7517 §5) and verification key selection (ADR 0029 §2).
+//! JWK Set (RFC 7517 §5) and key selection: [`JwkSet::select`] and
+//! [`JwkSet::matching`] (ADR 0054), and verification key selection
+//! (ADR 0029 §2), all on one candidate rule (ADR 0054 §2, §6).
 //!
-//! The public contract is documented on [`JwkSet`]. The alg → key family
-//! table selection uses is [`KeyMaterial::serves_signing_alg`]
-//! (ADR 0026 §2 step 8), the single copy JWS key binding also uses.
+//! The public contract is documented on [`JwkSet`] and [`JwkSelector`].
+//! The alg → key family tables selection uses are
+//! [`KeyMaterial::serves_signing_alg`] and
+//! [`KeyMaterial::serves_key_mgmt_alg`] (ADR 0026 §2 step 8), the single
+//! copies JWS and JWE key binding also use, and the JWE `key_ops` of an
+//! `alg` come from the JWE key model (`jwe/key.rs`), not a copy.
 //!
 //! [`KeyMaterial::serves_signing_alg`]: super::KeyMaterial::serves_signing_alg
+//! [`KeyMaterial::serves_key_mgmt_alg`]: super::KeyMaterial::serves_key_mgmt_alg
 
 use core::fmt;
 
@@ -28,9 +34,11 @@ const NO_KEYS_ARRAY: &str = "a JWK Set must have a keys member that is an array"
 /// document, in document order, plus its other top-level members.
 ///
 /// Build one with [`JwkSet::from_json`] (untrusted bytes) or
-/// [`JwkSet::from_object`] (an already-parsed object), and pick the keys
-/// that may verify a JWS with [`JwkSet::verification_candidates`]
-/// (ADR 0029 §2).
+/// [`JwkSet::from_object`] (an already-parsed object). Pick one key with
+/// [`JwkSet::select`], every key a [`JwkSelector`] matches with
+/// [`JwkSet::matching`] (ADR 0054), and the keys that may verify a JWS
+/// with [`JwkSet::verification_candidates`] (ADR 0029 §2). All three
+/// apply the one rule documented on [`JwkSelector`].
 ///
 /// # What import keeps
 ///
@@ -210,7 +218,10 @@ impl JwkSet {
     /// `(key_index, key)`, in set order, where `key_index` indexes
     /// [`JwkSet::keys`].
     ///
-    /// A key is a candidate iff all of these hold:
+    /// This is [`JwkSet::matching`] with the selector
+    /// `{ alg, key_op: verify, kid }` (ADR 0054 §6), on the same rule, so
+    /// it allows no key `matching` would not. For that selector the rule
+    /// reads: a key is a candidate iff all of these hold:
     ///
     /// 1. **Family:** its `kty`/`crv` serves `alg` (the ADR 0026 §2 step 8
     ///    table, e.g. `HS*` → `oct`, `ES256` → `EC` `P-256`, `EdDSA` and
@@ -283,6 +294,34 @@ impl JwkSet {
     /// (ADR 0054 §2), the same rule [`JwkSet::matching`] and
     /// [`JwkSet::verification_candidates`] apply.
     ///
+    /// ```
+    /// use polyjose::Error;
+    /// use polyjose::jwk::{JwkSelector, JwkSet, KeyAlg};
+    ///
+    /// // RFC 7517 Appendix A.1 (the RSA modulus shortened here to `n`).
+    /// # let n = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw";
+    /// let set = JwkSet::from_json(format!(r#"{{"keys":[
+    ///     {{"kty":"EC","crv":"P-256","use":"enc","kid":"1",
+    ///      "x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+    ///      "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}},
+    ///     {{"kty":"RSA","n":"{n}","e":"AQAB","alg":"RS256","kid":"2011-04-29"}}
+    /// ]}}"#).as_bytes())?;
+    ///
+    /// let rs256 = JwkSelector::new().alg(KeyAlg::from("RS256"))?;
+    /// let (index, key) = set.select(&rs256)?;
+    /// assert_eq!((index, key.kid()), (1, Some("2011-04-29")));
+    ///
+    /// // The P-256 key is `use: enc`, so it serves ECDH-ES, not ES256.
+    /// let es256 = JwkSelector::new().alg(KeyAlg::from("ES256"))?;
+    /// assert_eq!(set.select(&es256).unwrap_err(), Error::NoMatchingKey);
+    /// let ecdh = JwkSelector::new().alg(KeyAlg::from("ECDH-ES"))?;
+    /// assert_eq!(set.select(&ecdh)?.0, 0);
+    ///
+    /// // No criterion and two keys: ambiguous, never a guess.
+    /// assert_eq!(set.select(&JwkSelector::new()).unwrap_err(), Error::MultipleMatchingKeys);
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// - [`Error::NoMatchingKey`] if no member matches, including when the
@@ -293,6 +332,62 @@ impl JwkSet {
     ///   (a `kid`, RFC 7517 §4.5), or try each of [`JwkSet::matching`].
     ///
     /// Neither error says which members were looked at.
+    ///
+    /// # Security (ADR 0054 §7, RFC 8725)
+    ///
+    /// - **Selection never authorizes an algorithm.** It identifies a key.
+    ///   The caller's allow-list still decides: every polyjose verify and
+    ///   decrypt takes one, and its key binding re-checks the family, JWK
+    ///   `alg`, `use` and `key_ops` (RFC 8725 §3.1, ADR 0026 §2 step 8).
+    /// - **A selector with an `alg` never crosses key families**: a secret
+    ///   `oct` key is never selected for an asymmetric `alg`, nor an
+    ///   asymmetric key for `HS*`, A\*KW, `dir` or PBES2, and a key whose
+    ///   own `alg` is another algorithm is never selected (RFC 8725 §3.1).
+    /// - **A selector without an `alg`** (a `kid` alone, say) may return a
+    ///   key of any family. Pass it only to operations that take an
+    ///   allow-list.
+    /// - **A `kid` is only compared for equality**, exact and
+    ///   case-sensitive, never used as a path, URL or query (RFC 8725
+    ///   §3.10). A `kid` from an untrusted header is safe to select by.
+    /// - **The result is the member as imported**, and may hold private
+    ///   members (`EC`/`OKP` `d`, `oct` `k`): it is the caller's key. Call
+    ///   [`Jwk::to_public`] before publishing it. RSA private members never
+    ///   import (ADR 0021).
+    ///
+    /// ```
+    /// use polyjose::Error;
+    /// use polyjose::jwa::SigningAlg;
+    /// use polyjose::jwk::{JwkSelector, JwkSet, KeyAlg};
+    /// use polyjose::jws::{VerifyOptions, verify_compact};
+    ///
+    /// // RFC 7517 Appendix A.3, and the RFC 7515 A.1 JWS its HMAC key signs.
+    /// let set = JwkSet::from_json(br#"{"keys":[
+    ///     {"kty":"oct","alg":"A128KW","k":"GawgguFyGrWKav7AX4VKUg"},
+    ///     {"kty":"oct","kid":"HMAC key used in JWS spec Appendix A.1 example",
+    ///      "k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}
+    /// ]}"#)?;
+    /// let jws = concat!(
+    ///     "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9",
+    ///     ".eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ",
+    ///     ".dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    /// );
+    ///
+    /// let (_, key) = set.select(&JwkSelector::new().alg(KeyAlg::from("HS256"))?)?;
+    /// // Selected for HS256, the key still verifies only if HS256 is allowed.
+    /// let hs384_only = [SigningAlg::HS384];
+    /// let refused = verify_compact(jws, key, &VerifyOptions::new(&hs384_only)?);
+    /// assert_eq!(refused.unwrap_err(), Error::AlgorithmNotAllowed);
+    /// let hs256 = [SigningAlg::HS256];
+    /// assert!(verify_compact(jws, key, &VerifyOptions::new(&hs256)?).is_ok());
+    ///
+    /// // An `oct` key is never selected for an asymmetric `alg` (RFC 8725 §3.1).
+    /// let es256 = JwkSelector::new().alg(KeyAlg::from("ES256"))?;
+    /// assert_eq!(set.select(&es256).unwrap_err(), Error::NoMatchingKey);
+    ///
+    /// // The selected key is secret: it has no public form to publish.
+    /// assert!(!key.is_public() && key.to_public().is_none());
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
     pub fn select(&self, selector: &JwkSelector) -> Result<(usize, &Jwk)> {
         let criteria = Criteria::of(selector);
         exactly_one(self.filter_keys(|key| criteria.matches(key)))
@@ -302,10 +397,36 @@ impl JwkSet {
     /// `(key_index, key)`, where `key_index` indexes [`JwkSet::keys`]
     /// (ADR 0054 §4).
     ///
-    /// The rule is that of [`JwkSet::select`] (ADR 0054 §2). This never
-    /// fails and has no bound: selection computes no cryptography, so
-    /// bounding how many keys a caller then tries is the caller's choice
-    /// (ADR 0029 §4's `max_key_candidates` is a verification policy).
+    /// The rule is that of [`JwkSet::select`], documented on
+    /// [`JwkSelector`] (ADR 0054 §2). This never fails and has no bound:
+    /// selection computes no cryptography, so bounding how many keys a
+    /// caller then tries is the caller's choice (ADR 0029 §4's
+    /// `max_key_candidates` is a verification policy).
+    ///
+    /// ```
+    /// use polyjose::jwk::{JwkSelector, JwkSet};
+    ///
+    /// let set = JwkSet::from_json(br#"{"keys":[
+    ///     {"kty":"oct","k":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","kid":"k"},
+    ///     {"kty":"XYZ","kid":"k"},
+    ///     {"kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08","kid":"k"}
+    /// ]}"#)?;
+    /// // A `kid` alone matches keys of any family, in set order; indices
+    /// // leave the skipped `XYZ` entry out.
+    /// let selector = JwkSelector::new().kid("k");
+    /// let found: Vec<usize> = set.matching(&selector).map(|(index, _)| index).collect();
+    /// assert_eq!(found, [0, 1]);
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
+    ///
+    /// # Security (ADR 0054 §7, RFC 8725)
+    ///
+    /// As for [`JwkSet::select`]: matching never authorizes an algorithm
+    /// (the caller's allow-list decides); a selector with an `alg` never
+    /// crosses key families, while one without may match any family; a
+    /// `kid` is only compared for equality (RFC 8725 §3.1, §3.10); and
+    /// each key is the member as imported, possibly with private members
+    /// (`EC`/`OKP` `d`, `oct` `k`), the caller's to protect.
     pub fn matching<'a>(
         &'a self,
         selector: &'a JwkSelector,
@@ -530,8 +651,41 @@ impl<'a> Criteria<'a> {
 /// Build one with [`JwkSelector::new`], which selects every member, and
 /// the setters, each of which narrows it. Every criterion is validated
 /// when it is set, before any set is read (ADR 0054 §1.1, §4), so a
-/// selector that exists is one polyjose can apply. The ADR 0054 §2 rule
-/// that applies it is `JwkSet::select` / `JwkSet::matching`.
+/// selector that exists is one polyjose can apply. Apply it with
+/// [`JwkSet::select`] (one key) or [`JwkSet::matching`] (every key).
+///
+/// # The rule (ADR 0054 §2)
+///
+/// A member matches iff all five checks hold, in this order. A criterion
+/// that is not set skips its check.
+///
+/// 1. **Family.** With an `alg`, the member's `kty`/`crv` serves it, by
+///    the core's only family tables (ADR 0026 §2 step 8): `HS*` → `oct`,
+///    `ES256` → `EC` `P-256`, A\*KW, `dir` and PBES2 → `oct`,
+///    `RSA-OAEP-256` → `RSA`, ECDH-ES → `EC` `P-256`/`P-384`/`P-521` or
+///    `OKP` `X25519` (RFC 7518 §3.1, §4.1; RFC 8037 §3).
+/// 2. **JWK `alg`.** With an `alg`, the member's `alg` is absent or
+///    exactly it (RFC 7517 §4.4, RFC 8725 §3.1): `EdDSA` ≠ `Ed25519`. For
+///    `dir` only, a member `alg` naming a content encryption algorithm
+///    also matches (RFC 7518 §4.5; the exact `enc` is checked at use).
+/// 3. **Purpose.** The effective use is the `key_use`, else the use of
+///    the `key_op` (`sign`/`verify` → `sig`, the others → `enc`), else the
+///    use the `alg` implies (JWS → `sig`, JWE → `enc`). Parts that
+///    disagree (`alg: ES256` with `key_use: enc`) match nothing. With an
+///    effective use, the member's `use` is absent or that use
+///    (RFC 7517 §4.2).
+/// 4. **`key_ops`.** The member's `key_ops`, if present, contains the
+///    `key_op` ([`Jwk::permits`]); without a `key_op`, an operation the
+///    `alg` performs in either direction (`sign`/`verify`;
+///    `wrapKey`/`unwrapKey`; `encrypt`/`decrypt` for `dir`; `deriveKey`
+///    for ECDH-ES); with neither, a registered operation of the effective
+///    use (RFC 7517 §4.3).
+/// 5. **`kid`.** The member has exactly this `kid`, case-sensitive
+///    (RFC 7517 §4.5). A member without a `kid` never matches.
+///
+/// Selection checks no key strength (HMAC length, AES key size), and not
+/// whether an operation needs the private half: the operation's key
+/// binding decides that at use (ADR 0054 §2, "Not part of selection").
 ///
 /// ```
 /// use polyjose::Error;
