@@ -61,6 +61,7 @@ let package = Package(
             resources: [
                 .copy("Resources/vectors"),
                 .copy("Resources/schema.json"),
+                .copy("Resources/api-inventory.txt"),
             ]
         ),
     ],
