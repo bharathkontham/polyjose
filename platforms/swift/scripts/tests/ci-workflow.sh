@@ -18,10 +18,15 @@
 #                default ci), the shape ADR 0037 §1 gives feature 0012; the first step rejects any
 #                value other than ci or release.
 #   permissions  one `permissions:` block, top-level, exactly `contents: read`.
-#   forbidden    none of: secrets, GITHUB_TOKEN, github.token, an OIDC token, `gh` release/api
-#                commands, a release upload action, a registry publish, git push, a download of
-#                another run's artifacts (ADR 0060: the parity reference is made in this job),
-#                event context. Comment lines are not searched.
+#   forbidden    on normalised non-comment text (continuations joined, whitespace collapsed,
+#                lower-cased, secrets['x'] and github['x'] rewritten as secrets.x and github.x;
+#                B02): no reference to secrets (also toJSON(secrets), secrets: inherit), nothing
+#                with "token" (github.token, GITHUB_TOKEN, id-token), no event context, no gh
+#                command at all, no "publish" (npm, cargo, gradle, swift package-registry), no pod
+#                trunk, twine or gem upload, no release action, git push or download of another
+#                run's artifacts (ADR 0060), no write permission, no `|| true`, `|| :`, `set +e`,
+#                `continue-on-error` or `exit 0`, and no curl or wget upload flag (-T, -F, -X in
+#                any flag cluster, --upload-file, --form, --data*, --json, -d @, ...).
 #   pins         every `uses:` is `<owner>/<repo>@<40 hex> # vX.Y.Z`; an action uses one pin, and
 #                the same pin as ci.yml when ci.yml uses that action (ADR 0037 §1).
 #   checkout     every actions/checkout step sets `persist-credentials: false`.
@@ -250,17 +255,44 @@ else
 fi
 
 # --- forbidden strings ----------------------------------------------------------------------
+# Matched on normalised text, so that no spelling slips through (B02): the non-comment lines with
+# line continuations joined, tabs and runs of spaces collapsed to one space, then lower-cased (GitHub
+# context names are case-insensitive), with the bracket forms secrets['x'], secrets["x"] and
+# github['x'] rewritten as secrets.x and github.x. The curl and wget upload flags are matched on the
+# same text before lower-casing, since -F (form upload) and -f (fail), -T (upload) and -t differ only
+# in case.
+awk '{ if (sub(/\\$/, "")) { buf = buf $0 " "; next } print buf $0; buf = "" } END { if (buf != "") print buf }' "$code" |
+  tr '\t' ' ' | sed -E 's/  +/ /g' >"$work/norm_case"
+bracket_re="(secrets|github) ?\\[ ?['\"]([^'\"]*)['\"] ?\\]"
+tr '[:upper:]' '[:lower:]' <"$work/norm_case" | sed -E "s/$bracket_re/\\1.\\2/g" >"$work/norm"
 forbidden_found=0
-for s in 'secrets.' 'secrets:' 'GITHUB_TOKEN' 'github.token' 'id-token' 'ACTIONS_ID_TOKEN' \
-  'ACTIONS_RUNTIME_TOKEN' 'gh release' 'gh api' 'gh workflow' 'gh pr ' 'upload-release-asset' \
-  'action-gh-release' 'create-release' 'cargo publish' 'npm publish' 'pod trunk' 'git push' \
-  'download-artifact' 'pull_request_target' 'write-all' ': write' 'github.event' '--upload-file'; do
-  if grep -qF -- "$s" "$code"; then
+# forbid <label> <extended regular expression> [<file>]
+forbid() {
+  local n
+  n=$(grep -nE -- "$2" "${3:-$work/norm}" | head -n 1 | cut -d: -f1)
+  if [ -n "$n" ]; then
     forbidden_found=1
-    bad "forbidden" "'$s' on line $(grep -nF -- "$s" "$code" | head -n 1 | cut -d: -f1) of the non-comment lines"
+    bad "forbidden" "$1 (normalised non-comment line $n: $(sed -n "${n}p" "${3:-$work/norm}" | sed 's/^ *//' | cut -c1-100))"
   fi
-done
-[ "$forbidden_found" = 0 ] && ok "forbidden: no secrets, tokens, OIDC, gh, release upload, registry, push or artifact download"
+}
+forbid "a reference to secrets" '(^|[^a-z0-9_])secrets([^a-z0-9_]|$)'
+forbid "a token (github.token, GITHUB_TOKEN, id-token, any *token*)" 'token'
+forbid "event context" 'github\.event'
+forbid "a gh command (the workflow needs none)" '(^|[^a-z0-9_./-])gh( |$)'
+forbid "a publish command or task" 'publish'
+forbid "a registry upload" 'pod (trunk|repo push)|package-registry|twine upload|gem push'
+forbid "a release action" 'upload-release-asset|action-gh-release|create-release'
+forbid "git push" 'git push'
+forbid "a download of another run's artifacts (ADR 0060)" 'download-artifact'
+forbid "pull_request_target" 'pull_request_target'
+forbid "a write permission" 'write-all|: write'
+forbid "an error swallowed with || true or || :" '\|\| ?(true|:)( |;|\)|$)'
+forbid "set +e or set +o" 'set \+([a-z]*e|o)'
+forbid "continue-on-error" 'continue-on-error'
+forbid "exit 0" 'exit 0( |;|\)|$)'
+grep -iE '(^|[^a-z0-9_])(curl|wget)( |$)' "$work/norm_case" >"$work/fetch_lines" || true
+forbid "a curl or wget upload flag" '(^| )-[A-Za-z]*[TFX]|--(upload-file|form|form-string|data|data-binary|data-raw|data-urlencode|json|request|post-file|post-data|body-file|body-data|method)( |=|$)|(^| )-d ?@' "$work/fetch_lines"
+[ "$forbidden_found" = 0 ] && ok "forbidden: no secrets, token, event context, gh, publish, upload, push, artifact download, write permission or swallowed error (normalised text)"
 
 # --- pins -----------------------------------------------------------------------------------
 pin_re='^ *(- )?uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -698,7 +730,8 @@ mutate steps "" '            *) echo "::error::the mode input must be ci or rele
 mutate steps "" "      - name: every results file is present" "      - name: extra\n        run: rm -f target/conformance/swift-ios-sim.json\n\n      - name: every results file is present" "an extra run step"
 mutate actions "" "          save-if: \${{ github.ref == 'refs/heads/main' }}" "          save-if: true" "rust-cache saving from every ref"
 mutate actions "" "      - name: rust-core reference" "      - uses: softprops/action-gh-release@0123456789abcdef0123456789abcdef01234567 # v2.0.0\n        with:\n          draft: true\n\n      - name: rust-core reference" "an action outside the allow-list"
-mutate shell "" "    shell: bash" "    working-directory: ." "the default shell removed"
+mutate shell "" "    shell: bash --noprofile --norc -euo pipefail {0}" "    working-directory: ." "the default shell removed"
+mutate shell "" "    shell: bash --noprofile --norc -euo pipefail {0}" "    shell: bash" "GitHub's bash default, without -u"
 mutate shell "" "$parity_run" "        shell: sh\n$parity_run" "a step overriding the shell"
 mutate env "" "  CARGO_INCREMENTAL: 0" "  CARGO_INCREMENTAL: 0\n  BASH_ENV: /tmp/x" "BASH_ENV in the workflow env"
 mutate env "" "$mode_env" "$mode_env\n      POLYJOSE_LOCAL_XCFRAMEWORK: 0" "an extra job env variable"
