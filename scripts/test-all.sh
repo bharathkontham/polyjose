@@ -180,10 +180,36 @@ run_ffi_generated_names() {
   if [ -n "$skipped" ]; then record "$name" "$skipped"; else record "$name" PASS; fi
 }
 
+# The syntax step (feature 0013 F10, pipeline rule 9), first in every run whatever the platforms:
+# `bash -n`, under this script's bash, over every shell script the gates and suites run (the globs
+# below, when they match; scripts/tests/ at any depth). A file that does not parse FAILs the step,
+# which names it. It backs the completion sentinel of each script's EXIT trap (above): a syntax
+# error fails the gate here even where the broken script itself would exit 0 (macOS /bin/bash 3.2
+# runs an EXIT trap with $? = 0 after one). Under -n, bash 3.2 does not parse inside $(...),
+# which bash 5 and the shellcheck run of each change do.
+syntax_globs='scripts/*.sh scripts/check-binding-api.d/*.sh bindings/*/test.sh bindings/*/tests/*.sh bindings/*/scripts/*.sh platforms/*/test.sh'
+run_syntax() {
+  local g f n=0 bad=0 list="$scratch/syntax.list"
+  echo "==> syntax"
+  : >"$list"
+  # Unquoted on purpose: each pattern is expanded; bash 3.2 has no nullglob, so an unmatched one
+  # stays literal and is dropped by the -f test.
+  # shellcheck disable=SC2086
+  for g in $syntax_globs; do for f in $g; do [ -f "$f" ] && printf '%s\0' "$f" >>"$list"; done; done
+  if [ -d scripts/tests ]; then find scripts/tests -name '*.sh' -type f -print0 >>"$list" || bad=1; fi
+  while IFS= read -r -d '' f; do
+    n=$((n + 1))
+    "${BASH:-bash}" -n "$f" </dev/null 2>&1 || { echo "syntax: $f does not parse"; bad=1; }
+  done <"$list"
+  if [ "$bad" -eq 0 ]; then echo "syntax: $n scripts parse"; record syntax PASS; else record syntax FAIL; fi
+}
+
 # Conformance results files (ADR 0034 §2) left by an earlier run must never count in the parity
 # check below: each run starts with an empty target/conformance/, which this run's suites refill.
 results_dir=target/conformance
 rm -rf "$results_dir" || { echo "could not clear $results_dir"; exit 2; }
+
+run_syntax
 
 for p in "${platforms[@]}"; do
   case $p in
