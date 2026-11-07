@@ -2786,10 +2786,112 @@ fn conformance_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
 }
 
-/// The shared vectors: every file must be schema-valid and pass.
+/// Where every runner writes its results file (ADR 0034 §2):
+/// `target/conformance/` at the repository root, whatever `CARGO_TARGET_DIR`
+/// says, so `scripts/conformance-parity.sh` finds every runner's file in
+/// one place.
+fn results_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/conformance")
+}
+
+/// This build's results file name. Only the default-features build is the
+/// reference run, `rust-core.json` (ADR 0034 §4); a build with features
+/// writes `rust-core-<features>.json` (`rust-core-fixed-rng.json`,
+/// `rust-core-deflate-fixed-rng.json`, ...), which the parity check
+/// ignores.
+fn results_file_name(enabled: &[&str]) -> String {
+    if enabled.is_empty() {
+        format!("{RUST_CORE}.json")
+    } else {
+        format!("{RUST_CORE}-{}.json", enabled.join("-"))
+    }
+}
+
+/// The results file text (`conformance/schema/results.schema.json`): the
+/// runner, the crate version, the enabled `features`, `Error::CODES`
+/// (ADR 0034 §8) and the results, one per line so a file can be searched
+/// by id.
+fn results_document(enabled: &[&str], results: &[Object]) -> String {
+    let strings = |items: &[&str]| -> Value {
+        Value::from(items.iter().map(|s| Value::from(*s)).collect::<Vec<_>>())
+    };
+    let header: [(&str, Value); 4] = [
+        ("runner", Value::from(RUST_CORE)),
+        ("polyjose", Value::from(env!("CARGO_PKG_VERSION"))),
+        ("features", strings(enabled)),
+        ("error_codes", strings(Error::CODES)),
+    ];
+    let mut text = String::from("{\n");
+    for (name, value) in &header {
+        text.push_str(&format!(
+            "  {}: {},\n",
+            Value::from(*name).to_json(),
+            value.to_json()
+        ));
+    }
+    text.push_str("  \"results\": [");
+    for (i, result) in results.iter().enumerate() {
+        text.push_str(if i == 0 { "\n    " } else { ",\n    " });
+        text.push_str(&result.to_json());
+    }
+    text.push_str(if results.is_empty() {
+        "]\n}\n"
+    } else {
+        "\n  ]\n}\n"
+    });
+    text
+}
+
+/// Writes `report`'s results to `dir/file`, replacing any earlier file
+/// atomically (a temporary file, then a rename), and returns its path. A
+/// report whose walk was incomplete is not written: any earlier file is
+/// removed instead, so a run that could not see every vector leaves no
+/// stale or partial reference behind (the parity check then fails on the
+/// missing file).
+fn write_results(
+    dir: &Path,
+    file: &str,
+    enabled: &[&str],
+    report: &Report,
+) -> Result<Option<PathBuf>, String> {
+    let path = dir.join(file);
+    if !report.complete {
+        return match std::fs::remove_file(&path) {
+            Ok(()) => Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("{}: cannot remove: {e}", path.display())),
+        };
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: cannot create: {e}", dir.display()))?;
+    let temporary = dir.join(format!(".{file}.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, results_document(enabled, &report.results))
+        .map_err(|e| format!("{}: cannot write: {e}", temporary.display()))?;
+    std::fs::rename(&temporary, &path)
+        .map_err(|e| format!("{}: cannot write: {e}", path.display()))?;
+    Ok(Some(path))
+}
+
+/// The shared vectors: every file must be schema-valid and pass. The run
+/// also writes this build's results file (ADR 0034 §2, §4; see
+/// [`results_file_name`]), checked against `results.schema.json`, before
+/// any assertion, so a failing run is recorded too.
 #[test]
 fn conformance_vectors() {
     let report = run_dir(&conformance_dir().join("vectors"));
+    let enabled = enabled_features();
+    let written = write_results(
+        &results_dir(),
+        &results_file_name(&enabled),
+        &enabled,
+        &report,
+    )
+    .unwrap_or_else(|e| panic!("results file: {e}"));
+    if let Some(path) = written {
+        let text = std::fs::read(&path).unwrap();
+        if let Err(e) = check_results_text(&text) {
+            panic!("{}: not valid per results.schema.json: {e}", path.display());
+        }
+    }
     assert!(
         report.failures.is_empty(),
         "{} of {} conformance vector file(s) failed:\n  {}",
@@ -7066,4 +7168,89 @@ fn run_dir_records_one_result_per_vector() {
     let empty = TempDir::new("results-empty");
     let report = run_dir_with(&empty.0, &[]);
     assert!(!report.complete && report.results.is_empty(), "{report:?}");
+}
+
+/// The writer names the file by the build's features (ADR 0034 §4: only
+/// the default build is the `rust-core` reference), writes a file that
+/// validates against `results.schema.json`, one result per line, and
+/// removes an earlier file instead of writing when the walk was incomplete.
+#[test]
+fn results_writer_writes_the_reference_file() {
+    assert_eq!(results_file_name(&[]), "rust-core.json");
+    assert_eq!(
+        results_file_name(&["fixed-rng"]),
+        "rust-core-fixed-rng.json"
+    );
+    assert_eq!(
+        results_file_name(&["deflate", "fixed-rng"]),
+        "rust-core-deflate-fixed-rng.json"
+    );
+
+    let vectors = TempDir::new("writer-vectors");
+    vectors.write(
+        "x/ok.json",
+        &vector(
+            "b64url.encode",
+            r#"{"bytes_hex":"66"}"#,
+            r#"{"ok":true,"b64u":"Zg"}"#,
+        ),
+    );
+    vectors.write(
+        "x/needs.json",
+        &with_features(
+            &vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            r#"["deflate"]"#,
+        ),
+    );
+    let out = TempDir::new("writer-out");
+    let target = out.0.join("conformance");
+    let report = run_dir_with(&vectors.0, &[]);
+    let path = write_results(&target, "rust-core.json", &[], &report)
+        .unwrap()
+        .expect("a complete report is written");
+    let text = std::fs::read_to_string(&path).unwrap();
+    check_results_text(text.as_bytes()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["runner"], "rust-core");
+    assert_eq!(value["polyjose"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(value["features"], serde_json::json!([]));
+    assert_eq!(value["error_codes"], serde_json::json!(Error::CODES));
+    assert_eq!(value["results"].as_array().unwrap().len(), 2);
+    // Files are sorted by path, so x/needs.json comes first.
+    assert_eq!(value["results"][0]["reason"], "feature:deflate");
+    assert_eq!(value["results"][1]["id"], "x/ok.json#0");
+    assert_eq!(
+        text.lines().filter(|l| l.contains(r#""id":"#)).count(),
+        2,
+        "one result per line: {text}"
+    );
+    assert!(
+        std::fs::read_dir(&target).unwrap().count() == 1,
+        "no temporary file left"
+    );
+
+    // With features, the features are recorded.
+    let path = write_results(&target, "rust-core-deflate.json", &["deflate"], &report)
+        .unwrap()
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    check_results_text(text.as_bytes()).unwrap();
+    assert!(text.contains(r#""features": ["deflate"]"#), "{text}");
+
+    // An incomplete walk removes the earlier file and writes nothing.
+    let incomplete = run_dir_with(&out.0.join("missing"), &[]);
+    assert_eq!(
+        write_results(&target, "rust-core.json", &[], &incomplete).unwrap(),
+        None
+    );
+    assert!(!target.join("rust-core.json").exists());
+    assert_eq!(
+        write_results(&target, "rust-core.json", &[], &incomplete).unwrap(),
+        None,
+        "nothing to remove is fine"
+    );
 }
