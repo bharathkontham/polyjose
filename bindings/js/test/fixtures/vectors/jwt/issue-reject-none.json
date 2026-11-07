@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): alg none is refused",
+  "operation": "jwt.issue",
+  "input": {
+    "claims": {
+      "sub": "x"
+    },
+    "alg": "none",
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}

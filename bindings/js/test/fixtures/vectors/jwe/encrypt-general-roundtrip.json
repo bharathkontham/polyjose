@@ -1,0 +1,54 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a general JWE to two recipients, checked by round trip",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "general",
+    "enc": "A128GCM",
+    "plaintext_b64u": "c2VjcmV0",
+    "recipients": [
+      {
+        "alg": "A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "c2VjcmV0LWtleS1ieXRlcw"
+        },
+        "header": {
+          "kid": "r1"
+        }
+      },
+      {
+        "alg": "PBES2-HS256+A128KW",
+        "key": {
+          "kty": "oct",
+          "k": "c2VjcmV0LWtleS1ieXRlcw"
+        },
+        "p2c": 1000,
+        "p2s_len": 16,
+        "apu_b64u": "YXB1"
+      }
+    ],
+    "protected": {
+      "cty": "text/plain"
+    },
+    "unprotected": {
+      "jku": "https://example.com/keys"
+    },
+    "aad_b64u": "YWFk"
+  },
+  "expect": {
+    "ok": true,
+    "decrypt_with": {
+      "key": {
+        "kty": "oct",
+        "k": "c2VjcmV0LWtleS1ieXRlcw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  }
+}

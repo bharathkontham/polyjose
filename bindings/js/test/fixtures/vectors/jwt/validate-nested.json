@@ -1,0 +1,51 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a nested JWT with an exact typ and an access-token profile",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "h.k.iv.nested-fixture.tag",
+    "now": 1300819000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "c2VjcmV0LWtleS1ieXRlcw"
+      },
+      "allowed_algs": [
+        "dir"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ],
+      "max_pbes2_count": 5000
+    },
+    "policy": {
+      "issuer": [
+        "joe",
+        "ann"
+      ],
+      "audience": [
+        "aud"
+      ],
+      "typ": {
+        "mode": "exact",
+        "value": "at+jwt"
+      },
+      "profile": "access_token"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "joe",
+      "exp": 1300819380
+    },
+    "alg": "HS256"
+  }
+}

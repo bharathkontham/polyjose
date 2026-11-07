@@ -1,0 +1,20 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): an empty allowed_enc is AlgorithmNotAllowed (ADR 0034 §6)",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "h.k.iv.ct-fixture.tag",
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": []
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}

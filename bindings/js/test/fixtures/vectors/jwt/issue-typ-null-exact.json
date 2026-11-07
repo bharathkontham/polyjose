@@ -1,0 +1,22 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): typ null omits typ (RFC 7519 §5.1); claims keep their order, integer-like member included",
+  "operation": "jwt.issue",
+  "input": {
+    "claims": {
+      "iss": "joe",
+      "1": "one",
+      "exp": 1300819380
+    },
+    "alg": "HS256",
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "typ": null
+  },
+  "expect": {
+    "ok": true,
+    "token": "eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLCIxIjoib25lIiwiZXhwIjoxMzAwODE5MzgwfQ.sig"
+  }
+}

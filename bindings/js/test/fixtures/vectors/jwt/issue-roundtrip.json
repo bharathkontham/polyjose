@@ -1,0 +1,35 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): {ok:true}: three compact parts, then validated with validate, alg and claims compared back",
+  "operation": "jwt.issue",
+  "input": {
+    "claims": {
+      "sub": "x",
+      "exp": 1300819380
+    },
+    "alg": "HS256",
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "typ": "at+jwt",
+    "validate": {
+      "now": 1300819000,
+      "allowed_algs": [
+        "HS256"
+      ],
+      "key": {
+        "kty": "oct",
+        "k": "c2VjcmV0LWtleS1ieXRlcw"
+      },
+      "policy": {
+        "typ": {
+          "mode": "any"
+        }
+      }
+    }
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): SPKI DER of a public key",
+  "operation": "keys.export_der",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    },
+    "format": "spki"
+  },
+  "expect": {
+    "ok": true,
+    "der_b64u": "MCo"
+  }
+}
