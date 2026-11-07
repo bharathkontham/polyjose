@@ -38,9 +38,9 @@
 # 0060). Nothing is downloaded from another run.
 #
 # The iOS Simulator run needs the iOS 27.2 runtime. When the runner image lacks it, a step tries to
-# download it (`xcodebuild -downloadPlatform`, best effort); if it is still missing,
-# test-simulators.sh prints `SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)` and
-# `SKIPPED (no iOS simulator runtime)`. The iOS Simulator is a required platform (owner,
+# download it (`xcodebuild -downloadPlatform`; a failed download is only a warning, with no
+# continue-on-error); if it is still missing, test-simulators.sh prints
+# `SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)` and `SKIPPED (no iOS simulator runtime)`. The iOS Simulator is a required platform (owner,
 # 2026-11-07), so:
 #   - release mode fails the job when either line was printed or swift-ios-sim.json is absent;
 #   - ci mode only accepts the waiver: the results step turns it into a visible warning, the job
@@ -87,9 +87,12 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
+# Every run script runs under bash with -e, -u and pipefail (B04): a failing command, an unset
+# variable or a failing stage of a pipe such as `test.sh | tee` fails the step. GitHub's own
+# `shell: bash` gives only -e and pipefail.
 defaults:
   run:
-    shell: bash
+    shell: bash --noprofile --norc -euo pipefail {0}
 
 jobs:
   swift:
@@ -113,8 +116,8 @@ jobs:
       - name: Xcode 27.2
         run: |
           if [ ! -d "$DEVELOPER_DIR" ]; then
-            echo "::error::Xcode $XCODE_VERSION is not at $DEVELOPER_DIR on this runner image"
-            ls -d /Applications/Xcode*.app || true
+            echo "::error::Xcode $XCODE_VERSION is not at $DEVELOPER_DIR on this runner image; it has:"
+            ls -d /Applications/Xcode*.app
             exit 1
           fi
           xcodebuild -version
@@ -192,27 +195,33 @@ jobs:
         if: inputs.mode == 'release'
         run: platforms/swift/scripts/build-xcframework.sh --release
 
-      # Best effort: when the image lacks the runtime test-simulators.sh uses, try to download it.
-      # The runtime id is read from that script, so it is named in one place. If the download
-      # fails, test-simulators.sh prints the SKIPPED-RUNNER waiver, which the results step reports.
+      # When the image lacks the runtime test-simulators.sh uses, try to download it. The runtime
+      # id is read from that script, so it is named in one place. A failed download is a warning
+      # only: test-simulators.sh then prints its skip lines, which fail release mode and are the
+      # ci-mode waiver (results step). A download that hangs past the step timeout fails the job.
       - name: iOS Simulator runtime
         id: ios-runtime
-        continue-on-error: true
         timeout-minutes: 30
         run: |
           runtime=$(sed -n 's/^runtime_id=//p' platforms/swift/scripts/test-simulators.sh)
-          [ -n "$runtime" ] || { echo "::error::no runtime_id in test-simulators.sh"; exit 1; }
+          if [ -z "$runtime" ]; then
+            echo "::error::no runtime_id in test-simulators.sh"
+            exit 1
+          fi
           . platforms/swift/scripts/simulator-lib.sh
           xcrun simctl list runtimes -j >"$RUNNER_TEMP/runtimes.json"
           if sim_runtime_available "$RUNNER_TEMP/runtimes.json" "$runtime"; then
             echo "$runtime is installed"
-            exit 0
+          else
+            version=${runtime##*.iOS-}
+            version=${version//-/.}
+            echo "$runtime is missing; downloading the iOS $version simulator runtime"
+            if xcodebuild -downloadPlatform iOS -buildVersion "$version"; then
+              xcrun simctl list runtimes
+            else
+              echo "::warning::the iOS $version simulator runtime could not be downloaded"
+            fi
           fi
-          version=${runtime##*.iOS-}
-          version=${version//-/.}
-          echo "$runtime is missing; downloading the iOS $version simulator runtime"
-          xcodebuild -downloadPlatform iOS -buildVersion "$version"
-          xcrun simctl list runtimes
 
       # The suite: the XCFramework (rebuilt when stale), check-generated, swift test on the macOS
       # host (swift-macos), the packaging tests, the workflow check and the iOS Simulator run
