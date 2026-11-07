@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a 16-octet oct key's shape and an encrypt/decrypt round trip with the key itself",
+  "operation": "keys.generate_oct",
+  "input": {
+    "len_bytes": 16
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "k_octets": 16
+    },
+    "use_with": {
+      "alg": "A128KW",
+      "enc": "A128GCM"
+    }
+  }
+}

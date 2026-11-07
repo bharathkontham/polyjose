@@ -283,6 +283,51 @@ test("keys.generate_for checks the key is private, has exactly the RFC members, 
   assert.equal(ec.status, "fail", "an EC key without d is public");
 });
 
+test("keys.generate_oct/_ec/_okp map to jwkGenerateOct/Ec/Okp; shape without alg; use_with round trip (ADR 0034 §6)", async () => {
+  const fake = toyBackend();
+  const results = await run([fixture("keys/generate-oct.json"), fixture("keys/generate-ec.json"), fixture("keys/generate-okp.json")], fake);
+  assert.deepEqual(results.map((r) => [r.status, r.actual]), [
+    ["pass", { ok: true }],
+    ["pass", { ok: true }],
+    ["pass", { ok: true }],
+  ]);
+  assert.deepEqual(fake.of("jwkGenerateOct").map((c) => c.args), [[16]]);
+  assert.deepEqual(fake.of("jwkGenerateEc").map((c) => c.args), [["P-256"]]);
+  assert.deepEqual(fake.of("jwkGenerateOkp").map((c) => c.args), [["X25519"]]);
+  // The other side is the public key for EC and OKP, the key itself for oct (RFC 7518 §6.4).
+  assert.equal(fake.of("jwkToPublic").length, 2);
+  // EC: a JWS signed with the key under {"alg":"ES256"}, verified with allow-list [ES256].
+  const [sign] = fake.of("jwsSignCompact");
+  assert.deepEqual(sign?.args.slice(2), [{ protectedHeader: '{"alg":"ES256"}' }]);
+  assert.deepEqual((fake.of("jwsVerifyCompact")[0]?.args[2] as { allowedAlgs: string[] }).allowedAlgs, ["ES256"]);
+  // A refusal of the core is the outcome; ec and okp cannot fail (schema).
+  assert.deepEqual((await one(fixture("keys/generate-oct-reject.json"))).actual, { ok: false, error: "InvalidKey" });
+});
+
+test("use_with: a failing round trip, an alg in the shape, or a missing use_with fails the vector", async () => {
+  const ec = fixture("keys/generate-ec.json");
+  const unverified = await one(ec, toyBackend({ jwsVerifyCompact: () => { throw coded("InvalidSignature", "x"); } }));
+  assert.equal(unverified.status, "fail");
+  assert.equal(unverified.actual, undefined, "a runner check inside the operation leaves no actual");
+  assert.match(unverified.reason ?? "", /use_with: the signature does not verify/);
+  const bound = await one(ec, toyBackend({ jwkGenerateEc: () => '{"kty":"EC","crv":"P-256","x":"eA","y":"eQ","d":"ZA","alg":"ES256"}' }));
+  assert.equal(bound.status, "fail", "a generator key has no alg");
+  const okp = fixture("keys/generate-okp.json");
+  const undecrypted = await one(okp, toyBackend({ jweDecryptCompact: () => { throw coded("DecryptionFailed", "x"); } }));
+  assert.equal(undecrypted.status, "fail");
+  assert.match(undecrypted.reason ?? "", /use_with: the key does not decrypt/);
+  const body = JSON.parse(ec.json) as { expect: Record<string, unknown> };
+  delete body.expect["use_with"];
+  assert.equal((await one({ path: "keys/no-use-with.json", json: JSON.stringify(body) })).status, "fail", "use_with is required");
+  // keys.generate_for takes an optional use_with, checked the same way.
+  const forAlg = JSON.parse(fixture("keys/generate-for-a128kw.json").json) as { expect: Record<string, unknown> };
+  forAlg.expect["use_with"] = { alg: "A128KW", enc: "A128GCM" };
+  const fake = toyBackend();
+  assert.equal((await one({ path: "keys/for-use-with.json", json: JSON.stringify(forAlg) }, fake)).status, "pass");
+  assert.equal(fake.of("jweEncryptCompact").length, 1);
+  assert.equal(fake.of("jwkToPublic").length, 0, "oct: the key itself");
+});
+
 test("features_absent: runs without the feature, skipped as feature:!<name> with it (ADR 0056)", async () => {
   const compress = JSON.parse(fixture("jwe/encrypt-compress.json").json) as Record<string, unknown>;
   delete compress["features"];

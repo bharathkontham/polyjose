@@ -25,7 +25,7 @@
  */
 
 import type { PolyjoseApi } from "../src/api.js";
-import type { JsonObject, JwtVerifyOptions, JweDecryptOptions } from "../src/types.js";
+import type { EcCurve, JsonObject, JwtVerifyOptions, JweDecryptOptions, OkpCurve } from "../src/types.js";
 import { scanJson, textAt, type JsonNode } from "./json-text.js";
 import { jsonEqual, schemaViolation } from "./schema.js";
 
@@ -82,12 +82,24 @@ type Outcome = { ok: true; out: Out } | { ok: false; error: string };
 /** The `jwk.thumbprint` hash names of the schema, mapped to the facade's (ADR 0030 §4). */
 const HASHES: Readonly<Record<string, string>> = { "sha-256": "SHA-256" };
 
+type Members = Readonly<Record<string, readonly string[]>>;
+
 /** The members a generated private key has (RFC 7518 §6.2.1-§6.2.2, RFC 8037 §2, RFC 7518 §6.4.1), plus `alg`. */
-const GENERATED_MEMBERS: Readonly<Record<string, readonly string[]>> = {
+const GENERATED_MEMBERS: Members = {
   EC: ["alg", "crv", "d", "kty", "x", "y"],
   OKP: ["alg", "crv", "d", "kty", "x"],
   oct: ["alg", "k", "kty"],
 };
+
+/** {@link GENERATED_MEMBERS} of a key bound to no algorithm (`jwkGenerateOct`, `Ec`, `Okp`): no `alg`. */
+const UNBOUND_MEMBERS: Members = {
+  EC: ["crv", "d", "kty", "x", "y"],
+  OKP: ["crv", "d", "kty", "x"],
+  oct: ["k", "kty"],
+};
+
+/** The payload or plaintext of every `use_with` round trip: the ASCII octets of `polyjose` (ADR 0034 §6). */
+const USE_WITH_PAYLOAD = Uint8Array.from("polyjose", (c) => c.charCodeAt(0));
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -397,9 +409,30 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
     out["der_b64u"] = await encode(api, await lib(api, () => api.jwkToDer(text.at("input", "jwk"), str(input["format"]) as "spki")));
   },
   // keys.generate_for → jwkGenerateForAlg(alg) (ADR 0018 §5); the surface resolves the RFC 7518 §7.1 name.
-  "keys.generate_for": async (api, input, _expect, _text, out) => {
+  // Then the `use_with` round trip when the vector has one (ADR 0034 §6).
+  "keys.generate_for": async (api, input, expect, _text, out) => {
     const jwk = await lib(api, () => api.jwkGenerateForAlg(str(input["alg"])));
-    out["shape"] = await generatedShape(api, jwk);
+    out["shape"] = await generatedShape(api, jwk, GENERATED_MEMBERS);
+    await echoUseWith(api, jwk, expect, out);
+  },
+  // keys.generate_oct → jwkGenerateOct(len_bytes) (RFC 7518 §6.4.1; ADR 0030 §4, ADR 0018 §5); the shape
+  // has no `alg`, then the `use_with` round trip (ADR 0034 §6).
+  "keys.generate_oct": async (api, input, expect, _text, out) => {
+    const jwk = await lib(api, () => api.jwkGenerateOct(input["len_bytes"] as number));
+    out["shape"] = await generatedShape(api, jwk, UNBOUND_MEMBERS);
+    await echoUseWith(api, jwk, expect, out);
+  },
+  // keys.generate_ec → jwkGenerateEc(crv) (RFC 7518 §6.2, RFC 8812 §3.1; ADR 0030 §4).
+  "keys.generate_ec": async (api, input, expect, _text, out) => {
+    const jwk = await lib(api, () => api.jwkGenerateEc(str(input["crv"]) as EcCurve));
+    out["shape"] = await generatedShape(api, jwk, UNBOUND_MEMBERS);
+    await echoUseWith(api, jwk, expect, out);
+  },
+  // keys.generate_okp → jwkGenerateOkp(crv) (RFC 8037 §2; ADR 0030 §4).
+  "keys.generate_okp": async (api, input, expect, _text, out) => {
+    const jwk = await lib(api, () => api.jwkGenerateOkp(str(input["crv"]) as OkpCurve));
+    out["shape"] = await generatedShape(api, jwk, UNBOUND_MEMBERS);
+    await echoUseWith(api, jwk, expect, out);
   },
 
   // jwe.encrypt → jweEncryptCompact / jweEncryptJson(form) (RFC 7516 §5.1, §7).
@@ -539,13 +572,13 @@ function imported(jwk: JsonObject): JsonObject {
   return jwk;
 }
 
-/** Rust `generated_shape`: private, exactly the RFC members, imports back unchanged; then the shape. */
-async function generatedShape(api: PolyjoseApi, jwk: JsonObject): Promise<Out> {
+/** Rust `generated_shape`: private, exactly the RFC members of `members`, imports back unchanged; then the shape. */
+async function generatedShape(api: PolyjoseApi, jwk: JsonObject, members: Members): Promise<Out> {
   const kty = typeof jwk["kty"] === "string" ? jwk["kty"] : "";
   const isPrivate = kty === "oct" || Object.hasOwn(jwk, "d");
   if (!isPrivate) throw new HarnessError("generate_for returned a public key");
   const names = Object.keys(jwk).sort();
-  const expected = GENERATED_MEMBERS[kty];
+  const expected = Object.hasOwn(members, kty) ? members[kty] : undefined;
   if (expected === undefined || !jsonEqual(names, [...expected])) {
     throw new HarnessError(`generate_for returned a JWK with members ${JSON.stringify(names)}`);
   }
@@ -555,6 +588,48 @@ async function generatedShape(api: PolyjoseApi, jwk: JsonObject): Promise<Out> {
   for (const name of ["kty", "crv", "alg"]) if (Object.hasOwn(jwk, name)) shape[name] = jwk[name];
   if (typeof jwk["k"] === "string") shape["k_octets"] = (await decode(api, jwk["k"], "the generated k")).length;
   return shape;
+}
+
+/** Runs the expectation's `use_with` round trip on `jwk`, if it has one, and echoes it back as an output, as `verify_with` is. */
+async function echoUseWith(api: PolyjoseApi, jwk: JsonObject, expect: Out, out: Out): Promise<void> {
+  const useWith = isObject(expect["use_with"]) ? expect["use_with"] : undefined;
+  if (useWith === undefined) return;
+  await checkUseWith(api, jwk, useWith);
+  out["use_with"] = useWith;
+}
+
+/**
+ * Rust `check_use_with` (ADR 0034 §6; conformance/README.md `use_with`): every call is a check, so any
+ * failure fails the vector. The other side is the key's public form, or the key itself for `oct`
+ * (RFC 7518 §6.4).
+ * - Without `enc`: a compact JWS (RFC 7515 §7.1) of `polyjose` under `{"alg": alg}`, verified with
+ *   allow-list `[alg]` (RFC 7515 §5.1-§5.2).
+ * - With `enc`: a compact JWE (RFC 7516 §7.1) of it to one recipient with `alg`, decrypted with the key
+ *   and allow-lists `[alg]` and `[enc]` (RFC 7516 §5.1-§5.2).
+ */
+async function checkUseWith(api: PolyjoseApi, jwk: JsonObject, useWith: Out): Promise<void> {
+  const alg = str(useWith["alg"]);
+  const key = JSON.stringify(jwk);
+  const other =
+    jwk["kty"] === "oct" ? key : JSON.stringify(await check(api, "use_with: the key has no public form", () => api.jwkToPublic(key)));
+  const enc = useWith["enc"];
+  if (typeof enc !== "string") {
+    const token = await check(api, "use_with: the key does not sign", () =>
+      api.jwsSignCompact(USE_WITH_PAYLOAD, key, { protectedHeader: JSON.stringify({ alg }) }),
+    );
+    const verified = await check(api, "use_with: the signature does not verify", () =>
+      api.jwsVerifyCompact(token, other, { allowedAlgs: [alg] }),
+    );
+    if (!bytesEqual(verified.payload, USE_WITH_PAYLOAD)) throw new HarnessError("use_with: the verified payload is not the signed one");
+  } else {
+    const token = await check(api, "use_with: encryption to the key fails", () =>
+      api.jweEncryptCompact(USE_WITH_PAYLOAD, { enc, recipients: [{ alg, key: other }] }),
+    );
+    const decrypted = await check(api, "use_with: the key does not decrypt", () =>
+      api.jweDecryptCompact(token, key, { allowedAlgs: [alg], allowedEnc: [enc] }),
+    );
+    if (!bytesEqual(decrypted.plaintext, USE_WITH_PAYLOAD)) throw new HarnessError("use_with: the decrypted plaintext is not the encrypted one");
+  }
 }
 
 /** The decrypt options of `jwe.decrypt` and of a nested JWT's `decrypt` (Rust `jwe_policy`). */
