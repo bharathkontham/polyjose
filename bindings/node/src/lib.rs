@@ -129,6 +129,46 @@ pub(crate) mod tests {
         tasks
     }
 
+    /// The field names of `pub struct <name>` in `text`, in declaration order.
+    fn struct_fields(text: &str, name: &str) -> Vec<String> {
+        let header = format!("pub struct {name}");
+        let start = text
+            .match_indices(&header)
+            .map(|(i, _)| i)
+            .find(|&i| text[i + header.len()..].starts_with([' ', '<']))
+            .unwrap_or_else(|| panic!("no `{header}`"));
+        let body = &text[start..];
+        let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+        body.lines()
+            .skip(1)
+            .map(str::trim)
+            .filter_map(|line| line.strip_prefix("pub "))
+            .filter_map(|line| line.split_once(':').map(|(field, _)| field.to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn secret_inputs_are_declared_last() {
+        // napi-derive converts the fields of a `#[napi(object)]` input in declaration order, and a
+        // failing conversion drops the fields already converted unwiped (the module docs'
+        // misuse-path residual). The secret key `String`s, and the recipients that hold them,
+        // come last, so every other field is converted first (review-code.md N1).
+        let records = include_str!("records.rs");
+        for (record, last) in [
+            ("JwsSigner", "key"),
+            ("JweRecipient", "key"),
+            ("JweEncryptOptions", "recipients"),
+        ] {
+            let fields = struct_fields(records, record);
+            assert!(fields.len() > 1, "{record}: {fields:?}");
+            assert_eq!(
+                fields.last().map(String::as_str),
+                Some(last),
+                "{record} declares `{last}` last: {fields:?}"
+            );
+        }
+    }
+
     #[test]
     fn no_hand_written_unsafe() {
         // The needles are split with concat! so this test does not match itself.
