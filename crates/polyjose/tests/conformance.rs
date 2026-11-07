@@ -2572,8 +2572,40 @@ fn check_vector(name: &str, bytes: &[u8]) -> Result<Passed, String> {
 
 /// [`check_vector`] with `enabled` as the build's features.
 fn check_vector_with(name: &str, bytes: &[u8], enabled: &[&str]) -> Result<Passed, String> {
+    check_vector_traced(name, bytes, enabled, &mut Trace::default())
+}
+
+/// What a results file records of one vector besides its status
+/// (ADR 0034 §2). Filled in as [`check_vector_traced`] goes; recording
+/// never changes how the vector is evaluated.
+#[derive(Debug, Default)]
+struct Trace {
+    /// The vector's `source`, when usable (ADR 0034 §1: reported
+    /// alongside the id).
+    source: Option<String>,
+    /// The vector's `operation`, when the file parses and names one.
+    op: Option<String>,
+    /// The operation's outcome, when it returned one: success, or the
+    /// library's error code.
+    actual: Option<Result<(), &'static str>>,
+}
+
+/// [`check_vector_with`], recording into `trace` the vector's `source`,
+/// `operation` and, once the operation has run, its outcome.
+fn check_vector_traced(
+    name: &str,
+    bytes: &[u8],
+    enabled: &[&str],
+    trace: &mut Trace,
+) -> Result<Passed, String> {
     let value = parse_vector_file(bytes)
         .map_err(|e| format!("{name}: not a valid JSON text ({e}); see conformance/schema.json"))?;
+    trace.source = usable_source(&value);
+    trace.op = value
+        .get("operation")
+        .and_then(Value::as_str)
+        .filter(|op| is_text(op))
+        .map(str::to_owned);
     let source = usable_source(&value).unwrap_or_else(|| "<missing>".to_owned());
     let fail = |problem: String| format!("{name} (source: {source}): {problem}");
     let vector = validate(&value).map_err(fail)?;
@@ -2589,6 +2621,7 @@ fn check_vector_with(name: &str, bytes: &[u8], enabled: &[&str]) -> Result<Passe
     let outcome = catch_unwind(AssertUnwindSafe(|| execute(&vector)))
         .map_err(|_| fail("panicked while running".to_owned()))?
         .map_err(fail)?;
+    trace.actual = Some(outcome.as_ref().map(|_| ()).map_err(Error::code));
     compare(&vector.expect, &outcome).map_err(fail)?;
     Ok(Passed::Ran {
         negative: matches!(vector.expect, Expect::Err(_)),
@@ -2607,6 +2640,64 @@ struct Report {
     /// `SKIPPED (needs feature ...)` lines, one per skipped vector file.
     skipped: Vec<String>,
     failures: Vec<String>,
+    /// One results-file entry per vector file, in file order (ADR 0034
+    /// §2; see [`result_entry`]).
+    results: Vec<Object>,
+    /// Whether every vector file was found: false when the walk itself
+    /// failed (an unreadable directory, a symbolic link) or found nothing,
+    /// so the results would not cover every vector.
+    complete: bool,
+}
+
+/// A vector's id (ADR 0034 §1 as amended by ADR 0045 §4): its path under
+/// the vectors directory, `/`-separated on every platform, then `#0`, as
+/// every file holds one vector.
+fn vector_id(relative: &Path) -> String {
+    let parts: Vec<String> = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    format!("{}#0", parts.join("/"))
+}
+
+/// One results-file entry (`conformance/schema/results.schema.json`):
+/// `id`, then `source` and `op` when known, `status`, `actual` for a vector
+/// that ran, and `reason` for a skip (`feature:` and the missing feature
+/// names, in the vector's order, ADR 0034 §3) or a failure (its message).
+fn result_entry(id: String, trace: Trace, result: &Result<Passed, String>) -> Object {
+    let mut entry = Object::new();
+    entry.insert("id", id);
+    if let Some(source) = trace.source {
+        entry.insert("source", source);
+    }
+    if let Some(op) = trace.op {
+        entry.insert("op", op);
+    }
+    let status = match result {
+        Ok(Passed::Ran { .. }) => "pass",
+        Ok(Passed::Skipped { .. }) => "skipped",
+        Err(_) => "fail",
+    };
+    entry.insert("status", status);
+    // A skipped vector never ran, so it has no outcome.
+    if let Some(actual) = trace.actual {
+        let mut outcome = Object::new();
+        outcome.insert("ok", actual.is_ok());
+        if let Err(code) = actual {
+            outcome.insert("error", code);
+        }
+        entry.insert("actual", outcome);
+    }
+    match result {
+        Ok(Passed::Ran { .. }) => {}
+        Ok(Passed::Skipped { features }) => {
+            entry.insert("reason", format!("feature:{}", features.join(",")));
+        }
+        Err(message) => {
+            entry.insert("reason", message.as_str());
+        }
+    }
+    entry
 }
 
 /// Every `*.json` file under `dir`, recursively, sorted. A symbolic link is
@@ -2656,15 +2747,17 @@ fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
             .failures
             .push(format!("{}: no vector files (*.json) found", dir.display()));
     }
+    report.complete = report.failures.is_empty();
     for path in files {
-        let name = path
-            .strip_prefix(dir)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
+        let relative = path.strip_prefix(dir).unwrap_or(&path);
+        let name = relative.display().to_string();
+        let mut trace = Trace::default();
         let result = std::fs::read(&path)
             .map_err(|e| format!("{name}: cannot read: {e}"))
-            .and_then(|bytes| check_vector_with(&name, &bytes, enabled));
+            .and_then(|bytes| check_vector_traced(&name, &bytes, enabled, &mut trace));
+        report
+            .results
+            .push(result_entry(vector_id(relative), trace, &result));
         match result {
             Ok(Passed::Ran {
                 operation,
@@ -2693,10 +2786,112 @@ fn conformance_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
 }
 
-/// The shared vectors: every file must be schema-valid and pass.
+/// Where every runner writes its results file (ADR 0034 §2):
+/// `target/conformance/` at the repository root, whatever `CARGO_TARGET_DIR`
+/// says, so `scripts/conformance-parity.sh` finds every runner's file in
+/// one place.
+fn results_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/conformance")
+}
+
+/// This build's results file name. Only the default-features build is the
+/// reference run, `rust-core.json` (ADR 0034 §4); a build with features
+/// writes `rust-core-<features>.json` (`rust-core-fixed-rng.json`,
+/// `rust-core-deflate-fixed-rng.json`, ...), which the parity check
+/// ignores.
+fn results_file_name(enabled: &[&str]) -> String {
+    if enabled.is_empty() {
+        format!("{RUST_CORE}.json")
+    } else {
+        format!("{RUST_CORE}-{}.json", enabled.join("-"))
+    }
+}
+
+/// The results file text (`conformance/schema/results.schema.json`): the
+/// runner, the crate version, the enabled `features`, `Error::CODES`
+/// (ADR 0034 §8) and the results, one per line so a file can be searched
+/// by id.
+fn results_document(enabled: &[&str], results: &[Object]) -> String {
+    let strings = |items: &[&str]| -> Value {
+        Value::from(items.iter().map(|s| Value::from(*s)).collect::<Vec<_>>())
+    };
+    let header: [(&str, Value); 4] = [
+        ("runner", Value::from(RUST_CORE)),
+        ("polyjose", Value::from(env!("CARGO_PKG_VERSION"))),
+        ("features", strings(enabled)),
+        ("error_codes", strings(Error::CODES)),
+    ];
+    let mut text = String::from("{\n");
+    for (name, value) in &header {
+        text.push_str(&format!(
+            "  {}: {},\n",
+            Value::from(*name).to_json(),
+            value.to_json()
+        ));
+    }
+    text.push_str("  \"results\": [");
+    for (i, result) in results.iter().enumerate() {
+        text.push_str(if i == 0 { "\n    " } else { ",\n    " });
+        text.push_str(&result.to_json());
+    }
+    text.push_str(if results.is_empty() {
+        "]\n}\n"
+    } else {
+        "\n  ]\n}\n"
+    });
+    text
+}
+
+/// Writes `report`'s results to `dir/file`, replacing any earlier file
+/// atomically (a temporary file, then a rename), and returns its path. A
+/// report whose walk was incomplete is not written: any earlier file is
+/// removed instead, so a run that could not see every vector leaves no
+/// stale or partial reference behind (the parity check then fails on the
+/// missing file).
+fn write_results(
+    dir: &Path,
+    file: &str,
+    enabled: &[&str],
+    report: &Report,
+) -> Result<Option<PathBuf>, String> {
+    let path = dir.join(file);
+    if !report.complete {
+        return match std::fs::remove_file(&path) {
+            Ok(()) => Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("{}: cannot remove: {e}", path.display())),
+        };
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: cannot create: {e}", dir.display()))?;
+    let temporary = dir.join(format!(".{file}.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, results_document(enabled, &report.results))
+        .map_err(|e| format!("{}: cannot write: {e}", temporary.display()))?;
+    std::fs::rename(&temporary, &path)
+        .map_err(|e| format!("{}: cannot write: {e}", path.display()))?;
+    Ok(Some(path))
+}
+
+/// The shared vectors: every file must be schema-valid and pass. The run
+/// also writes this build's results file (ADR 0034 §2, §4; see
+/// [`results_file_name`]), checked against `results.schema.json`, before
+/// any assertion, so a failing run is recorded too.
 #[test]
 fn conformance_vectors() {
     let report = run_dir(&conformance_dir().join("vectors"));
+    let enabled = enabled_features();
+    let written = write_results(
+        &results_dir(),
+        &results_file_name(&enabled),
+        &enabled,
+        &report,
+    )
+    .unwrap_or_else(|e| panic!("results file: {e}"));
+    if let Some(path) = written {
+        let text = std::fs::read(&path).unwrap();
+        if let Err(e) = check_results_text(&text) {
+            panic!("{}: not valid per results.schema.json: {e}", path.display());
+        }
+    }
     assert!(
         report.failures.is_empty(),
         "{} of {} conformance vector file(s) failed:\n  {}",
@@ -6457,4 +6652,605 @@ fn jwt_runner_never_reads_the_wall_clock() {
     // valid only because the runner's clock is `now`.
     let valid = vector("jwt.validate", &jwt_hs256(""), &jwt_validated("HS256", ""));
     assert!(check_vector("clock.json", valid.as_bytes()).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Results files (ADR 0034 §2): conformance/schema/results.schema.json and a
+// validator for it.
+// ---------------------------------------------------------------------------
+
+/// `conformance/schema/results.schema.json`, parsed by `serde_json`, the
+/// dev-only JSON oracle (ADR 0016 §5), so a results file is checked by a
+/// parser independent of the writer's.
+fn results_schema() -> serde_json::Value {
+    let bytes = std::fs::read(conformance_dir().join("schema/results.schema.json")).unwrap();
+    serde_json::from_slice(&bytes).expect("results.schema.json is JSON")
+}
+
+/// The JSON Schema keywords [`check_against`] implements. A schema node
+/// with any other keyword fails [`results_schema_keywords`], so the
+/// validator can never skip a rule the schema states.
+const RESULTS_SCHEMA_KEYWORDS: &[&str] = &[
+    "$schema",
+    "title",
+    "description",
+    "$defs",
+    "$ref",
+    "type",
+    "required",
+    "additionalProperties",
+    "properties",
+    "items",
+    "enum",
+    "const",
+    "minLength",
+    "minItems",
+    "uniqueItems",
+    "pattern",
+    "oneOf",
+];
+
+/// `$defs/id/pattern`: a path under `conformance/vectors/` (no leading `/`,
+/// no `\`, no `#`) of a `.json` file, then `#0` (ADR 0045 §4).
+const RESULT_ID_PATTERN: &str = "^[^#/\\\\][^#\\\\]*\\.json#0$";
+
+/// `$defs/skipped/properties/reason/pattern`: `feature:` and the missing
+/// feature names, comma-separated (ADR 0034 §3).
+const SKIP_REASON_PATTERN: &str = "^feature:[a-z0-9-]+(,[a-z0-9-]+)*$";
+
+/// [`RESULT_ID_PATTERN`], by hand (no regex crate, ADR 0016).
+fn is_result_id(s: &str) -> bool {
+    let Some(path) = s.strip_suffix("#0") else {
+        return false;
+    };
+    let first_ok = path
+        .chars()
+        .next()
+        .is_some_and(|c| !matches!(c, '#' | '/' | '\\'));
+    first_ok
+        && !path.contains(['#', '\\'])
+        && path
+            .strip_suffix(".json")
+            .is_some_and(|stem| !stem.is_empty())
+}
+
+/// [`SKIP_REASON_PATTERN`], by hand.
+fn is_skip_reason(s: &str) -> bool {
+    s.strip_prefix("feature:").is_some_and(|names| {
+        names.split(',').all(|name| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+    })
+}
+
+/// The predicate of a `pattern` the results schema uses; `None` for any
+/// other, which [`check_against`] refuses rather than ignores.
+fn results_pattern(pattern: &str) -> Option<fn(&str) -> bool> {
+    match pattern {
+        RESULT_ID_PATTERN => Some(is_result_id),
+        SKIP_REASON_PATTERN => Some(is_skip_reason),
+        _ => None,
+    }
+}
+
+/// Every keyword of every schema node in `schema` is one
+/// [`RESULTS_SCHEMA_KEYWORDS`] names, and every `pattern` one
+/// [`results_pattern`] knows. `enum` and `const` hold values, not schemas.
+fn results_schema_keywords(schema: &serde_json::Value, pointer: &str) -> Result<(), String> {
+    let node = schema
+        .as_object()
+        .ok_or_else(|| format!("{pointer}: a schema node must be an object"))?;
+    for (keyword, value) in node {
+        if !RESULTS_SCHEMA_KEYWORDS.contains(&keyword.as_str()) {
+            return Err(format!("{pointer}: unsupported keyword `{keyword}`"));
+        }
+        let here = format!("{pointer}/{keyword}");
+        match keyword.as_str() {
+            "properties" | "$defs" => {
+                for (name, sub) in value.as_object().ok_or(format!("{here}: not an object"))? {
+                    results_schema_keywords(sub, &format!("{here}/{name}"))?;
+                }
+            }
+            "items" => results_schema_keywords(value, &here)?,
+            "oneOf" => {
+                for (i, sub) in value
+                    .as_array()
+                    .ok_or(format!("{here}: not an array"))?
+                    .iter()
+                    .enumerate()
+                {
+                    results_schema_keywords(sub, &format!("{here}/{i}"))?;
+                }
+            }
+            "additionalProperties" if value != &serde_json::Value::Bool(false) => {
+                return Err(format!("{here}: only `false` is supported"));
+            }
+            "pattern" => {
+                let pattern = value.as_str().ok_or(format!("{here}: not a string"))?;
+                if results_pattern(pattern).is_none() {
+                    return Err(format!("{here}: no hand-written check for {pattern:?}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The JSON Schema type name of `value` (`integer` for a whole number).
+fn json_type(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => "integer",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// Validates `value` against the schema node `schema` of the schema
+/// document `root` (JSON Schema 2020-12, restricted to
+/// [`RESULTS_SCHEMA_KEYWORDS`]). The error names the JSON pointer of the
+/// first violation.
+fn check_against(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+    pointer: &str,
+) -> Result<(), String> {
+    let at = |problem: String| Err(format!("{pointer}: {problem}"));
+    if let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        let name = reference
+            .strip_prefix("#/$defs/")
+            .ok_or(format!("{pointer}: unsupported $ref {reference}"))?;
+        let target = root
+            .get("$defs")
+            .and_then(|defs| defs.get(name))
+            .ok_or(format!("{pointer}: no $defs/{name}"))?;
+        check_against(root, target, value, pointer)?;
+    }
+    if let Some(kind) = schema.get("type").and_then(serde_json::Value::as_str) {
+        let actual = json_type(value);
+        if actual != kind && !(kind == "number" && actual == "integer") {
+            return at(format!("must be of type {kind}, is {actual}"));
+        }
+    }
+    if let Some(allowed) = schema.get("enum").and_then(serde_json::Value::as_array)
+        && !allowed.contains(value)
+    {
+        return at(format!(
+            "must be one of {}",
+            serde_json::Value::from(allowed.clone())
+        ));
+    }
+    if let Some(constant) = schema.get("const")
+        && value != constant
+    {
+        return at(format!("must be {constant}"));
+    }
+    if let (Some(min), Some(s)) = (
+        schema.get("minLength").and_then(serde_json::Value::as_u64),
+        value.as_str(),
+    ) && (s.chars().count() as u64) < min
+    {
+        return at(format!("must have at least {min} character(s)"));
+    }
+    if let (Some(pattern), Some(s)) = (
+        schema.get("pattern").and_then(serde_json::Value::as_str),
+        value.as_str(),
+    ) {
+        let matches = results_pattern(pattern).ok_or(format!("{pointer}: pattern {pattern:?}"))?;
+        if !matches(s) {
+            return at(format!("{s:?} must match {pattern}"));
+        }
+    }
+    if let Some(items) = value.as_array() {
+        if let Some(min) = schema.get("minItems").and_then(serde_json::Value::as_u64)
+            && (items.len() as u64) < min
+        {
+            return at(format!("must have at least {min} item(s)"));
+        }
+        if schema.get("uniqueItems") == Some(&serde_json::Value::Bool(true)) {
+            for (i, item) in items.iter().enumerate() {
+                if items[..i].contains(item) {
+                    return at(format!("item {i} repeats an earlier one (uniqueItems)"));
+                }
+            }
+        }
+        if let Some(item_schema) = schema.get("items") {
+            for (i, item) in items.iter().enumerate() {
+                check_against(root, item_schema, item, &format!("{pointer}/{i}"))?;
+            }
+        }
+    }
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+            for name in required.iter().filter_map(serde_json::Value::as_str) {
+                if !object.contains_key(name) {
+                    return at(format!("missing required member `{name}`"));
+                }
+            }
+        }
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object);
+        for (name, member) in object {
+            match properties.and_then(|p| p.get(name)) {
+                Some(member_schema) => {
+                    check_against(root, member_schema, member, &format!("{pointer}/{name}"))?;
+                }
+                None if schema.get("additionalProperties")
+                    == Some(&serde_json::Value::Bool(false)) =>
+                {
+                    return at(format!("unknown member `{name}`"));
+                }
+                None => {}
+            }
+        }
+    }
+    if let Some(branches) = schema.get("oneOf").and_then(serde_json::Value::as_array) {
+        let errors: Vec<String> = branches
+            .iter()
+            .filter_map(|branch| check_against(root, branch, value, pointer).err())
+            .collect();
+        let matched = branches.len() - errors.len();
+        if matched != 1 {
+            return at(format!(
+                "must match exactly one oneOf branch, matches {matched} ({})",
+                errors.join("; ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates a results file's text against `results.schema.json`, parsing
+/// it with `serde_json`.
+fn check_results_text(text: &[u8]) -> Result<(), String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(text).map_err(|e| format!("not JSON: {e}"))?;
+    let schema = results_schema();
+    check_against(&schema, &schema, &value, "")
+}
+
+/// The schema uses only what the validator implements, so no rule of it is
+/// silently ignored; and the two hand-written patterns accept and refuse
+/// what their regular expressions do.
+#[test]
+fn results_schema_uses_only_supported_keywords() {
+    results_schema_keywords(&results_schema(), "").unwrap();
+    for (id, ok) in [
+        ("jws-rfc7515/a1.json#0", true),
+        ("a.json#0", true),
+        ("third_party/rfc7520/jws/4-1.json#0", true),
+        ("a.json#1", false),
+        ("a.json", false),
+        (".json#0", false),
+        ("/a.json#0", false),
+        ("a\\b.json#0", false),
+        ("a#b.json#0", false),
+        ("a.jsonx#0", false),
+        ("", false),
+    ] {
+        assert_eq!(is_result_id(id), ok, "{id:?}");
+    }
+    for (reason, ok) in [
+        ("feature:deflate", true),
+        ("feature:deflate,fixed-rng", true),
+        ("feature:", false),
+        ("feature:deflate,", false),
+        ("feature:Deflate", false),
+        ("feature: deflate", false),
+        ("deflate", false),
+    ] {
+        assert_eq!(is_skip_reason(reason), ok, "{reason:?}");
+    }
+    // An unknown keyword or pattern is refused, not ignored.
+    let unknown: serde_json::Value =
+        serde_json::from_str(r#"{"type":"string","maxLength":3}"#).unwrap();
+    assert!(results_schema_keywords(&unknown, "").is_err());
+    let pattern: serde_json::Value =
+        serde_json::from_str(r#"{"type":"string","pattern":"^a$"}"#).unwrap();
+    assert!(results_schema_keywords(&pattern, "").is_err());
+}
+
+/// The schema's `features` enum is the runner's [`FEATURES`] table, in
+/// schema order, and its `runner` enum names the reference run first
+/// (ADR 0034 §2, §4).
+#[test]
+fn results_schema_agrees_with_the_runner() {
+    let schema = results_schema();
+    let features: Vec<&str> = schema["properties"]["features"]["items"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(features, feature_names());
+    let runners = schema["properties"]["runner"]["enum"].as_array().unwrap();
+    assert_eq!(runners.first().and_then(|r| r.as_str()), Some(RUST_CORE));
+}
+
+/// The runner name of this file's results (ADR 0034 §2).
+const RUST_CORE: &str = "rust-core";
+
+/// A minimal results file with one result of each status.
+const RESULTS_EXAMPLE: &str = r#"{"runner":"node","polyjose":"0.1.0","features":[],"error_codes":["InvalidBase64","InvalidKey"],"results":[{"id":"a/b.json#0","source":"RFC 4648 §10","op":"b64url.decode","status":"pass","actual":{"ok":false,"error":"InvalidBase64"}},{"id":"a/c.json#0","op":"jwe.encrypt","status":"skipped","reason":"feature:fixed-rng"},{"id":"a/d.json#0","status":"fail","reason":"not JSON"},{"id":"a/e.json#0","op":"jws.verify","status":"fail","actual":{"ok":true},"reason":"expected error InvalidKey"}]}"#;
+
+/// The validator accepts a valid results file and refuses each way one can
+/// break the schema (so the check of the reference file is not vacuous).
+#[test]
+fn results_validator_refuses_invalid_files() {
+    check_results_text(RESULTS_EXAMPLE.as_bytes()).unwrap();
+    check_results_text(br#"{"runner":"rust-core","polyjose":"0.1.0","features":["deflate","fixed-rng"],"error_codes":["X"],"results":[]}"#).unwrap();
+    for (old, new, problem) in [
+        (
+            r#""runner":"node","#,
+            "",
+            "missing required member `runner`",
+        ),
+        (r#""runner":"node""#, r#""runner":"node-x86_64""#, "/runner"),
+        (r#""features":[]"#, r#""features":["zlib"]"#, "/features/0"),
+        (
+            r#""features":[]"#,
+            r#""features":["deflate","deflate"]"#,
+            "uniqueItems",
+        ),
+        (
+            r#""error_codes":["InvalidBase64","InvalidKey"]"#,
+            r#""error_codes":[]"#,
+            "at least 1 item",
+        ),
+        (r#""InvalidKey"]"#, r#""InvalidBase64"]"#, "uniqueItems"),
+        (r#""polyjose":"0.1.0""#, r#""polyjose":"""#, "/polyjose"),
+        (
+            r#""results":["#,
+            r#""extra":1,"results":["#,
+            "unknown member `extra`",
+        ),
+        (r#""a/b.json#0""#, r#""a/b.json""#, "/results/0"),
+        (r#""a/b.json#0""#, r#""a/b.json#1""#, "/results/0"),
+        (r#""status":"pass""#, r#""status":"passed""#, "/results/0"),
+        (
+            r#","actual":{"ok":false,"error":"InvalidBase64"}}"#,
+            "}",
+            "/results/0",
+        ),
+        (
+            r#""actual":{"ok":false,"error":"InvalidBase64"}"#,
+            r#""actual":{"ok":false}"#,
+            "/results/0",
+        ),
+        (
+            r#""actual":{"ok":false,"error":"InvalidBase64"}"#,
+            r#""actual":{"ok":true,"error":"InvalidBase64"}"#,
+            "/results/0",
+        ),
+        (
+            r#""actual":{"ok":false,"error":"InvalidBase64"}"#,
+            r#""actual":{"ok":false,"error":"InvalidBase64"},"reason":"x""#,
+            "/results/0",
+        ),
+        (
+            r#""reason":"feature:fixed-rng""#,
+            r#""reason":"fixed-rng""#,
+            "/results/1",
+        ),
+        (
+            r#""reason":"feature:fixed-rng""#,
+            r#""reason":"feature:fixed-rng","actual":{"ok":true}"#,
+            "/results/1",
+        ),
+        (r#""op":"jwe.encrypt","#, "", "/results/1"),
+        (
+            r#""status":"fail","reason":"not JSON""#,
+            r#""status":"fail""#,
+            "/results/2",
+        ),
+    ] {
+        assert_eq!(RESULTS_EXAMPLE.matches(old).count(), 1, "{old}");
+        let broken = RESULTS_EXAMPLE.replacen(old, new, 1);
+        let err = check_results_text(broken.as_bytes()).expect_err(&broken);
+        assert!(err.contains(problem), "{old} -> {new}: {err}");
+    }
+}
+
+/// `run_dir` records one result per vector file (ADR 0034 §2): the id is
+/// the path under the directory plus `#0` (ADR 0045 §4); a vector that ran
+/// records its outcome as `actual`, passing or not; a skip names the
+/// missing features in the vector's order; a broken file fails with a
+/// reason, and with `op` when it names one.
+#[test]
+fn run_dir_records_one_result_per_vector() {
+    let dir = TempDir::new("results");
+    let encode = vector(
+        "b64url.encode",
+        r#"{"bytes_hex":"66"}"#,
+        r#"{"ok":true,"b64u":"Zg"}"#,
+    );
+    dir.write("a/ok.json", &encode);
+    dir.write(
+        "a/negative.json",
+        &vector(
+            "b64url.decode",
+            r#"{"b64u":"Zg="}"#,
+            r#"{"ok":false,"error":"InvalidBase64"}"#,
+        ),
+    );
+    dir.write(
+        "b/wrong.json",
+        &vector(
+            "b64url.decode",
+            r#"{"b64u":"Zg="}"#,
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+        ),
+    );
+    dir.write(
+        "b/needs.json",
+        &with_features(
+            &vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            r#"["fixed-rng","deflate"]"#,
+        ),
+    );
+    dir.write("c/invalid.json", &encode.replace(r#""66""#, r#""6""#));
+    dir.write(
+        "c/unknown.json",
+        &vector("jws.frobnicate", "{}", r#"{"ok":true}"#),
+    );
+    dir.write("c/broken.json", "{");
+    dir.write("c/LICENSE", "not a vector");
+    let report = run_dir_with(&dir.0, &[]);
+    assert!(report.complete, "{report:?}");
+    let got: Vec<String> = report.results.iter().map(Object::to_json).collect();
+    let expected = [
+        format!(
+            r#"{{"id":"a/negative.json#0","source":"{SOURCE}","op":"b64url.decode","status":"pass","actual":{{"ok":false,"error":"InvalidBase64"}}}}"#
+        ),
+        format!(
+            r#"{{"id":"a/ok.json#0","source":"{SOURCE}","op":"b64url.encode","status":"pass","actual":{{"ok":true}}}}"#
+        ),
+        format!(
+            r#"{{"id":"b/needs.json#0","source":"{SOURCE}","op":"jwe.decrypt","status":"skipped","reason":"feature:fixed-rng,deflate"}}"#
+        ),
+    ];
+    assert_eq!(got.len(), 7, "{got:#?}");
+    assert_eq!(got[..3], expected, "{got:#?}");
+    let fails: Vec<&Object> = report.results[3..].iter().collect();
+    let ids: Vec<&str> = fails
+        .iter()
+        .map(|r| r.get("id").and_then(Value::as_str).unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "b/wrong.json#0",
+            "c/broken.json#0",
+            "c/invalid.json#0",
+            "c/unknown.json#0"
+        ]
+    );
+    for result in &fails {
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("fail"));
+        let reason = result.get("reason").and_then(Value::as_str).unwrap();
+        assert!(report.failures.iter().any(|f| f == reason), "{reason}");
+    }
+    // The wrong expectation ran: its outcome is recorded.
+    assert_eq!(
+        fails[0].get("actual").map(Value::to_json).as_deref(),
+        Some(r#"{"ok":false,"error":"InvalidBase64"}"#)
+    );
+    // The unparseable file names no op; the others name theirs. None of the
+    // three ran, so none has an outcome.
+    let ops: Vec<Option<&str>> = fails[1..]
+        .iter()
+        .map(|r| r.get("op").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ops, [None, Some("b64url.encode"), Some("jws.frobnicate")]);
+    assert!(fails[1..].iter().all(|r| !r.contains("actual")));
+    // Each entry is schema-valid.
+    let document = format!(
+        r#"{{"runner":"rust-core","polyjose":"0.1.0","features":[],"error_codes":["X"],"results":[{}]}}"#,
+        got.join(",")
+    );
+    check_results_text(document.as_bytes()).unwrap();
+
+    // A walk that finds nothing is incomplete, so no results file is
+    // written from it.
+    let empty = TempDir::new("results-empty");
+    let report = run_dir_with(&empty.0, &[]);
+    assert!(!report.complete && report.results.is_empty(), "{report:?}");
+}
+
+/// The writer names the file by the build's features (ADR 0034 §4: only
+/// the default build is the `rust-core` reference), writes a file that
+/// validates against `results.schema.json`, one result per line, and
+/// removes an earlier file instead of writing when the walk was incomplete.
+#[test]
+fn results_writer_writes_the_reference_file() {
+    assert_eq!(results_file_name(&[]), "rust-core.json");
+    assert_eq!(
+        results_file_name(&["fixed-rng"]),
+        "rust-core-fixed-rng.json"
+    );
+    assert_eq!(
+        results_file_name(&["deflate", "fixed-rng"]),
+        "rust-core-deflate-fixed-rng.json"
+    );
+
+    let vectors = TempDir::new("writer-vectors");
+    vectors.write(
+        "x/ok.json",
+        &vector(
+            "b64url.encode",
+            r#"{"bytes_hex":"66"}"#,
+            r#"{"ok":true,"b64u":"Zg"}"#,
+        ),
+    );
+    vectors.write(
+        "x/needs.json",
+        &with_features(
+            &vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            r#"["deflate"]"#,
+        ),
+    );
+    let out = TempDir::new("writer-out");
+    let target = out.0.join("conformance");
+    let report = run_dir_with(&vectors.0, &[]);
+    let path = write_results(&target, "rust-core.json", &[], &report)
+        .unwrap()
+        .expect("a complete report is written");
+    let text = std::fs::read_to_string(&path).unwrap();
+    check_results_text(text.as_bytes()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["runner"], "rust-core");
+    assert_eq!(value["polyjose"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(value["features"], serde_json::json!([]));
+    assert_eq!(value["error_codes"], serde_json::json!(Error::CODES));
+    assert_eq!(value["results"].as_array().unwrap().len(), 2);
+    // Files are sorted by path, so x/needs.json comes first.
+    assert_eq!(value["results"][0]["reason"], "feature:deflate");
+    assert_eq!(value["results"][1]["id"], "x/ok.json#0");
+    assert_eq!(
+        text.lines().filter(|l| l.contains(r#""id":"#)).count(),
+        2,
+        "one result per line: {text}"
+    );
+    assert!(
+        std::fs::read_dir(&target).unwrap().count() == 1,
+        "no temporary file left"
+    );
+
+    // With features, the features are recorded.
+    let path = write_results(&target, "rust-core-deflate.json", &["deflate"], &report)
+        .unwrap()
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    check_results_text(text.as_bytes()).unwrap();
+    assert!(text.contains(r#""features": ["deflate"]"#), "{text}");
+
+    // An incomplete walk removes the earlier file and writes nothing.
+    let incomplete = run_dir_with(&out.0.join("missing"), &[]);
+    assert_eq!(
+        write_results(&target, "rust-core.json", &[], &incomplete).unwrap(),
+        None
+    );
+    assert!(!target.join("rust-core.json").exists());
+    assert_eq!(
+        write_results(&target, "rust-core.json", &[], &incomplete).unwrap(),
+        None,
+        "nothing to remove is fine"
+    );
 }
