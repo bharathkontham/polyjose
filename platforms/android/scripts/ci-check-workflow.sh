@@ -127,9 +127,9 @@ function check_expressions(s,   i, j, rest, e, k, c, q, w, prev, m) {
   }
 }
 # Key syntax outside the subset, which the line-based rules (the uses: scan, parse_key) would not
-# read as the key it is: a quoted key (YAML 1.2.2 §7.3.2, §7.3.3: `"uses":`, `'uses':`, also one
-# with escapes such as `"u\x73es":`), an explicit key (§6.9 / §8.2.2: `? uses`) and a tag
-# (§6.8.1: `!!str uses:`). Each is looked for at the start of a node: after the indent and any
+# read as the key it is: a quoted key (YAML 1.2.2 §7.3.1, §7.3.2: a double- or single-quoted
+# uses, also one with escapes such as `"u\x73es":`), an explicit key (§8.2.2: `? uses`) and a
+# tag (§6.9.1: `!!str uses:`). Each is looked for at the start of a node: after the indent and any
 # "- " markers, after a flow `{`, `[` or `,`, and after a `: `. A quote in the middle of a plain
 # scalar is plain text, and ${{ }} expressions are skipped. Returns "" or what was found.
 function key_syntax(s,   i, j, n, c, nx, q, qkey, start, t) {
