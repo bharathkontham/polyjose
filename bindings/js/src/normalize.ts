@@ -293,9 +293,26 @@ export function record(v: unknown, at: string, members: readonly string[]): Reco
   return out;
 }
 
-/** Sets `out[key]` only when `value` is present, so absent optional fields are left out. */
+/**
+ * Creates `out[key]` as an own, enumerable, writable, configurable data property holding `value`
+ * (ECMA-262 ValidateAndApplyPropertyDescriptor), the descriptor an object literal's member gets
+ * (CreateDataProperty). Never an assignment (0013 F13, security audit M1 follow-up): an assignment
+ * to a member `out` doesn't own consults `out`'s prototype (OrdinarySet), so on a result, which
+ * keeps `Object.prototype`, an accessor a pollution bug put on `Object.prototype.aad` would run
+ * its setter with the secret `aad` (ADR 0030 §7) and leave the result without it, and a
+ * non-writable inherited member would make the write a TypeError.
+ *
+ * The descriptor itself has no prototype: `Object.defineProperty` reads `value`, `get`, `set`,
+ * `writable`, ... through the descriptor's prototype chain (ToPropertyDescriptor), so with an
+ * ordinary descriptor object a polluted `Object.prototype.get` would make every write a TypeError.
+ */
+export function define<T extends object, K extends keyof T>(out: T, key: K, value: T[K]): void {
+  Object.defineProperty(out, key, bare<PropertyDescriptor>({ value, enumerable: true, writable: true, configurable: true }));
+}
+
+/** {@link define}s `out[key]` only when `value` is present, so absent optional fields are left out. */
 export function put<T extends object, K extends keyof T>(out: T, key: K, value: T[K] | undefined): void {
-  if (value !== undefined) out[key] = value;
+  if (value !== undefined) define(out, key, value);
 }
 
 // --- outputs (what the backend returned) -------------------------------------------------
