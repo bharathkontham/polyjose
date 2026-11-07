@@ -363,3 +363,73 @@ proptest! {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Format, URI and distinct hashes (RFC 7638 §3, RFC 9278 §3, ADR 0054 §8)
+// ---------------------------------------------------------------------------
+
+/// Whether `c` is in the base64url alphabet (RFC 4648 §5): no `+`, `/` or
+/// `=` padding (RFC 7515 §2).
+fn is_base64url(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
+/// The names and the default are those ADR 0054 §8 fixes, and the
+/// SHA-256 shorthands are `thumbprint(Sha256)` (ADR 0054 §8).
+#[test]
+fn hash_names_and_default() {
+    for (hash, name, _) in HASHES {
+        assert_eq!(hash.hash_name(), name);
+        assert_eq!(ThumbprintHash::from_name(name), Ok(hash));
+    }
+    // RFC 9278 §5: SHA-256 is the mandatory-to-implement default.
+    assert_eq!(ThumbprintHash::default(), ThumbprintHash::Sha256);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// A thumbprint is the unpadded base64url of the digest: 43, 64 or 86
+    /// characters for SHA-256, SHA-384 or SHA-512 (RFC 7638 §3,
+    /// RFC 7515 §2, ADR 0054 §8.1).
+    #[test]
+    fn thumbprints_are_unpadded_base64url_of_the_digest_length(key in decorated()) {
+        let jwk = key.jwk();
+        for (hash, _, length) in HASHES {
+            let thumbprint = jwk.thumbprint(hash);
+            prop_assert_eq!(thumbprint.len(), length, "{:?}", hash);
+            prop_assert!(thumbprint.chars().all(is_base64url), "{:?}: {}", hash, thumbprint);
+        }
+    }
+
+    /// The URI is `urn:ietf:params:oauth:jwk-thumbprint:` + the IANA hash
+    /// name + `:` + the thumbprint (RFC 9278 §3, §4; ADR 0054 §8.3), and
+    /// the SHA-256 shorthands equal the general forms.
+    #[test]
+    fn thumbprint_uri_is_the_urn_of_the_thumbprint(key in decorated()) {
+        let jwk = key.jwk();
+        for (hash, _, _) in HASHES {
+            let expected = format!(
+                "urn:ietf:params:oauth:jwk-thumbprint:{}:{}",
+                hash.hash_name(),
+                jwk.thumbprint(hash)
+            );
+            prop_assert_eq!(jwk.thumbprint_uri(hash), expected);
+        }
+        prop_assert_eq!(jwk.thumbprint_sha256(), jwk.thumbprint(ThumbprintHash::Sha256));
+        prop_assert_eq!(jwk.thumbprint_uri_sha256(), jwk.thumbprint_uri(ThumbprintHash::Sha256));
+    }
+
+    /// The three hashes give pairwise different thumbprints and URIs for
+    /// every key (ADR 0054 §8).
+    #[test]
+    fn the_three_hashes_give_pairwise_different_values(key in decorated()) {
+        let jwk = key.jwk();
+        for (i, (first, _, _)) in HASHES.iter().enumerate() {
+            for (second, _, _) in &HASHES[i + 1..] {
+                prop_assert_ne!(jwk.thumbprint(*first), jwk.thumbprint(*second));
+                prop_assert_ne!(jwk.thumbprint_uri(*first), jwk.thumbprint_uri(*second));
+            }
+        }
+    }
+}
