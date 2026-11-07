@@ -137,6 +137,9 @@ else
   record chrome FAIL
 fi
 
+echo "==> $me: workerd (miniflare)"
+if (cd "$stage" && node dist/workerd.js); then record workerd PASS; else record workerd FAIL; fi
+
 echo
 echo "$me: summary"
 for line in "${summary[@]}"; do echo "  $line"; done
