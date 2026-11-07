@@ -106,6 +106,9 @@ pub use api::{
     decrypt_json,
 };
 
+// The JWE `key_ops` table, for JWK Set selection (ADR 0054 §2 item 4).
+pub(crate) use key::key_ops_either_direction;
+
 // The internal modules of the JWE pipeline (RFC 7516 §5).
 mod aes_gcm_kw;
 mod aes_kw;

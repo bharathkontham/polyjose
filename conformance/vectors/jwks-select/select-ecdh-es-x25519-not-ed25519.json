@@ -1,0 +1,34 @@
+{
+  "source": "ADR 0054 §2.1; RFC 8037 §3.2, RFC 7518 §4.6",
+  "description": "ECDH-ES on an Ed25519 and an X25519 key returns the X25519 key; decided by ADR 0054 §2.1 (family): ECDH-ES is served by P-256, P-384, P-521 and X25519 keys, and Ed25519 never matches ECDH-ES (RFC 8037 §3.2); member 1 has no alg, use (U = enc from ECDH-ES) or key_ops, and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+        },
+        {
+          "kty": "OKP",
+          "crv": "X25519",
+          "kid": "Bob",
+          "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "ECDH-ES"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "kid": "Bob",
+      "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+    }
+  }
+}

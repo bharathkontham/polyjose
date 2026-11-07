@@ -1,0 +1,18 @@
+{
+  "source": "ADR 0054 §4; RFC 7517 §5",
+  "description": "A JWK Set whose keys member is one JWK object, not an array, fails with InvalidKey; decided by ADR 0054 §4 precedence 1 (ADR 0041 §2): keys must be an array of JWKs (RFC 7517 §5), so the import fails with InvalidKey before any selection; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      }
+    },
+    "selector": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

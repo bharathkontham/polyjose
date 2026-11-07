@@ -1,0 +1,35 @@
+{
+  "source": "ADR 0054 §2.1; RFC 7518 §3.4",
+  "description": "ES384 on a P-256 and a P-384 key returns the P-384 key; decided by ADR 0054 §2.1 (family): ES384 is served by a P-384 key only (RFC 7518 §3.4), so the P-256 member is out; member 1 has no alg, use (U = sig from ES384) or key_ops, and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-384",
+          "x": "YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2",
+          "y": "A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "ES384"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-384",
+      "x": "YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2",
+      "y": "A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP"
+    }
+  }
+}

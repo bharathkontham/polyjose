@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0054 §2.1, §7; RFC 7518 §3.3, RFC 8725 §3.1",
+  "description": "RS256 on an oct and an RSA-2048 key returns the RSA key, never the secret oct key; decided by ADR 0054 §2.1 (family): RS256 is served by an RSA key only (RFC 7518 §3.3), so an oct key is never returned for an asymmetric alg (§7, RFC 8725 §3.1); member 1 has no alg, use (U = sig) or key_ops, and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+        },
+        {
+          "kty": "RSA",
+          "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+          "e": "AQAB"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "RS256"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "RSA",
+      "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+      "e": "AQAB"
+    }
+  }
+}
