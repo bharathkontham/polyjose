@@ -3,15 +3,18 @@
 # (ADR 0030 §1, ADR 0016 §4) and no serde in the bindings (ADR 0030 §1). Each change below must make
 # check-deps.sh fail with those checks' messages only.
 #
-# Check 13: for each bindings/deps-allowlist/<name>.txt whose bindings/<name> exists, the normal tree
-# of that package (`cargo tree -e normal --target all`, with default, no-default and all features)
-# lists only crates of that file, of deps-allowlist.txt and of the core's tree; the file lists no
-# crate the tree lacks and none that deps-allowlist.txt already allows; every bindings/* package has
-# a file. Cases: a crate added to polyjose-node, also behind a feature and on a Windows-only target;
-# an entry missing, stale or already allowed; node.txt removed; a file whose bindings/<name> is not a
-# package; malformed lines; and polyjose-surface, with a fixture package while T01's bindings/surface
-# does not exist yet, so surface.txt is not checked vacuously. A file whose bindings/<name> does not
-# exist is skipped with a message and passes.
+# Check 13: for each bindings/deps-allowlist/<name>.txt whose bindings/<name> exists, the normal and
+# build tree of that package (`cargo tree -e normal,build --target all`, with default, no-default and
+# all features) lists only crates of that file, of deps-allowlist.txt and of the core's tree; the
+# file lists no crate the tree lacks and none that deps-allowlist.txt already allows; every
+# bindings/* package has a file. Cases: a crate added to polyjose-node, also behind a feature and on
+# a Windows-only target; an entry missing, stale or already allowed; node.txt removed; a file whose
+# bindings/<name> is not a package; malformed lines; and polyjose-surface, with a fixture package
+# while T01's bindings/surface does not exist yet, so surface.txt is not checked vacuously. A file
+# whose bindings/<name> does not exist is skipped with a message and passes. Build-dependencies
+# (security audit L2 of feature 0013): a build.rs with [build-dependencies] anyhow in
+# polyjose-surface, a build-dependency of polyjose-node behind a feature and one of polyjose-wasm on
+# a Windows-only target; and napi-build, the legitimate build crate, dropped from node.txt.
 # Check 14: serde, serde_json, serde_derive, serde-wasm-bindgen or any other serde-family crate in the
 # normal tree of a bindings/* package fails, unless every path to it goes through a crate that a
 # `# serde-only-below:` line of the package's allowlist names (ffi.txt: UniFFI's proc-macro;
@@ -70,7 +73,7 @@ allow_new_crates() {
     grep -v '^[[:space:]]*#' deps-allowlist.txt
     grep -v '^[[:space:]]*#' "bindings/deps-allowlist/$1.txt"
   } | awk 'NF { print $1 }' | tr 'A-Z_' 'a-z-' | sort -u >"$scratch/covered") || lib_die "could not list the covered crates"
-  (cd "$case_dir" && cargo tree --locked --offline -p "$2" -e normal --all-features --target all --prefix none) \
+  (cd "$case_dir" && cargo tree --locked --offline -p "$2" -e normal,build --all-features --target all --prefix none) \
     | awk 'NR > 1 { print $1 }' | tr 'A-Z_' 'a-z-' | sort -u | comm -23 - "$scratch/covered" \
     | grep -vx "$2" >>"$case_dir/bindings/deps-allowlist/$1.txt" || lib_die "could not widen $1.txt"
 }
@@ -220,6 +223,13 @@ relock
 expect_fail "a build-dependency of polyjose-wasm on Windows only (--target all)" \
   "FAIL: the tree of polyjose-wasm \\(bindings/wasm\\) $not_allowed" "$not_allowed"
 expect_also "the build crate is named" '^  - base64ct$'
+
+# The legitimate build crates are listed, and exactly: napi-build dropped from node.txt fails.
+new_case node-build-missing
+replace_in bindings/deps-allowlist/node.txt $'\nnapi-build\n' $'\n'
+expect_fail "napi-build dropped from node.txt" \
+  "FAIL: the tree of polyjose-node \\(bindings/node\\) $not_allowed" "$not_allowed"
+expect_also "the missing build crate is named" '^  - napi-build$'
 
 # --- Check 14: no serde in the bindings -------------------------------------------------------------------
 
