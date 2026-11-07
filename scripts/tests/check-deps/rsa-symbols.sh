@@ -35,6 +35,15 @@
 #  16.   the audit's I4 plant in its library-less form: a tools/ member whose only polyjose edge is
 #        a dev-dependency enabling its test-RNG feature through a TOML escape (the feature itself
 #        is check-test-vectors-off.sh's; here the dev tree holding polyjose is what stops the gate).
+# The shipped build's extra Cargo arguments (feature 0006 F06, security audit L2): the gate builds
+# polyjose-wasm for wasm32 with the one WASM_CARGO_ARGS line of bindings/wasm/scripts/build-package.sh
+# (ADR 0059), so it reads the code that ships:
+#  17.   the unchanged tree's wasm32 configurations are labelled with that line's arguments;
+#  18.   a `#[cfg(polyjose_f06)]` RSA private-key function passes while nothing sets the cfg, and
+#        fails once the line (and, in the copy, check-no-cargo-config.sh's allowlist entry, as an
+#        ADR superseding ADR 0059 would) adds `build.rustflags` with that cfg;
+#  19.   the gate fails closed (exit 2) when the line is missing, or holds a word it cannot read
+#        as plain text (an expansion).
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
 # so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
 # release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
@@ -46,6 +55,11 @@ set -euo pipefail
 export LC_ALL=C
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
+
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh): the
+# EXIT trap of lib.sh again, with the sentinel, which the last line sets.
+completed=""
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "${0##*/}: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # One build directory for every case, so the dependencies compile once (the cases differ only in
 # workspace crates). It is inside $scratch, which lib.sh deletes on exit.
@@ -101,6 +115,18 @@ else
   echo "FAIL - unchanged tree: no line saying polyjose-uniffi-bindgen was skipped"
   tests_failed=$((tests_failed + 1))
 fi
+# 17. The wasm32 configurations are built with build-package.sh's WASM_CARGO_ARGS (ADR 0059).
+cfg="-""-config" # cargo's config flag, in two pieces: check-no-cargo-config.sh scans this file
+wasm_args="$cfg 'profile.release.opt-level=\"z\"'"
+for suffix in "" " --release"; do
+  tests_run=$((tests_run + 1))
+  if grep -Fqx "  polyjose-wasm $wasm_args$suffix (wasm32-unknown-unknown): polyjose, polyjose_wasm" "$scratch/out"; then
+    echo "ok   - unchanged tree: polyjose-wasm$suffix (wasm32) is built with build-package.sh's WASM_CARGO_ARGS"
+  else
+    echo "FAIL - unchanged tree: no polyjose-wasm $wasm_args$suffix (wasm32-unknown-unknown) configuration"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
 expect_symbol "unchanged tree" "rsa::public_key::RsaPublicKey"
 expect_symbol "unchanged tree" "rsa::pkcs1v15::verifying_key::VerifyingKey<sha2::Sha256>"
 expect_symbol "unchanged tree" "rsa::pss::verifying_key::VerifyingKey<sha2::Sha512>"
@@ -125,6 +151,7 @@ expect_fail "audit 2: #[path] module outside src/" "$pkcs1_sign" "$sym_fail"
 
 # 3. A macro takes the crate name as an ident.
 new_case macro-ident
+# shellcheck disable=SC2016 # Rust source: $c is a macro variable, not a shell expansion
 append_to "$hmac" 'macro_rules! k { ($c:ident) => { $c::pkcs1v15::SigningKey::<sha2::Sha256> } }
 pub(crate) fn evil(msg: &[u8]) -> Vec<u8> {
     use p256::ecdsa::signature::{SignatureEncoding, Signer as _};
@@ -182,6 +209,7 @@ expect_fail "pss::SigningKey" "rsa::pss::signing_key::SigningKey<sha2::Sha256>" 
 #    release pass catches it on its own.
 only=polyjose-all-features-release
 new_case release-only
+# shellcheck disable=SC2016 # Rust source: $c is a macro variable, not a shell expansion
 append_to "$lib_rs" 'macro_rules! k { ($c:ident) => { $c::pkcs1v15::SigningKey::<sha2::Sha256> } }
 /// Test only.
 #[doc(hidden)]
@@ -407,4 +435,71 @@ else
   tests_failed=$((tests_failed + 1))
 fi
 
-finish
+# set_line <path in the copy> <ERE of the one line to replace> <new line, or empty to delete it>
+set_line() {
+  python3 -I -c '
+import re, sys
+path, pattern, new = sys.argv[1:4]
+with open(path, encoding="utf-8") as f:
+    lines = f.read().splitlines(True)
+hits = [i for i, l in enumerate(lines) if re.search(pattern, l)]
+if len(hits) != 1:
+    sys.exit("%s: %d lines match %r, expected one" % (path, len(hits), pattern))
+lines[hits[0]] = new + "\n" if new else ""
+with open(path, "w", encoding="utf-8") as f:
+    f.write("".join(lines))
+' "$case_dir/$1" "$2" "$3" || lib_die "could not edit $1 in the copy"
+}
+
+# allow_line <WASM_CARGO_ARGS line>: build-package.sh holds the line, and the copy's
+# check-no-cargo-config.sh allows exactly it (what an ADR superseding ADR 0059 would change).
+allow_line() {
+  set_line bindings/wasm/scripts/build-package.sh '^WASM_CARGO_ARGS=' "$1"
+  set_line scripts/check-no-cargo-config.sh '^allowed_line=' "allowed_line=$(printf '%s' "$1" | python3 -I -c 'import shlex, sys; print(shlex.quote(sys.stdin.read()))')"
+}
+
+# 18. A plant that only a cfg from the shipped build's arguments compiles.
+only=polyjose-wasm-wasm32-unknown-unknown
+cfg_plant='/// Test only.
+#[doc(hidden)]
+#[cfg(polyjose_f06)]
+pub fn evil() -> bool {
+    let mut rng = p256::elliptic_curve::rand_core::UnwrapErr(crate::rng::CryptoRngAdapter::os());
+    rsa::RsaPrivateKey::new(&mut rng, 2048).is_ok()
+}'
+new_case wasm-args-cfg-unset
+append_to "$lib_rs" "$cfg_plant"
+expect_pass "a #[cfg(polyjose_f06)] RsaPrivateKey::new while nothing sets the cfg (wasm32)"
+
+new_case wasm-args-cfg-set
+append_to "$lib_rs" "$cfg_plant"
+allow_line "WASM_CARGO_ARGS=($wasm_args $cfg 'build.rustflags=[\"--cfg\",\"polyjose_f06\",\"--check-cfg\",\"cfg(polyjose_f06)\"]')"
+expect_fail "the same plant with build.rustflags --cfg polyjose_f06 in build-package.sh's WASM_CARGO_ARGS (wasm32)" \
+  "<rsa::private_key::RsaPrivateKey>::new" \
+  "$sym_fail in the objects of polyjose \\(polyjose-wasm .*polyjose_f06.* \\(wasm32-unknown-unknown\\)\\)"
+only=""
+
+# 19. No line, or a word that is not plain text: the gate fails closed before any build.
+for variant in missing expansion; do
+  new_case "wasm-args-$variant"
+  case $variant in
+    missing) set_line bindings/wasm/scripts/build-package.sh '^WASM_CARGO_ARGS=' ""
+      want='^ERROR: bindings/wasm/scripts/build-package\.sh has no WASM_CARGO_ARGS=\(\.\.\.\) line' ;;
+    *) allow_line "WASM_CARGO_ARGS=($cfg \"\$F06_ARGS\")"
+      want='^ERROR: cannot read the WASM_CARGO_ARGS line of bindings/wasm/scripts/build-package\.sh as plain words' ;;
+  esac
+  tests_run=$((tests_run + 1))
+  rc=0
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq "$want" "$scratch/out"; then
+    echo "ok   - WASM_CARGO_ARGS line $variant: $gate_name fails closed"
+  else
+    echo "FAIL - WASM_CARGO_ARGS line $variant: exit $rc (expected 2) with output matching /$want/"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
+
+finish_rc=0
+finish || finish_rc=$?
+completed=1; exit "$finish_rc"
