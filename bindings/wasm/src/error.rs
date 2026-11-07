@@ -12,7 +12,7 @@
 //! Neither carries input: the code and message come from the core only (ADR 0030 §5, ADR 0007),
 //! and reader messages name the field, never its value.
 
-use js_sys::{Error, Reflect};
+use js_sys::{Error, Reflect, TypeError};
 use polyjose_surface::SurfaceError;
 use wasm_bindgen::JsValue;
 
@@ -33,4 +33,10 @@ pub(crate) fn polyjose_error(e: SurfaceError) -> JsValue {
         &JsValue::from_str(e.code()),
     );
     err.into()
+}
+
+/// The JS `TypeError` thrown when a record field has the wrong type (ADR 0031 §3, "Records").
+/// `what` names the field and the expected type; it never quotes the value.
+pub(crate) fn type_error(what: &str) -> JsValue {
+    TypeError::new(&format!("polyjose: {what}")).into()
 }

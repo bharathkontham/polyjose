@@ -37,5 +37,8 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod read;
 
+pub mod jwk;
+pub mod keys;
 pub mod util;
