@@ -19,7 +19,8 @@
 # reproduction), also with the allowlist widened so only check 14 is left; serde_json as a direct
 # dependency of polyjose-ffi, whose allowlist lists it below the bindgen; a crate dropped from
 # ffi.txt's line, or the line removed; the line with no explanation, unneeded, or naming a crate
-# outside the tree.
+# outside the tree; and a core dependency on semver, which polyjose-ffi's build gives a serde edge,
+# reported by the core's check 5 only.
 # The unchanged tree must pass. Usage: scripts/tests/check-deps/binding-allowlists.sh
 set -euo pipefail
 export LC_ALL=C
@@ -205,6 +206,15 @@ new_case ffi-serde-json
 add_dependency bindings/ffi/Cargo.toml 'serde_json = "1"'
 expect_fail "serde_json as a direct dependency of polyjose-ffi" \
   "FAIL: serde_json $serde \\(ADR 0030 §1: no serde in the bindings\\): polyjose-ffi -> serde_json$" "$serde"
+
+# A change to the core is reported by the core's checks alone: with semver a direct dependency of
+# the core, polyjose-ffi's build turns on semver's `serde` feature (through uniffi's cargo_metadata),
+# so serde hangs below the core's semver only there; check 14 does not walk into the core, and check
+# 5 (guarded group dalek-build) is what fails.
+new_case core-semver
+add_core_dependency 'semver = { version = "1", default-features = false }'
+expect_fail "a core change that a binding's build unifies serde onto" \
+  'FAIL: semver \(guarded group dalek-build\)' 'FAIL: semver \(guarded group dalek-build\)'
 
 new_case ffi-below-narrowed
 set_directive bindings/deps-allowlist/ffi.txt '# serde-only-below: uniffi_bindgen cargo_metadata camino uniffi_pipeline'
