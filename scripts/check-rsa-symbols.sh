@@ -16,7 +16,12 @@
 #      unification, as an rlib (`cargo rustc --crate-type rlib`, so its objects are kept even when
 #      it ships as a cdylib or staticlib), on the host;
 #   3. polyjose-wasm the same way for wasm32-unknown-unknown, its shipping target (polyjose alone
-#      does not build there: getrandom needs the binding's `wasm_js` backend).
+#      does not build there: getrandom needs the binding's `wasm_js` backend), with the shipped
+#      build's extra Cargo arguments: the words of the one `WASM_CARGO_ARGS=(...)` line of
+#      bindings/wasm/scripts/build-package.sh (ADR 0059; feature 0006 F06, security audit L2), so
+#      the code read is the code of the published .wasm (a cfg or a rustflag added there reaches
+#      these builds too). check-no-cargo-config.sh, run first, allows that line only by its exact
+#      text and fails on any other assignment of WASM_CARGO_ARGS under bindings/.
 # A workspace member with no library target (build tooling such as polyjose-uniffi-bindgen) is
 # skipped only when its tree, under every feature set (default, --no-default-features and
 # --all-features), holds neither rsa nor another workspace member; otherwise it fails closed.
@@ -41,7 +46,9 @@
 # (`$LT$` -> `<`, `..` -> `::`, ...), since llvm-nm's Itanium demangler leaves those escapes;
 # rustc 1.99 emits v0 names, but the check does not depend on it.
 #
-# Fails closed (exit 2), with the reason, when: cargo, rustc, python3, ar or nm is missing; a
+# Fails closed (exit 2), with the reason, when: cargo, rustc, python3, ar or nm is missing;
+# build-package.sh has no WASM_CARGO_ARGS line, more than one, or one whose words are not plain
+# text (quoted or unquoted literals only: no expansion, glob, escape or comment); a
 # workspace member has no library target and its tree holds rsa or another member; a build fails;
 # a build does not report polyjose's (or the binding's) rlib; an rlib holds no object or a member
 # it does not expect; the symbol tool cannot read an object or prints a line it cannot parse; or
@@ -106,7 +113,7 @@ done
 
 # The program is read from stdin (so it may use any quote); the builds it runs get /dev/null.
 python3 -I - "$target_dir" "$dump_dir" "$only" <<'PY'
-import json, os, re, shutil, subprocess, sys, tempfile
+import json, os, re, shlex, shutil, subprocess, sys, tempfile
 
 target_dir, dump_dir, only = sys.argv[1], sys.argv[2], sys.argv[3].split()
 CORE = "polyjose"
@@ -256,6 +263,48 @@ AR, NM = find_tool("llvm-ar", "ar"), find_tool("llvm-nm", "nm")
 tool_hint = ("" if NM.startswith(tool_bin) else
              " (with %s; the toolchain's llvm-nm reads every target: rustup component add llvm-tools)" % NM)
 
+# --- The shipped wasm build's extra Cargo arguments -------------------------------------------------
+# One line of build-package.sh defines them (ADR 0059): `WASM_CARGO_ARGS=(<words>)`. Its words are
+# read as bash would read them, and only words with one reading are accepted: runs of '...', "..."
+# without $, ` or \, and unquoted characters that bash neither expands nor globs.
+BUILD_PACKAGE = "bindings/wasm/scripts/build-package.sh"
+WORD_PART = re.compile(r"""'([^']*)'|"([^"$`\\]*)"|([A-Za-z0-9_.,:=+/@%-]+)""")
+
+
+def wasm_cargo_args():
+    try:
+        with open(BUILD_PACKAGE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except (OSError, UnicodeDecodeError) as e:
+        die("cannot read %s: %s" % (BUILD_PACKAGE, e))
+    defs = [l for l in lines if re.match(r"\s*WASM_CARGO_ARGS\b", l)]
+    if not defs:
+        die("%s has no WASM_CARGO_ARGS=(...) line (ADR 0059); the wasm32 builds read it" % BUILD_PACKAGE)
+    if len(defs) > 1:
+        die("%s has %d WASM_CARGO_ARGS lines, expected one: %s" % (BUILD_PACKAGE, len(defs), defs))
+    m = re.fullmatch(r"WASM_CARGO_ARGS=\((.*)\)", defs[0])
+    words, i, s = [], 0, m.group(1) if m else None
+    while s is not None and i < len(s):
+        if s[i] in " \t":
+            i += 1
+            continue
+        word = ""
+        while i < len(s) and s[i] not in " \t":
+            part = WORD_PART.match(s, i)
+            if part is None:
+                s = None
+                break
+            word += next(g for g in part.groups() if g is not None)
+            i = part.end()
+        else:
+            words.append(word)
+    if s is None:
+        die("cannot read the WASM_CARGO_ARGS line of %s as plain words: %r" % (BUILD_PACKAGE, defs[0]))
+    return words
+
+
+WASM_ARGS = wasm_cargo_args()
+
 # --- What to build ----------------------------------------------------------------------------------
 meta = json.loads(run(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
                       "cargo metadata"))
@@ -301,8 +350,9 @@ builds = [("%s --all-features" % CORE, "host", "%s-all-features" % CORE,
            ["build", "-p", CORE, "--lib", "--all-features"], [CORE])]
 for b in bindings:
     builds.append((b, "host", b, ["rustc", "-p", b, "--lib", "--crate-type", "rlib"], [CORE, b]))
-builds.append((WASM_BINDING, WASM_TARGET, "%s-%s" % (WASM_BINDING, WASM_TARGET),
-               ["rustc", "-p", WASM_BINDING, "--lib", "--crate-type", "rlib", "--target", WASM_TARGET],
+builds.append((" ".join([WASM_BINDING] + [shlex.quote(a) for a in WASM_ARGS]), WASM_TARGET,
+               "%s-%s" % (WASM_BINDING, WASM_TARGET),
+               ["rustc", "-p", WASM_BINDING, "--lib", "--crate-type", "rlib", "--target", WASM_TARGET] + WASM_ARGS,
                [CORE, WASM_BINDING]))
 # (label, file-name id, cargo arguments, crates whose objects are read)
 configs = [("%s (%s)" % (what, where), file_id, args, crates) for what, where, file_id, args, crates in builds]
