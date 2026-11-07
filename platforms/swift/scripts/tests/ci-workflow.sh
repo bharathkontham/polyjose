@@ -61,15 +61,32 @@
 #                test-simulators.sh (`SKIPPED-RUNNER (swift-ios-sim: ...` and `SKIPPED (no iOS
 #                simulator runtime)`) and on a missing swift-ios-sim.json; the step that accepts
 #                the waiver does so only when "$MODE" is ci.
-#   continue     `continue-on-error` only on the step with `id: ios-runtime` (the best-effort
-#                download of the iOS simulator runtime).
+#   continue     no `continue-on-error` anywhere.
+#   steps        every run step equals, exactly, one of the canonical steps held in this script,
+#                each once and in order (compared without its name line, trailing whitespace,
+#                trailing blank lines and comment lines; B04). Changing a run step of the
+#                workflow means changing its canonical text here, on purpose.
+#   actions      only actions/checkout, Swatinem/rust-cache, actions/setup-node and
+#                actions/upload-artifact, each with exactly its keys, inputs (an upload may add
+#                retention-days or compression-level) and condition (rust-cache: ci mode, saving
+#                only on main; the ios-sim upload: only when its results file is present), and in
+#                its place relative to the canonical steps.
+#   shell        the top-level default shell is `bash --noprofile --norc -euo pipefail {0}`, and no
+#                job or step sets another.
+#   env          the workflow env is exactly CARGO_TERM_COLOR and CARGO_INCREMENTAL, the job env
+#                exactly MODE, XCODE_VERSION and DEVELOPER_DIR (no BASH_ENV or other variable).
+#   structure    top-level keys name, on, permissions, env, defaults, jobs; job keys name, runs-on,
+#                timeout-minutes, env, steps (no concurrency, container, services, strategy...).
 #   actionlint   `actionlint` accepts the file (it runs shellcheck on the scripts when shellcheck
 #                is installed). A missing actionlint fails the check.
 #
 # Self-test: once the workflow passes, each of a list of mutations of it (one line replaced or
 # lines inserted, in a scratch copy) must fail the check named for it, so that every check is
-# shown to reject what it is there to reject: a pull_request trigger, a write permission, a secret,
-# an unpinned action, --allow-dev in release mode, an expression in a run script, and so on.
+# shown to reject what it is there to reject: a pull_request trigger, a write permission, a secret
+# in any spelling, an unpinned action, --allow-dev in release mode, an expression in a run script
+# of any form, a required step turned into a no-op, and so on (including every case of bugs B02,
+# B03 and B04). A list of benign edits (retention-days, a renamed step, comments, a blank line, a
+# longer timeout) must still pass, so that the checks are not simply brittle. About 45 s.
 #
 # Exit status: 0 every check passed; 1 a check failed; 2 a usage error.
 # Bash 3.2 compatible (macOS /bin/bash). Needs awk, grep, sed and actionlint.
@@ -131,7 +148,7 @@ block() {
 
 # keys <indent>: the mapping keys at exactly <indent> spaces among the lines on stdin.
 keys() {
-  awk -v ind="$1" '{ match($0, /^ */); if (RLENGTH == ind) { k = substr($0, ind + 1); sub(/:.*/, "", k); print k } }'
+  awk -v ind="$1" '/^[ ]*$/ { next } { match($0, /^ */); if (RLENGTH == ind) { k = substr($0, ind + 1); sub(/:.*/, "", k); print k } }'
 }
 
 # The steps, one file each ($work/steps/NN), with the item's `- ` turned into indentation so that
@@ -586,18 +603,350 @@ done
 [ "$ios_ok" = 1 ] && ok "ios-sim: required in release mode (either skip line or a missing file fails); the waiver only in ci mode"
 
 # --- continue-on-error ----------------------------------------------------------------------
-coe_ok=1
+if grep -q 'continue-on-error' "$code"; then
+  bad "continue" "continue-on-error is not allowed anywhere (the job must fail when a step fails)"
+else
+  ok "continue: no continue-on-error"
+fi
+
+# --- steps (B04) ----------------------------------------------------------------------------
+# Text greps cannot show that a command runs and that its failure fails the job, so every run
+# step must be, exactly, one of the canonical steps below, each once and in this order. A step
+# is compared without its name line (renaming is harmless), with trailing whitespace and trailing
+# blank lines stripped, and without comment lines (the step files drop them). Any edit to a run
+# step of the workflow therefore needs the same edit here, on purpose, where a reviewer sees it.
+# Action (uses:) steps are checked by "actions".
+mkdir -p "$work/canon"
+canon_n=0
+# canon <label>: the next canonical step, read from stdin.
+canon() {
+  canon_n=$((canon_n + 1))
+  cat >"$(printf '%s/canon/%02d' "$work" "$canon_n")"
+  printf '%s\n' "$1" >"$(printf '%s/canon/%02d.label' "$work" "$canon_n")"
+}
+# The canonical steps, in order (copied from the reviewed workflow; keep the two in step).
+canon 'mode is ci or release' <<'CANON'
+        run: |
+          case "$MODE" in
+            ci | release) echo "mode: $MODE" ;;
+            *) echo "::error::the mode input must be ci or release"; exit 1 ;;
+          esac
+CANON
+canon 'Xcode 27.2' <<'CANON'
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::Xcode $XCODE_VERSION is not at $DEVELOPER_DIR on this runner image; it has:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          xcodebuild -version
+          actual=$(xcodebuild -version | sed -n 's/^Xcode //p')
+          if [ "$actual" != "$XCODE_VERSION" ]; then
+            echo "::error::expected Xcode $XCODE_VERSION, xcodebuild reports $actual"
+            exit 1
+          fi
+          swift --version
+          sw_vers
+          uname -m
+CANON
+canon 'no cargo config' <<'CANON'
+        run: scripts/check-no-cargo-config.sh
+CANON
+canon 'Install toolchain (rust-toolchain.toml)' <<'CANON'
+        run: |
+          rustup toolchain install
+          rustup show
+          cargo --version
+CANON
+canon 'Install the pinned nightly (release mode)' <<'CANON'
+        if: inputs.mode == 'release'
+        run: |
+          nightly=$(tr -d '[:space:]' < platforms/swift/nightly-toolchain)
+          rustup toolchain install "$nightly" --profile minimal --component rust-src
+          rustc "+$nightly" --version
+CANON
+canon 'actionlint 1.7.12' <<'CANON'
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
+        run: |
+          [ "$(uname -m)" = arm64 ] || { echo "::error::the actionlint pin is for darwin arm64"; exit 1; }
+          dir="$RUNNER_TEMP/actionlint"
+          tarball="actionlint_${ACTIONLINT_VERSION}_darwin_arm64.tar.gz"
+          mkdir -p "$dir"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$dir/$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
+          echo "$ACTIONLINT_SHA256  $dir/$tarball" | shasum -a 256 -c -
+          tar -xzf "$dir/$tarball" -C "$dir" actionlint
+          "$dir/actionlint" -version
+          echo "$dir" >>"$GITHUB_PATH"
+CANON
+canon 'XCFramework (release mode, platforms/swift/scripts/build-xcframework.sh --release)' <<'CANON'
+        if: inputs.mode == 'release'
+        run: platforms/swift/scripts/build-xcframework.sh --release
+CANON
+canon 'iOS Simulator runtime' <<'CANON'
+        id: ios-runtime
+        timeout-minutes: 30
+        run: |
+          runtime=$(sed -n 's/^runtime_id=//p' platforms/swift/scripts/test-simulators.sh)
+          if [ -z "$runtime" ]; then
+            echo "::error::no runtime_id in test-simulators.sh"
+            exit 1
+          fi
+          . platforms/swift/scripts/simulator-lib.sh
+          xcrun simctl list runtimes -j >"$RUNNER_TEMP/runtimes.json"
+          if sim_runtime_available "$RUNNER_TEMP/runtimes.json" "$runtime"; then
+            echo "$runtime is installed"
+          else
+            version=${runtime##*.iOS-}
+            version=${version//-/.}
+            echo "$runtime is missing; downloading the iOS $version simulator runtime"
+            if xcodebuild -downloadPlatform iOS -buildVersion "$version"; then
+              xcrun simctl list runtimes
+            else
+              echo "::warning::the iOS $version simulator runtime could not be downloaded"
+            fi
+          fi
+CANON
+canon 'platforms/swift/test.sh (macOS host and the iOS Simulator)' <<'CANON'
+        run: |
+          rm -rf target/conformance
+          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then
+            echo "::error::platforms/swift/test.sh did not end with its PASS line"
+            exit 1
+          fi
+CANON
+canon 'the iOS Simulator ran (release mode)' <<'CANON'
+        if: inputs.mode == 'release'
+        run: |
+          log="$RUNNER_TEMP/swift-test.log"
+          if grep -qF 'SKIPPED-RUNNER (swift-ios-sim:' "$log" ||
+            grep -qxF 'SKIPPED (no iOS simulator runtime)' "$log"; then
+            echo "::error::release mode requires the iOS Simulator run; test-simulators.sh skipped it (no iOS 27.2 runtime on the runner)"
+            exit 1
+          fi
+          if [ ! -f target/conformance/swift-ios-sim.json ]; then
+            echo "::error::release mode requires target/conformance/swift-ios-sim.json"
+            exit 1
+          fi
+          echo "the iOS Simulator ran: target/conformance/swift-ios-sim.json"
+CANON
+canon 'every results file is present' <<'CANON'
+        id: results
+        run: |
+          if [ ! -f target/conformance/swift-macos.json ]; then
+            echo "::error::missing target/conformance/swift-macos.json"
+            exit 1
+          fi
+          echo "present: target/conformance/swift-macos.json"
+          if [ -f target/conformance/swift-ios-sim.json ]; then
+            echo "present: target/conformance/swift-ios-sim.json"
+            echo "ios_sim=present" >>"$GITHUB_OUTPUT"
+          elif [ "$MODE" = ci ] && grep -qxF 'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)' "$RUNNER_TEMP/swift-test.log"; then
+            echo "::warning::swift-ios-sim SKIPPED: the runner has no iOS 27.2 simulator runtime, so the iOS Simulator suite did not run"
+            echo "swift-ios-sim: SKIPPED (no iOS 27.2 simulator runtime on the runner)" >>"$GITHUB_STEP_SUMMARY"
+            echo "ios_sim=skipped" >>"$GITHUB_OUTPUT"
+          else
+            echo "::error::missing target/conformance/swift-ios-sim.json (and no ci-mode waiver from test-simulators.sh)"
+            exit 1
+          fi
+CANON
+canon 'rust-core reference' <<'CANON'
+        run: cargo test --locked -p polyjose --test conformance
+CANON
+canon 'conformance parity' <<'CANON'
+        run: scripts/conformance-parity.sh
+CANON
+canon 'package.sh (release mode)' <<'CANON'
+        if: inputs.mode == 'release'
+        run: platforms/swift/scripts/package.sh
+CANON
+canon 'package.sh (ci mode, a development build allowed)' <<'CANON'
+        if: inputs.mode == 'ci'
+        run: platforms/swift/scripts/package.sh --allow-dev
+CANON
+canon 'the checkout is unchanged' <<'CANON'
+        run: git diff --exit-code --stat HEAD
+CANON
+canon 'dist/apple holds the three packaged files' <<'CANON'
+        run: |
+          for f in PolyjoseFFI.xcframework.zip PolyjoseFFI.xcframework.zip.sha256 binaryTarget.swift.txt; do
+            [ -f "dist/apple/$f" ] || { echo "::error::missing dist/apple/$f"; exit 1; }
+          done
+          ls -l dist/apple
+          cat dist/apple/PolyjoseFFI.xcframework.zip.sha256
+CANON
+
+# normalise_step <step file>: the step without its name line, trailing whitespace and trailing
+# blank lines.
+normalise_step() {
+  sed -e '/^        name: /d' -e 's/[[:space:]]*$//' "$1" |
+    awk '{ a[NR] = $0 } END { n = NR; while (n > 0 && a[n] == "") n--; for (i = 1; i <= n; i++) print a[i] }'
+}
+steps_ok=1
+last_canon=0
+i=0
+canon_at=()
 for s in $steps; do
-  if [ -n "$(step_key "$s" continue-on-error)" ] && [ "$(step_key "$s" id)" != ios-runtime ]; then
-    coe_ok=0
-    bad "continue" "continue-on-error in step '$(step_key "$s" name)'; only the ios-runtime step may have it"
+  i=$((i + 1))
+  if grep -q '^        run:' "$s"; then
+    normalise_step "$s" >"$s.norm"
+    # The expected next canonical step first (the usual case), then all of them.
+    found=0
+    j=$((last_canon + 1))
+    if [ "$j" -le "$canon_n" ] && cmp -s "$s.norm" "$(printf '%s/canon/%02d' "$work" "$j")"; then
+      found=$j
+    else
+      j=0
+      while [ "$j" -lt "$canon_n" ]; do
+        j=$((j + 1))
+        if cmp -s "$s.norm" "$(printf '%s/canon/%02d' "$work" "$j")"; then found=$j; break; fi
+      done
+    fi
+    if [ "$found" = 0 ]; then
+      steps_ok=0
+      bad "steps" "run step $i ('$(step_key "$s" name)') is not one of the canonical steps (edit the canonical text in ci-workflow.sh on purpose)"
+    elif [ -n "${canon_at[$found]:-}" ]; then
+      steps_ok=0
+      bad "steps" "the canonical step '$(cat "$work/canon/$(printf '%02d' "$found").label")' appears twice"
+    elif [ "$found" -le "$last_canon" ]; then
+      steps_ok=0
+      bad "steps" "run step $i ('$(step_key "$s" name)') is out of the canonical order"
+      canon_at[found]=$i
+    else
+      canon_at[found]=$i
+      last_canon=$found
+    fi
+  elif ! grep -q '^        uses: ' "$s"; then
+    steps_ok=0
+    bad "steps" "step $i has neither run: nor uses:"
   fi
 done
-if grep -qE '^    continue-on-error:' "$code"; then
-  coe_ok=0
-  bad "continue" "the job must not set continue-on-error"
+j=0
+while [ "$j" -lt "$canon_n" ]; do
+  j=$((j + 1))
+  if [ -z "${canon_at[$j]:-}" ]; then
+    steps_ok=0
+    bad "steps" "missing (or changed) canonical step: $(cat "$work/canon/$(printf '%02d' "$j").label")"
+  fi
+done
+[ "$steps_ok" = 1 ] && ok "steps: the $canon_n run steps are exactly the canonical ones, in order"
+
+# canon_step <label>: the workflow step index of the canonical step with that label (0 if absent).
+canon_step() {
+  local j=0
+  while [ "$j" -lt "$canon_n" ]; do
+    j=$((j + 1))
+    if [ "$(cat "$work/canon/$(printf '%02d' "$j").label")" = "$1" ]; then echo "${canon_at[$j]:-0}"; return; fi
+  done
+  echo 0
+}
+
+# --- actions (B04) --------------------------------------------------------------------------
+# Only the four actions the job needs, each with exactly its keys and inputs; rust-cache in ci mode
+# only and saving only on main; positions relative to the canonical steps.
+actions_ok=1
+i=0
+for s in $steps; do
+  i=$((i + 1))
+  u=$(step_key "$s" uses)
+  [ -n "$u" ] || continue
+  a=${u%%@*}
+  cond=$(step_key "$s" if)
+  stepkeys=$(keys 8 <"$s" | sort | tr '\n' ' ')
+  withkeys=$(awk '$0 == "        with:" { w = 1; next } w && /^          [^ ]/ { k = substr($0, 11); sub(/:.*/, "", k); print k; next } w && /^        [^ ]/ { w = 0 }' "$s" | sort | tr '\n' ' ')
+  want_cond=""
+  case $a in
+    actions/checkout)
+      want_keys="uses with "; want_with="persist-credentials "
+      [ "$i" -lt "$(canon_step "no cargo config")" ] ||
+        { actions_ok=0; bad "actions" "actions/checkout must come before the cargo-config check"; } ;;
+    Swatinem/rust-cache)
+      want_keys="if uses with "; want_with="save-if "; want_cond="inputs.mode == 'ci'"
+      # shellcheck disable=SC2016 # literal workflow text
+      [ "$(step_with "$s" save-if)" = '${{ github.ref == '"'refs/heads/main'"' }}' ] ||
+        { actions_ok=0; bad "actions" "rust-cache must save only on main (save-if: \${{ github.ref == 'refs/heads/main' }})"; }
+      if [ "$i" -lt "$(canon_step "Install toolchain (rust-toolchain.toml)")" ] || [ "$i" -gt "$(canon_step "platforms/swift/test.sh (macOS host and the iOS Simulator)")" ]; then
+        actions_ok=0; bad "actions" "rust-cache must come after the toolchain install and before test.sh"
+      fi ;;
+    actions/setup-node)
+      want_keys="uses with "; want_with="node-version package-manager-cache "
+      [ "$(step_with "$s" package-manager-cache)" = false ] ||
+        { actions_ok=0; bad "actions" "setup-node must set package-manager-cache: false"; }
+      [ "$i" -lt "$(canon_step "conformance parity")" ] ||
+        { actions_ok=0; bad "actions" "setup-node must come before parity"; } ;;
+    actions/upload-artifact)
+      want_keys="uses with "; want_with="if-no-files-found name path "
+      case $(step_with "$s" name) in
+        conformance-swift-ios-sim)
+          want_keys="if uses with "; want_cond="steps.results.outputs.ios_sim == 'present'"
+          after="every results file is present" ;;
+        conformance-swift-macos) after="every results file is present" ;;
+        *) after="dist/apple holds the three packaged files" ;;
+      esac
+      [ "$i" -gt "$(canon_step "$after")" ] ||
+        { actions_ok=0; bad "actions" "the $(step_with "$s" name) upload must come after the step '$after'"; } ;;
+    *)
+      actions_ok=0; bad "actions" "$a is not one of the allowed actions (checkout, rust-cache, setup-node, upload-artifact)"
+      continue ;;
+  esac
+  # A step's keys, apart from its name, and its with: inputs; benign extra upload inputs allowed.
+  stepkeys=$(printf '%s' "$stepkeys" | sed 's/name //')
+  if [ "$stepkeys" != "$want_keys" ]; then
+    actions_ok=0; bad "actions" "step $i ($a) has the keys '$stepkeys', expected '$want_keys'"
+  fi
+  if [ "$a" = actions/upload-artifact ]; then
+    withkeys=$(printf '%s' "$withkeys" | sed -E 's/(compression-level|retention-days) //g')
+  fi
+  if [ "$withkeys" != "$want_with" ]; then
+    actions_ok=0; bad "actions" "step $i ($a) has the inputs '$withkeys', expected '$want_with'"
+  fi
+  if [ "$cond" != "$want_cond" ]; then
+    actions_ok=0; bad "actions" "step $i ($a) has the condition '$cond', expected '$want_cond'"
+  fi
+done
+[ "$actions_ok" = 1 ] && ok "actions: only checkout, rust-cache (ci mode, saving on main), setup-node and upload-artifact, each with its own keys and place"
+
+# --- shell (B04) ----------------------------------------------------------------------------
+shell_block=$(block "defaults:" 0)
+expected_shell="  run:
+    shell: bash --noprofile --norc -euo pipefail {0}"
+if [ "$shell_block" != "$expected_shell" ]; then
+  bad "shell" "the top-level defaults must be exactly run.shell: bash --noprofile --norc -euo pipefail {0}"
+elif [ "$(grep -c 'shell:' "$code")" != 1 ] || [ "$(grep -c 'defaults:' "$code")" != 1 ]; then
+  bad "shell" "no job or step may set its own shell or defaults"
+else
+  ok "shell: every run script runs under bash -euo pipefail"
 fi
-[ "$coe_ok" = 1 ] && ok "continue: continue-on-error only on the iOS simulator runtime download"
+
+# --- env (B04) ------------------------------------------------------------------------------
+env_ok=1
+workflow_env=$(block "env:" 0)
+if [ "$workflow_env" != "  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0" ]; then
+  env_ok=0; bad "env" "the workflow env must be exactly CARGO_TERM_COLOR: always and CARGO_INCREMENTAL: 0 (no BASH_ENV or other variable)"
+fi
+job_env=$(block "    env:" 4)
+# shellcheck disable=SC2016 # literal workflow text
+if [ "$job_env" != '      MODE: ${{ inputs.mode }}
+      XCODE_VERSION: "27.2"
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer' ]; then
+  env_ok=0; bad "env" "the job env must be exactly MODE, XCODE_VERSION and DEVELOPER_DIR"
+fi
+[ "$env_ok" = 1 ] && ok "env: the workflow and job env blocks are exactly the expected variables"
+
+# --- structure (B04) ------------------------------------------------------------------------
+top_keys=$(keys 0 <"$code" | sort | tr '\n' ' ')
+job_keys=$(block "jobs:" 0 | keys 4 | sort | tr '\n' ' ')
+if [ "$top_keys" != "defaults env jobs name on permissions " ]; then
+  bad "structure" "top-level keys must be name, on, permissions, env, defaults and jobs, got: $top_keys"
+elif [ "$job_keys" != "env name runs-on steps timeout-minutes " ]; then
+  bad "structure" "the job's keys must be name, runs-on, timeout-minutes, env and steps, got: $job_keys"
+else
+  ok "structure: the expected top-level and job keys only"
+fi
 
 # --- actionlint -----------------------------------------------------------------------------
 if ! command -v actionlint >/dev/null 2>&1; then
@@ -808,13 +1157,13 @@ benign "" "      - name: rust-core reference" "\n      - name: rust-core referen
 benign "" "    timeout-minutes: 180" "    timeout-minutes: 200" "a longer job timeout"
 benign "" "          node-version: 24" "          node-version: 22" "another Node major for parity"
 
-# Check the copies, six at a time (each check is about a second of short-lived processes).
+# Check the copies, eight at a time (each check is a few seconds of short-lived processes).
 batch=0
 for copy in "$work"/mutation-*.yml; do
   [ -f "$copy" ] || continue
   ( rc=0; "$0" --check "$copy" >"$copy.log" 2>&1 || rc=$?; echo "$rc" >"$copy.rc" ) &
   batch=$((batch + 1))
-  if [ "$batch" = 6 ]; then wait; batch=0; fi
+  if [ "$batch" = 8 ]; then wait; batch=0; fi
 done
 wait
 for copy in "$work"/mutation-*.yml; do
