@@ -1,0 +1,317 @@
+//! The JWK and key operations of the binding surface (ADR 0030 §4, "JWK"), through the public
+//! surface API only, with RFC appendix values (feature 0013 T06).
+//!
+//! Every expected error code is the core's (ADR 0030 §5); where the surface itself rejects a
+//! string (an unknown hash, curve or format name), the code is the one ADR 0030 §5 fixes.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
+
+use polyjose_surface::records::JwkSelector;
+use polyjose_surface::{SecretString, SurfaceError, jwk};
+
+/// RFC 7517 Appendix A.2: the P-256 private key (with `use` and `kid`).
+const RFC7517_A2_P256_PRIVATE: &str = r#"{"kty":"EC",
+    "crv":"P-256",
+    "x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+    "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+    "d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE",
+    "use":"enc",
+    "kid":"1"}"#;
+
+/// RFC 7517 Appendix A.1: the public half of [`RFC7517_A2_P256_PRIVATE`], in core member order.
+const RFC7517_A1_P256_PUBLIC: &str = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","use":"enc","kid":"1"}"#;
+
+/// RFC 8037 Appendix A.1: the Ed25519 private key, `d` before `x` as the RFC prints it.
+const RFC8037_A1_ED25519_PRIVATE: &str = r#"{"kty":"OKP","crv":"Ed25519",
+    "d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+    "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#;
+
+/// RFC 8037 Appendix A.2: the Ed25519 public key.
+const RFC8037_A2_ED25519_PUBLIC: &str =
+    r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#;
+
+/// RFC 8037 Appendix A.3: the RFC 7638 thumbprint of the RFC 8037 A.1/A.2 key.
+const RFC8037_A3_THUMBPRINT: &str = "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k";
+
+/// RFC 7748 §6.1 / RFC 8037 Appendix A.6: Bob's X25519 private key.
+const X25519_BOB_PRIVATE: &str = r#"{"kty":"OKP","crv":"X25519","kid":"Bob",
+    "x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+    "d":"XasIfmJKikt54X-Lg4AO5m87sSkmGLb9HC-LJ_-I4Os"}"#;
+
+/// RFC 7638 §3.1: the RSA public key of the thumbprint example.
+const RFC7638_RSA: &str = r#"{"kty":"RSA",
+    "n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+    "e":"AQAB",
+    "alg":"RS256",
+    "kid":"2011-04-29"}"#;
+
+/// RFC 7638 §3.1: the thumbprint of [`RFC7638_RSA`].
+const RFC7638_THUMBPRINT: &str = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
+
+/// RFC 9278 §3 (example in §6): the thumbprint URI of [`RFC7638_RSA`].
+const RFC9278_URI: &str =
+    "urn:ietf:params:oauth:jwk-thumbprint:sha-256:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
+
+/// RFC 7517 Appendix A.3: the HMAC key of RFC 7515 Appendix A.1.
+const RFC7517_A3_OCT: &str = r#"{"kty":"oct",
+    "k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
+    "kid":"HMAC key used in JWS spec Appendix A.1 example"}"#;
+
+/// RFC 7517 Appendix A.2: the RSA private key (RFC 7517 A.2 with `alg` and `kid`). RSA private
+/// keys are not supported (ADR 0021).
+const RFC7517_A2_RSA_PRIVATE: &str = r#"{"kty":"RSA",
+    "n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+    "e":"AQAB",
+    "d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q",
+    "p":"83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs",
+    "q":"3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk",
+    "dp":"G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0",
+    "dq":"s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk",
+    "qi":"GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU",
+    "alg":"RS256",
+    "kid":"2011-04-29"}"#;
+
+/// The code of a failed surface call.
+fn code<T: std::fmt::Debug>(result: Result<T, SurfaceError>) -> &'static str {
+    result.unwrap_err().code()
+}
+
+// --- jwk_parse --------------------------------------------------------------------------------
+
+#[test]
+fn parse_returns_the_core_reserialization_in_core_member_order() {
+    // RFC 7517 §4 / RFC 8037 §2: whitespace dropped, `kty` and the key-type members first, then
+    // `use`, `kid` (Jwk::to_object order).
+    let parsed: SecretString = jwk::jwk_parse(RFC7517_A2_P256_PRIVATE).unwrap();
+    assert_eq!(
+        parsed.as_str(),
+        r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE","use":"enc","kid":"1"}"#
+    );
+    let parsed = jwk::jwk_parse(RFC8037_A1_ED25519_PRIVATE).unwrap();
+    assert_eq!(
+        parsed.as_str(),
+        r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"}"#
+    );
+    // Parsing is idempotent: the core form parses to itself.
+    assert_eq!(
+        jwk::jwk_parse(parsed.as_str()).unwrap().as_str(),
+        parsed.as_str()
+    );
+}
+
+#[test]
+fn parse_keeps_public_rsa_and_oct_keys() {
+    let rsa = jwk::jwk_parse(RFC7638_RSA).unwrap();
+    assert!(rsa.as_str().starts_with(r#"{"kty":"RSA","n":"0vx7"#));
+    assert!(
+        rsa.as_str()
+            .ends_with(r#""e":"AQAB","alg":"RS256","kid":"2011-04-29"}"#)
+    );
+    let oct = jwk::jwk_parse(RFC7517_A3_OCT).unwrap();
+    assert_eq!(
+        oct.as_str(),
+        r#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow","kid":"HMAC key used in JWS spec Appendix A.1 example"}"#
+    );
+}
+
+#[test]
+fn parse_rejects_an_rsa_private_key_as_unsupported() {
+    // ADR 0021: RSA is public-key only.
+    assert_eq!(
+        code(jwk::jwk_parse(RFC7517_A2_RSA_PRIVATE)),
+        "UnsupportedAlgorithm"
+    );
+}
+
+#[test]
+fn parse_reports_the_core_codes_for_bad_input() {
+    // I-JSON (RFC 7493 §2.3): duplicate member names are rejected by the core parser.
+    let duplicate = r#"{"kty":"oct","k":"c2VjcmV0","k":"c2VjcmV0"}"#;
+    for (input, expected) in [
+        ("", "InvalidJson"),
+        ("[]", "InvalidJson"),
+        ("{\"kty\":", "InvalidJson"),
+        (duplicate, "InvalidJson"),
+        (r#"{"crv":"P-256"}"#, "InvalidKey"),
+        (r#"{"kty":"oct","k":"c2VjcmV0="}"#, "InvalidBase64"),
+        (
+            r#"{"kty":"EC","crv":"P-224","x":"AA","y":"AA"}"#,
+            "UnsupportedAlgorithm",
+        ),
+    ] {
+        assert_eq!(code(jwk::jwk_parse(input)), expected, "{input}");
+    }
+}
+
+// --- jwk_to_public ----------------------------------------------------------------------------
+
+#[test]
+fn to_public_of_rfc7517_a2_is_rfc7517_a1() {
+    let public: String = jwk::jwk_to_public(RFC7517_A2_P256_PRIVATE).unwrap();
+    assert_eq!(public, RFC7517_A1_P256_PUBLIC);
+}
+
+#[test]
+fn to_public_of_okp_private_keys_drops_d() {
+    assert_eq!(
+        jwk::jwk_to_public(RFC8037_A1_ED25519_PRIVATE).unwrap(),
+        RFC8037_A2_ED25519_PUBLIC
+    );
+    assert_eq!(
+        jwk::jwk_to_public(X25519_BOB_PRIVATE).unwrap(),
+        r#"{"kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08","kid":"Bob"}"#
+    );
+}
+
+#[test]
+fn to_public_of_a_public_key_is_its_core_form() {
+    assert_eq!(
+        jwk::jwk_to_public(RFC7517_A1_P256_PUBLIC).unwrap(),
+        RFC7517_A1_P256_PUBLIC
+    );
+    let rsa = jwk::jwk_to_public(RFC7638_RSA).unwrap();
+    assert_eq!(rsa, jwk::jwk_parse(RFC7638_RSA).unwrap().as_str());
+}
+
+#[test]
+fn to_public_drops_unknown_members() {
+    // The core never publishes a member it cannot classify (Jwk::to_public).
+    let with_extra = r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A","note":"x"}"#;
+    assert_eq!(
+        jwk::jwk_to_public(with_extra).unwrap(),
+        RFC8037_A2_ED25519_PUBLIC
+    );
+}
+
+#[test]
+fn to_public_of_an_oct_key_is_unsupported() {
+    // RFC 7518 §6.4: an `oct` key has no public part. The core's `Jwk::to_public` returns `None`
+    // (no code of its own); the surface reports `UnsupportedAlgorithm`, the code the core gives
+    // for exporting an `oct` key's public half as SPKI (ADR 0018 §3 format matrix).
+    assert_eq!(
+        code(jwk::jwk_to_public(RFC7517_A3_OCT)),
+        "UnsupportedAlgorithm"
+    );
+}
+
+#[test]
+fn to_public_reports_parse_errors_with_the_core_codes() {
+    assert_eq!(code(jwk::jwk_to_public("{")), "InvalidJson");
+    assert_eq!(
+        code(jwk::jwk_to_public(RFC7517_A2_RSA_PRIVATE)),
+        "UnsupportedAlgorithm"
+    );
+}
+
+// --- jwk_thumbprint / jwk_thumbprint_uri ------------------------------------------------------
+
+#[test]
+fn thumbprint_reproduces_rfc7638_section_3_1() {
+    assert_eq!(
+        jwk::jwk_thumbprint(RFC7638_RSA, "SHA-256").unwrap(),
+        RFC7638_THUMBPRINT
+    );
+}
+
+#[test]
+fn thumbprint_uri_reproduces_rfc9278() {
+    assert_eq!(
+        jwk::jwk_thumbprint_uri(RFC7638_RSA, "SHA-256").unwrap(),
+        RFC9278_URI
+    );
+}
+
+#[test]
+fn thumbprint_of_a_private_key_is_that_of_its_public_key() {
+    // RFC 7638 §3.2.1, RFC 8037 Appendix A.3.
+    for key in [RFC8037_A1_ED25519_PRIVATE, RFC8037_A2_ED25519_PUBLIC] {
+        assert_eq!(
+            jwk::jwk_thumbprint(key, "SHA-256").unwrap(),
+            RFC8037_A3_THUMBPRINT
+        );
+        assert_eq!(
+            jwk::jwk_thumbprint_uri(key, "SHA-256").unwrap(),
+            format!("urn:ietf:params:oauth:jwk-thumbprint:sha-256:{RFC8037_A3_THUMBPRINT}")
+        );
+    }
+    assert_eq!(
+        jwk::jwk_thumbprint(RFC7517_A2_P256_PRIVATE, "SHA-256").unwrap(),
+        jwk::jwk_thumbprint(RFC7517_A1_P256_PUBLIC, "SHA-256").unwrap()
+    );
+}
+
+#[test]
+fn every_hash_but_sha_256_is_unsupported_for_now() {
+    // ADR 0022 (no SHA-1) and the T06 interim rule (lead, 2026-11-07): only SHA-256 until the
+    // core gains SHA-384/SHA-512 thumbprints (feature 0015, task T14). Names are exact: the
+    // RFC 9278 §4 lower-case form and other spellings are not ADR 0030 §4 hash names.
+    for hash in [
+        "SHA-384", "SHA-512", "SHA-1", "sha-256", "SHA256", "sha256", " SHA-256", "SHA-256 ", "",
+        "MD5",
+    ] {
+        assert_eq!(
+            code(jwk::jwk_thumbprint(RFC7638_RSA, hash)),
+            "UnsupportedAlgorithm",
+            "{hash:?}"
+        );
+        assert_eq!(
+            code(jwk::jwk_thumbprint_uri(RFC7638_RSA, hash)),
+            "UnsupportedAlgorithm",
+            "{hash:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_hash_is_reported_before_the_key_is_parsed() {
+    // The hash name is checked first, so a bad key with a bad hash reports the hash.
+    assert_eq!(
+        code(jwk::jwk_thumbprint("{", "SHA-1")),
+        "UnsupportedAlgorithm"
+    );
+    assert_eq!(
+        code(jwk::jwk_thumbprint_uri("{", "SHA-1")),
+        "UnsupportedAlgorithm"
+    );
+}
+
+#[test]
+fn thumbprint_reports_key_errors_with_the_core_codes() {
+    assert_eq!(code(jwk::jwk_thumbprint("{", "SHA-256")), "InvalidJson");
+    assert_eq!(code(jwk::jwk_thumbprint_uri("{", "SHA-256")), "InvalidJson");
+    // The RSA private key is rejected before any hash is computed (ADR 0021).
+    assert_eq!(
+        code(jwk::jwk_thumbprint(RFC7517_A2_RSA_PRIVATE, "SHA-256")),
+        "UnsupportedAlgorithm"
+    );
+}
+
+#[test]
+fn thumbprint_of_an_oct_key_hashes_k() {
+    // RFC 7638 §3.2: the required members of an `oct` key are `k` and `kty`.
+    assert_eq!(
+        jwk::jwk_thumbprint(RFC7517_A3_OCT, "SHA-256").unwrap(),
+        "y_x3gCJnL6oKGBBIXScabduwxTVy2Wd2bzRVEUbdUzc"
+    );
+}
+
+// --- jwks_select ------------------------------------------------------------------------------
+
+#[test]
+fn jwks_select_is_unsupported_until_the_core_selects() {
+    // T06 interim rule (lead, 2026-11-07): the core has no general `JwkSet::select` yet
+    // (feature 0015, task T14), so every call fails with `UnsupportedAlgorithm`.
+    let jwks = format!(r#"{{"keys":[{RFC7517_A1_P256_PUBLIC},{RFC8037_A2_ED25519_PUBLIC}]}}"#);
+    let selector = JwkSelector {
+        kid: Some("1".to_owned()),
+        alg: None,
+        key_use: Some("enc".to_owned()),
+    };
+    assert_eq!(
+        code(jwk::jwks_select(&jwks, &selector)),
+        "UnsupportedAlgorithm"
+    );
+    assert_eq!(
+        code(jwk::jwks_select(&jwks, &JwkSelector::default())),
+        "UnsupportedAlgorithm"
+    );
+}
