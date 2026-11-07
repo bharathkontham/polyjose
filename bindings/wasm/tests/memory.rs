@@ -268,10 +268,13 @@ const fn known(
 // Why a heap copy is accepted. Each is a decision on record, or a framework edge.
 const JWT_CLAIMS: &str = "JWT claims are plain text, outside ADR 0030 §7 (ADR 0058 owner \
     decision 2): the core's parsed claim values and the surface's `claims` String are not wiped";
-const JWE_JSON_AAD: &str = "the JWE JSON serialization carries the aad in the clear (RFC 7516 \
-    §7.2.1 `aad`), and src/jwe.rs returns the serialized JWE as an owned String, a public result";
 const GLUE_REALLOC: &str = "wasm-bindgen's passStringToWasm0 moved the block of a non-ASCII \
     string and freed the old one with its ASCII prefix (review N7, framework glue)";
+
+// Not residue: a copy that is part of the call's output (orchestrator, 2026-11-07).
+const JWE_JSON_AAD: &str = "output token content (RFC 7516 §7.2.1): the JWE JSON \
+    serialization's `aad` member is base64url(aad) in the clear, and src/jwe.rs returns the \
+    serialized JWE, a public result, as an owned String";
 
 // Why a shadow-stack fragment occurs: a primitive's own frame, which `Zeroizing` never reaches
 // and the adapter does not scrub (src/lib.rs, "Secrets"). Feature 0012 owns these (core backlog).
@@ -297,8 +300,7 @@ const X25519_SCALAR: &str = "the X25519 scalar in x25519-dalek's Diffie-Hellman 
 /// exactly; wasm-opt rearranges the frames that held the third.
 #[rustfmt::skip] // one entry per line
 const KNOWN: &[Known] = &[
-    // On the heap.
-    known("glue: a non-ASCII string whose block moved", "k (base64url)", r(0, 0, 1), r(0, 0, 1), GLUE_REALLOC),
+    // On the heap: output token content (RFC 7516 §7.2.1), not residue.
     known("jweEncryptJson(A128KW + A128CBC-HS256, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
     known("jweEncryptJson(A256GCMKW + A256GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
     known("jweEncryptJson(ECDH-ES + A256GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
@@ -306,6 +308,8 @@ const KNOWN: &[Known] = &[
     known("jweEncryptJson(PBES2-HS256+A128KW + A128GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
     known("jweEncryptJson(dir + A128CBC-HS256, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
     known("jweEncryptJson(dir + A128GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
+    // On the heap: residue.
+    known("glue: a non-ASCII string whose block moved", "k (base64url)", r(0, 0, 1), r(0, 0, 1), GLUE_REALLOC),
     known("jwtDecryptNested", "claims sub", r(0, 0, 2), r(0, 0, 2), JWT_CLAIMS),
     known("jwtDecryptNestedWithJwks", "claims sub", r(0, 0, 2), r(0, 0, 2), JWT_CLAIMS),
     known("jwtSign(HS512)", "claims sub", r(0, 0, 1), r(0, 0, 1), JWT_CLAIMS),
