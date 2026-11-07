@@ -9,13 +9,15 @@
 
 use polyjose::Error;
 use polyjose::header::Header;
+use polyjose::jwa::SigningAlg;
 use polyjose::jwk::Jwk;
-use polyjose::jws::{ProtectedHeader, SignOptions, Signer};
+use polyjose::jws::{ProtectedHeader, SignOptions, Signer, Verified, VerifyOptions};
 
-use crate::error::{SurfaceError, SurfaceResult};
+use crate::error::SurfaceResult;
 use crate::records::{
-    JwsSignOptions, JwsSigner, JwsVerified, JwsVerifyOptions, apply, apply_flag,
+    JwsSignOptions, JwsSigner, JwsVerified, JwsVerifyOptions, algs, apply, apply_flag, to_usize,
 };
+use crate::secret::SecretBytes;
 
 /// Header-form misuse (ADR 0030 §4, §5): a signer sets both `protected_header` and
 /// `protected_b64u`.
@@ -126,29 +128,57 @@ pub fn jws_sign_general(
 
 /// Verifies the JWS Compact Serialization `token` with `key` (ADR 0030 §4; RFC 7515 §5.2,
 /// §7.1; ADR 0026 §2).
+///
+/// Only `options.allowed_algs` decides which algorithms are accepted: the header `alg` must be
+/// in it, and `none` never is (RFC 8725 §3.1, ADR 0007). The key is the caller's; a header's
+/// `jwk`, `jku`, `x5c` or `kid` never selects one (ADR 0026 §2). `None` limits are the core
+/// defaults (ADR 0026 §7), and `detached_payload` is RFC 7515 Appendix F.
+///
+/// The result's [`JwsVerified::protected_header`] is the core's serialization of the verified
+/// header (always present for compact), and its payload is wiped on drop (ADR 0049 §4).
+///
+/// # Errors
+///
+/// The core's code for a bad key, then `AlgorithmNotAllowed` for an empty or `none`-only
+/// allow-list (RFC 8725 §3.1), then every error of `polyjose::jws::verify_compact` in the core's
+/// fixed order (ADR 0048; ADR 0026 §2): the surface adds no check and no ordering of its own.
 pub fn jws_verify_compact(
     token: &str,
     key: &str,
     options: &JwsVerifyOptions,
 ) -> SurfaceResult<JwsVerified> {
-    // stub: T07
-    let _ = (token, key, options);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let key = parse_key(key)?;
+    let allowed: Vec<SigningAlg> = algs(&options.allowed_algs);
+    let verified = polyjose::jws::verify_compact(token, &key, &verify_options(&allowed, options)?)?;
+    Ok(verified_from_core(verified)?)
 }
 
 /// Verifies the flattened or general JWS JSON Serialization `jws` with `key` (ADR 0030 §4;
 /// RFC 7515 §5.2, §7.2; ADR 0026 §3).
 ///
-/// The returned [`JwsVerified::unprotected_header`] is **not integrity-protected** (ADR 0049
-/// §2): never trust `typ`, `cty`, `kid` or `crit` from it.
+/// The allow-list, key, limits and detached payload work as in [`jws_verify_compact`]. For a
+/// general JWS the result describes the first signature, in array order, that verifies with
+/// `key`, and [`JwsVerified::signature_index`] says which (ADR 0026 §3; RFC 7515 Appendix A.6).
+///
+/// **[`JwsVerified::unprotected_header`] is not integrity-protected** (ADR 0049 §2): the
+/// signature does not cover it (RFC 7515 §5.1 step 5, §7.2.1), so anyone can change or add it
+/// and the JWS still verifies. Never trust `typ`, `cty`, `kid` or `crit` from it; read them from
+/// [`JwsVerified::protected_header`]. A signature may have only an unprotected header (RFC 7520
+/// §4.7, ADR 0045 §1); its `alg` then still has to be in the caller's allow-list (ADR 0045 §2).
+///
+/// # Errors
+///
+/// As [`jws_verify_compact`], with the errors of `polyjose::jws::verify_json`: when no
+/// signature verifies, the code of the one that got furthest (ADR 0026 §3).
 pub fn jws_verify_json(
     jws: &str,
     key: &str,
     options: &JwsVerifyOptions,
 ) -> SurfaceResult<JwsVerified> {
-    // stub: T07
-    let _ = (jws, key, options);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let key = parse_key(key)?;
+    let allowed: Vec<SigningAlg> = algs(&options.allowed_algs);
+    let verified = polyjose::jws::verify_json(jws, &key, &verify_options(&allowed, options)?)?;
+    Ok(verified_from_core(verified)?)
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -213,4 +243,60 @@ fn core_signer(
 /// stands (ADR 0030 §3); `true` is RFC 7515 Appendix F.
 fn sign_options(detached: bool) -> SignOptions {
     apply_flag(SignOptions::new(), detached, |o| o.detached(true))
+}
+
+/// The core verify options: the allow-list (required, checked by the core: RFC 8725 §3.1,
+/// ADR 0007), then each limit and the detached payload only when set (ADR 0030 §3), so a `None`
+/// is the core default (ADR 0026 §7). The detached payload is borrowed, not copied (ADR 0030
+/// §7.1).
+fn verify_options<'a>(
+    allowed: &'a [SigningAlg],
+    options: &'a JwsVerifyOptions,
+) -> polyjose::Result<VerifyOptions<'a>> {
+    let opts = VerifyOptions::new(allowed)?;
+    let opts = apply(
+        opts,
+        options.max_input_len.map(to_usize),
+        VerifyOptions::max_input_len,
+    );
+    let opts = apply(
+        opts,
+        options.max_signatures.map(to_usize),
+        VerifyOptions::max_signatures,
+    );
+    Ok(apply(
+        opts,
+        options.detached_payload.as_ref().map(SecretBytes::as_bytes),
+        VerifyOptions::detached_payload,
+    ))
+}
+
+/// A signature index that does not fit a `u32` (ADR 0030 §2). Unreachable: the index is below
+/// the number of signatures, which `max_signatures` (a `u32`, or the core default) bounds
+/// (ADR 0026 §7). Reported as the over-limit `InvalidFormat` rather than a panic.
+const INDEX_OVERFLOW: &str = "signature index exceeds u32";
+
+/// The surface result of a core verification (ADR 0030 §4): the registered `alg` name, the
+/// headers as the core serializes them (RFC 7515 §4), and the index.
+///
+/// The payload is the core's [`zeroize::Zeroizing`] buffer, moved into [`SecretBytes`] without
+/// a copy, so no unwiped intermediate exists (ADR 0049 §4, ADR 0030 §7.2).
+fn verified_from_core(verified: Verified) -> polyjose::Result<JwsVerified> {
+    let signature_index = u32::try_from(verified.signature_index)
+        .map_err(|_| Error::InvalidFormat(INDEX_OVERFLOW))?;
+    Ok(JwsVerified {
+        alg: verified.alg.as_str().to_owned(),
+        protected_header: verified
+            .protected
+            .as_ref()
+            .map(Header::to_json)
+            .transpose()?,
+        unprotected_header: verified
+            .unprotected
+            .as_ref()
+            .map(Header::to_json)
+            .transpose()?,
+        payload: SecretBytes::from(verified.payload),
+        signature_index,
+    })
 }
