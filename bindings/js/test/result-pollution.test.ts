@@ -8,6 +8,7 @@
 import { assert, fs, path, process, test } from "../node/builtins.js";
 import { createApi, PolyjoseError } from "../src/api.js";
 import { coded, fakeBackend, type Operation } from "./fake-backend.js";
+import { ownData, TRAP_KINDS, withTraps } from "./traps.js";
 
 const KEY = '{"kty":"oct","k":"AAAA"}';
 const JWKS = '{"keys":[]}';
@@ -220,6 +221,118 @@ for (const [record, fields] of RESULTS) {
   });
 }
 
+// --- writes: every result member is an own data property (0013 F13) ------------------------
+// The facade builds each result itself. A member it created by assignment (`out[key] = value`)
+// would run a setter a pollution bug put on `Object.prototype` (the secret `aad`, a `kid`, a
+// header handed to attacker code, and the result left without the member), or fail on a
+// non-writable inherited member. Each record and field comes from bindings/api-inventory.txt, so a
+// new result member is covered without editing this file.
+
+/** A backend result of `record` with every field, optional ones included (and a full `inner`). */
+function full(record: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of RESULTS.get(record) ?? []) out[f.name] = f.name === "inner" ? full("JwtVerified") : BACKEND_VALUE[f.name];
+  return out;
+}
+
+/** Every member of `record`'s result, as [holder path, field]: its own fields, and `inner`'s. */
+function members(record: string): { inner: boolean; name: string }[] {
+  const own = (RESULTS.get(record) ?? []).map((f) => ({ inner: false, name: f.name }));
+  const inner = own.some((f) => f.name === "inner") ? (RESULTS.get("JwtVerified") ?? []).map((f) => ({ inner: true, name: f.name })) : [];
+  return [...own, ...inner];
+}
+
+/** The polluted value planted for a member: the same type as the backend's, so type checks pass. */
+const pollutedFor = (m: PropertyKey): unknown => (m === "inner" ? full("JwtVerified") : POLLUTED_VALUE[String(m)]);
+
+test("every result record has write-side cases, and every member of each has a polluted value", () => {
+  for (const record of RESULTS.keys()) {
+    assert.ok((USES[record] ?? []).length > 0, `${record} is returned by an operation under test`);
+    for (const m of members(record)) assert.ok(m.name === "inner" || Object.hasOwn(POLLUTED_VALUE, m.name), `${record}.${m.name}`);
+  }
+  // The members the 0006 lead named are among them.
+  const all = [...RESULTS.keys()].flatMap((r) => members(r).map((m) => m.name));
+  for (const f of ["aad", "kid", "keyIndex", "protectedHeader", "unprotectedHeader", "sharedUnprotectedHeader", "recipientHeader"]) {
+    assert.ok(all.includes(f), f);
+  }
+});
+
+for (const record of RESULTS.keys()) {
+  for (const kind of TRAP_KINDS) {
+    test(`${record}: with ${kind === "accessor" ? "an accessor" : "a read-only"} member on Object.prototype, each result member is an own data property with the backend's value`, async () => {
+      for (const use of USES[record] ?? []) {
+        const want = own(await use.call(apiReturning(use.op, full(record)).api));
+        for (const m of members(record)) {
+          const { api } = apiReturning(use.op, full(record));
+          const label = `${record}.${m.inner ? "inner." : ""}${m.name} via ${use.op} (${kind})`;
+          const { value: got, writes } = await withTraps(Object.prototype, [m.name], kind, pollutedFor, () => use.call(api));
+          assert.deepEqual(writes, [], `${label}: no setter ran, so no value reached it`);
+          const holder = m.inner ? ownData(got, "inner", label) : got;
+          ownData(holder, m.name, label);
+          assert.deepEqual(own(got), want, `${label}: the result holds exactly the backend's values`);
+        }
+      }
+    });
+  }
+
+  test(`${record}: every member trapped at once, setters then read-only members, changes nothing`, async () => {
+    for (const use of USES[record] ?? []) {
+      const want = own(await use.call(apiReturning(use.op, full(record)).api));
+      const names = members(record).map((m) => m.name);
+      for (const kind of TRAP_KINDS) {
+        const { api } = apiReturning(use.op, full(record));
+        const { value: got, writes } = await withTraps(Object.prototype, names, kind, pollutedFor, () => use.call(api));
+        assert.deepEqual(writes, [], `${record} via ${use.op} (${kind}): no setter ran`);
+        for (const m of members(record)) ownData(m.inner ? ownData(got, "inner", record) : got, m.name, `${record}.${m.name} (${kind})`);
+        assert.deepEqual(own(got), want, `${record} via ${use.op} (${kind})`);
+      }
+    }
+  });
+}
+
+test("results are still ordinary objects: Object.prototype, as callers expect (F09)", async () => {
+  for (const [record, uses] of Object.entries(USES)) {
+    for (const use of uses) {
+      const got = await use.call(apiReturning(use.op, full(record)).api);
+      assert.equal(Object.getPrototypeOf(got), Object.prototype, `${record} via ${use.op}`);
+      if (record === "JwtNestedVerified") assert.equal(Object.getPrototypeOf((got as Record<string, unknown>)["inner"]), Object.prototype);
+    }
+  }
+});
+
+test("descriptor members on Object.prototype (get, set, value, writable, ...) don't change how result members are made", async () => {
+  // Object.defineProperty reads its descriptor through the descriptor's prototype chain
+  // (ECMA-262 ToPropertyDescriptor): an inherited `get` or `set` would make a plain-object
+  // descriptor invalid (a TypeError), and an inherited `writable: false` would weaken it.
+  const planted: Record<string, unknown> = {
+    get: () => "attacker",
+    set: () => undefined,
+    writable: false,
+    enumerable: false,
+    configurable: false,
+    value: "attacker",
+  };
+  for (const [record, uses] of Object.entries(USES)) {
+    for (const use of uses) {
+      const want = own(await use.call(apiReturning(use.op, full(record)).api));
+      const { api } = apiReturning(use.op, full(record));
+      for (const [k, v] of Object.entries(planted)) {
+        // A prototype-less descriptor: the members planted before this one are inherited otherwise.
+        const d = Object.assign(Object.create(null) as PropertyDescriptor, { value: v, writable: true, enumerable: false, configurable: true });
+        Object.defineProperty(Object.prototype, k, d);
+      }
+      let got: unknown;
+      try {
+        got = await use.call(api);
+      } finally {
+        for (const k of Object.keys(planted)) delete (Object.prototype as Record<string, unknown>)[k];
+      }
+      for (const m of members(record)) ownData(m.inner ? ownData(got, "inner", record) : got, m.name, `${record}.${m.name}`);
+      assert.deepEqual(own(got), want, `${record} via ${use.op}`);
+    }
+  }
+});
+
 test("a JwtNestedVerified inner result missing a required field is a TypeError under pollution", async () => {
   for (const f of (RESULTS.get("JwtVerified") ?? []).filter((x) => !x.optional)) {
     const raw = result("JwtNestedVerified", []);
@@ -261,17 +374,19 @@ test("errorCodes(): a hole in the backend's list is a TypeError, never read thro
 test("a backend error's code is mapped only from the backend's own errorCodes() entries", async () => {
   // A hole in errorCodes() must not let Array.prototype[1] add a code to the mapping set.
   const holey = ["InvalidJson", , "InvalidKey"];
+  const unlisted = coded("InvalidSignature", "x");
   const fake = fakeBackend({
     handlers: {
       errorCodes: () => holey,
       jwkParse: () => {
-        throw coded("InvalidSignature", "x");
+        throw unlisted;
       },
     },
   });
   const api = createApi(fake.backend);
+  // An unlisted code is not a PolyjoseError; it is passed through unchanged (0013 F12).
   await assert.rejects(
     polluted(Array.prototype, 1, "InvalidSignature", () => api.jwkParse(KEY)),
-    (e: unknown) => e instanceof TypeError && !(e instanceof PolyjoseError),
+    (e: unknown) => e === unlisted && !(e instanceof PolyjoseError),
   );
 });

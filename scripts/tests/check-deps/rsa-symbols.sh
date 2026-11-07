@@ -25,6 +25,16 @@
 #        whose tree holds a workspace member (here polyjose), which the gate cannot read.
 #  11-13. the same, whose tree holds rsa without polyjose: as a normal, a build- or a
 #        dev-dependency (the tree is read with -e normal,build,dev).
+#  14.   the same, with polyjose or rsa only behind an optional feature (an optional normal
+#        polyjose or rsa, an optional rsa build-dependency), which the default tree does not show
+#        but `--all-features` builds compile (the tree is the union of the default,
+#        --no-default-features and --all-features trees; review S1 of feature 0013).
+#  15.   the feature 0013 security audit's L1 plant, as written: a bin-only tools/evil member with
+#        an optional rsa and polyjose behind a feature, compiling rsa::pkcs1v15::SigningKey (the
+#        text scan fails on it too, rsa-guard.sh).
+#  16.   the audit's I4 plant in its library-less form: a tools/ member whose only polyjose edge is
+#        a dev-dependency enabling its test-RNG feature through a TOML escape (the feature itself
+#        is check-test-vectors-off.sh's; here the dev tree holding polyjose is what stops the gate).
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
 # so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
 # release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
@@ -301,5 +311,102 @@ rsa = { workspace = true }"
     tests_failed=$((tests_failed + 1))
   fi
 done
+
+# 14. The same when polyjose or rsa is reached only through an optional dependency behind a
+#     feature: the default tree does not show it, but `cargo build --workspace --all-features`
+#     compiles it, so the skip reads every feature set (cargo has no optional dev-dependency).
+for variant in "dependencies polyjose" "dependencies rsa" "build-dependencies rsa"; do
+  kind=${variant% *}; dep=${variant#* }
+  case $dep in
+    polyjose) spec='{ path = "../../crates/polyjose", optional = true }' ;;
+    *) spec='{ workspace = true, optional = true }' ;;
+  esac
+  new_case "tool-with-optional-$dep-$kind"
+  append_to tools/rsa-tool/Cargo.toml "[package]
+name = \"rsa-tool\"
+version = \"0.0.0\"
+edition = \"2024\"
+publish = false
+
+[features]
+x = [\"dep:$dep\"]
+
+[$kind]
+$dep = $spec"
+  append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+  replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+  tests_run=$((tests_run + 1))
+  rc=0
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq "^ERROR: workspace member rsa-tool has no library target, and its tree contains ${dep}[;,]" "$scratch/out"; then
+    echo "ok   - library-less member with an optional $dep in [$kind] behind a feature: $gate_name fails closed"
+  else
+    echo "FAIL - library-less member with an optional $dep in [$kind] behind a feature: exit $rc (expected 2) with the no-library-target error"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
+
+# 15. The security audit's L1 plant, as written (feature 0013 review-security.md), except that the
+#     member takes rsa from [workspace.dependencies] (the pin of ADR 0055 §4, default features off)
+#     instead of a version written here, which a bump of that pin would make unresolvable.
+new_case tool-audit-l1
+append_to tools/evil/Cargo.toml '[package]
+name = "polyjose-evil-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rsa = { workspace = true, optional = true }
+polyjose = { path = "../../crates/polyjose", optional = true }
+
+[features]
+signer = ["dep:rsa", "dep:polyjose"]
+
+[[bin]]
+name = "evil"
+path = "src/main.rs"'
+append_to tools/evil/src/main.rs '#[cfg(feature = "signer")]
+pub fn sign(k: &rsa::RsaPrivateKey, m: &[u8]) -> Vec<u8> {
+    use rsa::pkcs1v15::SigningKey;
+    let _ = (SigningKey::<rsa::sha2::Sha256>::new_unprefixed(k.clone()), m); Vec::new()
+}
+fn main() {}'
+replace_in Cargo.toml 'members = [' 'members = ["tools/evil", '
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member polyjose-evil-tool has no library target, and its tree contains polyjose, rsa;' "$scratch/out"; then
+  echo "ok   - audit L1 plant (optional rsa and polyjose in a bin-only tools/ member): $gate_name fails closed"
+else
+  echo "FAIL - audit L1 plant (optional rsa and polyjose in a bin-only tools/ member): exit $rc (expected 2) with the no-library-target error"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+
+# 16. The audit's I4 plant, library-less: polyjose only as a dev-dependency, with its test-RNG
+#     feature spelled through a TOML escape (\u0069 is "i").
+new_case tool-audit-i4
+append_to tools/rsa-tool/Cargo.toml '[package]
+name = "rsa-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+polyjose = { path = "../../crates/polyjose", features = ["\u0069nsecure-test-vectors"] }'
+append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member rsa-tool has no library target, and its tree contains polyjose[;,]' "$scratch/out"; then
+  echo "ok   - audit I4 plant (escaped test-RNG feature on a polyjose dev-dependency, library-less): $gate_name fails closed"
+else
+  echo "FAIL - audit I4 plant (escaped test-RNG feature on a polyjose dev-dependency, library-less): exit $rc (expected 2) with the no-library-target error"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
 
 finish

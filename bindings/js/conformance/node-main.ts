@@ -23,6 +23,7 @@
 
 import { crypto, fs, path, process } from "../node/builtins.js";
 import type { PolyjoseApi } from "../src/api.js";
+import { add } from "./own.js";
 import { runVectors, vectorsDigest, type DigestInput, type Sha256, type VectorFile, type VectorResult } from "./runner.js";
 
 /** `node:crypto`'s SHA-256, the Node path's digest (ADR 0060 §5); never polyjose. */
@@ -80,9 +81,9 @@ function collect(dir: string, base: string, files: string[], links: string[]): v
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     const rel = path.relative(base, full).split(path.sep).join("/");
-    if (entry.isSymbolicLink()) links.push(rel);
+    if (entry.isSymbolicLink()) add(links, rel);
     else if (entry.isDirectory()) collect(full, base, files, links);
-    else if (entry.isFile() && entry.name.endsWith(".json")) files.push(rel);
+    else if (entry.isFile() && entry.name.endsWith(".json")) add(files, rel);
   }
 }
 
@@ -113,13 +114,13 @@ export async function runConformance(api: PolyjoseApi, options: ConformanceOptio
       bytes = fs.readFileSync(path.join(vectorsDir, name));
     } catch (e) {
       // A `fail` with no digest line (ADR 0060 §2).
-      unreadable.push({ id: `${name}#0`, op: "unknown", status: "fail", reason: `${name}: cannot read: ${String(e)}` });
+      add(unreadable, { id: `${name}#0`, op: "unknown", status: "fail", reason: `${name}: cannot read: ${String(e)}` });
       continue;
     }
     // The digest is over these very bytes; the runner gets them decoded exactly as
     // readFileSync(…, "utf8") would decode them.
-    read.push({ id: `${name}#0`, bytes });
-    files.push({ path: name, json: bytes.toString("utf8") });
+    add(read, { id: `${name}#0`, bytes });
+    add(files, { path: name, json: bytes.toString("utf8") });
   }
   if (read.length === 0) throw new Error(`${vectorsDir}: no vector file could be read`);
   const digest = await vectorsDigest(read, nodeSha256);

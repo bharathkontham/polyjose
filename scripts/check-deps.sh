@@ -24,7 +24,9 @@
 #   7. the workspace root Cargo.toml has a [patch] or [replace] section;
 #   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
 #      build-dependency ([build-dependencies] or [target.*.build-dependencies]);
-#   9. a Rust file under crates/polyjose/src or bindings names an RSA private-key or signing type,
+#   9. a Rust file of the workspace (crates/polyjose/src, bindings/, and every other workspace
+#      member's directory and target directories, from cargo metadata) names an RSA private-key or
+#      signing type,
 #      or decrypts with rsa (ADR 0021 §3: RSA is used for public-key operations only), or has a
 #      spelling that could hide such a use from this scan (ADR 0049 §1): `rsa` aliased or
 #      re-exported in a use tree (any `rsa` token in one names the crate), `#[path]` or `include!`,
@@ -37,11 +39,11 @@
 #      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
 #  12. a workspace member depends on the `rsa` package under another name (`package = "rsa"`),
 #      which would hide its use from check 9;
-#  13. the normal tree of a binding package (bindings/<name>, any target, default, no-default or all
-#      features) has a crate that bindings/deps-allowlist/<name>.txt, deps-allowlist.txt and the
-#      core's tree do not cover; that file lists a crate the tree lacks or one deps-allowlist.txt
-#      already allows, or is malformed; or a binding package has no such file (ADR 0030 §1). A file
-#      whose bindings/<name> does not exist yet is skipped with a message;
+#  13. the normal and build tree of a binding package (bindings/<name>, any target, default,
+#      no-default or all features) has a crate that bindings/deps-allowlist/<name>.txt,
+#      deps-allowlist.txt and the core's tree do not cover; that file lists a crate the tree lacks
+#      or one deps-allowlist.txt already allows, or is malformed; or a binding package has no such
+#      file (ADR 0030 §1). A file whose bindings/<name> does not exist yet is skipped with a message;
 #  14. a serde-family crate (serde, serde_core, serde_derive, serde_json, serde-wasm-bindgen, ...) is
 #      in the normal tree of a binding package other than below the crates of the explained
 #      `# serde-only-below:` line of its allowlist (ADR 0030 §1), or that line is not needed.
@@ -578,9 +580,13 @@ for dep in pkgs[0]["dependencies"]:
 
 # 9. RSA is used for public-key operations only (ADR 0021 §3): RUSTSEC-2023-0071 (Marvin) is a
 #    timing leak of rsa's private-key operations, and deny.toml ignores it only while this check
-#    holds. Every *.rs file under crates/polyjose/src and bindings (build output and node_modules
-#    excluded) is scanned as text, comments and strings included, so the check errs toward
-#    failing. Fails, naming the file and line, on:
+#    holds. Every *.rs file under crates/polyjose/src, bindings/, and the directory of every other
+#    workspace member (read from cargo metadata, so build tooling outside bindings/, such as a
+#    tools/<name> member, is scanned too; feature 0013 security audit L1) and of each of its
+#    targets is scanned as text, comments and strings included, so the check errs toward failing.
+#    Exempt, as before: build output and node_modules, and crates/polyjose outside the directories
+#    of its library and binary targets (src/): its tests and benches use RSA private keys as test
+#    oracles, and dev-dependencies never ship (ADR 0016 §5). Fails, naming the file and line, on:
 #    - anywhere: `RsaPrivateKey` (so `RsaPrivateKey::new` too), `BlindedSigningKey`,
 #      `DecryptingKey`, `RandomizedDecryptor`, `Pkcs1v15Sign` and the `Pss` scheme struct
 #      (verification uses the typed `pkcs1v15::VerifyingKey` / `pss::VerifyingKey`), and
@@ -634,8 +640,34 @@ for dep in pkgs[0]["dependencies"]:
 #    spelling of a path can hide codegened code (ADR 0049 §1).
 check_rsa_public_only() {
   python3 -I -c '
-import bisect, os, re, sys
-roots = sys.argv[1:]
+import bisect, json, os, re, sys
+meta_path, ws_root, core_dir = sys.argv[1], os.path.realpath(sys.argv[2]), sys.argv[3]
+with open(meta_path, encoding="utf-8") as f:
+    meta = json.load(f)
+rel = lambda p: os.path.relpath(os.path.realpath(p), ws_root).replace(os.sep, "/")
+# The scan roots: the two of before, and the directory and target directories of every
+# workspace member. The core is scanned only in the directories of its library and binary targets
+# (its tests and benches are exempt).
+roots = {core_dir + "/src", "bindings"}
+members = set(meta["workspace_members"])
+if not members:
+    sys.exit("cargo metadata lists no workspace members")
+seen = 0
+for p in meta["packages"]:
+    if p["id"] not in members:
+        continue
+    seen += 1
+    core = rel(os.path.dirname(p["manifest_path"])) == core_dir
+    if not core:
+        roots.add(rel(os.path.dirname(p["manifest_path"])))
+    for t in p["targets"]:
+        if core and set(t["kind"]) & {"test", "bench", "example"}:
+            continue
+        roots.add(rel(os.path.dirname(t["src_path"])))
+if seen != len(members):
+    sys.exit("cargo metadata is missing %d workspace member(s)" % (len(members) - seen))
+roots = sorted(roots)
+PRUNE = set(roots) | {core_dir}
 word = lambda w: re.compile(r"(?<![A-Za-z0-9_])" + w + r"(?![A-Za-z0-9_])")
 USE_TREE = r"[A-Za-z0-9_:{},*#\s]"
 ANYWHERE = [
@@ -811,11 +843,14 @@ for root in roots:
     if not os.path.isdir(root):
         continue
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        # A directory that is a root of its own is walked once, as that root; the core directory
+        # is scanned only through its roots.
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS
+                             and os.path.normpath(os.path.join(dirpath, d)).replace(os.sep, "/") not in PRUNE)
         for name in sorted(filenames):
             if not name.endswith(".rs"):
                 continue
-            path = os.path.join(dirpath, name)
+            path = os.path.normpath(os.path.join(dirpath, name))
             with open(path, encoding="utf-8", errors="replace") as f:
                 text = f.read()
             lines = text.split("\n")
@@ -858,7 +893,7 @@ for root in roots:
 for root in roots:
     if not os.path.isdir(root):
         sys.exit("%s is not a directory" % root)
-' crates/polyjose/src bindings >"$work/rsa-uses" || die "could not scan the sources for RSA private-key use"
+' "$work/metadata.json" "$root_physical" "$(dirname "$core_manifest")" >"$work/rsa-uses" || die "could not scan the sources for RSA private-key use"
   if [ -s "$work/rsa-uses" ]; then
     fail "RSA private-key or signing use (ADR 0021 §3; deny.toml ignores RUSTSEC-2023-0071 only while this holds):"
     sed 's/^/  - /' "$work/rsa-uses"
@@ -937,11 +972,16 @@ if seen != len(members):
 
 # 13. The binding crates' trees (ADR 0030 §1, ADR 0016 §4-§5). The frameworks (napi-rs,
 #     wasm-bindgen, UniFFI) are not counted against the core, but each binding's tree is pinned as
-#     exactly as the core's: bindings/deps-allowlist/<name>.txt lists what the normal tree of the
-#     package in bindings/<name> adds to the core's,
-#       cargo tree -p <package> -e normal --target all --prefix none
+#     exactly as the core's: bindings/deps-allowlist/<name>.txt lists what the normal and build tree
+#     of the package in bindings/<name> adds to the core's,
+#       cargo tree -p <package> -e normal,build --target all --prefix none
 #     read with default features, with --no-default-features and with --all-features, so neither a
-#     target- nor a feature-specific dependency can hide. Fails when:
+#     target- nor a feature-specific dependency can hide. The build edges are included for the
+#     reason they are in the core's tree (check 1): a build script and its build-dependencies run on
+#     every developer, CI and release machine that builds the binding, and can change what is
+#     compiled, so an unvetted build crate (one behind a new build.rs in the framework-free surface,
+#     say) is audit surface like a runtime one (security audit L2 of feature 0013). Dev-dependencies
+#     never ship and are not checked, as for the core (ADR 0016 §5). Fails when:
 #     - that tree has a crate the file does not list, other than a workspace package, a crate of
 #       deps-allowlist.txt or a crate of the core's own tree (check 1 governs those, so a crate the
 #       core gains is reported once, by check 1);
@@ -1035,14 +1075,15 @@ parse_binding_allowlist() {
   sort -u "$work/bal/$name.below.unsorted" >"$work/bal/$name.below"
 }
 
-# binding_tree <package> <out>: the sorted normalized names in the package's normal tree with
-# default features, --no-default-features and --all-features, every target, the package included.
+# binding_tree <package> <out>: the sorted normalized names in the package's normal and build tree
+# with default features, --no-default-features and --all-features, every target, the package
+# included.
 binding_tree() {
   local flags
   : >"$work/bt.names"
   for flags in --features= --no-default-features --all-features; do
-    cargo tree --locked -p "$1" -e normal --target all --prefix none "$flags" </dev/null >"$work/bt.raw" 2>"$work/bt.err" \
-      || { cat "$work/bt.err" >&2; die "'cargo tree --locked -p $1 -e normal --target all --prefix none $flags' failed"; }
+    cargo tree --locked -p "$1" -e normal,build --target all --prefix none "$flags" </dev/null >"$work/bt.raw" 2>"$work/bt.err" \
+      || { cat "$work/bt.err" >&2; die "'cargo tree --locked -p $1 -e normal,build --target all --prefix none $flags' failed"; }
     awk -v want="$1" '
       function err(msg) { print msg | "cat 1>&2"; bad = 1 }
       NR == 1 { if ($1 != want) err("unexpected root line: " $0); print $1; next }
@@ -1087,7 +1128,7 @@ check_binding_allowlists() {
       fail "the tree of $pkg (bindings/$name) contains crates that $file does not allow (ADR 0030 §1, ADR 0016 §4):"
       sed 's/^/  - /' "$work/bal/$name.offenders"
       echo "  Remove the dependency, or add it to $file with an ADR. To see what pulls one in:"
-      echo "    cargo tree -p $pkg -e normal --all-features --target all -i <crate>"
+      echo "    cargo tree -p $pkg -e normal,build --all-features --target all -i <crate>"
     fi
     comm -13 "$work/bal/$name.tree" "$work/bal/$name.list" >"$work/bal/$name.stale"
     if [ -s "$work/bal/$name.stale" ]; then

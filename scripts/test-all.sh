@@ -40,7 +40,13 @@ has_wasm_suite() {
 }
 run() { local name=$1; shift; echo "==> $name"; if "$@"; then record "$name" PASS; else record "$name" FAIL; fi; }
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/test-all.XXXXXX") || { echo "mktemp failed"; exit 2; }
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed (feature 0013 F10, pipeline rule 9): macOS /bin/bash 3.2 runs an EXIT trap with
+# $? = 0 after a syntax error when errexit is on (bash 5 keeps 2), so a guard broken by an edit
+# could exit 0. `completed` is set only by the last line; the trap keeps a non-zero status and
+# turns 0 into 2 when the script stopped before it. Every scripts/*.sh with an EXIT trap does the
+# same (scripts/tests/syntax/guards.sh).
+completed=""
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-all.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 # Each binding feature owns its platform's suite as one script (feature 0013 T04, ADR 0030 §1), so
 # the four can change their test commands without editing this file. platform_script prints it.
 platform_script() {
@@ -63,10 +69,12 @@ platform_script() {
 # rust-core.json counts (a rust-core-<features>.json is a Rust build with features, which
 # scripts/conformance-parity.sh ignores). A SKIPPED or FAILed platform is never required to have a
 # file. Every platform has a line naming at least one runner; a missing or empty line FAILs parity.
+# wasm-pkg-workerd is required (feature 0013 F10): workerd comes from the pinned miniflare
+# dev-dependency, so it runs wherever npm does (0006 lead); only the browser runners are optional.
 results_runners='
 rust: rust-core rust-surface
 node: node
-wasm: wasm-node wasm-chrome? wasm-pkg-node wasm-pkg-chrome? wasm-pkg-workerd?
+wasm: wasm-node wasm-chrome? wasm-pkg-node wasm-pkg-chrome? wasm-pkg-workerd
 android: jvm android-emulator?
 swift: swift-macos swift-ios-sim?
 '
@@ -113,14 +121,48 @@ dispatch() {
 # executable FAILs (it would otherwise drop out unnoticed), and so does finding none at all.
 # The gate scripts guard what CI relies on, e.g. check-deps.sh's ADR 0021 guard, which deny.toml's
 # RUSTSEC-2023-0071 ignore depends on, so their own tests gate too.
+# Each runs with no stdin; its exit status decides PASS or FAIL. A skipped negative test is never
+# PASS (pipeline rule 9; feature 0013 F10): with exit 0 and `SKIPPED (host:<tool>)` as its last
+# non-blank line, it is reported SKIPPED with that reason if <tool> is in negative_skip_tools below,
+# and FAILs otherwise; a last line starting with SKIPPED in any other form (another reason, no
+# reason, leading blanks) FAILs too. A SKIPPED line before the last line is ordinary output.
+#
+# negative_skip_tools: the host tools a negative test may lack, each owner-accepted because:
+#   actionlint  lints the CI workflows, which are disabled (ADR 0044); feature 0006 T05's accepted
+#               criterion runs it "SKIPPED if actionlint is missing, never passing", and the
+#               workflow check's text rules still run without it (0006 F04).
+# Adding a tool needs the owner's acceptance, recorded here with the reason.
+negative_skip_tools="actionlint"
 run_negative_tests() {
-  local t name found=0
+  local t name found=0 out rc last tool
   for t in scripts/tests/*/*.sh; do
     [ -e "$t" ] || continue # bash 3.2 has no nullglob by default: an unmatched glob stays literal
     case ${t##*/} in lib.sh) continue ;; esac
     found=1; name="negative: ${t#scripts/tests/}"
-    if [ -x "$t" ]; then run "$name" "$t"
-    else echo "$t is not executable"; record "$name" FAIL; fi
+    echo "==> $name"
+    if [ ! -x "$t" ]; then echo "$t is not executable"; record "$name" FAIL; continue; fi
+    out="$scratch/negative-$(printf '%s' "${t#scripts/tests/}" | tr '/ ' '__').out"
+    "$t" </dev/null 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+    if [ "$rc" -ne 0 ]; then echo "$t exited $rc"; record "$name" FAIL; continue; fi
+    last=$(awk '{ sub(/\r$/, "") } NF { line = $0 } END { sub(/[ \t]+$/, "", line); print line }' "$out")
+    case $last in
+      "SKIPPED (host:"*")")
+        tool=${last#"SKIPPED (host:"}; tool=${tool%")"}
+        case $tool in
+          "" | -* | *[!a-z0-9-]*)
+            echo "$t: last line \"$last\" is not SKIPPED (host:<tool>)"; record "$name" FAIL ;;
+          *)
+            case " $negative_skip_tools " in
+              *" $tool "*) record "$name" "$last" ;;
+              *) echo "$t: skipped for host tool $tool, which is not in negative_skip_tools (scripts/test-all.sh)"
+                record "$name" FAIL ;;
+            esac ;;
+        esac ;;
+      [[:space:]]*SKIPPED* | SKIPPED*)
+        echo "$t: last line \"$last\" is not SKIPPED (host:<tool>) for a tool in negative_skip_tools"
+        record "$name" FAIL ;;
+      *) record "$name" PASS ;;
+    esac
   done
   if [ "$found" -eq 0 ]; then echo "no negative tests found (scripts/tests/*/*.sh)"; record negative-tests FAIL; fi
 }
@@ -174,10 +216,36 @@ run_ffi_generated_names() {
   if [ -n "$skipped" ]; then record "$name" "$skipped"; else record "$name" PASS; fi
 }
 
+# The syntax step (feature 0013 F10, pipeline rule 9), first in every run whatever the platforms:
+# `bash -n`, under this script's bash, over every shell script the gates and suites run (the globs
+# below, when they match; scripts/tests/ at any depth). A file that does not parse FAILs the step,
+# which names it. It backs the completion sentinel of each script's EXIT trap (above): a syntax
+# error fails the gate here even where the broken script itself would exit 0 (macOS /bin/bash 3.2
+# runs an EXIT trap with $? = 0 after one). Under -n, bash 3.2 does not parse inside $(...),
+# which bash 5 and the shellcheck run of each change do.
+syntax_globs='scripts/*.sh scripts/check-binding-api.d/*.sh bindings/*/test.sh bindings/*/tests/*.sh bindings/*/scripts/*.sh platforms/*/test.sh'
+run_syntax() {
+  local g f n=0 bad=0 list="$scratch/syntax.list"
+  echo "==> syntax"
+  : >"$list"
+  # Unquoted on purpose: each pattern is expanded; bash 3.2 has no nullglob, so an unmatched one
+  # stays literal and is dropped by the -f test.
+  # shellcheck disable=SC2086
+  for g in $syntax_globs; do for f in $g; do [ -f "$f" ] && printf '%s\0' "$f" >>"$list"; done; done
+  if [ -d scripts/tests ]; then find scripts/tests -name '*.sh' -type f -print0 >>"$list" || bad=1; fi
+  while IFS= read -r -d '' f; do
+    n=$((n + 1))
+    "${BASH:-bash}" -n "$f" </dev/null 2>&1 || { echo "syntax: $f does not parse"; bad=1; }
+  done <"$list"
+  if [ "$bad" -eq 0 ]; then echo "syntax: $n scripts parse"; record syntax PASS; else record syntax FAIL; fi
+}
+
 # Conformance results files (ADR 0034 §2) left by an earlier run must never count in the parity
 # check below: each run starts with an empty target/conformance/, which this run's suites refill.
 results_dir=target/conformance
 rm -rf "$results_dir" || { echo "could not clear $results_dir"; exit 2; }
+
+run_syntax
 
 for p in "${platforms[@]}"; do
   case $p in
@@ -392,4 +460,4 @@ summary="$summary$missing_results$waived_results"
 $skipped_runners"
 
 printf "\nSummary:%b\n" "$summary"
-exit $status
+completed=1; exit "$status"

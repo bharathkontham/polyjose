@@ -44,6 +44,7 @@ import {
   optU32,
   outBytes,
   outIndex,
+  outList,
   outObject,
   outStr,
   put,
@@ -419,8 +420,30 @@ const jwk = (v: unknown, at: string): JwkObject => outObject(v, at) as JwkObject
 
 // --- errors -------------------------------------------------------------------------------
 
-function field(e: unknown, name: string): unknown {
-  return (typeof e === "object" && e !== null) || typeof e === "function" ? (e as Record<string, unknown>)[name] : undefined;
+/**
+ * `e`'s own data member `name`, or `undefined` (0013 F09, F12): never read through a prototype,
+ * so a polluted `Object.prototype.code` or `Error.prototype.message` can't stand in for one the
+ * backend didn't set, and never through a getter, so reading runs no backend or caller code.
+ * napi-rs (`napi_create_error`) and wasm-bindgen (`Reflect::set`) set `code` and `message` as
+ * own data properties.
+ */
+function ownData(e: unknown, name: string): unknown {
+  if ((typeof e !== "object" || e === null) && typeof e !== "function") return undefined;
+  try {
+    const d = Object.getOwnPropertyDescriptor(e, name);
+    return d !== undefined && "value" in d ? d.value : undefined;
+  } catch {
+    return undefined; // a Proxy whose trap throws has no readable member
+  }
+}
+
+/** `e instanceof C`, false if a hostile `Proxy` or `Symbol.hasInstance` throws. */
+function isInstance(e: unknown, C: abstract new (...args: never[]) => unknown): boolean {
+  try {
+    return e instanceof C;
+  } catch {
+    return false;
+  }
 }
 
 /** One of the generated {@link ERROR_CODES}, the core's `Error::CODES` this facade was built from. */
@@ -429,23 +452,61 @@ function isErrorCode(code: string): code is ErrorCode {
 }
 
 /**
- * A backend failure as the facade reports it (ADR 0030 §5, ADR 0031 §1): a `code` that is both
- * in the backend's `errorCodes()` and in the generated {@link ERROR_CODES} gives a
- * `PolyjoseError` with the backend's message, so `PolyjoseError.code` is always an
- * {@link ErrorCode} even if the backend and the facade versions drift (0013 F04, review N2).
- * Anything else (a code only one side knows, napi's own `InvalidArg`/`StringExpected`, a
- * `TypeError` of the wasm reader) is a host `TypeError` with the original message. `codes`
- * throws if the backend can't list its codes; that error is reported instead.
+ * napi-rs's argument-conversion `Status` names: the `code` napi-rs puts on the JS error when a
+ * caller's value can't be converted to the Rust parameter type (napi 3.16, `Status` and its
+ * `AsRef<str>`; Node-API `napi_status`). Other statuses (`GenericFailure`, `PendingException`,
+ * `Cancelled`, ...) don't say the caller misused the API, so they pass through unchanged.
  */
-function mapError(e: unknown, codes: () => ReadonlySet<string>): Error {
-  const code = field(e, "code");
-  const message = field(e, "message");
-  const text = typeof message === "string" ? message : describe(e);
-  if (typeof code === "string" && codes().has(code) && isErrorCode(code)) return new PolyjoseError(code, text);
-  return new TypeError(text);
+const NAPI_ARGUMENT_STATUSES: ReadonlySet<string> = new Set([
+  "InvalidArg",
+  "ObjectExpected",
+  "StringExpected",
+  "NameExpected",
+  "FunctionExpected",
+  "NumberExpected",
+  "BooleanExpected",
+  "ArrayExpected",
+  "BigintExpected",
+  "DateExpected",
+  "ArrayBufferExpected",
+  "DetachableArraybufferExpected",
+]);
+
+/** `e`'s own string `message`, or `fallback`: never a prototype's (0013 F12). */
+function ownMessage(e: unknown, fallback: string): string {
+  const m = ownData(e, "message");
+  return typeof m === "string" ? m : fallback;
+}
+
+/**
+ * A backend failure as the facade reports it (ADR 0030 §5, ADR 0031 §1, BACKEND.md "Errors";
+ * 0013 F04, F12). `code` and `message` are read as own data members only.
+ *
+ * 1. An own `code` that is in the generated {@link ERROR_CODES} and in the backend's
+ *    `errorCodes()` gives a `PolyjoseError` with the backend's own message, so
+ *    `PolyjoseError.code` is always an {@link ErrorCode} even if the backend and the facade
+ *    versions drift (F04, review N2). `codes` throws if the backend can't list its codes; that
+ *    error is reported instead. It is asked only for a code in `ERROR_CODES`, the only codes
+ *    that could become a `PolyjoseError`.
+ * 2. A host argument error is a `TypeError` with the original message: a `TypeError` (a wasm
+ *    reader's), returned as is, or an `Error` whose own `code` is one of
+ *    {@link NAPI_ARGUMENT_STATUSES}, re-made as a `TypeError`.
+ * 3. Anything else is returned unchanged, the same value: a `WebAssembly.RuntimeError` trap, a
+ *    backend's own "unusable, reload it" refusal, another napi status, a code only one side
+ *    knows. It isn't the caller's misuse, so it isn't reported as a `TypeError` (F12).
+ */
+function mapError(e: unknown, codes: () => ReadonlySet<string>): unknown {
+  const code = ownData(e, "code");
+  if (typeof code === "string" && isErrorCode(code) && codes().has(code)) return new PolyjoseError(code, ownMessage(e, code));
+  if (isInstance(e, TypeError)) return e;
+  if (typeof code === "string" && NAPI_ARGUMENT_STATUSES.has(code) && isInstance(e, Error)) {
+    return new TypeError(ownMessage(e, `polyjose: the backend could not convert an argument (${code})`));
+  }
+  return e;
 }
 
 function describe(e: unknown): string {
+  if ((typeof e === "object" && e !== null) || typeof e === "function") return "the backend threw a value with no message";
   try {
     return String(e);
   } catch {
@@ -493,8 +554,7 @@ export function createApi(backend: Backend): PolyjoseApi {
     try {
       listed = backend.errorCodes();
     } catch (e) {
-      const why = field(e, "message");
-      throw new Error(`polyjose: the backend's errorCodes() failed (${typeof why === "string" ? why : describe(e)}), so a backend error can't be mapped`, {
+      throw new Error(`polyjose: the backend's errorCodes() failed (${ownMessage(e, describe(e))}), so a backend error can't be mapped`, {
         cause: e,
       });
     }
@@ -545,14 +605,8 @@ export function createApi(backend: Backend): PolyjoseApi {
   const b = backend;
   return {
     version: async () => outStr(await invoke(() => b.version()), "version"),
-    errorCodes: async () => {
-      const raw: unknown = await invoke(() => b.errorCodes());
-      if (!Array.isArray(raw)) throw new TypeError("polyjose: the backend returned errorCodes that is not an array");
-      // Own elements only (0013 F09): a hole is reported, never read through `Array.prototype`.
-      const out: string[] = [];
-      for (let i = 0; i < raw.length; i++) out.push(outStr(Object.hasOwn(raw, i) ? raw[i] : undefined, `errorCodes[${i}]`));
-      return out;
-    },
+    // Own elements only (0013 F09): a hole is reported, never read through `Array.prototype`.
+    errorCodes: async () => outList(await invoke(() => b.errorCodes()), "errorCodes", outStr),
 
     base64urlEncode: (input) =>
       run(
