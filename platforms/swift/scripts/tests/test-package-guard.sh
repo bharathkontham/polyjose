@@ -120,8 +120,10 @@ run_package --allow-dev --xcframework "$xcf" --out-dir "$dev_out"
 check "--allow-dev packages a development build" "[ $rc -eq 0 ]"
 [ "$rc" -eq 0 ] || show_log
 check "it warns that the zip must not be released" "log_has 'must not be released'"
+# Listed into a file first: under pipefail, `unzip | grep -q` fails when grep exits before unzip.
+unzip -Z1 "$dev_out/PolyjoseFFI.xcframework.zip" >"$scratch/dev-entries.txt" 2>/dev/null || true
 check "the zip holds the watchos-arm64 library" \
-  "unzip -Z1 '$dev_out/PolyjoseFFI.xcframework.zip' 2>/dev/null | grep -qxF 'PolyjoseFFI.xcframework/watchos-arm64/libpolyjose_ffi.a'"
+  "grep -qxF 'PolyjoseFFI.xcframework/watchos-arm64/libpolyjose_ffi.a' '$scratch/dev-entries.txt'"
 check "the output directory holds exactly the zip, its .sha256 and the stanza" \
   "[ \"\$(ls -A '$dev_out' | tr '\n' ' ')\" = 'PolyjoseFFI.xcframework.zip PolyjoseFFI.xcframework.zip.sha256 binaryTarget.swift.txt ' ]"
 

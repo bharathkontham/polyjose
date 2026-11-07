@@ -62,7 +62,7 @@ check "unzip lists LICENSE" "has_entry PolyjoseFFI.xcframework/LICENSE"
 check "unzip lists Info.plist and polyjose-build.txt" \
   "has_entry PolyjoseFFI.xcframework/Info.plist && has_entry PolyjoseFFI.xcframework/polyjose-build.txt"
 check "one top-level entry, PolyjoseFFI.xcframework/ (what SwiftPM looks for in the asset)" \
-  "! grep -v '^PolyjoseFFI\\.xcframework/' '$entries' | grep -q ."
+  "[ -z \"\$(grep -v '^PolyjoseFFI\\.xcframework/' '$entries')\" ]"
 check "no AppleDouble ._* entries" "! grep -Eq '(^|/)\\._' '$entries'"
 check "no __MACOSX entries" "! grep -q '__MACOSX' '$entries'"
 size=$(stat -f %z "$zip")
