@@ -1,0 +1,112 @@
+# Crates allowed in the normal dependency tree of polyjose-ffi (bindings/ffi, the UniFFI adapter
+# shared by Kotlin and Swift) beyond the core's: what
+#   cargo tree -p polyjose-ffi -e normal --target all --prefix none
+# lists (also with --no-default-features and --all-features), other than workspace packages, crates
+# of deps-allowlist.txt and crates of the core's own tree, which check 1 governs. scripts/check-deps.sh
+# (check 13) enforces this file in both directions, like deps-allowlist.txt (ADR 0016 §4): a crate
+# in that tree that is not listed fails, and so does an entry the tree no longer contains, or one
+# that deps-allowlist.txt already allows. Adding an entry needs an ADR (ADR 0016 §4, ADR 0030 §1).
+#
+# Format: one crate name per line; `#` starts a comment. No serde-family crate may appear in the
+# tree (check 14) unless a `# serde-only-below: <crate>...` line, followed by comment lines that
+# explain it, names the crates every path to it must go through.
+#
+# Measured 2026-11-07 with uniffi 0.32.2 and its `cli` feature, which bindings/ffi/Cargo.toml still
+# enables for the uniffi-bindgen binary in the same package. Feature 0013 T10 moves that binary to
+# its own package (ADR 0030 §1, ADR 0032, ADR 0033) and then re-measures this file: the bindgen
+# group below goes away.
+
+# serde-only-below: uniffi_macros uniffi_bindgen cargo_metadata camino uniffi_pipeline
+# Every path from polyjose-ffi to serde, serde_core, serde_derive, serde_json or serde_spanned goes
+# through one of these crates, and none of them puts serde into the code the library calls:
+# - uniffi_macros is the proc-macro behind #[uniffi::export]; it runs inside the compiler (build
+#   time only) and parses uniffi.toml with toml and serde, which are non-optional dependencies of
+#   uniffi_macros 0.32.2 and so stay in this tree after T10;
+# - uniffi_bindgen, uniffi_pipeline, camino and cargo_metadata are the bindgen CLI's (uniffi's `cli`
+#   feature, and cargo_metadata also uniffi's default `cargo-metadata` feature). Only the
+#   uniffi-bindgen binary, run at build time to generate the Kotlin and Swift sources, uses them;
+#   T10 removes them from the library's tree.
+
+# UniFFI runtime, the Kotlin/Swift binding's framework (ADR 0030 §1, ADR 0032, ADR 0033): uniffi
+# and uniffi_core, with anyhow, bytes, once_cell and static_assertions, which uniffi_core uses.
+uniffi
+uniffi_core
+anyhow
+bytes
+once_cell
+static_assertions
+
+# UniFFI proc-macros (ADR 0030 §1; compile time only): uniffi_macros, uniffi_internal_macros and
+# uniffi_meta, which read uniffi.toml (toml with its parser, writer, datetime and serde_spanned,
+# winnow, serde with serde_core and serde_derive, camino and fs-err for the path) and keep metadata
+# in an indexmap (with equivalent, hashbrown, siphasher and memchr); syn, quote and proc-macro2 are
+# already in deps-allowlist.txt.
+uniffi_macros
+uniffi_internal_macros
+uniffi_meta
+toml
+toml_datetime
+toml_parser
+toml_writer
+serde_spanned
+winnow
+serde
+serde_core
+serde_derive
+camino
+fs-err
+indexmap
+equivalent
+hashbrown
+siphasher
+memchr
+
+# UniFFI bindgen CLI (ADR 0030 §1, ADR 0032; uniffi's `cli` and `cargo-metadata` features, removed
+# from the library by T10): uniffi_bindgen with uniffi_pipeline and uniffi_udl (weedle2, nom,
+# minimal-lexical), askama templates (askama_derive, askama_macros, askama_parser, basic-toml), clap
+# (clap_builder, clap_derive, clap_lex, anstyle, strsim, heck), cargo_metadata (cargo-platform,
+# serde_json with itoa and zmij), goblin (scroll, scroll_derive, plain) for reading the cdylib's
+# metadata, textwrap (smawk), glob, log, tempfile (fastrand, rustix, errno, linux-raw-sys,
+# bitflags, windows-sys, windows-link), thiserror (thiserror-impl) and rustc-hash.
+uniffi_bindgen
+uniffi_pipeline
+uniffi_udl
+weedle2
+nom
+minimal-lexical
+askama
+askama_derive
+askama_macros
+askama_parser
+basic-toml
+clap
+clap_builder
+clap_derive
+clap_lex
+anstyle
+strsim
+heck
+cargo_metadata
+cargo-platform
+serde_json
+itoa
+zmij
+goblin
+scroll
+scroll_derive
+plain
+textwrap
+smawk
+glob
+log
+tempfile
+fastrand
+rustix
+errno
+linux-raw-sys
+bitflags
+windows-sys
+windows-link
+thiserror
+thiserror-impl
+rustc-hash
