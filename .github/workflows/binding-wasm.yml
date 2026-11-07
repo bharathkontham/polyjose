@@ -1,0 +1,235 @@
+# The @polyjose/wasm package build and its tests (feature 0006 T05; ADR 0031 §3, ADR 0034, ADR 0037).
+#
+# It never runs on a PR, on a push or on a schedule (ADR 0044; owner rule 2026-11-07): merges gate
+# on local verification only, and the Actions platform matrix runs once, at the 0.1.0 release
+# candidate, when the release workflow (feature 0012 T03) calls this file through workflow_call.
+# workflow_dispatch is there so the owner can start it by hand; agents never dispatch it (pipeline
+# rule 8). Neither trigger takes inputs or credentials, and nothing here publishes: publishing is
+# Gate 3 (ADR 0011, ADR 0037 §2). bindings/wasm/scripts/check-workflow.sh enforces all of this
+# locally, together with actionlint.
+#
+# One job, the same scripts as a local run (`scripts/test-all.sh wasm`):
+#   1. the rust-core conformance reference (cargo test -p polyjose --test conformance), written to
+#      target/conformance/rust-core.json first, since bindings/wasm/test.sh never touches it;
+#   2. bindings/wasm/test.sh: the vector index, wasm-pack test in Node and in headless Chrome,
+#      scripts/build-package.sh (the tarball, the ADR 0059 size override, the 1 MiB budget) and
+#      test-pkg/run.sh (the installed package in Node, headless Chrome and workerd);
+#   3. scripts/conformance-parity.sh over the five wasm results files against rust-core.json;
+#   4. the tarball (artifact npm-wasm) and the results files (artifact conformance-wasm).
+#
+# Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
+# that SHA was resolved from. Bump both together. The tools are pinned too: Rust by
+# rust-toolchain.toml, wasm-pack, Node, and Chrome for Testing with the chromedriver of the same
+# release (a driver of another major version refuses Chrome; 0006 research §7).
+name: binding-wasm
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+# Least privilege: the job only reads the repository. When called, the caller's permissions cap
+# these further.
+permissions:
+  contents: read
+
+# No concurrency group: in a called workflow, github.workflow is the caller's name, so a group here
+# would collide with the caller's own group.
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # wasm-pack 0.15.1 (ADR 0031 §3), and Node 24, the current LTS line (engines.node >= 22.12).
+  WASM_PACK_VERSION: 0.15.1
+  NODE_VERSION: 24.21.0
+  # Chrome for Testing, Chrome and chromedriver from this one release, linux64. The Chrome for
+  # Testing JSON endpoints publish no checksums, so the archives' SHA-256 are pinned here
+  # (computed 2026-11-07 from storage.googleapis.com/chrome-for-testing-public/<version>/linux64/).
+  # Bump the version and both hashes together.
+  CFT_VERSION: 156.0.8078.80
+  CFT_CHROME_SHA256: b711c720f774be355197f32edf37e0651418ba036d92446ee2da19ac017540a7
+  CFT_CHROMEDRIVER_SHA256: cae58bbd262ba5c8a0ce2540f44254b6e789efc4fe9b18bbb4a00487a9f5859e
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  wasm:
+    name: wasm
+    # A fixed image, not ubuntu-latest: the Chrome sandbox step below depends on its AppArmor setup.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Runs before anything that invokes cargo: a cargo config file in the repository could
+      # replace sources, add rustflags or wrap rustc for every later step (as in ci.yml).
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      # This file's own policy (triggers, permissions, no publish step, no credentials, pins) and
+      # the negative cases of that check. actionlint is not installed here, so both print
+      # SKIPPED (actionlint missing) for that part; it runs locally.
+      - name: workflow policy
+        run: |
+          bindings/wasm/scripts/check-workflow.sh
+          bindings/wasm/scripts/check-workflow.sh --self-test
+
+      # rustup reads rust-toolchain.toml: the pinned channel and its target list, which includes
+      # wasm32-unknown-unknown. The check fails the job if that target ever leaves the file.
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+          cargo --version
+          rustup target list --installed | grep -Fx wasm32-unknown-unknown
+
+      # The prebuilt release binary, checked against the hash in install-action's manifest; no
+      # fallback to building or fetching it another way.
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: wasm-pack@${{ env.WASM_PACK_VERSION }}
+          fallback: none
+
+      - name: wasm-pack version
+        run: |
+          wasm-pack --version
+          [ "$(wasm-pack --version)" = "wasm-pack $WASM_PACK_VERSION" ]
+
+      # No dependency cache, here or for cargo: this job builds a release-candidate artifact from a
+      # clean state.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Node version
+        run: |
+          node --version
+          [ "$(node --version)" = "v$NODE_VERSION" ]
+
+      # scripts/build-package.sh prints the .wasm's brotli size and needs the brotli command.
+      - name: brotli
+        run: |
+          if ! command -v brotli >/dev/null 2>&1; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q --no-install-recommends brotli
+          fi
+          brotli --version
+
+      # Chrome for Testing and its chromedriver, both from CFT_VERSION, checked against the pinned
+      # hashes. They reach the test scripts through the overrides those already read:
+      #   - CHROME: the Chrome bindings/wasm/scripts/chromedriver.sh reads the version of;
+      #   - target/chromedriver-<version>/chromedriver: chromedriver.sh's driver cache, so it uses
+      #     this driver and downloads nothing;
+      #   - WASM_BINDGEN_TEST_WEBDRIVER_JSON: the capabilities file of wasm-bindgen-test-runner
+      #     (wasm-bindgen 0.2.130), whose goog:chromeOptions.binary makes chromedriver start this
+      #     Chrome rather than the runner image's preinstalled one (another version);
+      #   - POLYJOSE_CHROME: the Chrome bindings/wasm/test-pkg/src/chrome.ts runs.
+      - name: Chrome for Testing ${{ env.CFT_VERSION }}
+        run: |
+          cft=$RUNNER_TEMP/chrome-for-testing
+          base=https://storage.googleapis.com/chrome-for-testing-public/$CFT_VERSION/linux64
+          mkdir -p "$cft"
+          for archive in chrome-linux64 chromedriver-linux64; do
+            curl -fsS --proto '=https' --tlsv1.2 --retry 3 --max-time 600 -o "$cft/$archive.zip" "$base/$archive.zip"
+          done
+          printf '%s  %s\n' "$CFT_CHROME_SHA256" "$cft/chrome-linux64.zip" \
+            "$CFT_CHROMEDRIVER_SHA256" "$cft/chromedriver-linux64.zip" | sha256sum -c -
+          unzip -q "$cft/chrome-linux64.zip" -d "$cft"
+          unzip -q "$cft/chromedriver-linux64.zip" -d "$cft"
+          chrome=$cft/chrome-linux64/chrome
+          driver=$cft/chromedriver-linux64/chromedriver
+          "$chrome" --version
+          "$driver" --version
+          "$chrome" --version | grep -F " $CFT_VERSION"
+          "$driver" --version | grep -F "ChromeDriver $CFT_VERSION "
+          mkdir -p "target/chromedriver-$CFT_VERSION"
+          cp "$driver" "target/chromedriver-$CFT_VERSION/chromedriver"
+          printf '{"goog:chromeOptions":{"binary":"%s"}}\n' "$chrome" >"$RUNNER_TEMP/webdriver.json"
+          {
+            echo "CHROME=$chrome"
+            echo "POLYJOSE_CHROME=$chrome"
+            echo "WASM_BINDGEN_TEST_WEBDRIVER_JSON=$RUNNER_TEMP/webdriver.json"
+          } >>"$GITHUB_ENV"
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, which Chrome's
+      # sandbox needs; only binaries with an AppArmor profile granting `userns` may create them
+      # (the Chrome package installs one for /opt/google/chrome). This adds that profile for the
+      # Chrome for Testing binary alone, so it runs sandboxed: test-pkg's Chrome run passes no
+      # --no-sandbox. Nothing is changed when the restriction is off.
+      - name: Chrome sandbox (AppArmor profile)
+        run: |
+          restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ "$(cat "$restrict" 2>/dev/null || echo 0)" = 1 ]; then
+            sudo tee /etc/apparmor.d/polyjose-chrome-for-testing >/dev/null <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile polyjose-chrome-for-testing $CHROME flags=(unconfined) {
+            userns,
+          }
+          EOF
+            sudo apparmor_parser -r /etc/apparmor.d/polyjose-chrome-for-testing
+            echo "AppArmor profile loaded for $CHROME"
+          else
+            echo "unprivileged user namespaces are not restricted; no profile needed"
+          fi
+
+      # The reference run, before test.sh: scripts/conformance-parity.sh compares every wasm
+      # results file with this one (ADR 0034 §4, §5). Default features only, as ADR 0034 §4 needs.
+      - name: rust-core conformance reference
+        id: reference
+        run: |
+          cargo test -p polyjose --test conformance --locked
+          test -s target/conformance/rust-core.json
+
+      # SKIPPED is a pass locally when a tool is missing, but every tool is installed here, so only
+      # a full PASS line counts.
+      - name: bindings/wasm/test.sh
+        id: wasm
+        run: |
+          bindings/wasm/test.sh 2>&1 | tee "$RUNNER_TEMP/wasm-test.log"
+          last=$(tail -n 1 "$RUNNER_TEMP/wasm-test.log")
+          case $last in
+            "wasm: PASS (wasm-node, wasm-chrome, wasm-pkg-node, wasm-pkg-chrome, wasm-pkg-workerd)") ;;
+            *) echo "::error::bindings/wasm/test.sh did not run every wasm runner: $last"; exit 1 ;;
+          esac
+
+      # test.sh builds with cargo commands that do not pass --locked; a changed lock file here
+      # would mean the build resolved other dependencies than the committed ones.
+      - name: Cargo.lock unchanged
+        if: ${{ !cancelled() && steps.wasm.outcome != 'skipped' }}
+        run: git diff --exit-code -- Cargo.lock
+
+      # Runs even when test.sh failed, so the parity report shows what differed. Each of the five
+      # wasm runners must have written its file; the other bindings' runners are reported as
+      # SKIPPED by the parity check (no results in this job).
+      - name: conformance parity
+        if: ${{ !cancelled() && steps.reference.outcome == 'success' }}
+        run: |
+          for runner in wasm-node wasm-chrome wasm-pkg-node wasm-pkg-chrome wasm-pkg-workerd; do
+            test -s "target/conformance/$runner.json" || { echo "::error::no target/conformance/$runner.json"; exit 1; }
+          done
+          scripts/conformance-parity.sh
+
+      # The package tarball, only from a fully passing run (ADR 0037 §1 artifact name npm-wasm).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ success() }}
+        with:
+          name: npm-wasm
+          path: dist/npm/*.tgz
+          if-no-files-found: error
+
+      # The results files, also from a failed run, for diagnosis. rust-core.json is included so the
+      # parity check can be repeated from the artifact alone.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: conformance-wasm
+          path: |
+            target/conformance/wasm-*.json
+            target/conformance/rust-core.json
+          if-no-files-found: warn
