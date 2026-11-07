@@ -48,8 +48,12 @@
 #                --allow-dev; ci mode runs package.sh too (it may pass --allow-dev); --allow-dev
 #                appears only in steps conditional on ci mode; rust-cache
 #                runs in ci mode only (ADR 0032 §1, feature 0009 T05).
-#   expressions  no `${{ ... }}` inside a `run:` script: inputs reach scripts through `env:` only
-#                (feature 0007 review-security.md I6).
+#   expressions  `${{` only in the value of a `name:` or `if:` key or inside an `env:` or `with:`
+#                mapping; never on any line of a `run:` value, whatever its YAML form (B03), so
+#                inputs reach scripts through `env:` only (feature 0007 review-security.md I6). The
+#                expressions are only `inputs.mode` and `github.ref == 'refs/heads/main'`, with no
+#                backslash on their line; `if:` conditions are only the mode tests and the
+#                ios-sim results test.
 #   xcode        the job sets DEVELOPER_DIR to /Applications/Xcode_<v>.app and XCODE_VERSION to
 #                the same <v>, and a step compares `xcodebuild -version` with it.
 #   ios-sim      the iOS Simulator is required in release mode (owner, 2026-11-07): a step after
@@ -475,15 +479,71 @@ done
 [ "$modes_ok" = 1 ] && ok "modes: release installs the nightly with rust-src, builds with --release, packages without --allow-dev; ci mode packages too; --allow-dev and rust-cache in ci mode only"
 
 # --- expressions ----------------------------------------------------------------------------
+# B03: `${{` is allowed only in the value of a `name:` or `if:` key or inside an `env:` or `with:`
+# mapping. A `run:` value, whatever its form (`|`, `|-`, `|+`, `>`, `>-`, plain or quoted, inline
+# or on later lines), is everything indented deeper than its `run:` key; no line of it may hold
+# `${{`, comment lines included (GitHub substitutes expressions anywhere in the script). Then every
+# expression must be one of the allowed ones, with no backslash on its line (a YAML escape such
+# as s could spell a context name), and every `if:` condition one of the allowed ones.
+awk '
+  function indent(l) { match(l, /^ */); return RLENGTH }
+  {
+    line = $0
+    if (line ~ /^[ ]*$/) next
+    i = indent(line); rest = substr(line, i + 1); k = i
+    if (substr(rest, 1, 2) == "- ") { k = i + 2; rest = substr(rest, 3) }
+    if (region != "" && i <= rind) region = ""
+    if (region == "run") { if (index(line, "${{")) print "RUN\t" FNR; next }
+    if (rest ~ /^#/) next
+    if (rest ~ /^["\047]?run["\047]?:/) {
+      region = "run"; rind = k
+      if (index(line, "${{")) print "RUN\t" FNR
+      next
+    }
+    if (region == "map") { if (index(line, "${{")) print "EXPR\t" FNR "\t" line; next }
+    if (rest ~ /^(env|with):[ ]*(#.*)?$/) { region = "map"; rind = k; next }
+    key = rest; sub(/:.*/, "", key)
+    if (key == "if") { v = rest; sub(/^if:[ ]*/, "", v); print "IF\t" FNR "\t" v }
+    if (index(line, "${{")) {
+      if (key == "name" || key == "if") print "EXPR\t" FNR "\t" line
+      else print "KEY\t" FNR "\t" key
+    }
+  }
+' "$workflow" >"$work/expr"
 expr_ok=1
-for s in $steps; do
-  # shellcheck disable=SC2016 # the literal text of a GitHub expression, not a shell expansion
-  if run_has "$s" '${{'; then
-    expr_ok=0
-    bad "expressions" "\${{ ... }} inside the run script of step '$(step_key "$s" name)'; pass it through env:"
-  fi
-done
-[ "$expr_ok" = 1 ] && ok "expressions: no \${{ ... }} inside run scripts"
+# shellcheck disable=SC2016 # the literal opening of a GitHub expression
+open_expr='${{'
+close_expr='}}'
+while IFS="$(printf '\t')" read -r kind n rest; do
+  case $kind in
+    RUN) expr_ok=0; bad "expressions" "\${{ ... }} in a run script (line $n); pass it through env:" ;;
+    KEY) expr_ok=0; bad "expressions" "\${{ ... }} in the value of '$rest' (line $n); only name:, if:, env: and with: values may hold one" ;;
+    IF)
+      case $rest in
+        "inputs.mode == 'ci'" | "inputs.mode == 'release'" | "steps.results.outputs.ios_sim == 'present'") ;;
+        *) expr_ok=0; bad "expressions" "if: condition not in the allow-list (line $n): $rest" ;;
+      esac ;;
+    EXPR)
+      case $rest in
+        *\\*) expr_ok=0; bad "expressions" "a backslash on a line with an expression (line $n)" ;;
+      esac
+      left=$rest
+      while :; do
+        case $left in *"$open_expr"*) ;; *) break ;; esac
+        left=${left#*"$open_expr"}
+        case $left in
+          *"$close_expr"*) e=${left%%"$close_expr"*}; left=${left#*"$close_expr"} ;;
+          *) expr_ok=0; bad "expressions" "an expression not closed on its line (line $n)"; break ;;
+        esac
+        e=$(printf '%s' "$e" | sed -E 's/^ +//; s/ +$//')
+        case $e in
+          "inputs.mode" | "github.ref == 'refs/heads/main'") ;;
+          *) expr_ok=0; bad "expressions" "expression not in the allow-list (line $n): $e" ;;
+        esac
+      done ;;
+  esac
+done <"$work/expr"
+[ "$expr_ok" = 1 ] && ok "expressions: only in name:, if:, env: and with: values, and only inputs.mode and the main-ref test; if: conditions from the allow-list"
 
 # --- xcode ----------------------------------------------------------------------------------
 dev_dir_version=$(sed -n 's|^      DEVELOPER_DIR: /Applications/Xcode_\([0-9][0-9.]*\)\.app/Contents/Developer$|\1|p' "$code" | head -n 1)
