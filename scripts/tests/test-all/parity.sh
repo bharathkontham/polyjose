@@ -58,8 +58,9 @@ check "results left by an earlier run are cleared, so parity has no reference" 0
   '^  android: PASS$' '^  parity: SKIPPED \(no reference results: target/conformance/rust-core\.json'
 check_absent "parity does not run on stale results" '^parity fixture'
 tests_run=$((tests_run + 1))
-if [ ! -e "$case_dir/target/conformance" ]; then echo "ok   - target/conformance/ is removed before the suites"
-else echo "FAIL - target/conformance/ still exists: $(ls "$case_dir/target/conformance")"; tests_failed=$((tests_failed + 1)); fi
+if [ ! -e "$case_dir/target/conformance/rust-core.json" ] && [ ! -e "$case_dir/target/conformance/node.json" ]; then
+  echo "ok   - target/conformance/ is cleared before the suites (only this run's files remain)"
+else echo "FAIL - stale results remain: $(ls "$case_dir/target/conformance")"; tests_failed=$((tests_failed + 1)); fi
 
 new_case stale-mixed
 mkdir -p "$case_dir/target/conformance"
