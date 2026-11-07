@@ -104,7 +104,11 @@ real_cargo=$(command -v cargo)
 shim_dir="$scratch/shim"
 mkdir -p "$shim_dir"
 for mode in exit-101 empty-output; do
-  case $mode in exit-101) action='exit 101' ;; *) action='exit 0' ;; esac
+  # Each mode must fail on the probe itself, not on the inverted tree after it.
+  case $mode in
+    exit-101) action='exit 101'; want='^FAIL: cargo tree failed for polyjose-uniffi-bindgen \(its whole tree\)$' ;;
+    *) action='exit 0'; want='^FAIL: the whole tree of polyjose-uniffi-bindgen does not show polyjose-uniffi-bindgen;' ;;
+  esac
   cat >"$shim_dir/cargo" <<EOF
 #!/bin/sh
 probe=0 bindgen=0
@@ -117,8 +121,7 @@ EOF
   chmod +x "$shim_dir/cargo"
   new_case "probe-$mode"
   path_prefix="$shim_dir:"
-  expect_fail "whole-tree probe of polyjose-uniffi-bindgen: $mode" \
-    '^FAIL: .*polyjose-uniffi-bindgen' '^FAIL: .*polyjose-uniffi-bindgen'
+  expect_fail "whole-tree probe of polyjose-uniffi-bindgen: $mode" "$want" "$want"
   expect_no_skip "whole-tree probe of polyjose-uniffi-bindgen: $mode" polyjose-uniffi-bindgen
   path_prefix=""
 done
