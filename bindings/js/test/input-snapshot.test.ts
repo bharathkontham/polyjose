@@ -7,7 +7,7 @@
 // outcome, and the caller's own arrays are never wiped.
 import { assert, test } from "../node/builtins.js";
 import { createApi, PolyjoseError, type JsonObject, type JwkObject, type PolyjoseApi } from "../src/api.js";
-import { coded, fakeBackend, type Call, type Fake, type Handler, type Operation } from "./fake-backend.js";
+import { b64uDecode, b64uEncode, coded, fakeBackend, type Call, type Fake, type Handler, type Operation } from "./fake-backend.js";
 
 const KEY_TEXT = '{"kty":"oct","k":"AAAA"}';
 const VERIFIED = { alg: "HS256", payload: new Uint8Array([9]), signatureIndex: 0 };
@@ -380,4 +380,24 @@ test("a detached Uint8Array is a TypeError before the backend is called", async 
   assert.equal(view.length, 0, "detached");
   await assert.rejects(api.base64urlEncode(view), (e: unknown) => e instanceof TypeError && /base64urlEncode: bytes/.test(e.message));
   assert.equal(fake.calls.length, 0);
+});
+
+test("0006 reference scenario: sign on a cold first call, mutate the payload, verify round-trips the original", async () => {
+  // A payload-embedding backend: what it signs is what it was handed when the call reached it.
+  const { api, release } = cold({
+    jwsSignCompact: ((payload: Uint8Array) => `e30.${b64uEncode(payload)}.sig`) as Handler,
+    jwsVerifyCompact: ((token: string) => ({
+      alg: "HS256",
+      payload: b64uDecode(token.split(".")[1] ?? ""),
+      signatureIndex: 0,
+    })) as Handler,
+  });
+  const original = [1, 2, 3, 4, 5, 6, 7, 8];
+  const payload = new Uint8Array(original);
+  const pending = api.jwsSignCompact(payload, KEY_TEXT, { protectedHeader: { alg: "HS256" } });
+  payload.fill(0xee);
+  release();
+  const verified = await api.jwsVerifyCompact(await pending, KEY_TEXT, { allowedAlgs: ["HS256"] });
+  assert.deepEqual(Array.from(verified.payload), original);
+  assert.deepEqual(Array.from(payload), new Array(8).fill(0xee), "the caller's own array is left as the caller set it");
 });
