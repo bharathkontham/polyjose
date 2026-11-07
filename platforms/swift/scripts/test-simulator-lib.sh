@@ -10,7 +10,7 @@ set -euo pipefail
 export LC_ALL=C
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=simulator-lib.sh
+# shellcheck source-path=SCRIPTDIR source=simulator-lib.sh
 . "$here/simulator-lib.sh"
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/polyjose-simlib-test.XXXXXX")"
