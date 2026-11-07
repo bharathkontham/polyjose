@@ -10,12 +10,12 @@
  * fails, wasm32's allocation-failure handler aborts, and abort is `unreachable`, a
  * `WebAssembly.RuntimeError` thrown from the glue call. Peak memory is about 120 MB.
  *
- * Through the facade the trap is reported as a `TypeError` with the original message, because
- * the facade maps every error without a core `code` to a `TypeError` (`bindings/js/src/api.ts`
- * `mapError`). That is the facade's contract, so these checks go by message: the poisoned
- * calls carry the backend's "Reload" text, whatever class the facade gives them. The
- * `backend` case calls `backend.js` directly (by file URL, as the audit's scenario does), to
- * show the `RuntimeError` itself is rethrown unchanged.
+ * The facade passes an error that is neither a core failure nor an argument error through
+ * unchanged (feature 0013 F12, ADR 0061; `bindings/js/src/api.ts` `mapError`), so through the
+ * API the trap rejects with the `WebAssembly.RuntimeError` itself, and every later call with
+ * the backend's refusal, a plain `Error`. Both are checked by class and by message. The
+ * `backend` case calls `backend.js` directly (by file URL, as the audit's scenario does): the
+ * same, one layer down.
  */
 import { assert, childProcess, path, process, resolveFrom, stageRoot, test, url } from "./node.js";
 
@@ -42,6 +42,8 @@ interface Outcome {
   readonly name?: string;
   readonly message?: string;
   readonly runtimeError?: boolean;
+  /** Exactly an `Error`: not a `TypeError`, `PolyjoseError` or other subclass. */
+  readonly plainError?: boolean;
   readonly polyjose?: boolean;
 }
 
@@ -56,6 +58,7 @@ async function outcome(api: Api | undefined, call: () => unknown): Promise<Outco
       name: err.name,
       message: err.message,
       runtimeError: e instanceof WebAssembly.RuntimeError,
+      plainError: Object.getPrototypeOf(e) === Error.prototype,
       polyjose: api !== undefined && e instanceof api.PolyjoseError,
     };
   }
@@ -119,12 +122,15 @@ function assertFailsClosed(r: Record<string, Outcome>, mode: string): void {
   const trap = get(r, "trap");
   assert.equal(trap.ok, false, `${mode}: a 32 MiB input under a 16 MiB memory cap must trap`);
   assert.equal(trap.polyjose, false, `${mode}: a trap is never a PolyjoseError`);
-  assert.ok(!POISONED.test(trap.message ?? ""), `${mode}: the trap itself is rethrown, not replaced: ${trap.message}`);
+  assert.equal(trap.runtimeError, true, `${mode}: the trap is the WebAssembly.RuntimeError itself, got ${trap.name}: ${trap.message}`);
+  assert.equal(trap.name, "RuntimeError", mode);
+  assert.match(trap.message ?? "", /unreachable/, `${mode}: the trap's own message: ${trap.message}`);
 
   for (const key of ["laterEncode", "laterGenerate", "laterVersion", "laterErrorCodes", "laterReady", "laterBackendCall"]) {
     const later = get(r, key);
     assert.equal(later.ok, false, `${mode}: ${key} must be refused after the trap`);
-    assert.equal(later.polyjose, false, `${mode}: ${key} is not a PolyjoseError`);
+    assert.equal(later.plainError, true, `${mode}: ${key} is the backend's refusal, a plain Error, got ${later.name}: ${later.message}`);
+    assert.equal(later.name, "Error", `${mode}: ${key}`);
     assert.match(later.message ?? "", POISONED, `${mode}: ${key}: ${later.message}`);
   }
 }
@@ -132,18 +138,11 @@ function assertFailsClosed(r: Record<string, Outcome>, mode: string): void {
 if (process.argv[2] === "child") {
   await child(process.argv[3] ?? "");
 } else {
-  await test("S3: a trap through the API poisons the instance; every later call says to reload", () => {
-    const r = runChild("facade");
-    assertFailsClosed(r, "facade");
-    // The facade's class for it today (mapError): recorded, not required.
-    const trap = get(r, "trap");
-    assert.match(trap.message ?? "", /unreachable/, `the trap's own message: ${trap.message}`);
+  await test("S3: a trap through the API rejects with the RuntimeError; every later call with the reload refusal", () => {
+    assertFailsClosed(runChild("facade"), "facade");
   });
 
-  await test("S3: the backend rethrows the WebAssembly.RuntimeError itself, unchanged", () => {
-    const r = runChild("backend");
-    assertFailsClosed(r, "backend");
-    const trap = get(r, "trap");
-    assert.equal(trap.runtimeError, true, `expected a WebAssembly.RuntimeError, got ${trap.name}: ${trap.message}`);
+  await test("S3: backend.js rethrows the WebAssembly.RuntimeError itself and then refuses", () => {
+    assertFailsClosed(runChild("backend"), "backend");
   });
 }
