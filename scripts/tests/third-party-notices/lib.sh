@@ -104,7 +104,7 @@ new_fixture() {
   printf '[workspace]\nresolver = "2"\nmembers = ["app"]\n' >"$fx/ws/Cargo.toml"
   : >"$fx/ws/app/src/lib.rs"
   app_license=MIT
-  : >"$fx/deps"; : >"$fx/build-deps"; : >"$fx/dev-deps"; : >"$fx/android-deps"
+  : >"$fx/deps"; : >"$fx/build-deps"; : >"$fx/dev-deps"; : >"$fx/android-deps"; : >"$fx/linux-deps"
 }
 
 # vendor_crate <name> <license expression | - (none) | file:<path> (license-file only)>
@@ -136,7 +136,8 @@ crate_file() {
   printf '%s\n' "$3" >"$fx/vendor/$1/$2"
 }
 
-# app_dep <deps|build-deps|dev-deps|android-deps> <crate>
+# app_dep <deps|build-deps|dev-deps|android-deps|linux-deps> <crate>: android-deps and linux-deps are
+# app's dependencies for target_os "android" and "linux" only.
 app_dep() { printf '%s = { path = "../../vendor/%s" }\n' "$2" "$2" >>"$fx/$1"; }
 
 # lock_fixture: writes app's manifest and the fixture's Cargo.lock (offline, path crates only).
@@ -148,13 +149,21 @@ lock_fixture() {
     printf '\n[build-dependencies]\n'; cat "$fx/build-deps"
     printf '\n[dev-dependencies]\n'; cat "$fx/dev-deps"
     printf '\n[target.'\''cfg(target_os = "android")'\''.dependencies]\n'; cat "$fx/android-deps"
+    printf '\n[target.'\''cfg(target_os = "linux")'\''.dependencies]\n'; cat "$fx/linux-deps"
   } >"$fx/ws/app/Cargo.toml"
   cargo generate-lockfile --offline --manifest-path "$fx/ws/Cargo.toml" >"$scratch/lock.log" 2>&1 \
     || { cat "$scratch/lock.log" >&2; lib_die "could not lock fixture $fx"; }
 }
 
-# fixture_run <output file> <target>
-fixture_run() { run_notices "$1" -p app --target "$2" --manifest-path "$fx/ws/Cargo.toml"; }
+# fixture_run <output file> <target>...: one --target per given target, in the given order.
+fixture_run() {
+  local out=$1 t n
+  shift
+  n=$#
+  for t in "$@"; do set -- "$@" --target "$t"; done
+  shift "$n"
+  run_notices "$out" -p app "$@" --manifest-path "$fx/ws/Cargo.toml"
+}
 
 # expect_reject <label> <crate label...>: the last run failed with status 1, its log names every
 # given "<name> <version>", and it wrote no output file ($out).
