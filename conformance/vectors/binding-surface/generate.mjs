@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generates conformance/vectors/binding-surface/ (feature 0013 T11): the vectors that pin the
+// Generates conformance/vectors/binding-surface/ (feature 0013 T11, T15): the vectors that pin the
 // core's defaults and security decisions on every platform (ADR 0034 §6), so a binding that
 // re-states a default, or offers an extra code path, fails them first. One vector per file
 // (ADR 0045 §4); each `source` names the ADR it pins.
@@ -9,8 +9,9 @@
 //   script names are written, so it can be run into an empty directory and diffed.
 //
 // Where the values come from, never from polyjose:
-// - the allow-list, limit and RSA pins reuse inputs of committed vectors (RFC 7515 App. A.1-A.3,
-//   RFC 7516 App. A.3, the jws-negative/ and jwe/rsa-oaep-256/ files), read from <repo-root>;
+// - the allow-list, limit, RSA and DEFLATE-off pins reuse inputs of committed vectors (RFC 7515
+//   App. A.1-A.3, RFC 7516 App. A.3, RFC 7520 §5.9, the jws-negative/, jwe/rsa-oaep-256/ and
+//   jwe/zip/ files), read from <repo-root>;
 // - the PBES2 tokens are built here with node:crypto (OpenSSL) from SHA-256-derived bytes, so a
 //   rerun gives identical files, and each is opened with node:crypto before it is written;
 // - the JWT key-set pins reuse the RFC 7519 §3.1 token and the RFC 7515 A.1 and A.3 keys.
@@ -44,8 +45,9 @@ function derive(label, len) {
 
 const written = [];
 mkdirSync(OUT, { recursive: true });
-function write(name, source, description, operation, input, expect) {
-  writeFileSync(join(OUT, `${name}.json`), `${JSON.stringify({ source, description, operation, input, expect }, null, 2)}\n`);
+/** `extra`: optional top-level members after `expect` (`features_absent`, ADR 0056). */
+function write(name, source, description, operation, input, expect, extra = {}) {
+  writeFileSync(join(OUT, `${name}.json`), `${JSON.stringify({ source, description, operation, input, expect, ...extra }, null, 2)}\n`);
   written.push(name);
 }
 const fails = (error) => ({ ok: false, error });
@@ -258,6 +260,32 @@ write(
   OAEP_ENCRYPT.input,
   fails('UnsupportedAlgorithm'),
 );
+
+// ---- No DEFLATE in the binding configuration (ADR 0030 §4, ADR 0056) ---------------------------
+// `features_absent: ["deflate"]`: run where the core has no `deflate` (every binding and the
+// rust-core reference), skipped with `feature:!deflate` where it does (ADR 0056 §2).
+const WITHOUT_DEFLATE = { features_absent: ['deflate'] };
+const ZIP_DECRYPT = read('jwe/zip/rfc7520-5-9-a128kw-a128gcm-def-decrypt.json');
+write(
+  'jwe-decrypt-zip-def-without-deflate',
+  'ADR 0030 §4; ADR 0034 §6; ADR 0056',
+  'ADR 0030 §4, ADR 0017 §5: the RFC 7520 §5.9 compact JWE (A128KW + A128GCM, zip DEF) of jwe/zip/rfc7520-5-9-a128kw-a128gcm-def-decrypt.json, with its own key and allow-lists, is UnsupportedAlgorithm in a build without deflate (RFC 7516 §5.2 step 5: zip must be understood), before any cryptography; no binding may inflate it',
+  'jwe.decrypt',
+  ZIP_DECRYPT.input,
+  fails('UnsupportedAlgorithm'),
+  WITHOUT_DEFLATE,
+);
+const ZIP_ENCRYPT = read('jwe/zip/roundtrip-a128kw-a128gcm-def.json');
+write(
+  'jwe-encrypt-compress-without-deflate',
+  'ADR 0030 §4; ADR 0034 §6; ADR 0056',
+  'ADR 0030 §4, ADR 0017 §5: compress true on the A128KW + A128GCM encryption of jwe/zip/roundtrip-a128kw-a128gcm-def.json (RFC 7516 §4.1.3) is UnsupportedAlgorithm in a build without deflate; no binding may encrypt uncompressed in its place',
+  'jwe.encrypt',
+  ZIP_ENCRYPT.input,
+  fails('UnsupportedAlgorithm'),
+  WITHOUT_DEFLATE,
+);
+
 // ---- JWK Set selection (ADR 0029) --------------------------------------------------------------
 const JWT = read('jwt/rfc7519/3-1-hs256-before-exp.json');
 const A3_KEY = read('jws-rfc7515/a3-es256-compact-verify.json').input.key;
