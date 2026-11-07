@@ -3330,6 +3330,19 @@ fn valid_vectors_pass() {
             r#"{"hash":"sha-1","jwk":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}}"#,
             r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
         ),
+        // ADR 0054 §1.3: the empty selector on a one-key set returns that
+        // key, compared as a JSON value (member order ignored).
+        vector(
+            "jwks.select",
+            r#"{"jwks":{"keys":[{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]},"selector":{}}"#,
+            r#"{"ok":true,"jwk":{"x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","crv":"Ed25519","kty":"OKP"}}"#,
+        ),
+        // ADR 0054 §4: an empty set has no match.
+        vector(
+            "jwks.select",
+            r#"{"jwks":{"keys":[]},"selector":{"kid":"a"}}"#,
+            r#"{"ok":false,"error":"NoMatchingKey"}"#,
+        ),
         // RFC 8410 §10.1; member order of the expected JWK does not matter.
         vector(
             "keys.import_pem",
@@ -3837,6 +3850,61 @@ fn schema_invalid_vectors_fail() {
             "/expect/thumbprint_uri: required member is missing",
         ),
         (
+            "jwks.select without selector",
+            vector(
+                "jwks.select",
+                r#"{"jwks":{"keys":[]}}"#,
+                r#"{"ok":false,"error":"NoMatchingKey"}"#,
+            ),
+            "/input/selector: required member is missing",
+        ),
+        (
+            // The binding selector has no key_op (ADR 0054 §9).
+            "jwks.select selector with key_op",
+            vector(
+                "jwks.select",
+                r#"{"jwks":{"keys":[]},"selector":{"key_op":"verify"}}"#,
+                r#"{"ok":false,"error":"NoMatchingKey"}"#,
+            ),
+            "/input/selector/key_op: unknown member",
+        ),
+        (
+            "jwks.select alg not a string",
+            vector(
+                "jwks.select",
+                r#"{"jwks":{"keys":[]},"selector":{"alg":["ES256"]}}"#,
+                r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+            ),
+            "/input/selector/alg",
+        ),
+        (
+            "jwks.select jwks not an object",
+            vector(
+                "jwks.select",
+                r#"{"jwks":"{\"keys\":[]}","selector":{}}"#,
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            "/input/jwks",
+        ),
+        (
+            "jwks.select success without jwk",
+            vector(
+                "jwks.select",
+                r#"{"jwks":{"keys":[]},"selector":{}}"#,
+                r#"{"ok":true}"#,
+            ),
+            "/expect/jwk: required member is missing",
+        ),
+        (
+            "jwks.select jwk not an object",
+            vector(
+                "jwks.select",
+                r#"{"jwks":{"keys":[]},"selector":{}}"#,
+                r#"{"ok":true,"jwk":"{}"}"#,
+            ),
+            "/expect/jwk",
+        ),
+        (
             "operation not a string",
             vector("b64url.encode", r#"{"bytes_hex":"66"}"#, encode_ok)
                 .replace(r#""b64url.encode""#, r#"["b64url.encode"]"#),
@@ -3955,6 +4023,36 @@ fn failing_vectors_fail_naming_their_source() {
             ),
             "thumbprint",
         ),
+        (
+            "jwks.select expecting the other key",
+            vector(
+                "jwks.select",
+                r#"{"jwks":{"keys":[{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"},{"kty":"oct","k":"AA"}]},"selector":{"alg":"EdDSA"}}"#,
+                r#"{"ok":true,"jwk":{"kty":"oct","k":"AA"}}"#,
+            ),
+            "`jwk`",
+        ),
+        (
+            "jwks.select expecting NoMatchingKey for two matches",
+            vector(
+                "jwks.select",
+                r#"{"jwks":{"keys":[{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"},{"kty":"oct","k":"AA"}]},"selector":{}}"#,
+                r#"{"ok":false,"error":"NoMatchingKey"}"#,
+            ),
+            "got error MultipleMatchingKeys",
+        ),
+        (
+            "jwks.select expecting a key where none matches",
+            vector(
+                "jwks.select",
+                r#"{"jwks":{"keys":[{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]},"selector":{"alg":"ES256"}}"#,
+                &format!(
+                    r#"{{"ok":true,"jwk":{}}}"#,
+                    r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#
+                ),
+            ),
+            "got error NoMatchingKey",
+        ),
     ];
     for (what, json, needle) in cases {
         let name = format!("failing ({what}).json");
@@ -4014,6 +4112,75 @@ fn verified(alg: &str, index: u32) -> String {
 
 fn quoted(s: &str) -> String {
     format!("\"{s}\"")
+}
+
+/// The RFC 8037 A.2 Ed25519 public key.
+const ED25519_A2_PUBLIC: &str =
+    r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#;
+
+/// `jwks.select` runs its steps in the order conformance/README.md fixes,
+/// which is the ADR 0054 §4 precedence: the set import, then the selector
+/// (`kid`, `alg`, `key_use`), then selection. Each case breaks two steps
+/// with different codes and expects the earlier one.
+#[test]
+fn jwks_select_runs_its_steps_in_order() {
+    let two_keys = format!(r#"{{"keys":[{ED25519_A2_PUBLIC},{{"kty":"oct","k":"AA"}}]}}"#);
+    let select = |jwks: &str, selector: &str| format!(r#"{{"jwks":{jwks},"selector":{selector}}}"#);
+    let cases = [
+        // The import (InvalidKey) before the alg (UnsupportedAlgorithm).
+        vector(
+            "jwks.select",
+            &select(r#"{"keys":"x"}"#, r#"{"alg":"foo"}"#),
+            &failure("InvalidKey"),
+        ),
+        // The import (InvalidKey) before the key_use (UnsupportedAlgorithm).
+        vector(
+            "jwks.select",
+            &select(r#"{"keys":{}}"#, r#"{"key_use":"foo"}"#),
+            &failure("InvalidKey"),
+        ),
+        // The alg (UnsupportedAlgorithm) before selection (NoMatchingKey).
+        vector(
+            "jwks.select",
+            &select(r#"{"keys":[]}"#, r#"{"kid":"a","alg":"none"}"#),
+            &failure("UnsupportedAlgorithm"),
+        ),
+        // The key_use (UnsupportedAlgorithm) before selection
+        // (MultipleMatchingKeys).
+        vector(
+            "jwks.select",
+            &select(&two_keys, r#"{"key_use":"foo"}"#),
+            &failure("UnsupportedAlgorithm"),
+        ),
+        // Every part reaches the selector: alone, each of these leaves two
+        // matches or none; together they pick the Ed25519 key.
+        vector(
+            "jwks.select",
+            &select(&two_keys, "{}"),
+            &failure("MultipleMatchingKeys"),
+        ),
+        vector(
+            "jwks.select",
+            &select(&two_keys, r#"{"kid":"a"}"#),
+            &failure("NoMatchingKey"),
+        ),
+        vector(
+            "jwks.select",
+            &select(&two_keys, r#"{"key_use":"enc"}"#),
+            &failure("MultipleMatchingKeys"),
+        ),
+        vector(
+            "jwks.select",
+            &select(&two_keys, r#"{"alg":"EdDSA","key_use":"sig"}"#),
+            &format!(r#"{{"ok":true,"jwk":{ED25519_A2_PUBLIC}}}"#),
+        ),
+        vector(
+            "jwks.select",
+            &select(&two_keys, r#"{"alg":"EdDSA","key_use":"enc"}"#),
+            &failure("NoMatchingKey"),
+        ),
+    ];
+    assert_passes(&cases);
 }
 
 fn assert_passes(cases: &[String]) {
