@@ -332,8 +332,13 @@ export function outObject(v: unknown, at: string): JsonObject {
   return parsed as JsonObject;
 }
 
-/** The backend's results are plain objects; this reads one member. */
+/**
+ * One member of a backend result (a plain object, BACKEND.md), read only if the result owns it
+ * (0013 F09, security audit M1 follow-up). A member the backend left out is `undefined`, never
+ * a value a pollution bug put on `Object.prototype`: an absent optional field (`kid`,
+ * `keyIndex`, a header, `aad`) stays absent, and a missing required one is a TypeError.
+ */
 export function member(v: unknown, name: string, at: string): unknown {
   if (typeof v !== "object" || v === null) throw badResult(at, "an object");
-  return (v as Record<string, unknown>)[name];
+  return Object.hasOwn(v, name) ? (v as Record<string, unknown>)[name] : undefined;
 }
