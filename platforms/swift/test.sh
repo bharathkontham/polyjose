@@ -3,9 +3,13 @@
 # swift` (feature 0013 T04's dispatcher) or directly, from any directory.
 #
 # Steps, each failing the suite on error:
-#   1. builds platforms/swift/build/PolyjoseFFI.xcframework with
-#      platforms/swift/scripts/build-xcframework.sh when it is missing (an existing one is reused;
-#      step 2 fails if its C header no longer matches polyjose-ffi);
+#   1. (re)builds platforms/swift/build/PolyjoseFFI.xcframework with
+#      platforms/swift/scripts/build-xcframework.sh when it is missing or stale, and prints why:
+#      its polyjose-build.txt records the commit it was built from, and it is stale when that
+#      commit is missing or unknown, or the Rust inputs differ from it in a later commit or in the
+#      working tree (platforms/swift/scripts/xcframework-stale.sh, whose own test runs first). An
+#      old library would otherwise pass: it reports the same version and vectors digest. A build
+#      made while any file is uncommitted is stamped so, and is rebuilt (incrementally) next time;
 #   2. platforms/swift/scripts/check-generated.sh: the committed Polyjose.swift is what the bindgen
 #      generates (ADR 0032 §4);
 #   3. `swift test` at the repository root with POLYJOSE_LOCAL_XCFRAMEWORK=1, in Swift 6 language
@@ -38,9 +42,15 @@ for tool in swift xcodebuild cargo; do
 done
 
 xcframework="$swift_dir/build/PolyjoseFFI.xcframework"
-if [ ! -d "$xcframework" ]; then
-  echo "==> $me: building the XCFramework (missing)"
+echo "==> $me: test-xcframework-stale.sh"
+"$swift_dir/scripts/test-xcframework-stale.sh"
+# shellcheck source=scripts/xcframework-stale.sh
+. "$swift_dir/scripts/xcframework-stale.sh"
+if reason=$(xcframework_stale "$root" "$xcframework"); then
+  echo "==> $me: rebuilding the XCFramework: $reason"
   "$swift_dir/scripts/build-xcframework.sh"
+else
+  echo "$me: the XCFramework is up to date with the Rust inputs"
 fi
 
 echo "==> $me: check-generated"
