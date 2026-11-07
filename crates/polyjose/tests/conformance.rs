@@ -7951,14 +7951,14 @@ fn results_schema_agrees_with_the_runner() {
 const RUST_CORE: &str = "rust-core";
 
 /// A minimal results file with one result of each status.
-const RESULTS_EXAMPLE: &str = r#"{"runner":"node","polyjose":"0.1.0","features":[],"error_codes":["InvalidBase64","InvalidKey"],"results":[{"id":"a/b.json#0","source":"RFC 4648 §10","op":"b64url.decode","status":"pass","actual":{"ok":false,"error":"InvalidBase64"}},{"id":"a/c.json#0","op":"jwe.encrypt","status":"skipped","reason":"feature:fixed-rng"},{"id":"a/d.json#0","status":"fail","reason":"not JSON"},{"id":"a/e.json#0","op":"jws.verify","status":"fail","actual":{"ok":true},"reason":"expected error InvalidKey"}]}"#;
+const RESULTS_EXAMPLE: &str = r#"{"runner":"node","polyjose":"0.1.0","vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","features":[],"error_codes":["InvalidBase64","InvalidKey"],"results":[{"id":"a/b.json#0","source":"RFC 4648 §10","op":"b64url.decode","status":"pass","actual":{"ok":false,"error":"InvalidBase64"}},{"id":"a/c.json#0","op":"jwe.encrypt","status":"skipped","reason":"feature:fixed-rng"},{"id":"a/d.json#0","status":"fail","reason":"not JSON"},{"id":"a/e.json#0","op":"jws.verify","status":"fail","actual":{"ok":true},"reason":"expected error InvalidKey"}]}"#;
 
 /// The validator accepts a valid results file and refuses each way one can
 /// break the schema (so the check of the reference file is not vacuous).
 #[test]
 fn results_validator_refuses_invalid_files() {
     check_results_text(RESULTS_EXAMPLE.as_bytes()).unwrap();
-    check_results_text(br#"{"runner":"rust-core","polyjose":"0.1.0","features":["deflate","fixed-rng"],"error_codes":["X"],"results":[]}"#).unwrap();
+    check_results_text(br#"{"runner":"rust-core","polyjose":"0.1.0","vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","features":["deflate","fixed-rng"],"error_codes":["X"],"results":[]}"#).unwrap();
     for (old, new, problem) in [
         (
             r#""runner":"node","#,
@@ -7979,6 +7979,26 @@ fn results_validator_refuses_invalid_files() {
         ),
         (r#""InvalidKey"]"#, r#""InvalidBase64"]"#, "uniqueItems"),
         (r#""polyjose":"0.1.0""#, r#""polyjose":"""#, "/polyjose"),
+        (
+            r#""vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","#,
+            "",
+            "missing required member `vectors_digest`",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#""9A06F1EFDD269176088CB0E6BFC6A7E4D4F74AA3D1B1B8FC6C879FDBB82AC7D1""#,
+            "/vectors_digest",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d10""#,
+            "/vectors_digest",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#"7"#,
+            "/vectors_digest",
+        ),
         (
             r#""results":["#,
             r#""extra":1,"results":["#,
@@ -8129,7 +8149,8 @@ fn run_dir_records_one_result_per_vector() {
     assert!(fails[1..].iter().all(|r| !r.contains("actual")));
     // Each entry is schema-valid.
     let document = format!(
-        r#"{{"runner":"rust-core","polyjose":"0.1.0","features":[],"error_codes":["X"],"results":[{}]}}"#,
+        r#"{{"runner":"rust-core","polyjose":"0.1.0","vectors_digest":"{}","features":[],"error_codes":["X"],"results":[{}]}}"#,
+        report.vectors_digest().unwrap(),
         got.join(",")
     );
     check_results_text(document.as_bytes()).unwrap();

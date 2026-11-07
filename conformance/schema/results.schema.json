@@ -3,7 +3,7 @@
   "title": "polyjose conformance results file",
   "description": "The results of one conformance runner's run over every file under conformance/vectors/ (ADR 0034 §2). Each runner writes it to target/conformance/<runner>.json, or target/conformance/<runner>-<suffix>.json for a CI matrix run or a non-reference Rust build; scripts/conformance-parity.sh compares every such file with the rust-core reference run (ADR 0034 §4, §5, §8). conformance/README.md (Binding runners) has the rules. Every object is closed.",
   "type": "object",
-  "required": ["runner", "polyjose", "features", "error_codes", "results"],
+  "required": ["runner", "polyjose", "vectors_digest", "features", "error_codes", "results"],
   "additionalProperties": false,
   "properties": {
     "runner": {

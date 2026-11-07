@@ -3,7 +3,9 @@
 # identical files pass; a missing id, a different error code, a different skip reason, a `fail`
 # entry or a different error_codes list fails, printing the id (or list) and both outcomes; and
 # a directory with only the reference passes with a SKIPPED line per runner. The ADR 0056 skip
-# reason feature:!<name> (cases h) is compared like any other.
+# reason feature:!<name> (cases h) is compared like any other. ADR 0060 §6 (cases j-l): a different
+# vectors_digest fails, printing both; the empty-input digest fails in any file; the member is
+# required and must be 64 lowercase hex characters.
 # Usage: scripts/tests/conformance-parity/parity-cases.sh
 # Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
@@ -127,6 +129,76 @@ put node-x86_64-unknown-linux-musl.json "$(edit "$(as_runner node)" '"polyjose":
 expect_fail "(i') a different polyjose version under a CI matrix suffix" \
   '^FAIL: node-x86_64-unknown-linux-musl\.json: polyjose version differs: rust-core 0\.1\.0 \| node 0\.2\.0-rc\.1$' \
   '^FAIL: node-x86_64-unknown-linux-musl\.json: polyjose version differs: '
+
+# (j) ADR 0060 §6: a file from another vector corpus (a stale artifact, a drifted bundle) fails
+# even with every id, status and outcome equal, printing both digests; the version check (i) and
+# this one are made together, so a file can fail on both.
+OTHER_DIGEST=ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
+new_case digest-differs
+put rust-core.json "$REFERENCE"
+put node.json "$(edit "$(as_runner node)" "\"vectors_digest\":\"$DIGEST\"" "\"vectors_digest\":\"$OTHER_DIGEST\"")"
+put jvm-linux-x86-64.json "$(as_runner jvm)"
+expect_fail "(j) a different vectors_digest" \
+  "^FAIL: node\\.json: vectors_digest differs: rust-core $DIGEST \\| node $OTHER_DIGEST\$" \
+  '^FAIL: node\.json: vectors_digest differs: '
+grep -q '^PASS: jvm-linux-x86-64\.json ' "$scratch/out" || {
+  echo "FAIL - (j): the file with the reference's digest does not pass"; tests_failed=$((tests_failed + 1))
+}
+new_case digest-matrix
+put rust-core.json "$REFERENCE"
+put swift-ios-sim-iphone.json "$(edit "$(as_runner swift-ios-sim)" "\"vectors_digest\":\"$DIGEST\"" "\"vectors_digest\":\"$OTHER_DIGEST\"")"
+expect_fail "(j') a different vectors_digest under a CI matrix suffix" \
+  "^FAIL: swift-ios-sim-iphone\\.json: vectors_digest differs: rust-core $DIGEST \\| swift-ios-sim $OTHER_DIGEST\$" \
+  '^FAIL: swift-ios-sim-iphone\.json: vectors_digest differs: '
+new_case digest-and-version
+put rust-core.json "$REFERENCE"
+put node.json "$(edit "$(edit "$(as_runner node)" '"polyjose":"0.1.0"' '"polyjose":"0.0.9"')" \
+  "\"vectors_digest\":\"$DIGEST\"" "\"vectors_digest\":\"$OTHER_DIGEST\"")"
+expect_fail "(j'') a different version and digest: both reported" \
+  '^FAIL: node\.json: polyjose version differs: rust-core 0\.1\.0 \| node 0\.0\.9$' \
+  '^FAIL: node\.json: (polyjose version|vectors_digest) differs: '
+grep -q "^FAIL: node\\.json: vectors_digest differs: rust-core $DIGEST | node $OTHER_DIGEST\$" "$scratch/out" || {
+  echo "FAIL - (j''): the digest difference is not reported next to the version one"; tests_failed=$((tests_failed + 1))
+}
+
+# (k) The SHA-256 of the empty input (a runner that read no vector file) fails in any file, the
+# reference included (ADR 0060 §3, §6.2).
+new_case empty-digest-binding
+put rust-core.json "$REFERENCE"
+put node.json "$(edit "$(as_runner node)" "\"vectors_digest\":\"$DIGEST\"" "\"vectors_digest\":\"$EMPTY_DIGEST\"")"
+expect_fail "(k) the empty-input digest in a binding" \
+  "^FAIL: node\\.json: vectors_digest is $EMPTY_DIGEST, the SHA-256 of the empty input " \
+  '^FAIL: node\.json: vectors_digest is '
+new_case empty-digest-reference
+put rust-core.json "$(edit "$REFERENCE" "\"vectors_digest\":\"$DIGEST\"" "\"vectors_digest\":\"$EMPTY_DIGEST\"")"
+put node.json "$(edit "$(as_runner node)" "\"vectors_digest\":\"$DIGEST\"" "\"vectors_digest\":\"$EMPTY_DIGEST\"")"
+expect_fail "(k') the empty-input digest in the reference (and an equal binding)" \
+  "^FAIL: rust-core\\.json: vectors_digest is $EMPTY_DIGEST, the SHA-256 of the empty input " \
+  '^FAIL: (rust-core|node)\.json: vectors_digest is '
+grep -q '^PASS: ' "$scratch/out" && {
+  echo "FAIL - (k'): a file passed against an empty-corpus reference"; tests_failed=$((tests_failed + 1))
+}
+
+# (l) vectors_digest is required and must be 64 lowercase hex characters (ADR 0060 §1, §6.1), in
+# the reference too.
+new_case digest-missing
+put rust-core.json "$REFERENCE"
+put node.json "$(edit "$(as_runner node)" "\"vectors_digest\":\"$DIGEST\"," '')"
+expect_fail "(l) a binding file without vectors_digest" \
+  '^FAIL: node\.json: not valid per .*: missing required member vectors_digest' '^FAIL: node\.json: not valid per '
+new_case digest-missing-reference
+put rust-core.json "$(edit "$REFERENCE" "\"vectors_digest\":\"$DIGEST\"," '')"
+put node.json "$(as_runner node)"
+expect_fail "(l') a reference without vectors_digest" \
+  '^FAIL: rust-core\.json: not valid per .*: missing required member vectors_digest' '^FAIL: rust-core\.json: not valid per '
+upper=$(printf '%s' "$DIGEST" | tr 'a-f' 'A-F')
+for bad in "$upper" "${DIGEST}0" "${DIGEST%?}" "sha256:$DIGEST" ""; do
+  new_case "digest-malformed-${#bad}"
+  put rust-core.json "$REFERENCE"
+  put node.json "$(edit "$(as_runner node)" "\"vectors_digest\":\"$DIGEST\"" "\"vectors_digest\":\"$bad\"")"
+  expect_fail "(l'') a malformed vectors_digest ${bad:-(empty string)}" \
+    '^FAIL: node\.json: not valid per .*/vectors_digest: .* must match \^\[0-9a-f\]\{64\}\$' '^FAIL: node\.json: not valid per '
+done
 
 # (h) ADR 0056: a reference with a features_absent skip (feature:!deflate, as an --all-features
 # build would give) and a skip of both kinds; an identical binding passes.

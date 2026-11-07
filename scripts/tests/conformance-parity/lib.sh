@@ -22,9 +22,14 @@ command -v node >/dev/null 2>&1 || lib_die "node not found on PATH"
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/conformance-parity-test.XXXXXX") || lib_die "mktemp failed"
 trap 'rm -rf "$scratch"' EXIT
 
+# The digest of the ADR 0060 §4 worked example, standing in for the corpus the fixtures ran on, and
+# the SHA-256 of the empty input, which no results file may carry (ADR 0060 §3).
+DIGEST=9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1
+EMPTY_DIGEST=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
 # The reference fixture (rust-core.json): an executed success, an executed failure vector, and two
 # skips, one per feature.
-REFERENCE='{"runner":"rust-core","polyjose":"0.1.0","features":[],
+REFERENCE='{"runner":"rust-core","polyjose":"0.1.0","vectors_digest":"'$DIGEST'","features":[],
 "error_codes":["InvalidBase64","InvalidKey","DecryptionFailed"],
 "results":[
 {"id":"b64url/encode.json#0","source":"RFC 4648 §10","op":"b64url.encode","status":"pass","actual":{"ok":true}},
