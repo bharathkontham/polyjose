@@ -13,7 +13,7 @@ workspace = true
 
 # ADR 0030 §1: the surface depends on polyjose and zeroize only. No FFI framework, no serde
 # (ADR 0016), and none of polyjose's off-by-default features: bindings ship without `deflate`
-# (feature 0013 Q2) and can never enable `insecure-test-vectors` (ADR 0005,
+# (feature 0013 Q2) and never with the deterministic test RNG (ADR 0005,
 # scripts/check-test-vectors-off.sh).
 [dependencies]
 polyjose.workspace = true
