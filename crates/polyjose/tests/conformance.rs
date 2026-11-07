@@ -6170,15 +6170,13 @@ fn features_absent_is_strict() {
         ),
         r#"["deflate"]"#,
     );
-    match check_vector("compress.json", compress.as_bytes()) {
-        Ok(Passed::Skipped { present, .. }) => {
-            assert!(cfg!(feature = "deflate"));
-            assert_eq!(present, ["deflate"]);
-        }
-        Ok(Passed::Ran { negative, .. }) => {
-            assert!(!cfg!(feature = "deflate") && negative);
-        }
-        Err(e) => panic!("{e}"),
+    match (
+        check_vector("compress.json", compress.as_bytes()),
+        cfg!(feature = "deflate"),
+    ) {
+        (Ok(Passed::Skipped { present, .. }), true) => assert_eq!(present, ["deflate"]),
+        (Ok(Passed::Ran { negative: true, .. }), false) => {}
+        (other, deflate) => panic!("with deflate {deflate}: {other:?}"),
     }
 }
 
