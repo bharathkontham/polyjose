@@ -923,6 +923,7 @@ fn execute(vector: &JsValue) -> Result<Outcome, String> {
         "b64url.encode" => b64url_encode(&input, &mut out),
         "b64url.decode" => b64url_decode(&input, &mut out),
         "jwk.thumbprint" => jwk_thumbprint(&input, &mut out),
+        "jwks.select" => jwks_select(&input, &mut out),
         "jws.sign" => jws_sign(&input, &expect, &mut out),
         "jws.verify" => jws_verify(&input, &mut out),
         "keys.import_pem" => keys_import_pem(&input, &mut out),
@@ -984,6 +985,32 @@ fn jwk_thumbprint(input: &JsValue, out: &mut Out) -> Step<()> {
         lib(jwk::jwk_thumbprint(jwk.clone(), hash.clone()))?,
     );
     out.set("thumbprint_uri", lib(jwk::jwk_thumbprint_uri(jwk, hash))?);
+    Ok(())
+}
+
+/// `jwks.select` → `jwksSelect(jwks, { kid, alg, keyUse })` (RFC 7517 §5; ADR 0054 §1-§4, §9;
+/// README `jwks.select`).
+///
+/// The set goes as JSON text in file order, and the selector member by member, each as given and
+/// only when present (`key_use` → `keyUse`): the surface and the core parse, validate and select,
+/// so the runner maps, normalizes and pre-checks nothing. The returned key (a secret-bearing
+/// string) is parsed as JSON and compared as a JSON value.
+fn jwks_select(input: &JsValue, out: &mut Out) -> Step<()> {
+    let Some(criteria) = get(input, "selector") else {
+        return harness("no member `selector`");
+    };
+    let selector = Rec::new();
+    for (vector_name, adapter_name) in [("kid", "kid"), ("alg", "alg"), ("key_use", "keyUse")] {
+        if has(&criteria, vector_name) {
+            selector.set(adapter_name, str_of(&criteria, vector_name)?);
+        }
+    }
+    let jwks = json_arg(input, "jwks")?;
+    let selected = lib(jwk::jwks_select(jwks, &selector.value()))?;
+    out.set(
+        "jwk",
+        parse_output(&String::from(selected), "the selected JWK")?,
+    );
     Ok(())
 }
 
@@ -2122,6 +2149,54 @@ fn jwk_thumbprint_passes_the_hash_as_given_and_an_absent_one_as_absent() {
         Some(86),
         "SHA-512 is 86 base64url characters (ADR 0054 §8.1)"
     );
+}
+
+/// Two `oct` keys, one per `use`, for the `jwks.select` runner tests.
+const SELECT_SET: &str = r#"{"keys": [{"kty": "oct", "k": "AAECAwQFBgcICQoLDA0ODw", "use": "sig", "kid": "a"}, {"kty": "oct", "k": "EBESExQVFhcYGRobHB0eHw", "use": "enc", "kid": "b"}]}"#;
+
+fn select(selector: &str, expect: &str) -> (Status, Trace) {
+    let input = format!(r#"{{"jwks": {SELECT_SET}, "selector": {selector}}}"#);
+    status_of(&vector("jwks.select", &input, expect, ""), &[])
+}
+
+#[wasm_bindgen_test]
+fn jwks_select_maps_the_selector_member_by_member() {
+    // `kid` and `key_use` (the adapter's `keyUse`) each select one member, compared as a JSON
+    // value (README `jwks.select`).
+    let b = r#"{"ok": true, "jwk": {"kid": "b", "use": "enc", "k": "EBESExQVFhcYGRobHB0eHw", "kty": "oct"}}"#;
+    for selector in [r#"{"kid": "b"}"#, r#"{"key_use": "enc"}"#] {
+        let (status, trace) = select(selector, b);
+        assert!(matches!(status, Status::Pass), "selector {selector}");
+        assert_eq!(trace.actual, Some(Ok(())));
+    }
+    // `alg` HS256 implies `use` `sig` (ADR 0054 §2), so only `a` matches.
+    let a = r#"{"ok": true, "jwk": {"kty": "oct", "k": "AAECAwQFBgcICQoLDA0ODw", "use": "sig", "kid": "a"}}"#;
+    let (status, _) = select(r#"{"alg": "HS256", "kid": "a"}"#, a);
+    assert!(matches!(status, Status::Pass));
+    let (status, _) = select(r#"{"alg": "HS256"}"#, a);
+    assert!(matches!(status, Status::Pass));
+    // ADR 0054 §4, §5: none, several, and a refused name are the core's outcomes.
+    for (selector, code) in [
+        (r#"{"kid": "c"}"#, "NoMatchingKey"),
+        ("{}", "MultipleMatchingKeys"),
+        (r#"{"alg": "none"}"#, "UnsupportedAlgorithm"),
+        (r#"{"key_use": "SIG"}"#, "UnsupportedAlgorithm"),
+    ] {
+        let expect = format!(r#"{{"ok": false, "error": "{code}"}}"#);
+        let (status, trace) = select(selector, &expect);
+        assert!(matches!(status, Status::Pass), "selector {selector}");
+        assert_eq!(
+            trace.actual,
+            Some(Err(code.to_owned())),
+            "selector {selector}"
+        );
+    }
+    // The selector is closed: `key_op` is not part of 0.1.0 (ADR 0054 §9), so it is a broken
+    // vector, and so is the host spelling `keyUse` in a vector file.
+    for selector in [r#"{"key_op": "sign"}"#, r#"{"keyUse": "sig"}"#] {
+        let input = format!(r#"{{"jwks": {SELECT_SET}, "selector": {selector}}}"#);
+        assert_fails(&vector("jwks.select", &input, b, ""), "schema:");
+    }
 }
 
 #[wasm_bindgen_test]
