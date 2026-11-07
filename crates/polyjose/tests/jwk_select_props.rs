@@ -25,6 +25,9 @@
 //!    the *imported* key's material and `alg`.
 //! 5. **Monotonicity:** adding a criterion never adds a match, and removing
 //!    a set member never adds a match for the remaining indexes.
+//! 6. **Setter order:** building a selector in reverse order gives an equal
+//!    selector with the same matches, incoherent `alg` + `key_op` pairs
+//!    included (ADR 0057 §1).
 //!
 //! **Generators.** Keys come only from committed fixtures (RFC 7517 App. A,
 //! RFC 7515 App. A, RFC 7520, RFC 7468, RFC 8037 App. A, and
