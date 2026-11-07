@@ -20,4 +20,7 @@ crate-type = ["cdylib", "staticlib", "lib"]
 # polyjose-uniffi-bindgen (such as `cargo build --workspace`) unifies `cli` into uniffi.
 [dependencies]
 polyjose.workspace = true
+polyjose-surface = { path = "../surface" }
 uniffi = { version = "=0.32.2", default-features = false }
+# Secret-bearing inputs are moved into `Zeroizing` in each export's first statement (ADR 0030 §7.1).
+zeroize.workspace = true
