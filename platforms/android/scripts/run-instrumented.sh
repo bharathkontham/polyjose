@@ -12,7 +12,8 @@
 #    also on an error or an interrupt (a trap). Nothing is ever stopped by process pattern.
 #    Either way it waits, at most POLYJOSE_EMULATOR_BOOT_TIMEOUT seconds in all, until the device
 #    is ready for Gradle: sys.boot_completed = 1, init.svc.bootanim = stopped (when the property
-#    exists) and `pm path android` answers (pending_readiness; feature 0008 F02).
+#    exists) and `pm path android` answers (pending_readiness; feature 0008 F02). Each of those
+#    adb shell calls is bounded to 10 s by timeout/gtimeout where available (F06).
 # 2. `./gradlew --no-daemon :polyjose:connectedDebugAndroidTest` with ANDROID_SERIAL=<serial>.
 # 3. Judged by the JUnit XML under polyjose/build/outputs/androidTest-results/connected/, not by
 #    Gradle's exit status alone (AGP can report BUILD SUCCESSFUL when the instrumentation crashed,
@@ -92,7 +93,20 @@ emulator=$sdk/emulator/emulator
 
 # The serials adb lists, in any state (device, offline, unauthorized).
 listed_serials() { "$adb" devices 2>/dev/null | awk 'NR > 1 && NF >= 2 { print $1 }'; }
-boot_completed() { [ "$("$adb" -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; }
+# ready_shell <serial> <command...>: `adb -s <serial> shell <command...>` for the readiness wait,
+# bounded to 10 s by `timeout` (coreutils, Linux) or `gtimeout` (Homebrew coreutils, macOS) where
+# one exists, so a wedged adb server cannot hold the wait past POLYJOSE_EMULATOR_BOOT_TIMEOUT
+# (feature 0008 F06, review N2); a call that times out counts as not ready yet. Without either
+# tool the call is made unbounded, as before. stdin is /dev/null: timeout runs the command outside
+# the terminal's foreground process group, where reading the terminal would stop it.
+adb_timeout=""
+for t in timeout gtimeout; do command -v "$t" >/dev/null 2>&1 && { adb_timeout=$t; break; }; done
+ready_shell() {
+  local s=$1; shift
+  if [ -n "$adb_timeout" ]; then "$adb_timeout" 10 "$adb" -s "$s" shell "$@" </dev/null
+  else "$adb" -s "$s" shell "$@" </dev/null; fi
+}
+boot_completed() { [ "$(ready_shell "$1" getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; }
 # pending_readiness <serial>: returns 0 when the device is ready for Gradle; otherwise prints what
 # it still waits for and returns 1. sys.boot_completed alone is not enough: right after it the
 # package manager may not answer yet, and AGP then reports "No compatible devices connected" on a
@@ -101,10 +115,10 @@ boot_completed() { [ "$("$adb" -s "$1" shell getprop sys.boot_completed 2>/dev/n
 pending_readiness() {
   local v
   boot_completed "$1" || { echo "sys.boot_completed"; return 1; }
-  v=$("$adb" -s "$1" shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r') ||
+  v=$(ready_shell "$1" getprop init.svc.bootanim 2>/dev/null | tr -d '\r') ||
     { echo "init.svc.bootanim (adb shell failed)"; return 1; }
   [ -z "$v" ] || [ "$v" = stopped ] || { echo "the boot animation (init.svc.bootanim=$v)"; return 1; }
-  if ! v=$("$adb" -s "$1" shell pm path android 2>/dev/null | tr -d '\r') ||
+  if ! v=$(ready_shell "$1" pm path android 2>/dev/null | tr -d '\r') ||
     ! printf '%s\n' "$v" | grep -q '^package:'; then
     echo "the package manager (pm path android)"; return 1
   fi
