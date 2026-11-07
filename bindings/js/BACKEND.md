@@ -10,9 +10,13 @@
   - The facade passes **only fields it has validated**.
   - It **leaves an absent optional field out**: it never passes `undefined` or `null`, because napi throws on `null` (0013 research §3).
 - **Integers are checked before they reach you.** Sizes and counts are integers in 0..=2^32−1 (`u32`). `now` is a safe integer of whole seconds. wasm-bindgen would otherwise coerce `-1` to `4294967295`.
-- **Bytes** are `Uint8Array` (a Node `Buffer` may arrive: it is a subclass).
+- **Bytes are fresh copies the facade wipes.** Every byte input (payloads, `detachedPayload`, plaintext, `aad`, `apu`, `apv`, DER, `base64urlEncode` input) arrives as a plain `Uint8Array` that the facade copied from the caller's array when the operation was called (ADR 0030 §7, 0013 B06).
+  - The facade wipes each copy with `fill(0)` once your call settles: when you return, throw, or your Promise resolves or rejects.
+  - So read or copy the bytes before you settle, and **never keep or return an input array**: it is zeros afterwards. napi-rs and wasm-bindgen copy the bytes into Rust memory during the call, which meets this.
+  - The caller's own array is never passed to you and never wiped.
+- **Inputs are taken at the call.** The facade validates and normalises every argument synchronously, when the operation is called: it copies bytes, serialises JSON objects and reads the clock for `now` before it awaits `ready()`. A caller that changes its array or object after starting a call can't change what you receive. Argument errors are `TypeError`s raised before `ready()` or your function is called.
 - **Allow-lists always arrive.** `allowedAlgs` and `allowedEnc` are always present, possibly `[]` (the core then answers `AlgorithmNotAllowed`).
-- **`now` always arrives** on the JWT verify options. The facade passes `Math.floor(Date.now() / 1000)` when the caller gives none (ADR 0028 §4, ADR 0030 §4). So no native layer reads a clock, and both packages behave the same.
+- **`now` always arrives** on the JWT verify options. The facade passes `Math.floor(Date.now() / 1000)`, read when the operation is called, when the caller gives none (ADR 0028 §4, ADR 0030 §4). So no native layer reads a clock, and both packages behave the same.
 - **Results** may be returned directly or as a Promise (napi `AsyncTask`). An optional result field may be absent, `undefined` or `null`.
 - **Errors.** A core failure is thrown, or rejected, as an object whose `code` is one of `errorCodes()` and whose `message` is the core's text (ADR 0030 §5). The facade turns it into its own `PolyjoseError`, so `instanceof` works the same in both packages. Anything else, such as napi's `InvalidArg` or `StringExpected` or a reader `TypeError`, becomes a `TypeError` with the original message.
 - **`version()` and `errorCodes()` are synchronous.** `errorCodes()` returns the core's `Error::CODES`, in order.

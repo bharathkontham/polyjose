@@ -1,5 +1,7 @@
 // A scriptable fake of the backend contract (src/backend.ts, BACKEND.md). Every call is
-// recorded; an operation without a scripted handler throws a plain Error (no `code`), which the
+// recorded twice: `args` as the arguments were at the call (byte arrays copied, because the facade
+// wipes the copies it hands the backend once the call settles) and `received` exactly as passed.
+// An operation without a scripted handler throws a plain Error (no `code`), which the
 // facade turns into a TypeError, so a test can never pass through an unscripted path silently.
 import type { Backend } from "../src/backend.js";
 import { ERROR_CODES } from "../src/error-codes.js";
@@ -44,7 +46,10 @@ export type Operation = (typeof OPERATIONS)[number];
 
 export interface Call {
   readonly op: string;
+  /** The arguments as they were at the call: byte arrays copied, lists and records rebuilt. */
   readonly args: readonly unknown[];
+  /** The arguments exactly as the backend received them (the facade's copies, wiped later). */
+  readonly received: readonly unknown[];
 }
 
 export type Handler = (...args: never[]) => unknown;
@@ -100,6 +105,14 @@ export function b64uDecode(text: string): Uint8Array {
   return Uint8Array.from(bytes);
 }
 
+/** A deep copy of a backend argument as it is now. */
+function snapshot(v: unknown): unknown {
+  if (v instanceof Uint8Array) return Uint8Array.from(v);
+  if (Array.isArray(v)) return v.map(snapshot);
+  if (typeof v === "object" && v !== null) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, snapshot(x)]));
+  return v;
+}
+
 export function fakeBackend(options: FakeOptions = {}): Fake {
   const calls: Call[] = [];
   const handlers = options.handlers ?? {};
@@ -112,7 +125,7 @@ export function fakeBackend(options: FakeOptions = {}): Fake {
   const backend: Record<string, unknown> = {};
   for (const op of OPERATIONS) {
     backend[op] = (...args: unknown[]) => {
-      calls.push({ op, args });
+      calls.push({ op, args: args.map(snapshot), received: args });
       const handler = handlers[op] ?? defaults[op];
       if (handler === undefined) throw new Error(`fake backend: ${op} is not scripted`);
       return (handler as (...a: unknown[]) => unknown)(...args);
