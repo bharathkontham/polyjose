@@ -1,4 +1,4 @@
-//! JWK operations (ADR 0030 §4, "JWK"): parsing, the public form, thumbprints and JWK Set
+//! JWK operations (ADR 0030 §4, "JWK"; ADR 0054 §9): parsing, the public form, thumbprints and JWK Set
 //! selection (RFC 7517, RFC 7518 §6, RFC 7638, RFC 9278, RFC 8037; ADR 0018, 0021, 0022).
 //!
 //! JWKs and JWK Sets are JSON text in and out, parsed and written by the core's strict I-JSON
@@ -11,7 +11,7 @@
 //! `InvalidKey`, `KeyAlgorithmMismatch`, and `UnsupportedAlgorithm` for well-formed keys polyjose
 //! does not support, an RSA private key among them (ADR 0021).
 
-use polyjose::jwk::{Jwk, ThumbprintHash};
+use polyjose::jwk::{Jwk, JwkSelector as CoreSelector, JwkSet, KeyAlg, KeyUse, ThumbprintHash};
 
 use crate::error::{SurfaceError, SurfaceResult};
 use crate::records::JwkSelector;
@@ -129,20 +129,60 @@ pub fn jwk_thumbprint_uri(jwk: &str, hash: Option<&str>) -> SurfaceResult<String
     Ok(key.thumbprint_uri(thumbprint_hash(hash)?))
 }
 
-/// The member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4; RFC 7517 §5, §4.2,
-/// §4.4, §4.5; the 0001 T07 selection rules).
+/// The one member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4, ADR 0054 §9;
+/// RFC 7517 §5, §4.2, §4.4, §4.5).
 ///
-/// `kid` is used only here, by an explicit caller choice; verification never selects a key by
-/// a header's `kid` (ADR 0026 §2, ADR 0030 §6). The member may be private, so the result is a
-/// [`SecretString`].
+/// The rule is the core's [`JwkSet::select`] (ADR 0054 §2, as ADR 0057 §1 amends it), which
+/// "0001 T07 selection rules" in ADR 0030 §4 now means. The surface only builds the core
+/// selector, in this order, the first error being the outcome (ADR 0054 §4):
+///
+/// 1. [`JwkSet::from_json`] imports `jwks`; members the core cannot use are skipped
+///    (ADR 0041 §2), and an RSA private member fails the whole set (ADR 0021, ADR 0029 §3);
+/// 2. a core [`JwkSelector`](polyjose::jwk::JwkSelector) from `new()`, then `kid`, then `alg`
+///    parsed by [`KeyAlg::from`], then `key_use` parsed by [`KeyUse::from`], each set only when
+///    `Some`; the core setters validate the names (ADR 0054 §1.1), the surface maps none;
+/// 3. `select`: exactly one match, or `NoMatchingKey` (none, an empty set included), or
+///    `MultipleMatchingKeys` (two or more: RFC 7517 §5.1 gives a set's order no meaning).
+///
+/// The result is the member's core serialization ([`Jwk::to_json`]); its index in the set is
+/// not returned (ADR 0030 §4 returns a JWK). EC, OKP and `oct` members come back as imported,
+/// private parts included (ADR 0054 §3), so the result is a [`SecretString`] (ADR 0030 §7.2).
+///
+/// # Security (ADR 0054 §7, RFC 8725)
+///
+/// - Selection identifies a key; it never authorizes an algorithm. Pass the key only to an
+///   operation that takes an allow-list, as every verify and decrypt does (ADR 0007).
+/// - A selector with `alg` never crosses key families. One without `alg` (a `kid` alone) may
+///   return a key of any family. A `kid` from an untrusted header is safe to compare: pair it
+///   with `alg`. For JWS and JWT, verify against the set with `jwt_verify_with_jwks` instead,
+///   which selects by the header's `alg` and `kid` after the allow-list (ADR 0029).
+/// - Call [`jwk_to_public`] before publishing a selected key.
+/// - `NoMatchingKey` and `MultipleMatchingKeys` tell a prober which `kid`s exist and which
+///   repeat. A server should map both, with the verify and decrypt codes, to one opaque client
+///   error such as `invalid_token` (RFC 6750 §3.1).
+/// - Pin a JWK `alg` on every `oct` key, or select with a `kid`: an `oct` key without `alg`
+///   matches every symmetric `alg`, and selection checks no key size (ADR 0057 §3).
 ///
 /// # Errors
 ///
-/// For now, always `UnsupportedAlgorithm`: the core has no general JWK Set selection yet. It
-/// arrives with feature 0015 (`JwkSet::select`), and task T14 wires it in here behind this same
-/// signature (feature 0013 T06 Log, owner decision 2026-11-07).
+/// In the order above: the set's import errors (`InvalidJson`; `InvalidKey` for a missing or
+/// non-array `keys`; `UnsupportedAlgorithm` for an RSA private member), then
+/// `UnsupportedAlgorithm` for an `alg` that is not a JWS or JWE key management algorithm
+/// polyjose implements (`none`, `RSA1_5`, `RSA-OAEP`, an `enc` name, an unknown name) or a
+/// `key_use` other than `sig` or `enc`, then `NoMatchingKey` or `MultipleMatchingKeys`.
+/// Neither the input nor the selector is echoed.
 pub fn jwks_select(jwks: &str, selector: &JwkSelector) -> SurfaceResult<SecretString> {
-    // Interim stub until feature 0015 / task T14.
-    let _ = (jwks, selector);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let set = JwkSet::from_json(jwks.as_bytes())?;
+    let mut core = CoreSelector::new();
+    if let Some(kid) = &selector.kid {
+        core = core.kid(kid);
+    }
+    if let Some(alg) = &selector.alg {
+        core = core.alg(KeyAlg::from(alg.as_str()))?;
+    }
+    if let Some(key_use) = &selector.key_use {
+        core = core.key_use(KeyUse::from(key_use.as_str()))?;
+    }
+    let (_, key) = set.select(&core)?;
+    Ok(SecretString::from(key.to_json()))
 }
