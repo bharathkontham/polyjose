@@ -39,11 +39,11 @@
 #      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
 #  12. a workspace member depends on the `rsa` package under another name (`package = "rsa"`),
 #      which would hide its use from check 9;
-#  13. the normal tree of a binding package (bindings/<name>, any target, default, no-default or all
-#      features) has a crate that bindings/deps-allowlist/<name>.txt, deps-allowlist.txt and the
-#      core's tree do not cover; that file lists a crate the tree lacks or one deps-allowlist.txt
-#      already allows, or is malformed; or a binding package has no such file (ADR 0030 §1). A file
-#      whose bindings/<name> does not exist yet is skipped with a message;
+#  13. the normal and build tree of a binding package (bindings/<name>, any target, default,
+#      no-default or all features) has a crate that bindings/deps-allowlist/<name>.txt,
+#      deps-allowlist.txt and the core's tree do not cover; that file lists a crate the tree lacks
+#      or one deps-allowlist.txt already allows, or is malformed; or a binding package has no such
+#      file (ADR 0030 §1). A file whose bindings/<name> does not exist yet is skipped with a message;
 #  14. a serde-family crate (serde, serde_core, serde_derive, serde_json, serde-wasm-bindgen, ...) is
 #      in the normal tree of a binding package other than below the crates of the explained
 #      `# serde-only-below:` line of its allowlist (ADR 0030 §1), or that line is not needed.
@@ -972,11 +972,16 @@ if seen != len(members):
 
 # 13. The binding crates' trees (ADR 0030 §1, ADR 0016 §4-§5). The frameworks (napi-rs,
 #     wasm-bindgen, UniFFI) are not counted against the core, but each binding's tree is pinned as
-#     exactly as the core's: bindings/deps-allowlist/<name>.txt lists what the normal tree of the
-#     package in bindings/<name> adds to the core's,
-#       cargo tree -p <package> -e normal --target all --prefix none
+#     exactly as the core's: bindings/deps-allowlist/<name>.txt lists what the normal and build tree
+#     of the package in bindings/<name> adds to the core's,
+#       cargo tree -p <package> -e normal,build --target all --prefix none
 #     read with default features, with --no-default-features and with --all-features, so neither a
-#     target- nor a feature-specific dependency can hide. Fails when:
+#     target- nor a feature-specific dependency can hide. The build edges are included for the
+#     reason they are in the core's tree (check 1): a build script and its build-dependencies run on
+#     every developer, CI and release machine that builds the binding, and can change what is
+#     compiled, so an unvetted build crate (one behind a new build.rs in the framework-free surface,
+#     say) is audit surface like a runtime one (security audit L2 of feature 0013). Dev-dependencies
+#     never ship and are not checked, as for the core (ADR 0016 §5). Fails when:
 #     - that tree has a crate the file does not list, other than a workspace package, a crate of
 #       deps-allowlist.txt or a crate of the core's own tree (check 1 governs those, so a crate the
 #       core gains is reported once, by check 1);
@@ -1070,14 +1075,15 @@ parse_binding_allowlist() {
   sort -u "$work/bal/$name.below.unsorted" >"$work/bal/$name.below"
 }
 
-# binding_tree <package> <out>: the sorted normalized names in the package's normal tree with
-# default features, --no-default-features and --all-features, every target, the package included.
+# binding_tree <package> <out>: the sorted normalized names in the package's normal and build tree
+# with default features, --no-default-features and --all-features, every target, the package
+# included.
 binding_tree() {
   local flags
   : >"$work/bt.names"
   for flags in --features= --no-default-features --all-features; do
-    cargo tree --locked -p "$1" -e normal --target all --prefix none "$flags" </dev/null >"$work/bt.raw" 2>"$work/bt.err" \
-      || { cat "$work/bt.err" >&2; die "'cargo tree --locked -p $1 -e normal --target all --prefix none $flags' failed"; }
+    cargo tree --locked -p "$1" -e normal,build --target all --prefix none "$flags" </dev/null >"$work/bt.raw" 2>"$work/bt.err" \
+      || { cat "$work/bt.err" >&2; die "'cargo tree --locked -p $1 -e normal,build --target all --prefix none $flags' failed"; }
     awk -v want="$1" '
       function err(msg) { print msg | "cat 1>&2"; bad = 1 }
       NR == 1 { if ($1 != want) err("unexpected root line: " $0); print $1; next }
@@ -1122,7 +1128,7 @@ check_binding_allowlists() {
       fail "the tree of $pkg (bindings/$name) contains crates that $file does not allow (ADR 0030 §1, ADR 0016 §4):"
       sed 's/^/  - /' "$work/bal/$name.offenders"
       echo "  Remove the dependency, or add it to $file with an ADR. To see what pulls one in:"
-      echo "    cargo tree -p $pkg -e normal --all-features --target all -i <crate>"
+      echo "    cargo tree -p $pkg -e normal,build --all-features --target all -i <crate>"
     fi
     comm -13 "$work/bal/$name.tree" "$work/bal/$name.list" >"$work/bal/$name.stale"
     if [ -s "$work/bal/$name.stale" ]; then
