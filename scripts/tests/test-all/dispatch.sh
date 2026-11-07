@@ -20,6 +20,11 @@ fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 fixture bindings/node/test.sh 0 'fixture node suite ran'
 fixture platforms/android/test.sh 0 'fixture android suite ran'
 fixture platforms/swift/test.sh 0 'fixture apple suite ran'
+# Each passing platform writes its runners' results files, which the parity step requires (F05).
+writes_own_results bindings/wasm/test.sh wasm
+writes_own_results bindings/node/test.sh node
+writes_own_results platforms/android/test.sh android
+writes_own_results platforms/swift/test.sh apple
 run_test_all wasm node android apple
 check "each platform runs its script and passes on exit 0" 0 \
   '^fixture wasm suite ran$' '^fixture node suite ran$' '^fixture android suite ran$' '^fixture apple suite ran$' \
@@ -60,6 +65,7 @@ check "a SKIPPED line does not hide a non-zero exit status" 1 '^  node: FAIL$'
 
 new_case skipped-not-last
 fixture bindings/wasm/test.sh 0 'SKIPPED (one browser missing)' 'node tests passed'
+writes_own_results bindings/wasm/test.sh wasm
 run_test_all wasm
 check "SKIPPED on an earlier line is ordinary output: exit 0 passes" 0 '^  wasm: PASS$'
 
@@ -81,6 +87,7 @@ new_case stdin
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 # shellcheck disable=SC2016 # expanded by the fixture, not here
 fixture_append bindings/wasm/test.sh 'read -r line && echo "read stdin: $line"'
+writes_own_results bindings/wasm/test.sh wasm
 rc=0
 (cd "$case_dir" && "${BASH:-bash}" scripts/test-all.sh wasm) <<<"caller input" >"$scratch/out" 2>&1 || rc=$?
 check "a script reading stdin still runs" 0 '^  wasm: PASS$'

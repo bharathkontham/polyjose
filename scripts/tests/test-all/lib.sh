@@ -50,6 +50,15 @@ writes_results() {
   done
 }
 
+# writes_own_results <platform script> <platform>: the fixture also writes the results file of every
+# runner (required or optional) on the platform's line of the copy's runner table.
+writes_own_results() {
+  local line runners r
+  line=$(grep -E "^$2:" "$case_dir/scripts/test-all.sh") || lib_die "no runner-table line for $2 in the copy"
+  read -r -a runners <<<"${line#*:}"
+  for r in ${runners[@]+"${runners[@]}"}; do writes_results "$1" "${r%\?}"; done
+}
+
 # parity_fixture <exit status> <line>...: a fixture scripts/conformance-parity.sh that also prints its
 # arguments and which results files it found.
 parity_fixture() {
