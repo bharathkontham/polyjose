@@ -4,6 +4,10 @@
 # make check-deps.sh fail with the guard's own message (and no other check's):
 #   - RSA private-key and signing types and an Oaep decryption in crates/polyjose/src, and the
 #     same in a binding (bindings/**);
+#   - the same in a workspace member outside bindings/: the feature 0013 security audit's L1 plant
+#     (a bin-only tools/evil member with an optional rsa and polyjose behind a feature, compiling
+#     rsa::pkcs1v15::SigningKey), and a member whose [[bin]] path is outside its own directory
+#     (the scan reads every member's directory and target directories from cargo metadata);
 #   - the security audit's reproductions of ADR 0049 §1, as far as a text scan can see them: an rsa
 #     alias in a brace use tree (`use {rsa as r};`), `#[path]` (also through cfg_attr) and
 #     `include!` naming a file outside the scanned roots, and an out-of-line child module of
@@ -93,6 +97,47 @@ expect_fail "RsaPrivateKey in a binding" "bindings/wasm/src/lib.rs:[0-9]+: RsaPr
 new_case binding-new-file
 append_to bindings/ffi/src/sign/rsa.rs 'pub fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
 expect_fail "rsa SigningKey in a new binding file" "bindings/ffi/src/sign/rsa.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+# --- Check 9: workspace members outside bindings/ (feature 0013 security audit L1) ----------------
+# The audit's plant, as written: build tooling under tools/, which no shipped library links, still
+# must not compile RSA private-key code (the symbol check fails closed on it too, rsa-symbols.sh).
+evil_manifest='[package]
+name = "polyjose-evil-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rsa = { version = "=0.10.0-rc.20", optional = true, default-features = false }
+polyjose = { path = "../../crates/polyjose", optional = true }
+
+[features]
+signer = ["dep:rsa", "dep:polyjose"]
+'
+evil_main='#[cfg(feature = "signer")]
+pub fn sign(k: &rsa::RsaPrivateKey, m: &[u8]) -> Vec<u8> {
+    use rsa::pkcs1v15::SigningKey;
+    let _ = (SigningKey::<rsa::sha2::Sha256>::new_unprefixed(k.clone()), m); Vec::new()
+}
+fn main() {}'
+
+new_case tool-member
+append_to tools/evil/Cargo.toml "$evil_manifest"'[[bin]]
+name = "evil"
+path = "src/main.rs"'
+append_to tools/evil/src/main.rs "$evil_main"
+replace_in Cargo.toml 'members = [' 'members = ["tools/evil", '
+expect_fail "audit L1: rsa::pkcs1v15::SigningKey in a bin-only tools/ member" \
+  "^  - tools/evil/src/main\\.rs:3: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case tool-member-bin-elsewhere
+append_to tools/evil/Cargo.toml "$evil_manifest"'[[bin]]
+name = "evil"
+path = "../../misc/evil.rs"'
+append_to misc/evil.rs "$evil_main"
+replace_in Cargo.toml 'members = [' 'members = ["tools/evil", '
+expect_fail "a tools/ member whose [[bin]] is outside its directory" \
+  "^  - misc/evil\\.rs:2: RsaPrivateKey" "$src_fail"
 
 # --- Check 9: paths split across lines, by whitespace or by a comment ------------------------------
 # Rust lets whitespace and comments sit between the tokens of a path, so `rsa`, `::` and the item
