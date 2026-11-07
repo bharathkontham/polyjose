@@ -1,0 +1,52 @@
+{
+  "name": "@polyjose/wasm",
+  "version": "@VERSION@",
+  "description": "polyjose for Web (WASM): JOSE (JWS, JWE, JWK, JWT) in pure Rust compiled to WebAssembly, for browsers, Node.js and Cloudflare Workers.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bharathkontham/polyjose.git",
+    "directory": "bindings/wasm"
+  },
+  "homepage": "https://polyjose.dev",
+  "keywords": ["jose", "jws", "jwe", "jwk", "jwt", "webassembly", "wasm"],
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "workerd": "./workerd.mjs",
+      "worker": "./workerd.mjs",
+      "node": "./node.mjs",
+      "browser": "./browser.mjs",
+      "import": "./browser.mjs",
+      "default": "./browser.mjs"
+    }
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "THIRD-PARTY-NOTICES.txt",
+    "backend.js",
+    "browser.mjs",
+    "facade/api.d.ts",
+    "facade/api.js",
+    "facade/backend.d.ts",
+    "facade/backend.js",
+    "facade/error-codes.d.ts",
+    "facade/error-codes.js",
+    "facade/normalize.d.ts",
+    "facade/normalize.js",
+    "facade/types.d.ts",
+    "facade/types.js",
+    "index.d.ts",
+    "index.js",
+    "node.mjs",
+    "polyjose_wasm.d.ts",
+    "polyjose_wasm.js",
+    "polyjose_wasm_bg.wasm",
+    "workerd.mjs"
+  ]
+}
