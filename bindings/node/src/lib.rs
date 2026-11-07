@@ -24,6 +24,7 @@
 //!   napi-derive generates.
 
 pub mod error;
+pub mod jwe;
 pub mod jwk;
 pub mod jws;
 pub mod keys;
