@@ -15,6 +15,11 @@
 # (security audit L2 of feature 0013): a build.rs with [build-dependencies] anyhow in
 # polyjose-surface, a build-dependency of polyjose-node behind a feature and one of polyjose-wasm on
 # a Windows-only target; and napi-build, the legitimate build crate, dropped from node.txt.
+# Check 8, the binding part (security audit L2 of feature 0013, second recommendation): neither
+# polyjose-surface nor polyjose-ffi may have a build script. Cases: a bare build.rs (no
+# build-dependencies) in bindings/surface and in bindings/ffi, a `build = "<file>"` key in each
+# manifest, and the reproduction above, which check 8 now reports too. bindings/node keeps
+# napi-build's build.rs (ADR 0031): the unchanged tree passes and says so.
 # Check 14: serde, serde_json, serde_derive, serde-wasm-bindgen or any other serde-family crate in the
 # normal tree of a bindings/* package fails, unless every path to it goes through a crate that a
 # `# serde-only-below:` line of the package's allowlist names (ffi.txt: UniFFI's proc-macro;
@@ -33,6 +38,7 @@ export LC_ALL=C
 not_allowed='contains crates that bindings/deps-allowlist/[a-z-]+\.txt does not allow'
 serde='is in the normal tree of polyjose-[a-z-]+ \(bindings/[a-z-]+\)'
 format='^FAIL: bindings/deps-allowlist/[a-z-]+\.txt:[0-9]+: '
+build_script='has a build script; polyjose-surface and polyjose-ffi must not have one'
 
 # expect_also <description> <ERE>: the output of the last expect_pass/expect_fail also matches.
 expect_also() {
@@ -95,6 +101,8 @@ with open(path, "w", encoding="utf-8") as f:
 
 new_case clean
 expect_pass "unchanged tree"
+expect_also "check 8 names the binding crates it holds to no build script, and node's allowed one" \
+  '^ok: no build script in polyjose-surface \(bindings/surface\), polyjose-ffi \(bindings/ffi\); bindings/node keeps napi-build.s build\.rs \(ADR 0031\)'
 if [ ! -d "$repo/bindings/surface" ]; then
   expect_also "surface.txt is skipped while bindings/surface does not exist" \
     '^skip: bindings/deps-allowlist/surface\.txt: bindings/surface does not exist'
@@ -198,8 +206,9 @@ append_to bindings/surface/build.rs 'fn main() -> anyhow::Result<()> { Ok(()) }'
 append_to bindings/surface/Cargo.toml $'\n[build-dependencies]\nanyhow = "1"'
 relock
 expect_fail "a build.rs with [build-dependencies] anyhow added to polyjose-surface" \
-  "FAIL: the tree of polyjose-surface \\(bindings/surface\\) $not_allowed" "$not_allowed"
+  "FAIL: the tree of polyjose-surface \\(bindings/surface\\) $not_allowed" "$not_allowed|$build_script"
 expect_also "the build crate is named" '^  - anyhow$'
+expect_also "check 8 reports the build script too" "^FAIL: polyjose-surface \\(bindings/surface\\) $build_script"
 
 new_case node-build-feature
 python3 -I -c '
@@ -230,6 +239,39 @@ replace_in bindings/deps-allowlist/node.txt $'\nnapi-build\n' $'\n'
 expect_fail "napi-build dropped from node.txt" \
   "FAIL: the tree of polyjose-node \\(bindings/node\\) $not_allowed" "$not_allowed"
 expect_also "the missing build crate is named" '^  - napi-build$'
+
+# --- Check 8: no build script in polyjose-surface or polyjose-ffi (security audit L2) ------------------
+# The audit's second recommendation: neither crate needs one, so a build script fails even with no
+# build-dependency (which check 13 would not see).
+
+new_case surface-build-rs
+append_to bindings/surface/build.rs 'fn main() {}'
+expect_fail "a bare build.rs (no build-dependencies) in polyjose-surface" \
+  "^FAIL: polyjose-surface \\(bindings/surface\\) $build_script" "$build_script"
+expect_also "the file is named" '^  - bindings/surface/build\.rs exists$'
+expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/surface/build\.rs \(cargo metadata\)$'
+
+new_case ffi-build-rs
+append_to bindings/ffi/build.rs 'fn main() {}'
+expect_fail "a bare build.rs (no build-dependencies) in polyjose-ffi" \
+  "^FAIL: polyjose-ffi \\(bindings/ffi\\) $build_script" "$build_script"
+expect_also "the file is named" '^  - bindings/ffi/build\.rs exists$'
+
+new_case surface-build-key
+append_to bindings/surface/gen.rs 'fn main() {}'
+replace_in bindings/surface/Cargo.toml $'\npublish = false\n' $'\npublish = false\nbuild = "gen.rs"\n'
+expect_fail "a build = \"gen.rs\" key in polyjose-surface's manifest" \
+  "^FAIL: polyjose-surface \\(bindings/surface\\) $build_script" "$build_script"
+# (package.build? line N: ... from the conservative scan when python3 has no tomllib)
+expect_also "the key is named" '^  - package\.build[? ]'
+expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/surface/gen\.rs \(cargo metadata\)$'
+
+new_case ffi-build-key
+append_to bindings/ffi/tools/gen.rs 'fn main() {}'
+replace_in bindings/ffi/Cargo.toml $'\npublish = false\n' $'\npublish = false\nbuild = "tools/gen.rs"\n'
+expect_fail "a build = \"tools/gen.rs\" key in polyjose-ffi's manifest" \
+  "^FAIL: polyjose-ffi \\(bindings/ffi\\) $build_script" "$build_script"
+expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/ffi/tools/gen\.rs \(cargo metadata\)$'
 
 # --- Check 14: no serde in the bindings -------------------------------------------------------------------
 
