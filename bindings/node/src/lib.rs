@@ -24,6 +24,7 @@
 //!   napi-derive generates.
 
 pub mod error;
+pub mod jwk;
 pub mod records;
 mod task;
 pub mod util;
@@ -31,6 +32,9 @@ pub mod util;
 #[cfg(test)]
 pub(crate) mod tests {
     use zeroize::ZeroizeOnDrop;
+
+    /// RFC 7517 Appendix A.2: a P-256 private key (with `use` and `kid`).
+    pub(crate) const RFC7517_A2_P256_PRIVATE: &str = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE","use":"enc","kid":"1"}"#;
 
     /// Compiles only if `value`'s type wipes itself on drop (ADR 0030 §7.7: the secret-input
     /// path compiles to a zeroizing owner).
