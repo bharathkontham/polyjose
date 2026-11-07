@@ -74,8 +74,9 @@ unzip -q "$zip" -d "$unzipped" || fail "unzip cannot extract the zip"
 u="$unzipped/PolyjoseFFI.xcframework"
 plist_ids=$(i=0; while id=$(plutil -extract "AvailableLibraries.$i.LibraryIdentifier" raw -o - "$u/Info.plist" 2>/dev/null); do
   echo "$id"; i=$((i + 1)); done | sort | tr '\n' ' ')
-check "Info.plist lists exactly the 9 libraries (in any order)" \
-  "[ '$plist_ids' = \"\$(printf '%s\\n' $libraries | sort | tr '\\n' ' ')\" ]"
+# shellcheck disable=SC2086 # a word list
+want_ids=$(printf '%s\n' $libraries | sort | tr '\n' ' ')
+check "Info.plist lists exactly the 9 libraries (in any order)" "[ '$plist_ids' = '$want_ids' ]"
 check "LICENSE is polyjose's LICENSE" "cmp -s '$u/LICENSE' '$repo/LICENSE'"
 if [ -z "$allow" ]; then
   check "the packaged build is a release build (arm64_32: present)" \
