@@ -2205,8 +2205,7 @@ mod tests {
         /// `key_ops: ["encrypt"]`, which A128KW key binding would refuse.
         #[test]
         fn an_incoherent_key_op_matches_nothing() {
-            let encrypt_only = with(OCT, r#""key_ops":["encrypt"]"#);
-            let set = set_from(&[encrypt_only.clone()]);
+            let set = set_from(&[with(OCT, r#""key_ops":["encrypt"]"#)]);
             let a128kw_encrypt = by_alg("A128KW").key_op(KeyOp::Encrypt).unwrap();
             assert!(matched(&set, &a128kw_encrypt).is_empty());
             assert_eq!(
