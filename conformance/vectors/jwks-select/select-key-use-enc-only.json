@@ -1,0 +1,41 @@
+{
+  "source": "ADR 0054 §2.3; RFC 7517 §4.2",
+  "description": "key_use enc alone, on a P-256 key with use sig and a P-256 key with use enc, returns the use enc key; decided by ADR 0054 §2.3 (purpose): key_use enc gives U = enc, so the use sig member is out; with no alg there is no family or JWK alg check (§2.1, §2.2), neither member has key_ops (§2.4), and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "9k4oxJo3yFhw4XvUDFOFlmhgwqGrC25aBd7xhpkFB6Y",
+          "y": "zE-06UddsK2b0rpGKPXn9gz55y3tneIwQbTHPYn4o_I",
+          "kid": "a",
+          "use": "sig"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "kYUQsFzddzDVWQ2zrOHzLvP5Xh0vfUGlmngWR9XMJTw",
+          "y": "8uWP4BrVkuiNMETAGTs-RXFQpR9p5DtW6MzL2D6yXX8",
+          "kid": "b",
+          "use": "enc"
+        }
+      ]
+    },
+    "selector": {
+      "key_use": "enc"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "kYUQsFzddzDVWQ2zrOHzLvP5Xh0vfUGlmngWR9XMJTw",
+      "y": "8uWP4BrVkuiNMETAGTs-RXFQpR9p5DtW6MzL2D6yXX8",
+      "kid": "b",
+      "use": "enc"
+    }
+  }
+}

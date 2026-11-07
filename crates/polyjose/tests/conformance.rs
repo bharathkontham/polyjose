@@ -29,6 +29,11 @@
 //!   RFC 7518 §7.1 registry, and a generated key, being random, is compared
 //!   by its shape, after the runner checks it is private, has exactly the
 //!   RFC members plus `alg`, and imports back unchanged;
+//! - for `jwks.select` (ADR 0054 §1–§4), the step order of
+//!   conformance/README.md: import `jwks`, then build the selector from
+//!   `kid`, `alg` and `key_use` in that order, then select, the first error
+//!   being the outcome (ADR 0054 §4 precedence); the selected key is
+//!   compared as a JSON value;
 //! - for `jwt.validate` and `jwt.issue` (RFC 7519), a fixed clock built
 //!   from `now` and no other (ADR 0028 §4); the step order of
 //!   conformance/README.md (`decrypt.key`, `decrypt`'s lists, `key` or
@@ -63,7 +68,7 @@ use polyjose::header::Header;
 use polyjose::json::{self, Number, Object, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use polyjose::jwe::{self, DecryptPolicy, Encryptor, JsonForm, Recipient};
-use polyjose::jwk::{Jwk, JwkSet, ThumbprintHash};
+use polyjose::jwk::{Jwk, JwkSelector, JwkSet, KeyAlg, KeyUse, ThumbprintHash};
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
 use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt};
 use polyjose::keys::{JoseAlg, KeyFormat, generate_for};
@@ -122,6 +127,7 @@ const OPERATIONS: &[&str] = &[
     "b64url.encode",
     "b64url.decode",
     "jwk.thumbprint",
+    "jwks.select",
     "jws.sign",
     "jws.verify",
     "keys.import_pem",
@@ -342,6 +348,35 @@ const JWK_THUMBPRINT_OK: Shape = Shape {
         req("thumbprint", Kind::Base64url),
         req("thumbprint_uri", Kind::String),
     ],
+    rules: &[],
+};
+/// The binding `JwkSelector` (ADR 0030 §4, ADR 0054 §9): every member
+/// optional, `{}` selecting every member (ADR 0054 §1.3). `alg` and
+/// `key_use` are any string: an unsupported one is a vector outcome
+/// (`UnsupportedAlgorithm`, ADR 0054 §1.1), not a schema error.
+const JWKS_SELECTOR: Shape = Shape {
+    def: "jwks_selector",
+    members: &[
+        opt("kid", Kind::String),
+        opt("alg", Kind::String),
+        opt("key_use", Kind::String),
+    ],
+    rules: &[],
+};
+// ADR 0054 §1–§4: one key from a JWK Set (RFC 7517 §5). `jwks` is
+// unconstrained, since import errors and skipped members are under test.
+const JWKS_SELECT_INPUT: Shape = Shape {
+    def: "jwks_select_input",
+    members: &[
+        req("jwks", Kind::Object),
+        req("selector", Kind::Nested(&JWKS_SELECTOR)),
+    ],
+    rules: &[],
+};
+/// The one matching member's core serialization, compared as a JSON value.
+const JWKS_SELECT_OK: Shape = Shape {
+    def: "jwks_select_ok",
+    members: &[req("jwk", Kind::Object)],
     rules: &[],
 };
 
@@ -795,6 +830,12 @@ const SPECS: &[OpSpec] = &[
         name: "jwk.thumbprint",
         input: &JWK_THUMBPRINT_INPUT,
         ok: &[&JWK_THUMBPRINT_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "jwks.select",
+        input: &JWKS_SELECT_INPUT,
+        ok: &[&JWKS_SELECT_OK],
         can_fail: true,
     },
     OpSpec {
@@ -2404,6 +2445,38 @@ fn check_jwt_issue_round_trip(
 
 /// Runs the operation through the public API: the success outputs, or the
 /// library's error.
+/// `jwks.select` (ADR 0054 §1–§4; the binding `jwks_select` of ADR 0030
+/// §4 as amended by ADR 0054 §9). The steps run in the order
+/// conformance/README.md fixes, and the first error is the outcome, which
+/// is the ADR 0054 §4 precedence:
+///
+/// 1. import `jwks` with [`JwkSet::from_object`] (RFC 7517 §5; ADR 0041 §2
+///    skips, ADR 0021 and ADR 0029 §3 fail);
+/// 2. build the selector from [`JwkSelector::new`] with `kid`, then `alg`
+///    (`KeyAlg::from`), then `key_use` (`KeyUse::from`), each through its
+///    setter, which validates it (ADR 0054 §1.1);
+/// 3. [`JwkSet::select`]: one match, `NoMatchingKey` or
+///    `MultipleMatchingKeys` (ADR 0054 §4).
+///
+/// The selected key is its core serialization ([`Jwk::to_object`]).
+fn run_jwks_select(input: &Object, out: &mut Object) -> Result<(), Error> {
+    let set = JwkSet::from_object(input_object(input, "jwks"))?;
+    let selector = input_object(input, "selector");
+    let mut built = JwkSelector::new();
+    if selector.get("kid").is_some() {
+        built = built.kid(input_str(selector, "kid"));
+    }
+    if selector.get("alg").is_some() {
+        built = built.alg(KeyAlg::from(input_str(selector, "alg")))?;
+    }
+    if selector.get("key_use").is_some() {
+        built = built.key_use(KeyUse::from(input_str(selector, "key_use")))?;
+    }
+    let (_, key) = set.select(&built)?;
+    out.insert("jwk", key.to_object());
+    Ok(())
+}
+
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
     let input = &vector.input;
     let mut out = Object::new();
@@ -2438,6 +2511,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
             };
             out.insert("thumbprint", key.thumbprint(hash));
             out.insert("thumbprint_uri", key.thumbprint_uri(hash));
+        }
+        "jwks.select" => {
+            if let Err(e) = run_jwks_select(input, &mut out) {
+                return Ok(Err(e));
+            }
         }
         "jws.sign" => {
             if let Err(e) = run_jws_sign(input, &vector.expect, &mut out)? {
