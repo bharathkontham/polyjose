@@ -211,8 +211,13 @@ export interface JwtVerifyOptions {
   ignoreAudience?: boolean | undefined;
   typ?: string | undefined;
   anyTyp?: boolean | undefined;
-  /** `"access_token"`: the RFC 9068 §4 profile. */
-  profile?: string | undefined;
+  /**
+   * `"access_token"`: the RFC 9068 §4 JWT access-token profile (`Policy::access_token`), the only
+   * profile, so a typo fails to compile (0013 F04, review N5). The type is the only check: an
+   * untyped caller's other string still reaches the core, which refuses it with
+   * `UnsupportedAlgorithm` (ADR 0030 §4).
+   */
+  profile?: "access_token" | undefined;
   maxKeyCandidates?: number | undefined;
   maxInputLen?: number | undefined;
 }
