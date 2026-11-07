@@ -55,6 +55,7 @@ esac
 command -v node >/dev/null 2>&1 || die "node not found on PATH"
 # The platform the napi loader (binding.cjs) picks on this host: <platform>-<arch>, plus -gnu or
 # -musl on Linux (a glibc runtime version in the process report means glibc) and -msvc on Windows.
+# shellcheck disable=SC2016 # the ${...} below are JavaScript template literals, not shell expansions
 host=$(node -e '
 const { platform, arch } = process;
 let name = `${platform}-${arch}`;
