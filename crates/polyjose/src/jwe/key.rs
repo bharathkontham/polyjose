@@ -177,6 +177,22 @@ fn key_op(alg: &KeyMgmtAlg, direction: Direction) -> Option<KeyOp> {
     Some(op)
 }
 
+/// The RFC 7517 §4.3 `key_ops` values that using a key with `alg`
+/// performs in either direction: [`key_op`] for encrypting, then for
+/// decrypting (`wrapKey` and `unwrapKey`, `encrypt` and `decrypt`, or
+/// `deriveKey` twice). Both are `None` for an `alg` without a mode.
+///
+/// Only JWK Set selection calls it (ADR 0054 §2 item 4), since a selector
+/// names no direction. It reads [`key_op`] rather than restating its rows;
+/// key binding ([`RecipientKey::from_jwk`]) still checks the one operation
+/// of its own direction.
+pub(crate) fn key_ops_either_direction(alg: &KeyMgmtAlg) -> [Option<KeyOp>; 2] {
+    [
+        key_op(alg, Direction::Encrypt),
+        key_op(alg, Direction::Decrypt),
+    ]
+}
+
 /// The error for a key of the wrong size or form: [`Error::InvalidKey`]
 /// with `detail` on encrypt, where the caller supplied an unusable key,
 /// and [`Error::KeyAlgorithmMismatch`] on decrypt, where the key is simply
