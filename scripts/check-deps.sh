@@ -41,7 +41,10 @@
 #      features) has a crate that bindings/deps-allowlist/<name>.txt, deps-allowlist.txt and the
 #      core's tree do not cover; that file lists a crate the tree lacks or one deps-allowlist.txt
 #      already allows, or is malformed; or a binding package has no such file (ADR 0030 §1). A file
-#      whose bindings/<name> does not exist yet is skipped with a message.
+#      whose bindings/<name> does not exist yet is skipped with a message;
+#  14. a serde-family crate (serde, serde_core, serde_derive, serde_json, serde-wasm-bindgen, ...) is
+#      in the normal tree of a binding package other than below the crates of the explained
+#      `# serde-only-below:` line of its allowlist (ADR 0030 §1), or that line is not needed.
 #  Checks 9-12 are, with scripts/check-rsa-symbols.sh (the same rule read from the compiled object
 #  code of polyjose and the bindings, built in the dev and the release profile, ADR 0049 §1), the
 #  guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing them means removing
@@ -953,6 +956,10 @@ if seen != len(members):
 #     surface.txt before T01 creates bindings/surface). Adding an entry needs an ADR, like the core's.
 binding_allowlist_dir=bindings/deps-allowlist
 
+# The serde family (check 14): serde, serde_core, serde_derive, serde_json, serde-wasm-bindgen and any
+# other crate named serde-<x> or serde_<x>, as normalized names.
+serde_family_re='^serde(-.*)?$'
+
 # binding_packages: "$work/binding-pkgs" ("<dir> <package>" for each workspace package whose
 # manifest is in bindings/<dir>), "$work/ws-members" (every workspace package's normalized name).
 binding_packages() {
@@ -1100,6 +1107,97 @@ check_binding_allowlists() {
   done <"$work/binding-pkgs"
 }
 
+# 14. No serde in the bindings (ADR 0030 §1: "No serde anywhere, including framework serde
+#     features"; ADR 0016 §6). Fails when a serde-family crate (serde_family_re) is in the normal
+#     tree of a workspace package under bindings/ (`cargo tree -e normal --all-features --target
+#     all`), unless every path to it goes through a crate named on the `# serde-only-below:` line of
+#     the package's allowlist. That line exists only for a path that is build-time only, which the
+#     comment lines under it must explain (check 13 rejects the line without them): in ffi.txt,
+#     UniFFI's proc-macro and its bindgen CLI (feature 0013 T10 moves the CLI into its own package).
+#     The line must also stay exact: it fails when the tree has no serde-family crate at all, or
+#     when it names a crate the tree does not contain. Each failure prints a shortest offending path.
+check_no_serde_in_bindings() {
+  local dir pkg name below file line crate path
+  while read -r dir pkg; do
+    case $dir in !*) continue ;; esac
+    name=$dir; below="$work/bal/$name.below"
+    file="$binding_allowlist_dir/$name.txt"
+    # A malformed allowlist is reported by check 13 and not used here.
+    if [ -e "$work/bal/$name.bad" ]; then continue; fi
+    [ -f "$below" ] || : >"$below"
+    cargo tree --locked -p "$pkg" -e normal --all-features --target all --prefix depth </dev/null \
+      >"$work/serde.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree -p $pkg --prefix depth failed"; }
+    python3 -I -c '
+import re, sys
+tree_path, below_path, family = sys.argv[1], sys.argv[2], re.compile(sys.argv[3])
+def norm(name):
+    return name.lower().replace("_", "-")
+line_re = re.compile(r"^([0-9]+)([A-Za-z0-9][A-Za-z0-9_-]*) (v[0-9][^ ]*)")
+edges, stack, root, spelled, present = {}, [], None, {}, set()
+with open(tree_path, encoding="utf-8") as f:
+    for number, line in enumerate(f, 1):
+        m = line_re.match(line.rstrip("\r\n"))
+        if m is None:
+            sys.exit("unexpected cargo tree line %d: %s" % (number, line.rstrip()))
+        depth, node = int(m.group(1)), (norm(m.group(2)), m.group(3))
+        spelled[node] = m.group(2)
+        present.add(node[0])
+        if depth == 0:
+            if root is not None:
+                sys.exit("cargo tree printed more than one root")
+            root = node
+        elif depth > len(stack):
+            sys.exit("cargo tree line %d skips a level" % number)
+        else:
+            edges.setdefault(stack[depth - 1], set()).add(node)
+        del stack[depth:]
+        stack.append(node)
+if root is None:
+    sys.exit("cargo tree printed nothing")
+with open(below_path, encoding="utf-8") as f:
+    below = set(line.strip() for line in f if line.strip())
+for name in sorted(below - present):
+    print("OUTSIDE %s" % name)
+if below and not any(family.match(name) for name in present):
+    print("UNNEEDED")
+# Breadth-first from the package, never entering a crate of the serde-only-below line.
+prev, todo = {root: None}, [root]
+while todo:
+    nxt = []
+    for node in todo:
+        for dep in sorted(edges.get(node, ())):
+            if dep in prev or dep[0] in below:
+                continue
+            prev[dep] = node
+            nxt.append(dep)
+    todo = nxt
+for node in sorted(prev):
+    if family.match(node[0]):
+        path, cur = [], node
+        while cur is not None:
+            path.append(spelled[cur])
+            cur = prev[cur]
+        print("HIT %s %s" % (spelled[node], " -> ".join(reversed(path))))
+' "$work/serde.depth" "$below" "$serde_family_re" </dev/null >"$work/serde.hits" \
+      || die "could not read the dependency graph of $pkg for serde (see above)"
+    while read -r line; do
+      case $line in
+        "OUTSIDE "*) fail "$file: serde-only-below names ${line#OUTSIDE }, which is not in the tree of $pkg; remove it from the line" ;;
+        UNNEEDED) fail "$file: serde-only-below is not needed: no serde-family crate in the tree of $pkg; remove the line and its explanation" ;;
+        "HIT "*)
+          line=${line#HIT }; crate=${line%% *}; path=${line#* }
+          if [ -s "$below" ]; then
+            fail "$crate is in the normal tree of $pkg (bindings/$name) (ADR 0030 §1: no serde in the bindings): $path"
+            echo "  Not through any crate of the serde-only-below line of $file: $(tr '\n' ' ' <"$below")"
+          else
+            fail "$crate is in the normal tree of $pkg (bindings/$name) (ADR 0030 §1: no serde in the bindings): $path"
+          fi
+          echo "  Every path to it: cargo tree -p $pkg -e normal --all-features --target all -i $crate" ;;
+      esac
+    done <"$work/serde.hits"
+  done <"$work/binding-pkgs"
+}
+
 check_tree_allowlisted
 check_allowlist_not_stale
 check_default_features_off
@@ -1113,6 +1211,7 @@ check_no_sha1
 check_rsa_no_features
 check_rsa_not_renamed
 check_binding_allowlists
+check_no_serde_in_bindings
 
 if [ "$failed" -ne 0 ]; then
   echo "check-deps: FAILED"
@@ -1122,5 +1221,5 @@ fi
 echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features and under its own name (ADR 0021, ADR 0022)"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
-echo "ok: the binding trees match $binding_allowlist_dir ($(awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $2 }' "$work/bal-checked")) (ADR 0030 §1)"
+echo "ok: the binding trees match $binding_allowlist_dir ($(awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $2 }' "$work/bal-checked")), with serde-family crates only below each file's serde-only-below crates (ADR 0030 §1)"
 exit 0
