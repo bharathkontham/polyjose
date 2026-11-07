@@ -1,0 +1,263 @@
+# The Kotlin/Android binding on GitHub's runners (feature 0008 T05; ADR 0033 §4, §5; ADR 0037 §1):
+# the JVM suite on each of the five host platforms with its own library, the instrumented suite on
+# an x86_64 emulator with KVM, the release AAR and the five-platform JVM jar, and parity of every
+# result with a fresh rust-core run. It builds and checks; it never publishes or signs anything.
+#
+# Dispatched by hand only (owner, 2026-11-07). ADR 0044 keeps PR CI off, and this workflow is not
+# run without the owner. Feature 0012 T03 makes it callable from ci.yml and release.yml (ADR 0037
+# §1) by adding the commented line under `on:` unchanged. For that, every job reads only its
+# inputs and the github, matrix, steps and needs contexts, the token is the default read-only one,
+# and no job has a deployment environment. There is no `concurrency` group, because in a called
+# workflow github.workflow names the caller, so a group here could cancel the caller's run.
+#
+# Each step calls a platforms/android/scripts/ci-*.sh script, and every script also runs locally.
+# platforms/android/scripts/ci-check-workflow.sh checks this file (the triggers, the permissions,
+# the pinned actions and the absence of credentials, publishing and signing).
+#
+# Every action is pinned to a full commit SHA; the trailing comment is the release tag that SHA
+# was resolved from. The actions are ci.yml's (same SHAs) plus the first-party setup-java,
+# upload-artifact and download-artifact. Bump both together.
+name: binding-android
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode: { description: "ci (the only mode until feature 0012 adds release)", type: string, required: false, default: ci }
+  # workflow_call: { inputs: { mode: { description: "ci (the only mode until feature 0012 adds release)", type: string, required: false, default: ci } } }
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Fails the run early on a mode this workflow does not implement yet.
+  mode:
+    name: mode
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Check the mode input
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          case $MODE in
+            ci) echo "mode: ci" ;;
+            *) echo "::error::mode '$MODE' is not implemented (only ci; feature 0012 adds release)"; exit 1 ;;
+          esac
+
+  # The five JVM host libraries (ADR 0033 §4), each built and tested on a native runner, except
+  # darwin-x86-64, which is cross-built on the arm64 Mac and not tested here.
+  host-natives:
+    name: host natives (${{ matrix.prefix }})
+    needs: [mode]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, prefix: darwin-aarch64, cross: darwin-x86-64 }
+          - { os: ubuntu-24.04, prefix: linux-x86-64, cross: "" }
+          - { os: ubuntu-24.04-arm, prefix: linux-aarch64, cross: "" }
+          - { os: windows-2025, prefix: win32-x86-64, cross: "" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # As in ci.yml: before anything that invokes cargo.
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build and test the host library
+        env:
+          PREFIX: ${{ matrix.prefix }}
+          CROSS: ${{ matrix.cross }}
+        run: |
+          # CROSS is empty or one prefix.
+          # shellcheck disable=SC2086
+          platforms/android/scripts/ci-host-natives.sh "$PREFIX" $CROSS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jvm-natives-${{ matrix.prefix }}
+          path: target/ci/jvm-natives-${{ matrix.prefix }}/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ matrix.cross != '' }}
+        with:
+          name: jvm-natives-${{ matrix.cross }}
+          path: target/ci/jvm-natives-${{ matrix.cross }}/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-jvm-${{ matrix.prefix }}
+          path: target/ci/conformance-jvm-${{ matrix.prefix }}/
+          if-no-files-found: error
+
+  # The instrumented suite (ADR 0033 §5) on API 36 x86_64 with KVM. A waiver (no emulator) fails
+  # this job.
+  emulator:
+    name: emulator (API 36 x86_64)
+    needs: [mode]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Android SDK, NDK, emulator and system image
+        run: platforms/android/scripts/ci-android-sdk.sh --emulator
+
+      - name: Instrumented suite on the emulator
+        run: platforms/android/scripts/ci-emulator.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-android-emulator
+          path: target/ci/conformance-android-emulator/
+          if-no-files-found: error
+
+      # The JUnit XML, also when the suite failed, to read what failed.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: android-emulator-junit
+          path: platforms/android/polyjose/build/outputs/androidTest-results/
+          if-no-files-found: warn
+
+  # The release AAR and the five-platform jar (ADR 0033 §4), from the libraries above, checked by
+  # scripts/check-artifacts.sh. Built into build/repo only; nothing leaves the run but artifacts.
+  assemble:
+    name: assemble (AAR, five-platform jar)
+    needs: [host-natives]
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Android SDK and NDK
+        run: platforms/android/scripts/ci-android-sdk.sh
+
+      # One jvm-natives-<prefix>/ folder per platform.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: jvm-natives-*
+          path: target/ci-natives
+
+      - name: Assemble and check the AAR and the jar
+        run: platforms/android/scripts/ci-assemble-jar.sh target/ci-natives --require-all
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-aar
+          path: target/ci/android-aar/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jvm-jar
+          path: target/ci/jvm-jar/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: maven-repo
+          path: target/ci/maven-repo/
+          if-no-files-found: error
+
+  # Every Kotlin runner's results against a fresh rust-core run of this checkout (ADR 0034 §5,
+  # ADR 0060). It runs when a test job failed too, to report what it can, and a missing results
+  # file fails it.
+  parity:
+    name: parity
+    needs: [host-natives, emulator]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: conformance-*
+          path: target/ci-results
+          merge-multiple: true
+
+      - name: Conformance parity
+        run: platforms/android/scripts/ci-parity.sh target/ci-results
