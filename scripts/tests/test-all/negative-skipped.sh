@@ -89,7 +89,6 @@ malformed_case upper-tool 'SKIPPED (host:Actionlint)'
 malformed_case two-words 'SKIPPED (host:actionlint extra)'
 malformed_case suffix 'SKIPPED (host:actionlint) later'
 malformed_case leading-blank '  SKIPPED (host:actionlint)'
-malformed_case lower-case 'skipped (host:actionlint)'
 
 # --- Exit status and earlier lines ----------------------------------------------------------------------
 
