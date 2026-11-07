@@ -218,6 +218,13 @@ reject_case unlicense Unlicense;                   expect_reject "an Unlicense-o
 reject_case unlicense-and "Unlicense AND MIT";     expect_reject "Unlicense inside an AND fails" "bad-crate 0.1.0"
 reject_case unlicense-nested "(Unlicense AND MIT) OR Apache-2.0"; expect_reject "Unlicense inside an AND within an OR fails" "bad-crate 0.1.0"
 reject_case unlicense-or-gpl "Unlicense OR GPL-3.0-only"; expect_reject "Unlicense OR a license outside the allowlist fails" "bad-crate 0.1.0"
+# Adversarial expressions (tester, security audit I6): none may pass where cargo deny would not.
+reject_case unlicense-or-and-gpl "Unlicense OR (MIT AND GPL-2.0-only)"; expect_reject "Unlicense OR (allowed AND GPL) fails" "bad-crate 0.1.0"
+reject_case unlicense-or-and-gpl2 "(Unlicense OR MIT) AND GPL-3.0-only"; expect_reject "(Unlicense OR MIT) AND GPL fails" "bad-crate 0.1.0"
+reject_case unlicense-with "Unlicense WITH LLVM-exception"; expect_reject "Unlicense WITH an exception fails" "bad-crate 0.1.0"
+reject_case unlicense-slash-gpl "Unlicense/GPL-3.0-only"; expect_reject "legacy Unlicense/GPL fails" "bad-crate 0.1.0"
+reject_case unlicense-twice "Unlicense OR Unlicense"; expect_reject "Unlicense OR Unlicense fails" "bad-crate 0.1.0"
+reject_case unlicense-and-or "Unlicense AND (Unlicense OR MIT)"; expect_reject "Unlicense AND (Unlicense OR MIT) fails" "bad-crate 0.1.0"
 
 # A GPL crate deep in the tree, next to a second offender: both named, nothing written, and an
 # existing output file is left as it was.
