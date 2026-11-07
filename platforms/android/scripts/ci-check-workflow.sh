@@ -186,7 +186,41 @@ function end_permissions() {
   }
   perm_open = 0
 }
-BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top_perm_ok = 0; run_open = 0 }
+function fail_at(n, r, msg) { printf "FAIL: %s: line %d: %s\n", msg, n, r }
+# The end of a list item (a step): its with: keys against the allow-list of its action.
+function end_item(   i, k, v, list, pcf) {
+  if (item_action == "" && item_with) fail_at(with_line, with_raw, "actions: with: without uses: in the same step")
+  if (item_action != "") {
+    list = (item_action in with_allow) ? with_allow[item_action] : ""
+    pcf = 0
+    for (i = 1; i <= wk_n; i++) {
+      k = wk_key[i]; v = wk_val[i]
+      if (index(" " list " ", " " k " ") == 0)
+        fail_at(wk_line[i], wk_raw[i], "actions: with: " k " is not allowed for " item_action (list == "" ? " (it takes no with: keys here)" : " (only " list ")"))
+      else if (item_action == "actions/checkout" && k == "persist-credentials") {
+        if (v == "false") pcf = 1
+        else fail_at(wk_line[i], wk_raw[i], "actions: with: persist-credentials must be false for actions/checkout")
+      } else if (item_action == "actions/checkout" && k == "fetch-depth" && v !~ /^[0-9]+$/)
+        fail_at(wk_line[i], wk_raw[i], "actions: with: fetch-depth must be a number for actions/checkout")
+    }
+    if (item_action == "actions/checkout" && !pcf)
+      fail_at(item_line, item_raw, "actions: actions/checkout without with: persist-credentials: false (it would keep the token)")
+  }
+  item_open = 0; item_action = ""; item_uses = 0; item_with = 0; wk_n = 0; with_open = 0
+}
+BEGIN {
+  on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top_perm_ok = 0; run_open = 0
+  item_open = 0; item_action = ""; item_uses = 0; item_with = 0; wk_n = 0; with_open = 0
+  # The with: keys each action may take (security audit L3): a checkout only of this repository
+  # at the dispatched commit (no repository, ref, path, ssh-key or token), and no other action
+  # input than the shipped workflow uses. An action not listed takes none. Add a key here only
+  # with a review of what that input can fetch, run or expose.
+  with_allow["actions/checkout"] = "persist-credentials fetch-depth"
+  with_allow["Swatinem/rust-cache"] = "save-if"
+  with_allow["actions/setup-java"] = "distribution java-version"
+  with_allow["actions/upload-artifact"] = "name path if-no-files-found"
+  with_allow["actions/download-artifact"] = "pattern path merge-multiple"
+}
 {
   raw = $0
   if (raw ~ /^\t/ || raw ~ /^ *\t/) fail("structure: tab indentation")
@@ -224,6 +258,24 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
   if (has_key(low, "continue-on-error")) fail("continue-on-error: not allowed (a failing step or job must fail the run)")
   if (has_key(low, "container") || has_key(low, "services")) fail("containers: container: or services: (an image would run the steps)")
   if (low ~ /[{,][ ]*shell[ ]*:/) fail("shell: a flow-style shell: (only a block shell: bash)")
+  if (low ~ /[{,][ ]*with[ ]*:/) fail("structure: flow-style with:")
+
+  # Steps: a list item ends at the next line indented no deeper than its "-". The keys of its
+  # with: block (one indentation level) are collected and checked by end_item.
+  if (with_open && indent <= with_col) with_open = 0
+  if (item_open && indent <= item_dash) end_item()
+  if (!item_open && code ~ /^ *-( |$)/) {
+    item_open = 1; item_dash = indent; item_col = -1
+    if (match(code, /^ *- +[^ ]/)) item_col = RLENGTH - 1
+  }
+  if (with_open) {
+    if (with_child < 0) with_child = indent
+    if (indent == with_child) {
+      if (parse_key(code) && keycol == indent) {
+        wk_n++; wk_key[wk_n] = tolower(key); wk_val[wk_n] = value; wk_line[wk_n] = NR; wk_raw[wk_n] = raw
+      } else fail("actions: not a key under with:")
+    } else if (indent < with_child) fail("actions: inconsistent indentation under with:")
+  }
 
   # A permissions block in progress: its children.
   if (perm_open) {
@@ -244,6 +296,22 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
   rawkey = key; key = tolower(key)
   if (key != rawkey && key ~ /^(on|true|permissions|uses|with|run|shell|defaults|secrets|container|services|continue-on-error|environment)$/)
     fail("structure: \"" rawkey "\" is a case variant of " key ": (keys are lower case)")
+
+  # The uses: and with: of a step (the keys of the list item itself).
+  if (item_open && item_col < 0 && indent > item_dash) item_col = keycol
+  if (key == "uses" || key == "with") {
+    if (item_open && keycol == item_col) {
+      if (key == "uses") {
+        if (item_uses++) fail("structure: a second uses: in one step")
+        item_action = value; sub(/@.*/, "", item_action); item_line = NR; item_raw = raw
+      } else {
+        if (item_with++) fail("structure: a second with: in one step")
+        with_line = NR; with_raw = raw
+        if (value != "") fail("actions: with: must be a block of keys")
+        else { with_open = 1; with_col = keycol; with_child = -1 }
+      }
+    } else if (key == "with") fail("actions: with: outside a step")
+  }
 
   # Top-level keys.
   if (indent == 0 && keycol == 0) {
@@ -282,6 +350,7 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
   }
 }
 END {
+  if (item_open) end_item()
   NR = 0; raw = "(end of file)"
   end_permissions()
   if (on_count != 1) fail("trigger: " on_count " top-level on: keys (exactly one is required)")
