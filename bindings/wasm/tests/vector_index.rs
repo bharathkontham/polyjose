@@ -44,7 +44,10 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
             .file_type()
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         if kind.is_symlink() {
-            panic!("{}: a symbolic link under conformance/vectors", path.display());
+            panic!(
+                "{}: a symbolic link under conformance/vectors",
+                path.display()
+            );
         } else if kind.is_dir() {
             collect(root, &path, out);
         } else if path.extension().is_some_and(|ext| ext == "json") {
