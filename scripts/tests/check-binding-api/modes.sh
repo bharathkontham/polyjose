@@ -3,7 +3,8 @@
 # scripts/check-binding-api.d/<mode>.sh is a mode, found without editing the main script; a mode
 # that skips prints `SKIPPED (<mode>: <reason>)` and never counts as passing (pipeline rule 9);
 # derive errors, malformed lines and code-order differences fail; unknown modes are usage errors.
-# Uses fixture modes, so it needs no node and no cargo.
+# Uses fixture modes, so it needs no node and no cargo. A case that runs every mode keeps only the
+# real surface and js modes of the copy, so the mode files binding features add do not change it.
 #
 # Usage: scripts/tests/check-binding-api/modes.sh (under /bin/bash 3.2 and bash 5).
 # The fixture mode bodies below are shell code for a mode file, single-quoted on purpose.
@@ -28,16 +29,67 @@ run_check kotlin
 check_last_line "a new mode file is a mode, without editing the main script" 0 \
   'check-binding-api: kotlin: PASS (32 operations, 0 records, 0 fields, 16 codes)'
 
-new_case all-modes
-fixture_mode kotlin "$echo_mode"
-fixture_mode swift 'MODE_KINDS="op"
+# only_modes <mode>...: removes every other mode file from the copy. The real tree gains a mode file
+# per binding feature, so a case that runs every mode keeps only the real ones it controls.
+only_modes() {
+  local f m
+  for m in "$@"; do
+    [ -f "$case_dir/scripts/check-binding-api.d/$m.sh" ] || lib_die "mode $m is not in the copy"
+  done
+  for f in "$case_dir"/scripts/check-binding-api.d/*.sh; do
+    m=${f##*/}
+    case " $* " in
+      *" ${m%.sh} "*) ;;
+      *) rm -f "$f" || lib_die "could not remove $m from the copy" ;;
+    esac
+  done
+}
+
+# all_modes_case <name> [<base>]: a case whose modes are exactly the real surface (passes) and js
+# (skips: bindings/js is removed) and the fixtures kotlin (passes) and swift (skips), whatever other
+# modes the tree has.
+all_modes_case() {
+  new_case "$@"
+  only_modes surface js
+  fixture_mode kotlin "$echo_mode"
+  fixture_mode swift 'MODE_KINDS="op"
 mode_derive() { skip "swift missing"; }'
-rm -rf "$case_dir/bindings/js"
+  rm -rf "$case_dir/bindings/js"
+}
+all_modes_lines=('^check-binding-api: kotlin: PASS ' '^check-binding-api: surface: PASS '
+  '^SKIPPED \(js: bindings/js/package\.json missing\)$' '^SKIPPED \(swift: swift missing\)$')
+
+all_modes_case all-modes
 run_check
 check "with no argument every mode runs, and a summary counts skips apart" 0 \
-  '^check-binding-api: kotlin: PASS ' '^check-binding-api: surface: PASS ' \
-  '^SKIPPED \(js: bindings/js/package\.json missing\)$' '^SKIPPED \(swift: swift missing\)$' \
-  '^check-binding-api: 2 passed, 0 failed, skipped: js swift$'
+  "${all_modes_lines[@]}" '^check-binding-api: 2 passed, 0 failed, skipped: js swift$'
+
+# Each binding feature adds its mode file to the real tree (0006 wasm.sh, then node, kotlin, swift;
+# ADR 0030 §8). The all-modes case must not depend on them: here the tree has gained one that skips
+# and one that passes, and the case still runs only its own modes.
+cp -R "$base" "$scratch/base-grown" || lib_die "could not copy the base"
+printf '%s\n' 'MODE_KINDS="op"' 'mode_derive() { skip "wasm-pack missing"; }' \
+  >"$scratch/base-grown/scripts/check-binding-api.d/wasm.sh" || lib_die "could not write wasm.sh"
+printf '%s\n' "$echo_mode" >"$scratch/base-grown/scripts/check-binding-api.d/node.sh" \
+  || lib_die "could not write node.sh"
+all_modes_case all-modes-grown-tree "$scratch/base-grown"
+run_check
+check "the all-modes case is unchanged by the mode files bindings add to the tree" 0 \
+  "${all_modes_lines[@]}" '^check-binding-api: 2 passed, 0 failed, skipped: js swift$'
+check_absent "the all-modes case runs none of the tree's other modes" \
+  '^(SKIPPED \(|check-binding-api: )(wasm|node):'
+
+# An extra mode file in the case itself is a mode like the others: it runs, a pass counts, and a
+# skip is listed in the summary and never counted as passed.
+all_modes_case extra-modes
+fixture_mode wasm 'MODE_KINDS="op"
+mode_derive() { skip "wasm-pack missing"; }'
+fixture_mode node "$echo_mode"
+run_check
+check "an extra passing mode and an extra skipping mode are each reported" 0 \
+  "${all_modes_lines[@]}" '^check-binding-api: node: PASS ' '^SKIPPED \(wasm: wasm-pack missing\)$' \
+  '^check-binding-api: 3 passed, 0 failed, skipped: js swift wasm$'
+check_absent "an extra mode that skips is not reported as passing" '^check-binding-api: wasm: PASS'
 
 new_case skip
 fixture_mode swift 'MODE_KINDS="op"

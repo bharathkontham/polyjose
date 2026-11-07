@@ -51,11 +51,12 @@ need_js_modules() {
   js_modules=$scratch/js-install/node_modules
 }
 
-# new_case <name>: a fresh copy of the base in $case_dir.
+# new_case <name> [<base>]: a fresh copy of the base (or of the given directory, a changed copy of
+# the base) in $case_dir.
 new_case() {
   case_dir="$scratch/case-$1"
   rm -rf "$case_dir"
-  cp -R "$base" "$case_dir" || lib_die "could not copy the base"
+  cp -R "${2:-$base}" "$case_dir" || lib_die "could not copy ${2:-the base}"
 }
 
 # use_js_modules: links the case's bindings/js/node_modules to $js_modules.
