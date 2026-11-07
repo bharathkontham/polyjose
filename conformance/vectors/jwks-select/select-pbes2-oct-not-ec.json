@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0054 §2.1; RFC 7518 §4.8",
+  "description": "PBES2-HS256+A128KW on a P-256 key and an oct key returns the oct key; decided by ADR 0054 §2.1 (family): PBES2 is served by an oct key only (its k is the password, RFC 7518 §4.8), and an asymmetric key is never returned for it; member 1 has no alg, use (U = enc) or key_ops, and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        },
+        {
+          "kty": "oct",
+          "k": "X8EwrK_w_mNZySX8TCh4Bw"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "PBES2-HS256+A128KW"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "oct",
+      "k": "X8EwrK_w_mNZySX8TCh4Bw"
+    }
+  }
+}

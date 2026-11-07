@@ -2,8 +2,11 @@
 # The license policy and crate selection of scripts/third-party-notices.sh (ADR 0020 §4), on
 # fixture workspaces of local path crates (no registry, no network):
 #   - a crate whose license expression names a license outside the allowlist (GPL, also inside
-#     an OR), uses another WITH exception, is malformed, or is missing (license-file only) fails
-#     the run, naming the crate, and no output file is written or replaced;
+#     an OR; CC0-1.0, which deny.toml does not allow either), uses another WITH exception, is
+#     malformed, or is missing (license-file only) fails the run, naming the crate, and no output
+#     file is written or replaced;
+#   - Unlicense passes only as an OR alternative to an allowed license (`Unlicense OR MIT`), not
+#     alone, under an AND, or next to a license outside the allowlist;
 #   - a crate without a license file passes only when its license is exactly MIT, Apache-2.0 or
 #     MPL-2.0, and then gets the standard text from scripts/licenses/;
 #   - only linked crates are listed: build-dependencies, dev-dependencies, proc-macros and the
@@ -107,8 +110,11 @@ crate_file legacy license-mit "MARKER legacy mit"
 crate_file legacy LICENSE-APACHE.md "MARKER legacy apache"
 vendor_crate paren "(MIT OR Apache-2.0) AND Unicode-3.0"
 crate_file paren LICENSE-UNICODE "MARKER paren unicode"
-vendor_crate others "BSD-3-Clause OR BSD-2-Clause OR ISC OR Zlib OR Unlicense OR CC0-1.0"
+vendor_crate others "BSD-3-Clause OR BSD-2-Clause OR ISC OR Zlib OR Unlicense"
 crate_file others COPYING "MARKER others copying"
+# Unlicense as an OR alternative to an allowed license, as memchr ships it (security audit I6).
+vendor_crate unlicense-or "Unlicense OR MIT"
+crate_file unlicense-or LICENSE-MIT "MARKER unlicense-or mit"
 vendor_crate lowercase "mit OR apache-2.0"
 crate_file lowercase LICENCE "MARKER lowercase licence"
 vendor_crate licdir MIT
@@ -121,7 +127,7 @@ vendor_crate builddep GPL-3.0-only
 vendor_crate devdep GPL-3.0-only
 vendor_crate androidonly MIT
 crate_file androidonly LICENSE "MARKER androidonly"
-for c in mitfile mitnofile apachenofile mplnofile llvm legacy paren others lowercase licdir pmacro; do
+for c in mitfile mitnofile apachenofile mplnofile llvm legacy paren others unlicense-or lowercase licdir pmacro; do
   app_dep deps "$c"
 done
 app_dep build-deps builddep
@@ -135,7 +141,7 @@ if [ "$rc" -eq 0 ]; then pass "allowlisted licenses: the run succeeds"
 else fail "allowlisted licenses: the run fails (exit $rc)"; show_log; fi
 if [ -f "$out" ]; then
   expect_crates "linked crates are listed, transitive ones too" "$out" present \
-    deep mitfile mitnofile apachenofile mplnofile llvm legacy paren others lowercase licdir
+    deep mitfile mitnofile apachenofile mplnofile llvm legacy paren others unlicense-or lowercase licdir
   expect_crates "proc-macros, their dependencies, build- and dev-dependencies are not" "$out" absent \
     pmacro pmdep builddep devdep
   expect_crates "another target's dependency is not" "$out" absent androidonly
@@ -204,6 +210,21 @@ reject_case none -;                                 expect_reject "no license ex
 reject_case license-file file:LICENSE;              expect_reject "license-file without an expression fails" "bad-crate 0.1.0"
 reject_case dual-no-file "MIT OR Apache-2.0" no-file; expect_reject "no license file and not a single standard license fails" "bad-crate 0.1.0"
 reject_case bsd-no-file BSD-3-Clause no-file;       expect_reject "BSD-3-Clause without its license file fails" "bad-crate 0.1.0"
+# deny.toml [licenses].allow has no CC0-1.0, so neither has the notices allowlist (security audit I6).
+reject_case cc0 CC0-1.0;                           expect_reject "a CC0-1.0-only crate fails" "bad-crate 0.1.0"
+reject_case cc0-or "MIT OR CC0-1.0";               expect_reject "a CC0-1.0 alternative in an OR fails" "bad-crate 0.1.0"
+# Nor has it Unlicense: the notices accept it only as an OR alternative to an allowed license.
+reject_case unlicense Unlicense;                   expect_reject "an Unlicense-only crate fails" "bad-crate 0.1.0"
+reject_case unlicense-and "Unlicense AND MIT";     expect_reject "Unlicense inside an AND fails" "bad-crate 0.1.0"
+reject_case unlicense-nested "(Unlicense AND MIT) OR Apache-2.0"; expect_reject "Unlicense inside an AND within an OR fails" "bad-crate 0.1.0"
+reject_case unlicense-or-gpl "Unlicense OR GPL-3.0-only"; expect_reject "Unlicense OR a license outside the allowlist fails" "bad-crate 0.1.0"
+# Adversarial expressions (tester, security audit I6): none may pass where cargo deny would not.
+reject_case unlicense-or-and-gpl "Unlicense OR (MIT AND GPL-2.0-only)"; expect_reject "Unlicense OR (allowed AND GPL) fails" "bad-crate 0.1.0"
+reject_case unlicense-or-and-gpl2 "(Unlicense OR MIT) AND GPL-3.0-only"; expect_reject "(Unlicense OR MIT) AND GPL fails" "bad-crate 0.1.0"
+reject_case unlicense-with "Unlicense WITH LLVM-exception"; expect_reject "Unlicense WITH an exception fails" "bad-crate 0.1.0"
+reject_case unlicense-slash-gpl "Unlicense/GPL-3.0-only"; expect_reject "legacy Unlicense/GPL fails" "bad-crate 0.1.0"
+reject_case unlicense-twice "Unlicense OR Unlicense"; expect_reject "Unlicense OR Unlicense fails" "bad-crate 0.1.0"
+reject_case unlicense-and-or "Unlicense AND (Unlicense OR MIT)"; expect_reject "Unlicense AND (Unlicense OR MIT) fails" "bad-crate 0.1.0"
 
 # A GPL crate deep in the tree, next to a second offender: both named, nothing written, and an
 # existing output file is left as it was.

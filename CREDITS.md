@@ -470,7 +470,7 @@ UniFFI) are not part of the core crate and are not listed here.
   (ADR 0021).
 - **Audit status:** audited by Include Security in 2019 (one minor finding, per its README), before
   RUSTSEC-2023-0071 (the "Marvin" timing leak in private-key operations), which has no patched
-  version and affects the release candidate polyjose pins (0.10.0-rc.20). The constant-time 0.10
+  version and affects the release candidate polyjose pins (0.10.0-rc.21). The constant-time 0.10
   rewrite has no public independent audit. Public-key operations handle no secret, so the advisory
   does not apply to the way polyjose uses the crate.
 
