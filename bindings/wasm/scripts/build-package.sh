@@ -5,7 +5,8 @@
 #   bindings/wasm/scripts/build-package.sh [--no-pack]
 #
 #   1. guards: no publish command in the package sources, no hand-written JavaScript or
-#      declarations under bindings/wasm (ADR 0047), the exports conditions in ADR 0031 §3 order;
+#      declarations under bindings/wasm (ADR 0047), the exports conditions in ADR 0031 §3 order
+#      without `worker` (ADR 0063);
 #   2. one `wasm-pack build --release --target web --no-pack` (wasm-opt -Oz through
 #      [package.metadata.wasm-pack.profile.release] in bindings/wasm/Cargo.toml), into a staging
 #      directory under the workspace target/; prints the .wasm's raw, gzip -9 and brotli -q 11
@@ -102,11 +103,20 @@ if git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   [ -z "$tracked" ] || die "tracked JavaScript or declarations under bindings/wasm: $tracked"
 fi
 
-echo "==> $me: exports conditions in ADR 0031 §3 order"
+echo "==> $me: exports conditions in ADR 0031 §3 order, without worker (ADR 0063)"
+# Every key of exports["."], in order. ADR 0063 (superseding ADR 0031 §3 in part) drops `worker`:
+# webpack 5 sets it for `target: "webworker"`, so a browser Web Worker bundle would get the
+# Cloudflare-only workerd.mjs. Cloudflare's wrangler matches `workerd` first.
 order=$(awk '/"exports"/ { inside = 1 } inside && /^    }/ { exit }
-  inside && /^      "[a-z]+":/ { c = $1; gsub(/[":]/, "", c); printf "%s ", c }' "$template")
-[ "$order" = "types workerd worker node browser import default " ] \
-  || die "package.template.json exports conditions are '$order', expected: types workerd worker node browser import default"
+  inside && /^      "[^"]*":/ { c = $1; gsub(/[":]/, "", c); printf "%s ", c }' "$template")
+worker_hits=$(grep -nE '"worker"[[:space:]]*:' "$template" || true)
+case " $order" in
+  *" worker "*) die "package.template.json exports has a \"worker\" condition; ADR 0063 removed it (webpack's target \"webworker\" sets it, and browser Web Workers must get browser.mjs)" ;;
+esac
+# The same key at any indentation or nesting, which the line-based order scan above would miss.
+[ -z "$worker_hits" ] || { echo "$worker_hits"; die "package.template.json has a \"worker\" key; ADR 0063 removed the worker condition"; }
+[ "$order" = "types workerd node browser import default " ] \
+  || die "package.template.json exports conditions are '$order', expected: types workerd node browser import default (ADR 0031 §3, ADR 0063)"
 
 # --- 2. The wasm build -------------------------------------------------------------------------
 
