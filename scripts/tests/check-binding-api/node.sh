@@ -21,6 +21,11 @@ export LC_ALL=C
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so this
+# replaces lib.sh's cleanup trap with one that turns an exit before the last line into status 2.
+completed=""
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "node.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
+
 pkg=bindings/node
 fixtures=$repo/scripts/tests/check-binding-api/fixtures/node
 # The declarations the mode reads, in build order (build.sh: binding.d.ts, facade/, index.d.ts).
@@ -191,4 +196,6 @@ run_check node
 check "the shipped ERROR_CODES in another order fail" 1 \
   '^  error codes of node differ from the inventory.s \(same codes, same order\):$' '^check-binding-api: node: FAIL '
 
-finish
+status=0
+finish || status=$?
+completed=1; exit "$status"
