@@ -14,9 +14,10 @@
 //!   copying it out of a `RustBuffer` that it then freed unwiped: the documented residual of
 //!   ADR 0030 §7.3 (ADR 0030 §7.1).
 //! - **Outputs.** [`JwsVerified::payload`] is copied once from the surface's `SecretBytes`, which
-//!   is wiped when the surface record drops (ADR 0030 §7.2, ADR 0049 §4). UniFFI serializes the
-//!   record into a `RustBuffer`, drops the record, and the host frees the buffer unwiped: the
-//!   documented residual of ADR 0030 §7.3. The signed serializations are the surface's plain
+//!   is wiped when the surface record drops (ADR 0030 §7.2, ADR 0049 §4). UniFFI 0.32.2
+//!   serializes the record into a buffer that grows as it is written (earlier allocations of it
+//!   are freed unwiped), drops the record unwiped, and the host frees the `RustBuffer` unwiped:
+//!   the documented residual of ADR 0030 §7.3, which the adapter cannot reach without `unsafe`. The signed serializations are the surface's plain
 //!   `String`s (they are the transmitted token).
 
 use polyjose_surface::records as surface;

@@ -15,10 +15,11 @@
 //! - **Outputs.** Generated keys, imported keys, and the PEM or DER of a private key come from
 //!   the surface as `SecretString`/`SecretBytes`. The adapter copies each once into the value
 //!   UniFFI lowers, and the surface's buffer is wiped when it drops at the end of the statement
-//!   (ADR 0030 §7.2). A `String` result becomes the host's `RustBuffer` as is; a `Vec<u8>`
-//!   result is serialized by UniFFI into a new `RustBuffer` and the vector is then dropped. The
-//!   host frees the `RustBuffer` unwiped. These framework copies are the documented residual of
-//!   ADR 0030 §7.3.
+//!   (ADR 0030 §7.2). A `String` result becomes the host's `RustBuffer` as is. A `Vec<u8>`
+//!   result is serialized by UniFFI 0.32.2 into a buffer that grows as it is written (so earlier
+//!   allocations of it are freed unwiped too), and the vector is then dropped unwiped. The host
+//!   frees the `RustBuffer` unwiped. These framework copies, which the adapter cannot reach
+//!   without `unsafe`, are the documented residual of ADR 0030 §7.3.
 
 use zeroize::Zeroizing;
 
