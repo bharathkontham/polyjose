@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 use polyjose_surface::records::JwkSelector;
-use polyjose_surface::{SecretString, SurfaceError, jwk};
+use polyjose_surface::{SecretString, SurfaceError, jwk, keys, util};
 
 /// RFC 7517 Appendix A.2: the P-256 private key (with `use` and `kid`).
 const RFC7517_A2_P256_PRIVATE: &str = r#"{"kty":"EC",
@@ -314,4 +314,194 @@ fn jwks_select_is_unsupported_until_the_core_selects() {
         code(jwk::jwks_select(&jwks, &JwkSelector::default())),
         "UnsupportedAlgorithm"
     );
+}
+
+// --- jwk_generate_oct -------------------------------------------------------------------------
+
+/// The `k` octets of a generated `oct` JWK, which the core writes as `{"kty":"oct","k":"…"}`
+/// followed by `alg` when set (Jwk::to_object order).
+fn oct_k(jwk: &SecretString) -> Vec<u8> {
+    let rest = jwk.as_str().strip_prefix(r#"{"kty":"oct","k":""#).unwrap();
+    let end = rest.find('"').unwrap();
+    util::base64url_decode(&rest[..end]).unwrap()
+}
+
+#[test]
+fn generate_oct_accepts_the_core_range() {
+    // RFC 7518 §6.4.1; ADR 0018 §5: 16 to 512 octets, from the OS CSPRNG (ADR 0005).
+    for len in [16, 17, 32, 64, 511, 512] {
+        let key: SecretString = keys::jwk_generate_oct(len).unwrap();
+        assert_eq!(oct_k(&key).len(), len as usize, "{len}");
+        assert!(!key.as_str().contains(r#""alg""#), "no alg member: {len}");
+        // The result is a valid JWK in core form.
+        assert_eq!(jwk::jwk_parse(key.as_str()).unwrap().as_str(), key.as_str());
+    }
+}
+
+#[test]
+fn generate_oct_draws_fresh_randomness() {
+    let a = keys::jwk_generate_oct(32).unwrap();
+    let b = keys::jwk_generate_oct(32).unwrap();
+    assert_ne!(oct_k(&a), oct_k(&b));
+}
+
+#[test]
+fn generate_oct_rejects_other_lengths_with_invalid_key() {
+    for len in [0, 1, 15, 513, 4096, u32::MAX] {
+        assert_eq!(code(keys::jwk_generate_oct(len)), "InvalidKey", "{len}");
+    }
+}
+
+// --- jwk_generate_ec / jwk_generate_okp -------------------------------------------------------
+
+#[test]
+fn generate_ec_accepts_exactly_the_four_curves() {
+    // RFC 7518 §6.2.1.1, RFC 8812 §3.1; ADR 0030 §4.
+    for crv in ["P-256", "P-384", "P-521", "secp256k1"] {
+        let key = keys::jwk_generate_ec(crv).unwrap();
+        let prefix = format!(r#"{{"kty":"EC","crv":"{crv}","x":""#);
+        assert!(key.as_str().starts_with(&prefix), "{crv}");
+        assert!(key.as_str().contains(r#","d":""#), "{crv} is private");
+        assert_eq!(jwk::jwk_parse(key.as_str()).unwrap().as_str(), key.as_str());
+        assert!(!jwk::jwk_to_public(key.as_str()).unwrap().contains(r#""d""#));
+    }
+}
+
+#[test]
+fn generate_ec_rejects_other_curve_names() {
+    for crv in [
+        "P-224",
+        "p-256",
+        "P256",
+        "secp256r1",
+        "Ed25519",
+        "X25519",
+        "brainpoolP256r1",
+        "",
+        "P-256 ",
+    ] {
+        assert_eq!(
+            code(keys::jwk_generate_ec(crv)),
+            "UnsupportedAlgorithm",
+            "{crv:?}"
+        );
+    }
+}
+
+#[test]
+fn generate_okp_accepts_exactly_ed25519_and_x25519() {
+    // RFC 8037 §2; ADR 0030 §4.
+    for crv in ["Ed25519", "X25519"] {
+        let key = keys::jwk_generate_okp(crv).unwrap();
+        let prefix = format!(r#"{{"kty":"OKP","crv":"{crv}","x":""#);
+        assert!(key.as_str().starts_with(&prefix), "{crv}");
+        assert!(key.as_str().contains(r#","d":""#), "{crv} is private");
+        assert_eq!(jwk::jwk_parse(key.as_str()).unwrap().as_str(), key.as_str());
+    }
+}
+
+#[test]
+fn generate_okp_rejects_other_curve_names() {
+    // Ed448 and X448 are registered (RFC 8037 §5) but out of scope (ADR 0006).
+    for crv in ["Ed448", "X448", "ed25519", "x25519", "P-256", "EdDSA", ""] {
+        assert_eq!(
+            code(keys::jwk_generate_okp(crv)),
+            "UnsupportedAlgorithm",
+            "{crv:?}"
+        );
+    }
+}
+
+// --- jwk_generate_for_alg ---------------------------------------------------------------------
+
+#[test]
+fn generate_for_alg_follows_the_core_table() {
+    // The 0005 `generate_for` table (RFC 7518 §3.2, §3.4, §4.4, §4.7, §5.2.3-§5.2.5, §5.3;
+    // RFC 8812 §3.2; RFC 8037 §3.1; RFC 9864), with `alg` bound (RFC 7517 §4.4).
+    for (alg, len) in [
+        ("HS256", 32),
+        ("HS384", 48),
+        ("HS512", 64),
+        ("A128KW", 16),
+        ("A192KW", 24),
+        ("A256KW", 32),
+        ("A128GCMKW", 16),
+        ("A192GCMKW", 24),
+        ("A256GCMKW", 32),
+        ("A128GCM", 16),
+        ("A192GCM", 24),
+        ("A256GCM", 32),
+        ("A128CBC-HS256", 32),
+        ("A192CBC-HS384", 48),
+        ("A256CBC-HS512", 64),
+    ] {
+        let key = keys::jwk_generate_for_alg(alg).unwrap();
+        assert_eq!(oct_k(&key).len(), len, "{alg}");
+        assert!(
+            key.as_str().ends_with(&format!(r#","alg":"{alg}"}}"#)),
+            "{alg}"
+        );
+    }
+    for (alg, kty, crv) in [
+        ("ES256", "EC", "P-256"),
+        ("ES384", "EC", "P-384"),
+        ("ES512", "EC", "P-521"),
+        ("ES256K", "EC", "secp256k1"),
+        ("EdDSA", "OKP", "Ed25519"),
+        ("Ed25519", "OKP", "Ed25519"),
+    ] {
+        let key = keys::jwk_generate_for_alg(alg).unwrap();
+        let prefix = format!(r#"{{"kty":"{kty}","crv":"{crv}","x":""#);
+        assert!(key.as_str().starts_with(&prefix), "{alg}");
+        assert!(
+            key.as_str().ends_with(&format!(r#","alg":"{alg}"}}"#)),
+            "{alg}"
+        );
+    }
+}
+
+#[test]
+fn generate_for_alg_rejects_what_the_core_rejects() {
+    // ADR 0021 (no RSA key generation), ADR 0022 (`RSA-OAEP`), passwords are not generated
+    // (`PBES2-*`), `dir` depends on `enc`, `none` has no key, names are case-sensitive
+    // (RFC 7515 §4.1.1), and unknown names are unsupported.
+    for alg in [
+        "RS256",
+        "RS384",
+        "RS512",
+        "PS256",
+        "PS384",
+        "PS512",
+        "RSA-OAEP-256",
+        "RSA-OAEP",
+        "RSA1_5",
+        "PBES2-HS256+A128KW",
+        "PBES2-HS384+A192KW",
+        "PBES2-HS512+A256KW",
+        "dir",
+        "none",
+        "Ed448",
+        "es256",
+        "",
+    ] {
+        assert_eq!(
+            code(keys::jwk_generate_for_alg(alg)),
+            "UnsupportedAlgorithm",
+            "{alg:?}"
+        );
+    }
+}
+
+#[test]
+fn generate_for_alg_leaves_the_ecdh_es_curve_to_the_caller() {
+    // The core decides: ECDH-ES works on several curves, so a request without one is
+    // `InvalidKey("curve required")`, never a default curve (0005 `generate_for`).
+    for alg in [
+        "ECDH-ES",
+        "ECDH-ES+A128KW",
+        "ECDH-ES+A192KW",
+        "ECDH-ES+A256KW",
+    ] {
+        assert_eq!(code(keys::jwk_generate_for_alg(alg)), "InvalidKey", "{alg}");
+    }
 }
