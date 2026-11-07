@@ -65,11 +65,21 @@ pkg=$wasm/pkg
 dist=$repo/dist/npm
 template=$wasm/package.template.json
 
+# --- 1. Guards ---------------------------------------------------------------------------------
+
+# No rustflags from the environment (0006 review N2, ADR 0005). getrandom 0.4.3 selects a
+# `getrandom_backend` cfg (`custom`, `unsupported`, `extern_impl`) before `wasm_js`, so one
+# `--cfg getrandom_backend=…` here would silently change the RNG of the shipped .wasm. Cargo
+# reads rustflags from these four variables, ahead of any config file (CARGO_ENCODED_RUSTFLAGS,
+# then RUSTFLAGS, then target.<triple>.rustflags, then build.rustflags); the shipped build takes
+# its only Cargo override from WASM_CARGO_ARGS above (ADR 0059). An empty variable is no flag.
+for var in RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS; do
+  [ -z "${!var:-}" ] || die "$var is set; unset it: the shipped .wasm is built without environment rustflags (0006 review N2, ADR 0005)"
+done
+
 for tool in cargo wasm-pack node npm gzip brotli; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH"
 done
-
-# --- 1. Guards ---------------------------------------------------------------------------------
 
 echo "==> $me: no publish command (publishing is Gate 3, ADR 0011)"
 publish_re='(npm|pnpm|yarn|wasm-pack)[[:space:]]+publish|napi[[:space:]]+pre-?publish|"(pre|post)?publish(Only)?"[[:space:]]*:'
