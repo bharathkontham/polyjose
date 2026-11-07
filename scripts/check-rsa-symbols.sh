@@ -325,7 +325,10 @@ def build(label, args):
 
 
 # --- Reading an rlib --------------------------------------------------------------------------------
-NM_LINE = re.compile(r"^\s*(?:[0-9A-Fa-f]+\s+)?([A-Za-z?-])\s+(\S.*)$")
+# The address column is hex for machine code, or a run of dashes for an LLVM bitcode member: the
+# release profile's LTO (Cargo.toml) makes cargo build rlib roots with -C linker-plugin-lto, so
+# their codegen units are bitcode, whose symbol table llvm-nm reads the same way.
+NM_LINE = re.compile(r"^\s*(?:(?:[0-9A-Fa-f]+|-+)\s+)?([A-Za-z?-])\s+(\S.*)$")
 
 
 def nm(path, demangle, what):

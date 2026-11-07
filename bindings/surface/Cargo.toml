@@ -1,0 +1,20 @@
+[package]
+name = "polyjose-surface"
+description = "The framework-free binding API of polyjose (ADR 0030): one definition of every operation, record and error that the WASM, Node and UniFFI adapters wrap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# ADR 0030 §1: the surface depends on polyjose and zeroize only. No FFI framework, no serde
+# (ADR 0016), and none of polyjose's off-by-default features: bindings ship without `deflate`
+# (feature 0013 Q2) and never with the deterministic test RNG (ADR 0005,
+# scripts/check-test-vectors-off.sh).
+[dependencies]
+polyjose.workspace = true
+zeroize.workspace = true
