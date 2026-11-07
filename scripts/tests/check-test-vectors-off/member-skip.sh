@@ -155,4 +155,42 @@ expect_pass "member reaching polyjose through polyjose-surface"
 expect_no_skip "member reaching polyjose through polyjose-surface" "$probe"
 expect_line "member reaching polyjose through polyjose-surface" "$(ok_line "$probe")"
 
+# 9-10. polyjose reached only under a renamed dependency key (package = "polyjose"): cargo tree
+#       prints the package name, so the member is checked, not skipped.
+add_probe renamed-feature "[dependencies]
+alias = { package = \"polyjose\", path = \"../../crates/polyjose\", features = [$escaped] }"
+expect_fail "renamed polyjose dependency enabling the feature" "$enable_fail" "$any_enable_fail"
+expect_no_skip "renamed polyjose dependency enabling the feature" "$probe"
+add_probe renamed-clean "[dependencies]
+alias = { package = \"polyjose\", path = \"../../crates/polyjose\" }"
+expect_pass "renamed polyjose dependency without the feature"
+expect_no_skip "renamed polyjose dependency without the feature" "$probe"
+
+# 11. Warning lines around the whole-tree probe of a member that reaches polyjose
+#     (polyjose-surface, as a dev-dependency): the member is still checked, never skipped.
+cat >"$shim_dir/cargo" <<EOF
+#!/bin/sh
+probe=0
+for a in "\$@"; do
+  case \$a in normal,build,dev) probe=1 ;; esac
+done
+if [ "\$probe" = 1 ]; then
+  echo "warning: unused manifest key: noise" >&2
+  echo "  polyjose-ish v9.9.9"
+  "$real_cargo" "\$@"
+  rc=\$?
+  echo "warning: trailing noise" >&2
+  exit \$rc
+fi
+exec "$real_cargo" "\$@"
+EOF
+chmod +x "$shim_dir/cargo"
+add_probe noisy "[dev-dependencies]
+polyjose-surface = { path = \"../surface\" }"
+path_prefix="$shim_dir:"
+expect_pass "member reaching polyjose, probe output with warning lines"
+expect_no_skip "member reaching polyjose, probe output with warning lines" "$probe"
+expect_line "member reaching polyjose, probe output with warning lines" "$(ok_line "$probe")"
+path_prefix=""
+
 finish
