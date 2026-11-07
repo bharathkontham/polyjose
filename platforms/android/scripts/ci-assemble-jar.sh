@@ -20,11 +20,12 @@
 #    :sample-minified:assembleRelease publishAllPublicationsToBuildLocalRepository`, then
 #    `scripts/check-artifacts.sh --no-build` (AAR contents, 16 KB alignment, size, notices, the
 #    jar's libraries and Polyjose-Native-Platforms, the APK, the POMs, no Central configuration).
-#    The notices are T04's: the jar's thirdPartyNotices task and check-artifacts.sh both fail,
-#    naming the crates, when a library in the jar compiles a crate the shipped notices file does
-#    not list. That is so for the five-platform jar today (feature 0008 T05 log: linux adds
-#    linux-raw-sys, windows adds windows-link and windows-sys), and this script does not work
-#    around it.
+#    The notices (feature 0008 F01): the jar's thirdPartyNotices task writes one file over the
+#    union of the crate trees of every platform in the jar (scripts/third-party-notices.sh with a
+#    --target per platform; 75 crates for the five today: the Linux libraries add linux-raw-sys,
+#    the Windows one windows-link and windows-sys). The task and check-artifacts.sh both fail,
+#    naming the target and the crates, when a library in the jar compiles a crate the shipped
+#    file does not list or its target is not in the file's Targets: line.
 # 3. The jar must carry what CI tested, byte for byte: each passed-in library, and each library
 #    this host rebuilt for a prefix CI also built (printing both SHA-256s; a mismatch fails, as
 #    the jar would ship a library the host-natives tests never loaded). With --require-all, all
