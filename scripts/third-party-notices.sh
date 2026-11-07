@@ -20,6 +20,20 @@
 # files of a directory with such a name, e.g. LICENSES/). The workspace's own crates (polyjose and
 # the binding) come first, under polyjose's MIT LICENSE (ADR 0015).
 #
+# License policy (fails the run, naming every offending crate, and writes nothing):
+#   - every crate needs a `license` expression (`license-file` alone is not enough);
+#   - every license the expression names must be in ALLOWED below, whatever its operators: an
+#     alternative outside the list (`MIT OR GPL-2.0-only`) fails too. Operators are OR, AND and
+#     `WITH LLVM-exception` (on Apache-2.0 only), with parentheses; the deprecated `/` separator
+#     counts as OR (Cargo reference, manifest `license` field). Identifiers match
+#     case-insensitively, operators case-sensitively (SPDX 2.3 Annex D.2);
+#   - a crate that ships no license file must be licensed exactly MIT, Apache-2.0 or MPL-2.0, and
+#     gets that license's standard text from scripts/licenses/; any other crate needs its own
+#     files (e.g. BSD's copyright line exists only there);
+#   - the workspace's own crates must be MIT (ADR 0015).
+# MPL-2.0 is allowed, as in deny.toml, for UniFFI (uniffi, uniffi_core, ...), which the Kotlin
+# and Swift bindings link (ADR 0032, ADR 0033).
+#
 # Output is deterministic: crates sorted by name, then SemVer version; license files sorted by
 # name; LF line endings; no timestamps and no local paths. Two runs give byte-identical files.
 #
@@ -81,6 +95,12 @@ import sys
 tree_path, metadata_path, licenses_dir, root_name, target, out_path = sys.argv[1:7]
 RULE = "=" * 80
 errors = []
+offenders = set()  # the "<name> <version>" of every crate that breaks the policy
+
+
+def reject(label, reason):
+    errors.append("%s: %s" % (label, reason))
+    offenders.add(label)
 
 with open(metadata_path, encoding="utf-8") as f:
     metadata = json.load(f)
@@ -193,8 +213,8 @@ def license_files(p):
 STANDARD_TEXTS = {"MIT": "MIT.txt", "Apache-2.0": "Apache-2.0.txt", "MPL-2.0": "MPL-2.0.txt"}
 
 
-def standard_text(expr):
-    name = STANDARD_TEXTS.get((expr or "").strip())
+def standard_text(single):
+    name = STANDARD_TEXTS.get(single or "")
     if not name:
         return None
     return read_text(os.path.join(licenses_dir, name))
@@ -211,6 +231,101 @@ def source_line(p):
     return src
 
 
+# --- License policy -------------------------------------------------------------------------
+# The allowlist (ADR 0020 §4; all compatible with polyjose's MIT, ADR 0015), and the one
+# exception with the only license it may modify.
+ALLOWED = ["MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "ISC", "Unicode-3.0", "Zlib",
+           "Unlicense", "CC0-1.0", "MPL-2.0"]
+EXCEPTIONS = {"LLVM-exception": "Apache-2.0"}
+CANONICAL = dict((x.lower(), x) for x in ALLOWED)
+CANONICAL_EXC = dict((x.lower(), x) for x in EXCEPTIONS)
+
+
+class BadExpression(Exception):
+    pass
+
+
+def check_expression(expr):
+    """Checks an SPDX license expression (SPDX 2.3 Annex D) against ALLOWED.
+    Returns (problems, single): the list of reasons it is rejected (empty if accepted), and the
+    canonical identifier when the whole expression is exactly one license without an exception
+    (else None)."""
+    # `/` is Cargo's deprecated alternative to OR.
+    tokens = ["OR" if t == "/" else t for t in re.findall(r"[()/]|[^\s()/]+", expr)]
+    problems = []
+    pos = [0]
+
+    def peek():
+        return tokens[pos[0]] if pos[0] < len(tokens) else None
+
+    def take():
+        t = peek()
+        pos[0] += 1
+        return t
+
+    def or_expr():
+        n = and_expr()
+        while peek() == "OR":
+            take()
+            n = (None, n, and_expr())
+        return n
+
+    def and_expr():
+        n = atom()
+        while peek() == "AND":
+            take()
+            n = (None, n, atom())
+        return n
+
+    def atom():
+        t = take()
+        if t is None:
+            raise BadExpression("it ends where a license is expected")
+        if t == "(":
+            n = or_expr()
+            if take() != ")":
+                raise BadExpression("unbalanced parentheses")
+            return n
+        if t in ("AND", "OR", "WITH", ")"):
+            raise BadExpression("%r where a license is expected" % t)
+        lic = CANONICAL.get(t.lower())
+        if lic is None:
+            problems.append("%r is not an allowed license (%s)" % (t, ", ".join(ALLOWED)))
+        if peek() != "WITH":
+            return lic
+        take()
+        e = take()
+        if e is None:
+            raise BadExpression("WITH without an exception")
+        exc = CANONICAL_EXC.get(e.lower())
+        if exc is None:
+            problems.append("exception %r is not allowed (only %s)" % (e, ", ".join(sorted(EXCEPTIONS))))
+        elif lic is not None and EXCEPTIONS[exc] != lic:
+            problems.append("%s applies only to %s, not %s" % (exc, EXCEPTIONS[exc], lic))
+        return None
+
+    try:
+        node = or_expr()
+        if peek() is not None:
+            raise BadExpression("unexpected %r" % peek())
+    except BadExpression as e:
+        return (["malformed expression: %s" % e], None)
+    return (problems, node if isinstance(node, str) and not problems else None)
+
+
+single_license = {}
+for p in sorted(selected.values(), key=crate_key):
+    label = "%s %s" % (p["name"], p["version"])
+    expr = (p.get("license") or "").strip()
+    if not expr:
+        reject(label, "no license expression in its Cargo.toml (`license-file` alone is not accepted)")
+        continue
+    problems, single = check_expression(expr)
+    for problem in problems:
+        reject(label, "license %r: %s" % (expr, problem))
+    single_license[p["id"]] = single
+
+
 # --- The workspace's own crates -------------------------------------------------------------
 own = sorted((p for p in selected.values() if p["id"] in members), key=crate_key)
 third = sorted((p for p in selected.values() if p["id"] not in members), key=crate_key)
@@ -220,8 +335,8 @@ if not os.path.isfile(polyjose_license):
     fail("no LICENSE at the workspace root (%s)" % polyjose_license)
 for p in own:
     if (p.get("license") or "").strip() != "MIT":
-        errors.append("%s %s: a workspace crate must be licensed MIT (ADR 0015), not %r"
-                      % (p["name"], p["version"], p.get("license")))
+        reject("%s %s" % (p["name"], p["version"]),
+               "a workspace crate must be licensed MIT (ADR 0015), not %r" % p.get("license"))
 
 out = []
 w = out.append
@@ -273,14 +388,16 @@ for p in third:
             w(text.rstrip("\n"))
             w("")
         continue
-    std = standard_text(p.get("license"))
+    if label in offenders:
+        continue  # its expression is already rejected
+    std = standard_text(single_license[p["id"]])
     if std is None:
-        errors.append("%s: ships no license file (LICENSE*, COPYING*, NOTICE*) and its license %r "
-                      "is not one with a standard text in scripts/licenses/ (%s)"
-                      % (label, p.get("license"), ", ".join(sorted(STANDARD_TEXTS))))
+        reject(label, "ships no license file (LICENSE*, COPYING*, NOTICE*) and its license %r is "
+               "not one with a standard text in scripts/licenses/ (%s)"
+               % (p.get("license"), ", ".join(sorted(STANDARD_TEXTS))))
         continue
     w("--- License text: standard %s (the crate ships no license file; copyright: its authors) ---"
-      % p["license"].strip())
+      % single_license[p["id"]])
     w(std.rstrip("\n"))
     w("")
 
@@ -288,7 +405,7 @@ if errors:
     for e in errors:
         sys.stderr.write("third-party-notices: %s\n" % e)
     fail("%d crate(s) of %s for %s break the license policy (ADR 0020 §4); no file written"
-         % (len(errors), root_name, target))
+         % (len(offenders), root_name, target))
 
 with open(out_path, "w", encoding="utf-8", newline="\n") as f:
     f.write("\n".join(out).rstrip("\n") + "\n")
