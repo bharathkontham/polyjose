@@ -9,8 +9,9 @@
  * 4. extracts the document and writes `target/conformance/wasm-pkg-chrome.json` (`host.ts`).
  *
  * Chrome is `POLYJOSE_CHROME` if set, else the installed macOS app. Without it this prints
- * `SKIPPED (...)` and exits 0, writing no results file, so the parity check reports
- * `SKIPPED (no results: wasm-pkg-chrome)` (pipeline rule 9). Exit 1 on any failure.
+ * `SKIPPED (...)` and exits 0, writing no results file; `run.sh` then prints the waiver
+ * `SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)`, and scripts/test-all.sh reports the runner
+ * SKIPPED, never passing (ADR 0060 §7, pipeline rule 9). Exit 1 on any failure.
  */
 import { collectVectors, reportProbe, resolveEntry, writeResults } from "./host.js";
 import { childProcess, fs, path, process, repoRoot, stageRoot } from "./node.js";

@@ -26,9 +26,17 @@
 # --nocapture (which prints the results line of a passing test) goes after `-- --` when no cargo
 # option precedes it, and after `--` when one does.
 #
-# Ends with `wasm: PASS (…)`, or `SKIPPED (<reason>)` when wasm-pack or Chrome is missing (the
-# Node runs still run and must pass), or exits 1. Results files left by an earlier run are removed
-# first. Don't run it at the same time as bindings/js/test.sh: build-package.sh rebuilds
+# Without Chrome (scripts/chromedriver.sh and test-pkg/src/chrome.ts find none) the two Chrome
+# runners are waived, each with a line in scripts/test-all.sh's exact form (ADR 0060 §7, feature
+# 0013 F05; wasm-chrome and wasm-pkg-chrome are the `?` runners of its `wasm` line):
+#   SKIPPED-RUNNER (wasm-chrome: host:no-chrome)        printed here
+#   SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)    printed by test-pkg/run.sh
+# and the platform still passes on the other three runners, which must run and write their files.
+# test-all.sh then reports the two runners SKIPPED under parity, never as passing (pipeline rule 9).
+# A workerd (miniflare) failure is a failure, never a waiver.
+#
+# Ends with `wasm: PASS (…)`, or `SKIPPED (wasm-pack missing)`, or exits 1. Results files left by
+# an earlier run are removed first. Don't run it at the same time as bindings/js/test.sh: build-package.sh rebuilds
 # bindings/js/dist. Runs on macOS /bin/bash 3.2 and Linux bash.
 set -uo pipefail
 export LC_ALL=C
@@ -103,7 +111,10 @@ if ! scripts/chromedriver.sh >"$driver_out"; then
 else
   driver=$(tail -n 1 "$driver_out")
   case $driver in
-    "SKIPPED ("?*")") chrome_skip=${driver#SKIPPED (}; chrome_skip=${chrome_skip%)} ;;
+    "SKIPPED ("?*")")
+      chrome_skip=${driver#SKIPPED (}; chrome_skip=${chrome_skip%)}
+      echo "$me: wasm-chrome not run: $chrome_skip"
+      echo "SKIPPED-RUNNER (wasm-chrome: host:no-chrome)" ;;
     /*) wasm_pack_run wasm-chrome --headless --chrome --chromedriver "$driver" --features browser -- --nocapture ;;
     *) fail "wasm-chrome: scripts/chromedriver.sh printed \"$driver\", not a path or SKIPPED (<reason>)" ;;
   esac
@@ -111,7 +122,6 @@ fi
 
 # --- 4. The package tests (T04) --------------------------------------------------------------
 
-pkg=""
 pkg_chrome_skip=""
 if [ -e test-pkg/run.sh ]; then
   echo "==> $me: the package (scripts/build-package.sh)"
@@ -124,19 +134,32 @@ if [ -e test-pkg/run.sh ]; then
     if [ "$rc" -ne 0 ]; then
       fail "wasm-pkg: test-pkg/run.sh exited $rc"
     else
-      pkg=", wasm-pkg-node, wasm-pkg-chrome, wasm-pkg-workerd"
       line=$(sed -n 's/^[[:space:]]*chrome: \(SKIPPED (.*)\)[[:space:]]*$/\1/p' "$work/test-pkg.out" | tail -n 1)
+      waiver=$(grep -c '^SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)$' "$work/test-pkg.out" || true)
       if [ -n "$line" ]; then
-        pkg=", wasm-pkg-node, wasm-pkg-workerd"
         pkg_chrome_skip=${line#SKIPPED (}; pkg_chrome_skip=${pkg_chrome_skip%)}
         # Chrome is either missing for both runs or for neither: an installed Chrome must run.
         [ -n "$chrome_skip" ] || fail "wasm-pkg-chrome: test-pkg/run.sh skipped Chrome ($pkg_chrome_skip), but Chrome is installed"
+        [ "$waiver" -eq 1 ] || fail "wasm-pkg-chrome: test-pkg/run.sh skipped Chrome without exactly one SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome) line"
+      else
+        [ "$waiver" -eq 0 ] || fail "wasm-pkg-chrome: test-pkg/run.sh printed a SKIPPED-RUNNER line, but its Chrome run was not skipped"
       fi
     fi
   fi
+else
+  fail "wasm-pkg: test-pkg/run.sh missing"
 fi
 
 # --- Result ----------------------------------------------------------------------------------
+
+# Every runner that was not waived wrote its results file (scripts/test-all.sh requires each one
+# of a passing platform, ADR 0060 §7), so a run that wrote none fails here, by name, too.
+ran="wasm-node wasm-pkg-node wasm-pkg-workerd"
+[ -n "$chrome_skip" ] || ran="$ran wasm-chrome"
+[ -n "$pkg_chrome_skip" ] || ran="$ran wasm-pkg-chrome"
+for runner in $ran; do
+  [ -f "$results/$runner.json" ] || fail "$runner: no ${results#"$repo"/}/$runner.json"
+done
 
 echo
 if [ ${#failures[@]} -gt 0 ]; then
@@ -144,8 +167,7 @@ if [ ${#failures[@]} -gt 0 ]; then
   exit 1
 fi
 if [ -n "$chrome_skip" ]; then
-  echo "$me: wasm-node${pkg/, wasm-pkg-chrome/} passed; wasm-chrome and wasm-pkg-chrome not run"
-  echo "SKIPPED ($chrome_skip)"
+  echo "$me: PASS (wasm-node, wasm-pkg-node, wasm-pkg-workerd; wasm-chrome and wasm-pkg-chrome not run, host:no-chrome)"
   exit 0
 fi
-echo "$me: PASS (wasm-node, wasm-chrome$pkg)"
+echo "$me: PASS (wasm-node, wasm-chrome, wasm-pkg-node, wasm-pkg-chrome, wasm-pkg-workerd)"

@@ -6,37 +6,83 @@
  * workerd.
  *
  * The document is the one `bindings/js/conformance/node-main.ts` writes for `wasm-pkg-node`:
- * `{ runner, polyjose, features, error_codes, results }`, results sorted by id, features `[]`
- * (the bindings enable no vector feature, ADR 0034 §3), and `error_codes` from the binding
- * (ADR 0034 §8).
+ * `{ runner, polyjose, vectors_digest, features, error_codes, results }`, results sorted by id,
+ * features `[]` (the bindings enable no vector feature, ADR 0034 §3), and `error_codes` from the
+ * binding (ADR 0034 §8). `vectors_digest` (ADR 0060 §1-§3) is computed here, in the runtime, with
+ * its own `crypto.subtle` (`subtleSha256`, ADR 0060 §5; never polyjose), over the very bytes the
+ * runner then parses.
  */
 import type { PolyjoseApi } from "../js/src/api.js";
-import { runVectors, type VectorFile, type VectorResult } from "../js/conformance/runner.js";
+import {
+  runVectors,
+  subtleSha256,
+  vectorsDigest,
+  type DigestInput,
+  type VectorFile,
+  type VectorResult,
+} from "../js/conformance/runner.js";
+
+/** One vector file as the host read it: its path under `conformance/vectors/` and its raw bytes. */
+export interface VectorBytes {
+  readonly path: string;
+  /** The file's bytes, standard base64 (RFC 4648 §4), so JSON carries them unchanged. */
+  readonly base64: string;
+}
 
 /** What the host hands the runtime: the parsed `conformance/schema.json` and the vector files. */
 export interface VectorInput {
   readonly schema: unknown;
-  readonly files: readonly VectorFile[];
+  readonly files: readonly VectorBytes[];
   /** Host-side failures (an unreadable file, a symbolic link), merged into the results as `fail`. */
   readonly failures: readonly VectorResult[];
 }
 
-/** The ADR 0034 §2 results file. */
+/** The ADR 0034 §2 results file, with ADR 0060 §1's `vectors_digest`. */
 export interface ResultsDocument {
   readonly runner: string;
   readonly polyjose: string;
+  readonly vectors_digest: string;
   readonly features: readonly string[];
   readonly error_codes: readonly string[];
   readonly results: readonly VectorResult[];
 }
 
-/** Runs every vector through `api` and returns the results document for `runner`. */
+/** The bytes of standard base64 text (RFC 4648 §4). */
+function fromBase64(text: string): Uint8Array {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Runs every vector through `api` and returns the results document for `runner`. Each file's
+ * bytes are hashed for the digest (id `<path>#0`, ADR 0045 §4) and decoded as UTF-8 for the
+ * runner as node-main's `Buffer.toString("utf8")` does: a BOM is kept (`ignoreBOM`), not
+ * stripped (ADR 0060 §2: no conversion). No file read means no digest: it throws (ADR 0060 §3).
+ */
 export async function resultsDocument(api: PolyjoseApi, runner: string, input: VectorInput): Promise<ResultsDocument> {
+  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  const read: DigestInput[] = [];
+  const files: VectorFile[] = [];
+  for (const file of input.files) {
+    const bytes = fromBase64(file.base64);
+    read.push({ id: `${file.path}#0`, bytes });
+    files.push({ path: file.path, json: decoder.decode(bytes) });
+  }
+  const digest = await vectorsDigest(read, subtleSha256);
   const features: string[] = [];
-  const results = [...(await runVectors(api, input.files, { schema: input.schema, features })), ...input.failures].sort(
+  const results = [...(await runVectors(api, files, { schema: input.schema, features })), ...input.failures].sort(
     (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
-  return { runner, polyjose: await api.version(), features, error_codes: [...(await api.errorCodes())], results };
+  return {
+    runner,
+    polyjose: await api.version(),
+    vectors_digest: digest,
+    features,
+    error_codes: [...(await api.errorCodes())],
+    results,
+  };
 }
 
 /** One check of {@link errorShapeProbe}. */

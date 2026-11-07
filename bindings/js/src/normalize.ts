@@ -116,21 +116,108 @@ export function optSeconds(v: unknown, at: string): number | undefined {
   return v;
 }
 
+/** An array literal: an `Array` whose prototype is `Array.prototype` or `null`, like {@link isPlainObject}. */
+function isPlainArray(v: unknown): v is unknown[] {
+  if (!Array.isArray(v)) return false;
+  const proto: unknown = Object.getPrototypeOf(v);
+  return proto === Array.prototype || proto === null;
+}
+
+/** A value {@link jsonText} can't serialise: caught by {@link json} and reported without the value. */
+class NotJsonData extends Error {}
+
 /**
- * JSON text: a string is passed through unchanged (so member order and number spelling reach
- * the core's strict parser as written), a plain object is `JSON.stringify`'d (ADR 0030 §2).
+ * The JSON text of plain data (RFC 8259 §2–§7), read from the caller's own members only
+ * (0013 F09, security audit M1 follow-up). The output equals `JSON.stringify(v)` for plain data
+ * in an unpolluted realm: the same member order (`Object.keys`, ECMA-262 EnumerableOwnProperties),
+ * escapes and number spelling (both from `JSON.stringify` of a primitive), a member whose value
+ * is `undefined` left out and an `undefined` element written as `null`, `NaN` and `±Infinity` as
+ * `null`.
+ *
+ * It differs from `JSON.stringify` exactly where that reads the host's global state or calls
+ * the caller's code:
+ * - **no `toJSON` is called, at any depth**: neither an inherited one (a polluted
+ *   `Object.prototype.toJSON`, `Array.prototype.toJSON` or `BigInt.prototype.toJSON` could
+ *   otherwise replace the claims, key or header being sent) nor an own one;
+ * - **an array hole is not data**: `JSON.stringify` reads it through `Array.prototype`, where a
+ *   pollution bug could have put a key into a JWK Set; here it is a TypeError, as in
+ *   {@link list};
+ * - **only JSON data is accepted** (ADR 0030 §2 "a plain object", the `JsonValue` type):
+ *   {@link isPlainObject} objects, {@link isPlainArray} arrays, strings, numbers, booleans and
+ *   `null`. A `Date`, `Map`, class instance, boxed primitive, typed array, function, symbol or
+ *   BigInt is a TypeError wherever it appears, never coerced by its own or an inherited method.
+ *
+ * Each own member is read once (a getter runs once, as in {@link record}), and one an earlier
+ * getter deleted is skipped, never read through the prototype. A cycle is a TypeError; the same
+ * object reached twice without a cycle is written twice, as `JSON.stringify` does.
+ *
+ * `JSON.stringify` of a string or number is safe: ECMA-262 SerializeJSONProperty looks up
+ * `toJSON` only on an Object or a BigInt, so a primitive is never coerced through a prototype.
+ * The output is built with `+` only, so no `Array.prototype` method is involved.
+ */
+function jsonText(v: unknown, ancestors: Set<object>): string | undefined {
+  if (v === null) return "null";
+  switch (typeof v) {
+    case "string":
+      return JSON.stringify(v);
+    case "number":
+      return Number.isFinite(v) ? JSON.stringify(v) : "null";
+    case "boolean":
+      return v ? "true" : "false";
+    case "undefined":
+      return undefined;
+    case "object":
+      break;
+    default:
+      // function, symbol, bigint: not JSON data.
+      throw new NotJsonData();
+  }
+  if (ancestors.has(v)) throw new NotJsonData();
+  if (isPlainArray(v)) {
+    ancestors.add(v);
+    const n = v.length;
+    let out = "[";
+    for (let i = 0; i < n; i++) {
+      if (!Object.hasOwn(v, i)) throw new NotJsonData();
+      if (i > 0) out += ",";
+      out += jsonText(v[i], ancestors) ?? "null";
+    }
+    ancestors.delete(v);
+    return out + "]";
+  }
+  if (isPlainObject(v)) {
+    ancestors.add(v);
+    let out = "{";
+    let first = true;
+    for (const key of Object.keys(v)) {
+      if (!Object.hasOwn(v, key)) continue;
+      const text = jsonText(v[key], ancestors);
+      if (text === undefined) continue;
+      out += (first ? "" : ",") + JSON.stringify(key) + ":" + text;
+      first = false;
+    }
+    ancestors.delete(v);
+    return out + "}";
+  }
+  throw new NotJsonData();
+}
+
+/**
+ * JSON text (ADR 0030 §2): a string is passed through unchanged (so member order and number
+ * spelling reach the core's strict parser as written); a plain object is serialised by
+ * {@link jsonText}, the `JSON.stringify` text of its own plain data, with no `toJSON` consulted
+ * and nothing read through a prototype (0013 F09).
  */
 export function json(v: unknown, at: string): string {
   if (typeof v === "string") return v;
   if (!isPlainObject(v)) throw fail(at, "JSON text or a plain object");
-  let text: string;
   try {
-    text = JSON.stringify(v);
+    return jsonText(v, new Set()) ?? "{}";
   } catch {
-    // A cycle or a BigInt. The engine's message may quote the input, so it is not reused.
-    throw fail(at, "a JSON-serializable plain object");
+    // Not JSON data, a cycle, a throwing getter or a nesting too deep for the stack. The message
+    // names the argument only: a value or member name may be key material (ADR 0030 §5).
+    throw fail(at, "JSON text or a plain object of JSON data (plain objects, arrays without holes, strings, numbers, booleans, null)");
   }
-  return text;
 }
 
 export function optJson(v: unknown, at: string): string | undefined {
@@ -245,8 +332,13 @@ export function outObject(v: unknown, at: string): JsonObject {
   return parsed as JsonObject;
 }
 
-/** The backend's results are plain objects; this reads one member. */
+/**
+ * One member of a backend result (a plain object, BACKEND.md), read only if the result owns it
+ * (0013 F09, security audit M1 follow-up). A member the backend left out is `undefined`, never
+ * a value a pollution bug put on `Object.prototype`: an absent optional field (`kid`,
+ * `keyIndex`, a header, `aad`) stays absent, and a missing required one is a TypeError.
+ */
 export function member(v: unknown, name: string, at: string): unknown {
   if (typeof v !== "object" || v === null) throw badResult(at, "an object");
-  return (v as Record<string, unknown>)[name];
+  return Object.hasOwn(v, name) ? (v as Record<string, unknown>)[name] : undefined;
 }
