@@ -147,8 +147,8 @@ grep -q '@VERSION@' "$stage/package.json" && die "package.json still has a @VERS
 
 # The values the entries check at load time (0006 F05, audit L1), baked in now and never read at
 # run time from a mutable place: the version from the package.json just generated, and the
-# SHA-384 of the .wasm exactly as it is shipped (wasm-opt has run), base64 as SRI writes it
-# (W3C Subresource Integrity §3.1), for fetch's `integrity` and node:crypto alike.
+# SHA-384 of the .wasm exactly as it is shipped (wasm-opt has run), in base64 as W3C Subresource
+# Integrity metadata writes it, for fetch's `integrity` and node:crypto alike.
 pkg_version=$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$stage/package.json")
 [ "$pkg_version" = "$version" ] || die "the generated package.json has version '$pkg_version', expected '$version'"
 wasm_sha384=$(openssl dgst -sha384 -binary "$glue/polyjose_wasm_bg.wasm" | openssl base64 -A) \
@@ -178,7 +178,7 @@ cat >"$ts/integrity.ts" <<EOF
 export const PACKAGE_VERSION = "$pkg_version";
 
 /**
- * The SHA-384 of polyjose_wasm_bg.wasm as shipped, base64 (W3C Subresource Integrity §3.1): the
+ * The SHA-384 of polyjose_wasm_bg.wasm as shipped, base64 (W3C Subresource Integrity): the
  * browser entry fetches the module with this integrity, the Node entry hashes what it reads.
  */
 export const WASM_SHA384 = "$wasm_sha384";
