@@ -10,7 +10,7 @@
 
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use polyjose::jwk::{EcCurve, Jwk, OkpCurve};
-use polyjose::keys::{self as core_keys, JoseAlg, KeySpec};
+use polyjose::keys::{self as core_keys, JoseAlg, KeyFormat, KeySpec};
 
 use crate::error::{SurfaceError, SurfaceResult};
 use crate::records::to_usize;
@@ -134,37 +134,99 @@ fn jose_alg(alg: &str) -> JoseAlg {
     ContentEncAlg::from(alg).into()
 }
 
+/// The core [`KeyFormat`] the ADR 0030 §4 format name `format` stands for, matched exactly
+/// (case-sensitive, no trimming). This is the one place that maps format names.
+///
+/// | Name | Structure |
+/// |---|---|
+/// | `pkcs8` | PKCS#8 OneAsymmetricKey (RFC 5958 §2): an EC or OKP private key |
+/// | `sec1` | SEC1 ECPrivateKey (RFC 5915 §3): an EC private key |
+/// | `spki` | SubjectPublicKeyInfo (RFC 5280 §4.1.2.7): an EC, OKP or RSA public key |
+/// | `pkcs1` | PKCS#1 RSAPublicKey (RFC 8017 App. A.1.1): an RSA public key |
+///
+/// # Errors
+///
+/// `UnsupportedAlgorithm` for any other name (ADR 0030 §5). The name is not echoed.
+fn key_format(format: &str) -> SurfaceResult<KeyFormat> {
+    match format {
+        "pkcs8" => Ok(KeyFormat::Pkcs8),
+        "sec1" => Ok(KeyFormat::Sec1),
+        "spki" => Ok(KeyFormat::Spki),
+        "pkcs1" => Ok(KeyFormat::Pkcs1),
+        _ => Err(unsupported()),
+    }
+}
+
 /// The JWK of the PEM-encoded key `pem` (ADR 0030 §4; RFC 7468 §2, §10, §13; RFC 5915 §4).
 ///
+/// The PEM label selects the structure (`PRIVATE KEY`, `PUBLIC KEY`, `EC PRIVATE KEY`,
+/// `RSA PUBLIC KEY`) and the key type comes from its DER, never from the label
+/// (`polyjose::jwk::Jwk::from_pem`, ADR 0018 §2, §3). The result never has `kty` `oct`
+/// (RFC 8725 §2.1) and no `alg` member.
+///
 /// The PEM may hold a private key, so it is borrowed, and the JWK returned as a
-/// [`SecretString`]. RSA private and encrypted PKCS#8 keys fail with `UnsupportedAlgorithm`
-/// (ADR 0018, ADR 0021).
+/// [`SecretString`] (ADR 0030 §7).
+///
+/// # Errors
+///
+/// As the core decides: `UnsupportedAlgorithm` for RSA private keys in any form (ADR 0021),
+/// encrypted keys (RFC 5958 §3, RFC 1421 §4.6.1.1; ADR 0018 §4), other labels such as
+/// `CERTIFICATE` (RFC 7468 §5) and unsupported algorithms or curves; `InvalidKey` for malformed
+/// or non-canonical PEM or DER and keys that fail JWK validation.
 pub fn jwk_from_pem(pem: &str) -> SurfaceResult<SecretString> {
-    // stub: T06
-    let _ = pem;
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    secret_jwk(Jwk::from_pem(pem))
 }
 
 /// The JWK of the DER-encoded key `der` in `format` (ADR 0030 §4; RFC 5958 §2, RFC 5915 §3,
 /// RFC 5280 §4.1.2.7, RFC 8017 App. A.1.1).
+///
+/// The caller names the structure; the core does no format sniffing (ADR 0007, ADR 0018 §3).
+/// The DER may hold a private key, so it is borrowed, and the JWK returned as a
+/// [`SecretString`] (ADR 0030 §7).
+///
+/// # Errors
+///
+/// - `UnsupportedAlgorithm` for a format name other than `pkcs8`, `sec1`, `spki` and `pkcs1`
+///   (ADR 0030 §5), checked before `der` is read.
+/// - The errors of [`jwk_from_pem`], from the core; DER of another structure than `format` is
+///   `InvalidKey`.
 pub fn jwk_from_der(der: &[u8], format: &str) -> SurfaceResult<SecretString> {
-    // stub: T06
-    let _ = (der, format);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let format = key_format(format)?;
+    secret_jwk(Jwk::from_der(der, format))
 }
 
-/// `jwk` as PEM in `format` (ADR 0030 §4; RFC 7468 §2). The PEM of a private key is a secret,
-/// so the result is a [`SecretString`].
+/// `jwk` as PEM in `format` (ADR 0030 §4; RFC 7468 §2): the DER of [`jwk_to_der`] with the
+/// format's label (`PRIVATE KEY`, RFC 7468 §10; `PUBLIC KEY`, §13; `EC PRIVATE KEY`, RFC 5915
+/// §4; `RSA PUBLIC KEY`), 64-character lines and LF line endings, as the core writes it.
+///
+/// The PEM of a private key is a secret, so the result is a [`SecretString`] (ADR 0030 §7.2).
+///
+/// # Errors
+///
+/// Those of [`jwk_to_der`], in the same order.
 pub fn jwk_to_pem(jwk: &str, format: &str) -> SurfaceResult<SecretString> {
-    // stub: T06
-    let _ = (jwk, format);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let format = key_format(format)?;
+    let key = Jwk::from_json(jwk.as_bytes())?;
+    Ok(SecretString::from(key.to_pem(format)?))
 }
 
-/// `jwk` as DER in `format` (ADR 0030 §4; RFC 5958 §2, RFC 5915 §3, RFC 5280 §4.1.2.7). The DER
-/// of a private key is a secret, so the result is [`SecretBytes`].
+/// `jwk` as DER in `format` (ADR 0030 §4; RFC 5958 §2, RFC 5915 §3, RFC 5280 §4.1.2.7, RFC 8017
+/// App. A.1.1), in the byte layout the core writes (ADR 0018 §3). Only the key material is
+/// exported; `kid`, `use`, `alg` and the other JWK members have no place in these structures.
+///
+/// `spki` of a private key exports its public half. The DER of a private key is a secret, so
+/// the result is [`SecretBytes`] (ADR 0030 §7.2).
+///
+/// # Errors
+///
+/// 1. `UnsupportedAlgorithm` for a format name other than `pkcs8`, `sec1`, `spki` and `pkcs1`
+///    (ADR 0030 §5), checked before `jwk` is parsed.
+/// 2. The core's JWK parse errors (an RSA private JWK is `UnsupportedAlgorithm`, ADR 0021).
+/// 3. The core's export errors (ADR 0018 §3 format matrix): `UnsupportedAlgorithm` for an `oct`
+///    key in any format (RFC 8725 §2.1), a non-EC key in `sec1` and a non-RSA key in `pkcs1`;
+///    `InvalidKey` for a public key in `pkcs8` or `sec1`.
 pub fn jwk_to_der(jwk: &str, format: &str) -> SurfaceResult<SecretBytes> {
-    // stub: T06
-    let _ = (jwk, format);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let format = key_format(format)?;
+    let key = Jwk::from_json(jwk.as_bytes())?;
+    Ok(SecretBytes::from(key.to_der(format)?))
 }
