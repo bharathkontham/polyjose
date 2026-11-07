@@ -796,3 +796,181 @@ fn export_rejects_what_the_core_rejects() {
         assert_eq!(code(keys::jwk_to_der(key, format)), expected, "{name}");
     }
 }
+
+// --- Defaults stay in the core (ADR 0030 §3) --------------------------------------------------
+
+/// The core defaults no surface code may restate (ADR 0030 §3): the PBES2 bound (10,000,
+/// ADR 0023), the DEFLATE cap (250,000, ADR 0017), the input limits (1 MiB = 1,048,576, and
+/// 1,000,000) and the signature and recipient counts (16, ADR 0026 §7). 16 is also the core's
+/// shortest generated `oct` key.
+const CORE_DEFAULTS: [u128; 5] = [10_000, 1_000_000, 250_000, 1_048_576, 16];
+
+/// `source` with its comments (line, doc and nested block comments) replaced by a space, and
+/// string, raw-string and character literals kept, so a `//` inside a string is not a comment.
+fn code_without_comments(source: &str) -> String {
+    let c: Vec<char> = source.chars().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    let ident = |ch: char| ch.is_alphanumeric() || ch == '_';
+    while i < c.len() {
+        let next = c.get(i + 1).copied();
+        if c[i] == '/' && next == Some('/') {
+            while i < c.len() && c[i] != '\n' {
+                i += 1;
+            }
+            out.push(' ');
+        } else if c[i] == '/' && next == Some('*') {
+            let mut depth = 0;
+            while i < c.len() {
+                if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if c[i] == '*' && c.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            out.push(' ');
+        } else if c[i] == 'r'
+            && (i == 0 || !ident(c[i - 1]))
+            && matches!(next, Some('"') | Some('#'))
+            && {
+                let hashes = c[i + 1..].iter().take_while(|&&ch| ch == '#').count();
+                c.get(i + 1 + hashes) == Some(&'"')
+            }
+        {
+            // A raw string r#"..."#: ends at a quote followed by the same number of hashes.
+            let hashes = c[i + 1..].iter().take_while(|&&ch| ch == '#').count();
+            let start = i;
+            i += 2 + hashes;
+            while i < c.len() {
+                if c[i] == '"'
+                    && c[i + 1..]
+                        .iter()
+                        .take(hashes)
+                        .filter(|&&ch| ch == '#')
+                        .count()
+                        == hashes
+                {
+                    i += 1 + hashes;
+                    break;
+                }
+                i += 1;
+            }
+            out.extend(&c[start..i.min(c.len())]);
+        } else if c[i] == '"' {
+            let start = i;
+            i += 1;
+            while i < c.len() && c[i] != '"' {
+                i += if c[i] == '\\' { 2 } else { 1 };
+            }
+            i += 1;
+            out.extend(&c[start..i.min(c.len())]);
+        } else if c[i] == '\'' && next == Some('\\') {
+            // An escaped character literal such as '\n' or '\''.
+            let start = i;
+            i += 3;
+            while i < c.len() && c[i] != '\'' {
+                i += 1;
+            }
+            i += 1;
+            out.extend(&c[start..i.min(c.len())]);
+        } else if c[i] == '\'' && c.get(i + 2) == Some(&'\'') {
+            out.extend(&c[i..i + 3]);
+            i += 3;
+        } else {
+            out.push(c[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The value of every integer literal in `code`, in any radix, with `_` separators and type
+/// suffixes removed (`16`, `0x10`, `16usize`, `1_048_576_u32`).
+fn integer_literals(code: &str) -> Vec<u128> {
+    let c: Vec<char> = code.chars().collect();
+    let mut values = Vec::new();
+    let mut i = 0;
+    while i < c.len() {
+        let starts = c[i].is_ascii_digit()
+            && (i == 0 || !(c[i - 1].is_alphanumeric() || c[i - 1] == '_' || c[i - 1] == '.'));
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < c.len() && (c[i].is_ascii_alphanumeric() || c[i] == '_') {
+            i += 1;
+        }
+        let token: String = c[start..i].iter().filter(|&&ch| ch != '_').collect();
+        let (radix, digits) = match token.get(..2) {
+            Some("0x") => (16, &token[2..]),
+            Some("0o") => (8, &token[2..]),
+            Some("0b") => (2, &token[2..]),
+            _ => (10, token.as_str()),
+        };
+        let end = digits.find(['u', 'i']).unwrap_or(digits.len());
+        if let Ok(value) = u128::from_str_radix(&digits[..end], radix) {
+            values.push(value);
+        }
+    }
+    values
+}
+
+#[test]
+fn the_literal_scanner_ignores_comments_and_reads_every_radix() {
+    let sample = r##"
+        // 16 in a line comment
+        /// 1048576 in a doc comment
+        /* 10000 /* nested 250000 */ still 16 */
+        let url = "https://example.com"; let a = 16usize;
+        let b = r#"// not a comment"#; let c = 0x10; let d = 1_048_576_u32;
+        let e: &'static str = "x"; let f = '\''; let g = 'a'; let h = 1000000i64;
+        let p256 = "P-256"; let size = u16::MAX; let k = 7;
+    "##;
+    let code = code_without_comments(sample);
+    assert!(code.contains("https://example.com"));
+    assert!(code.contains("// not a comment"));
+    assert!(!code.contains("in a line comment"));
+    assert!(!code.contains("still"));
+    // Digits inside string literals count: they are code, not comments ("P-256" gives 256).
+    assert_eq!(
+        integer_literals(&code),
+        [16, 16, 1_048_576, 1_000_000, 256, 7]
+    );
+}
+
+#[test]
+fn no_surface_source_restates_a_core_default() {
+    // Every file of `bindings/surface/src`, not only this task's: the rule is the surface's
+    // (ADR 0030 §1, §3; feature 0013 T06-T08 acceptance criteria).
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    files.sort();
+    assert!(
+        files.len() >= 9,
+        "expected the surface modules in {}",
+        dir.display()
+    );
+    for path in files {
+        let source = std::fs::read_to_string(&path).unwrap();
+        let code = code_without_comments(&source);
+        for value in integer_literals(&code) {
+            assert!(
+                !CORE_DEFAULTS.contains(&value),
+                "{} restates the core default {value} outside a comment (ADR 0030 §3)",
+                path.display()
+            );
+        }
+    }
+}
