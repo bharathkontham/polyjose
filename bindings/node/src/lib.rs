@@ -160,10 +160,9 @@ pub(crate) mod tests {
 
     #[test]
     fn secret_inputs_are_declared_last() {
-        // napi-derive converts the fields of a `#[napi(object)]` input in declaration order, and a
-        // failing conversion drops the fields already converted unwiped (the module docs'
-        // misuse-path residual). The secret key `String`s, and the recipients that hold them,
-        // come last, so every other field is converted first (review-code.md N1).
+        // The secret key `String`s, and the recipients that hold them, are declared last, so
+        // `binding.d.ts` lists them last and the readers below read them last
+        // (review-code.md N1; `records_that_meet_bytes_are_read_by_hand`).
         let records = include_str!("records.rs");
         for (record, last) in [
             ("JwsSigner", "key"),
@@ -178,6 +177,161 @@ pub(crate) mod tests {
                 "{record} declares `{last}` last: {fields:?}"
             );
         }
+    }
+
+    /// The JS names of the fields of `pub struct <name>` (napi's camelCase, or its `js_name`),
+    /// each with whether its type holds bytes.
+    fn struct_js_fields(text: &str, name: &str) -> Vec<(String, bool)> {
+        let header = format!("pub struct {name}");
+        let start = text
+            .match_indices(&header)
+            .map(|(i, _)| i)
+            .find(|&i| text[i + header.len()..].starts_with([' ', '<']))
+            .unwrap_or_else(|| panic!("no `{header}`"));
+        let mut js_name = None;
+        let mut fields = Vec::new();
+        for line in block(&text[start..], &header)
+            .lines()
+            .skip(1)
+            .map(str::trim)
+        {
+            if let Some(rest) = line.strip_prefix(concat!("#[napi(js_name = ", "\"")) {
+                js_name = rest.split('"').next().map(str::to_owned);
+            } else if let Some((field, ty)) =
+                line.strip_prefix("pub ").and_then(|l| l.split_once(": "))
+            {
+                let camel = field
+                    .split('_')
+                    .enumerate()
+                    .map(|(i, part)| {
+                        let mut chars = part.chars();
+                        match (i, chars.next()) {
+                            (0, _) | (_, None) => part.to_owned(),
+                            (_, Some(c)) => c.to_ascii_uppercase().to_string() + chars.as_str(),
+                        }
+                    })
+                    .collect::<String>();
+                fields.push((
+                    js_name.take().unwrap_or(camel),
+                    ty.contains("Uint8ArraySlice"),
+                ));
+            }
+        }
+        fields
+    }
+
+    #[test]
+    fn records_that_meet_bytes_are_read_by_hand() {
+        // review-security.md L1: every property read can run a JS getter, which can detach and
+        // free a byte argument napi has already captured as a view. So these records are not
+        // converted by napi-derive at all (`object_from_js = false` makes that a compile error);
+        // their functions take a plain `Object` and read them with the `read` functions.
+        let records = include_str!("records.rs");
+        for record in [
+            "JwsSignOptions",
+            "JwsSigner",
+            "JwsVerifyOptions",
+            "JweRecipient",
+            "JweEncryptOptions",
+        ] {
+            let declaration = concat!(
+                "#[napi(object, object_to_js = false, ",
+                "object_from_js = false)]\npub struct "
+            );
+            assert!(
+                records.contains(&format!("{declaration}{record} "))
+                    || records.contains(&format!("{declaration}{record}<")),
+                "{record} is declared for its type only"
+            );
+            // Each reader reads exactly the declared JS fields, the byte fields first (each copied
+            // by `copied_bytes` as it is read) and a secret key or the recipients last.
+            let reader = block(records, &format!("impl {record}"));
+            let reader = &reader[..reader
+                .find("pub(crate) fn read_all")
+                .unwrap_or(reader.len())];
+            let read: Vec<&str> = reader.split('"').skip(1).step_by(2).collect();
+            let fields = struct_js_fields(records, record);
+            let mut declared: Vec<&str> = fields.iter().map(|(f, _)| f.as_str()).collect();
+            let mut sorted = read.clone();
+            declared.sort_unstable();
+            sorted.sort_unstable();
+            assert_eq!(
+                sorted, declared,
+                "{record}: the reader reads every declared field once"
+            );
+            let bytes = fields.iter().filter(|(_, b)| *b).count();
+            for (i, name) in read.iter().enumerate() {
+                let is_bytes = fields.iter().any(|(f, b)| f == name && *b);
+                assert_eq!(
+                    is_bytes,
+                    i < bytes,
+                    "{record}: `{name}` is read in the wrong place: {read:?}"
+                );
+                if is_bytes {
+                    assert!(
+                        reader.contains(&format!("copied_bytes(obj, \"{name}\")")),
+                        "{record}.{name}"
+                    );
+                }
+            }
+            if let Some(last) = ["key", "recipients"].into_iter().find(|s| read.contains(s)) {
+                assert_eq!(
+                    read.last(),
+                    Some(&last),
+                    "{record}: `{last}` is read last: {read:?}"
+                );
+            }
+        }
+        assert_eq!(
+            records
+                .matches(r#"key: SecretString::from(required::<String>(obj, "key")?),"#)
+                .count(),
+            2,
+            "each record key moves straight into its zeroizing owner"
+        );
+
+        // Every function that reads such a record copies its byte argument, and moves every
+        // string argument into its owner, before the first property read.
+        let mut functions = 0;
+        for (file, text) in SOURCES {
+            for (start, _) in text.match_indices("#[napi]\npub fn ") {
+                let function = block(&text[start..], "#[napi]");
+                let (signature, body) = function.split_once(") -> ").unwrap_or((function, ""));
+                if !signature.contains("Object<'_>") && !signature.contains("Array<'_>") {
+                    continue;
+                }
+                functions += 1;
+                let name = signature.split(['(', '\n']).nth(1).unwrap_or(signature);
+                assert!(
+                    !signature.contains("&[u8]"),
+                    "{file} {name}: bytes as a Uint8ArraySlice"
+                );
+                let first_read = body
+                    .find("::read")
+                    .unwrap_or_else(|| panic!("{file} {name}: no record read"));
+                let owners = body[..first_read].matches("Zeroizing::new(").count();
+                // The arguments before the record: the payload or plaintext, and the token and
+                // key strings (a later `form` or `detached` is not secret).
+                let before = &signature[..signature
+                    .find("#[napi(ts_arg_type")
+                    .unwrap_or(signature.len())];
+                let arguments = before.matches(": String").count()
+                    + before.matches(": Uint8ArraySlice").count();
+                assert_eq!(
+                    owners, arguments,
+                    "{file} {name}: every byte and string argument before the record is owned \
+                     before the record is read"
+                );
+                assert!(
+                    !body[first_read..].contains("Zeroizing::new("),
+                    "{file} {name}"
+                );
+            }
+        }
+        assert_eq!(
+            functions, 8,
+            "the sign, verify and encrypt functions that take a record"
+        );
     }
 
     #[test]
