@@ -1334,18 +1334,50 @@ fn no_error_or_debug_output_carries_a_marked_secret() {
     assert!(!format!("{verified:#?}").contains(MARKER));
 }
 
+/// The value of a numeric token (`600`, `6_0`, `0x3c`, `0o10`, `8usize`), or `None` for a token
+/// that does not start with a digit, such as `u8` or `HS256`.
+fn numeric_value(token: &str) -> Option<u128> {
+    if !token.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let token = token.replace('_', "");
+    let (radix, body) = match token.get(..2) {
+        Some("0x") => (16, &token[2..]),
+        Some("0o") => (8, &token[2..]),
+        Some("0b") => (2, &token[2..]),
+        _ => (10, token.as_str()),
+    };
+    let digits: String = body.chars().take_while(|c| c.is_digit(radix)).collect();
+    u128::from_str_radix(&digits, radix).ok()
+}
+
+#[test]
+fn numeric_value_reads_every_radix_and_skips_identifiers() {
+    for (token, value) in [
+        ("600", Some(600)),
+        ("6_0", Some(60)),
+        ("0x3c", Some(60)),
+        ("0o10", Some(8)),
+        ("0b1000", Some(8)),
+        ("8usize", Some(8)),
+        ("u8", None),
+        ("HS256", None),
+    ] {
+        assert_eq!(numeric_value(token), value, "{token}");
+    }
+}
+
 #[test]
 fn no_numeric_literal_in_jwt_rs_restates_a_core_default() {
     // ADR 0030 §3: the leeway (60), its cap (600) and the key-candidate bound (8) live in the
-    // core only. Code, not comments, is checked, up to the unit tests.
+    // core only. Every line of jwt.rs outside comments is checked, its unit tests and string
+    // literals included, in any radix.
     let source = include_str!("../src/jwt.rs");
-    let code = source.split("#[cfg(test)]").next().unwrap();
-    for (n, line) in code.lines().enumerate() {
-        let line = line.split("//").next().unwrap();
-        for token in line.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
-            let digits = token.trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '_');
+    for (n, line) in source.lines().enumerate() {
+        let code = line.split("//").next().unwrap();
+        for token in code.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
             assert!(
-                !["60", "600", "8"].contains(&digits.trim_start_matches('0')),
+                !matches!(numeric_value(token), Some(60 | 600 | 8)),
                 "jwt.rs line {} restates a core default: {line}",
                 n + 1
             );
