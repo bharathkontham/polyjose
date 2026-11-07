@@ -135,6 +135,16 @@ impl Jwk {
     ///   application knows the hash protects it well enough. polyjose
     ///   wipes the hash input and the hash state; the returned thumbprint
     ///   is not secret material and is not wiped.
+    /// - **Passwords and other low-entropy `oct` keys:** never publish
+    ///   the thumbprint of a password or other low-entropy `oct` key,
+    ///   such as a PBES2 key, whose `k` is the password (RFC 7518 §4.8),
+    ///   and never use it as a `kid`, although RFC 7638 §3.4 suggests
+    ///   thumbprints as `kid` values: a `kid` is readable in every token
+    ///   header. The thumbprint is an unsalted fast hash of the secret,
+    ///   so whoever sees it can test password guesses offline at hash
+    ///   speed. Publishing it undoes the protection of PBES2's salt
+    ///   (`p2s`) and iteration count (`p2c`) (RFC 7518 §4.8.1.1,
+    ///   §4.8.1.2). SHA-384 and SHA-512 do not change this.
     /// - **Not a blocklist:** an attacker can transform a key (an RSA
     ///   modulus 3·N, say) so it gets another thumbprint, so comparing
     ///   thumbprints cannot reliably exclude a key.
@@ -173,7 +183,12 @@ impl Jwk {
     ///
     /// # Security
     ///
-    /// The [`Jwk::thumbprint`] cautions apply (RFC 9278 §7). For X25519
+    /// The [`Jwk::thumbprint`] cautions apply (RFC 9278 §7, RFC 7638 §7).
+    /// In particular, never publish the URI of a password or other
+    /// low-entropy `oct` key (PBES2, RFC 7518 §4.8), or use it as a `kid`
+    /// (RFC 7638 §3.4): it carries an unsalted fast hash of the secret,
+    /// which undoes PBES2's `p2s`/`p2c` protection whatever the hash.
+    /// For X25519
     /// several public keys are equivalent to one another (RFC 7748 §7), so
     /// a URI used as an identifier should be bound to the actual key, for
     /// instance by a signature over that key (RFC 9278 §7.1).
