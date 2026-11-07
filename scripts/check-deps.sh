@@ -23,7 +23,9 @@
 #      the code behind it can be swapped);
 #   7. the workspace root Cargo.toml has a [patch] or [replace] section;
 #   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
-#      build-dependency ([build-dependencies] or [target.*.build-dependencies]);
+#      build-dependency ([build-dependencies] or [target.*.build-dependencies]); or
+#      bindings/surface or bindings/ffi has a build script (build.rs, a `build` key, or a
+#      custom-build target in cargo metadata; security audit L2 of feature 0013);
 #   9. a Rust file of the workspace (crates/polyjose/src, bindings/, and every other workspace
 #      member's directory and target directories, from cargo metadata) names an RSA private-key or
 #      signing type,
@@ -389,6 +391,7 @@ guarded_group_edges() {
 guarded_paths() {
   cargo tree --locked -p "$core_pkg" -e "$1" --all-features --target all --prefix depth </dev/null \
     >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree -e $1 --prefix depth failed"; }
+  # shellcheck disable=SC2016 # Python source in single quotes, with no shell expansion meant
   python3 -I -c '
 import re, sys
 tree_path, rules_path = sys.argv[1], sys.argv[2]
@@ -586,6 +589,57 @@ for dep in pkgs[0]["dependencies"]:
   fi
 }
 
+# 8, the binding part (security audit L2 of feature 0013, second recommendation). A build script
+#    runs arbitrary code on every developer, CI and release machine that builds the crate, and can
+#    change what is compiled. The framework-free surface (ADR 0030 §1) and the UniFFI adapter
+#    (proc-macro scaffolding, ADR 0032, ADR 0033) need none, so either one having a build script
+#    fails, with or without build-dependencies (whose crates check 13 pins). bindings/node keeps
+#    the build.rs that napi-build needs (ADR 0031), its build tree pinned by check 13;
+#    bindings/wasm has no build script today and is not covered here (check 13 pins its build
+#    edges too). A crate named here that is not a workspace package fails: the check cannot vouch
+#    for it, so the list must be updated.
+no_build_script_dirs="bindings/surface bindings/ffi"
+nbs_checked="" # "<package> (<dir>), ...": what the ok line names
+check_bindings_no_build_script() {
+  local dir pkg checked=""
+  for dir in $no_build_script_dirs; do
+    python3 -I -c '
+import json, os, sys
+meta_path, manifest, out = sys.argv[1], os.path.realpath(sys.argv[2]), sys.argv[3]
+with open(meta_path, encoding="utf-8") as f:
+    meta = json.load(f)
+members = set(meta["workspace_members"])
+pkgs = [p for p in meta["packages"]
+        if p["id"] in members and os.path.realpath(p["manifest_path"]) == manifest]
+if len(pkgs) != 1:
+    sys.exit(3)
+with open(out, "w", encoding="utf-8") as f:
+    f.write(pkgs[0]["name"] + "\n")
+    for target in pkgs[0]["targets"]:
+        if "custom-build" in target["kind"]:
+            f.write("build script %s (cargo metadata)\n" % target["src_path"])
+' "$work/metadata.json" "$dir/Cargo.toml" "$work/nbs" 2>"$work/nbs.err" || {
+      if [ "$?" -eq 3 ]; then
+        fail "$dir is not a workspace package, so check 8 cannot hold it to no build script; update no_build_script_dirs in this script"
+        continue
+      fi
+      cat "$work/nbs.err" >&2; die "could not read $dir's targets from cargo metadata"
+    }
+    pkg=$(sed -n 1p "$work/nbs")
+    sed 1d "$work/nbs" >"$work/nbs.found"
+    if [ -e "$dir/build.rs" ] || [ -L "$dir/build.rs" ]; then
+      echo "$dir/build.rs exists" >>"$work/nbs.found"
+    fi
+    python3 -I -c "$toml_keys_py" "$dir/Cargo.toml" package.build >>"$work/nbs.found" || die "could not read $dir/Cargo.toml"
+    if [ -s "$work/nbs.found" ]; then
+      fail "$pkg ($dir) has a build script; polyjose-surface and polyjose-ffi must not have one (security audit L2 of feature 0013, ADR 0030 §1):"
+      sort "$work/nbs.found" | sed 's/^/  - /'
+    fi
+    checked="$checked${checked:+, }$pkg ($dir)"
+  done
+  nbs_checked=$checked
+}
+
 # 9. RSA is used for public-key operations only (ADR 0021 §3): RUSTSEC-2023-0071 (Marvin) is a
 #    timing leak of rsa's private-key operations, and deny.toml ignores it only while this check
 #    holds. Every *.rs file under crates/polyjose/src, bindings/, and the directory of every other
@@ -647,6 +701,7 @@ for dep in pkgs[0]["dependencies"]:
 #    the compiled objects of polyjose and the bindings (dev and release profiles), where no
 #    spelling of a path can hide codegened code (ADR 0049 §1).
 check_rsa_public_only() {
+  # shellcheck disable=SC2016 # Python source in single quotes, with no shell expansion meant
   python3 -I -c '
 import bisect, json, os, re, sys
 meta_path, ws_root, core_dir = sys.argv[1], os.path.realpath(sys.argv[2]), sys.argv[3]
@@ -1260,6 +1315,7 @@ check_group_rules
 check_sources_crates_io
 check_no_patch_or_replace
 check_core_no_build_script
+check_bindings_no_build_script
 check_rsa_public_only
 check_no_sha1
 check_rsa_no_features
@@ -1275,5 +1331,6 @@ fi
 echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features and under its own name (ADR 0021, ADR 0022)"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
+echo "ok: no build script in $nbs_checked; bindings/node keeps napi-build's build.rs (ADR 0031)"
 echo "ok: the binding trees match $binding_allowlist_dir ($(awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $2 }' "$work/bal-checked")), with serde-family crates only below each file's serde-only-below crates (ADR 0030 §1)"
 completed=1; exit 0
