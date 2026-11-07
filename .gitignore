@@ -7,3 +7,5 @@ platforms/android/build/
 platforms/android/src/main/jniLibs/
 platforms/swift/*.xcframework
 .build/
+# Packaged release artifacts (platforms/swift/scripts/package.sh writes dist/apple/; ADR 0037 §3).
+/dist/
