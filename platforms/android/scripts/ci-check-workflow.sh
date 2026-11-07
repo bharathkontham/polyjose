@@ -115,6 +115,45 @@ function check_expressions(s,   i, j, rest, e, k, c, q, w, prev) {
     }
   }
 }
+# Key syntax outside the subset, which the line-based rules (the uses: scan, parse_key) would not
+# read as the key it is: a quoted key (YAML 1.2.2 §7.3.2, §7.3.3: `"uses":`, `'uses':`, also one
+# with escapes such as `"u\x73es":`), an explicit key (§6.9 / §8.2.2: `? uses`) and a tag
+# (§6.8.1: `!!str uses:`). Each is looked for at the start of a node: after the indent and any
+# "- " markers, after a flow `{`, `[` or `,`, and after a `: `. A quote in the middle of a plain
+# scalar is plain text, and ${{ }} expressions are skipped. Returns "" or what was found.
+function key_syntax(s,   i, j, n, c, nx, q, qkey, start, t) {
+  t = ""
+  while ((i = index(s, "${{")) > 0 && (j = index(substr(s, i), "}}")) > 0) {
+    t = t substr(s, 1, i - 1) "E"; s = substr(s, i + j + 1)
+  }
+  s = t s; n = length(s); q = ""; qkey = 0; start = 1
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (q != "") {
+      if (q == "\"" && c == "\\") { i++; continue }
+      if (c != q) continue
+      if (q == "\047" && substr(s, i + 1, 1) == "\047") { i++; continue }
+      q = ""
+      if (qkey) {
+        for (j = i + 1; substr(s, j, 1) == " "; j++) ;
+        if (substr(s, j, 1) == ":") return "a quoted key"
+      }
+      continue
+    }
+    if (c == " ") continue
+    nx = substr(s, i + 1, 1)
+    if (start) {
+      start = 0
+      if (c == "-" && (nx == " " || nx == "")) { start = 1; continue }
+      if (c == "\"" || c == "\047") { q = c; qkey = 1; continue }
+      if (c == "?" && (nx == " " || nx == "")) return "an explicit ? key"
+      if (c == "!") return "a YAML tag"
+    }
+    if (c == "{" || c == "[" || c == ",") start = 1
+    else if (c == ":" && (nx == " " || nx == "")) start = 1
+  }
+  return ""
+}
 # A key line: indent, an optional "- ", the key, a colon, the value.
 function parse_key(s,   m, rest) {
   key = ""; value = ""; keycol = -1
@@ -164,7 +203,8 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
   }
   run_open = 0
   if (code ~ /(^|[ {,[])[&*][A-Za-z0-9_]/ || code ~ /<<[ ]*:/) fail("structure: YAML anchor, alias or merge key")
-  if (low ~ /[{,][ ]*uses[ ]*:/) fail("structure: flow-style uses:")
+  if (low ~ /[{,][ ]*["\047]?uses["\047]?[ ]*:/) fail("structure: flow-style uses:")
+  if ((found = key_syntax(code)) != "") fail("structure: " found " (outside the subset)")
 
   # A permissions block in progress: its children.
   if (perm_open) {
