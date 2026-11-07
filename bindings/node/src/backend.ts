@@ -21,7 +21,13 @@
  *   1. it refuses to load at all while either WASI variable is set, whatever its value;
  *   2. it refuses while any WASI candidate resolves from the loader's directory, resolved exactly
  *      as the loader's own `require.resolve` would (the same directory, `node_modules` walk and
- *      `NODE_PATH`), so the loader's WASI branch can never find anything.
+ *      `NODE_PATH`), so the loader's WASI branch can never find anything;
+ *   3. after loading, it accepts only the native addon: the loader's own `__napiBindingTarget`
+ *      stamp must be `"native"` (a `NAPI_RS_NATIVE_LIBRARY_PATH` module stamped with a WASI flavor
+ *      is refused), and `version()` must equal this package's version, which is the workspace
+ *      version every release keeps in step (feature 0007 T04). So a mismatched
+ *      `@polyjose/node-<platform>` is refused always, not only under
+ *      `NAPI_RS_ENFORCE_VERSION_CHECK` (SF-4 item 3).
  * `test/loader.test.ts` pins the loader's load targets, so a CLI bump that adds a candidate fails
  * there before it can be missed here.
  */
@@ -89,7 +95,16 @@ function loadBinding(host: Host, moduleUrl: string): typeof Binding {
       refuse(`${id} resolves next to the loader, but polyjose publishes no WASI build; remove it`);
     }
   }
-  return req("./binding.cjs") as typeof Binding;
+  const loaded = req("./binding.cjs") as Partial<typeof Binding> | null;
+  if (loaded?.__napiBindingTarget !== "native") {
+    refuse("the loaded binding is not the native addon (__napiBindingTarget is not \"native\")");
+  }
+  const expected = (req("./package.json") as { version?: unknown }).version;
+  const actual = typeof loaded.version === "function" ? loaded.version() : undefined;
+  if (typeof expected !== "string" || actual !== expected) {
+    refuse(`the native addon is version ${String(actual)}, but this package is ${String(expected)}; reinstall it`);
+  }
+  return loaded as typeof Binding;
 }
 
 const binding = loadBinding(
