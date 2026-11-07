@@ -41,14 +41,17 @@ Every function returns a Promise. The WebAssembly module loads on the first call
 
 `package.json` `exports` picks the right entry for your runtime:
 
-| Condition | Entry | Loads the module with |
+| Condition | Entry | Gets the module from |
 |---|---|---|
-| `workerd` | `workerd.mjs` | a static `.wasm` import (a `WebAssembly.Module`) and `initSync` |
-| `node` | `node.mjs` | `readFileSync` and `initSync` |
-| `browser`, `import`, `default` | `browser.mjs` | `fetch` of `new URL("./polyjose_wasm_bg.wasm", import.meta.url)` |
+| `workerd` | `workerd.mjs` | a static `.wasm` import, which arrives as a compiled `WebAssembly.Module` |
+| `node` | `node.mjs` | `readFileSync`, a SHA-384 check, then `WebAssembly.compile` |
+| `browser`, `import`, `default` | `browser.mjs` | a `fetch` of `new URL("./polyjose_wasm_bg.wasm", import.meta.url)` with Subresource Integrity, then `WebAssembly.compile` |
 
-- **Cloudflare Workers** use the `workerd` entry. Wrangler resolves the `workerd` condition.
-- **Browser Web Workers** use the browser entry, `browser.mjs`, like a page does. That includes bundles built with webpack's `target: "webworker"`.
+Every entry then instantiates the module with the glue's asynchronous `init`, awaited inside the first call, never `initSync` and never at import time.
+
+- **Cloudflare Workers** use the `workerd` entry. Wrangler's condition set lists `workerd` first.
+- **Browser Web Workers** use the browser entry, `browser.mjs`, like a page does. The package has no `worker` condition, so any condition set without `workerd` or `node` resolves `browser.mjs`. That includes the sets webpack 5 uses for `target: "webworker"` and for `new Worker(new URL(..., import.meta.url))`.
+- **Node.js** always adds the `node` condition, so it resolves `node.mjs`, also when run with `-C worker`.
 
 - **Tested:** Node.js ≥ 22.12, headless Chrome and Cloudflare Workers (workerd).
 - **Expected to work:** current Firefox and Safari, and bundlers that resolve `new URL(..., import.meta.url)` (webpack 5, Vite, esbuild).
@@ -70,7 +73,7 @@ Treat the host's `crypto` as part of what you trust. Use the platform's own `cry
 
 ### Serving the module
 
-- **MIME type.** Serve `polyjose_wasm_bg.wasm` as `application/wasm`. With another type, browsers can't compile it while it streams in. The glue then falls back to a slower, non-streaming load and logs a console warning.
+- **MIME type.** Serve `polyjose_wasm_bg.wasm` as `application/wasm`, the media type registered for WebAssembly modules. Only the browser entry fetches the file: Node reads it from disk, and Cloudflare Workers get it precompiled in the deploy bundle. The browser entry checks the fetched bytes with Subresource Integrity and compiles them with `WebAssembly.compile`, which, unlike `WebAssembly.compileStreaming`, doesn't check the type. So another type doesn't stop the package from loading.
 - **Content Security Policy.** Allow the fetch of the `.wasm` file (`connect-src`) and WebAssembly compilation (`script-src 'wasm-unsafe-eval'`). Without `'wasm-unsafe-eval'`, a page with a CSP can't compile the module, and the first call rejects.
 - **Serve it byte for byte.** A bundler or CDN that rewrites, re-encodes or inlines the `.wasm` will make the first call fail (see [Loader integrity](#loader-integrity)).
 
@@ -89,11 +92,12 @@ Every script in the same JavaScript realm is trusted. Code that can patch `WebAs
 
 ### After a trap
 
-If the module traps (a `WebAssembly.RuntimeError`, for example when it runs out of memory on a very large input), the instance is unusable. That call rejects, and every later call rejects with an error saying to reload. Secrets passed to the trapped call may remain in the module's memory. Restart the process or worker, or reload the page.
+If the module traps (a `WebAssembly.RuntimeError`, for example when it runs out of memory on a very large input), or a call fails with a `RangeError` (as a stack overflow inside the module does), the instance is unusable. That call rejects, and every later call rejects with an error saying to reload. Secrets passed to the trapped call may remain in the module's memory. Restart the process or worker, or reload the page.
 
 ### What stays in memory
 
 - **The Rust heap:** inside the WebAssembly module, secret inputs (keys, payloads, plaintexts, passwords) are wiped when a call finishes, and secret outputs are copied out without leaving a copy on the module's heap.
+- **A JSON-serialized JWE carries `aad` in the clear** (RFC 7516 §7.2.1). Don't put secrets in `aad` if you use the JSON serialization.
 - **The stack is not scrubbed.** Short-lived fragments of keys and plaintext can stay in the module's stack memory after a call, until later calls overwrite them.
 - **JWT claims are not treated as secret.** They are returned as plain strings and not wiped. Put secret data in a JWE payload, not in JWT claims.
 - **JavaScript copies are yours.** JavaScript strings, such as JWKs, tokens and claims, are immutable, and the garbage collector frees them, so no library can wipe them. A returned `Uint8Array` (a payload, plaintext or DER key) is yours: overwrite it with `fill(0)` when you're done with it.
