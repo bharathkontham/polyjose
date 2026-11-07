@@ -122,7 +122,7 @@
       }
     },
     "skipped": {
-      "description": "The vector lists a feature the build does not enable (the only skip rule, ADR 0034 §3): reason is feature: and the missing feature names, comma-separated, in the vector's order. There is no actual.",
+      "description": "The vector lists in features a feature the build does not enable (ADR 0034 §3), or in features_absent one it enables (ADR 0056): reason is feature: and those names, comma-separated, the missing ones first in the vector's features order, then each enabled one as !<name> in its features_absent order. There is no actual.",
       "type": "object",
       "required": ["id", "op", "status", "reason"],
       "additionalProperties": false,
@@ -133,7 +133,7 @@
         "status": { "const": "skipped" },
         "reason": {
           "type": "string",
-          "pattern": "^feature:[a-z0-9-]+(,[a-z0-9-]+)*$"
+          "pattern": "^feature:!?[a-z0-9-]+(,!?[a-z0-9-]+)*$"
         }
       }
     }

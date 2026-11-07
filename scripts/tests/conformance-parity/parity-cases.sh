@@ -2,7 +2,8 @@
 # The parity rules of scripts/conformance-parity.sh (ADR 0034 §5, §8; feature 0013 T02 cases a-g):
 # identical files pass; a missing id, a different error code, a different skip reason, a `fail`
 # entry or a different error_codes list fails, printing the id (or list) and both outcomes; and
-# a directory with only the reference passes with a SKIPPED line per runner.
+# a directory with only the reference passes with a SKIPPED line per runner. The ADR 0056 skip
+# reason feature:!<name> (cases h) is compared like any other.
 # Usage: scripts/tests/conformance-parity/parity-cases.sh
 # Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
@@ -107,6 +108,41 @@ put rust-core.json "$REFERENCE"
 put swift-macos.json "$(edit "$(as_runner swift-macos)" '"InvalidBase64","InvalidKey"' '"InvalidKey","InvalidBase64"')"
 expect_fail "(f') error_codes in another order" \
   '^FAIL: swift-macos\.json: error_codes differ: ' '^FAIL: swift-macos\.json: error_codes differ: '
+
+# (h) ADR 0056: a reference with a features_absent skip (feature:!deflate, as an --all-features
+# build would give) and a skip of both kinds; an identical binding passes.
+ABSENT_REFERENCE=$(edit "$REFERENCE" '"reason":"feature:fixed-rng"}' \
+  '"reason":"feature:fixed-rng"},
+{"id":"binding-surface/zip-off.json#0","op":"jwe.decrypt","status":"skipped","reason":"feature:!deflate"},
+{"id":"binding-surface/mixed.json#0","op":"jwe.encrypt","status":"skipped","reason":"feature:fixed-rng,!deflate"}')
+new_case absent-identical
+put rust-core.json "$ABSENT_REFERENCE"
+put node.json "$(as_runner node "$ABSENT_REFERENCE")"
+expect_pass "(h) identical feature:!<name> skips" '^PASS: node\.json \(node, ' '^conformance parity: OK \(1 file'
+
+# (h') The plain reason where the reference has the mirror one.
+new_case absent-reason
+put rust-core.json "$ABSENT_REFERENCE"
+put node.json "$(edit "$(as_runner node "$ABSENT_REFERENCE")" '"reason":"feature:!deflate"' '"reason":"feature:deflate"')"
+expect_fail "(h') feature:deflate where the reference has feature:!deflate" \
+  '^FAIL: node\.json: binding-surface/zip-off\.json#0: rust-core skipped feature:!deflate \| node skipped feature:deflate$' \
+  '^FAIL: node\.json: binding-surface/zip-off\.json#0: '
+
+# (h'') A binding that runs what the reference skips with feature:!deflate.
+new_case absent-ran
+put rust-core.json "$ABSENT_REFERENCE"
+put node.json "$(edit "$(as_runner node "$ABSENT_REFERENCE")" \
+  '"status":"skipped","reason":"feature:!deflate"' '"status":"pass","actual":{"ok":false,"error":"UnsupportedAlgorithm"}')"
+expect_fail "(h'') a binding runs a vector the reference skips with feature:!deflate" \
+  '^FAIL: node\.json: binding-surface/zip-off\.json#0: rust-core skipped feature:!deflate \| node pass \{"ok":false,"error":"UnsupportedAlgorithm"\}$' \
+  '^FAIL: node\.json: binding-surface/zip-off\.json#0: '
+
+# (h''') A malformed mirror reason is not a valid results file.
+new_case absent-malformed
+put rust-core.json "$ABSENT_REFERENCE"
+put node.json "$(edit "$(as_runner node "$ABSENT_REFERENCE")" '"reason":"feature:!deflate"' '"reason":"feature:deflate!"')"
+expect_fail "(h''') a malformed feature:!<name> reason" \
+  '^FAIL: node\.json: not valid per ' '^FAIL: node\.json: not valid per '
 
 # (g) No binding files: passes, with one SKIPPED line per runner other than the reference.
 new_case no-bindings
