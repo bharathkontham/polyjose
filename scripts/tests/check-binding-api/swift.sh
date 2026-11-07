@@ -6,7 +6,7 @@
 # mode; UniFFI's own public plumbing (FfiConverter*, uniffiEnsurePolyjoseFfiInitialized) and
 # braces inside comments and strings do not count. Hand-written forms the generated code does not
 # use are seen too (F01): declarations sharing a line with an extension, a brace or each other,
-# and declarations with attributes on the same line.
+# declarations with attributes on the same line, and `open` declarations, read like `public`.
 #
 # Usage: scripts/tests/check-binding-api/swift.sh (under /bin/bash 3.2 and bash 5).
 set -euo pipefail
@@ -148,6 +148,31 @@ edit $gen 'public struct JwsVerified: Equatable, Hashable {' 'public struct JwsV
 run_check swift
 check "a record var with an attribute on the same line is still read as a public var" 1 \
   'public var JwsVerified\.extraVar is not a parameter of its init'
+
+new_case open-class
+append $src/Extra.swift 'open class Extra {}'
+run_check swift
+check "an open class fails like a public one" 1 'open class Extra is neither an operation, a record nor the error type'
+
+new_case open-func
+append $src/Extra.swift 'open func extra3() {}'
+run_check swift
+check_diffs "an open func is an extra operation" \
+  'extra in swift (not in the inventory): op extra3'
+
+new_case open-own-line
+append $src/Extra.swift 'open
+func extra3() {}'
+run_check swift
+check_diffs "open on its own line before a func is an extra operation" \
+  'extra in swift (not in the inventory): op extra3'
+
+new_case open-extension-member
+append $src/Extra.swift 'extension JwsVerified {
+    open class func extra4() {}
+}'
+run_check swift
+check "an open extension member fails like a public one" 1 'open member extra4 in an extension of JwsVerified'
 
 new_case non-public-forms
 append $src/Extra.swift 'extension JwsVerified { func helper() {}; internal var opened: Bool { false } }

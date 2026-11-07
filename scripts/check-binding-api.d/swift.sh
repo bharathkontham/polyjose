@@ -10,7 +10,8 @@
 #   1. comments (`//`, `/* */`, nested) and string literals are blanked, keeping the line breaks;
 #   2. the declarations are read by brace depth, each line in pieces that end after a `{`, `}` or
 #      `;`, so declarations sharing a line with an extension, a brace or each other count too,
-#      and without leading attributes (`@available(iOS 16, *) public func f()` is `public func f()`):
+#      and without leading attributes (`@available(iOS 16, *) public func f()` is `public func f()`);
+#      `open` (public, and also subclassable or overridable outside the module) counts as `public`:
 #      - an operation is a `public func <name>(` at depth 0;
 #      - a record is a `public struct <Name>` at depth 0, and its fields are the parameters of its
 #        `public init(` (depth 1): no default is a required field, `= nil` an optional one (`?`)
@@ -129,11 +130,12 @@ function piece(line) {
     return
   }
   text = noattrs(text)
-  if (depth == 0 && text == "public") { pending = 1; return }
+  if (depth == 0 && (text == "public" || text == "open")) { pending = text; return }
   decl = text
-  if (pending && text != "") { decl = "public " text; pending = 0 }
-  if (depth == 0 && decl ~ /^public[ \t]/) {
-    rest = decl; sub(/^public[ \t]+/, "", rest)
+  if (pending != "" && text != "") { decl = pending " " text; pending = "" }
+  if (depth == 0 && decl ~ /^(public|open)[ \t]/) {
+    access = decl; sub(/[ \t].*/, "", access)
+    rest = decl; sub(/^(public|open)[ \t]+/, "", rest)
     kind = rest; sub(/[ \t].*/, "", kind)
     name = rest; sub(/^[a-z]+[ \t]+/, "", name); sub(/[^A-Za-z0-9_].*/, "", name)
     framework_item = (index(name, prefix) == 1 || (name in plumbing))
@@ -144,7 +146,7 @@ function piece(line) {
     } else if (kind == "enum" && name == error_type) {
       seen_error = 1
     } else if (!framework_item) {
-      print "error " where() ": public " kind " " name " is neither an operation, a record nor the error type"
+      print "error " where() ": " access " " kind " " name " is neither an operation, a record nor the error type"
     }
   }
   if (depth == 0) {
@@ -166,15 +168,16 @@ function piece(line) {
         if (text ~ /\)[ \t]*(throws[ \t]*)?\{/) { params(init, block_name); inits[block_name]++ } else collecting = 1
       }
     }
-    if (block_kind == "extension" && index(block_name, prefix) != 1 && text ~ /^public[ \t]/) {
-      m = text; sub(/^public[ \t]+((static|final|override|mutating|convenience)[ \t]+)*(var|let|func|init|subscript)[ \t]*/, "", m); sub(/[^A-Za-z0-9_].*/, "", m)
-      print "error " where() ": public member " (m == "" ? "init" : m) " in an extension of " block_name " (a hand-written member is public API: add it to the inventory and to this mode)"
+    if (block_kind == "extension" && index(block_name, prefix) != 1 && text ~ /^(public|open)[ \t]/) {
+      access = text; sub(/[ \t].*/, "", access)
+      m = text; sub(/^(public|open)[ \t]+((static|class|final|override|mutating|convenience)[ \t]+)*(var|let|func|init|subscript)[ \t]*/, "", m); sub(/[^A-Za-z0-9_].*/, "", m)
+      print "error " where() ": " access " member " (m == "" ? "init" : m) " in an extension of " block_name " (a hand-written member is public API: add it to the inventory and to this mode)"
     }
   }
   depth += count(line, "{") - count(line, "}")
   if (depth < 0) { print "error " where() ": unbalanced braces"; depth = 0 }
 }
-FNR == 1 { depth = 0; pending = 0; collecting = 0 }
+FNR == 1 { depth = 0; pending = ""; collecting = 0 }
 # Each line is read in pieces that end after a `{`, `}` or `;`, so a declaration that shares its
 # line with a brace or another declaration (`extension T { public func f() {} }`, `} public func
 # g() {}`, `public func a() {}; public func b() {}`) is read at its own depth like one on a line of
