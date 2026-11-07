@@ -30,6 +30,8 @@
 //! 6. the shared and per-recipient unprotected headers, typed the same way
 //!    → `InvalidHeader`.
 
+use zeroize::Zeroizing;
+
 use super::api::{DecryptPolicy, JsonForm};
 use super::core::{self, JweParts, RecipientParts};
 use crate::header::Header;
@@ -47,7 +49,9 @@ struct Raw {
     protected: Option<String>,
     unprotected: Option<Object>,
     recipients: Vec<RawRecipient>,
-    aad: Option<String>,
+    /// Wiped on drop: an encoding of the JWE AAD, which can carry
+    /// application secrets (ADR 0050 §4).
+    aad: Option<Zeroizing<String>>,
     iv: Option<String>,
     ciphertext: String,
     tag: Option<String>,
@@ -107,7 +111,7 @@ pub(crate) fn parse(jwe: &str, policy: &DecryptPolicy) -> Result<JweParts> {
     for recipient in &raw.recipients {
         encrypted_keys.push(decode(recipient.encrypted_key.as_ref())?.unwrap_or_default());
     }
-    let aad = decode(raw.aad.as_ref())?;
+    let aad = decode(raw.aad.as_deref())?.map(Zeroizing::new);
     let iv = decode(raw.iv.as_ref())?.unwrap_or_default();
     let ciphertext = b64url_decode(&raw.ciphertext)?;
     let tag = decode(raw.tag.as_ref())?.unwrap_or_default();
@@ -195,7 +199,7 @@ fn shape(mut top: Object, max_recipients: usize) -> Result<Raw> {
     };
     let protected = string_member(&mut top, "protected", PROTECTED)?;
     let unprotected = object_member(&mut top, "unprotected", UNPROTECTED)?;
-    let aad = string_member(&mut top, "aad", AAD)?;
+    let aad = string_member(&mut top, "aad", AAD)?.map(Zeroizing::new);
     let iv = string_member(&mut top, "iv", IV)?;
     let tag = string_member(&mut top, "tag", TAG)?;
     let ciphertext = match top.remove("ciphertext") {
@@ -354,7 +358,7 @@ pub(crate) fn serialize(parts: &JweParts, form: JsonForm) -> Result<String> {
             out.insert("recipients", entries);
         }
     }
-    match parts.aad.as_deref() {
+    match parts.aad.as_deref().map(Vec::as_slice) {
         None => {}
         Some([]) => {
             return Err(Error::InvalidFormat(
@@ -916,13 +920,34 @@ mod tests {
         );
         let parts = parsed(&jwe);
         assert_eq!(parts.protected_b64, encoded);
-        assert_eq!(parts.aad.as_deref(), Some(&b"[\"vcard\"]"[..]));
+        assert_eq!(
+            parts.aad.as_deref().map(Vec::as_slice),
+            Some(&b"[\"vcard\"]"[..])
+        );
         let out = serialize(&parts, JsonForm::Flattened).unwrap_or_else(|e| panic!("{e}"));
         assert!(
             out.contains(&format!(r#""protected":"{encoded}""#)),
             "{out}"
         );
         assert!(out.contains(&format!(r#""aad":"{aad}""#)), "{out}");
+    }
+
+    /// The encoded `aad` (RFC 7516 §7.2.1) is an encoding of the JWE AAD,
+    /// which can carry application secrets (ADR 0050 §4), so the copy
+    /// taken while parsing is wiped on drop, as the decoded one is (0006
+    /// security audit L3).
+    #[test]
+    fn the_encoded_aad_is_held_in_a_buffer_wiped_on_drop() {
+        fn is_zeroizing(_: &Option<Zeroizing<String>>) {}
+        let aad = b64url_encode(b"MARKERaad");
+        let jwe = a5_with(&[&format!(r#""aad":"{aad}""#)], &[]);
+        let top = json::parse(jwe.as_bytes())
+            .ok()
+            .and_then(Value::into_object)
+            .unwrap_or_else(|| panic!("{jwe}"));
+        let raw = shape(top, 1).unwrap_or_else(|e| panic!("{e}"));
+        is_zeroizing(&raw.aad);
+        assert_eq!(raw.aad.as_deref().map(String::as_str), Some(aad.as_str()));
     }
 
     #[test]
@@ -969,7 +994,7 @@ mod tests {
         // An empty JWE AAD was part of the AAD computation (§5.1 step 14)
         // but §7.2.1 cannot carry it.
         let mut empty_aad = parsed(A5);
-        empty_aad.aad = Some(Vec::new());
+        empty_aad.aad = Some(Zeroizing::new(Vec::new()));
         for form in [JsonForm::Flattened, JsonForm::General] {
             assert_eq!(
                 serialize(&empty_aad, form),
