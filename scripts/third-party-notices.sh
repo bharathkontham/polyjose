@@ -87,7 +87,10 @@ command -v cargo >/dev/null 2>&1 || die "cargo not found on PATH"
 command -v python3 >/dev/null 2>&1 || die "python3 not found on PATH"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/third-party-notices.XXXXXX") || die "mktemp failed"
-trap 'rm -rf "$work"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$work"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "third-party-notices.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 offline_hint="(offline: run \`cargo fetch --locked\` first if the registry cache lacks a crate)"
 cargo tree --manifest-path "$manifest" --locked --offline -p "$pkg" --target "$target" \
@@ -469,3 +472,4 @@ if ! { cp "$work/notices.txt" "$tmp_out" && mv -f "$tmp_out" "$out"; }; then
   die "could not write $out"
 fi
 echo "third-party-notices: wrote $out ($pkg, $target)"
+completed=1; exit 0

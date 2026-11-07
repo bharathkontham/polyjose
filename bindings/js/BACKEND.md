@@ -23,7 +23,18 @@
 - **Results** may be returned directly or as a Promise (napi `AsyncTask`). An optional result field may be absent, `undefined` or `null`.
   - The facade reads a result's **own** members only (`Object.hasOwn`, 0013 F09), so a member a pollution bug put on `Object.prototype` never stands in for one you left out: an absent `kid` stays absent, and a missing required field is a `TypeError`. Return each field as an own data property of a plain or prototype-less object. napi-rs `#[napi(object)]` and an object built with `js_sys::Reflect::set` do this; a class instance whose fields are getters on its prototype would read as empty.
   - `errorCodes()` is read the same way: by own index, a hole being an error, never an `Array.prototype` element.
-- **Errors.** A core failure is thrown, or rejected, as an object whose `code` is one of `errorCodes()` and whose `message` is the core's text (ADR 0030 §5). The facade turns it into its own `PolyjoseError`, so `instanceof` works the same in both packages. It does so only for a code that is in both your `errorCodes()` and the facade's generated `ERROR_CODES`, so a code from a newer core never escapes the `ErrorCode` type. Anything else, such as napi's `InvalidArg` or `StringExpected`, a reader `TypeError` or a code only one side knows, becomes a `TypeError` with the original message. If `errorCodes()` throws or returns no array, the failing call rejects with an `Error` naming that cause instead (0013 F04).
+  - What the facade **hands the caller** is built the same way in reverse (0013 F13): each result member is created with `Object.defineProperty` as an own, enumerable, writable, configurable data property, never by assignment, and each array element at its index, never with `push`. Results still inherit from `Object.prototype`. So a setter or a read-only member that a pollution bug put on `Object.prototype` (`aad`, `kid`, a header) or on `Array.prototype[0]` never receives a value and never makes a call fail. The arrays you receive (byte copies, lists, signers and recipients) are built the same way.
+- **Errors.** Throw, or reject with, an object whose `code` is one of `errorCodes()` and whose `message` is the core's text for a core failure (ADR 0030 §5). Set both as **own data properties**: napi-rs (`napi_create_error`) and wasm-bindgen (`Reflect::set`) do. The facade reads `code` and `message` as own data members only, never through a prototype or a getter (0013 F12), and maps what you throw in this order:
+
+  | You throw | The caller gets |
+  |---|---|
+  | anything with an own `code` that is in the facade's generated `ERROR_CODES` and in your `errorCodes()` | a `PolyjoseError` with that `code` and your own `message` (or the code, if you set no message). So `instanceof` works the same in both packages, and a code from a newer core never escapes the `ErrorCode` type (0013 F04). |
+  | a `TypeError` (for example the wasm reader's) | that `TypeError`, unchanged |
+  | an `Error` whose own `code` is a napi-rs argument-conversion status: `InvalidArg`, `ObjectExpected`, `StringExpected`, `NameExpected`, `FunctionExpected`, `NumberExpected`, `BooleanExpected`, `ArrayExpected`, `BigintExpected`, `DateExpected`, `ArrayBufferExpected`, `DetachableArraybufferExpected` (napi 3.16 `Status`) | a `TypeError` with your own `message` |
+  | **anything else** | **the same value, unchanged**: a `WebAssembly.RuntimeError` trap, your own "backend unusable, reload it" error, another napi status (`GenericFailure`, `PendingException`, ...), a code only one side knows, an `Error` without a code, a thrown string |
+
+  - A `TypeError` says the caller passed a bad argument, so the facade uses it only for argument errors. A trap or an unusable backend isn't the caller's mistake; it reaches the caller as you threw it, still a rejection (fail-closed). There is no marker for "backend unusable": throw your own `Error` (no core `code`) and it arrives unchanged.
+  - `errorCodes()` is asked only when an error's own `code` is in `ERROR_CODES`. If it then throws or returns no array, the failing call rejects with an `Error` naming that cause (0013 F04). A failure without such a code never calls it, so a backend whose `errorCodes()` refuses after a trap still reports its own error.
 - **`version()` and `errorCodes()` are synchronous.** `errorCodes()` returns the core's `Error::CODES`, in order.
 - **`ready(): Promise<void>` is optional.** The facade awaits it once, lazily, before the first call of any operation, so WASM initialises without top-level await (ADR 0031 §3). If it rejects, the call rejects with that error unchanged, and the next call tries again.
 
@@ -90,6 +101,7 @@ export type * from "./api.js";
 `conformance/runner.ts` exports `runVectors(api, files, { schema, features })`.
 - It runs vector files through the bound API and returns the ADR 0034 §2 results.
 - It has no Node-only imports, so a browser page or a workerd script can feed it the same files.
+- It is a caller of the facade and follows the same rule (0013 F13): every option record, signer, recipient and output record it builds is prototype-less, and every list is filled by index (`conformance/own.ts`), so no inherited setter sees an `aad`, a key or a plaintext.
 
 `conformance/node-main.ts` exports `main(api, { runner, suffix?, root })`.
 - It reads `<root>/conformance/vectors/**/*.json`, runs them, and writes `<root>/target/conformance/<runner>.json`, or `<runner>-<suffix>.json` for a CI matrix run.
