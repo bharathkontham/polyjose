@@ -118,7 +118,10 @@ test("package.json is the ADR 0031 ESM package with compiled output only (ADR 00
   const pkg = record(readJson(path.join(pkgDir, "package.json")), "package.json");
   assert.equal(pkg["name"], "@polyjose/node");
   assert.equal(pkg["type"], "module");
-  assert.deepEqual(pkg["exports"], { ".": { types: "./index.d.ts", default: "./index.js" } });
+  assert.deepEqual(pkg["exports"], {
+    ".": { types: "./index.d.ts", default: "./index.js" },
+    "./package.json": "./package.json",
+  });
   assert.deepEqual(pkg["engines"], { node: ">=22.12" });
   const files = pkg["files"];
   assert.ok(Array.isArray(files));
@@ -144,6 +147,14 @@ test("package.json is the ADR 0031 ESM package with compiled output only (ADR 00
   assert.equal(pkg["dependencies"], undefined, "no runtime dependencies");
   const scripts = record(pkg["scripts"], "scripts");
   assert.deepEqual(Object.keys(scripts).sort(), ["build", "test"], "no publish hooks (Gate 3)");
+});
+
+test("require('@polyjose/node/package.json') resolves through exports, for tooling and version probes", () => {
+  // Without an "./package.json" export this throws ERR_PACKAGE_PATH_NOT_EXPORTED (review-code.md N6).
+  const require = host.getBuiltinModule("node:module").createRequire(thisFile);
+  const manifest = record(require("@polyjose/node/package.json"), "require('@polyjose/node/package.json')");
+  assert.deepEqual(manifest, readJson(path.join(pkgDir, "package.json")), "the package's own manifest");
+  assert.equal(manifest["version"], "0.1.0");
 });
 
 /** The napi platform name of a target triple (ADR 0031 §2), e.g. aarch64-unknown-linux-musl -> linux-arm64-musl. */
