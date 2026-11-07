@@ -58,6 +58,7 @@ export interface NodeAssert {
   match(value: string, pattern: RegExp, message?: string): void;
   doesNotMatch(value: string, pattern: RegExp, message?: string): void;
   throws(fn: () => unknown, expected?: unknown, message?: string): void;
+  doesNotThrow(fn: () => unknown, message?: string): void;
   rejects(promise: Promise<unknown> | (() => Promise<unknown>), expected?: unknown, message?: string): Promise<void>;
   fail(message?: string): never;
 }
