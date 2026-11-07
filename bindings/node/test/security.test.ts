@@ -286,7 +286,7 @@ test("jwsVerifyCompact rejects an empty, a none-only and a missing allowedAlgs w
   const jws = a1["jws"] as string;
   const key = a1["key"] as JwkObject;
   assert.equal((await jwsVerifyCompact(jws, key, { allowedAlgs: ["HS256"] })).alg, "HS256");
-  // An Unsecured JWS (RFC 7515 §A.5 form, `alg: none`): never accepted (ADR 0007), even when listed.
+  // An Unsecured JWS (the RFC 7515 Appendix A.5 form, `alg: none`): never accepted (ADR 0007), even when listed.
   const unsecured = `${await base64urlEncode(ascii('{"alg":"none"}'))}.${await base64urlEncode(ascii("x"))}.`;
 
   const shapes: [string, string, unknown][] = [
