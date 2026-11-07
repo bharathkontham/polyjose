@@ -30,7 +30,13 @@
 //! `conformance/tools/jwt-oracle/keys.json`); polyjose generates none.
 //! Members get an optional `kid` from {`a`, `b`, `A`}, an optional `alg`
 //! the key can serve, an optional `use` and an optional `key_ops` subset
-//! consistent with that `use`. Selectors combine an optional `alg` (every
+//! consistent with that `use`. Low-weight arms (0015 F01, review
+//! SHOULD-FIX 1) also give a member an unregistered `alg`
+//! ([`UNREGISTERED_ALG`]), an unregistered `use` ([`UNREGISTERED_USE`]) or
+//! an extra unregistered `key_ops` entry ([`UNREGISTERED_OP`]), so the
+//! fail-closed paths of ADR 0054 §2.2–§2.4 are reached. Each is kept on
+//! import, none is skipped
+//! ([`unregistered_member_values_import_as_unknown`]). Selectors combine an optional `alg` (every
 //! implemented JWS and JWE key management algorithm), `kid` and `key_use`.
 //! **No selector carries a `key_op`:** how `key_op` combines with `alg` is
 //! an open owner question (feature 0015 backlog.md), so it is not
@@ -45,7 +51,7 @@ use polyjose::Error;
 use polyjose::json::{Object, Value, parse};
 use polyjose::jwa::{KeyMgmtAlg, SigningAlg};
 use polyjose::jwk::{
-    EcCurve, Jwk, JwkSelector, JwkSet, KeyAlg, KeyMaterial, KeyType, KeyUse, OkpCurve,
+    EcCurve, Jwk, JwkSelector, JwkSet, KeyAlg, KeyMaterial, KeyOp, KeyType, KeyUse, OkpCurve,
 };
 use proptest::collection::vec;
 use proptest::option;
@@ -331,6 +337,23 @@ fn use_ops(key_use: &str) -> &'static [&'static str] {
     }
 }
 
+/// A member `alg` in no registry polyjose knows. RFC 7517 §4.4 lets a JWK
+/// carry any `alg` ("collision-resistant name"); `Jwk::from_object` keeps
+/// one it does not know as `KeyAlg::Unknown` rather than refusing the key
+/// (only `RSA1_5` and `RSA-OAEP` are refused, ADRs 0021, 0022), so the
+/// member is in the set and selection must refuse it (ADR 0054 §2.2).
+const UNREGISTERED_ALG: &str = "x-unregistered";
+
+/// A member `use` other than `sig` and `enc`. RFC 7517 §4.2: "Other values
+/// MAY be used"; it is kept as `KeyUse::Unknown` and never conflicts with
+/// `key_ops` on import (RFC 7517 §4.3 gives it no meaning to compare).
+const UNREGISTERED_USE: &str = "x-other";
+
+/// A `key_ops` entry outside the RFC 7517 §4.3 registry. RFC 7517 §4.3:
+/// "Other values MAY be used"; it is kept as `KeyOp::Unknown` and never
+/// conflicts with `use` on import.
+const UNREGISTERED_OP: &str = "x-op";
+
 /// The `alg` values a member of `family` may carry (RFC 7517 §4.4): every
 /// JWS and JWE key management `alg` it serves, plus, for `oct`, the content
 /// encryption algorithms (`dir` keys, RFC 7518 §4.5).
@@ -391,26 +414,49 @@ impl MemberSpec {
 
 /// A member: a pool key, an optional `kid`, an optional `alg` it serves, an
 /// optional `use`, and optional `key_ops` drawn from the operations of one
-/// `use` (the member's own `use` if it has one), so that `use` and
+/// `use` (the member's own `use` if it is registered), so that `use` and
 /// `key_ops` are consistent (RFC 7517 §4.3).
+///
+/// Low-weight arms (about one member in ten each) instead give the member
+/// [`UNREGISTERED_ALG`] as its `alg`, [`UNREGISTERED_USE`] as its `use`, or
+/// append [`UNREGISTERED_OP`] to its `key_ops`. None makes the member
+/// invalid: RFC 7517 §4.2–§4.4 allow other values, and an unregistered
+/// `use` or operation has no meaning to conflict with (RFC 7517 §4.3), so
+/// every generated member still imports (ADR 0041 §2 skips only invalid
+/// members; [`every_generated_member_imports`]).
 fn member() -> impl Strategy<Value = MemberSpec> {
     (0..pool().len()).prop_flat_map(|key| {
         let algs = member_algs(pool()[key].family);
         (
             Just(key),
             option::of(select(KIDS)),
-            option::of(select(algs)),
-            option::of(select(&["sig", "enc"][..])),
+            prop_oneof![
+                9 => option::of(select(algs)),
+                1 => Just(Some(UNREGISTERED_ALG)),
+            ],
+            prop_oneof![
+                9 => option::of(select(&["sig", "enc"][..])),
+                1 => Just(Some(UNREGISTERED_USE)),
+            ],
             select(&["sig", "enc"][..]),
         )
             .prop_flat_map(|(key, kid, alg, key_use, ops_use)| {
-                let ops = use_ops(key_use.unwrap_or(ops_use));
+                // An unregistered `use` constrains no operation (RFC 7517
+                // §4.3), so its `key_ops` come from either registered use.
+                let ops = use_ops(
+                    key_use
+                        .filter(|u| *u != UNREGISTERED_USE)
+                        .unwrap_or(ops_use),
+                );
                 (
                     Just(key),
                     Just(kid),
                     Just(alg),
                     Just(key_use),
-                    option::of(subsequence(ops, 0..=ops.len())),
+                    option::of((
+                        subsequence(ops, 0..=ops.len()),
+                        proptest::bool::weighted(0.1),
+                    )),
                 )
             })
             .prop_map(|(key, kid, alg, key_use, key_ops)| MemberSpec {
@@ -418,7 +464,12 @@ fn member() -> impl Strategy<Value = MemberSpec> {
                 kid,
                 alg,
                 key_use,
-                key_ops,
+                key_ops: key_ops.map(|(mut ops, extra)| {
+                    if extra {
+                        ops.push(UNREGISTERED_OP);
+                    }
+                    ops
+                }),
             })
     })
 }
@@ -755,11 +806,79 @@ fn generators_reach_every_oracle_verdict() {
     assert!(ecdh_kw_key_ops, "no key_ops rejection under ECDH-ES+A*KW");
 }
 
+/// How the crate imports each unregistered value, through the public API,
+/// on every pool key: kept verbatim as `Unknown`, never skipped and never
+/// an error (RFC 7517 §4.2–§4.4 "Other values MAY be used"; ADR 0041 §2
+/// skips only invalid members; ADR 0054 §3 leaves import unchanged). The
+/// oracle's §2.2–§2.4 rules for these values rely on this.
+///
+/// For contrast, a *registered* `alg` that the key's family cannot serve is
+/// refused by `Jwk::from_object` (`KeyAlgorithmMismatch`, RFC 7517 §4.4,
+/// RFC 8725 §3.1) and so skipped by the set (ADR 0041 §2). Such a member
+/// never reaches selection, which is why [`member`] has no arm for it.
+#[test]
+fn unregistered_member_values_import_as_unknown() {
+    for (key, pool_key) in pool().iter().enumerate() {
+        let spec = MemberSpec {
+            key,
+            kid: Some("a"),
+            alg: Some(UNREGISTERED_ALG),
+            key_use: Some(UNREGISTERED_USE),
+            key_ops: Some(vec!["sign", UNREGISTERED_OP]),
+        };
+        let set = import(std::slice::from_ref(&spec));
+        assert_eq!(set.skipped(), 0, "{}", pool_key.label);
+        let jwk = &set.keys()[0];
+        assert_eq!(
+            jwk.alg(),
+            Some(&KeyAlg::Unknown(UNREGISTERED_ALG.to_owned())),
+            "{}",
+            pool_key.label
+        );
+        assert_eq!(
+            jwk.key_use(),
+            Some(&KeyUse::Unknown(UNREGISTERED_USE.to_owned())),
+            "{}",
+            pool_key.label
+        );
+        assert_eq!(
+            jwk.key_ops(),
+            Some(&[KeyOp::Sign, KeyOp::Unknown(UNREGISTERED_OP.to_owned())][..]),
+            "{}",
+            pool_key.label
+        );
+        // An extra unregistered op beside a registered `use` is no conflict
+        // either (RFC 7517 §4.3).
+        for registered in ["sig", "enc"] {
+            let spec = MemberSpec {
+                key_use: Some(registered),
+                key_ops: Some(vec![UNREGISTERED_OP]),
+                ..spec.clone()
+            };
+            assert_eq!(
+                import(&[spec]).skipped(),
+                0,
+                "{} {registered}",
+                pool_key.label
+            );
+        }
+    }
+    let oct = pool().iter().position(|k| k.family == Family::Oct).unwrap();
+    let mismatched = MemberSpec {
+        alg: Some("ES256"),
+        ..bare(oct)
+    };
+    let set = import(&[mismatched]);
+    assert_eq!((set.len(), set.skipped()), (0, 1));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
     /// Every generated member is a valid JWK, so the set skips none and
-    /// `keys()[i]` is generated member `i` (ADR 0054 §3, ADR 0041 §2).
+    /// `keys()[i]` is generated member `i` (ADR 0054 §3, ADR 0041 §2). This
+    /// includes the unregistered `alg`, `use` and `key_ops` arms, each kept
+    /// as `Unknown` ([`unregistered_member_values_import_as_unknown`]).
     #[test]
     fn every_generated_member_imports(members in members()) {
         let set = import(&members);
