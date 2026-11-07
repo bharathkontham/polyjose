@@ -13,6 +13,7 @@
 //! wiped when it drops at the end of the statement. That one copy is the documented residual of
 //! ADR 0030 §7.3.
 
+use polyjose_surface::records as surface;
 use zeroize::Zeroizing;
 
 use crate::PolyjoseError;
@@ -84,7 +85,7 @@ pub fn jwk_thumbprint_uri(jwk: String, hash: String) -> Result<String, PolyjoseE
 #[uniffi::export]
 pub fn jwks_select(jwks: String, selector: JwkSelector) -> Result<String, PolyjoseError> {
     let jwks = Zeroizing::new(jwks);
-    let selector = polyjose_surface::records::JwkSelector::from(selector);
+    let selector = surface::JwkSelector::from(selector);
     Ok(polyjose_surface::jwk::jwks_select(&jwks, &selector)?
         .as_str()
         .to_owned())
