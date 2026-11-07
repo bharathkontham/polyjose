@@ -52,7 +52,9 @@ modes_dir=$repo/scripts/check-binding-api.d
 me=check-binding-api
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/check-binding-api.XXXXXX") || { echo "$me: mktemp failed"; exit 2; }
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh).
+completed=""
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-binding-api.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # snake_case -> camelCase, the conversion napi-rs, UniFFI and the JS facade apply (ADR 0030 §2):
 # each "_x" becomes "X" ("max_pbes2_count" -> "maxPbes2Count", "p2s_len" -> "p2sLen").
@@ -145,6 +147,7 @@ check_inventory() {
 
 # --- Modes -----------------------------------------------------------------------------------------
 
+# shellcheck disable=SC2329 # called by the mode files
 skip() { printf '%s\n' "$*" >"$mode_scratch/skip-reason"; exit 77; }
 mode_fail() { echo "$me: $mode: $*"; echo "$me: $mode: FAIL"; exit 1; }
 
@@ -242,4 +245,5 @@ done
 if [ ${#modes[@]} -gt 1 ]; then
   echo "$me: $passed passed, $failed failed, skipped:${skipped:- none}"
 fi
-[ "$failed" -eq 0 ]
+status=0; [ "$failed" -eq 0 ] || status=1
+completed=1; exit "$status"

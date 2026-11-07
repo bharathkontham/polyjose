@@ -12,6 +12,19 @@
 
 gate_name=test-all.sh
 
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh): the
+# EXIT trap of check-deps/lib.sh again, with the sentinel, which finish (each test's last
+# statement) sets, so a test that stops before finish never exits 0.
+completed=""
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "${0##*/}: stopped before finish (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
+
+# finish: prints the summary, sets the sentinel and exits non-zero if any case failed.
+finish() {
+  echo "$((tests_run - tests_failed))/$tests_run cases passed"
+  completed=1
+  [ "$tests_failed" -eq 0 ]
+}
+
 # fixture <path in the copy> <exit status> <line>...: an executable sh script that prints each line
 # and exits with the status. It replaces the real script if the owning feature has created one.
 fixture() {

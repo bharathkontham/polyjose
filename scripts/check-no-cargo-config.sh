@@ -56,7 +56,10 @@ top=$(git rev-parse --show-toplevel 2>&1) || die "not a git work tree ($top)"
 [ "$(cd "$top" && pwd -P)" = "$root" ] || die "git's top level $top is not this repository ($root)"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/check-no-cargo-config.XXXXXX") || die "mktemp failed"
-trap 'rm -rf "$work"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$work"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-no-cargo-config.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # --- 1. No cargo config file anywhere in the repository -------------------------------------------
 # NUL-separated listings become one path per line. A newline inside a name can only split a path,
@@ -154,4 +157,4 @@ allowlist of keys (for example cross-compiling flags in features 0008/0009) and 
 check (scripts/check-no-cargo-config.sh).
 EOF
 fi
-exit $status
+completed=1; exit "$status"
