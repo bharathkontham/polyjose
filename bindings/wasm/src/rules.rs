@@ -11,6 +11,10 @@
 //! - **Optional `hash`, no default** (ADR 0054 §9, ADR 0030 §1, §3): `jwkThumbprint` and
 //!   `jwkThumbprintUri` take `hash: Option<String>` and hand it to the surface as `as_deref()`;
 //!   the adapter names no hash, so an absent one is the core's default (SHA-256).
+//! - **Own data out** (BACKEND.md "Results", 0006 review S1): no source builds a JS object that
+//!   inherits from `Object.prototype` (`Object::new()`) or assigns through the prototype chain
+//!   (`set_name`), and no `Reflect` result is dropped (`let _ =`, `.map(drop)`), so a planted
+//!   setter or read-only member can neither see a value nor silently remove a member.
 //! - **No clock** (ADR 0028, ADR 0030 §4): the facade passes JWT `now`; nothing here reads time.
 //! - **No `unsafe`, no logging** (workspace rules, ADR 0030 §7.5).
 //! - **Coverage** (ADR 0030 §4, BACKEND.md): one export per `op` of `bindings/api-inventory.txt`.
@@ -241,6 +245,30 @@ fn no_secret_is_copied_out_of_its_owner() {
                 !text.contains(pattern),
                 "{file}: `{pattern}` copies a secret"
             );
+        }
+    }
+}
+
+#[test]
+fn objects_are_prototype_less_and_no_reflect_result_is_dropped() {
+    // Built from pieces so this file does not match itself.
+    let banned = [["Object::", "new()"].concat(), [".set_", "name("].concat()];
+    for (file, text) in sources() {
+        for b in &banned {
+            assert!(
+                !text.contains(b.as_str()),
+                "{file}: `{b}` goes through Object.prototype; use a prototype-less object and \
+                 define or set own members (write.rs, error.rs)"
+            );
+        }
+        for statement in text.split(';').filter(|s| s.contains("Reflect::")) {
+            let statement = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+            for dropped in ["let _ =", ".map(drop)", ".ok()"] {
+                assert!(
+                    !statement.contains(dropped),
+                    "{file}: a Reflect result is dropped (`{dropped}`): {statement}"
+                );
+            }
         }
     }
 }
