@@ -19,8 +19,9 @@
 #        JS facade has no third-party code. The trailing `//# sourceMappingURL=` line tsc writes
 #        is removed from each staged .js and .d.ts: the maps, and the .ts sources they point at,
 #        are not shipped (ADR 0047, package.json `files`). The build in the tree keeps them.
-#      - each darwin platform: npm/<platform>/package.json, the addon, the repository's LICENSE,
-#        a short README.md written here, and THIRD-PARTY-NOTICES.txt from
+#      - each darwin platform: scripts/pack-platform.sh <platform> <triple> dist/npm/ (shared with
+#        scripts/ci-build.sh): npm/<platform>/package.json, the addon, the repository's LICENSE,
+#        a short README.md, and THIRD-PARTY-NOTICES.txt from
 #        scripts/third-party-notices.sh -p polyjose-node --target <triple> (ADR 0020 §4).
 #   3. npm pack of each staged directory into dist/npm/, which is emptied first. npm pack writes
 #      fixed timestamps into the tarball entries.
@@ -137,22 +138,7 @@ for entry in $platforms; do
   name=${entry%%:*}
   triple=${entry#*:}
   echo "==> @polyjose/node pack: stage and pack @polyjose/node-$name ($triple)"
-  dir=$stage/$name
-  mkdir "$dir"
-  addon=polyjose.$name.node
-  [ -f "$addon" ] || { echo "pack.sh: $addon was not built" >&2; exit 1; }
-  cp "npm/$name/package.json" "$addon" "$dir/"
-  cp "$repo/LICENSE" "$dir/LICENSE"
-  cat >"$dir/README.md" <<EOF
-# @polyjose/node-$name
-
-The \`$triple\` native addon of [\`@polyjose/node\`](https://www.npmjs.com/package/@polyjose/node).
-Install \`@polyjose/node\`, not this package: it loads this addon on this platform.
-
-MIT; see \`LICENSE\`. \`THIRD-PARTY-NOTICES.txt\` lists the Rust crates compiled into the addon.
-EOF
-  "$repo/scripts/third-party-notices.sh" -p polyjose-node --target "$triple" -o "$dir/THIRD-PARTY-NOTICES.txt"
-  pack "$dir"
+  scripts/pack-platform.sh "$name" "$triple" "$out"
 done
 
 echo "==> @polyjose/node pack: dist/npm/"
