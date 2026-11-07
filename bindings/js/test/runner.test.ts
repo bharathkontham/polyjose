@@ -487,7 +487,7 @@ test("a schema option is required, and its absence fails every vector loudly", a
 });
 
 test("the runner, schema check and scanner import nothing Node-only (they also run in browsers)", () => {
-  for (const file of ["conformance/runner.ts", "conformance/schema.ts", "conformance/json-text.ts"]) {
+  for (const file of ["conformance/runner.ts", "conformance/schema.ts", "conformance/json-text.ts", "conformance/own.ts"]) {
     const source = fs.readFileSync(path.resolve(process.cwd(), file), "utf8");
     const imports = [...source.matchAll(/^\s*import[^;]*?from\s+"([^"]+)"/gm)].map((m) => m[1] ?? "");
     for (const spec of imports) {

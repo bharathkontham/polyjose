@@ -44,6 +44,7 @@ import {
   optU32,
   outBytes,
   outIndex,
+  outList,
   outObject,
   outStr,
   put,
@@ -604,14 +605,8 @@ export function createApi(backend: Backend): PolyjoseApi {
   const b = backend;
   return {
     version: async () => outStr(await invoke(() => b.version()), "version"),
-    errorCodes: async () => {
-      const raw: unknown = await invoke(() => b.errorCodes());
-      if (!Array.isArray(raw)) throw new TypeError("polyjose: the backend returned errorCodes that is not an array");
-      // Own elements only (0013 F09): a hole is reported, never read through `Array.prototype`.
-      const out: string[] = [];
-      for (let i = 0; i < raw.length; i++) out.push(outStr(Object.hasOwn(raw, i) ? raw[i] : undefined, `errorCodes[${i}]`));
-      return out;
-    },
+    // Own elements only (0013 F09): a hole is reported, never read through `Array.prototype`.
+    errorCodes: async () => outList(await invoke(() => b.errorCodes()), "errorCodes", outStr),
 
     base64urlEncode: (input) =>
       run(
