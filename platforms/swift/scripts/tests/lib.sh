@@ -36,6 +36,60 @@ run_package() {
   "$package_sh" "$@" >"$scratch/last.log" 2>&1 || rc=$?
 }
 
+# A stand-in `cargo` for the same-crate-set check of package.sh (ADR 0032 §6, ADR 0020 §4;
+# feature 0009 F03). It runs the real cargo for every command, so nothing needs the network.
+# For `cargo tree` with `--target <T>`, where T is the target given to run_package_fake_cargo,
+# it also prints the line $fake_extra_crate, as a dependency that only T compiles would add. It
+# appends `tree <target>` to $fake_cargo_log for every `cargo tree`, so a test can see which
+# targets package.sh asked about.
+# shellcheck disable=SC2034 # fake_extra_crate and fake_cargo_log are read by the tests
+fake_extra_crate="polyjose-f03-one-target-only v0.0.1"
+# shellcheck disable=SC2034
+fake_cargo_log="$scratch/fake-cargo.log"
+fake_cargo_dir="$scratch/fake-cargo"
+
+make_fake_cargo() {
+  [ -x "$fake_cargo_dir/cargo" ] && return 0
+  real_cargo=$(command -v cargo) || lib_die "cargo is not on PATH"
+  mkdir -p "$fake_cargo_dir"
+  cat >"$fake_cargo_dir/cargo" <<'EOF'
+#!/bin/bash
+# Stand-in cargo of platforms/swift/scripts/tests/lib.sh (make_fake_cargo).
+set -uo pipefail
+real=${POLYJOSE_FAKE_CARGO_REAL:?}
+if [ "${1:-}" = tree ]; then
+  target="" prev=""
+  for arg in "$@"; do
+    case $arg in --target=*) target=${arg#--target=} ;; esac
+    [ "$prev" = --target ] && target=$arg
+    prev=$arg
+  done
+  printf 'tree %s\n' "$target" >>"${POLYJOSE_FAKE_CARGO_LOG:?}"
+  if [ -n "$target" ] && [ "$target" = "${POLYJOSE_FAKE_CARGO_TARGET:-}" ]; then
+    "$real" "$@" || exit
+    printf '%s\n' "${POLYJOSE_FAKE_CARGO_EXTRA:?}"
+    exit 0
+  fi
+fi
+exec "$real" "$@"
+EOF
+  chmod 755 "$fake_cargo_dir/cargo"
+}
+
+# run_package_fake_cargo <target> <args...>: run_package with the stand-in cargo first on PATH,
+# adding $fake_extra_crate to the `cargo tree` of <target> only. $fake_cargo_log starts empty.
+# shellcheck disable=SC2034 # rc is read by the tests that source this file
+run_package_fake_cargo() {
+  local target=$1
+  shift
+  make_fake_cargo
+  : >"$fake_cargo_log"
+  rc=0
+  env PATH="$fake_cargo_dir:$PATH" POLYJOSE_FAKE_CARGO_REAL="$real_cargo" \
+    POLYJOSE_FAKE_CARGO_TARGET="$target" POLYJOSE_FAKE_CARGO_EXTRA="$fake_extra_crate" \
+    POLYJOSE_FAKE_CARGO_LOG="$fake_cargo_log" "$package_sh" "$@" >"$scratch/last.log" 2>&1 || rc=$?
+}
+
 show_log() { sed 's/^/    | /' "$scratch/last.log"; }
 
 # log_has <fixed string>: the last package.sh output contains the string.
