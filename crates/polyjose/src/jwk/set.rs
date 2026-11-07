@@ -342,7 +342,10 @@ impl JwkSet {
     /// - **A selector with an `alg` never crosses key families**: a secret
     ///   `oct` key is never selected for an asymmetric `alg`, nor an
     ///   asymmetric key for `HS*`, A\*KW, `dir` or PBES2, and a key whose
-    ///   own `alg` is another algorithm is never selected (RFC 8725 §3.1).
+    ///   own `alg` is another algorithm is never selected (RFC 8725 §3.1),
+    ///   except, for `dir`, a member whose `alg` is a content encryption
+    ///   algorithm; the JWE key binding checks the exact `enc` at use
+    ///   (ADR 0054 §2.2; RFC 7518 §4.5).
     /// - **A selector without an `alg`** (a `kid` alone, say) may return a
     ///   key of any family. Pass it only to operations that take an
     ///   allow-list.
