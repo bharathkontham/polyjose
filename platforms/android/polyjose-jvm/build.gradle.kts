@@ -134,9 +134,11 @@ val assembleJarNatives = tasks.register<Sync>("assembleJarNatives") {
     into(layout.buildDirectory.dir("jar-natives"))
 }
 
-// META-INF/polyjose/THIRD-PARTY-NOTICES.txt (ADR 0020 §4, ADR 0033 §4), generated for this host's
-// target; the task fails if the library of another platform in the jar compiles a crate the file
-// does not list (both darwin targets compile the same crates).
+// META-INF/polyjose/THIRD-PARTY-NOTICES.txt (ADR 0020 §4, ADR 0033 §4): one file over the union of
+// the crate trees of every platform in the jar (header `Targets:`; 75 crates for all five; feature
+// 0008 F01). The task fails closed, naming them, if the header does not name exactly the jar's
+// targets, a platform's library compiles a crate the file does not list, or the file lists a crate
+// no platform compiles (ThirdPartyNotices).
 val thirdPartyNotices = tasks.named<ThirdPartyNotices>("thirdPartyNotices") {
     hostPrefix?.let { primaryTarget = jnaPlatforms.getValue(it) }
     targets.addAll(jarPlatforms.map { jnaPlatforms.getValue(it) })

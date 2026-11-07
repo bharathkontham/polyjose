@@ -121,9 +121,10 @@ abstract class SyncFromRootBuild @Inject constructor(private val fs: FileSystemO
 }
 
 // META-INF/polyjose/THIRD-PARTY-NOTICES.txt inside the AAR's classes.jar (ADR 0020 §4, ADR 0033 §4;
-// a subfolder of META-INF, which AGP's packaging does not exclude). Generated for arm64-v8a; the
-// task fails if the crates of another ABI's library are not all listed in it. armeabi-v7a has one
-// crate fewer (no cpufeatures), so the file covers all four (feature 0008 T04).
+// a subfolder of META-INF, which AGP's packaging does not exclude): one file over the union of the
+// four ABIs' crate trees (header `Targets:`; feature 0008 F01). The task fails closed, naming them,
+// if the header does not name exactly these four targets, an ABI's library compiles a crate the
+// file does not list, or the file lists a crate no ABI compiles (ThirdPartyNotices).
 val thirdPartyNotices = tasks.named<ThirdPartyNotices>("thirdPartyNotices") {
     primaryTarget = "aarch64-linux-android"
     targets.addAll("armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android")
