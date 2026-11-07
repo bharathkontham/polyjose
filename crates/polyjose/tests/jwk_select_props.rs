@@ -354,6 +354,29 @@ const UNREGISTERED_USE: &str = "x-other";
 /// conflicts with `use` on import.
 const UNREGISTERED_OP: &str = "x-op";
 
+/// The registered `use` values (RFC 7517 §4.2).
+const REGISTERED_USES: &[&str] = &["sig", "enc"];
+
+/// The registered `key_ops` values (RFC 7517 §4.3).
+const REGISTERED_OPS: &[&str] = &[
+    "sign",
+    "verify",
+    "encrypt",
+    "decrypt",
+    "wrapKey",
+    "unwrapKey",
+    "deriveKey",
+    "deriveBits",
+];
+
+/// Whether a member `alg` names a JWS, JWE key management or content
+/// encryption algorithm in this file's restated lists (RFC 7518 §3.1,
+/// §4.1, §5.1; RFC 8037 §3.1; RFC 8812 §3.2; RFC 9864 §2.2). Anything else,
+/// such as [`UNREGISTERED_ALG`], is unregistered for ADR 0054 §2.2.
+fn is_registered_alg(alg: &str) -> bool {
+    JWS_ALGS.contains(&alg) || KEY_MGMT_ALGS.contains(&alg) || CONTENT_ENC_ALGS.contains(&alg)
+}
+
 /// The `alg` values a member of `family` may carry (RFC 7517 §4.4): every
 /// JWS and JWE key management `alg` it serves, plus, for `oct`, the content
 /// encryption algorithms (`dir` keys, RFC 7518 §4.5).
@@ -573,6 +596,14 @@ fn oracle(member: &MemberSpec, sel: &Sel) -> Result<(), Check> {
     // §2.2 JWK `alg`: absent or exactly equal (RFC 7517 §4.4,
     // RFC 8725 §3.1); for `dir`, a content encryption `alg` also matches.
     if let (Some(alg), Some(member_alg)) = (sel.alg, member.alg) {
+        // An unregistered member `alg` is present, can never be "exactly
+        // equal" to a selector `alg` (§1.1 admits only implemented ones),
+        // and is not a content encryption algorithm, so the `dir`
+        // exception cannot apply: it fails §2.2 whenever the selector has
+        // an `alg`.
+        if !is_registered_alg(member_alg) {
+            return Err(Check::JwkAlg);
+        }
         let dir_exception = alg == "dir" && CONTENT_ENC_ALGS.contains(&member_alg);
         if member_alg != alg && !dir_exception {
             return Err(Check::JwkAlg);
@@ -588,10 +619,17 @@ fn oracle(member: &MemberSpec, sel: &Sel) -> Result<(), Check> {
         (Some(given), _) => Some(given),
         (None, implied) => implied,
     };
-    if let (Some(effective), Some(member_use)) = (effective, member.key_use)
-        && member_use != effective
-    {
-        return Err(Check::Purpose);
+    if let (Some(effective), Some(member_use)) = (effective, member.key_use) {
+        // U is always `sig` or `enc` (it comes from `key_use`, which §1.1
+        // limits to those, or from the `alg`). An unregistered member
+        // `use` is present and is neither, so it fails §2.3 whenever a U
+        // exists. Without a U, `use` is not checked, and it may match.
+        if !REGISTERED_USES.contains(&member_use) {
+            return Err(Check::Purpose);
+        }
+        if member_use != effective {
+            return Err(Check::Purpose);
+        }
     }
 
     // §2.4 `key_ops`: if present, it must contain (no `key_op` given) one
@@ -603,8 +641,16 @@ fn oracle(member: &MemberSpec, sel: &Sel) -> Result<(), Check> {
             (None, Some(effective)) => Some(use_ops(effective)),
             (None, None) => None,
         };
+        // Every operation §2.4 can require is a registered one (the `alg`
+        // rows and the ops of U are both drawn from RFC 7517 §4.3), so an
+        // unregistered entry never satisfies §2.4: only the member's
+        // registered entries are considered. A `key_ops` holding only
+        // unregistered values fails whenever something is required.
         if let Some(required) = required
-            && !ops.iter().any(|op| required.contains(op))
+            && !ops
+                .iter()
+                .filter(|op| REGISTERED_OPS.contains(op))
+                .any(|op| required.contains(op))
         {
             return Err(Check::KeyOps);
         }
@@ -738,6 +784,82 @@ fn oracle_follows_the_adr_0054_examples() {
     };
     assert_eq!(oracle(&a128kw, &by_alg("A128KW")), Ok(()));
     assert_eq!(oracle(&bare(oct), &by_alg("A128KW")), Ok(()));
+    // §2.2-§2.4 for unregistered member values (0015 F01).
+    let unregistered_alg = MemberSpec {
+        alg: Some(UNREGISTERED_ALG),
+        ..bare(oct)
+    };
+    let unregistered_use = MemberSpec {
+        key_use: Some(UNREGISTERED_USE),
+        ..bare(oct)
+    };
+    let only_unregistered_op = MemberSpec {
+        key_ops: Some(vec![UNREGISTERED_OP]),
+        ..bare(oct)
+    };
+    let by_use = |key_use| Sel {
+        key_use: Some(key_use),
+        ..Sel::default()
+    };
+    let by_kid = Sel {
+        kid: Some("a"),
+        ..Sel::default()
+    };
+    for alg in selector_algs()
+        .into_iter()
+        .filter(|a| serves(Family::Oct, a))
+    {
+        // §2.2: with any selector `alg` the oct key serves, `dir` included.
+        assert_eq!(
+            oracle(&unregistered_alg, &by_alg(alg)),
+            Err(Check::JwkAlg),
+            "{alg}"
+        );
+        // §2.3: the `alg` implies a U.
+        assert_eq!(
+            oracle(&unregistered_use, &by_alg(alg)),
+            Err(Check::Purpose),
+            "{alg}"
+        );
+        // §2.4: the `alg`'s operations are required.
+        assert_eq!(
+            oracle(&only_unregistered_op, &by_alg(alg)),
+            Err(Check::KeyOps),
+            "{alg}"
+        );
+    }
+    for key_use in REGISTERED_USES {
+        // §2.2 needs a selector `alg`; without one the member `alg` is not
+        // checked.
+        assert_eq!(oracle(&unregistered_alg, &by_use(key_use)), Ok(()));
+        // §2.3: `key_use` is U.
+        assert_eq!(
+            oracle(&unregistered_use, &by_use(key_use)),
+            Err(Check::Purpose)
+        );
+        // §2.4: a registered operation of U is required.
+        assert_eq!(
+            oracle(&only_unregistered_op, &by_use(key_use)),
+            Err(Check::KeyOps)
+        );
+        // An extra unregistered op beside one of U still matches.
+        let with_extra = MemberSpec {
+            key_ops: Some(vec![use_ops(key_use)[0], UNREGISTERED_OP]),
+            ..bare(oct)
+        };
+        assert_eq!(oracle(&with_extra, &by_use(key_use)), Ok(()));
+    }
+    // No `alg` and no U: §2.2, §2.3 and §2.4 are all skipped.
+    for sel in [Sel::default(), by_kid] {
+        for member in [&unregistered_alg, &unregistered_use, &only_unregistered_op] {
+            let member = MemberSpec {
+                kid: Some("a"),
+                ..member.clone()
+            };
+            assert_eq!(oracle(&member, &sel), Ok(()), "{member:?} {sel:?}");
+        }
+    }
+
     // §1.2: no `kid` never matches a `kid`; `a` ≠ `A`.
     let kid_a = Sel {
         kid: Some("a"),
