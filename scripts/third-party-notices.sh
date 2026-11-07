@@ -413,5 +413,8 @@ PY
 
 # Replace the -o file only now, in one step, so a failed run leaves no partial file behind.
 tmp_out="$out.tmp.$$"
-cp "$work/notices.txt" "$tmp_out" && mv -f "$tmp_out" "$out" || { rm -f "$tmp_out"; die "could not write $out"; }
+if ! { cp "$work/notices.txt" "$tmp_out" && mv -f "$tmp_out" "$out"; }; then
+  rm -f "$tmp_out"
+  die "could not write $out"
+fi
 echo "third-party-notices: wrote $out ($pkg, $target)"

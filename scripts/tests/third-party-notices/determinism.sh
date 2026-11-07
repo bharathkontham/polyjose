@@ -38,7 +38,7 @@ else pass "no timestamp"; fi
 # dot-separated part, as SemVer orders them).
 awk -v rule="$rule" 'prev == rule && $0 ~ /^[A-Za-z0-9_-]+ [0-9][^ ]*$/ { print } { prev = $0 }' "$a" \
   >"$scratch/order.txt"
-python3 -I - "$scratch/order.txt" <<'EOF' && pass "sections sorted by name, then version" || fail "sections sorted by name, then version"
+if python3 -I - "$scratch/order.txt" <<'EOF'; then pass "sections sorted by name, then version"; else fail "sections sorted by name, then version"; fi
 import re, sys
 rows = [l.split(" ") for l in open(sys.argv[1]).read().splitlines()]
 def key(row):

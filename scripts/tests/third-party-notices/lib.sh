@@ -26,6 +26,7 @@ fail() { tests_run=$((tests_run + 1)); tests_failed=$((tests_failed + 1)); echo 
 
 # run_notices <output file> <args...>: runs the script with -o <output file> and the other
 # arguments, keeping its stdout and stderr in $scratch/last.log and its exit status in $rc.
+# shellcheck disable=SC2034 # rc is read by the tests that source this file
 run_notices() {
   local out=$1; shift
   rc=0
