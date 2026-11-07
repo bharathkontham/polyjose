@@ -339,13 +339,18 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 - **fail** on a file that is not schema-valid, including a misspelled or unknown member anywhere: every object the schema defines is closed;
 - **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks, reported SKIPPED by name ([Features](#features));
 - **fail** when it finds no vector files, so a wrong path can't pass vacuously;
-- run every vector and report every failure, not only the first, each naming the file and its `source`.
+- run every vector and report every failure, not only the first, each naming the file and its `source`;
+- write one results file, `target/conformance/<runner>.json`, with an entry for every vector file ([Binding runners](#binding-runners), ADR 0034 §2).
 
 The Rust runner also checks `schema.json` against its own tables (`schema_and_runner_agree`), so the schema and the runner can't drift apart.
 
 ## Binding runners
 
-Which operation families each platform's runner runs today. The rules above apply to every runner that exists. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
+Every runner (the Rust reference run, the Rust surface run and each binding's) runs every vector file, follows the [rules for every runner](#rules-for-every-runner) and writes **one results file**. `scripts/conformance-parity.sh` then compares each results file with the Rust reference run, so a runner can't pass by running fewer vectors, by skipping one for another reason, or by getting `"ok": false` with another error code (ADR 0034).
+
+### Status per platform
+
+Which operation families each platform's runner runs today. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
 
 | Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jws.*` | `keys.*` | `jwt.*` |
 |---|---|---|---|---|
@@ -355,7 +360,138 @@ Which operation families each platform's runner runs today. The rules above appl
 | Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0008) |
 | Swift | none yet (0009, over the 0013 surface) | no runner yet (0009) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0009) |
 
-When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row. ADR 0034's parity check then compares its results with the Rust reference run.
+When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row.
+
+### Runner names and results files
+
+Every runner writes `target/conformance/<runner>.json` at the **repository root** (not under `CARGO_TARGET_DIR`), in the format of [`schema/results.schema.json`](schema/results.schema.json). The names are those of ADR 0034 §2, exactly; the schema's `runner` enum is the list the parity check uses.
+
+| Runner | What runs | Feature |
+|---|---|---|
+| `rust-core` | `crates/polyjose/tests/conformance.rs` (`conformance_vectors`), built with the default features: **the reference run** (ADR 0034 §4) | 0013 T02 |
+| `rust-surface` | `bindings/surface/tests/conformance.rs`, the same files through `polyjose-surface` only (ADR 0030) | 0013 T11 |
+| `wasm-node`, `wasm-chrome` | the wasm-bindgen-test runs of the WASM adapter (`wasm-pack test --node`, `--headless --chrome`) | 0006 |
+| `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` | the packed `@polyjose/wasm` tarball through the shared JS facade and its runner (`bindings/js/conformance/`) | 0006 |
+| `node` | `@polyjose/node` through the shared JS facade and its runner | 0007 |
+| `jvm` | the Kotlin API on the JVM | 0008 |
+| `android-emulator` | the Kotlin API on the Android emulator (AVD `polyjose-api36`) | 0008 |
+| `swift-macos`, `swift-ios-sim`, `swift-tvos-sim` | the Swift API on macOS and the iOS and tvOS simulators | 0009 |
+
+- **Off-host runs** (a browser page, workerd, the emulator, a simulator) hand their results to the host-side driver, which writes the file on the host.
+- **CI matrix runs** append their target to the file name: `node-x86_64-unknown-linux-musl.json`, `jvm-linux-x86-64.json`. The file's `runner` member stays the bare name (`node`), and the parity check compares the file like `<runner>`.
+- **Rust builds with features** (`cargo test -p polyjose --all-features`, as `scripts/test-all.sh rust` runs) write `rust-core-<features>.json`, the enabled feature names joined by `-` (for example `rust-core-deflate-fixed-rng.json`). They aren't the reference, and the parity check ignores them. Only the default-features build writes `rust-core.json`.
+- **Test doubles** (a runner tested against a fake backend) never write to `target/conformance/`.
+
+### The results file
+
+```json
+{ "runner": "node", "polyjose": "0.1.0", "features": [], "error_codes": ["InvalidBase64", "…"],
+  "results": [
+    { "id": "jws-rfc7515/a1-hs256-compact-verify.json#0", "source": "RFC 7515 App. A.1", "op": "jws.verify",
+      "status": "pass", "actual": { "ok": true } },
+    { "id": "jwe/zip/bound-exact-decrypts.json#0", "op": "jwe.decrypt", "status": "skipped", "reason": "feature:deflate" } ] }
+```
+
+| Member | Rule |
+|---|---|
+| `runner` | The runner name above, without any file-name suffix. |
+| `polyjose` | The binding's `version()` (ADR 0030 §4); for the Rust runners, the crate version. |
+| `features` | The vector feature names (see [Features](#features)) the build enables. `[]` for every binding and for the reference. |
+| `error_codes` | The binding's `error_codes()`, in its order; for the Rust runners, `Error::CODES`. It must equal the reference's list, in the same order (ADR 0034 §8). |
+| `results` | **One entry per `*.json` file** under `vectors/`, including a file that doesn't parse. Ids are unique; order is free. |
+| `results[].id` | The file's path under `conformance/vectors/`, with `/` separators on every platform, then `#0`: every file holds one vector (ADR 0034 §1, ADR 0045 §4). Derived, never written by hand. |
+| `results[].source` | Optional: the vector's `source`. Not compared. |
+| `results[].op` | The vector's `operation`, as written. Required unless the file doesn't parse or names none. |
+| `results[].status` | `pass`: the vector ran and met its expectation (exact outputs, shape and round-trip checks included). `skipped`: only under [the skip rule](#the-skip-rule). `fail`: anything else. |
+| `results[].actual` | The outcome of the operation's calls in the [mapping](#operation-mapping): `{ "ok": true }` when every call returned, or `{ "ok": false, "error": <code> }` with the first call's error code. It's the library's outcome, recorded before any comparison, so a vector whose expectation is wrong still records what happened. Required for `pass`; on a `fail`, present when the calls returned; never on a skip. The checks after the calls (output comparison, shape, round trip) decide `pass` or `fail` but never change `actual`. |
+| `results[].reason` | `skipped`: `feature:` and the missing feature names. `fail`: a message saying why (the file, the `source`, the problem). |
+
+### The skip rule
+
+A vector is skipped **only** when its `features` lists a feature the runner's build doesn't enable (ADR 0034 §3). `reason` is `feature:` followed by the missing names, in the vector's order, comma-separated: `feature:fixed-rng`, `feature:deflate`, `feature:deflate,fixed-rng`. The vector is still validated against `schema.json` first, and a schema-invalid one is a `fail`.
+
+The binding configuration for 0.1.0 is the core's default features: never `fixed-rng` (ADR 0005), and no `deflate` (ADR 0030 §4). So every binding skips exactly the vectors the `rust-core` reference skips, with the same reasons. An unknown operation, an operation the runner hasn't mapped, an unreadable or unparseable file, an exception in the harness, and a host-side error that isn't a polyjose error (implementer note 8) are each a **`fail`**, never a skip.
+
+### The parity check
+
+`scripts/conformance-parity.sh [dir]` (default `target/conformance/`) needs `node` and nothing else. It validates every results file against `schema/results.schema.json`, checks that each file's `runner` matches its file name and that no id appears twice, then compares every file with `rust-core.json`. It checks for:
+
+- the same set of ids;
+- the same `status` per id, and the same `reason` for a skip;
+- the same `actual` (`ok`, and the error code) per executed id;
+- the same `error_codes` list;
+- no `fail` entry, in any file, the reference included.
+
+Each difference is printed as a `FAIL:` line with the id and both outcomes, and the exit status is 1. A missing, malformed or feature-built `rust-core.json` also exits 1. A runner without a file is printed as `SKIPPED (no results: <runner>)`, never as passing, and doesn't fail the check. Usage and tool errors (no `node`) exit 2. The script's own tests are in `scripts/tests/conformance-parity/`. `scripts/test-all.sh` runs them with the other negative tests, and 0013 T04 wires the check itself in after the platform suites.
+
+### Operation mapping
+
+How each vector `operation` maps to the ADR 0030 operations. Names are the surface's (`snake_case`); hosts call the `camelCase` form (`jws_verify_compact` → `jwsVerifyCompact`, `protected_b64u` → `protectedB64u`, `allowed_algs` → `allowedAlgs`). Record fields not listed are left unset, so the core default applies. A runner never writes a default of its own (ADR 0030 §3).
+
+- **Arguments.** JSON-valued arguments (a JWK, a JWK Set, a header, a JSON JWS or JWE, claims) are passed as **JSON text**: the vector's own text for that member, or an order-preserving re-serialization of it (see implementer note 4 for claims). `*_b64u` members are decoded by the runner to bytes, and a non-canonical value fails the vector (it's never an outcome). Strings and integers are passed as given.
+- **Outputs.** Byte results are written back as canonical base64url (RFC 4648 §5, no padding) with any correct encoder. JSON results are parsed and compared as JSON values, as each operation's section says.
+- **Calls.** The runner makes exactly the calls in the table, in that order, and none of its own before them (no `jwk_parse` to pre-check a key). The per-family step orders above happen inside each surface call, and the `rust-surface` run's parity with `rust-core` proves they match. `actual` is the outcome of these calls; the round-trip calls in the last column are checks, so they never set `actual`.
+
+| Vector `operation` | ADR 0030 call(s), with the vector members they take | Outputs and checks |
+|---|---|---|
+| `b64url.encode` | `base64url_encode(bytes)`, where `bytes` is `bytes_hex` decoded by the runner's own hex code | `b64u` = the result |
+| `b64url.decode` | `base64url_decode(b64u)` | `bytes_hex` = the result as lowercase hex |
+| `jwk.thumbprint` | `jwk_thumbprint(jwk, "SHA-256")`, then `jwk_thumbprint_uri(jwk, "SHA-256")`. The vector's `hash` (`"sha-256"`, the RFC 9278 hash name and the only value the schema allows) is passed as the surface name `"SHA-256"`. | `thumbprint`, `thumbprint_uri` |
+| `jws.sign`, `serialization` `"compact"` | `jws_sign_compact(payload, signers[0].key, JwsSignOptions { protected_b64u: signers[0].protected_b64u, detached })`. The header always goes as `protected_b64u`, never as `protected_header`. | `jws` (a string, compared exactly), or the `verify_with` round trip |
+| `jws.sign`, `"flattened"` | `jws_sign_flattened(payload, JwsSigner { key, protected_b64u, unprotected_header: header }, detached)`, from `signers[0]`. A signer may have only `header` (note 11). | `jws`: the returned JSON text parsed and compared as a JSON value; or `verify_with` |
+| `jws.sign`, `"general"` | `jws_sign_general(payload, [JwsSigner, …], detached)`: one `JwsSigner` per `signers` entry, in order, built as for flattened | as flattened |
+| `jws.sign` round trip (`verify_with`) | check: the output's shape (three compact parts; `signature` without `signatures`; one `signatures` entry per signer), then `jws_verify_compact` or `jws_verify_json` with `verify_with.key` and `JwsVerifyOptions { allowed_algs: verify_with.allowed_algs, detached_payload: payload when detached }` | the verified payload equals `payload_b64u`; any failure here is a `fail` |
+| `jws.verify` | a string `jws`: `jws_verify_compact(jws, key, options)`; an object: `jws_verify_json(<its JSON text>, key, options)`, with `JwsVerifyOptions { allowed_algs, detached_payload: detached_payload_b64u, max_input_len, max_signatures }` | `payload_b64u` = `JwsVerified.payload`, `alg`, `signature_index` |
+| `keys.import_pem` | `jwk_from_pem(pem)` | `jwk` = the result as an object; an `oct` result fails the vector |
+| `keys.export_pem` | `jwk_to_pem(jwk, format)`; `format` is passed as given (`pkcs8`, `sec1`, `spki`, `pkcs1`) | `pem` (exact text) |
+| `keys.import_der` | `jwk_from_der(der, format)`, where `der` is `der_b64u` decoded | `jwk`, as `keys.import_pem` |
+| `keys.export_der` | `jwk_to_der(jwk, format)` | `der_b64u` = the result |
+| `keys.generate_for` | `jwk_generate_for_alg(alg)`, `alg` passed as given | `shape`, after the checks of [`keys.generate_for`](#keysgenerate_for). The import-back check is `jwk_parse(<the generated JWK>)`, compared with it as a JSON value. |
+| `jwe.encrypt`, `"compact"` | `jwe_encrypt_compact(plaintext, options)` | `jwe` (a string), or the `decrypt_with` round trip |
+| `jwe.encrypt`, `"flattened"` or `"general"` | `jwe_encrypt_json(plaintext, options, serialization)` | `jwe`: the JSON text parsed and compared as a JSON value; or `decrypt_with` |
+| `jwe.encrypt` options | `JweEncryptOptions { enc, recipients, protected_header: protected, shared_unprotected_header: unprotected, aad: aad_b64u, compress }`, with one `JweRecipient { alg, key, header, apu: apu_b64u, apv: apv_b64u, p2c, p2s_len }` per `recipients` entry, in order. `rng_b64u` and `protected_b64u` occur only in `fixed-rng` vectors, which every binding skips, so they have no mapping. | |
+| `jwe.encrypt` round trip (`decrypt_with`) | check: the output's shape (five compact parts; `ciphertext` without `recipients`; one `recipients` entry per recipient), then `jwe_decrypt_compact` or `jwe_decrypt_json` with `decrypt_with.key` and `JweDecryptOptions { allowed_algs, allowed_enc }` from `decrypt_with` | the plaintext equals `plaintext_b64u`; any failure here is a `fail` |
+| `jwe.decrypt` | a string `jwe`: `jwe_decrypt_compact(jwe, key, options)`; an object: `jwe_decrypt_json(<its JSON text>, key, options)`, with `JweDecryptOptions { allowed_algs, allowed_enc, understood_crit, max_input_len, max_recipients, max_pbes2_count, max_decompressed_len }` | `plaintext_b64u` = `JweDecrypted.plaintext`, `recipient` = `recipient_index` |
+| `jwt.validate`, no `decrypt` | `key`: `jwt_verify(token, key, options)`; `jwks`: `jwt_verify_with_jwks(token, jwks, options)` | `claims` = `JwtVerified.claims` (a JSON value, numbers as doubles, note 1), `alg`, and `key_index` exactly when the input has `jwks` (note 2) |
+| `jwt.validate`, with `decrypt` | `key`: `jwt_decrypt_nested(token, decrypt.key, JweDecryptOptions { allowed_algs: decrypt.allowed_algs, allowed_enc: decrypt.allowed_enc, max_pbes2_count: decrypt.max_pbes2_count }, key, options)`; `jwks`: `jwt_decrypt_nested_with_jwks(…, jwks, options)` | as above, from `JwtNestedVerified.inner` |
+| `jwt.validate` options | `JwtVerifyOptions` from `now`, `allowed_algs` and `policy`, member by member (the table below) | |
+| `jwt.issue` | `jwt_sign(claims, key, JwtSignOptions { alg, … })`, where `typ` absent sets nothing (the default `JWT`), a string sets `typ`, and `null` sets `omit_typ: true` (note 3). `access_token` and `header` are never set: an access token's `typ` comes as the string `at+jwt`. With `encrypt`: then `jwt_encrypt_nested(<the signed JWT>, JweEncryptOptions { enc: encrypt.enc, recipients: [JweRecipient { alg: encrypt.alg, key: encrypt.key }] })`. | `token` (exact), or the `{ "ok": true }` checks (note 10); with `validate`, the token also validates as for `jwt.validate` |
+
+`policy` → `JwtVerifyOptions`, for `jwt.validate` and `jwt.issue`'s `validate`:
+
+| Vector member | `JwtVerifyOptions` field |
+|---|---|
+| `now` | `now` (always present: no runner reads a clock, ADR 0028 §4) |
+| `allowed_algs` | `allowed_algs` |
+| `policy.issuer` | `issuers`: a string becomes a one-element list, an array is passed as given |
+| `policy.audience` | `audiences` (an array only) |
+| `policy.subject` | `subject` |
+| `policy.leeway` | `leeway` |
+| `policy.max_age` | `max_age` |
+| `policy.require` | `required_claims` |
+| `policy.allow_missing_exp` | `allow_missing_exp: true` when `true`; `false` or absent sets nothing (note 6) |
+| `policy.ignore_audience` | `ignore_audience: true` when `true`; `false` or absent sets nothing |
+| `policy.typ` | mode `default`: nothing; mode `exact`: `typ: value`; mode `any`: `any_typ: true` |
+| `policy.profile` | `profile: "access_token"`. With `typ` mode `default` the vector is broken: a `fail` |
+| `policy.max_key_candidates` | `max_key_candidates` |
+| (none) | `max_input_len` is never set by a vector |
+
+### Implementer notes
+
+Points the sections above imply but that are easy to get wrong in a binding runner (from the 0004 T10 test report, and ADR 0045):
+
+1. **Claims numbers are compared as doubles.** Normalize both sides to IEEE 754 doubles before comparing `claims`: a Kotlin `Long` or Swift `Int` from the vector's parser against the `Double` the library's claims parse to, and vice versa. Vector JSON never holds an integer beyond 2^53 − 1 ([Binding readiness](#binding-readiness)), so the conversion is exact. Larger values appear only inside token payloads, where the library rejects them.
+2. **`key_index` is present exactly when the input has `jwks`, and `0` is a value.** Treat the binding's absent form (`undefined`, `null`, Kotlin `null`, Swift `nil`) as absent, and test for presence, never truthiness: JavaScript's `if (keyIndex)` drops index `0`.
+3. **`typ: null` is not an absent `typ`** in `jwt.issue`. `null` omits the header parameter (`omit_typ: true`), while an absent member keeps the default `JWT` (nothing set). The runner's JSON model must keep the two apart. `JSON.parse` does; Swift `Codable` decodes both as `nil` unless the runner checks `contains`, and a Kotlin `JsonObject` needs `containsKey` plus a `JsonNull` check.
+4. **Claims member order matters for exact tokens.** The library serializes the registered claims first, then the others in the order given (ADR 0027 §1). So `claims` goes to `jwt_sign` as **ordered JSON text**: the exact slice of the vector file, or the output of an order-preserving parser. A JavaScript object moves integer-like keys (`"1"`) to the front, and a Swift dictionary has no order, so neither may produce that text. The current vectors have no integer-like claim name. A runner that can't keep the order must fail such a vector, not reorder it.
+5. **`now` and every count are JSON integers.** Read them as integers and pass them as integers. JSON Schema's `integer` also admits `1300819439.0`, but the vectors never use that form ([Binding readiness](#binding-readiness)). A runner treats a fraction or exponent there as a broken vector (`fail`), as the Rust runner does, and never writes one.
+6. **`policy.audience` is an array only; `policy.issuer` is a string or an array.** A boolean member set to `false` (`allow_missing_exp`, `ignore_audience`) means "keep the default". Leave the option unset. Never call an opt-out, or set a field the core reads as configured, because of a `false`.
+7. **The policy is built before the token is parsed.** The Rust runner builds the policy, checking the allow-list and then `leeway` (over 600 is `InvalidClaim`), before the library looks at the token, and the surface's `jwt_verify*` and `jwt_decrypt_nested*` calls must do the same (the `rust-surface` parity run checks it). A binding must not validate its options lazily after reading the token. A vector with a bad `leeway` and a bad token would then report the other error. The one-fault rule keeps today's vectors from depending on this, but only by convention.
+8. **The outcome's `error` is the core code.** Read it from the binding's error: JS `PolyjoseError.code`, Kotlin `PolyjoseException.code()`, Swift `PolyjoseError.code()` (ADR 0030 §5), never from a class name or message. Any other thrown error is not an outcome, and the vector is a `fail`. That covers a JS `TypeError`, a napi `InvalidArg` and a Kotlin `IllegalArgumentException`.
+9. **JWK Set import is lenient, as in the core.** A member that is merely invalid is skipped (RFC 7517 §5), which can leave `NoMatchingKey` at validation. So the runner passes the vector's `jwks` text to the surface unchanged, and never parses, filters or pre-validates the set itself. A set without a `keys` array is `InvalidKey`, and a set holding an RSA private JWK is `UnsupportedAlgorithm` (ADR 0021, ADR 0029 §3).
+10. **`jwt.issue` `{ "ok": true }` is runner logic.** The runner checks that the token has three compact parts (five with `encrypt`), then validates it with `validate` through the `jwt.validate` mapping. The validated `alg` must be the issued one, and the claims must equal the issued `claims` as a JSON value. Any failure there is a `fail`; `actual` stays the outcome of `jwt_sign` and `jwt_encrypt_nested`.
+11. **A `jws.sign` signer may have only an unprotected header** (RFC 7515 §7.2.1, ADR 0045 §1): `header` and no `protected_b64u`, in the flattened and general serializations. It maps to a `JwsSigner` with `unprotected_header` only, and the surface signs it over `"." || payload`. Compact signers always have `protected_b64u`.
+12. **The RFC 7520 §4.7 vectors are never skipped.** `third_party/rfc7520/jws/4-7-unprotected-only-hs256-{flattened,general}-{sign,verify}.json` need no feature, so every binding runs them (ADR 0045 §1), like every other vector without `features`.
 
 ## Writing vectors
 
