@@ -420,9 +420,9 @@ Which operation families each platform's runner runs today. A cell that isn't "r
 |---|---|---|---|---|
 | Rust | `crates/polyjose/tests/conformance.rs` | runs | runs | runs |
 | Rust surface | `bindings/surface/tests/conformance.rs` (`polyjose-surface`, ADR 0030) | runs | runs | runs |
-| WASM | none yet (0006, over the 0013 surface) | no runner yet (0006) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0006) |
-| Node | none yet (0007, over the 0013 surface) | no runner yet (0007) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0007) |
-| Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0008) |
+| WASM | none yet (0006, over the 0013 surface) | no runner yet (0006) | not yet bound (0006–0008) | N/A (no binding JWT surface yet, 0006) |
+| Node | none yet (0007, over the 0013 surface) | no runner yet (0007) | not yet bound (0006–0008) | N/A (no binding JWT surface yet, 0007) |
+| Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0008) | N/A (no binding JWT surface yet, 0008) |
 | Swift (iOS) | `platforms/swift/Tests/PolyjoseTests/ConformanceRunner.swift` (0009): `swift-macos` on the macOS host, `swift-ios-sim` on the iOS 27.2 Simulator | runs | runs | runs |
 
 `jwks.select`, and `jwk.thumbprint`'s optional `hash`, run through the surface (`rust-surface`, 0013 T14), and the shared JS runner implements both, so each binding runs them as soon as its runner lands. Until then, test reports list WASM, Node and Kotlin as **SKIPPED (no binding runner yet; 0006–0008)** for them, as for the other families.
@@ -622,7 +622,7 @@ Points the sections above imply but that are easy to get wrong in a binding runn
   - `generate-*` shapes are the RFC sizes and curves.
   - The RSA modulus-bound keys are built by the generator, which also writes their JWK.
 
-  `source` names the RFC, OpenSSL for a generated key, or `polyjose` for a rule the description cites. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them all (`python3 -I`); edit the script, not the files. **Until features 0006–0009 bind the keys API, test reports list WASM, Node, Kotlin and Swift as `SKIPPED (API not yet bound)` for them (see [Binding runners](#binding-runners)). Each binding's runner implements `keys.*` when it binds the API, and the never-skip rule above then applies.**
+  `source` names the RFC, OpenSSL for a generated key, or `polyjose` for a rule the description cites. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them all (`python3 -I`); edit the script, not the files. **Until features 0006–0008 bind the keys API, test reports list WASM, Node and Kotlin as `SKIPPED (API not yet bound)` for them; Swift (iOS) runs them (`swift-macos`, `swift-ios-sim`, 0009) (see [Binding runners](#binding-runners)). Each binding's runner implements `keys.*` when it binds the API, and the never-skip rule above then applies.**
 - JWE vectors live under `jwe/`, one directory per task and kind: `jwe/compact/` (RFC 7516 Appendix A, RFC 7520 §5.6 and §5.8, round trips), `jwe/negative-structure/` (the error contract, one vector per rule; `source` "polyjose" or the RFC whose vector is refused), and the per-family and JSON directories of the later JWE tasks. RFC 7520 values are generated from the vendored ietf-jose cookbook (`crates/polyjose/tests/third_party/ietf-jose-cookbook/`), not transcribed.
 - JWS vectors are grouped by origin: `jws-rfc7515/` (RFC 7515 Appendix A and F; `source` "RFC 7515 App. A.x" or "RFC 7515 App. F"), `jws-rfc7797/`, `jws-rfc8037/`, `jws-oracle/` (generated independently of polyjose; `source` names the tool and its versions), `jws-negative/` (`source` names the RFC section, CVE or ADR enforced), `jws-limits/` (the default ADR 0026 §7 limits, at and just over each), and `third_party/rfc7520/jws/` (the RFC 7520 §4 cookbook).
 - Check every expected value against the RFC text yourself. If the RFC doesn't print the value, derive it independently of polyjose (for example with Python's `hashlib` over the hand-built input) and say so in `description`.
