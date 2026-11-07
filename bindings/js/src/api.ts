@@ -115,7 +115,10 @@ export interface PolyjoseApi {
   /**
    * The JWK Thumbprint (RFC 7638 §3, §3.4), base64url: 43, 64 or 86 characters for SHA-256,
    * SHA-384 or SHA-512. An absent `hash` (or `null`) is the core default, SHA-256 (ADR 0054 §9,
-   * RFC 9278 §5). Any other name fails with `UnsupportedAlgorithm` from the core.
+   * RFC 9278 §5). Any other name fails with `UnsupportedAlgorithm` from the core, after the key's
+   * own import errors (ADR 0057 §2). Never publish the thumbprint of a password or other
+   * low-entropy `oct` key, or use it as a `kid`: it is an unsalted fast hash of the secret
+   * (ADR 0057 §4, RFC 7638 §7).
    */
   jwkThumbprint(jwk: Jwk, hash?: ThumbprintHash): Promise<string>;
   /**
@@ -124,7 +127,18 @@ export interface PolyjoseApi {
    * for `jwkThumbprint`.
    */
   jwkThumbprintUri(jwk: Jwk, hash?: ThumbprintHash): Promise<string>;
-  /** Selects one key of a JWK Set (RFC 7517 §5) by `kid`, `alg` and `use`. */
+  /**
+   * The one key of a JWK Set (RFC 7517 §5) that `selector` picks by `kid`, `alg` and `keyUse`,
+   * under the core rule (`JwkSet::select`, ADR 0054 §2). An absent selector (or `{}`) matches
+   * every member. No match rejects with `NoMatchingKey`, two or more with `MultipleMatchingKeys`
+   * (RFC 7517 §5.1 gives a set's order no meaning); an `alg` or `keyUse` the core refuses with
+   * `UnsupportedAlgorithm`, after the set's own import errors (ADR 0054 §4).
+   *
+   * The key may be private (`d`, `k`): call `jwkToPublic` before publishing it. Selection never
+   * authorizes an algorithm, so pass the key only to an operation with an allow-list, and pair a
+   * `kid` from an untrusted header with `alg` (ADR 0054 §7). A server maps `NoMatchingKey` and
+   * `MultipleMatchingKeys` to one opaque client error, such as `invalid_token` (RFC 6750 §3.1).
+   */
   jwksSelect(jwks: JwkSet, selector?: JwkSelector): Promise<JwkObject>;
   /** A random `oct` key of `lenBytes` octets (RFC 7518 §6.4), from the OS CSPRNG (ADR 0005). */
   jwkGenerateOct(lenBytes: number): Promise<JwkObject>;

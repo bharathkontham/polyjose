@@ -71,7 +71,10 @@ export type KeyFormat = "pkcs8" | "sec1" | "spki" | "pkcs1";
 /** The JWE JSON serializations (RFC 7516 §7.2.1 general, §7.2.2 flattened). */
 export type JweJsonForm = "general" | "flattened";
 
-/** `jwksSelect` criteria (RFC 7517 §4.2, §4.4, §4.5; 0001 T07 selection rules). */
+/**
+ * `jwksSelect` criteria (RFC 7517 §4.2, §4.4, §4.5; ADR 0054 §1). Each is optional and passed
+ * to the core as given: `alg` a JWS or JWE key management algorithm, `keyUse` `sig` or `enc`.
+ */
 export interface JwkSelector {
   kid?: string | undefined;
   alg?: string | undefined;
