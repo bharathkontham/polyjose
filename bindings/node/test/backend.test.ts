@@ -8,11 +8,16 @@
 //     never an input array or a view of one;
 //   - string records (SF-6): the JWT records resolve with every field, as strings;
 //   - the records the adapter reads field by field (review-security.md L1): each field arrives;
+//   - own data properties (0013 F09, BACKEND.md): every record a backend operation resolves with is
+//     a plain or prototype-less object whose members are all own data properties, so the facade,
+//     which reads own members only, reads every field;
 //   - getter re-entrancy (L1): a getter that detaches and frees a byte argument during argument
 //     conversion cannot make the adapter read freed memory. Run in a child process with
 //     --expose-gc, so a crash fails the test instead of the runner.
 // No assertion reads a clock (pipeline rule 8).
 import { assert, path, test } from "../../js/dist/node/builtins.js";
+import * as facade from "@polyjose/node";
+import type { JwkObject } from "@polyjose/node";
 import { backend } from "../backend.js";
 
 interface SpawnResult {
@@ -189,6 +194,174 @@ test("the JWT records resolve with every field, strings as strings (jwtVerify, j
   assert.equal(out.inner.alg, "HS256");
   assert.equal(typeof out.outerHeader, "string");
   assert.equal(json(out.outerHeader)["cty"], "JWT", "cty set by the core (RFC 7519 §5.2)");
+  assert.equal(out.recipientIndex, 0);
+});
+
+// --- Own data properties (0013 F09; BACKEND.md "Results") ------------------------------------------
+
+/**
+ * Asserts that `record` is a plain (`Object.prototype`) or prototype-less object, that it has an
+ * own member for each of `fields`, and that every own member is a data property (`value`, no
+ * `get`/`set`). `nested` names the members that are records themselves, checked the same way.
+ */
+function ownDataRecord(
+  what: string,
+  record: unknown,
+  fields: readonly string[],
+  nested: Readonly<Record<string, readonly string[]>> = {},
+): void {
+  assert.equal(typeof record, "object", `${what}: an object`);
+  assert.notEqual(record, null, `${what}: not null`);
+  const proto = Object.getPrototypeOf(record) as unknown;
+  assert.ok(proto === Object.prototype || proto === null, `${what}: a plain or prototype-less object`);
+  const obj = record as Record<string, unknown>;
+  for (const field of fields) {
+    assert.ok(Object.hasOwn(obj, field), `${what}.${field} is an own member`);
+  }
+  for (const key of Reflect.ownKeys(obj)) {
+    const d = Object.getOwnPropertyDescriptor(obj, key);
+    const name = `${what}.${String(key)}`;
+    assert.ok(d !== undefined && Object.hasOwn(d, "value"), `${name} is a data property`);
+    assert.equal(d.get, undefined, `${name} has no getter`);
+    assert.equal(d.set, undefined, `${name} has no setter`);
+  }
+  for (const [field, inner] of Object.entries(nested)) {
+    ownDataRecord(`${what}.${field}`, obj[field], inner);
+  }
+}
+
+const JWT_VERIFIED = ["claims", "header", "alg", "kid"] as const;
+
+test("every record the raw backend resolves with is made of own data properties (jwsVerify*, jweDecrypt*, jwtVerify*, jwtDecryptNested*)", async () => {
+  const payload = ascii("payload (RFC 7515 §5.2)");
+  const compactJws = (await backend.jwsSignCompact(payload, hsKey, { protectedHeader: HS256 })) as string;
+  ownDataRecord(
+    "jwsVerifyCompact",
+    await backend.jwsVerifyCompact(compactJws, hsKey, { allowedAlgs: ["HS256"] }),
+    ["alg", "payload", "protectedHeader", "signatureIndex"],
+  );
+  const flattenedJws = (await backend.jwsSignFlattened(
+    payload,
+    { key: hsKey, protectedHeader: HS256, unprotectedHeader: '{"kid":"u"}' },
+    false,
+  )) as string;
+  ownDataRecord(
+    "jwsVerifyJson",
+    await backend.jwsVerifyJson(flattenedJws, hsKey, { allowedAlgs: ["HS256"] }),
+    ["alg", "payload", "protectedHeader", "unprotectedHeader", "signatureIndex"],
+  );
+
+  const plaintext = ascii("plaintext (RFC 7516 §5.2)");
+  const decrypt = { allowedAlgs: ["dir"], allowedEnc: ["A128GCM"] };
+  const compactJwe = (await backend.jweEncryptCompact(plaintext, {
+    enc: "A128GCM",
+    recipients: [{ alg: "dir", key: cek }],
+  })) as string;
+  ownDataRecord("jweDecryptCompact", await backend.jweDecryptCompact(compactJwe, cek, decrypt), [
+    "plaintext",
+    "header",
+    "protectedHeader",
+    "recipientIndex",
+  ]);
+  const generalJwe = (await backend.jweEncryptJson(
+    plaintext,
+    {
+      enc: "A128GCM",
+      protectedHeader: '{"cty":"text/plain"}',
+      sharedUnprotectedHeader: '{"jku":"https://example.com/s"}',
+      aad: ascii("aad"),
+      recipients: [{ alg: "dir", key: cek, header: '{"kid":"r"}' }],
+    },
+    "general",
+  )) as string;
+  ownDataRecord("jweDecryptJson", await backend.jweDecryptJson(generalJwe, cek, decrypt), [
+    "plaintext",
+    "header",
+    "protectedHeader",
+    "sharedUnprotectedHeader",
+    "recipientHeader",
+    "aad",
+    "recipientIndex",
+  ]);
+
+  const now = 1_700_000_000;
+  const signed = (await backend.jwtSign(JSON.stringify({ sub: "a", exp: now + 60 }), hsKey, { alg: "HS256" })) as string;
+  const verify = { allowedAlgs: ["HS256"], now };
+  const set = JSON.stringify({ keys: [json(cek), json(hsKey)] });
+  ownDataRecord("jwtVerify", await backend.jwtVerify(signed, hsKey, verify), JWT_VERIFIED);
+  ownDataRecord("jwtVerifyWithJwks", await backend.jwtVerifyWithJwks(signed, set, verify), [...JWT_VERIFIED, "keyIndex"]);
+
+  const nested = (await backend.jwtEncryptNested(signed, { enc: "A128GCM", recipients: [{ alg: "dir", key: cek }] })) as string;
+  ownDataRecord(
+    "jwtDecryptNested",
+    await backend.jwtDecryptNested(nested, cek, decrypt, hsKey, verify),
+    ["inner", "outerHeader", "recipientIndex"],
+    { inner: JWT_VERIFIED },
+  );
+  ownDataRecord(
+    "jwtDecryptNestedWithJwks",
+    await backend.jwtDecryptNestedWithJwks(nested, cek, decrypt, set, verify),
+    ["inner", "outerHeader", "recipientIndex"],
+    { inner: [...JWT_VERIFIED, "keyIndex"] },
+  );
+});
+
+test("the facade reads every field of those records (it reads own members only, 0013 F09)", async () => {
+  const hsJwk = json(hsKey) as JwkObject;
+  const cekJwk = json(cek) as JwkObject;
+  const payload = ascii("payload (RFC 7515 §5.2)");
+  const flattenedJws = await facade.jwsSignFlattened(
+    payload,
+    { key: hsJwk, protectedHeader: { alg: "HS256" }, unprotectedHeader: { kid: "u" } },
+    false,
+  );
+  const jws = await facade.jwsVerifyJson(flattenedJws, hsJwk, { allowedAlgs: ["HS256"] });
+  assert.equal(jws.alg, "HS256");
+  assert.deepEqual([...jws.payload], [...payload]);
+  assert.deepEqual(jws.protectedHeader, { alg: "HS256" });
+  assert.deepEqual(jws.unprotectedHeader, { kid: "u" });
+  assert.equal(jws.signatureIndex, 0);
+
+  const plaintext = ascii("plaintext (RFC 7516 §5.2)");
+  const decrypt = { allowedAlgs: ["dir"], allowedEnc: ["A128GCM"] };
+  const generalJwe = await facade.jweEncryptJson(
+    plaintext,
+    {
+      enc: "A128GCM",
+      protectedHeader: { cty: "text/plain" },
+      sharedUnprotectedHeader: { jku: "https://example.com/s" },
+      aad: ascii("aad"),
+      recipients: [{ alg: "dir", key: cekJwk, header: { kid: "r" } }],
+    },
+    "general",
+  );
+  const jwe = await facade.jweDecryptJson(generalJwe, cekJwk, decrypt);
+  assert.deepEqual([...jwe.plaintext], [...plaintext]);
+  assert.equal(jwe.header["kid"], "r", "the union header (RFC 7516 §5.2 step 4)");
+  assert.equal(jwe.protectedHeader?.["cty"], "text/plain");
+  assert.equal(jwe.protectedHeader?.["enc"], "A128GCM");
+  assert.deepEqual(jwe.sharedUnprotectedHeader, { jku: "https://example.com/s" });
+  assert.equal(jwe.recipientHeader?.["kid"], "r");
+  assert.deepEqual([...(jwe.aad ?? [])], [...ascii("aad")]);
+  assert.equal(jwe.recipientIndex, 0);
+
+  const now = 1_700_000_000;
+  const claims = { sub: "a", exp: now + 60 };
+  const signed = await facade.jwtSign(claims, hsJwk, { alg: "HS256" });
+  const verify = { allowedAlgs: ["HS256"], now };
+  const set = { keys: [cekJwk, hsJwk] };
+  const one = await facade.jwtVerifyWithJwks(signed, set, verify);
+  assert.deepEqual(one.claims, claims);
+  assert.equal(one.header["alg"], "HS256");
+  assert.equal(one.alg, "HS256");
+  assert.equal(one.keyIndex, 1);
+  assert.equal(one.kid, "k1");
+  const nested = await facade.jwtEncryptNested(signed, { enc: "A128GCM", recipients: [{ alg: "dir", key: cekJwk }] });
+  const out = await facade.jwtDecryptNestedWithJwks(nested, cekJwk, decrypt, set, verify);
+  assert.deepEqual(out.inner.claims, claims);
+  assert.equal(out.inner.keyIndex, 1);
+  assert.equal(out.inner.kid, "k1");
+  assert.equal(out.outerHeader["cty"], "JWT");
   assert.equal(out.recipientIndex, 0);
 });
 
