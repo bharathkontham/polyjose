@@ -78,6 +78,31 @@ run_negative_tests() {
   if [ "$found" -eq 0 ]; then echo "no negative tests found (scripts/tests/*/*.sh)"; record negative-tests FAIL; fi
 }
 
+# The binding API name check (feature 0013 T13, ADR 0030 §2, §8): one step per mode file in
+# scripts/check-binding-api.d/ ("api-names: <mode>"), each comparing a binding's exported names with
+# bindings/api-inventory.txt. The exit status decides PASS or FAIL; `SKIPPED (<mode>: <reason>)` as
+# the last line with exit 0 (a mode whose inputs are missing, e.g. js without node) is reported as
+# SKIPPED, never as passing (pipeline rule 9); a last line starting with SKIPPED in any other form
+# FAILs, and so does finding no mode at all.
+run_api_names() {
+  local f mode out rc last found=0
+  for f in scripts/check-binding-api.d/*.sh; do
+    [ -e "$f" ] || continue # bash 3.2 has no nullglob by default: an unmatched glob stays literal
+    found=1; mode=${f##*/}; mode=${mode%.sh}
+    echo "==> api-names: $mode"
+    out="$scratch/api-names-$mode.out"
+    scripts/check-binding-api.sh "$mode" </dev/null 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+    last=$(awk 'NF { line = $0 } END { sub(/\r$/, "", line); sub(/[ \t]+$/, "", line); print line }' "$out")
+    if [ "$rc" -ne 0 ]; then record "api-names: $mode" FAIL; continue; fi
+    case $last in
+      "SKIPPED ($mode: "?*")") record "api-names: $mode" "$last" ;;
+      SKIPPED*) echo "check-binding-api.sh $mode: last line \"$last\" is not SKIPPED ($mode: <reason>)"; record "api-names: $mode" FAIL ;;
+      *) record "api-names: $mode" PASS ;;
+    esac
+  done
+  if [ "$found" -eq 0 ]; then echo "no binding API modes found (scripts/check-binding-api.d/*.sh)"; record api-names FAIL; fi
+}
+
 # Conformance results files (ADR 0034 §2) left by an earlier run must never count in the parity
 # check below: each run starts with an empty target/conformance/, which this run's suites refill.
 results_dir=target/conformance
@@ -89,6 +114,9 @@ for p in "${platforms[@]}"; do
       # No cargo config file in the repository, and none set by a script or workflow; it could
       # change sources, rustflags or the rustc wrapper for every cargo command (needs only git).
       run no-cargo-config scripts/check-no-cargo-config.sh
+      # Every binding's exported names against the API inventory (needs no cargo), before the
+      # cargo steps, so a renamed or missing name fails before any conformance run.
+      run_api_names
       if have cargo; then run rust bash -c 'cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
       else record rust "SKIPPED (cargo missing)"; fi
       # The workspace run above uses default features; this one also covers polyjose's

@@ -84,7 +84,8 @@ fn json_form(form: &str) -> polyjose::Result<JsonForm> {
 ///
 /// The AAD is copied once into the core encryptor, which owns it from then on.
 ///
-/// Crate-visible so the nested JWT encrypt (`jwt.rs`) can build the same encryptor.
+/// The only conversion from [`JweEncryptOptions`] to the core (ADR 0030 §1): the nested JWT
+/// encrypt (`jwt.rs`) calls it too, so both report the same first error.
 pub(crate) fn encryptor(options: &JweEncryptOptions) -> polyjose::Result<Encryptor> {
     let recipients = options
         .recipients
@@ -190,7 +191,8 @@ pub fn jwe_decrypt_json(
 /// (`max_pbes2_count`, a per-token budget, ADR 0023 and ADR 0050 §2; `max_decompressed_len`,
 /// ADR 0017; `max_input_len` and `max_recipients`, ADR 0026 §7) default in the core alone.
 ///
-/// Crate-visible so the nested JWT decrypt (`jwt.rs`) can build the same policy.
+/// The only conversion from [`JweDecryptOptions`] to the core (ADR 0030 §1): the nested JWT
+/// decrypts (`jwt.rs`) call it too.
 pub(crate) fn decrypt_policy(options: &JweDecryptOptions) -> polyjose::Result<DecryptPolicy> {
     let allowed_algs: Vec<KeyMgmtAlg> = algs(&options.allowed_algs);
     let allowed_enc: Vec<ContentEncAlg> = algs(&options.allowed_enc);
