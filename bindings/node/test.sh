@@ -9,8 +9,8 @@
 #      build just wrote; it must PASS: after a build, SKIPPED means the check or the build is broken
 #      (scripts/test-all.sh also runs it, in its rust step, before any build, where a fresh tree
 #      can only skip; feature 0007 B01);
-#   5. the rust-core reference run, target/conformance/rust-core.json (cargo test -p polyjose
-#      --test conformance, default features, ADR 0034 §4): api.test reads Error::CODES from it,
+#   5. the rust-core reference run, target/conformance/rust-core.json (cargo test --locked
+#      -p polyjose --test conformance, default features, ADR 0034 §4; --locked: review-code.md SF-3): api.test reads Error::CODES from it,
 #      and scripts/conformance-parity.sh compares node.json with it;
 #   6. node --test over the compiled tests, as an explicit file list (a directory argument fails
 #      on Node 24, research §8): dist/<name>.test.js for every test/<name>.test.ts except
@@ -51,7 +51,7 @@ case $names_last in
 esac
 
 echo "==> @polyjose/node: rust-core reference results (ADR 0034 §4)"
-(cd ../.. && cargo test --quiet -p polyjose --test conformance)
+(cd ../.. && cargo test --locked --quiet -p polyjose --test conformance)
 
 echo "==> @polyjose/node: node --test (compiled output)"
 tests=()

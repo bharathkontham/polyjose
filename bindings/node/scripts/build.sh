@@ -4,7 +4,9 @@
 #      and tsc into bindings/js/dist/; bindings/js stays the facade's only source;
 #   2. the addon and its loader: napi build --platform --release --js binding.cjs --dts binding.d.ts
 #      (polyjose.<platform>.node, binding.cjs, binding.d.ts); extra arguments go to napi build,
-#      e.g. `scripts/build.sh --target x86_64-apple-darwin`;
+#      e.g. `scripts/build.sh --target x86_64-apple-darwin`. Cargo gets `--locked` (after `--`,
+#      which napi build hands to cargo build and to its own cargo metadata), so the addon is built
+#      from the committed Cargo.lock only (review-code.md SF-3);
 #   3. facade/: the compiled facade (.js and the generated .d.ts) copied from bindings/js/dist/src;
 #   4. tsc: src/*.ts to the package root (index.js, backend.js and their .d.ts), then test/*.ts to
 #      dist/.
@@ -26,7 +28,7 @@ echo "==> @polyjose/node build: the shared facade (bindings/js)"
 (cd "$js" && node tools/gen-error-codes.ts && rm -rf dist && node_modules/.bin/tsc -p .)
 
 echo "==> @polyjose/node build: napi build --platform --release $*"
-"$napi" build --platform --release --js binding.cjs --dts binding.d.ts "$@"
+"$napi" build --platform --release --js binding.cjs --dts binding.d.ts "$@" -- --locked
 
 echo "==> @polyjose/node build: facade/ (compiled .js and .d.ts of bindings/js/dist/src)"
 rm -rf facade

@@ -13,6 +13,9 @@
 #           Node-version runs pass x86_64-unknown-linux-gnu-node<N>, so each writes its own file.
 #
 # Steps:
+#   0. `cargo metadata --locked` first, so a Cargo.lock that does not match the manifests fails
+#      fast instead of being re-resolved on the runner (review-code.md SF-3); every cargo and napi
+#      build and test below passes --locked too (test.sh, scripts/build.sh), as ci.yml does;
 #   1. checks <target> and <label>, and that <target> is this host: Node's platform and arch, and
 #      on Linux its libc (glibc or musl, as the napi loader decides);
 #   2. test.sh, the whole package suite (TypeScript only, npm ci, build, API names, the rust-core
@@ -35,6 +38,10 @@ die() { echo "ci-build.sh: $*" >&2; exit 1; }
 [ $# -ge 1 ] && [ $# -le 2 ] || { echo "usage: scripts/ci-build.sh <target> [<label>]" >&2; exit 2; }
 target=$1
 label=${2:-$1}
+
+# The committed Cargo.lock, unchanged, or nothing runs (SF-3). test/ci.test.ts checks that this is
+# the first tool the script runs.
+cargo metadata --locked --format-version 1 >/dev/null
 
 # <Rust target>) platform=<npm/ directory and napi --platform suffix>. test/ci.test.ts checks that
 # this table is exactly package.json napi.targets and npm/*/.
