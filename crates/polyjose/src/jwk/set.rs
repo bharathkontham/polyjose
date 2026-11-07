@@ -1562,6 +1562,440 @@ mod tests {
         }
     }
 
+    /// ADR 0054 §2: the one candidate rule, check by check. Each test uses
+    /// a set whose members differ only in the property under test.
+    mod rule {
+        use super::*;
+        use crate::jwa::{KeyMgmtAlg, SigningAlg};
+        use crate::jwe::key_ops_either_direction;
+        use crate::jwk::{JwkSelector, KeyOp, KeyUse};
+
+        /// The selector for `alg` alone.
+        fn by_alg(alg: &str) -> JwkSelector {
+            JwkSelector::new().alg(KeyAlg::from(alg)).unwrap()
+        }
+
+        /// The indices `matching` yields, checking each key is the member
+        /// at that index of `keys()`.
+        fn matched(set: &JwkSet, selector: &JwkSelector) -> Vec<usize> {
+            let found: Vec<(usize, &Jwk)> = set.matching(selector).collect();
+            for (index, key) in &found {
+                assert!(core::ptr::eq(*key, &set.keys()[*index]));
+            }
+            found.into_iter().map(|(index, _)| index).collect()
+        }
+
+        /// One key of every family the core imports, with no `alg`, `use`,
+        /// `key_ops` or `kid`, so only the family differs.
+        fn families() -> JwkSet {
+            let set = set_from(&[
+                OCT.to_owned(),
+                RSA_2048.to_owned(),
+                EC_P256.to_owned(),
+                ec("P-384", 48).to_json().to_string(),
+                ec("P-521", 66).to_json().to_string(),
+                ec("secp256k1", 32).to_json().to_string(),
+                ED25519.to_owned(),
+                X25519.to_owned(),
+            ]);
+            assert_eq!(set.len(), 8);
+            set
+        }
+        const OCT_I: usize = 0;
+        const RSA_I: usize = 1;
+        const P256_I: usize = 2;
+        const P384_I: usize = 3;
+        const P521_I: usize = 4;
+        const K256_I: usize = 5;
+        const ED25519_I: usize = 6;
+        const X25519_I: usize = 7;
+
+        /// ADR 0054 §2 item 1: the family check is the core's two tables,
+        /// row by row, for every implemented JWS and JWE key management
+        /// `alg` (ADR 0026 §2 step 8; RFC 7518 §3.1, §4.1; RFC 8037 §3).
+        #[test]
+        fn family_follows_the_core_tables_for_every_alg() {
+            let set = families();
+            let jws: &[(&str, &[usize])] = &[
+                ("HS256", &[OCT_I]),
+                ("HS384", &[OCT_I]),
+                ("HS512", &[OCT_I]),
+                ("RS256", &[RSA_I]),
+                ("RS384", &[RSA_I]),
+                ("RS512", &[RSA_I]),
+                ("PS256", &[RSA_I]),
+                ("PS384", &[RSA_I]),
+                ("PS512", &[RSA_I]),
+                ("ES256", &[P256_I]),
+                ("ES384", &[P384_I]),
+                ("ES512", &[P521_I]),
+                ("ES256K", &[K256_I]),
+                ("EdDSA", &[ED25519_I]),
+                ("Ed25519", &[ED25519_I]),
+            ];
+            assert_eq!(
+                jws.len() + 1,
+                SigningAlg::KNOWN.len(),
+                "every JWS alg but none"
+            );
+            let ecdh: &[usize] = &[P256_I, P384_I, P521_I, X25519_I];
+            let jwe: &[(&str, &[usize])] = &[
+                ("RSA-OAEP-256", &[RSA_I]),
+                ("A128KW", &[OCT_I]),
+                ("A192KW", &[OCT_I]),
+                ("A256KW", &[OCT_I]),
+                ("dir", &[OCT_I]),
+                ("A128GCMKW", &[OCT_I]),
+                ("A192GCMKW", &[OCT_I]),
+                ("A256GCMKW", &[OCT_I]),
+                ("PBES2-HS256+A128KW", &[OCT_I]),
+                ("PBES2-HS384+A192KW", &[OCT_I]),
+                ("PBES2-HS512+A256KW", &[OCT_I]),
+                ("ECDH-ES", ecdh),
+                ("ECDH-ES+A128KW", ecdh),
+                ("ECDH-ES+A192KW", ecdh),
+                ("ECDH-ES+A256KW", ecdh),
+            ];
+            assert_eq!(
+                jwe.len(),
+                KeyMgmtAlg::KNOWN.len(),
+                "every JWE key management alg"
+            );
+            for (alg, expected) in jws.iter().chain(jwe) {
+                assert_eq!(matched(&set, &by_alg(alg)), *expected, "{alg}");
+            }
+        }
+
+        /// ADR 0054 §2 item 1, the consequences it names: selection by
+        /// `alg` never crosses key families (ADR 0054 §7).
+        #[test]
+        fn family_never_crosses_for_the_named_pairs() {
+            let set = families();
+            let never: &[(usize, &[&str])] = &[
+                (
+                    OCT_I,
+                    &["RS256", "ES256", "EdDSA", "ECDH-ES", "RSA-OAEP-256"],
+                ),
+                (RSA_I, &["HS256", "A128KW", "dir", "PBES2-HS256+A128KW"]),
+                (P256_I, &["HS256", "A128KW", "dir", "PBES2-HS256+A128KW"]),
+                (X25519_I, &["EdDSA"]),
+                (ED25519_I, &["ECDH-ES"]),
+                (K256_I, &["ECDH-ES"]),
+                (P384_I, &["ES256"]),
+            ];
+            for (member, algs) in never {
+                for alg in *algs {
+                    assert!(
+                        !matched(&set, &by_alg(alg)).contains(member),
+                        "{member} {alg}"
+                    );
+                }
+            }
+            // A `kid` never overrides the family.
+            let set = set_from(&[with(OCT, r#""kid":"k""#)]);
+            assert!(matched(&set, &by_alg("ES256").kid("k")).is_empty());
+        }
+
+        /// ADR 0054 §2 item 2: a member `alg` is absent or exactly the
+        /// selector's (RFC 7517 §4.4, RFC 8725 §3.1).
+        #[test]
+        fn jwk_alg_is_absent_or_exact() {
+            // RFC 9864 §2.2: `EdDSA` and `Ed25519` differ.
+            let set = set_from(&[
+                with(ED25519, r#""alg":"EdDSA""#),
+                with(ED25519, r#""alg":"Ed25519""#),
+                ED25519.to_owned(),
+            ]);
+            assert_eq!(matched(&set, &by_alg("EdDSA")), [0, 2]);
+            assert_eq!(matched(&set, &by_alg("Ed25519")), [1, 2]);
+
+            let set = set_from(&[
+                with(OCT, r#""alg":"A128KW""#),
+                with(OCT, r#""alg":"A256KW""#),
+                OCT.to_owned(),
+                with(OCT, r#""alg":"x-unregistered""#),
+                with(OCT, r#""alg":"HS256""#),
+            ]);
+            assert_eq!(set.len(), 5);
+            assert_eq!(matched(&set, &by_alg("A128KW")), [0, 2]);
+            assert_eq!(matched(&set, &by_alg("A256KW")), [1, 2]);
+            assert_eq!(matched(&set, &by_alg("HS256")), [2, 4]);
+            // A JWS alg never matches a member bound to a JWE alg, and the
+            // reverse.
+            assert_eq!(matched(&set, &by_alg("HS384")), [2]);
+            assert_eq!(matched(&set, &by_alg("A192KW")), [2]);
+            // Without a selector `alg`, the member `alg` is not checked.
+            assert_eq!(matched(&set, &JwkSelector::new()), [0, 1, 2, 3, 4]);
+        }
+
+        /// ADR 0054 §2 item 2, the one exception: for `dir`, and only for
+        /// `dir`, a member whose `alg` names a content encryption algorithm
+        /// matches (RFC 7518 §4.5, RFC 7520 §5.6.1).
+        #[test]
+        fn dir_alone_matches_a_member_named_by_its_enc() {
+            let set = set_from(&[
+                with(OCT, r#""alg":"A256GCM""#),
+                with(OCT, r#""alg":"A128CBC-HS256""#),
+                with(OCT, r#""alg":"dir""#),
+                with(OCT, r#""alg":"A256KW""#),
+            ]);
+            assert_eq!(matched(&set, &by_alg("dir")), [0, 1, 2]);
+            assert_eq!(matched(&set, &by_alg("A256KW")), [3]);
+            assert!(matched(&set, &by_alg("A256GCMKW")).is_empty());
+            assert!(matched(&set, &by_alg("PBES2-HS256+A128KW")).is_empty());
+            assert!(matched(&set, &by_alg("HS256")).is_empty());
+        }
+
+        /// ADR 0054 §2 item 3: with an effective use U, a member `use` is
+        /// absent or U (RFC 7517 §4.2). U comes from `key_use`, then
+        /// `key_op`, then `alg`.
+        #[test]
+        fn purpose_comes_from_key_use_then_key_op_then_alg() {
+            let set = set_from(&[
+                with(EC_P256, r#""use":"sig""#),
+                with(EC_P256, r#""use":"enc""#),
+                EC_P256.to_owned(),
+                with(EC_P256, r#""use":"x-other""#),
+            ]);
+            // From `alg`: JWS → sig, JWE → enc.
+            assert_eq!(matched(&set, &by_alg("ES256")), [0, 2]);
+            assert_eq!(matched(&set, &by_alg("ECDH-ES")), [1, 2]);
+            // From `key_op`.
+            let op = |op: KeyOp| JwkSelector::new().key_op(op).unwrap();
+            assert_eq!(matched(&set, &op(KeyOp::Sign)), [0, 2]);
+            assert_eq!(matched(&set, &op(KeyOp::Verify)), [0, 2]);
+            for enc_op in [
+                KeyOp::Encrypt,
+                KeyOp::Decrypt,
+                KeyOp::WrapKey,
+                KeyOp::UnwrapKey,
+                KeyOp::DeriveKey,
+                KeyOp::DeriveBits,
+            ] {
+                assert_eq!(matched(&set, &op(enc_op.clone())), [1, 2], "{enc_op}");
+            }
+            // From `key_use`.
+            let key_use = |u: KeyUse| JwkSelector::new().key_use(u).unwrap();
+            assert_eq!(matched(&set, &key_use(KeyUse::Sig)), [0, 2]);
+            assert_eq!(matched(&set, &key_use(KeyUse::Enc)), [1, 2]);
+            // Parts that agree: as each alone.
+            let agree = by_alg("ES256")
+                .key_use(KeyUse::Sig)
+                .unwrap()
+                .key_op(KeyOp::Verify);
+            assert_eq!(matched(&set, &agree.unwrap()), [0, 2]);
+
+            let set = set_from(&[
+                with(RSA_2048, r#""use":"sig""#),
+                with(RSA_2048, r#""use":"enc""#),
+                RSA_2048.to_owned(),
+            ]);
+            assert_eq!(matched(&set, &by_alg("RSA-OAEP-256")), [1, 2]);
+            assert_eq!(matched(&set, &by_alg("RS256")), [0, 2]);
+        }
+
+        /// ADR 0054 §2 item 3: parts that disagree on the use match
+        /// nothing, even a member with neither `use` nor `key_ops`.
+        #[test]
+        fn disagreeing_parts_match_nothing() {
+            let set = set_from(&[
+                EC_P256.to_owned(),
+                with(EC_P256, r#""use":"enc""#),
+                with(EC_P256, r#""use":"sig""#),
+                OCT.to_owned(),
+            ]);
+            let conflicts = [
+                by_alg("ES256").key_use(KeyUse::Enc).unwrap(),
+                JwkSelector::new()
+                    .key_op(KeyOp::Verify)
+                    .unwrap()
+                    .key_use(KeyUse::Enc)
+                    .unwrap(),
+                by_alg("ES256").key_op(KeyOp::WrapKey).unwrap(),
+                by_alg("ECDH-ES").key_use(KeyUse::Sig).unwrap(),
+                by_alg("ECDH-ES").key_op(KeyOp::Sign).unwrap(),
+                by_alg("A128KW").key_op(KeyOp::Verify).unwrap(),
+                JwkSelector::new()
+                    .key_use(KeyUse::Sig)
+                    .unwrap()
+                    .key_op(KeyOp::DeriveKey)
+                    .unwrap(),
+            ];
+            for selector in &conflicts {
+                assert!(matched(&set, selector).is_empty(), "{selector:?}");
+                assert_eq!(
+                    set.select(selector).map(|(i, _)| i),
+                    Err(Error::NoMatchingKey),
+                    "{selector:?}"
+                );
+            }
+        }
+
+        /// ADR 0054 §2 item 3: without U, `use` is not checked, so a
+        /// `kid`-only selector returns a `use: enc` (or unregistered `use`)
+        /// member.
+        #[test]
+        fn without_a_purpose_use_is_not_checked() {
+            let set = set_from(&[
+                with(EC_P256, r#""use":"enc","kid":"e""#),
+                with(EC_P256, r#""use":"x-other","kid":"x""#),
+                with(EC_P256, r#""use":"sig","kid":"s""#),
+            ]);
+            for (index, kid) in ["e", "x", "s"].into_iter().enumerate() {
+                assert_eq!(matched(&set, &JwkSelector::new().kid(kid)), [index]);
+            }
+            assert_eq!(matched(&set, &JwkSelector::new()), [0, 1, 2]);
+        }
+
+        /// ADR 0054 §2 item 4, with a `key_op`: exactly [`Jwk::permits`].
+        #[test]
+        fn key_ops_with_a_key_op_is_permits() {
+            let set = set_from(&[
+                with(EC_P256, r#""key_ops":["sign"]"#),
+                with(EC_P256, r#""key_ops":["verify"]"#),
+                with(EC_P256, r#""key_ops":["sign","verify"]"#),
+                with(EC_P256, r#""key_ops":[]"#),
+                EC_P256.to_owned(),
+                with(EC_P256, r#""key_ops":["Verify"]"#),
+                with(EC_P256, r#""key_ops":["deriveKey"]"#),
+            ]);
+            for op in [KeyOp::Sign, KeyOp::Verify, KeyOp::DeriveKey, KeyOp::Encrypt] {
+                let selector = JwkSelector::new().key_op(op.clone()).unwrap();
+                let permits: Vec<usize> = (0..set.len())
+                    .filter(|i| set.keys()[*i].permits(&op))
+                    .collect();
+                assert_eq!(matched(&set, &selector), permits, "{op}");
+            }
+            let verify = JwkSelector::new().key_op(KeyOp::Verify).unwrap();
+            assert_eq!(matched(&set, &verify), [1, 2, 4]);
+        }
+
+        /// ADR 0054 §2 item 4, with an `alg` and no `key_op`: at least one
+        /// operation the `alg` performs in either direction, from the JWE
+        /// `key_op` table (`jwe/key.rs`) for key management.
+        #[test]
+        fn key_ops_with_an_alg_needs_an_op_of_either_direction() {
+            let ops = [
+                "wrapKey",
+                "unwrapKey",
+                "encrypt",
+                "decrypt",
+                "deriveKey",
+                "deriveBits",
+                "sign",
+                "verify",
+            ];
+            let cases: &[(&str, &str, &[&str])] = &[
+                (OCT, "A128KW", &["wrapKey", "unwrapKey"]),
+                (OCT, "A128GCMKW", &["wrapKey", "unwrapKey"]),
+                (OCT, "PBES2-HS256+A128KW", &["wrapKey", "unwrapKey"]),
+                (RSA_2048, "RSA-OAEP-256", &["wrapKey", "unwrapKey"]),
+                (OCT, "dir", &["encrypt", "decrypt"]),
+                (EC_P256, "ECDH-ES", &["deriveKey"]),
+                (X25519, "ECDH-ES+A128KW", &["deriveKey"]),
+                (EC_P256, "ES256", &["sign", "verify"]),
+                (OCT, "HS256", &["sign", "verify"]),
+            ];
+            for (material, alg, allowed) in cases {
+                let members: Vec<String> = ops
+                    .iter()
+                    .map(|op| with(material, &format!(r#""key_ops":["{op}"]"#)))
+                    .chain([with(material, r#""key_ops":[]"#), material.to_string()])
+                    .collect();
+                let set = set_from(&members);
+                assert_eq!(set.len(), ops.len() + 2);
+                let mut expected: Vec<usize> = ops
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, op)| allowed.contains(op))
+                    .map(|(i, _)| i)
+                    .collect();
+                // No `key_ops` at all: not checked.
+                expected.push(ops.len() + 1);
+                assert_eq!(matched(&set, &by_alg(alg)), expected, "{alg}");
+            }
+        }
+
+        /// The helper reads `jwe/key.rs` `key_op` for both directions, for
+        /// every implemented JWE key management `alg`.
+        #[test]
+        fn the_jwe_key_ops_of_every_alg_come_from_key_op() {
+            for alg in KeyMgmtAlg::KNOWN {
+                let ops = key_ops_either_direction(alg);
+                assert!(ops.iter().all(Option::is_some), "{alg}");
+            }
+            assert_eq!(
+                key_ops_either_direction(&KeyMgmtAlg::from("RSA1_5")),
+                [None, None]
+            );
+        }
+
+        /// ADR 0054 §2 item 4, with only U: any registered operation of U
+        /// (RFC 7517 §4.3).
+        #[test]
+        fn key_ops_with_only_a_use_needs_an_op_of_that_use() {
+            let set = set_from(&[
+                with(OCT, r#""key_ops":["sign"]"#),
+                with(OCT, r#""key_ops":["encrypt"]"#),
+                with(OCT, r#""key_ops":["x-op"]"#),
+                with(OCT, r#""key_ops":[]"#),
+                with(OCT, r#""key_ops":["deriveBits"]"#),
+                OCT.to_owned(),
+                with(OCT, r#""key_ops":["x-op","verify"]"#),
+            ]);
+            let key_use = |u: KeyUse| JwkSelector::new().key_use(u).unwrap();
+            assert_eq!(matched(&set, &key_use(KeyUse::Sig)), [0, 5, 6]);
+            assert_eq!(matched(&set, &key_use(KeyUse::Enc)), [1, 4, 5]);
+            // Without U, `alg` or `key_op`, `key_ops` is not checked.
+            assert_eq!(matched(&set, &JwkSelector::new()), [0, 1, 2, 3, 4, 5, 6]);
+        }
+
+        /// ADR 0054 §1.2 and §2 item 5: `kid` is exact, case-sensitive
+        /// equality (RFC 7517 §4.5), never a pattern or a path
+        /// (RFC 8725 §3.10). A member without a `kid` never matches a
+        /// selector with one.
+        #[test]
+        fn kid_is_exact_equality_only() {
+            let set = set_from(&[
+                with(OCT, r#""kid":"a""#),
+                with(OCT, r#""kid":"A""#),
+                OCT.to_owned(),
+                with(OCT, r#""kid":"a ""#),
+                with(OCT, r#""kid":"../keys/a""#),
+                with(OCT, r#""kid":"""#),
+            ]);
+            let kid = |kid: &str| matched(&set, &JwkSelector::new().kid(kid));
+            assert_eq!(kid("a"), [0]);
+            assert_eq!(kid("A"), [1]);
+            assert_eq!(kid("a "), [3]);
+            assert_eq!(kid("../keys/a"), [4]);
+            assert_eq!(kid(""), [5]);
+            for absent in ["*", "a*", "%61", "\u{0430}", "keys/a", "b"] {
+                assert!(kid(absent).is_empty(), "{absent:?}");
+            }
+        }
+
+        /// A selector holding an `alg` its setter refuses (impossible
+        /// through the public API) matches nothing: selection fails closed.
+        #[test]
+        fn an_alg_the_setter_refuses_matches_nothing() {
+            let set = families();
+            for alg in ["A256GCM", "none", "RSA1_5"] {
+                let selector = JwkSelector {
+                    alg: Some(KeyAlg::from(alg)),
+                    ..JwkSelector::default()
+                };
+                assert!(matched(&set, &selector).is_empty(), "{alg}");
+            }
+            let set = set_from(&[with(OCT, r#""alg":"A256GCM""#)]);
+            let selector = JwkSelector {
+                alg: Some(KeyAlg::from("A256GCM")),
+                ..JwkSelector::default()
+            };
+            assert!(matched(&set, &selector).is_empty());
+        }
+    }
+
     /// ADR 0054 §6 (Gate 1, owner): `verification_candidates` re-based on
     /// the one candidate rule yields exactly what today's ADR 0029 §2
     /// filter yields, on generated sets.
