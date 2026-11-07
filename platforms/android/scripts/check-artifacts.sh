@@ -32,6 +32,8 @@
 # Exit status: 0 every check passed; 1 a check failed (each one is printed with FAIL); 2 usage
 # or a missing tool.
 set -uo pipefail
+# With pipefail, `cmd | grep -q` can fail when grep exits first (SIGPIPE): listings are saved to
+# files and grepped there.
 export LC_ALL=C
 
 cd "$(dirname "$0")/.." || exit 2
@@ -125,7 +127,8 @@ else
   else
     fail "AAR: proguard.txt is not consumer-rules.pro"
   fi
-  if unzip -Z1 "$work/aar/classes.jar" | grep -qx 'dev/polyjose/UniffiLib.class'; then
+  unzip -Z1 "$work/aar/classes.jar" >"$work/classes.list"
+  if grep -qx 'dev/polyjose/UniffiLib.class' "$work/classes.list"; then
     pass "AAR: classes.jar holds the generated Kotlin (dev/polyjose/UniffiLib.class)"
   else
     fail "AAR: classes.jar has no dev/polyjose/UniffiLib.class"
@@ -194,7 +197,7 @@ else
     *) expected_local="" ;;
   esac
   for prefix in $expected_local; do
-    if echo "$present" | grep -qx "$prefix"; then pass "jar: $prefix/ library"; else fail "jar: no $prefix/ library"; fi
+    if grep -qx "$prefix" <<<"$present"; then pass "jar: $prefix/ library"; else fail "jar: no $prefix/ library"; fi
   done
   mkdir -p "$work/jar" && unzip -q -o "$jar" -d "$work/jar"
   for prefix in $present; do
@@ -252,7 +255,8 @@ else
   else
     fail "APK: no R8 mapping.txt; is the release build minified?"
   fi
-  if unzip -Z1 "$apk" | grep -qx 'lib/arm64-v8a/libpolyjose_ffi.so'; then
+  unzip -Z1 "$apk" >"$work/apk.list"
+  if grep -qx 'lib/arm64-v8a/libpolyjose_ffi.so' "$work/apk.list"; then
     pass "APK: lib/arm64-v8a/libpolyjose_ffi.so"
   else
     fail "APK: no lib/arm64-v8a/libpolyjose_ffi.so"
@@ -319,7 +323,8 @@ PY
 check_publication polyjose aar
 check_publication polyjose-jvm jar
 if [ -f "$mrepo/polyjose-jvm/$version/polyjose-jvm-$version-sources.jar" ]; then
-  if unzip -Z1 "$mrepo/polyjose-jvm/$version/polyjose-jvm-$version-sources.jar" | grep -qE '(\.dylib|\.so|\.dll|THIRD-PARTY-NOTICES\.txt)$'; then
+  unzip -Z1 "$mrepo/polyjose-jvm/$version/polyjose-jvm-$version-sources.jar" >"$work/sources.list"
+  if grep -qE '(\.dylib|\.so|\.dll|THIRD-PARTY-NOTICES\.txt)$' "$work/sources.list"; then
     fail "Maven: the polyjose-jvm sources jar holds native libraries or notices"
   else
     pass "Maven: the polyjose-jvm sources jar holds sources only"
