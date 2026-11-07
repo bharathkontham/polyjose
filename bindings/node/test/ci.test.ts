@@ -16,12 +16,33 @@
 //     the scripts run passes `--locked`, and every `npm ci` passes `--ignore-scripts`.
 // The YAML is read with the minimal line reader below (indentation, keys, flow mappings), enough
 // for the shape this workflow uses; no YAML dependency (ADR 0047: typescript is the only one).
-import { assert, fs, path, test } from "../../js/dist/node/builtins.js";
+import { assert, fs, os, path, test } from "../../js/dist/node/builtins.js";
 
 interface NodeUrl {
   fileURLToPath(url: string): string;
 }
-const host = (globalThis as unknown as { process: { getBuiltinModule(id: "node:url"): NodeUrl } }).process;
+interface SpawnResult {
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly error?: Error;
+}
+interface NodeChildProcess {
+  spawnSync(file: string, args: readonly string[], options: { encoding: "utf8" }): SpawnResult;
+}
+interface NodeFsBytes {
+  readFileSync(path: string): Uint8Array;
+  writeFileSync(path: string, data: Uint8Array): void;
+}
+interface Host {
+  readonly platform: string;
+  getBuiltinModule(id: "node:url"): NodeUrl;
+  getBuiltinModule(id: "node:child_process"): NodeChildProcess;
+  getBuiltinModule(id: "node:fs"): NodeFsBytes;
+}
+const host = (globalThis as unknown as { process: Host }).process;
+const cp = host.getBuiltinModule("node:child_process");
+const fsb = host.getBuiltinModule("node:fs");
 const thisFile = host.getBuiltinModule("node:url").fileURLToPath((import.meta as unknown as { url: string }).url);
 /** bindings/node: this file is bindings/node/dist/ci.test.js. */
 const pkgDir = path.resolve(path.dirname(thisFile), "..");
@@ -423,4 +444,104 @@ test("every npm ci in the build scripts passes --ignore-scripts", () => {
     }
   }
   assert.equal(runs, 4, "test.sh and build.sh each run npm ci in bindings/node and bindings/js");
+});
+
+// --- The PE import reader (review-code.md SF-1) -----------------------------------------------------
+
+const peReader = path.join(pkgDir, "scripts", "pe-imports.py");
+const peFixture = (name: string): string => path.join(pkgDir, "test", "fixtures", "pe", name);
+/** As ci-build.sh runs it. Windows runners have python.exe only; their python3 is a shim for bash. */
+const python = host.platform === "win32" ? "python" : "python3";
+
+function peImports(...args: string[]): { status: number | null; lines: string[]; stderr: string } {
+  const r = cp.spawnSync(python, ["-I", peReader, ...args], { encoding: "utf8" });
+  assert.equal(r.error, undefined, `${python} runs`);
+  return { status: r.status, lines: r.stdout.split(/\r?\n/).filter((l) => l !== ""), stderr: r.stderr };
+}
+
+/** A scratch directory for edited copies of the fixtures, removed after `fn`. */
+function withScratch(fn: (dir: string) => void): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-pe-"));
+  try {
+    fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** `bytes` with every ASCII occurrence of `from` replaced by `to` (the same length). */
+function replaceAscii(bytes: Uint8Array, from: string, to: string): Uint8Array {
+  assert.equal(from.length, to.length);
+  const out = Uint8Array.from(bytes);
+  let hits = 0;
+  for (let i = 0; i + from.length <= out.length; i++) {
+    if ([...from].every((c, j) => out[i + j] === c.charCodeAt(0))) {
+      [...to].forEach((c, j) => (out[i + j] = c.charCodeAt(0)));
+      hits += 1;
+    }
+  }
+  assert.ok(hits > 0, `${from} occurs in the fixture`);
+  return out;
+}
+
+test("the PE import reader lists the DLLs a PE file imports (fixtures: test/fixtures/pe/regen.sh)", () => {
+  const dynamic = peImports(peFixture("crt-dynamic-x64.dll"));
+  assert.equal(dynamic.status, 0, dynamic.stderr);
+  assert.deepEqual(dynamic.lines, ["KERNEL32.dll", "VCRUNTIME140.dll", "MSVCP140.dll"], "x86-64, in import-table order");
+  const stat = peImports(peFixture("crt-static-arm64.dll"));
+  assert.equal(stat.status, 0, stat.stderr);
+  assert.deepEqual(stat.lines, ["KERNEL32.dll"], "ARM64");
+});
+
+test("--deny-crt fails on a VCRUNTIME*.dll or MSVCP*.dll import, in any case, and passes a static-CRT DLL", () => {
+  const dynamic = peImports("--deny-crt", peFixture("crt-dynamic-x64.dll"));
+  assert.equal(dynamic.status, 1, "the dynamic-CRT DLL fails");
+  assert.match(dynamic.stderr, /VCRUNTIME140\.dll/);
+  assert.match(dynamic.stderr, /MSVCP140\.dll/);
+  assert.equal(peImports("--deny-crt", peFixture("crt-static-arm64.dll")).status, 0, "the static-CRT DLL passes");
+  withScratch((dir) => {
+    const original = fsb.readFileSync(peFixture("crt-dynamic-x64.dll"));
+    // DLL names are case-insensitive on Windows: each forbidden name alone, lowercased, still
+    // fails. The other forbidden name is renamed to a harmless one of the same length.
+    for (const { lower, upper, other, harmless } of [
+      { lower: "vcruntime140.dll", upper: "VCRUNTIME140.dll", other: "MSVCP140.dll", harmless: "WS2_32XX.dll" },
+      { lower: "msvcp140.dll", upper: "MSVCP140.dll", other: "VCRUNTIME140.dll", harmless: "BCRYPTPRIMXX.dll" },
+    ]) {
+      const file = path.join(dir, lower);
+      fsb.writeFileSync(file, replaceAscii(replaceAscii(original, other, harmless), upper, lower));
+      assert.deepEqual(peImports(file).lines, ["KERNEL32.dll", ...(upper === "VCRUNTIME140.dll" ? [lower, harmless] : [harmless, lower])]);
+      const r = peImports("--deny-crt", file);
+      assert.equal(r.status, 1, `${lower} alone fails`);
+      assert.ok(r.stderr.includes(lower), `the failure names ${lower}`);
+      assert.ok(!r.stderr.includes(harmless), `and not ${harmless}`);
+    }
+  });
+});
+
+test("the PE import reader fails closed (exit 2) on anything that is not a well-formed PE file", () => {
+  withScratch((dir) => {
+    const original = fsb.readFileSync(peFixture("crt-dynamic-x64.dll"));
+    const cases: [string, Uint8Array][] = [
+      ["empty", new Uint8Array(0)],
+      ["the DOS header only", original.slice(0, 64)],
+      ["headers without the import table", original.slice(0, 512)],
+      ["not a PE file", Uint8Array.from("{\"name\": \"x\"}", (c) => c.charCodeAt(0))],
+    ];
+    // e_lfanew (offset 0x3c) pointing past the end of the file.
+    const lfanew = Uint8Array.from(original);
+    lfanew.set([0xf0, 0xff, 0x00, 0x00], 0x3c);
+    cases.push(["e_lfanew past the end", lfanew]);
+    for (const [what, bytes] of cases) {
+      const file = path.join(dir, "case.dll");
+      fsb.writeFileSync(file, bytes);
+      for (const args of [[file], ["--deny-crt", file]]) {
+        const r = peImports(...args);
+        assert.equal(r.status, 2, `${what} (${args.join(" ")}): exit 2, not a pass; stderr: ${r.stderr}`);
+        assert.deepEqual(r.lines, [], `${what}: no import is listed`);
+      }
+    }
+    assert.equal(peImports(path.join(dir, "missing.dll")).status, 2, "a missing file");
+    assert.equal(peImports().status, 2, "no file");
+    assert.equal(peImports("--deny-crt").status, 2, "--deny-crt and no file");
+  });
 });
