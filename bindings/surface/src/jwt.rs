@@ -12,15 +12,19 @@
 //! never a panic (the JS facade always passes `now`).
 
 use polyjose::Error;
+use polyjose::header::Header;
 use polyjose::json::{self, Object};
-use polyjose::jwa::SigningAlg;
+use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
+use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient};
 use polyjose::jwk::{Jwk, JwkSet};
-use polyjose::jwt::{self, Claims, Clock, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt};
+use polyjose::jwt::{
+    self, Claims, Clock, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt, VerifiedNestedJwt,
+};
 
-use crate::error::{SurfaceError, SurfaceResult};
+use crate::error::SurfaceResult;
 use crate::records::{
-    JweDecryptOptions, JweEncryptOptions, JwtNestedVerified, JwtSignOptions, JwtVerified,
-    JwtVerifyOptions, algs, apply, apply_flag, strs, to_usize, try_apply,
+    JweDecryptOptions, JweEncryptOptions, JweRecipient, JwtNestedVerified, JwtSignOptions,
+    JwtVerified, JwtVerifyOptions, algs, apply, apply_flag, strs, to_usize, try_apply,
 };
 
 /// Signs the JWT Claims Set `claims` (JSON text) with `key` into a compact JWS (ADR 0030 §4;
@@ -69,9 +73,10 @@ pub fn jwt_verify(
     options: &JwtVerifyOptions,
 ) -> SurfaceResult<JwtVerified> {
     let key = Jwk::from_json(key.as_bytes())?;
-    verify_with(options, |policy| {
+    let v = with_policy(options, |policy| {
         jwt::verify(token, Keys::One(&key), policy)
-    })
+    })?;
+    Ok(verified(v)?)
 }
 
 /// Verifies and validates the signed JWT `token` against the JWK Set `jwks` (ADR 0030 §4;
@@ -93,21 +98,45 @@ pub fn jwt_verify_with_jwks(
     options: &JwtVerifyOptions,
 ) -> SurfaceResult<JwtVerified> {
     let set = JwkSet::from_json(jwks.as_bytes())?;
-    verify_with(options, |policy| {
+    let v = with_policy(options, |policy| {
         jwt::verify(token, Keys::Set(&set), policy)
-    })
+    })?;
+    Ok(verified(v)?)
 }
 
 /// Encrypts the signed JWT `signed_jwt` into a compact JWE for exactly one recipient, with
 /// `cty: "JWT"` set by the core (ADR 0030 §4; RFC 7519 §5.2, §11.2).
+///
+/// `options` becomes a core `Encryptor` member by member (ADR 0030 §3: `None`/`false` calls
+/// nothing), then the core's [`jwt::encrypt_nested`] checks and encrypts.
+///
+/// # Errors
+///
+/// The core's: `InvalidKey` and the other JWK errors for a recipient key; `InvalidJson` or
+/// `InvalidHeader` for a header; `InvalidFormat` unless `signed_jwt` is a signed compact JWS,
+/// or unless there is exactly one recipient and no unprotected header or `aad` (RFC 7516
+/// §7.1); `InvalidHeader` for a `cty` other than `JWT` or for compression (RFC 8725 §3.6);
+/// `AlgorithmNotAllowed` for an inner `alg: none`; then the JWE errors.
 pub fn jwt_encrypt_nested(signed_jwt: &str, options: &JweEncryptOptions) -> SurfaceResult<String> {
-    // stub: T09
-    let _ = (signed_jwt, options);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let encryptor = encryptor(options)?;
+    Ok(jwt::encrypt_nested(signed_jwt, &encryptor)?)
 }
 
 /// Decrypts the nested JWT `token` with `decrypt_key`, then verifies and validates the inner
 /// JWT with one `key` (ADR 0030 §4; RFC 7519 §5.2, §7.2 step 8; RFC 8725 §3.3).
+///
+/// The steps run in the conformance order (conformance/README.md, "Step order"): import
+/// `decrypt_key`, build the JWE policy from `decrypt_options`, import `key`, build the JWT
+/// policy from `options` as for [`jwt_verify`], then the core's [`jwt::decrypt_nested`]. So
+/// every option is checked before `token` is read (0004 implementer note 7). The decrypt key is
+/// parsed into the core's `Jwk`, which wipes itself on drop, like every key (ADR 0030 §7).
+///
+/// # Errors
+///
+/// The core's: a three-part token or a JSON serialization is `InvalidFormat`; then the JWE
+/// errors (every failure after key management is `DecryptionFailed`), the outer `cty`/`typ`
+/// rules (`InvalidHeader`), every error of [`jwt_verify`] for the inner JWT, and
+/// `InvalidClaim` for a replicated `iss`/`sub`/`aud` that differs (RFC 7519 §5.3).
 pub fn jwt_decrypt_nested(
     token: &str,
     decrypt_key: &str,
@@ -115,13 +144,29 @@ pub fn jwt_decrypt_nested(
     key: &str,
     options: &JwtVerifyOptions,
 ) -> SurfaceResult<JwtNestedVerified> {
-    // stub: T09
-    let _ = (token, decrypt_key, decrypt_options, key, options);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let decrypt_key = Jwk::from_json(decrypt_key.as_bytes())?;
+    let decrypt_policy = decrypt_policy(decrypt_options)?;
+    let key = Jwk::from_json(key.as_bytes())?;
+    let v = with_policy(options, |policy| {
+        jwt::decrypt_nested(
+            token,
+            &decrypt_key,
+            &decrypt_policy,
+            Keys::One(&key),
+            policy,
+        )
+    })?;
+    Ok(nested_verified(v)?)
 }
 
 /// Decrypts the nested JWT `token` with `decrypt_key`, then verifies and validates the inner
 /// JWT against the JWK Set `jwks` (ADR 0030 §4; RFC 7519 §5.2, §7.2 step 8; ADR 0029).
+///
+/// As [`jwt_decrypt_nested`], with the set imported as for [`jwt_verify_with_jwks`].
+///
+/// # Errors
+///
+/// As [`jwt_decrypt_nested`], plus `NoMatchingKey` (ADR 0029 §4).
 pub fn jwt_decrypt_nested_with_jwks(
     token: &str,
     decrypt_key: &str,
@@ -129,9 +174,19 @@ pub fn jwt_decrypt_nested_with_jwks(
     jwks: &str,
     options: &JwtVerifyOptions,
 ) -> SurfaceResult<JwtNestedVerified> {
-    // stub: T09
-    let _ = (token, decrypt_key, decrypt_options, jwks, options);
-    Err(SurfaceError::from(polyjose::Error::UnsupportedAlgorithm))
+    let decrypt_key = Jwk::from_json(decrypt_key.as_bytes())?;
+    let decrypt_policy = decrypt_policy(decrypt_options)?;
+    let set = JwkSet::from_json(jwks.as_bytes())?;
+    let v = with_policy(options, |policy| {
+        jwt::decrypt_nested(
+            token,
+            &decrypt_key,
+            &decrypt_policy,
+            Keys::Set(&set),
+            policy,
+        )
+    })?;
+    Ok(nested_verified(v)?)
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -181,17 +236,16 @@ impl Clock for SurfaceClock {
     }
 }
 
-/// Builds the clock and the policy of `options`, then runs `verify` under them, converting the
-/// core result (ADR 0030 §4). The policy borrows the clock and the allow-list, so all three
-/// live in this frame.
-fn verify_with(
+/// Builds the clock and the policy of `options`, then runs `run` under them (ADR 0030 §4). The
+/// policy borrows the clock and the allow-list, so all three live in this frame.
+fn with_policy<T>(
     options: &JwtVerifyOptions,
-    verify: impl FnOnce(&Policy<'_>) -> polyjose::Result<VerifiedJwt>,
-) -> SurfaceResult<JwtVerified> {
+    run: impl FnOnce(&Policy<'_>) -> polyjose::Result<T>,
+) -> polyjose::Result<T> {
     let clock = SurfaceClock::new(options.now);
     let allowed: Vec<SigningAlg> = algs(&options.allowed_algs);
     let policy = policy(&clock, &allowed, options)?;
-    Ok(verified(verify(&policy)?)?)
+    run(&policy)
 }
 
 /// The core [`Policy`] of `options` (ADR 0030 §4): each member is one core call, and `None` or
@@ -293,8 +347,86 @@ fn json_object(text: &str) -> polyjose::Result<Object> {
 }
 
 // ------------------------------------------------------------------------------------------------
+// The JWE layer of a nested JWT (ADR 0030 §4, "JWE"; RFC 7516)
+// ------------------------------------------------------------------------------------------------
+
+/// The core [`Encryptor`] of `o` (ADR 0030 §3): `enc`, then each member present, then the
+/// recipients in order (RFC 7516 §5.1). Headers are parsed by the core's [`Header::from_json`].
+/// The core decides what the compact form allows (RFC 7516 §7.1).
+fn encryptor(o: &JweEncryptOptions) -> polyjose::Result<Encryptor> {
+    let mut e = Encryptor::new(ContentEncAlg::from(o.enc.as_str()));
+    e = try_apply(e, o.protected_header.as_deref(), |e, h| {
+        Ok(e.protected_header(Header::from_json(h.as_bytes())?))
+    })?;
+    e = try_apply(e, o.shared_unprotected_header.as_deref(), |e, h| {
+        Ok(e.shared_unprotected_header(Header::from_json(h.as_bytes())?))
+    })?;
+    e = apply(e, o.aad.as_ref(), |e, aad| e.aad(aad.as_bytes()));
+    e = apply_flag(e, o.compress, Encryptor::compress);
+    o.recipients
+        .iter()
+        .try_fold(e, |e, r| Ok(e.recipient(recipient(r)?)))
+}
+
+/// The core [`Recipient`] of `r` (RFC 7516 §7.2.1, RFC 7518 §4): the key is parsed into the
+/// core's wiping `Jwk` (ADR 0030 §7); `apu`, `apv` (RFC 7518 §4.6.1.2–§4.6.1.3), `p2c` and
+/// `p2s_len` (RFC 7518 §4.8.1) are set only when present, so the PBES2 defaults are the core's
+/// (ADR 0023).
+fn recipient(r: &JweRecipient) -> polyjose::Result<Recipient> {
+    let key = Jwk::from_json(r.key.as_str().as_bytes())?;
+    let mut rec = Recipient::new(KeyMgmtAlg::from(r.alg.as_str()), &key);
+    rec = try_apply(rec, r.header.as_deref(), |rec, h| {
+        Ok(rec.header(Header::from_json(h.as_bytes())?))
+    })?;
+    rec = apply(rec, r.apu.as_deref(), Recipient::apu);
+    rec = apply(rec, r.apv.as_deref(), Recipient::apv);
+    rec = apply(rec, r.p2c, Recipient::p2c);
+    rec = apply(rec, r.p2s_len.map(to_usize), Recipient::p2s_len);
+    Ok(rec)
+}
+
+/// The core [`DecryptPolicy`] of `o` (RFC 7516 §5.2, RFC 8725 §3.1; ADR 0023, ADR 0050): the
+/// allow-lists, which the core checks first, then each bound present.
+fn decrypt_policy(o: &JweDecryptOptions) -> polyjose::Result<DecryptPolicy> {
+    let alg: Vec<KeyMgmtAlg> = algs(&o.allowed_algs);
+    let enc: Vec<ContentEncAlg> = algs(&o.allowed_enc);
+    let mut p = DecryptPolicy::new(&alg, &enc)?;
+    p = apply(p, o.max_pbes2_count, DecryptPolicy::max_pbes2_count);
+    p = apply(
+        p,
+        o.max_decompressed_len.map(to_usize),
+        DecryptPolicy::max_decompressed_len,
+    );
+    p = apply(
+        p,
+        o.max_input_len.map(to_usize),
+        DecryptPolicy::max_input_len,
+    );
+    p = apply(
+        p,
+        o.max_recipients.map(to_usize),
+        DecryptPolicy::max_recipients,
+    );
+    p = apply(p, o.understood_crit.as_deref(), |p, crit| {
+        p.understood_crit(&strs(crit))
+    });
+    Ok(p)
+}
+
+// ------------------------------------------------------------------------------------------------
 // Results
 // ------------------------------------------------------------------------------------------------
+
+/// The surface form of a core [`VerifiedNestedJwt`] (ADR 0030 §4): the inner JWT as
+/// [`verified`] gives it, the outer JWE Protected Header (the whole JOSE Header of a compact
+/// JWE, RFC 7516 §7.1) as the core serializes it, and the recipient index (`0`).
+fn nested_verified(v: VerifiedNestedJwt) -> polyjose::Result<JwtNestedVerified> {
+    Ok(JwtNestedVerified {
+        outer_header: v.outer_header.to_json()?,
+        recipient_index: index(v.recipient),
+        inner: verified(v.inner)?,
+    })
+}
 
 /// The surface form of a core [`VerifiedJwt`] (ADR 0030 §4): the claims as the core serializes
 /// them, registered claims first (ADR 0027 §1), and the JWS Protected Header likewise.
@@ -364,10 +496,10 @@ mod tests {
         let options = JwtVerifyOptions::new(vec!["HS256".to_owned()]);
         let err = jwt_verify(token, key, &options).unwrap_err();
         assert_eq!(err.code(), "InvalidClaim");
-        assert_eq!(err, SurfaceError::from(Error::InvalidClaim("clock")));
+        assert_eq!(err, crate::SurfaceError::from(Error::InvalidClaim("clock")));
         let jwks = format!(r#"{{"keys":[{key}]}}"#);
         let err = jwt_verify_with_jwks(token, &jwks, &options).unwrap_err();
-        assert_eq!(err, SurfaceError::from(Error::InvalidClaim("clock")));
+        assert_eq!(err, crate::SurfaceError::from(Error::InvalidClaim("clock")));
     }
 
     #[test]
