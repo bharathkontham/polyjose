@@ -45,11 +45,12 @@ export LC_ALL=C
 # opt-level 3 before the link. It is not a named profile because wasm-pack 0.15.1's
 # `--profile <name>` hard-codes wasm-opt `-O` and ignores the wasm-opt arguments of the package
 # metadata (`-Oz` and the feature flags), so wasm-opt then rejects the stripped module.
-# Guarded (0006 F06, security audit L2): scripts/check-no-cargo-config.sh allows this exact line
-# and no other assignment of WASM_CARGO_ARGS under bindings/, and scripts/check-rsa-symbols.sh
-# builds polyjose-wasm for wasm32 with its words. Keep it one line of plain quoted words; changing
-# it needs an ADR and the same change to check-no-cargo-config.sh's `allowed_line`.
-WASM_CARGO_ARGS=(--config 'profile.release.opt-level="z"')
+# The one definition is in wasm-cargo-args.sh beside this script (0006 F06, security audit L2),
+# which test.sh sources too and the guards read: scripts/check-no-cargo-config.sh allows that
+# exact line and fails on any other command-line Cargo configuration under bindings/, and
+# scripts/check-rsa-symbols.sh builds polyjose-wasm for wasm32 with it.
+# shellcheck source=wasm-cargo-args.sh
+. "$(dirname "$0")/wasm-cargo-args.sh" || { echo "build-package: cannot read wasm-cargo-args.sh" >&2; exit 1; }
 
 # The size budget of the .wasm, in bytes (ADR 0031 §3: 1 MiB raw).
 SIZE_BUDGET=1048576
