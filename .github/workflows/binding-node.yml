@@ -1,0 +1,238 @@
+# @polyjose/node prebuilds (feature 0007 T05; ADR 0031 §2, ADR 0034 §2 and §5, ADR 0037 §1).
+#
+# Builds, tests and packs the addon for each of the eight napi targets of bindings/node/package.json
+# on a native runner, runs the suite on Node 22, 24 and 26 on linux-x64, then checks conformance
+# parity over every results file. All of the build logic is in bindings/node/scripts/ci-build.sh, so a
+# local run (`scripts/ci-build.sh aarch64-apple-darwin`) and a CI run check the same things.
+#
+# When it runs (ADR 0044; owner, 2026-11-07): never on PRs or pushes. The platform matrix runs once,
+# at the 0.1.0 release candidate, inside the release workflow of feature 0012, which turns this file
+# into a reusable workflow (0012 T03 adds `workflow_call` next to `workflow_dispatch`, and its
+# `mode` input, ADR 0037 §1). Until then the only trigger is a manual dispatch, and nobody dispatches
+# it without the owner. It is shaped for that change:
+#   - no inputs yet; any added later are declared identically under both triggers;
+#   - nothing reads PR or event context, only `matrix.*`;
+#   - artifact names are fixed: npm-<target> (the platform tarball) and conformance-node-<label>
+#     (target/conformance/node-<label>.json), ADR 0037 §1;
+#   - no workflow-level concurrency group: inside a called workflow, github.workflow is the
+#     caller's name, so a group here could collide with the caller's own.
+#
+# It never uploads to a registry: no release command of any package tool, no registry credentials, no
+# repository credentials beyond the read-only default, no OIDC. bindings/node/test/ci.test.ts
+# checks this file on every test.sh run (trigger set, permissions, forbidden strings, pins, matrix).
+#
+# Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
+# that SHA was resolved from. Bump both together (ci.yml's convention). The Alpine images are pinned
+# by digest the same way.
+name: binding-node
+
+on:
+  workflow_dispatch:
+
+# Least privilege: the workflow only reads the repository.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # One job per napi target (ADR 0031 §2), each on a runner of that platform, because the suite
+  # loads the addon it builds. darwin-x64 builds on macos-15-intel (macos-13 is retired, ADR 0037
+  # §1). The musl targets build inside an Alpine container started with `docker run` on the
+  # matching Linux runner: JavaScript actions do not run in Alpine containers on arm64 runners, so
+  # both musl jobs check out, upload and download on the runner and only build inside Alpine.
+  prebuild:
+    name: prebuild (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-apple-darwin, platform: darwin-x64, os: macos-15-intel }
+          - { target: aarch64-apple-darwin, platform: darwin-arm64, os: macos-latest }
+          - { target: x86_64-unknown-linux-gnu, platform: linux-x64-gnu, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, platform: linux-arm64-gnu, os: ubuntu-24.04-arm }
+          - { target: x86_64-unknown-linux-musl, platform: linux-x64-musl, os: ubuntu-latest, image: "node:24-alpine3.23@sha256:0efee1e068d21f6edcab7fa8c962fc4ecd50d4e28727bc23963379b63ee318ab" }
+          - { target: aarch64-unknown-linux-musl, platform: linux-arm64-musl, os: ubuntu-24.04-arm, image: "node:24-alpine3.23@sha256:0efee1e068d21f6edcab7fa8c962fc4ecd50d4e28727bc23963379b63ee318ab" }
+          - { target: x86_64-pc-windows-msvc, platform: win32-x64-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, platform: win32-arm64-msvc, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      # Git for Windows checks text files out with CRLF by default, which breaks the bash scripts.
+      - name: LF line endings (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # As in ci.yml: before anything that invokes cargo, so no cargo config file in the
+      # repository can change sources, flags or the compiler for the build below.
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      # Native jobs: Node and Rust on the runner. rustup reads rust-toolchain.toml, so the pinned
+      # channel is the one local builds use; the target's standard library is added on top.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ !matrix.image }}
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # scripts/third-party-notices.sh runs `python3`; Windows Python installs only `python`.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.13"
+
+      - name: python3 on PATH (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          shim="$(cygpath -u "$RUNNER_TEMP")/python3-shim"
+          mkdir -p "$shim"
+          printf '#!/bin/sh\nexec python "$@"\n' >"$shim/python3"
+          chmod +x "$shim/python3"
+          "$shim/python3" --version
+          cygpath -w "$shim" >>"$GITHUB_PATH"
+
+      - name: Install toolchain (rust-toolchain.toml)
+        if: ${{ !matrix.image }}
+        run: |
+          rustup toolchain install
+          rustup target add "${{ matrix.target }}"
+          rustup show
+          cargo --version
+
+      - name: ci-build.sh (native)
+        if: ${{ !matrix.image }}
+        run: bindings/node/scripts/ci-build.sh "${{ matrix.target }}"
+
+      # musl jobs: the same script inside Alpine. rustup comes from Alpine's own package; the
+      # container's default target is the runner's musl target, built dynamically linked (napi
+      # build adds -crt-static for musl).
+      - name: ci-build.sh (Alpine)
+        if: ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work -e TARGET -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL \
+            "$IMAGE" sh -euc '
+              apk add --no-cache bash build-base git python3 rustup
+              git config --global --add safe.directory /work
+              rustup-init -y --profile minimal --default-toolchain none
+              . "$HOME/.cargo/env"
+              rustup toolchain install
+              rustup target add "$TARGET"
+              rustup show
+              bindings/node/scripts/ci-build.sh "$TARGET"
+            '
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-${{ matrix.target }}
+          path: bindings/node/dist/npm/polyjose-node-${{ matrix.platform }}-*.tgz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-node-${{ matrix.target }}
+          path: target/conformance/node-${{ matrix.target }}.json
+          if-no-files-found: error
+
+  # The Node-API floor and the current releases (ADR 0031 §2: engines >= 22.12; Node 22, 24 and 26).
+  # Each run has its own results label, so parity sees all three.
+  node-versions:
+    name: node ${{ matrix.node }} (x86_64-unknown-linux-gnu)
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+          node --version
+
+      - name: ci-build.sh
+        run: bindings/node/scripts/ci-build.sh x86_64-unknown-linux-gnu "x86_64-unknown-linux-gnu-node${{ matrix.node }}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-node-x86_64-unknown-linux-gnu-node${{ matrix.node }}
+          path: target/conformance/node-x86_64-unknown-linux-gnu-node${{ matrix.node }}.json
+          if-no-files-found: error
+
+  # ADR 0034 §5: every results file against a fresh rust-core reference (default features, ADR 0034
+  # §4). The parity script reports a missing runner as SKIPPED without failing, so this job first
+  # requires each file this workflow promises.
+  parity:
+    name: conformance parity
+    needs: [prebuild, node-versions]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - name: rust-core reference
+        run: cargo test --locked -p polyjose --test conformance
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: conformance-node-*
+          path: target/conformance
+          merge-multiple: true
+
+      - name: every results file is present
+        run: |
+          missing=0
+          for label in \
+            x86_64-apple-darwin aarch64-apple-darwin \
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+            x86_64-pc-windows-msvc aarch64-pc-windows-msvc \
+            x86_64-unknown-linux-gnu-node22 x86_64-unknown-linux-gnu-node24 x86_64-unknown-linux-gnu-node26; do
+            f=target/conformance/node-$label.json
+            if [ -f "$f" ]; then echo "present: $f"; else echo "::error::missing $f"; missing=1; fi
+          done
+          exit "$missing"
+
+      - name: conformance parity
+        run: scripts/conformance-parity.sh
