@@ -3,6 +3,11 @@
 #
 #   platforms/android/test.sh        (from any directory; test-all.sh runs it from the repo root)
 #
+# 0. `scripts/ci-check-workflow.sh` and its negative suite `scripts/ci-check-workflow-test.sh`
+#    (feature 0008 T05, F06): .github/workflows/binding-android.yml stays dispatch-only, with no
+#    secrets, publishing or signing (owner decision 2026-11-07; ADR 0044). They need only bash, awk
+#    and grep, so they run first, before the toolchain checks and Gradle; either failing fails the
+#    platform.
 # 1. `./gradlew :polyjose-jvm:test`: the generated Kotlin on the host JVM through JNA and the host
 #    library (ADR 0033 §5). Always runs when its toolchain exists.
 # 2. `scripts/run-instrumented.sh` (feature 0008 T03): the instrumented suite on an emulator
@@ -21,6 +26,12 @@ set -uo pipefail
 cd "$(dirname "$0")" || exit 2
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+for check in scripts/ci-check-workflow.sh scripts/ci-check-workflow-test.sh; do
+  echo "==> android: $check"
+  "./$check" || { echo "android: $check FAILED"; exit 1; }
+done
+
 # gradlew uses $JAVA_HOME/bin/java, else java on PATH. `-version` must run: macOS has a /usr/bin/java
 # stub that exists without any JDK installed.
 java=java; [ -n "${JAVA_HOME:-}" ] && java=$JAVA_HOME/bin/java
