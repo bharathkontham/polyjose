@@ -207,3 +207,53 @@ test("npm/<platform>/ holds exactly one package per napi.targets entry, each shi
     assert.deepEqual(sub["files"], [binary, "THIRD-PARTY-NOTICES.txt"], `${p.dir}: files`);
   }
 });
+
+/** The npm/<platform> directories of package.json `napi.targets`, sorted. */
+function platformDirs(pkg: Record<string, unknown>): string[] {
+  const targets = record(pkg["napi"], "napi")["targets"];
+  assert.ok(Array.isArray(targets));
+  return targets.map((t) => platformOf(t as string).dir).sort();
+}
+
+test("optionalDependencies are the eight platform packages at exactly this version (review-code.md SF-8)", () => {
+  // What npm installs from the registry: the main package's optional dependency on each
+  // platform package, at its own version, so npm fetches the one addon matching the platform
+  // (by each platform package's os, cpu and libc) and the loader's version check passes.
+  const pkg = record(readJson(path.join(pkgDir, "package.json")), "package.json");
+  const version = pkg["version"];
+  assert.equal(typeof version, "string");
+  assert.deepEqual(
+    record(pkg["optionalDependencies"], "optionalDependencies"),
+    Object.fromEntries(platformDirs(pkg).map((dir) => [`@polyjose/node-${dir}`, version])),
+    "one exact-version entry per napi.targets entry, nothing else",
+  );
+});
+
+test("package-lock.json links the platform packages to npm/<platform>, so npm ci never fetches them", () => {
+  // The platform packages are not published until Gate 3, and a lockfile that names them only as
+  // root optionalDependencies (what `npm install` writes when the registry has none) fails
+  // `npm ci` as out of sync (npm 10.9 and 11.19, measured, feature 0007 F03). So the lock records
+  // each as a link to its committed npm/<platform>/ directory, which satisfies the exact version:
+  // `npm ci` then fetches nothing for them (online or offline; it links the host's manifest-only
+  // directory), and `npm install` keeps the links. To regenerate them: set each optional
+  // dependency to `file:npm/<platform>` and run `npm install --package-lock-only --offline
+  // --ignore-scripts`, then set them back to the version and run it again.
+  const pkg = record(readJson(path.join(pkgDir, "package.json")), "package.json");
+  const lock = record(readJson(path.join(pkgDir, "package-lock.json")), "package-lock.json");
+  const packages = record(lock["packages"], "packages");
+  assert.deepEqual(record(packages[""], "the lock's root")["optionalDependencies"], pkg["optionalDependencies"]);
+  for (const dir of platformDirs(pkg)) {
+    assert.deepEqual(packages[`node_modules/@polyjose/node-${dir}`], { resolved: `npm/${dir}`, link: true }, `${dir}: a link`);
+    const linked = record(packages[`npm/${dir}`], `npm/${dir} in the lock`);
+    const manifest = record(readJson(path.join(pkgDir, "npm", dir, "package.json")), `npm/${dir}/package.json`);
+    assert.equal(linked["name"], manifest["name"]);
+    assert.equal(linked["version"], pkg["version"]);
+    assert.equal(linked["optional"], true, `${dir}: optional, so a platform mismatch skips it`);
+    for (const field of ["os", "cpu", "libc"]) assert.deepEqual(linked[field], manifest[field], `${dir}: ${field}`);
+  }
+  const polyjose = Object.entries(packages).filter(([key]) => key.includes("@polyjose/") || key.startsWith("npm/"));
+  assert.equal(polyjose.length, 16, "the 8 links and their 8 directories, nothing else of ours");
+  for (const [key, entry] of polyjose) {
+    assert.doesNotMatch(String(record(entry, key)["resolved"] ?? ""), /^https?:/, `${key} never resolves from a registry`);
+  }
+});
