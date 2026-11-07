@@ -70,8 +70,9 @@ jobs:
         run: scripts/check-no-cargo-config.sh
 
       # This file's own policy (triggers, permissions, no publish step, no credentials, pins) and
-      # the negative cases of that check. actionlint is not installed here, so both print
-      # SKIPPED (actionlint missing) for that part; it runs locally.
+      # the negative cases of that check. actionlint is not installed here: every text rule and
+      # text case still runs, and only the actionlint part is skipped, which the last line of each
+      # says ("SKIPPED (actionlint missing)"); actionlint runs locally.
       - name: workflow policy
         run: |
           bindings/wasm/scripts/check-workflow.sh

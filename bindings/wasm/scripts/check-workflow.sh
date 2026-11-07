@@ -26,8 +26,11 @@
 #                 followed by its `# v<tag>` comment (ADR 0037 §1 "Pins"); local `./` workflows are
 #                 exempt;
 #   [actionlint]  actionlint (which also runs shellcheck on `run:` scripts when it is installed)
-#                 reports nothing. When actionlint is not installed the last line is
-#                 `SKIPPED (actionlint missing)`: never a pass.
+#                 reports nothing.
+# The text rules never depend on actionlint (pipeline rule 9): without it they still run, and only
+# the actionlint step is skipped. The last line then names exactly that partial skip,
+#   check-workflow: PASS (text rules); SKIPPED (actionlint missing): actionlint not run
+# so a pass is never reported for a check that did not run, and a skip never hides one that did.
 # Full-line comments are ignored by every text rule; text after a `#` on a content line is not, so
 # a pin comment cannot hide a publish command.
 #
@@ -38,10 +41,11 @@
 # registry-url, a `secrets.` reference, `secrets: inherit`, a GITHUB_TOKEN, write permissions at
 # the top or on a job, `write-all`, and an unpinned action. Each copy must fail, with every FAIL
 # line of the expected rule, so no other rule is what caught the change. With actionlint
-# installed, a copy with a broken expression must fail actionlint too. The repository is never
+# installed, a copy with a broken expression must fail actionlint too; without it every text case
+# still runs, and only that one case is skipped, as the last line says. The repository is never
 # modified.
 #
-# Exit status: 0 passed, or SKIPPED (actionlint missing) after the text rules passed; 1 a check
+# Exit status: 0 passed (with or without the actionlint part, as the last line says); 1 a check
 # failed; 2 a usage error or a missing file. Needs awk and grep. Runs on macOS /bin/bash 3.2 and
 # Linux bash.
 set -uo pipefail
@@ -154,8 +158,7 @@ check() {
     return 1
   fi
   if [ "$rc" -eq 3 ]; then
-    echo "$me: the text rules passed; actionlint was not run"
-    echo "SKIPPED (actionlint missing)"
+    echo "$me: PASS (text rules); SKIPPED (actionlint missing): actionlint not run"
     return 0
   fi
   echo "$me: PASS (${file#"$repo"/}: text rules, actionlint $(actionlint -version 2>/dev/null | head -n 1))"
@@ -281,8 +284,7 @@ self_test() {
     return 1
   fi
   if [ -n "$lint_note" ]; then
-    echo "$me: self-test: $cases_run text cases passed; the actionlint case was not run"
-    echo "SKIPPED ($lint_note)"
+    echo "$me: self-test PASS ($cases_run text cases); SKIPPED ($lint_note): the actionlint case was not run"
     return 0
   fi
   echo "$me: self-test PASS ($cases_run cases)"
