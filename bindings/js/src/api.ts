@@ -49,6 +49,7 @@ import {
   record,
   str,
   u32,
+  wipe,
 } from "./normalize.js";
 import type {
   EcCurve,
@@ -184,6 +185,7 @@ export interface PolyjoseApi {
 }
 
 // --- records: validated, rebuilt with only known, present members -------------------------
+// A record with byte members takes the call's `copies` list: see `bytes` and `run`.
 
 function signOptions(v: unknown, at: string): BackendJwsSignOptions {
   const o = record(v, at, ["protectedHeader", "protectedB64u", "detached"]);
@@ -203,35 +205,35 @@ function signer(v: unknown, at: string): BackendJwsSigner {
   return out;
 }
 
-function jwsVerifyOptions(v: unknown, at: string): BackendJwsVerifyOptions {
+function jwsVerifyOptions(v: unknown, at: string, copies: Uint8Array[]): BackendJwsVerifyOptions {
   const o = record(v, at, ["allowedAlgs", "detachedPayload", "maxInputLen", "maxSignatures"]);
   const out: BackendJwsVerifyOptions = { allowedAlgs: allowList(o["allowedAlgs"], `${at}.allowedAlgs`) };
-  put(out, "detachedPayload", optBytes(o["detachedPayload"], `${at}.detachedPayload`));
+  put(out, "detachedPayload", optBytes(o["detachedPayload"], `${at}.detachedPayload`, copies));
   put(out, "maxInputLen", optU32(o["maxInputLen"], `${at}.maxInputLen`));
   put(out, "maxSignatures", optU32(o["maxSignatures"], `${at}.maxSignatures`));
   return out;
 }
 
-function recipient(v: unknown, at: string): BackendJweRecipient {
+function recipient(v: unknown, at: string, copies: Uint8Array[]): BackendJweRecipient {
   const o = record(v, at, ["alg", "key", "header", "apu", "apv", "p2c", "p2sLen"]);
   const out: BackendJweRecipient = { alg: str(o["alg"], `${at}.alg`), key: json(o["key"], `${at}.key`) };
   put(out, "header", optJson(o["header"], `${at}.header`));
-  put(out, "apu", optBytes(o["apu"], `${at}.apu`));
-  put(out, "apv", optBytes(o["apv"], `${at}.apv`));
+  put(out, "apu", optBytes(o["apu"], `${at}.apu`, copies));
+  put(out, "apv", optBytes(o["apv"], `${at}.apv`, copies));
   put(out, "p2c", optU32(o["p2c"], `${at}.p2c`));
   put(out, "p2sLen", optU32(o["p2sLen"], `${at}.p2sLen`));
   return out;
 }
 
-function encryptOptions(v: unknown, at: string): BackendJweEncryptOptions {
+function encryptOptions(v: unknown, at: string, copies: Uint8Array[]): BackendJweEncryptOptions {
   const o = record(v, at, ["enc", "recipients", "protectedHeader", "sharedUnprotectedHeader", "aad", "compress"]);
   const out: BackendJweEncryptOptions = {
     enc: str(o["enc"], `${at}.enc`),
-    recipients: list(o["recipients"], `${at}.recipients`, recipient),
+    recipients: list(o["recipients"], `${at}.recipients`, (r, rat) => recipient(r, rat, copies)),
   };
   put(out, "protectedHeader", optJson(o["protectedHeader"], `${at}.protectedHeader`));
   put(out, "sharedUnprotectedHeader", optJson(o["sharedUnprotectedHeader"], `${at}.sharedUnprotectedHeader`));
-  put(out, "aad", optBytes(o["aad"], `${at}.aad`));
+  put(out, "aad", optBytes(o["aad"], `${at}.aad`, copies));
   put(out, "compress", optBool(o["compress"], `${at}.compress`));
   return out;
 }
@@ -311,7 +313,8 @@ function jwtVerifyOptions(v: unknown, at: string): PreparedJwtVerify {
 
 /**
  * The JWT clock (ADR 0028 §4, ADR 0030 §4): the caller's `now` wins; otherwise the JS wall
- * clock, floored to whole seconds, read at the call. A clock reading, not a policy default:
+ * clock, floored to whole seconds, read at the call (in `run`'s synchronous preparation, so a
+ * pending `ready()` can't delay the reading). A clock reading, not a policy default:
  * `@polyjose/node` and `@polyjose/wasm` behave identically and no Rust code reads time.
  */
 function withNow(prepared: PreparedJwtVerify): BackendJwtVerifyOptions {
@@ -467,6 +470,27 @@ export function createApi(backend: Backend): PolyjoseApi {
     }
   }
 
+  /**
+   * One operation with arguments (ADR 0030 §2, §7; ADR 0031 §1, §3; 0013 B06).
+   *
+   * `prepare` runs synchronously, when the operation is called and before anything is awaited:
+   * it validates and normalises every argument (a `TypeError` rejects the call before
+   * `ready()` or the backend is reached), copies each byte input into a fresh `Uint8Array`
+   * recorded in `copies`, serialises JSON objects, reads the JWT clock, and returns the backend
+   * call. Only that call waits for `ready()`, so nothing the caller does to its arrays or objects
+   * after starting the call changes what is processed. Once the backend call settles, success or
+   * failure, the copies are wiped with `fill(0)`; they are never handed back to the caller.
+   */
+  async function run<T>(prepare: (copies: Uint8Array[]) => () => MaybePromise<unknown>, output: (raw: unknown) => T): Promise<T> {
+    const copies: Uint8Array[] = [];
+    try {
+      const call = prepare(copies);
+      return output(await invoke(call));
+    } finally {
+      wipe(copies);
+    }
+  }
+
   const b = backend;
   return {
     version: async () => outStr(await invoke(() => b.version()), "version"),
@@ -476,171 +500,288 @@ export function createApi(backend: Backend): PolyjoseApi {
       return raw.map((c: unknown, i) => outStr(c, `errorCodes[${i}]`));
     },
 
-    base64urlEncode: async (input) => {
-      const data = bytes(input, "base64urlEncode: bytes");
-      return outStr(await invoke(() => b.base64urlEncode(data)), "base64urlEncode");
-    },
-    base64urlDecode: async (input) => {
-      const text = str(input, "base64urlDecode: text");
-      return outBytes(await invoke(() => b.base64urlDecode(text)), "base64urlDecode");
-    },
+    base64urlEncode: (input) =>
+      run(
+        (copies) => {
+          const data = bytes(input, "base64urlEncode: bytes", copies);
+          return () => b.base64urlEncode(data);
+        },
+        (r) => outStr(r, "base64urlEncode"),
+      ),
+    base64urlDecode: (input) =>
+      run(
+        () => {
+          const text = str(input, "base64urlDecode: text");
+          return () => b.base64urlDecode(text);
+        },
+        (r) => outBytes(r, "base64urlDecode"),
+      ),
 
-    jwkParse: async (key) => {
-      const k = json(key, "jwkParse: jwk");
-      return jwk(await invoke(() => b.jwkParse(k)), "jwkParse");
-    },
-    jwkToPublic: async (key) => {
-      const k = json(key, "jwkToPublic: jwk");
-      return jwk(await invoke(() => b.jwkToPublic(k)), "jwkToPublic");
-    },
-    jwkThumbprint: async (key, hash) => {
-      const k = json(key, "jwkThumbprint: jwk");
-      const h = str(hash, "jwkThumbprint: hash");
-      return outStr(await invoke(() => b.jwkThumbprint(k, h)), "jwkThumbprint");
-    },
-    jwkThumbprintUri: async (key, hash) => {
-      const k = json(key, "jwkThumbprintUri: jwk");
-      const h = str(hash, "jwkThumbprintUri: hash");
-      return outStr(await invoke(() => b.jwkThumbprintUri(k, h)), "jwkThumbprintUri");
-    },
-    jwksSelect: async (jwks, criteria) => {
-      const set = json(jwks, "jwksSelect: jwks");
-      const sel = selector(criteria, "jwksSelect: selector");
-      return jwk(await invoke(() => b.jwksSelect(set, sel)), "jwksSelect");
-    },
-    jwkGenerateOct: async (lenBytes) => {
-      const n = u32(lenBytes, "jwkGenerateOct: lenBytes");
-      return jwk(await invoke(() => b.jwkGenerateOct(n)), "jwkGenerateOct");
-    },
-    jwkGenerateEc: async (crv) => {
-      const c = str(crv, "jwkGenerateEc: crv");
-      return jwk(await invoke(() => b.jwkGenerateEc(c)), "jwkGenerateEc");
-    },
-    jwkGenerateOkp: async (crv) => {
-      const c = str(crv, "jwkGenerateOkp: crv");
-      return jwk(await invoke(() => b.jwkGenerateOkp(c)), "jwkGenerateOkp");
-    },
-    jwkGenerateForAlg: async (alg) => {
-      const a = str(alg, "jwkGenerateForAlg: alg");
-      return jwk(await invoke(() => b.jwkGenerateForAlg(a)), "jwkGenerateForAlg");
-    },
-    jwkFromPem: async (pem) => {
-      const p = str(pem, "jwkFromPem: pem");
-      return jwk(await invoke(() => b.jwkFromPem(p)), "jwkFromPem");
-    },
-    jwkFromDer: async (der, format) => {
-      const d = bytes(der, "jwkFromDer: der");
-      const f = str(format, "jwkFromDer: format");
-      return jwk(await invoke(() => b.jwkFromDer(d, f)), "jwkFromDer");
-    },
-    jwkToPem: async (key, format) => {
-      const k = json(key, "jwkToPem: jwk");
-      const f = str(format, "jwkToPem: format");
-      return outStr(await invoke(() => b.jwkToPem(k, f)), "jwkToPem");
-    },
-    jwkToDer: async (key, format) => {
-      const k = json(key, "jwkToDer: jwk");
-      const f = str(format, "jwkToDer: format");
-      return outBytes(await invoke(() => b.jwkToDer(k, f)), "jwkToDer");
-    },
+    jwkParse: (key) =>
+      run(
+        () => {
+          const k = json(key, "jwkParse: jwk");
+          return () => b.jwkParse(k);
+        },
+        (r) => jwk(r, "jwkParse"),
+      ),
+    jwkToPublic: (key) =>
+      run(
+        () => {
+          const k = json(key, "jwkToPublic: jwk");
+          return () => b.jwkToPublic(k);
+        },
+        (r) => jwk(r, "jwkToPublic"),
+      ),
+    jwkThumbprint: (key, hash) =>
+      run(
+        () => {
+          const k = json(key, "jwkThumbprint: jwk");
+          const h = str(hash, "jwkThumbprint: hash");
+          return () => b.jwkThumbprint(k, h);
+        },
+        (r) => outStr(r, "jwkThumbprint"),
+      ),
+    jwkThumbprintUri: (key, hash) =>
+      run(
+        () => {
+          const k = json(key, "jwkThumbprintUri: jwk");
+          const h = str(hash, "jwkThumbprintUri: hash");
+          return () => b.jwkThumbprintUri(k, h);
+        },
+        (r) => outStr(r, "jwkThumbprintUri"),
+      ),
+    jwksSelect: (jwks, criteria) =>
+      run(
+        () => {
+          const set = json(jwks, "jwksSelect: jwks");
+          const sel = selector(criteria, "jwksSelect: selector");
+          return () => b.jwksSelect(set, sel);
+        },
+        (r) => jwk(r, "jwksSelect"),
+      ),
+    jwkGenerateOct: (lenBytes) =>
+      run(
+        () => {
+          const n = u32(lenBytes, "jwkGenerateOct: lenBytes");
+          return () => b.jwkGenerateOct(n);
+        },
+        (r) => jwk(r, "jwkGenerateOct"),
+      ),
+    jwkGenerateEc: (crv) =>
+      run(
+        () => {
+          const c = str(crv, "jwkGenerateEc: crv");
+          return () => b.jwkGenerateEc(c);
+        },
+        (r) => jwk(r, "jwkGenerateEc"),
+      ),
+    jwkGenerateOkp: (crv) =>
+      run(
+        () => {
+          const c = str(crv, "jwkGenerateOkp: crv");
+          return () => b.jwkGenerateOkp(c);
+        },
+        (r) => jwk(r, "jwkGenerateOkp"),
+      ),
+    jwkGenerateForAlg: (alg) =>
+      run(
+        () => {
+          const a = str(alg, "jwkGenerateForAlg: alg");
+          return () => b.jwkGenerateForAlg(a);
+        },
+        (r) => jwk(r, "jwkGenerateForAlg"),
+      ),
+    jwkFromPem: (pem) =>
+      run(
+        () => {
+          const p = str(pem, "jwkFromPem: pem");
+          return () => b.jwkFromPem(p);
+        },
+        (r) => jwk(r, "jwkFromPem"),
+      ),
+    jwkFromDer: (der, format) =>
+      run(
+        (copies) => {
+          const d = bytes(der, "jwkFromDer: der", copies);
+          const f = str(format, "jwkFromDer: format");
+          return () => b.jwkFromDer(d, f);
+        },
+        (r) => jwk(r, "jwkFromDer"),
+      ),
+    jwkToPem: (key, format) =>
+      run(
+        () => {
+          const k = json(key, "jwkToPem: jwk");
+          const f = str(format, "jwkToPem: format");
+          return () => b.jwkToPem(k, f);
+        },
+        (r) => outStr(r, "jwkToPem"),
+      ),
+    jwkToDer: (key, format) =>
+      run(
+        () => {
+          const k = json(key, "jwkToDer: jwk");
+          const f = str(format, "jwkToDer: format");
+          return () => b.jwkToDer(k, f);
+        },
+        (r) => outBytes(r, "jwkToDer"),
+      ),
 
-    jwsSignCompact: async (payload, key, options) => {
-      const p = bytes(payload, "jwsSignCompact: payload");
-      const k = json(key, "jwsSignCompact: key");
-      const o = signOptions(options, "jwsSignCompact: options");
-      return outStr(await invoke(() => b.jwsSignCompact(p, k, o)), "jwsSignCompact");
-    },
-    jwsSignFlattened: async (payload, one, detached) => {
-      const p = bytes(payload, "jwsSignFlattened: payload");
-      const s = signer(one, "jwsSignFlattened: signer");
-      const d = detachedFlag(detached, "jwsSignFlattened: detached");
-      return outStr(await invoke(() => b.jwsSignFlattened(p, s, d)), "jwsSignFlattened");
-    },
-    jwsSignGeneral: async (payload, signers, detached) => {
-      const p = bytes(payload, "jwsSignGeneral: payload");
-      const s = list(signers, "jwsSignGeneral: signers", signer);
-      const d = detachedFlag(detached, "jwsSignGeneral: detached");
-      return outStr(await invoke(() => b.jwsSignGeneral(p, s, d)), "jwsSignGeneral");
-    },
-    jwsVerifyCompact: async (token, key, options) => {
-      const t = str(token, "jwsVerifyCompact: token");
-      const k = json(key, "jwsVerifyCompact: key");
-      const o = jwsVerifyOptions(options, "jwsVerifyCompact: options");
-      return jwsVerified(await invoke(() => b.jwsVerifyCompact(t, k, o)), "jwsVerifyCompact");
-    },
-    jwsVerifyJson: async (jws, key, options) => {
-      const t = json(jws, "jwsVerifyJson: jws");
-      const k = json(key, "jwsVerifyJson: key");
-      const o = jwsVerifyOptions(options, "jwsVerifyJson: options");
-      return jwsVerified(await invoke(() => b.jwsVerifyJson(t, k, o)), "jwsVerifyJson");
-    },
+    jwsSignCompact: (payload, key, options) =>
+      run(
+        (copies) => {
+          const p = bytes(payload, "jwsSignCompact: payload", copies);
+          const k = json(key, "jwsSignCompact: key");
+          const o = signOptions(options, "jwsSignCompact: options");
+          return () => b.jwsSignCompact(p, k, o);
+        },
+        (r) => outStr(r, "jwsSignCompact"),
+      ),
+    jwsSignFlattened: (payload, one, detached) =>
+      run(
+        (copies) => {
+          const p = bytes(payload, "jwsSignFlattened: payload", copies);
+          const s = signer(one, "jwsSignFlattened: signer");
+          const d = detachedFlag(detached, "jwsSignFlattened: detached");
+          return () => b.jwsSignFlattened(p, s, d);
+        },
+        (r) => outStr(r, "jwsSignFlattened"),
+      ),
+    jwsSignGeneral: (payload, signers, detached) =>
+      run(
+        (copies) => {
+          const p = bytes(payload, "jwsSignGeneral: payload", copies);
+          const s = list(signers, "jwsSignGeneral: signers", signer);
+          const d = detachedFlag(detached, "jwsSignGeneral: detached");
+          return () => b.jwsSignGeneral(p, s, d);
+        },
+        (r) => outStr(r, "jwsSignGeneral"),
+      ),
+    jwsVerifyCompact: (token, key, options) =>
+      run(
+        (copies) => {
+          const t = str(token, "jwsVerifyCompact: token");
+          const k = json(key, "jwsVerifyCompact: key");
+          const o = jwsVerifyOptions(options, "jwsVerifyCompact: options", copies);
+          return () => b.jwsVerifyCompact(t, k, o);
+        },
+        (r) => jwsVerified(r, "jwsVerifyCompact"),
+      ),
+    jwsVerifyJson: (jws, key, options) =>
+      run(
+        (copies) => {
+          const t = json(jws, "jwsVerifyJson: jws");
+          const k = json(key, "jwsVerifyJson: key");
+          const o = jwsVerifyOptions(options, "jwsVerifyJson: options", copies);
+          return () => b.jwsVerifyJson(t, k, o);
+        },
+        (r) => jwsVerified(r, "jwsVerifyJson"),
+      ),
 
-    jweEncryptCompact: async (plaintext, options) => {
-      const p = bytes(plaintext, "jweEncryptCompact: plaintext");
-      const o = encryptOptions(options, "jweEncryptCompact: options");
-      return outStr(await invoke(() => b.jweEncryptCompact(p, o)), "jweEncryptCompact");
-    },
-    jweEncryptJson: async (plaintext, options, form) => {
-      const p = bytes(plaintext, "jweEncryptJson: plaintext");
-      const o = encryptOptions(options, "jweEncryptJson: options");
-      const f = str(form, "jweEncryptJson: form");
-      return outStr(await invoke(() => b.jweEncryptJson(p, o, f)), "jweEncryptJson");
-    },
-    jweDecryptCompact: async (token, key, options) => {
-      const t = str(token, "jweDecryptCompact: token");
-      const k = json(key, "jweDecryptCompact: key");
-      const o = decryptOptions(options, "jweDecryptCompact: options");
-      return jweDecrypted(await invoke(() => b.jweDecryptCompact(t, k, o)), "jweDecryptCompact");
-    },
-    jweDecryptJson: async (jwe, key, options) => {
-      const t = json(jwe, "jweDecryptJson: jwe");
-      const k = json(key, "jweDecryptJson: key");
-      const o = decryptOptions(options, "jweDecryptJson: options");
-      return jweDecrypted(await invoke(() => b.jweDecryptJson(t, k, o)), "jweDecryptJson");
-    },
+    jweEncryptCompact: (plaintext, options) =>
+      run(
+        (copies) => {
+          const p = bytes(plaintext, "jweEncryptCompact: plaintext", copies);
+          const o = encryptOptions(options, "jweEncryptCompact: options", copies);
+          return () => b.jweEncryptCompact(p, o);
+        },
+        (r) => outStr(r, "jweEncryptCompact"),
+      ),
+    jweEncryptJson: (plaintext, options, form) =>
+      run(
+        (copies) => {
+          const p = bytes(plaintext, "jweEncryptJson: plaintext", copies);
+          const o = encryptOptions(options, "jweEncryptJson: options", copies);
+          const f = str(form, "jweEncryptJson: form");
+          return () => b.jweEncryptJson(p, o, f);
+        },
+        (r) => outStr(r, "jweEncryptJson"),
+      ),
+    jweDecryptCompact: (token, key, options) =>
+      run(
+        () => {
+          const t = str(token, "jweDecryptCompact: token");
+          const k = json(key, "jweDecryptCompact: key");
+          const o = decryptOptions(options, "jweDecryptCompact: options");
+          return () => b.jweDecryptCompact(t, k, o);
+        },
+        (r) => jweDecrypted(r, "jweDecryptCompact"),
+      ),
+    jweDecryptJson: (jwe, key, options) =>
+      run(
+        () => {
+          const t = json(jwe, "jweDecryptJson: jwe");
+          const k = json(key, "jweDecryptJson: key");
+          const o = decryptOptions(options, "jweDecryptJson: options");
+          return () => b.jweDecryptJson(t, k, o);
+        },
+        (r) => jweDecrypted(r, "jweDecryptJson"),
+      ),
 
-    jwtSign: async (claims, key, options) => {
-      const c = json(claims, "jwtSign: claims");
-      const k = json(key, "jwtSign: key");
-      const o = jwtSignOptions(options, "jwtSign: options");
-      return outStr(await invoke(() => b.jwtSign(c, k, o)), "jwtSign");
-    },
-    jwtVerify: async (token, key, options) => {
-      const t = str(token, "jwtVerify: token");
-      const k = json(key, "jwtVerify: key");
-      const o = jwtVerifyOptions(options, "jwtVerify: options");
-      return jwtVerified(await invoke(() => b.jwtVerify(t, k, withNow(o))), "jwtVerify");
-    },
-    jwtVerifyWithJwks: async (token, jwks, options) => {
-      const t = str(token, "jwtVerifyWithJwks: token");
-      const s = json(jwks, "jwtVerifyWithJwks: jwks");
-      const o = jwtVerifyOptions(options, "jwtVerifyWithJwks: options");
-      return jwtVerified(await invoke(() => b.jwtVerifyWithJwks(t, s, withNow(o))), "jwtVerifyWithJwks");
-    },
-    jwtEncryptNested: async (signedJwt, options) => {
-      const t = str(signedJwt, "jwtEncryptNested: signedJwt");
-      const o = encryptOptions(options, "jwtEncryptNested: options");
-      return outStr(await invoke(() => b.jwtEncryptNested(t, o)), "jwtEncryptNested");
-    },
-    jwtDecryptNested: async (token, decryptKey, decrypt, key, verify) => {
-      const t = str(token, "jwtDecryptNested: token");
-      const dk = json(decryptKey, "jwtDecryptNested: decryptKey");
-      const d = decryptOptions(decrypt, "jwtDecryptNested: decryptOptions");
-      const k = json(key, "jwtDecryptNested: key");
-      const v = jwtVerifyOptions(verify, "jwtDecryptNested: verifyOptions");
-      return jwtNestedVerified(await invoke(() => b.jwtDecryptNested(t, dk, d, k, withNow(v))), "jwtDecryptNested");
-    },
-    jwtDecryptNestedWithJwks: async (token, decryptKey, decrypt, jwks, verify) => {
-      const t = str(token, "jwtDecryptNestedWithJwks: token");
-      const dk = json(decryptKey, "jwtDecryptNestedWithJwks: decryptKey");
-      const d = decryptOptions(decrypt, "jwtDecryptNestedWithJwks: decryptOptions");
-      const s = json(jwks, "jwtDecryptNestedWithJwks: jwks");
-      const v = jwtVerifyOptions(verify, "jwtDecryptNestedWithJwks: verifyOptions");
-      return jwtNestedVerified(
-        await invoke(() => b.jwtDecryptNestedWithJwks(t, dk, d, s, withNow(v))),
-        "jwtDecryptNestedWithJwks",
-      );
-    },
+    jwtSign: (claims, key, options) =>
+      run(
+        () => {
+          const c = json(claims, "jwtSign: claims");
+          const k = json(key, "jwtSign: key");
+          const o = jwtSignOptions(options, "jwtSign: options");
+          return () => b.jwtSign(c, k, o);
+        },
+        (r) => outStr(r, "jwtSign"),
+      ),
+    jwtVerify: (token, key, options) =>
+      run(
+        () => {
+          const t = str(token, "jwtVerify: token");
+          const k = json(key, "jwtVerify: key");
+          const o = withNow(jwtVerifyOptions(options, "jwtVerify: options"));
+          return () => b.jwtVerify(t, k, o);
+        },
+        (r) => jwtVerified(r, "jwtVerify"),
+      ),
+    jwtVerifyWithJwks: (token, jwks, options) =>
+      run(
+        () => {
+          const t = str(token, "jwtVerifyWithJwks: token");
+          const s = json(jwks, "jwtVerifyWithJwks: jwks");
+          const o = withNow(jwtVerifyOptions(options, "jwtVerifyWithJwks: options"));
+          return () => b.jwtVerifyWithJwks(t, s, o);
+        },
+        (r) => jwtVerified(r, "jwtVerifyWithJwks"),
+      ),
+    jwtEncryptNested: (signedJwt, options) =>
+      run(
+        (copies) => {
+          const t = str(signedJwt, "jwtEncryptNested: signedJwt");
+          const o = encryptOptions(options, "jwtEncryptNested: options", copies);
+          return () => b.jwtEncryptNested(t, o);
+        },
+        (r) => outStr(r, "jwtEncryptNested"),
+      ),
+    jwtDecryptNested: (token, decryptKey, decrypt, key, verify) =>
+      run(
+        () => {
+          const t = str(token, "jwtDecryptNested: token");
+          const dk = json(decryptKey, "jwtDecryptNested: decryptKey");
+          const d = decryptOptions(decrypt, "jwtDecryptNested: decryptOptions");
+          const k = json(key, "jwtDecryptNested: key");
+          const v = withNow(jwtVerifyOptions(verify, "jwtDecryptNested: verifyOptions"));
+          return () => b.jwtDecryptNested(t, dk, d, k, v);
+        },
+        (r) => jwtNestedVerified(r, "jwtDecryptNested"),
+      ),
+    jwtDecryptNestedWithJwks: (token, decryptKey, decrypt, jwks, verify) =>
+      run(
+        () => {
+          const t = str(token, "jwtDecryptNestedWithJwks: token");
+          const dk = json(decryptKey, "jwtDecryptNestedWithJwks: decryptKey");
+          const d = decryptOptions(decrypt, "jwtDecryptNestedWithJwks: decryptOptions");
+          const s = json(jwks, "jwtDecryptNestedWithJwks: jwks");
+          const v = withNow(jwtVerifyOptions(verify, "jwtDecryptNestedWithJwks: verifyOptions"));
+          return () => b.jwtDecryptNestedWithJwks(t, dk, d, s, v);
+        },
+        (r) => jwtNestedVerified(r, "jwtDecryptNestedWithJwks"),
+      ),
 
     PolyjoseError,
   };
