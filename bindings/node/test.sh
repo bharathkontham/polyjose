@@ -5,10 +5,14 @@
 #      napi loader and tsc output, all generated and git-ignored);
 #   2. npm ci here (@napi-rs/cli) and in bindings/js (typescript), from the committed lockfiles;
 #   3. scripts/build.sh (facade, host addon and loader, tsc);
-#   4. the rust-core reference run, target/conformance/rust-core.json (cargo test -p polyjose
+#   4. the API name check, scripts/check-binding-api.sh node (ADR 0030 §8), on the declarations the
+#      build just wrote; it must PASS: after a build, SKIPPED means the check or the build is broken
+#      (scripts/test-all.sh also runs it, in its rust step, before any build, where a fresh tree
+#      can only skip; feature 0007 B01);
+#   5. the rust-core reference run, target/conformance/rust-core.json (cargo test -p polyjose
 #      --test conformance, default features, ADR 0034 §4): api.test reads Error::CODES from it,
 #      and scripts/conformance-parity.sh compares node.json with it;
-#   5. node --test over the compiled tests, as an explicit file list (a directory argument fails
+#   6. node --test over the compiled tests, as an explicit file list (a directory argument fails
 #      on Node 24, research §8): dist/<name>.test.js for every test/<name>.test.ts except
 #      package.test.ts, which scripts/pack.sh runs on the tarballs it packs (T04).
 # Exits non-zero on any failure.
@@ -35,6 +39,16 @@ npm ci --no-audit --no-fund --loglevel=error
 
 echo "==> @polyjose/node: build"
 scripts/build.sh
+
+echo "==> @polyjose/node: API names (scripts/check-binding-api.sh node)"
+names_rc=0
+names=$(cd ../.. && scripts/check-binding-api.sh node </dev/null 2>&1) || names_rc=$?
+printf '%s\n' "$names"
+names_last=$(printf '%s\n' "$names" | awk 'NF { line = $0 } END { print line }')
+case $names_last in
+  "check-binding-api: node: PASS ("*) [ "$names_rc" -eq 0 ] || { echo "check-binding-api.sh node exited $names_rc"; exit 1; } ;;
+  *) echo "the node API name check did not PASS after the build (FAIL and SKIPPED both fail here)"; exit 1 ;;
+esac
 
 echo "==> @polyjose/node: rust-core reference results (ADR 0034 §4)"
 (cd ../.. && cargo test --quiet -p polyjose --test conformance)
