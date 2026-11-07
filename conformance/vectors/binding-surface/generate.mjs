@@ -14,6 +14,7 @@
 //   jwe/zip/ files), read from <repo-root>;
 // - the PBES2 tokens are built here with node:crypto (OpenSSL) from SHA-256-derived bytes, so a
 //   rerun gives identical files, and each is opened with node:crypto before it is written;
+// - the key-generation vectors expect the RFC shapes (RFC 7518 §6.2, §6.4; RFC 8037 §2);
 // - the JWT key-set pins reuse the RFC 7519 §3.1 token and the RFC 7515 A.1 and A.3 keys.
 // Node built-ins only, no npm packages.
 
@@ -286,6 +287,64 @@ write(
   WITHOUT_DEFLATE,
 );
 
+// ---- Key generation: one vector per generator (ADR 0030 §4, ADR 0018 §5, ADR 0034 §6) ----------
+const generated = (shape, useWith) => ({ ok: true, shape, use_with: useWith });
+write(
+  'generate-oct-32-hs256',
+  'ADR 0018 §5; ADR 0030 §4; ADR 0034 §6',
+  'ADR 0030 jwk_generate_oct: a 32-octet oct key (RFC 7518 §6.4.1) from the OS CSPRNG, with no alg; it signs and verifies an HS256 compact JWS (RFC 7518 §3.2: at least the hash size)',
+  'keys.generate_oct',
+  { len_bytes: 32 },
+  generated({ kty: 'oct', k_octets: 32 }, { alg: 'HS256' }),
+);
+write(
+  'generate-oct-15-invalid-key',
+  'ADR 0018 §5; ADR 0030 §4; ADR 0034 §6',
+  'ADR 0030 jwk_generate_oct, ADR 0018 §5: the core generates oct keys of 16 to 512 octets, so 15 is InvalidKey, decided by the core before any random byte is drawn',
+  'keys.generate_oct',
+  { len_bytes: 15 },
+  fails('InvalidKey'),
+);
+write(
+  'generate-ec-p256-es256',
+  'ADR 0018 §5; ADR 0030 §4; ADR 0034 §6',
+  'ADR 0030 jwk_generate_ec: a P-256 key pair (RFC 7518 §6.2) with no alg; it signs an ES256 compact JWS that its public key verifies (RFC 7518 §3.4)',
+  'keys.generate_ec',
+  { crv: 'P-256' },
+  generated({ kty: 'EC', crv: 'P-256' }, { alg: 'ES256' }),
+);
+write(
+  'generate-okp-ed25519-eddsa',
+  'ADR 0018 §5; ADR 0030 §4; ADR 0034 §6',
+  'ADR 0030 jwk_generate_okp: an Ed25519 key pair (RFC 8037 §2) with no alg; it signs an EdDSA compact JWS that its public key verifies (RFC 8037 §3.1)',
+  'keys.generate_okp',
+  { crv: 'Ed25519' },
+  generated({ kty: 'OKP', crv: 'Ed25519' }, { alg: 'EdDSA' }),
+);
+write(
+  'generate-okp-x25519-ecdh-es',
+  'ADR 0018 §5; ADR 0030 §4; ADR 0034 §6',
+  'ADR 0030 jwk_generate_okp: an X25519 key pair (RFC 8037 §2) with no alg; an ECDH-ES + A128GCM compact JWE to its public key decrypts with it (RFC 8037 §3.2, RFC 7518 §4.6)',
+  'keys.generate_okp',
+  { crv: 'X25519' },
+  generated({ kty: 'OKP', crv: 'X25519' }, { alg: 'ECDH-ES', enc: 'A128GCM' }),
+);
+write(
+  'generate-for-alg-es256',
+  'ADR 0018 §5; ADR 0030 §4; ADR 0034 §6',
+  'ADR 0030 jwk_generate_for_alg: ES256 gives a P-256 key bound to alg ES256 (RFC 7517 §4.4, RFC 7518 §3.4); it signs an ES256 compact JWS that its public key verifies',
+  'keys.generate_for',
+  { alg: 'ES256' },
+  { ok: true, shape: { kty: 'EC', crv: 'P-256', alg: 'ES256' }, use_with: { alg: 'ES256' } },
+);
+write(
+  'generate-for-alg-a128kw',
+  'ADR 0018 §5; ADR 0030 §4; ADR 0034 §6',
+  'ADR 0030 jwk_generate_for_alg: A128KW gives a 16-octet oct key bound to alg A128KW (RFC 7518 §4.4); an A128KW + A128GCM compact JWE to it decrypts with it',
+  'keys.generate_for',
+  { alg: 'A128KW' },
+  { ok: true, shape: { kty: 'oct', alg: 'A128KW', k_octets: 16 }, use_with: { alg: 'A128KW', enc: 'A128GCM' } },
+);
 // ---- JWK Set selection (ADR 0029) --------------------------------------------------------------
 const JWT = read('jwt/rfc7519/3-1-hs256-before-exp.json');
 const A3_KEY = read('jws-rfc7515/a3-es256-compact-verify.json').input.key;

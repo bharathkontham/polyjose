@@ -657,7 +657,10 @@ fn execute(vector: &Value) -> Result<Outcome, String> {
         "keys.import_der" => keys_import_der(input, &mut out),
         "keys.export_pem" => keys_export_pem(input, &mut out),
         "keys.export_der" => keys_export_der(input, &mut out),
-        "keys.generate_for" => keys_generate_for(input, &mut out),
+        "keys.generate_for" => keys_generate_for(input, expect, &mut out),
+        "keys.generate_oct" | "keys.generate_ec" | "keys.generate_okp" => {
+            keys_generate(operation, input, expect, &mut out)
+        }
         "jwe.encrypt" => jwe_encrypt(input, expect, &mut out),
         "jwe.decrypt" => jwe_decrypt(input, &mut out),
         "jwt.validate" => jwt_validate(input, &mut out),
@@ -866,9 +869,23 @@ fn generated_members(kty: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// [`generated_members`] for a key bound to no algorithm (`jwk_generate_oct`, `_ec`, `_okp`):
+/// the same members without `alg`. Sorted.
+fn unbound_members(kty: &str) -> Option<&'static [&'static str]> {
+    match kty {
+        "EC" => Some(&["crv", "d", "kty", "x", "y"]),
+        "OKP" => Some(&["crv", "d", "kty", "x"]),
+        "oct" => Some(&["k", "kty"]),
+        _ => None,
+    }
+}
+
 /// The shape of a generated key, after the checks a shape can't say (README
 /// `keys.generate_for`): private, exactly the RFC members, and `jwk_parse` gives it back.
-fn generated_shape(generated: &SecretString) -> Step<Object> {
+fn generated_shape(
+    generated: &SecretString,
+    members: fn(&str) -> Option<&'static [&'static str]>,
+) -> Step<Object> {
     let jwk = parse_output(generated.as_str(), "the generated JWK")?;
     let object = jwk.as_object().ok_or(Stop::Harness(
         "the generated JWK is not an object".to_owned(),
@@ -882,7 +899,7 @@ fn generated_shape(generated: &SecretString) -> Step<Object> {
     }
     let mut names: Vec<&str> = object.iter().map(|(name, _)| name).collect();
     names.sort_unstable();
-    if generated_members(kty) != Some(names.as_slice()) {
+    if members(kty) != Some(names.as_slice()) {
         return harness(format!(
             "generate_for returned a JWK with members {names:?}"
         ));
@@ -914,10 +931,101 @@ fn generated_shape(generated: &SecretString) -> Step<Object> {
     Ok(shape)
 }
 
-/// `keys.generate_for` → `jwk_generate_for_alg(alg)` (ADR 0018 §5), `alg` passed as given.
-fn keys_generate_for(input: &Object, out: &mut Object) -> Step<()> {
+/// `keys.generate_for` → `jwk_generate_for_alg(alg)` (ADR 0018 §5), `alg` passed as given; then
+/// the `use_with` round trip when the vector has one.
+fn keys_generate_for(input: &Object, expect: &Object, out: &mut Object) -> Step<()> {
     let generated = keys::jwk_generate_for_alg(str_of(input, "alg"))?;
-    out.insert("shape", generated_shape(&generated)?);
+    out.insert("shape", generated_shape(&generated, generated_members)?);
+    echo_use_with(&generated, expect, out)
+}
+
+/// `keys.generate_oct` → `jwk_generate_oct(len_bytes)`, `keys.generate_ec` →
+/// `jwk_generate_ec(crv)`, `keys.generate_okp` → `jwk_generate_okp(crv)` (ADR 0030 §4; ADR 0018
+/// §5); then the shape (no `alg`) and the `use_with` round trip.
+fn keys_generate(operation: &str, input: &Object, expect: &Object, out: &mut Object) -> Step<()> {
+    let generated = match operation {
+        "keys.generate_oct" => {
+            keys::jwk_generate_oct(count(input, "len_bytes").expect("validated"))?
+        }
+        "keys.generate_ec" => keys::jwk_generate_ec(str_of(input, "crv"))?,
+        _ => keys::jwk_generate_okp(str_of(input, "crv"))?,
+    };
+    out.insert("shape", generated_shape(&generated, unbound_members)?);
+    echo_use_with(&generated, expect, out)
+}
+
+/// Runs the expectation's `use_with` round trip on `generated`, if it has one, and echoes it
+/// back as an output, as `verify_with` is.
+fn echo_use_with(generated: &SecretString, expect: &Object, out: &mut Object) -> Step<()> {
+    if let Some(use_with) = expect.get("use_with").and_then(Value::as_object) {
+        check_use_with(generated, use_with)?;
+        out.insert("use_with", Value::from(use_with.clone()));
+    }
+    Ok(())
+}
+
+/// The payload or plaintext of every `use_with` round trip: `polyjose`.
+const USE_WITH_PAYLOAD: &[u8] = b"polyjose";
+
+/// The `use_with` round trip of a generated key (ADR 0034 §6; README `use_with`): a compact JWS
+/// of [`USE_WITH_PAYLOAD`] under `{"alg": alg}`, verified with the key's public form
+/// (RFC 7515 §5.1–§5.2), or with `enc` a compact JWE to it, decrypted with the key (RFC 7516
+/// §5.1–§5.2). The other side is the key itself for `oct` (RFC 7518 §6.4). Every call here is a
+/// check: a failure fails the vector.
+fn check_use_with(generated: &SecretString, use_with: &Object) -> Step<()> {
+    let alg = str_of(use_with, "alg");
+    let key = generated.as_str();
+    let is_oct = parse_output(key, "the generated JWK")?
+        .get("kty")
+        .and_then(Value::as_str)
+        == Some("oct");
+    let other = if is_oct {
+        key.to_owned()
+    } else {
+        checked(
+            "use_with: the key has no public form",
+            jwk::jwk_to_public(key),
+        )?
+    };
+    match use_with.get("enc").and_then(Value::as_str) {
+        None => {
+            let options = JwsSignOptions {
+                protected_header: Some(format!(r#"{{"alg":{}}}"#, Value::from(alg).to_json())),
+                ..JwsSignOptions::default()
+            };
+            let token = checked(
+                "use_with: the key does not sign",
+                jws::jws_sign_compact(USE_WITH_PAYLOAD, key, &options),
+            )?;
+            let verified = checked(
+                "use_with: the signature does not verify",
+                jws::jws_verify_compact(
+                    &token,
+                    &other,
+                    &JwsVerifyOptions::new(vec![alg.to_owned()]),
+                ),
+            )?;
+            if verified.payload.as_bytes() != USE_WITH_PAYLOAD {
+                return harness("use_with: the verified payload is not the signed one");
+            }
+        }
+        Some(enc) => {
+            let recipient = JweRecipient::new(alg.to_owned(), SecretString::from(other));
+            let options = JweEncryptOptions::new(enc.to_owned(), vec![recipient]);
+            let token = checked(
+                "use_with: encryption to the key fails",
+                jwe::jwe_encrypt_compact(USE_WITH_PAYLOAD, &options),
+            )?;
+            let policy = JweDecryptOptions::new(vec![alg.to_owned()], vec![enc.to_owned()]);
+            let decrypted = checked(
+                "use_with: the key does not decrypt",
+                jwe::jwe_decrypt_compact(&token, key, &policy),
+            )?;
+            if decrypted.plaintext.as_bytes() != USE_WITH_PAYLOAD {
+                return harness("use_with: the decrypted plaintext is not the encrypted one");
+            }
+        }
+    }
     Ok(())
 }
 

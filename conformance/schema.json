@@ -26,6 +26,9 @@
         "keys.import_der",
         "keys.export_der",
         "keys.generate_for",
+        "keys.generate_oct",
+        "keys.generate_ec",
+        "keys.generate_okp",
         "jwe.encrypt",
         "jwe.decrypt",
         "jwt.validate",
@@ -257,6 +260,47 @@
               { "$ref": "#/$defs/failure" }
             ]
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.generate_oct" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_generate_oct_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/keys_generate_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.generate_ec" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_generate_ec_input" },
+          "expect": { "$ref": "#/$defs/keys_generate_ok" }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.generate_okp" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_generate_okp_input" },
+          "expect": { "$ref": "#/$defs/keys_generate_ok" }
         }
       }
     },
@@ -838,7 +882,67 @@
       "additionalProperties": false,
       "properties": {
         "ok": { "const": true },
-        "shape": { "$ref": "#/$defs/keys_generated_shape" }
+        "shape": { "$ref": "#/$defs/keys_generated_shape" },
+        "use_with": { "$ref": "#/$defs/keys_use_with" }
+      }
+    },
+    "keys_use_with": {
+      "description": "A use round trip of a generated key (ADR 0034 §6), checked by the runner and never an outcome. Without enc: a compact JWS (RFC 7515 §7.1) of the payload polyjose (cG9seWpvc2U) with the protected header {\"alg\": alg}, signed with the key and verified with its public key (the key itself for oct) and allow-list [alg]. With enc: a compact JWE (RFC 7516 §7.1) of the same plaintext to one recipient with alg and the key's public key (the key itself for oct), decrypted with the key and allow-lists [alg] and [enc]. Any failure there fails the vector.",
+      "type": "object",
+      "required": ["alg"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "type": "string" },
+        "enc": { "type": "string" }
+      }
+    },
+    "keys_generate_oct_input": {
+      "description": "Generate an oct key of len_bytes random octets (RFC 7518 §6.4.1) with the library's generate (ADR 0018 §5; ADR 0030 jwk_generate_oct) from the OS CSPRNG. The library accepts 16 to 512 octets; other lengths are InvalidKey.",
+      "type": "object",
+      "required": ["len_bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "len_bytes": { "$ref": "#/$defs/count" }
+      }
+    },
+    "keys_generate_ec_input": {
+      "description": "Generate an EC key pair on crv (RFC 7518 §6.2, RFC 8812 §3.1) with the library's generate (ADR 0018 §5; ADR 0030 jwk_generate_ec) from the OS CSPRNG. crv is one of the curves polyjose generates, so the operation cannot fail.",
+      "type": "object",
+      "required": ["crv"],
+      "additionalProperties": false,
+      "properties": {
+        "crv": { "enum": ["P-256", "P-384", "P-521", "secp256k1"] }
+      }
+    },
+    "keys_generate_okp_input": {
+      "description": "Generate an OKP key pair on crv (RFC 8037 §2) with the library's generate (ADR 0018 §5; ADR 0030 jwk_generate_okp) from the OS CSPRNG. crv is one of the curves polyjose generates, so the operation cannot fail.",
+      "type": "object",
+      "required": ["crv"],
+      "additionalProperties": false,
+      "properties": {
+        "crv": { "enum": ["Ed25519", "X25519"] }
+      }
+    },
+    "keys_generated_key": {
+      "description": "What a key from keys.generate_oct, keys.generate_ec or keys.generate_okp is, without its random material: kty, crv (EC and OKP only) and the length of k in octets (oct only). Such a key has no alg. Compared as a JSON value, so a member the generated key has and the shape omits fails too.",
+      "type": "object",
+      "required": ["kty"],
+      "additionalProperties": false,
+      "properties": {
+        "kty": { "enum": ["EC", "OKP", "oct"] },
+        "crv": { "type": "string" },
+        "k_octets": { "$ref": "#/$defs/count" }
+      }
+    },
+    "keys_generate_ok": {
+      "description": "A generated key's shape and its use round trip (use_with). The runner also checks that the key is private, has exactly the members RFC 7518 §6.2.1-§6.2.2 (EC), RFC 8037 §2 (OKP) or RFC 7518 §6.4.1 (oct) define, and imports back unchanged; any failure there fails the vector.",
+      "type": "object",
+      "required": ["ok", "shape", "use_with"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "shape": { "$ref": "#/$defs/keys_generated_key" },
+        "use_with": { "$ref": "#/$defs/keys_use_with" }
       }
     },
     "jwt_typ": {

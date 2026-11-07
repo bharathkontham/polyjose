@@ -1,0 +1,20 @@
+{
+  "source": "ADR 0018 §5; ADR 0030 §4; ADR 0034 §6",
+  "description": "ADR 0030 jwk_generate_for_alg: A128KW gives a 16-octet oct key bound to alg A128KW (RFC 7518 §4.4); an A128KW + A128GCM compact JWE to it decrypts with it",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A128KW"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A128KW",
+      "k_octets": 16
+    },
+    "use_with": {
+      "alg": "A128KW",
+      "enc": "A128GCM"
+    }
+  }
+}
