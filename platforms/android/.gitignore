@@ -1,0 +1,7 @@
+# Gradle state and every generated output: the UniFFI Kotlin, the cargo-ndk jniLibs, the JVM
+# natives and the module builds all live under build/ (ADR 0033 §1, option 1a).
+.gradle/
+.kotlin/
+build/
+# Machine-specific SDK path; AGP reads ANDROID_HOME from the environment instead.
+local.properties
