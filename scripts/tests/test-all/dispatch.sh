@@ -6,66 +6,12 @@
 # as passing (pipeline rule 9). Without a script the platform keeps its inline commands and their
 # SKIPPED reasons (0001 T14).
 #
-# Each case runs test-all.sh in a copy of the working tree (scripts/tests/check-deps/lib.sh) with
-# fixture scripts in place of the real ones, under the bash that runs this test ($BASH), so
-# `/bin/bash scripts/tests/test-all/dispatch.sh` checks bash 3.2 and a Linux bash checks bash 5.
-# Only non-rust platforms run, so no cargo build happens. Usage: scripts/tests/test-all/dispatch.sh
+# Each case runs test-all.sh in a copy of the working tree with fixture scripts (lib.sh), under the
+# bash that runs this test. Usage: scripts/tests/test-all/dispatch.sh
 set -euo pipefail
 export LC_ALL=C
-# shellcheck source=../check-deps/lib.sh
-. "$(dirname "$0")/../check-deps/lib.sh"
-
-gate_name=test-all.sh
-
-# fixture <path in the copy> <exit status> <line>...: an executable sh script that prints each line
-# and exits with the status. It replaces the real script if the owning feature has created one.
-fixture() {
-  local path=$1 rc=$2 line
-  shift 2
-  mkdir -p "$(dirname "$case_dir/$path")" || lib_die "could not create the directory of $path"
-  {
-    echo '#!/bin/sh'
-    for line in "$@"; do printf "printf '%%s\\\\n' '%s'\n" "$line"; done
-    echo "exit $rc"
-  } >"$case_dir/$path" || lib_die "could not write $path in the copy"
-  chmod +x "$case_dir/$path"
-}
-
-# run_test_all <platform>...: runs the copy's test-all.sh under this test's bash; sets $rc and
-# leaves its output in $scratch/out.
-run_test_all() {
-  rc=0
-  (cd "$case_dir" && "${BASH:-bash}" scripts/test-all.sh "$@") </dev/null >"$scratch/out" 2>&1 || rc=$?
-}
-
-# check <description> <expected exit status> <ERE>...: the last run exited with the status and its
-# output has a line matching each ERE.
-check() {
-  local what=$1 want=$2 pattern ok=1
-  shift 2
-  tests_run=$((tests_run + 1))
-  [ "$rc" -eq "$want" ] || ok=0
-  for pattern in "$@"; do grep -Eq -- "$pattern" "$scratch/out" || ok=0; done
-  if [ "$ok" -eq 1 ]; then
-    echo "ok   - $what"
-  else
-    echo "FAIL - $what: exit $rc (expected $want), wanted lines matching: $*"
-    sed 's/^/       /' "$scratch/out"
-    tests_failed=$((tests_failed + 1))
-  fi
-}
-
-# check_absent <description> <ERE>: no line of the last run's output matches the ERE.
-check_absent() {
-  tests_run=$((tests_run + 1))
-  if grep -Eq -- "$2" "$scratch/out"; then
-    echo "FAIL - $1: unexpected output matching /$2/"
-    sed 's/^/       /' "$scratch/out"
-    tests_failed=$((tests_failed + 1))
-  else
-    echo "ok   - $1"
-  fi
-}
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"
 
 # --- Each platform runs its own script ----------------------------------------------------------------
 
@@ -133,14 +79,7 @@ check_absent "a non-executable script is not run" '^fixture apple suite ran$'
 
 new_case stdin
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
-# (Inserted before the fixture's final exit.)
-python3 -I -c '
-import sys
-path = sys.argv[1]
-lines = open(path).read().splitlines(True)
-lines.insert(-1, "read -r line && echo \"read stdin: $line\"\n")
-open(path, "w").write("".join(lines))
-' "$case_dir/bindings/wasm/test.sh" || lib_die "could not edit the fixture"
+fixture_append bindings/wasm/test.sh 'read -r line && echo "read stdin: $line"'
 rc=0
 (cd "$case_dir" && "${BASH:-bash}" scripts/test-all.sh wasm) <<<"caller input" >"$scratch/out" 2>&1 || rc=$?
 check "a script reading stdin still runs" 0 '^  wasm: PASS$'
