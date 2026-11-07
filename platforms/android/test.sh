@@ -36,7 +36,7 @@ for check in scripts/ci-check-workflow.sh scripts/ci-check-workflow-test.sh; do
 done
 
 # The wrapper jar is the first code ./gradlew runs: it must be Gradle's (audit M2, ci-lib.sh).
-# shellcheck source=scripts/ci-lib.sh
+# shellcheck source=scripts/ci-lib.sh source-path=SCRIPTDIR
 . scripts/ci-lib.sh
 echo "==> android: gradle wrapper jar SHA-256 (Gradle $ci_gradle_wrapper_version)"
 ci_check_gradle_wrapper || { echo "android: the Gradle wrapper jar check FAILED"; exit 1; }
