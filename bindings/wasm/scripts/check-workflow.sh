@@ -28,9 +28,12 @@
 #   [actionlint]  actionlint (which also runs shellcheck on `run:` scripts when it is installed)
 #                 reports nothing.
 # The text rules never depend on actionlint (pipeline rule 9): without it they still run, and only
-# the actionlint step is skipped. The last line then names exactly that partial skip,
-#   check-workflow: PASS (text rules); SKIPPED (actionlint missing): actionlint not run
-# so a pass is never reported for a check that did not run, and a skip never hides one that did.
+# the actionlint step is skipped. The output then ends with
+#   check-workflow: text rules PASS; actionlint not run (actionlint missing)
+#   SKIPPED (host:actionlint)
+# the reason on the line before, and as the last line exactly the host-tool skip form that
+# scripts/test-all.sh's negative-test step accepts (host:<tool>, feature 0013 F10). A text-rule
+# failure is still a FAIL (exit 1) without actionlint.
 # Full-line comments are ignored by every text rule; text after a `#` on a content line is not, so
 # a pin comment cannot hide a publish command.
 #
@@ -42,11 +45,11 @@
 # the top or on a job, `write-all`, and an unpinned action. Each copy must fail, with every FAIL
 # line of the expected rule, so no other rule is what caught the change. With actionlint
 # installed, a copy with a broken expression must fail actionlint too; without it every text case
-# still runs, and only that one case is skipped, as the last line says. The repository is never
-# modified.
+# still runs, and only that one case is skipped, ending with the same two lines. The repository
+# is never modified.
 #
-# Exit status: 0 passed (with or without the actionlint part, as the last line says); 1 a check
-# failed; 2 a usage error or a missing file. Needs awk and grep. Runs on macOS /bin/bash 3.2 and
+# Exit status: 0 passed, or the text rules passed and the last line is SKIPPED (host:actionlint);
+# 1 a check failed; 2 a usage error or a missing file. Needs awk and grep. Runs on macOS /bin/bash 3.2 and
 # Linux bash.
 set -uo pipefail
 export LC_ALL=C
@@ -158,7 +161,8 @@ check() {
     return 1
   fi
   if [ "$rc" -eq 3 ]; then
-    echo "$me: PASS (text rules); SKIPPED (actionlint missing): actionlint not run"
+    echo "$me: text rules PASS (${file#"$repo"/}); actionlint not run (actionlint missing)"
+    echo "SKIPPED (host:actionlint)"
     return 0
   fi
   echo "$me: PASS (${file#"$repo"/}: text rules, actionlint $(actionlint -version 2>/dev/null | head -n 1))"
@@ -284,7 +288,8 @@ self_test() {
     return 1
   fi
   if [ -n "$lint_note" ]; then
-    echo "$me: self-test PASS ($cases_run text cases); SKIPPED ($lint_note): the actionlint case was not run"
+    echo "$me: self-test: $cases_run text cases PASS; the actionlint case was not run ($lint_note)"
+    echo "SKIPPED (host:actionlint)"
     return 0
   fi
   echo "$me: self-test PASS ($cases_run cases)"
