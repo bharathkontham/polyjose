@@ -104,6 +104,33 @@ run_package --allow-dev --xcframework "$xcf" --out-dir "$out"
 check "a library whose archive is missing is refused" "[ $rc -eq 1 ] && log_has 'tvos-arm64'"
 check "the refusals left the output directory as it was" untouched
 
+# --- One crate set on every Apple target (ADR 0032 §6, ADR 0020 §4) ---------------------------
+# The notices are generated for aarch64-apple-ios only, so a target that compiles another crate
+# set must be refused. The stand-in cargo of lib.sh adds one crate to the `cargo tree` of one
+# target, as a dependency only that target compiles would (feature 0009 F03). --allow-dev keeps
+# the stale check out of the way on a checkout with uncommitted Rust inputs; it must not let
+# differing crate sets through.
+fake_xcframework "$xcf" "$release_libraries" "$(stamp_for present)"
+run_package_fake_cargo aarch64-apple-tvos --allow-dev --xcframework "$xcf" --out-dir "$out"
+check "a target with an extra crate (aarch64-apple-tvos) is refused, even with --allow-dev" "[ $rc -eq 1 ]"
+check "the refusal says aarch64-apple-tvos compiles other crates than aarch64-apple-ios" \
+  "log_has 'aarch64-apple-tvos compiles other crates than aarch64-apple-ios'"
+check "the refusal shows the extra crate of aarch64-apple-tvos" "log_has '> $fake_extra_crate'"
+check "the crate-set refusal leaves the output directory as it was" untouched
+[ "$rc" -eq 1 ] || show_log
+
+# The last target of package.sh's list: the check covers every target, not only the first.
+run_package_fake_cargo arm64_32-apple-watchos --allow-dev --xcframework "$xcf" --out-dir "$out"
+check "a differing crate set on the last target (arm64_32-apple-watchos) is refused" \
+  "[ $rc -eq 1 ] && log_has 'arm64_32-apple-watchos compiles other crates than aarch64-apple-ios'"
+check "that refusal leaves the output directory as it was" untouched
+
+# The other direction: aarch64-apple-ios itself has the extra crate, so the other targets lack it.
+run_package_fake_cargo aarch64-apple-ios --allow-dev --xcframework "$xcf" --out-dir "$out"
+check "a crate that only aarch64-apple-ios compiles is refused" \
+  "[ $rc -eq 1 ] && log_has 'compiles other crates than aarch64-apple-ios' && log_has '< $fake_extra_crate'"
+check "that refusal leaves the output directory as it was, too" untouched
+
 # 9 incompressible libraries of 2.9 MB each: about 26 MB zipped, over the 25,000,000-byte stop.
 # --allow-dev also lets the stale check pass when this checkout has uncommitted Rust inputs.
 fake_xcframework "$xcf" "$release_libraries" "$(stamp_for present)" 2900000
