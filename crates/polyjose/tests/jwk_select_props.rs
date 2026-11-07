@@ -928,6 +928,116 @@ fn generators_reach_every_oracle_verdict() {
     assert!(ecdh_kw_key_ops, "no key_ops rejection under ECDH-ES+A*KW");
 }
 
+/// How often the deterministic generators reach each unregistered-value
+/// arm (0015 F01), and how often each ADR 0054 §2 rule for it decides the
+/// verdict. Counts of members, not of cases.
+#[derive(Debug, Default)]
+struct UnregisteredReach {
+    /// Members whose `alg` is [`UNREGISTERED_ALG`].
+    alg: usize,
+    /// ... of which §2.2 rejected (the selector has an `alg`).
+    alg_rejected: usize,
+    /// ... of which matched (no selector `alg`, so §2.2 is skipped).
+    alg_matched: usize,
+    /// Members whose `use` is [`UNREGISTERED_USE`].
+    key_use: usize,
+    /// ... of which §2.3 rejected for the `use` itself: the same member
+    /// without a `use` passes §2.3, so the selector's parts agree on a U.
+    use_rejected: usize,
+    /// ... of which matched (no U, so §2.3 is skipped).
+    use_matched: usize,
+    /// Members whose `key_ops` holds [`UNREGISTERED_OP`].
+    op: usize,
+    /// ... of which §2.4 rejected although they hold it.
+    op_rejected: usize,
+    /// ... of which §2.4 rejected and whose `key_ops` is only that op.
+    only_op_rejected: usize,
+    /// ... of which matched.
+    op_matched: usize,
+}
+
+/// The generators reach the unregistered `alg`, `use` and `key_ops` arms
+/// of [`member`], and each matching oracle rule rejects some member and
+/// is skipped for some other, so soundness and completeness compare the
+/// crate with ADR 0054 §2.2-§2.4 on these fail-closed paths (review
+/// SHOULD-FIX 1). The same deterministic stream as
+/// [`generators_reach_every_oracle_verdict`]; counts only, no timing.
+#[test]
+fn generators_reach_every_unregistered_value_rule() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = (members(), selector());
+    let mut reach = UnregisteredReach::default();
+    for _ in 0..1000 {
+        let (members, sel) = strategy.new_tree(&mut runner).unwrap().current();
+        for member in &members {
+            let verdict = oracle(member, &sel);
+            if member.alg == Some(UNREGISTERED_ALG) {
+                reach.alg += 1;
+                match verdict {
+                    Err(Check::JwkAlg) => reach.alg_rejected += 1,
+                    Ok(()) => reach.alg_matched += 1,
+                    Err(_) => {}
+                }
+            }
+            if member.key_use == Some(UNREGISTERED_USE) {
+                reach.key_use += 1;
+                let without_use = MemberSpec {
+                    key_use: None,
+                    ..member.clone()
+                };
+                match verdict {
+                    Err(Check::Purpose) if oracle(&without_use, &sel) != Err(Check::Purpose) => {
+                        reach.use_rejected += 1;
+                    }
+                    Ok(()) => reach.use_matched += 1,
+                    Err(_) => {}
+                }
+            }
+            if let Some(ops) = &member.key_ops
+                && ops.contains(&UNREGISTERED_OP)
+            {
+                reach.op += 1;
+                match verdict {
+                    Err(Check::KeyOps) => {
+                        reach.op_rejected += 1;
+                        if ops.len() == 1 {
+                            reach.only_op_rejected += 1;
+                        }
+                    }
+                    Ok(()) => reach.op_matched += 1,
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+    let UnregisteredReach {
+        alg,
+        alg_rejected,
+        alg_matched,
+        key_use,
+        use_rejected,
+        use_matched,
+        op,
+        op_rejected,
+        only_op_rejected,
+        op_matched,
+    } = reach;
+    for (name, count) in [
+        ("unregistered alg", alg),
+        ("§2.2 rejecting it", alg_rejected),
+        ("it matching with no selector alg", alg_matched),
+        ("unregistered use", key_use),
+        ("§2.3 rejecting it", use_rejected),
+        ("it matching with no U", use_matched),
+        ("unregistered op", op),
+        ("§2.4 rejecting a member holding it", op_rejected),
+        ("§2.4 rejecting it alone", only_op_rejected),
+        ("a member holding it matching", op_matched),
+    ] {
+        assert!(count > 0, "never reached: {name}; {reach:?}");
+    }
+}
+
 /// How the crate imports each unregistered value, through the public API,
 /// on every pool key: kept verbatim as `Unknown`, never skipped and never
 /// an error (RFC 7517 §4.2–§4.4 "Other values MAY be used"; ADR 0041 §2
