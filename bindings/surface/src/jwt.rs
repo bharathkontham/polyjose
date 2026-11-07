@@ -12,19 +12,18 @@
 //! never a panic (the JS facade always passes `now`).
 
 use polyjose::Error;
-use polyjose::header::Header;
 use polyjose::json::{self, Object};
-use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
-use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient};
+use polyjose::jwa::SigningAlg;
 use polyjose::jwk::{Jwk, JwkSet};
 use polyjose::jwt::{
     self, Claims, Clock, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt, VerifiedNestedJwt,
 };
 
 use crate::error::SurfaceResult;
+use crate::jwe::{decrypt_policy, encryptor};
 use crate::records::{
-    JweDecryptOptions, JweEncryptOptions, JweRecipient, JwtNestedVerified, JwtSignOptions,
-    JwtVerified, JwtVerifyOptions, algs, apply, apply_flag, strs, to_usize, try_apply,
+    JweDecryptOptions, JweEncryptOptions, JwtNestedVerified, JwtSignOptions, JwtVerified,
+    JwtVerifyOptions, algs, apply, apply_flag, strs, to_usize, try_apply,
 };
 
 /// Signs the JWT Claims Set `claims` (JSON text) with `key` into a compact JWS (ADR 0030 §4;
@@ -107,12 +106,17 @@ pub fn jwt_verify_with_jwks(
 /// Encrypts the signed JWT `signed_jwt` into a compact JWE for exactly one recipient, with
 /// `cty: "JWT"` set by the core (ADR 0030 §4; RFC 7519 §5.2, §11.2).
 ///
-/// `options` becomes a core `Encryptor` member by member (ADR 0030 §3: `None`/`false` calls
-/// nothing), then the core's [`jwt::encrypt_nested`] checks and encrypts.
+/// `options` becomes the core `Encryptor` exactly as for
+/// [`jwe_encrypt_compact`](crate::jwe::jwe_encrypt_compact), by the same conversion (ADR 0030
+/// §1; §3: `None`/`false` calls nothing), then the core's [`jwt::encrypt_nested`] checks and
+/// encrypts.
 ///
 /// # Errors
 ///
-/// The core's: `InvalidKey` and the other JWK errors for a recipient key; `InvalidJson` or
+/// The core's, and the first error wins, in the conformance order (conformance/README.md,
+/// "Step order", `jwe.encrypt`): each recipient's key, then its header, then the protected
+/// header, then the shared header, then the nested-JWT checks and encryption. So:
+/// `InvalidKey` and the other JWK errors for a recipient key; `InvalidJson` or
 /// `InvalidHeader` for a header; `InvalidFormat` unless `signed_jwt` is a signed compact JWS,
 /// or unless there is exactly one recipient and no unprotected header or `aad` (RFC 7516
 /// §7.1); `InvalidHeader` for a `cty` other than `JWT` or for compression (RFC 8725 §3.6);
@@ -126,8 +130,10 @@ pub fn jwt_encrypt_nested(signed_jwt: &str, options: &JweEncryptOptions) -> Surf
 /// JWT with one `key` (ADR 0030 §4; RFC 7519 §5.2, §7.2 step 8; RFC 8725 §3.3).
 ///
 /// The steps run in the conformance order (conformance/README.md, "Step order"): import
-/// `decrypt_key`, build the JWE policy from `decrypt_options`, import `key`, build the JWT
-/// policy from `options` as for [`jwt_verify`], then the core's [`jwt::decrypt_nested`]. So
+/// `decrypt_key`, build the JWE policy from `decrypt_options` (by the conversion
+/// [`jwe_decrypt_compact`](crate::jwe::jwe_decrypt_compact) uses, ADR 0030 §1), import `key`,
+/// build the JWT policy from `options` as for [`jwt_verify`], then the core's
+/// [`jwt::decrypt_nested`]. So
 /// every option is checked before `token` is read (0004 implementer note 7). The decrypt key is
 /// parsed into the core's `Jwk`, which wipes itself on drop, like every key (ADR 0030 §7).
 ///
@@ -345,73 +351,6 @@ fn json_object(text: &str) -> polyjose::Result<Object> {
     json::parse(text.as_bytes())?
         .into_object()
         .ok_or(Error::InvalidJson("expected a JSON object"))
-}
-
-// ------------------------------------------------------------------------------------------------
-// The JWE layer of a nested JWT (ADR 0030 §4, "JWE"; RFC 7516)
-// ------------------------------------------------------------------------------------------------
-
-/// The core [`Encryptor`] of `o` (ADR 0030 §3): `enc`, then each member present, then the
-/// recipients in order (RFC 7516 §5.1). Headers are parsed by the core's [`Header::from_json`].
-/// The core decides what the compact form allows (RFC 7516 §7.1).
-fn encryptor(o: &JweEncryptOptions) -> polyjose::Result<Encryptor> {
-    let mut e = Encryptor::new(ContentEncAlg::from(o.enc.as_str()));
-    e = try_apply(e, o.protected_header.as_deref(), |e, h| {
-        Ok(e.protected_header(Header::from_json(h.as_bytes())?))
-    })?;
-    e = try_apply(e, o.shared_unprotected_header.as_deref(), |e, h| {
-        Ok(e.shared_unprotected_header(Header::from_json(h.as_bytes())?))
-    })?;
-    e = apply(e, o.aad.as_ref(), |e, aad| e.aad(aad.as_bytes()));
-    e = apply_flag(e, o.compress, Encryptor::compress);
-    o.recipients
-        .iter()
-        .try_fold(e, |e, r| Ok(e.recipient(recipient(r)?)))
-}
-
-/// The core [`Recipient`] of `r` (RFC 7516 §7.2.1, RFC 7518 §4): the key is parsed into the
-/// core's wiping `Jwk` (ADR 0030 §7); `apu`, `apv` (RFC 7518 §4.6.1.2–§4.6.1.3), `p2c` and
-/// `p2s_len` (RFC 7518 §4.8.1) are set only when present, so the PBES2 defaults are the core's
-/// (ADR 0023).
-fn recipient(r: &JweRecipient) -> polyjose::Result<Recipient> {
-    let key = Jwk::from_json(r.key.as_str().as_bytes())?;
-    let mut rec = Recipient::new(KeyMgmtAlg::from(r.alg.as_str()), &key);
-    rec = try_apply(rec, r.header.as_deref(), |rec, h| {
-        Ok(rec.header(Header::from_json(h.as_bytes())?))
-    })?;
-    rec = apply(rec, r.apu.as_deref(), Recipient::apu);
-    rec = apply(rec, r.apv.as_deref(), Recipient::apv);
-    rec = apply(rec, r.p2c, Recipient::p2c);
-    rec = apply(rec, r.p2s_len.map(to_usize), Recipient::p2s_len);
-    Ok(rec)
-}
-
-/// The core [`DecryptPolicy`] of `o` (RFC 7516 §5.2, RFC 8725 §3.1; ADR 0023, ADR 0050): the
-/// allow-lists, which the core checks first, then each bound present.
-fn decrypt_policy(o: &JweDecryptOptions) -> polyjose::Result<DecryptPolicy> {
-    let alg: Vec<KeyMgmtAlg> = algs(&o.allowed_algs);
-    let enc: Vec<ContentEncAlg> = algs(&o.allowed_enc);
-    let mut p = DecryptPolicy::new(&alg, &enc)?;
-    p = apply(p, o.max_pbes2_count, DecryptPolicy::max_pbes2_count);
-    p = apply(
-        p,
-        o.max_decompressed_len.map(to_usize),
-        DecryptPolicy::max_decompressed_len,
-    );
-    p = apply(
-        p,
-        o.max_input_len.map(to_usize),
-        DecryptPolicy::max_input_len,
-    );
-    p = apply(
-        p,
-        o.max_recipients.map(to_usize),
-        DecryptPolicy::max_recipients,
-    );
-    p = apply(p, o.understood_crit.as_deref(), |p, crit| {
-        p.understood_crit(&strs(crit))
-    });
-    Ok(p)
 }
 
 // ------------------------------------------------------------------------------------------------

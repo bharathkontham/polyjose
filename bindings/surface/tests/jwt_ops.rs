@@ -1275,6 +1275,35 @@ fn pbes2_recipient_options_reach_the_core() {
     );
 }
 
+#[test]
+fn encrypt_nested_inputs_are_read_in_the_conformance_order() {
+    // Conformance README "Step order" (jwe.encrypt): each recipient's key, then its header, then
+    // the protected header, then the shared unprotected header. The nested encrypt builds its
+    // encryptor exactly as jwe_encrypt_compact does (ADR 0030 §1), so both report the same
+    // first error.
+    let bad_key = || JweRecipient::new("A128KW".to_owned(), secret(r#"{"kty":"oct"}"#));
+    let mut bad_header = JweRecipient::new("A128KW".to_owned(), secret(&oct_key()));
+    bad_header.header = Some(r#"{"kid":1}"#.to_owned());
+    let mut bad_key_and_header = bad_key();
+    bad_key_and_header.header = Some("[]".to_owned());
+    let cases = [
+        (vec![bad_key_and_header], Some("[]"), None, "InvalidKey"),
+        (vec![bad_key()], Some("[]"), Some("[]"), "InvalidKey"),
+        (vec![bad_header], Some("[]"), Some("[]"), "InvalidHeader"),
+    ];
+    for (recipients, protected, shared, expected) in cases {
+        let mut options = JweEncryptOptions::new("A128GCM".to_owned(), recipients);
+        options.protected_header = protected.map(str::to_owned);
+        options.shared_unprotected_header = shared.map(str::to_owned);
+        assert_eq!(code(jwt_encrypt_nested(RFC7519_3_1, &options)), expected);
+        assert_eq!(
+            jwt_encrypt_nested(RFC7519_3_1, &options).unwrap_err(),
+            polyjose_surface::jwe::jwe_encrypt_compact(RFC7519_3_1.as_bytes(), &options)
+                .unwrap_err()
+        );
+    }
+}
+
 // --- Secrets and defaults (ADR 0030 §3, §7) --------------------------------------------------
 
 #[test]
