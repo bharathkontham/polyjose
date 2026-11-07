@@ -1,0 +1,136 @@
+//! Every `polyjose-ffi` export, called directly from Rust once with a valid and once with an
+//! invalid input (feature 0013 T12). Each failure is checked as both the [`PolyjoseError`]
+//! variant and its exported `code()`, which is what Kotlin and Swift callers match on (ADR 0030
+//! §5, ADR 0032 §3, ADR 0033 §3).
+//!
+//! The behaviour behind each export is the surface's and the core's, tested there with the full
+//! RFC vector sets; these tests prove only that each adapter converts its arguments, makes its
+//! one surface call and converts the result (ADR 0030 §1, "the adapter test"). Inputs are RFC
+//! values where one is deterministic (RFC 7515 Appendix A.1, RFC 7516 Appendices A.3 and A.5,
+//! RFC 7517 Appendix A, RFC 7519 §3.1, RFC 7638 §3.1, RFC 8037 Appendix A, RFC 9278 §3) and
+//! round trips where the operation draws randomness (ADR 0005: no fixed RNG in a binding).
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
+
+use polyjose::json::{self, Value};
+use polyjose_ffi::PolyjoseError;
+use polyjose_ffi::jwk::{
+    jwk_parse, jwk_thumbprint, jwk_thumbprint_uri, jwk_to_public, jwks_select,
+};
+use polyjose_ffi::records::JwkSelector;
+
+/// Asserts that `$result` failed as `PolyjoseError::$variant` and that the exported `code()` is
+/// the variant's name, the stable code (ADR 0030 §5).
+macro_rules! assert_fails {
+    ($result:expr, $variant:ident) => {{
+        let err: PolyjoseError = match $result {
+            Ok(_) => panic!(
+                "{} succeeded, expected {}",
+                stringify!($result),
+                stringify!($variant)
+            ),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(err, PolyjoseError::$variant { .. }),
+            "{}: expected {}, got {err:?}",
+            stringify!($result),
+            stringify!($variant)
+        );
+        assert_eq!(err.code(), stringify!($variant), "{}", stringify!($result));
+    }};
+}
+
+fn s(v: &str) -> String {
+    v.to_owned()
+}
+
+/// Parses JSON text with the core's parser, so two texts compare as JSON values.
+fn value(text: &str) -> Value {
+    json::parse(text.as_bytes()).expect("valid JSON")
+}
+
+// --- RFC values -------------------------------------------------------------------------------
+
+/// RFC 7517 Appendix A.2: the P-256 private key (with `use` and `kid`).
+const RFC7517_A2_P256_PRIVATE: &str = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE","use":"enc","kid":"1"}"#;
+
+/// RFC 7517 Appendix A.1: the public half of [`RFC7517_A2_P256_PRIVATE`], in core member order.
+const RFC7517_A1_P256_PUBLIC: &str = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","use":"enc","kid":"1"}"#;
+
+/// RFC 7638 §3.1: the RSA public key of the thumbprint example.
+const RFC7638_RSA: &str = r#"{"kty":"RSA","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","e":"AQAB","alg":"RS256","kid":"2011-04-29"}"#;
+
+/// RFC 7638 §3.1: the SHA-256 thumbprint of [`RFC7638_RSA`].
+const RFC7638_THUMBPRINT: &str = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
+
+/// RFC 9278 §3 (example in §6): the thumbprint URI of [`RFC7638_RSA`].
+const RFC9278_URI: &str =
+    "urn:ietf:params:oauth:jwk-thumbprint:sha-256:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
+
+// --- JWK (RFC 7517, RFC 7638, RFC 9278) -------------------------------------------------------
+
+#[test]
+fn jwk_parse_reserializes_a_valid_key_and_rejects_malformed_json() {
+    // RFC 7517 §4: the key is validated and written back by the core, private members included.
+    let parsed = jwk_parse(s(RFC7517_A2_P256_PRIVATE)).unwrap();
+    assert!(value(&parsed) == value(RFC7517_A2_P256_PRIVATE), "{parsed}");
+    assert_fails!(jwk_parse(s("{")), InvalidJson);
+}
+
+#[test]
+fn jwk_to_public_drops_the_private_member_and_rejects_an_incomplete_key() {
+    // RFC 7517 Appendix A.1 is Appendix A.2 without `d` (RFC 7518 §6.2.2.1).
+    assert_eq!(
+        jwk_to_public(s(RFC7517_A2_P256_PRIVATE)).unwrap(),
+        RFC7517_A1_P256_PUBLIC
+    );
+    assert_fails!(
+        jwk_to_public(s(r#"{"kty":"EC","crv":"P-256"}"#)),
+        InvalidKey
+    );
+}
+
+#[test]
+fn jwk_thumbprint_is_rfc7638_and_rejects_an_unsupported_hash() {
+    assert_eq!(
+        jwk_thumbprint(s(RFC7638_RSA), s("SHA-256")).unwrap(),
+        RFC7638_THUMBPRINT
+    );
+    // ADR 0022: no SHA-1 thumbprints.
+    assert_fails!(
+        jwk_thumbprint(s(RFC7638_RSA), s("SHA-1")),
+        UnsupportedAlgorithm
+    );
+}
+
+#[test]
+fn jwk_thumbprint_uri_is_rfc9278_and_rejects_malformed_json() {
+    assert_eq!(
+        jwk_thumbprint_uri(s(RFC7638_RSA), s("SHA-256")).unwrap(),
+        RFC9278_URI
+    );
+    assert_fails!(jwk_thumbprint_uri(s("{"), s("SHA-256")), InvalidJson);
+}
+
+#[test]
+fn jwks_select_passes_through_to_the_surface_stub() {
+    // Until feature 0015 / task T14, the surface has no JWK Set selection and every call is
+    // `UnsupportedAlgorithm` (feature 0013 T06 Log); T14 replaces the valid case with a match.
+    let jwks = format!(r#"{{"keys":[{RFC7517_A1_P256_PUBLIC}]}}"#);
+    let selector = JwkSelector {
+        kid: Some(s("1")),
+        alg: None,
+        key_use: None,
+    };
+    assert_fails!(jwks_select(jwks, selector), UnsupportedAlgorithm);
+    let selector = JwkSelector {
+        kid: None,
+        alg: None,
+        key_use: None,
+    };
+    assert_fails!(
+        jwks_select(s("not a JWK Set"), selector),
+        UnsupportedAlgorithm
+    );
+}
