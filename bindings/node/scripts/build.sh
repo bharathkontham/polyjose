@@ -12,17 +12,17 @@
 #      dist/.
 # Idempotent: each step deletes and regenerates its own output. Everything it writes is
 # git-ignored. typescript comes from bindings/js (its only dev-dependency, pinned in its lockfile)
-# and @napi-rs/cli from this package's lockfile; when either is not installed yet, `npm ci` installs
-# it. It never publishes: npm publish and napi pre-publish belong to the human-approved release
-# (Gate 3).
+# and @napi-rs/cli from this package's lockfile; when either is not installed yet, `npm ci
+# --ignore-scripts` installs it, running no dependency's install script (review-code.md N2). It
+# never publishes: npm publish and napi pre-publish belong to the human-approved release (Gate 3).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 js=../js
 tsc=$js/node_modules/.bin/tsc
 napi=node_modules/.bin/napi
 
-[ -x "$tsc" ] || (cd "$js" && npm ci --no-audit --no-fund --loglevel=error)
-[ -x "$napi" ] || npm ci --no-audit --no-fund --loglevel=error
+[ -x "$tsc" ] || (cd "$js" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error)
+[ -x "$napi" ] || npm ci --ignore-scripts --no-audit --no-fund --loglevel=error
 
 echo "==> @polyjose/node build: the shared facade (bindings/js)"
 (cd "$js" && node tools/gen-error-codes.ts && rm -rf dist && node_modules/.bin/tsc -p .)

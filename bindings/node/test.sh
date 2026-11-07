@@ -3,7 +3,8 @@
 # `scripts/test-all.sh node` from the repository root:
 #   1. TypeScript only: no hand-written .js, .mjs or .cjs (ADR 0047; the only JavaScript is the
 #      napi loader and tsc output, all generated and git-ignored);
-#   2. npm ci here (@napi-rs/cli) and in bindings/js (typescript), from the committed lockfiles;
+#   2. npm ci here (@napi-rs/cli) and in bindings/js (typescript), from the committed lockfiles,
+#      with --ignore-scripts: no dependency's install script ever runs (review-code.md N2);
 #   3. scripts/build.sh (facade, host addon and loader, tsc);
 #   4. the API name check, scripts/check-binding-api.sh node (ADR 0030 §8), on the declarations the
 #      build just wrote; it must PASS: after a build, SKIPPED means the check or the build is broken
@@ -34,8 +35,8 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 echo "==> @polyjose/node: npm ci (bindings/node, bindings/js)"
-npm ci --no-audit --no-fund --loglevel=error
-(cd ../js && npm ci --no-audit --no-fund --loglevel=error)
+npm ci --ignore-scripts --no-audit --no-fund --loglevel=error
+(cd ../js && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error)
 
 echo "==> @polyjose/node: build"
 scripts/build.sh
