@@ -194,12 +194,15 @@ function is_runner(t) {
   gsub(/["\047\\]/, "", t); sub(/.*\//, "", t)
   return t ~ /^(sh|bash|zsh|dash|ksh|mksh|ash|fish|csh|tcsh|pwsh|powershell|python[0-9.]*|perl|ruby|node|php)$/
 }
+# A pipe segment that runs its input: its command (after assignments, a subshell ( or group {)
+# is a shell, interpreter, `.`, source, eval or an expanded $VAR, or a wrapper (sudo, env, ...)
+# with one of those among its arguments.
 function runs_code(seg,   tok, n, i, t) {
   n = split(seg, tok, " ")
   for (i = 1; i <= n; i++) {
-    t = tok[i]; gsub(/["\047]/, "", t)
+    t = tok[i]; gsub(/["\047]/, "", t); sub(/^[({]+/, "", t)
     if (t == "" || t ~ /^[a-z_][a-z0-9_]*=/) continue
-    if (is_runner(t)) return 1
+    if (is_runner(t) || t ~ /^(\.|source|eval)$/ || t ~ /^\$/) return 1
     sub(/.*\//, "", t)
     if (t !~ /^(sudo|doas|env|command|exec|nohup|time|nice|stdbuf|xargs|busybox)$/) return 0
     for (i++; i <= n; i++) if (is_runner(tok[i])) return 1
@@ -211,10 +214,15 @@ function check_download(s, n, r,   dl, rest, parts, k, i, seg, before, c2, t, m,
   dl = "(^|[^a-z0-9_.-])(curl|wget)([^a-z0-9_.-]|$)"
   if (s !~ dl) return
   match(s, dl); rest = substr(s, RSTART + RLENGTH - 1)
-  gsub(/\|\|/, " ", rest)
+  gsub(/\|\|/, " ", rest); gsub(/\|&/, "|", rest)
   k = split(rest, parts, "|")
   for (i = 2; i <= k; i++) {
     seg = parts[i]; sub(/[;&)].*/, "", seg)
+    if (runs_code(seg)) { fail_at(n, r, "downloads: curl or wget piped to a shell (download to a file, check its hash, then run it)"); return }
+  }
+  # An output process substitution after the download: tee >(sh).
+  for (t = rest; (i = index(t, ">(")) > 0; ) {
+    t = substr(t, i + 2); seg = t; sub(/[;&|)].*/, "", seg)
     if (runs_code(seg)) { fail_at(n, r, "downloads: curl or wget piped to a shell (download to a file, check its hash, then run it)"); return }
   }
   for (i = 1; i <= length(s); i++) {
