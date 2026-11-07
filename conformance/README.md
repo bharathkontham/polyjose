@@ -339,13 +339,18 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 - **fail** on a file that is not schema-valid, including a misspelled or unknown member anywhere: every object the schema defines is closed;
 - **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks, reported SKIPPED by name ([Features](#features));
 - **fail** when it finds no vector files, so a wrong path can't pass vacuously;
-- run every vector and report every failure, not only the first, each naming the file and its `source`.
+- run every vector and report every failure, not only the first, each naming the file and its `source`;
+- write one results file, `target/conformance/<runner>.json`, with an entry for every vector file ([Binding runners](#binding-runners), ADR 0034 §2).
 
 The Rust runner also checks `schema.json` against its own tables (`schema_and_runner_agree`), so the schema and the runner can't drift apart.
 
 ## Binding runners
 
-Which operation families each platform's runner runs today. The rules above apply to every runner that exists. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
+Every runner (the Rust reference run, the Rust surface run and each binding's) runs every vector file, follows the [rules for every runner](#rules-for-every-runner) and writes **one results file**. `scripts/conformance-parity.sh` then compares each results file with the Rust reference run, so a runner can't pass by running fewer vectors, by skipping one for another reason, or by getting `"ok": false` with another error code (ADR 0034).
+
+### Status per platform
+
+Which operation families each platform's runner runs today. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
 
 | Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jws.*` | `keys.*` | `jwt.*` |
 |---|---|---|---|---|
@@ -355,7 +360,69 @@ Which operation families each platform's runner runs today. The rules above appl
 | Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0008) |
 | Swift | none yet (0009, over the 0013 surface) | no runner yet (0009) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0009) |
 
-When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row. ADR 0034's parity check then compares its results with the Rust reference run.
+When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row.
+
+### Runner names and results files
+
+Every runner writes `target/conformance/<runner>.json` at the **repository root** (not under `CARGO_TARGET_DIR`), in the format of [`schema/results.schema.json`](schema/results.schema.json). The names are those of ADR 0034 §2, exactly; the schema's `runner` enum is the list the parity check uses.
+
+| Runner | What runs | Feature |
+|---|---|---|
+| `rust-core` | `crates/polyjose/tests/conformance.rs` (`conformance_vectors`), built with the default features: **the reference run** (ADR 0034 §4) | 0013 T02 |
+| `rust-surface` | `bindings/surface/tests/conformance.rs`, the same files through `polyjose-surface` only (ADR 0030) | 0013 T11 |
+| `wasm-node`, `wasm-chrome` | the wasm-bindgen-test runs of the WASM adapter (`wasm-pack test --node`, `--headless --chrome`) | 0006 |
+| `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` | the packed `@polyjose/wasm` tarball through the shared JS facade and its runner (`bindings/js/conformance/`) | 0006 |
+| `node` | `@polyjose/node` through the shared JS facade and its runner | 0007 |
+| `jvm` | the Kotlin API on the JVM | 0008 |
+| `android-emulator` | the Kotlin API on the Android emulator (AVD `polyjose-api36`) | 0008 |
+| `swift-macos`, `swift-ios-sim`, `swift-tvos-sim` | the Swift API on macOS and the iOS and tvOS simulators | 0009 |
+
+- **Off-host runs** (a browser page, workerd, the emulator, a simulator) hand their results to the host-side driver, which writes the file on the host.
+- **CI matrix runs** append their target to the file name: `node-x86_64-unknown-linux-musl.json`, `jvm-linux-x86-64.json`. The file's `runner` member stays the bare name (`node`), and the parity check compares the file like `<runner>`.
+- **Rust builds with features** (`cargo test -p polyjose --all-features`, as `scripts/test-all.sh rust` runs) write `rust-core-<features>.json`, the enabled feature names joined by `-` (for example `rust-core-deflate-fixed-rng.json`). They aren't the reference, and the parity check ignores them. Only the default-features build writes `rust-core.json`.
+- **Test doubles** (a runner tested against a fake backend) never write to `target/conformance/`.
+
+### The results file
+
+```json
+{ "runner": "node", "polyjose": "0.1.0", "features": [], "error_codes": ["InvalidBase64", "…"],
+  "results": [
+    { "id": "jws-rfc7515/a1-hs256-compact-verify.json#0", "source": "RFC 7515 App. A.1", "op": "jws.verify",
+      "status": "pass", "actual": { "ok": true } },
+    { "id": "jwe/zip/bound-exact-decrypts.json#0", "op": "jwe.decrypt", "status": "skipped", "reason": "feature:deflate" } ] }
+```
+
+| Member | Rule |
+|---|---|
+| `runner` | The runner name above, without any file-name suffix. |
+| `polyjose` | The binding's `version()` (ADR 0030 §4); for the Rust runners, the crate version. |
+| `features` | The vector feature names (see [Features](#features)) the build enables. `[]` for every binding and for the reference. |
+| `error_codes` | The binding's `error_codes()`, in its order; for the Rust runners, `Error::CODES`. It must equal the reference's list, in the same order (ADR 0034 §8). |
+| `results` | **One entry per `*.json` file** under `vectors/`, including a file that doesn't parse. Ids are unique; order is free. |
+| `results[].id` | The file's path under `conformance/vectors/`, with `/` separators on every platform, then `#0`: every file holds one vector (ADR 0034 §1, ADR 0045 §4). Derived, never written by hand. |
+| `results[].source` | Optional: the vector's `source`. Not compared. |
+| `results[].op` | The vector's `operation`, as written. Required unless the file doesn't parse or names none. |
+| `results[].status` | `pass`: the vector ran and met its expectation (exact outputs, shape and round-trip checks included). `skipped`: only under [the skip rule](#the-skip-rule). `fail`: anything else. |
+| `results[].actual` | The outcome of the operation's calls in the [mapping](#operation-mapping): `{ "ok": true }` when every call returned, or `{ "ok": false, "error": <code> }` with the first call's error code. It's the library's outcome, recorded before any comparison, so a vector whose expectation is wrong still records what happened. Required for `pass`; on a `fail`, present when the calls returned; never on a skip. The checks after the calls (output comparison, shape, round trip) decide `pass` or `fail` but never change `actual`. |
+| `results[].reason` | `skipped`: `feature:` and the missing feature names. `fail`: a message saying why (the file, the `source`, the problem). |
+
+### The skip rule
+
+A vector is skipped **only** when its `features` lists a feature the runner's build doesn't enable (ADR 0034 §3). `reason` is `feature:` followed by the missing names, in the vector's order, comma-separated: `feature:fixed-rng`, `feature:deflate`, `feature:deflate,fixed-rng`. The vector is still validated against `schema.json` first, and a schema-invalid one is a `fail`.
+
+The binding configuration for 0.1.0 is the core's default features: never `fixed-rng` (ADR 0005), and no `deflate` (ADR 0030 §4). So every binding skips exactly the vectors the `rust-core` reference skips, with the same reasons. An unknown operation, an operation the runner hasn't mapped, an unreadable or unparseable file, an exception in the harness, and a host-side error that isn't a polyjose error (implementer note 8) are each a **`fail`**, never a skip.
+
+### The parity check
+
+`scripts/conformance-parity.sh [dir]` (default `target/conformance/`) needs `node` and nothing else. It validates every results file against `schema/results.schema.json`, checks that each file's `runner` matches its file name and that no id appears twice, then compares every file with `rust-core.json`. It checks for:
+
+- the same set of ids;
+- the same `status` per id, and the same `reason` for a skip;
+- the same `actual` (`ok`, and the error code) per executed id;
+- the same `error_codes` list;
+- no `fail` entry, in any file, the reference included.
+
+Each difference is printed as a `FAIL:` line with the id and both outcomes, and the exit status is 1. A missing, malformed or feature-built `rust-core.json` also exits 1. A runner without a file is printed as `SKIPPED (no results: <runner>)`, never as passing, and doesn't fail the check. Usage and tool errors (no `node`) exit 2. The script's own tests are in `scripts/tests/conformance-parity/`. `scripts/test-all.sh` runs them with the other negative tests, and 0013 T04 wires the check itself in after the platform suites.
 
 ## Writing vectors
 
