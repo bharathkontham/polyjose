@@ -283,6 +283,43 @@ test("keys.generate_for checks the key is private, has exactly the RFC members, 
   assert.equal(ec.status, "fail", "an EC key without d is public");
 });
 
+test("features_absent: runs without the feature, skipped as feature:!<name> with it (ADR 0056)", async () => {
+  const compress = JSON.parse(fixture("jwe/encrypt-compress.json").json) as Record<string, unknown>;
+  delete compress["features"];
+  const absent = (extra: Record<string, unknown>): VectorFile =>
+    ({ path: "jwe/compress-absent.json", json: JSON.stringify({ ...compress, expect: { ok: false, error: "UnsupportedAlgorithm" }, ...extra }) });
+  const noDeflate = toyBackend({ jweEncryptCompact: () => { throw coded("UnsupportedAlgorithm", "no deflate"); } });
+  const [ran] = await run([absent({ features_absent: ["deflate"] })], noDeflate);
+  assert.deepEqual([ran?.status, ran?.actual], ["pass", { ok: false, error: "UnsupportedAlgorithm" }]);
+  const [skipped] = await run([absent({ features_absent: ["deflate"] })], toyBackend(), ["deflate"]);
+  assert.deepEqual([skipped?.status, skipped?.reason, skipped !== undefined && "actual" in skipped], ["skipped", "feature:!deflate", false]);
+  // Missing features first, then the enabled absent ones, each in the vector's order.
+  const [mixed] = await run([absent({ features: ["fixed-rng"], features_absent: ["deflate"] })], toyBackend(), ["deflate"]);
+  assert.equal(mixed?.reason, "feature:fixed-rng,!deflate");
+  const [both] = await run([absent({ features_absent: ["fixed-rng", "deflate"] })], toyBackend(), ["deflate", "fixed-rng"]);
+  assert.equal(both?.reason, "feature:!fixed-rng,!deflate");
+});
+
+test("features_absent is strict: known names, once each, non-empty, not also in features; compress needs deflate in a list", async () => {
+  const decode = { operation: "b64url.decode", input: { b64u: "AQI" }, expect: { ok: true, bytes_hex: "0102" } };
+  for (const [extra, needle] of [
+    [{ features_absent: ["zip"] }, /features_absent/],
+    [{ features_absent: ["deflate", "deflate"] }, /features_absent/],
+    [{ features_absent: [] }, /features_absent/],
+    [{ features_absent: "deflate" }, /features_absent/],
+    [{ features: ["deflate"], features_absent: ["deflate"] }, /"deflate" is listed in `features` too/],
+    [{ feature_absent: ["deflate"] }, /feature_absent/],
+  ] as const) {
+    const [result] = await run([vector("t/absent.json", { ...decode, ...extra })], toyBackend(), ["deflate"]);
+    assert.equal(result?.status, "fail", JSON.stringify(extra));
+    assert.match(result?.reason ?? "", needle);
+  }
+  const compress = JSON.parse(fixture("jwe/encrypt-compress.json").json) as Record<string, unknown>;
+  const [onlyRng] = await run([{ path: "jwe/x.json", json: JSON.stringify({ ...compress, features: undefined, features_absent: ["fixed-rng"] }) }]);
+  assert.equal(onlyRng?.status, "fail");
+  assert.match(onlyRng?.reason ?? "", /needs "deflate" listed in `features` or `features_absent`/);
+});
+
 // --- errors and harness rules --------------------------------------------------------------
 
 test("library errors are compared by code; a wrong code fails with the observed actual", async () => {

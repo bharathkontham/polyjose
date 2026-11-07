@@ -9,7 +9,8 @@
  * - a file that isn't strict JSON (duplicate members included, RFC 7493 §2.3) or isn't valid
  *   against `schema.json` fails, whether or not it would be skipped;
  * - a vector whose `features` this build lacks is `skipped` with `reason: "feature:<names>"`
- *   (ADR 0034 §3); nothing else is ever skipped;
+ *   (ADR 0034 §3), and one whose `features_absent` this build has with `!<name>` after them
+ *   (`feature:!deflate`, ADR 0056 §2); nothing else is ever skipped;
  * - an unknown or unmapped operation, a broken vector, and any exception that isn't a
  *   `PolyjoseError` (a facade `TypeError`, napi's `InvalidArg`) are `fail`, never an outcome;
  * - a `PolyjoseError` is the library's outcome and is compared by its `code` (ADR 0030 §5);
@@ -66,6 +67,16 @@ class LibraryError extends Error {
 }
 
 type Out = Record<string, unknown>;
+
+/** A schema-valid vector, as the runner reads it. */
+interface Vector {
+  operation: string;
+  input: Out;
+  expect: Out;
+  features?: string[];
+  /** The features the build must not enable (ADR 0056). */
+  features_absent?: string[];
+}
 type Outcome = { ok: true; out: Out } | { ok: false; error: string };
 
 /** The `jwk.thumbprint` hash names of the schema, mapped to the facade's (ADR 0030 §4). */
@@ -131,11 +142,15 @@ async function runOne(api: PolyjoseApi, file: VectorFile, options: RunOptions): 
     if (options.schema === undefined) throw new HarnessError("no schema supplied to runVectors");
     const violation = schemaViolation(options.schema, value);
     if (violation !== undefined) return fail(violation);
-    const vector = value as { operation: string; input: Out; expect: Out; features?: string[] };
+    const vector = value as Vector;
     crossMemberRules(vector);
     const enabled = options.features ?? [];
-    const missing = (vector.features ?? []).filter((f) => !enabled.includes(f));
-    if (missing.length > 0) return { id, op, status: "skipped", reason: `feature:${missing.join(",")}` };
+    // ADR 0034 §3: the missing `features`, in order; then ADR 0056 §2: each enabled `features_absent` one as `!<name>`.
+    const skip = [
+      ...(vector.features ?? []).filter((f) => !enabled.includes(f)),
+      ...(vector.features_absent ?? []).filter((f) => enabled.includes(f)).map((f) => `!${f}`),
+    ];
+    if (skip.length > 0) return { id, op, status: "skipped", reason: `feature:${skip.join(",")}` };
 
     const outcome = await execute(api, vector, new Text(file.json, tree));
     const actual: Actual = outcome.ok ? { ok: true } : { ok: false, error: outcome.error };
@@ -155,14 +170,22 @@ function message(e: unknown): string {
  * The rules tying members together that the schema can't state, as the Rust runner's
  * `check_jwe_encrypt_features` and `check_jwt_issue` check them (conformance/README.md).
  */
-function crossMemberRules(vector: { operation: string; input: Out; expect: Out; features?: string[] }): void {
+function crossMemberRules(vector: Vector): void {
   const { input, expect } = vector;
   const features = vector.features ?? [];
+  const absent = vector.features_absent ?? [];
+  // ADR 0056 §3: no name both needed and forbidden.
+  const both = absent.find((f) => features.includes(f));
+  if (both !== undefined) throw new HarnessError(`/features_absent: "${both}" is listed in \`features\` too`);
   if (vector.operation === "jwe.encrypt") {
-    for (const [member, feature] of [["rng_b64u", "fixed-rng"], ["protected_b64u", "fixed-rng"], ["compress", "deflate"]] as const) {
+    for (const [member, feature] of [["rng_b64u", "fixed-rng"], ["protected_b64u", "fixed-rng"]] as const) {
       if (Object.hasOwn(input, member) && !features.includes(feature)) {
         throw new HarnessError(`/features: \`input/${member}\` needs "${feature}" listed in \`features\``);
       }
+    }
+    // ADR 0056 §4: `deflate` in either list (`features_absent` pins UnsupportedAlgorithm without it).
+    if (Object.hasOwn(input, "compress") && !features.includes("deflate") && !absent.includes("deflate")) {
+      throw new HarnessError('/features: `input/compress` needs "deflate" listed in `features` or `features_absent`');
     }
   }
   if (vector.operation === "jwt.issue") {
