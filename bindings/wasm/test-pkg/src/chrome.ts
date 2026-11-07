@@ -6,7 +6,9 @@
  *    package from a tiny `node:http` server on 127.0.0.1 (`server.ts`);
  * 3. runs Chrome with `--headless=new --dump-dom --virtual-time-budget=<ms>` and a throwaway
  *    profile; the page (`page.ts`) writes the results into `<pre id="results">`;
- * 4. extracts the document and writes `target/conformance/wasm-pkg-chrome.json` (`host.ts`).
+ * 4. extracts the document and writes `target/conformance/wasm-pkg-chrome.json` (`host.ts`), and
+ *    prints the page's security checks (`<pre id="security">`, `security-checks.ts`, review N8);
+ *    a failing or missing check fails the run, but never changes the results file.
  *
  * Chrome is `POLYJOSE_CHROME` if set, else the installed macOS app. Without it this prints
  * `SKIPPED (...)` and exits 0, writing no results file; `run.sh` then prints the waiver
@@ -15,6 +17,7 @@
  */
 import { collectVectors, reportProbe, resolveEntry, writeResults } from "./host.js";
 import { childProcess, fs, path, process, repoRoot, stageRoot } from "./node.js";
+import { securityLines } from "./security-checks.js";
 import { startServer } from "./server.js";
 
 const RUNNER = "wasm-pkg-chrome";
@@ -34,7 +37,7 @@ function unescapeText(text: string): string {
 /** The text of every `<pre id="...">` in the dumped DOM. */
 function preTexts(dom: string): Map<string, string> {
   const found = new Map<string, string>();
-  for (const m of dom.matchAll(/<pre id="(results|probe|error)">([\s\S]*?)<\/pre>/g)) {
+  for (const m of dom.matchAll(/<pre id="(results|probe|security|error)">([\s\S]*?)<\/pre>/g)) {
     if (m[1] !== undefined && m[2] !== undefined) found.set(m[1], unescapeText(m[2]));
   }
   return found;
@@ -119,8 +122,11 @@ async function main(): Promise<number> {
     }
     const probe = pres.get("probe");
     const probeOk = reportProbe(RUNNER, probe === undefined ? null : JSON.parse(probe));
+    const security = pres.get("security");
+    const sec = securityLines(RUNNER, security === undefined ? null : JSON.parse(security));
+    for (const line of sec.lines) process.stdout.write(`${line}\n`);
     const code = writeResults(root, RUNNER, JSON.parse(results));
-    return probeOk && code === 0 ? 0 : 1;
+    return probeOk && sec.ok && code === 0 ? 0 : 1;
   } finally {
     await server.close();
     fs.rmSync(profile, { recursive: true, force: true });

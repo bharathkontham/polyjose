@@ -17,6 +17,11 @@ deny = [
   # sees them. `wrappers` (cargo-deny 0.20 src/bans.rs) allows a banned crate only when *every*
   # crate depending on it directly is listed: cc through any other crate, or through minicov plus
   # another crate, stays banned. scripts/tests/deny/cc-wrapper.sh proves that on a planted copy.
+  # What cargo-deny does not catch: minicov moving into a normal tree (a normal dependency of a
+  # binding or of the core). cc's only direct dependent would still be minicov, so this ban would
+  # still pass. scripts/check-deps.sh's allowlists catch that instead: minicov is in neither
+  # deps-allowlist.txt (check 1, the core's normal and build tree) nor any
+  # bindings/deps-allowlist/<name>.txt (check 13, a binding's normal tree).
   { name = "cc", wrappers = ["minicov"] }, { name = "cmake" },
 ]
 
