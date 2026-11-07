@@ -1072,6 +1072,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyjose-surface"
+version = "0.1.0"
+dependencies = [
+ "polyjose",
+ "zeroize",
+]
+
+[[package]]
 name = "polyjose-wasm"
 version = "0.1.0"
 dependencies = [
