@@ -347,7 +347,9 @@ $dep = $spec"
   fi
 done
 
-# 15. The security audit's L1 plant, as written (feature 0013 review-security.md).
+# 15. The security audit's L1 plant, as written (feature 0013 review-security.md), except that the
+#     member takes rsa from [workspace.dependencies] (the pin of ADR 0055 §4, default features off)
+#     instead of a version written here, which a bump of that pin would make unresolvable.
 new_case tool-audit-l1
 append_to tools/evil/Cargo.toml '[package]
 name = "polyjose-evil-tool"
@@ -356,7 +358,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rsa = { version = "=0.10.0-rc.20", optional = true, default-features = false }
+rsa = { workspace = true, optional = true }
 polyjose = { path = "../../crates/polyjose", optional = true }
 
 [features]
