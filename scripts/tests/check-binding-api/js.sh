@@ -52,11 +52,14 @@ fi
 
 # --- The real sources pass ---------------------------------------------------------------------------
 
+# The counts are the inventory's operations, records and fields and the core's codes (lib.sh), so
+# the case does not change when the API grows.
+n_codes=$(core_codes | awk 'END { print NR }')
 new_case pass
 use_js_modules
 run_check js
 check_last_line "the facade's declarations match the inventory" 0 \
-  'check-binding-api: js: PASS (32 operations, 13 records, 74 fields, 16 codes)'
+  "check-binding-api: js: PASS ($(inventory_count op) operations, $(inventory_count record) records, $(inventory_count field) fields, $n_codes codes)"
 dist_ok=1
 [ ! -e "$case_dir/bindings/js/dist" ] || dist_ok=0
 report "the declarations are built in the mode's scratch directory, not bindings/js/dist" "$dist_ok" \
@@ -90,6 +93,8 @@ check_diffs "a renamed operation fails as missing and extra" \
 new_case renamed-field
 use_js_modules
 edit $types '  keyUse?: string | undefined;' '  keyUsage?: string | undefined;'
+# The conformance runner and the tests set keyUse, so they would fail tsc first (facade_only).
+facade_only
 run_check js
 check_diffs "a renamed record field fails as missing and extra" \
   'missing from js (in the inventory): field JwkSelector.keyUse?' \
