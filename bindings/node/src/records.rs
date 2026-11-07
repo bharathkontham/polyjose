@@ -22,19 +22,38 @@
 //!   (`ToJs`); secret bytes (`payload`, `plaintext`, `aad`) are copied into new JS memory from
 //!   the surface's borrowed, zeroizing buffer, which is wiped when the surface record drops
 //!   (ADR 0030 §7.2). Optional fields that are `None` are left out of the JS object.
+//! - **String outputs** (headers, `alg`, `kid`, JWT claims) are `JsString`s, `string` in JS. Each
+//!   surface string is first moved into a `Zeroizing` owner, all of them before the first
+//!   conversion, and V8 copies it from the borrow; so every Rust copy is wiped, also when a later
+//!   conversion fails (review-code.md SF-6). JWT claims stay outside ADR 0030 §7's secret
+//!   classification (ADR 0058, owner decision 2); wiping the adapter's own copy changes no API.
 //! - **Not logged:** none of these records implements `Debug` (ADR 0030 §7.5).
 
-use napi::Env;
 use napi::bindgen_prelude::Uint8ArraySlice;
+use napi::{Env, JsString};
 use napi_derive::napi;
 use polyjose_surface::records as surface;
 use polyjose_surface::{SecretBytes, SecretString};
+use zeroize::Zeroizing;
 
 use crate::task::ToJs;
 
 /// Copies borrowed JS bytes into a zeroizing owner, on the JS thread (ADR 0030 §7.1).
 fn secret_bytes(bytes: Uint8ArraySlice<'_>) -> SecretBytes {
     SecretBytes::from(bytes.to_vec())
+}
+
+/// A JS string copied from the borrow of a zeroizing owner (ADR 0030 §7.2, review-code.md SF-6).
+fn js_string<'env>(env: &'env Env, value: &Zeroizing<String>) -> napi::Result<JsString<'env>> {
+    env.create_string(value.as_str())
+}
+
+/// [`js_string`] of an optional string; `None` stays `None` (left out of the JS object).
+fn js_string_opt<'env>(
+    env: &'env Env,
+    value: Option<&Zeroizing<String>>,
+) -> napi::Result<Option<JsString<'env>>> {
+    value.map(|value| js_string(env, value)).transpose()
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -147,14 +166,14 @@ impl From<JwsVerifyOptions<'_>> for surface::JwsVerifyOptions {
 #[napi(object, object_from_js = false)]
 pub struct JwsVerified<'env> {
     /// The algorithm that verified (RFC 7515 §4.1.1).
-    pub alg: String,
+    pub alg: JsString<'env>,
     /// The payload octets, copied from the surface's zeroizing buffer (ADR 0049 §4).
     pub payload: Uint8ArraySlice<'env>,
     /// The JWS Protected Header as JSON text, when present (RFC 7515 §4).
-    pub protected_header: Option<String>,
+    pub protected_header: Option<JsString<'env>>,
     /// The JWS Unprotected Header as JSON text, when present; not integrity-protected
     /// (RFC 7515 §7.2.1, ADR 0049 §2).
-    pub unprotected_header: Option<String>,
+    pub unprotected_header: Option<JsString<'env>>,
     /// The index of the signature that verified (RFC 7515 §7.2.1).
     pub signature_index: u32,
 }
@@ -163,11 +182,14 @@ impl<'env> ToJs<'env> for surface::JwsVerified {
     type Js = JwsVerified<'env>;
 
     fn to_js(self, env: &'env Env) -> napi::Result<JwsVerified<'env>> {
+        let alg = Zeroizing::new(self.alg);
+        let protected_header = self.protected_header.map(Zeroizing::new);
+        let unprotected_header = self.unprotected_header.map(Zeroizing::new);
         Ok(JwsVerified {
             payload: Uint8ArraySlice::copy_from(env, self.payload.as_bytes())?,
-            alg: self.alg,
-            protected_header: self.protected_header,
-            unprotected_header: self.unprotected_header,
+            alg: js_string(env, &alg)?,
+            protected_header: js_string_opt(env, protected_header.as_ref())?,
+            unprotected_header: js_string_opt(env, unprotected_header.as_ref())?,
             signature_index: self.signature_index,
         })
     }
@@ -286,14 +308,14 @@ pub struct JweDecrypted<'env> {
     pub plaintext: Uint8ArraySlice<'env>,
     /// The JOSE Header used (the union of the header members, RFC 7516 §5.2 step 4), as JSON
     /// text. Only its protected members are integrity-protected (ADR 0050 §3).
-    pub header: String,
+    pub header: JsString<'env>,
     /// The JWE Protected Header as JSON text, when present (RFC 7516 §7.2.1).
-    pub protected_header: Option<String>,
+    pub protected_header: Option<JsString<'env>>,
     /// The JWE Shared Unprotected Header as JSON text, when present (RFC 7516 §7.2.1).
-    pub shared_unprotected_header: Option<String>,
+    pub shared_unprotected_header: Option<JsString<'env>>,
     /// The recipient's JWE Per-Recipient Unprotected Header as JSON text, when present
     /// (RFC 7516 §7.2.1).
-    pub recipient_header: Option<String>,
+    pub recipient_header: Option<JsString<'env>>,
     /// The JWE AAD, when present, copied from the surface's zeroizing buffer (ADR 0050 §4).
     pub aad: Option<Uint8ArraySlice<'env>>,
     /// The index of the recipient that decrypted (RFC 7516 §7.2.1).
@@ -304,16 +326,20 @@ impl<'env> ToJs<'env> for surface::JweDecrypted {
     type Js = JweDecrypted<'env>;
 
     fn to_js(self, env: &'env Env) -> napi::Result<JweDecrypted<'env>> {
+        let header = Zeroizing::new(self.header);
+        let protected_header = self.protected_header.map(Zeroizing::new);
+        let shared_unprotected_header = self.shared_unprotected_header.map(Zeroizing::new);
+        let recipient_header = self.recipient_header.map(Zeroizing::new);
         Ok(JweDecrypted {
             plaintext: Uint8ArraySlice::copy_from(env, self.plaintext.as_bytes())?,
             aad: self
                 .aad
                 .map(|aad| Uint8ArraySlice::copy_from(env, aad.as_bytes()))
                 .transpose()?,
-            header: self.header,
-            protected_header: self.protected_header,
-            shared_unprotected_header: self.shared_unprotected_header,
-            recipient_header: self.recipient_header,
+            header: js_string(env, &header)?,
+            protected_header: js_string_opt(env, protected_header.as_ref())?,
+            shared_unprotected_header: js_string_opt(env, shared_unprotected_header.as_ref())?,
+            recipient_header: js_string_opt(env, recipient_header.as_ref())?,
             recipient_index: self.recipient_index,
         })
     }
@@ -412,66 +438,61 @@ impl From<JwtVerifyOptions> for surface::JwtVerifyOptions {
 
 /// A verified JWT (RFC 7519 §7.2): the result of `jwtVerify`/`jwtVerifyWithJwks`.
 #[napi(object, object_from_js = false)]
-pub struct JwtVerified {
-    /// The claims as the core's JSON serialization (ADR 0027 §1).
-    pub claims: String,
+pub struct JwtVerified<'env> {
+    /// The claims as the core's JSON serialization (ADR 0027 §1). Plain in the API (ADR 0058,
+    /// owner decision 2); the adapter's copy is wiped all the same (see the module docs).
+    pub claims: JsString<'env>,
     /// The JOSE Header as JSON text (RFC 7519 §5).
-    pub header: String,
+    pub header: JsString<'env>,
     /// The algorithm that verified (RFC 7515 §4.1.1).
-    pub alg: String,
+    pub alg: JsString<'env>,
     /// The index of the JWK Set member that verified, for a set (ADR 0029).
     pub key_index: Option<u32>,
     /// The `kid` of the key that verified, when it has one (RFC 7517 §4.5).
-    pub kid: Option<String>,
-}
-
-impl From<surface::JwtVerified> for JwtVerified {
-    fn from(v: surface::JwtVerified) -> Self {
-        Self {
-            claims: v.claims,
-            header: v.header,
-            alg: v.alg,
-            key_index: v.key_index,
-            kid: v.kid,
-        }
-    }
+    pub kid: Option<JsString<'env>>,
 }
 
 impl<'env> ToJs<'env> for surface::JwtVerified {
-    type Js = JwtVerified;
+    type Js = JwtVerified<'env>;
 
-    fn to_js(self, _env: &'env Env) -> napi::Result<JwtVerified> {
-        Ok(self.into())
+    fn to_js(self, env: &'env Env) -> napi::Result<JwtVerified<'env>> {
+        let claims = Zeroizing::new(self.claims);
+        let header = Zeroizing::new(self.header);
+        let alg = Zeroizing::new(self.alg);
+        let kid = self.kid.map(Zeroizing::new);
+        Ok(JwtVerified {
+            claims: js_string(env, &claims)?,
+            header: js_string(env, &header)?,
+            alg: js_string(env, &alg)?,
+            key_index: self.key_index,
+            kid: js_string_opt(env, kid.as_ref())?,
+        })
     }
 }
 
 /// A verified nested JWT (RFC 7519 §5.2, §7.2 step 8): the result of `jwtDecryptNested` and
 /// `jwtDecryptNestedWithJwks`.
 #[napi(object, object_from_js = false)]
-pub struct JwtNestedVerified {
+pub struct JwtNestedVerified<'env> {
     /// The inner, signed JWT.
-    pub inner: JwtVerified,
+    pub inner: JwtVerified<'env>,
     /// The outer JWE's JOSE Header as JSON text (RFC 7516 §5.2).
-    pub outer_header: String,
+    pub outer_header: JsString<'env>,
     /// The index of the JWE recipient that decrypted (RFC 7516 §7.2.1).
     pub recipient_index: u32,
 }
 
-impl From<surface::JwtNestedVerified> for JwtNestedVerified {
-    fn from(v: surface::JwtNestedVerified) -> Self {
-        Self {
-            inner: v.inner.into(),
-            outer_header: v.outer_header,
-            recipient_index: v.recipient_index,
-        }
-    }
-}
-
 impl<'env> ToJs<'env> for surface::JwtNestedVerified {
-    type Js = JwtNestedVerified;
+    type Js = JwtNestedVerified<'env>;
 
-    fn to_js(self, _env: &'env Env) -> napi::Result<JwtNestedVerified> {
-        Ok(self.into())
+    fn to_js(self, env: &'env Env) -> napi::Result<JwtNestedVerified<'env>> {
+        // Moved into its owner before the inner record converts, so it is wiped if that fails.
+        let outer_header = Zeroizing::new(self.outer_header);
+        Ok(JwtNestedVerified {
+            inner: self.inner.to_js(env)?,
+            outer_header: js_string(env, &outer_header)?,
+            recipient_index: self.recipient_index,
+        })
     }
 }
 
@@ -592,25 +613,5 @@ mod tests {
         });
         assert_eq!(signer.key.as_str().as_ptr(), ptr);
         crate::tests::wipes_on_drop(&signer.key);
-    }
-
-    #[test]
-    fn verified_jwt_records_pass_through() {
-        let inner = surface::JwtVerified {
-            claims: r#"{"sub":"a"}"#.into(),
-            header: r#"{"alg":"HS256"}"#.into(),
-            alg: "HS256".into(),
-            key_index: Some(1),
-            kid: None,
-        };
-        let nested = JwtNestedVerified::from(surface::JwtNestedVerified {
-            inner,
-            outer_header: r#"{"alg":"dir"}"#.into(),
-            recipient_index: 0,
-        });
-        assert_eq!(nested.inner.claims, r#"{"sub":"a"}"#);
-        assert_eq!(nested.inner.key_index, Some(1));
-        assert_eq!(nested.inner.kid, None);
-        assert_eq!(nested.outer_header, r#"{"alg":"dir"}"#);
     }
 }

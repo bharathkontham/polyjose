@@ -15,13 +15,18 @@
 //!    with the coded error ([`crate::error::reject`]).
 //! 4. The task then drops, and its `Zeroizing` fields wipe the copied inputs (ADR 0030 §7.6).
 //!
-//! [`ToJs`] builds secret results by copying from the surface's borrowed, zeroizing buffers
+//! [`ToJs`] builds every result by copying from a borrow of a zeroizing buffer
 //! (`env.create_string`, `Uint8ArraySlice::copy_from`), never by handing an owned `String` or
-//! `Vec<u8>` to napi, so no un-wiped Rust copy is left (research §4, ADR 0030 §7.2).
+//! `Vec<u8>` to napi, so no un-wiped Rust copy is left (research §4, ADR 0030 §7.2). That holds
+//! for the results ADR 0030 §7 classifies as secret and, since review-code.md SF-6, for every
+//! other string too: a compact token embeds base64url(payload), which ADR 0049 §4 treats as
+//! secret, and the JWT claims ADR 0058 leaves plain in the API are still wiped here. The JS types
+//! are unchanged (`string`, `Uint8Array`).
 
 use napi::bindgen_prelude::{ToNapiValue, TypeName, Uint8ArraySlice};
 use napi::{Env, JsString};
 use polyjose_surface::{SecretBytes, SecretString, SurfaceResult};
+use zeroize::Zeroizing;
 
 /// Converts a surface result into the JS value a task resolves with, on the JS thread.
 pub trait ToJs<'env> {
@@ -33,13 +38,16 @@ pub trait ToJs<'env> {
     fn to_js(self, env: &'env Env) -> napi::Result<Self::Js>;
 }
 
-/// A non-secret string (a compact token, a JSON serialization, a thumbprint, a public JWK):
-/// handed to napi as is, which copies it into a JS string.
+/// A string the API does not classify as secret (a compact token, a JSON serialization, a
+/// thumbprint, a public JWK). A token still embeds base64url(payload) (ADR 0049 §4), so the value
+/// moves into a zeroizing owner, V8 copies it from the borrow, and the Rust buffer is wiped on
+/// drop, as for [`SecretString`] (ADR 0030 §7.2, review-code.md SF-6). JS sees a `string`.
 impl<'env> ToJs<'env> for String {
-    type Js = String;
+    type Js = JsString<'env>;
 
-    fn to_js(self, _env: &'env Env) -> napi::Result<String> {
-        Ok(self)
+    fn to_js(self, env: &'env Env) -> napi::Result<JsString<'env>> {
+        let value = Zeroizing::new(self);
+        env.create_string(value.as_str())
     }
 }
 

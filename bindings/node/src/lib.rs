@@ -78,10 +78,16 @@ pub(crate) mod tests {
         ("../build.rs", include_str!("../build.rs")),
     ];
 
-    /// Tasks whose result is not secret and may resolve as plain `String`s: tokens, JSON
-    /// serializations, thumbprints, a public JWK and the JWT records (ADR 0030 §4, §7). Every
-    /// other task must resolve through `SecretString`, `SecretBytes` or a record that copies its
-    /// secret fields.
+    /// Tasks whose result the API does not classify as secret, so they may resolve through
+    /// `String` or the JWT records: tokens, JSON serializations, thumbprints, a public JWK
+    /// (ADR 0030 §4, §7), and the JWT claims and headers, plain for 0.1.0 (ADR 0058, owner
+    /// decision 2). Every other task must resolve through `SecretString`, `SecretBytes` or a
+    /// record that copies its secret fields.
+    ///
+    /// This list is the classification, not the wiping: since review-code.md SF-6 these results
+    /// are wiped too. `ToJs for String` and the JWT records move every string into a `Zeroizing`
+    /// owner and copy it into V8 from the borrow, so no task hands napi an owned `String`
+    /// (`no_task_resolves_with_an_owned_string`).
     const NON_SECRET_TASKS: [&str; 14] = [
         "JwkToPublicTask",
         "JwkThumbprintTask",
@@ -93,7 +99,8 @@ pub(crate) mod tests {
         "JweEncryptJsonTask",
         "JwtSignTask",
         "JwtEncryptNestedTask",
-        // The JWT results are records of non-secret strings (claims and headers, ADR 0030 §4).
+        // The JWT results: records of strings the API leaves plain (claims and headers,
+        // ADR 0030 §4, ADR 0058 owner decision 2), wiped by the adapter all the same.
         "JwtVerifyTask",
         "JwtVerifyWithJwksTask",
         "JwtDecryptNestedTask",
@@ -250,11 +257,7 @@ pub(crate) mod tests {
             .match_indices(marker)
             .map(|(i, _)| {
                 let rest = &records[i + marker.len()..];
-                let name = rest
-                    .split(['<', ' '])
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned();
+                let name = rest.split(['<', ' ']).next().unwrap_or_default().to_owned();
                 let fields = block(rest, &name)
                     .lines()
                     .skip(1)
@@ -282,7 +285,10 @@ pub(crate) mod tests {
             "let value = Zeroizing::new(self);",
             "env.create_string(value.as_str())",
         ] {
-            assert!(string.contains(line), "ToJs for String lacks `{line}`:\n{string}");
+            assert!(
+                string.contains(line),
+                "ToJs for String lacks `{line}`:\n{string}"
+            );
         }
         for (file, text) in SOURCES {
             for needle in [
@@ -350,6 +356,7 @@ pub(crate) mod tests {
         let task = include_str!("task.rs");
         for conversion in [
             "env.create_string(self.as_str())",
+            "env.create_string(value.as_str())",
             "Uint8ArraySlice::copy_from(env, self.as_bytes())",
         ] {
             assert!(task.contains(conversion), "task.rs lacks `{conversion}`");
