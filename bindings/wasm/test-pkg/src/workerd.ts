@@ -7,12 +7,15 @@
  *    installed package (`.js`/`.mjs` as ES modules, the `.wasm` as a compiled module, as
  *    wrangler uploads it). workerd has no `node_modules` resolution, so, as a bundler does, the
  *    name `@polyjose/wasm` is one module re-exporting the resolved entry;
- * 3. runs the probe and the vectors (sent as the request body), and writes
- *    `target/conformance/wasm-pkg-workerd.json` from the response (`host.ts`).
+ * 3. runs the security checks first (`GET /security`, `security-checks.ts`, review N8: the
+ *    worker's first API call, so its input-copy check is cold), then the probe and the vectors
+ *    (sent as the request body), and writes `target/conformance/wasm-pkg-workerd.json` from the
+ *    response (`host.ts`). A failing security check fails the run but never changes that file.
  * Miniflare starts and stops its own workerd process (`dispose()`). Exit 1 on any failure.
  */
 import { collectVectors, reportProbe, resolveEntry, writeResults } from "./host.js";
 import { fs, path, process, repoRoot, stageRoot } from "./node.js";
+import { securityLines } from "./security-checks.js";
 
 const RUNNER = "wasm-pkg-workerd";
 /** The workerd release miniflare 4.20260730.0 pins (workerd 1.20260730.1). */
@@ -89,6 +92,7 @@ async function main(): Promise<number> {
   const modules: ModuleDefinition[] = [
     { type: "ESModule", path: path.join(stage, "dist", "worker.js") },
     { type: "ESModule", path: path.join(stage, "dist", "results.js") },
+    { type: "ESModule", path: path.join(stage, "dist", "security-checks.js") },
     { type: "ESModule", path: path.join(stage, "js", "conformance", "runner.js") },
     { type: "ESModule", path: path.join(stage, "js", "conformance", "json-text.js") },
     { type: "ESModule", path: path.join(stage, "js", "conformance", "schema.js") },
@@ -107,6 +111,9 @@ async function main(): Promise<number> {
   const { Miniflare } = (await import(specifier)) as MiniflareModule;
   const mf = new Miniflare({ modules, modulesRoot: stage, compatibilityDate: COMPATIBILITY_DATE });
   try {
+    const security = await jsonBody("GET /security", await withTimeout("GET /security", mf.dispatchFetch("http://localhost/security")));
+    const sec = securityLines(RUNNER, security);
+    for (const line of sec.lines) process.stdout.write(`${line}\n`);
     const probe = await jsonBody("GET /probe", await withTimeout("GET /probe", mf.dispatchFetch("http://localhost/probe")));
     const probeOk = reportProbe(RUNNER, probe);
     const body = JSON.stringify(collectVectors(root));
@@ -118,7 +125,7 @@ async function main(): Promise<number> {
       ),
     );
     const code = writeResults(root, RUNNER, doc);
-    return probeOk && code === 0 ? 0 : 1;
+    return probeOk && sec.ok && code === 0 ? 0 : 1;
   } finally {
     await mf.dispose();
   }
