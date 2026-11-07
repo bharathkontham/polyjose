@@ -945,9 +945,10 @@ fn no_failing_path_puts_a_key_or_payload_in_the_error() {
 /// leaves every default to the core, so none may appear in its code.
 const CORE_DEFAULTS: [&str; 6] = ["10000", "1000000", "250000", "1048576", "16", "1024"];
 
-/// Numeric literals in `line` outside a `//` comment that equal a core default, ignoring `_`
-/// separators and type suffixes (`16u32`), and not counting digits that continue an identifier
-/// or a hex literal (`u16`, `0x16`).
+/// Numeric literals in `line` outside a `//` comment that equal a core default, in any radix
+/// (`16`, `0x10`, `0o20`, `0b1_0000`), ignoring `_` separators and type suffixes (`16u32`).
+/// String literals and `#[cfg(test)]` code are scanned too (the rule of T06's scan); digits that
+/// continue an identifier (`u16`) are not a literal.
 fn default_literals(line: &str) -> Vec<String> {
     let code = line.split("//").next().unwrap_or_default();
     let bytes = code.as_bytes();
@@ -956,17 +957,32 @@ fn default_literals(line: &str) -> Vec<String> {
     while i < bytes.len() {
         let starts_literal = bytes[i].is_ascii_digit()
             && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'));
-        if starts_literal {
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
-                i += 1;
-            }
-            let digits: String = code[start..i].chars().filter(|c| *c != '_').collect();
-            if CORE_DEFAULTS.contains(&digits.as_str()) {
-                found.push(code[start..i].to_owned());
-            }
-        } else {
+        if !starts_literal {
             i += 1;
+            continue;
+        }
+        let start = i;
+        let radix = match (bytes[i], bytes.get(i + 1)) {
+            (b'0', Some(b'x' | b'X')) => 16,
+            (b'0', Some(b'o' | b'O')) => 8,
+            (b'0', Some(b'b' | b'B')) => 2,
+            _ => 10,
+        };
+        if radix != 10 {
+            i += 2;
+        }
+        let digits_start = i;
+        while i < bytes.len() && (char::from(bytes[i]).is_digit(radix) || bytes[i] == b'_') {
+            i += 1;
+        }
+        let digits: String = code[digits_start..i]
+            .chars()
+            .filter(|c| *c != '_')
+            .collect();
+        let is_default = u64::from_str_radix(&digits, radix)
+            .is_ok_and(|n| CORE_DEFAULTS.contains(&n.to_string().as_str()));
+        if is_default {
+            found.push(code[start..i].to_owned());
         }
     }
     found
@@ -980,6 +996,15 @@ fn the_default_scan_finds_literals_and_skips_comments() {
     assert_eq!(default_literals("let m = 1024 * 1024;"), ["1024", "1024"]);
     assert!(default_literals("/// the default is 16 signatures").is_empty());
     assert!(default_literals("let a = b; // 16").is_empty());
+    assert_eq!(
+        default_literals("let h = 0x10; let o = 0o20;"),
+        ["0x10", "0o20"]
+    );
+    assert_eq!(
+        default_literals("let b = 0b1_0000; let s = \"16\";"),
+        ["0b1_0000", "16"]
+    );
+    assert_eq!(default_literals("let m = 0x10_0000;"), ["0x10_0000"]);
     assert!(default_literals("let x: u16 = 0x16; let y = 160;").is_empty());
 }
 
