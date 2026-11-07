@@ -22,8 +22,13 @@ workspace: `source /Users/bharath/bharathwork/joserust/.toolchain-env.sh`.
 ```sh
 ./gradlew :polyjose-jvm:test        # JVM tests through JNA and the host library
 ./gradlew :polyjose:assembleDebug   # the AAR (builds all four ABIs with cargo-ndk)
-./test.sh                           # what `scripts/test-all.sh android` runs
+scripts/run-instrumented.sh         # the instrumented suite on an emulator (see Tests)
+./test.sh                           # what `scripts/test-all.sh android` runs: both of the above
 ```
+
+From the repository root, `scripts/check-binding-api.sh kotlin` checks the generated Kotlin's
+public names against `bindings/api-inventory.txt` (ADR 0030 §2, 0013 T13); it generates the Kotlin
+into its own scratch directory, so it needs cargo but not Gradle.
 
 ## Rust tasks (root project)
 
@@ -44,6 +49,33 @@ date. The modules depend on these tasks; nothing generated is committed.
   (`conformance/vectors`), `polyjose.apiInventory` (`bindings/api-inventory.txt`),
   `polyjose.workspaceManifest` (`Cargo.toml`) and `polyjose.conformanceResults`
   (`target/conformance/jvm.json`, ADR 0034).
-- `:polyjose` androidTest runs on the `polyjose-api36` emulator with the conformance vectors
-  packaged as test-APK assets.
+- `:polyjose` androidTest (JUnit 4, AndroidJUnitRunner) runs on an emulator:
+  `ConformanceInstrumentedTest` (runner `android-emulator`) and `SecurityInstrumentedTest` (the
+  marker test for the JWS family, ADR 0030 §5; two generated keys differ, ADR 0005). The
+  `conformanceAssets` task copies `conformance/vectors/` and `conformance/schema.json` byte for byte
+  into the test APK's assets under `conformance/`; the device hashes the bytes it parses for
+  `vectors_digest` (ADR 0060), so a bundle that differs from the checkout fails parity.
 - Both test source sets include `shared-test/kotlin`, the conformance runner they share.
+
+### The instrumented run (`scripts/run-instrumented.sh`)
+
+1. It uses an emulator that `adb devices` lists as `device` and never stops it. With none, it boots
+   `polyjose-api36` headless (`-no-window -no-audio -no-snapshot -gpu swiftshader_indirect`, about
+   20 s on this host), waits at most 300 s for `sys.boot_completed`, and afterwards stops only that
+   emulator, by serial (`adb -s <serial> emu kill`), also on an error or Ctrl-C.
+2. It runs `./gradlew :polyjose:connectedDebugAndroidTest` on that serial and judges the run by the
+   JUnit XML under `polyjose/build/outputs/androidTest-results/connected/` (AGP can exit 0 when the
+   instrumentation crashed): a failure, an error, a skipped test or a missing file fails it.
+3. The test writes the results document to the test app's files dir and to AGP's additional test
+   output dir, which AGP pulls before it uninstalls the test APK; the script copies it to
+   `target/conformance/android-emulator.json` at the repository root (ADR 0034 §2).
+
+With no SDK, no AVD or a boot that times out, the JVM tests have still run, so the platform is not
+SKIPPED: the last line is `SKIPPED-RUNNER (android-emulator: host:<token>)` (`no-android-sdk`,
+`no-avd`, `emulator-boot-timeout`, `emulator-exited`), which `scripts/test-all.sh` reports as a
+SKIPPED runner under parity, never as passing (0013 F05). Overrides: `POLYJOSE_AVD`,
+`POLYJOSE_EMULATOR_BOOT_TIMEOUT` (seconds).
+
+Only arm64-v8a runs (an Apple Silicon host has no x86_64 system image), so x86_64 is NOT RUN. The
+AVD has 4 KB pages, so 16 KB page-size runtime testing is SKIPPED with that reason; the 16 KB
+alignment of the `.so` files is checked statically (`scripts/check-artifacts.sh`).
