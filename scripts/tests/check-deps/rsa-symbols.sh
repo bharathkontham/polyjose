@@ -82,6 +82,13 @@ pkcs1_sign='rsa::pkcs1v15::signing_key::SigningKey<sha2::Sha256>'
 new_case clean
 dump_dir="$scratch/dump-clean"
 expect_pass "unchanged tree"
+tests_run=$((tests_run + 1))
+if grep -Fqx '  skipped polyjose-uniffi-bindgen: no library target, and neither rsa nor a workspace member in its tree' "$scratch/out"; then
+  echo "ok   - unchanged tree: the library-less polyjose-uniffi-bindgen is skipped, and says so"
+else
+  echo "FAIL - unchanged tree: no line saying polyjose-uniffi-bindgen was skipped"
+  tests_failed=$((tests_failed + 1))
+fi
 expect_symbol "unchanged tree" "rsa::public_key::RsaPublicKey"
 expect_symbol "unchanged tree" "rsa::pkcs1v15::verifying_key::VerifyingKey<sha2::Sha256>"
 expect_symbol "unchanged tree" "rsa::pss::verifying_key::VerifyingKey<sha2::Sha512>"

@@ -1,0 +1,22 @@
+[package]
+name = "polyjose-uniffi-bindgen"
+description = "The UniFFI bindgen CLI that generates polyjose's Kotlin and Swift sources from the polyjose-ffi library (build tooling, never shipped)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Its own package, so that uniffi's `cli` feature (uniffi_bindgen, clap, askama, ...) never
+# enters the tree of polyjose-ffi and is never linked into a shipped library (ADR 0030 §1,
+# ADR 0032 §1, ADR 0033). Default features stay on: `cargo-metadata` is how bindgen 0.32 finds
+# bindings/ffi/uniffi.toml (ADR 0032 §2). The pin matches polyjose-ffi's exactly, because the
+# generated code must match the scaffolding the library was built with.
+#
+#   cargo run -p polyjose-uniffi-bindgen -- generate <libpolyjose_ffi.dylib|.so> \
+#     --language kotlin --no-format --out-dir target/uniffi/kotlin
+[dependencies]
+uniffi = { version = "=0.32.2", features = ["cli"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
