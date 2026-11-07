@@ -17,8 +17,15 @@
 //! ```
 //!
 //! `bindings/wasm/test.sh` runs this test before the two wasm-pack runs.
+//!
+//! It also checks the runner's ADR 0060 `vectors_digest` (`tests/digest/mod.rs`) on the host: the
+//! §4 worked example, and the digest over the **embedded** bytes the runner parses against the
+//! ADR's POSIX shell reference over the checkout, an oracle independent of every runner.
 #![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
+
+mod digest;
+mod vectors;
 
 use std::path::{Path, PathBuf};
 
@@ -111,5 +118,74 @@ fn the_vector_index_lists_every_vector_file() {
          Regenerate it with `{WRITE}=1 cargo test -p polyjose-wasm --test vector_index`.",
         path.display(),
         paths.len()
+    );
+}
+
+#[test]
+fn the_digest_of_the_adr_0060_worked_example() {
+    let (files, want) = digest::WORKED_EXAMPLE;
+    let got = digest::vectors_digest(files.iter().map(|(id, bytes)| (*id, *bytes)));
+    assert_eq!(got.as_deref(), Some(want));
+}
+
+#[test]
+fn an_empty_corpus_has_no_digest() {
+    assert_eq!(digest::vectors_digest(std::iter::empty()), None);
+}
+
+/// ADR 0060 §4's POSIX shell reference, with `sha256sum` where `shasum` is missing (Linux).
+fn shell_reference(dir: &Path) -> String {
+    let have = |tool: &str| {
+        std::process::Command::new("sh")
+            .args(["-c", &format!("command -v {tool}")])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    let sha = if have("shasum") {
+        "shasum -a 256"
+    } else if have("sha256sum") {
+        "sha256sum"
+    } else {
+        panic!("neither shasum nor sha256sum is on PATH: the ADR 0060 §4 reference can't run");
+    };
+    let script = format!(
+        "find . -type f -name '*.json' | sed 's|^\\./||' | \
+         while IFS= read -r p; do printf '%s#0\\t%s\\n' \"$p\" \"$({sha} \"$p\" | cut -d' ' -f1)\"; done | \
+         LC_ALL=C sort | {sha} | cut -d' ' -f1"
+    );
+    let out = std::process::Command::new("sh")
+        .args(["-c", &script])
+        .current_dir(dir)
+        .output()
+        .unwrap_or_else(|e| panic!("sh: {e}"));
+    assert!(
+        out.status.success(),
+        "the shell reference failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout)
+        .expect("hex")
+        .trim()
+        .to_owned()
+}
+
+#[test]
+fn the_runner_digest_of_the_embedded_vectors_equals_the_shell_reference() {
+    let ids: Vec<String> = vectors::VECTORS
+        .iter()
+        .map(|(path, _)| format!("{path}#0"))
+        .collect();
+    let got = digest::vectors_digest(
+        ids.iter()
+            .zip(vectors::VECTORS)
+            .map(|(id, (_, text))| (id.as_str(), text.as_bytes())),
+    )
+    .expect("a non-empty corpus");
+    assert_ne!(got, digest::EMPTY_DIGEST);
+    let want = shell_reference(&vectors_dir());
+    assert_eq!(want.len(), 64, "the shell reference printed {want:?}");
+    assert_eq!(
+        got, want,
+        "vectors_digest differs from the ADR 0060 §4 shell reference"
     );
 }

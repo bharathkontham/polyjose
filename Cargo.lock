@@ -1150,6 +1150,7 @@ dependencies = [
  "getrandom",
  "js-sys",
  "polyjose-surface",
+ "sha2",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "zeroize",

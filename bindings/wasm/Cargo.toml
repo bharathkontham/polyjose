@@ -40,6 +40,10 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 # it never reaches the shipped .wasm, and scripts/check-deps.sh checks only the normal tree.
 [dev-dependencies]
 wasm-bindgen-test = "=0.3.80"
+# The test oracle of the runner's ADR 0060 `vectors_digest` (SHA-256 of the vector files it parsed),
+# called directly, never through polyjose's API under test (ADR 0060 §5). The core's own sha2
+# (the workspace pin, default features off), so no crate is added to the tree.
+sha2.workspace = true
 
 [features]
 # Test-only: T02's wasm-bindgen-test suite enables `run_in_browser` with it for the Chrome run
