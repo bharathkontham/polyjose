@@ -1,0 +1,33 @@
+{
+  "source": "ADR 0054 §2.2; RFC 7517 §4.4, RFC 8725 §3.1",
+  "description": "EdDSA on an Ed25519 key with alg Ed25519 and an Ed25519 key without alg returns the key without alg; decided by ADR 0054 §2.2 (JWK alg): a member alg must equal the selector's exactly, and EdDSA is not Ed25519; both members are Ed25519 (§2.1), neither has use or key_ops; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+          "alg": "Ed25519"
+        },
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "ifIV_MkFfyBWonN1tqb5kTP9hXXLx9S7QN-bomVep5I"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "EdDSA"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "ifIV_MkFfyBWonN1tqb5kTP9hXXLx9S7QN-bomVep5I"
+    }
+  }
+}

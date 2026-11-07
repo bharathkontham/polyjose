@@ -20,7 +20,8 @@
 #      entry among them. A field must also have the inventory's form: a required field has no
 #      default (so `allowedAlgs` and `allowedEnc` cannot be omitted, ADR 0030 §3), an optional one
 #      defaults to null/nil, a flag to false. Each language must also have the exported `code()`
-#      (ADR 0030 §5);
+#      (ADR 0030 §5), and jwkThumbprint/jwkThumbprintUri an optional `hash` defaulting to
+#      null/nil (ADR 0054 §9);
 #   4. `xcrun swiftc -typecheck` of the generated Swift against its modulemap, with Swift 6 and
 #      complete concurrency checking, which must print no diagnostic (ADR 0032 §3). Without xcrun
 #      this step prints SKIPPED, which is not a pass (pipeline rule 9).
@@ -137,6 +138,15 @@ done
 # shellcheck disable=SC2016 # the backticks are Kotlin's, matched literally
 grep -q 'fun `code`(): kotlin.String' "$kotlin" || fail "kotlin: no exported code() on PolyjoseException"
 grep -q 'public func code() -> String' "$swift" || fail "swift: no exported code() on PolyjoseError"
+# ADR 0054 §9: the thumbprint `hash` is optional, defaulting to null/nil (the core default,
+# SHA-256). The inventory has no parameter syntax, so the two signatures are checked here.
+for op in jwkThumbprint jwkThumbprintUri; do
+  # shellcheck disable=SC2016 # the backticks are Kotlin's, matched literally
+  grep -qF 'fun `'"$op"'`(`jwk`: kotlin.String, `hash`: kotlin.String? = null)' "$kotlin" ||
+    fail "kotlin: $op does not take hash: kotlin.String? = null"
+  grep -qF "public func $op(jwk: String, hash: String? = nil)" "$swift" ||
+    fail "swift: $op does not take hash: String? = nil"
+done
 
 if command -v xcrun >/dev/null 2>&1; then
   if diagnostics=$(cd "$scratch/swift" && xcrun swiftc -typecheck -swift-version 6 -strict-concurrency=complete \

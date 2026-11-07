@@ -1,0 +1,32 @@
+{
+  "source": "RFC 7517 App. A.3; ADR 0054 §2.2; RFC 7518 §3.2",
+  "description": "The RFC 7517 A.3 set by alg HS256 returns its HMAC key; decided by ADR 0054 §2.2 (JWK alg): member 0's alg A128KW is not HS256, and member 1 has no alg; both are oct (§2.1), neither has use or key_ops, and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "alg": "A128KW",
+          "k": "GawgguFyGrWKav7AX4VKUg"
+        },
+        {
+          "kty": "oct",
+          "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
+          "kid": "HMAC key used in JWS spec Appendix A.1 example"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "HS256"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "oct",
+      "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
+      "kid": "HMAC key used in JWS spec Appendix A.1 example"
+    }
+  }
+}

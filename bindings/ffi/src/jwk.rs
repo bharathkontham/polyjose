@@ -48,41 +48,71 @@ pub fn jwk_to_public(jwk: String) -> Result<String, PolyjoseError> {
     Ok(polyjose_surface::jwk::jwk_to_public(&jwk)?)
 }
 
-/// The JWK Thumbprint of `jwk` under `hash` (`SHA-256`), base64url encoded without padding
-/// (ADR 0030 §4; RFC 7638 §3, RFC 7515 §2).
+/// The JWK Thumbprint of `jwk` under `hash`, base64url encoded without padding: 43, 64 or 86
+/// characters for SHA-256, SHA-384 or SHA-512 (ADR 0030 §4, ADR 0054 §9; RFC 7638 §3, §3.4,
+/// RFC 7515 §2).
+///
+/// `hash` is optional: Kotlin `hash: String? = null`, Swift `hash: String? = nil`. Absent is the
+/// core default, SHA-256 (RFC 9278 §5). A name is parsed by the core, which accepts exactly
+/// `sha-256` | `SHA-256` | `sha256` and the same three forms for 384 and 512, case-sensitive
+/// (ADR 0054 §8.2); the adapter passes it through unchanged.
+///
+/// # Security
+///
+/// For an `oct` key the hash input is the secret `k` (RFC 7638 §7). Never publish the thumbprint
+/// of a password (a PBES2 key) or any other low-entropy `oct` key, and never use it as a `kid`:
+/// it is an unsalted fast hash of the secret (ADR 0057 §4).
 ///
 /// # Errors
 ///
-/// `UnsupportedAlgorithm` for any other `hash`, `SHA-1` included (ADR 0022); the core's JWK
-/// parse errors.
-#[uniffi::export]
-pub fn jwk_thumbprint(jwk: String, hash: String) -> Result<String, PolyjoseError> {
+/// In this order (ADR 0057 §2): the core's JWK parse errors (`InvalidJson`, `InvalidBase64`,
+/// `InvalidKey`, `UnsupportedAlgorithm` for an RSA private JWK), then `UnsupportedAlgorithm` for
+/// any other `hash` name, `SHA-1` included (ADR 0022).
+#[uniffi::export(default(hash = None))]
+pub fn jwk_thumbprint(jwk: String, hash: Option<String>) -> Result<String, PolyjoseError> {
     let jwk = Zeroizing::new(jwk);
-    Ok(polyjose_surface::jwk::jwk_thumbprint(&jwk, &hash)?)
+    Ok(polyjose_surface::jwk::jwk_thumbprint(
+        &jwk,
+        hash.as_deref(),
+    )?)
 }
 
 /// The JWK Thumbprint URI of `jwk` under `hash`,
-/// `urn:ietf:params:oauth:jwk-thumbprint:<hash>:<thumbprint>` (ADR 0030 §4; RFC 9278 §3).
+/// `urn:ietf:params:oauth:jwk-thumbprint:<hash>:<thumbprint>` (ADR 0030 §4, ADR 0054 §9;
+/// RFC 9278 §3).
+///
+/// `hash` is as for [`jwk_thumbprint`], and optional in the same way. `<hash>` is always the
+/// IANA name (`sha-256`, `sha-384` or `sha-512`, RFC 9278 §4), whatever spelling was passed.
 ///
 /// # Errors
 ///
-/// Those of [`jwk_thumbprint`].
-#[uniffi::export]
-pub fn jwk_thumbprint_uri(jwk: String, hash: String) -> Result<String, PolyjoseError> {
+/// Those of [`jwk_thumbprint`], in the same order.
+#[uniffi::export(default(hash = None))]
+pub fn jwk_thumbprint_uri(jwk: String, hash: Option<String>) -> Result<String, PolyjoseError> {
     let jwk = Zeroizing::new(jwk);
-    Ok(polyjose_surface::jwk::jwk_thumbprint_uri(&jwk, &hash)?)
+    Ok(polyjose_surface::jwk::jwk_thumbprint_uri(
+        &jwk,
+        hash.as_deref(),
+    )?)
 }
 
-/// The member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4; RFC 7517 §5, §4.2,
-/// §4.4, §4.5). `kid` selects a key only here, by the caller's choice, never during
+/// The one member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4, ADR 0054 §9;
+/// RFC 7517 §5, §4.2, §4.4, §4.5), by the core rule (`JwkSet::select`, ADR 0054 §2 as ADR 0057
+/// §1 amends it). `kid` selects a key only here, by the caller's choice, never during
 /// verification (ADR 0026 §2, ADR 0030 §6).
 ///
-/// The member may be private (module docs; ADR 0030 §7.2, ADR 0058).
+/// The member may be private (module docs; ADR 0030 §7.2, ADR 0058): call `jwkToPublic` before
+/// publishing it. Selection never authorizes an algorithm; pass the key only to an operation
+/// with an allow-list, and pair a `kid` from an untrusted header with `alg` (ADR 0054 §7). A
+/// server maps `NoMatchingKey` and `MultipleMatchingKeys` to one opaque client error, such as
+/// `invalid_token` (RFC 6750 §3.1).
 ///
 /// # Errors
 ///
-/// Whatever the surface returns: for now always `UnsupportedAlgorithm`, until the core's JWK
-/// Set selection arrives with feature 0015 (feature 0013 T14), behind this same signature.
+/// In this order (ADR 0054 §4): the set's import errors (`InvalidJson`, `InvalidKey`,
+/// `UnsupportedAlgorithm` for an RSA private member); `UnsupportedAlgorithm` for an `alg` or
+/// `key_use` the core refuses; `NoMatchingKey` for no match, `MultipleMatchingKeys` for two or
+/// more.
 #[uniffi::export]
 pub fn jwks_select(jwks: String, selector: JwkSelector) -> Result<String, PolyjoseError> {
     let jwks = Zeroizing::new(jwks);
