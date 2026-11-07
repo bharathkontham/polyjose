@@ -1221,6 +1221,49 @@ benign "" "      - name: conformance parity" "      - name: 'conformance parity 
 # B05 backlog: in a run block, a # line between backslash-continued lines is part of the script.
 mutate steps "" "          curl --proto '=https' --tlsv1.2 -fsSL -o \"\$dir/\$tarball\" \\\\" "          curl --proto '=https' --tlsv1.2 -fsSL -o \"\$dir/\$tarball\" \\\\\n          # a comment line that ends the command here" "a # line inside a backslash-continued command"
 
+# --- B06: any whitespace (a TAB too) separates a value, so a quoted scalar after it is scanned ----
+# (awk turns \t into a TAB, \n into a line break and \\x into \x)
+mutate quoting "" "          node-version: 24" '          node-version:\t"\\x24\\x7b\\x7b \\x73ecrets.X \\x7d\\x7d"' "an escaped expression in node-version after a tab"
+mutate quoting "" "          node-version: 24" '          node-version: \t"\\x73ecrets"' "an escape in node-version after a space and a tab"
+# shellcheck disable=SC2016 # literal workflow text
+mutate quoting "" "          node-version: 24" '          node-version:\t"${\\\n            { sec\\\n            rets.X }}"' "an expression folded over escaped line breaks after a tab"
+mutate quoting "" "          node-version: 24" "          node-version:\t'a\n            b'" "a single-quoted node-version over two lines after a tab"
+mutate quoting "          name: apple-xcframework" "          if-no-files-found: error" '          if-no-files-found: error\n          retention-days:\t"\\x73ecrets"' "an escape in retention-days after a tab"
+mutate quoting "          name: conformance-swift-macos" "          if-no-files-found: error" '          if-no-files-found: error\n          compression-level:\t"\\x73ecrets"' "an escape in compression-level after a tab"
+mutate quoting "" "$checkout_pin" "$checkout_pin"'\n        name:\t"\\x73ecrets"' "an escape in an action step's name after a tab"
+mutate quoting "" "$checkout_pin" '      - name:\t"\\x73ecrets"\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' "an escape in an action step's item name after a tab"
+mutate quoting "" "    name: Swift (iOS) (\${{ inputs.mode }})" '    name:\t"\\x73ecrets"' "an escape in the job name after a tab"
+mutate quoting "" "          node-version: 24" '          node-version: {"a":"\\x73ecrets"}' "an escape in a JSON-like flow mapping (a quote right after a colon)"
+benign "" "          node-version: 24" '          node-version: 24\t# the "parity runner' "a tab before a comment that holds a quote"
+
+# --- B07: every value outside the run bodies sits on its key's line --------------------------------
+mutate one-line "" "          name: apple-xcframework" "          name: apple-xcframework\n            -dev" "the apple-xcframework artifact name continued (apple-xcframework -dev)"
+mutate one-line "" "          name: apple-xcframework" "          name: apple-xcframework\n            - dev" "the apple-xcframework artifact name continued by a list-like line"
+mutate one-line "" "          name: conformance-swift-macos" "          name: conformance-swift-macos\n            more" "the conformance-swift-macos artifact name continued"
+mutate one-line "" "          persist-credentials: false" "          persist-credentials: false\n            x" "persist-credentials continued (false x)"
+mutate one-line "" "          node-version: 24" "          node-version: 24\n            0" "node-version continued"
+mutate one-line "" "          package-manager-cache: false" "          package-manager-cache: false\n            x" "package-manager-cache continued"
+mutate one-line "" "          path: dist/apple/*" "          path: dist/apple/*\n            x" "an upload path continued"
+mutate one-line "          name: conformance-swift-macos" "          if-no-files-found: error" "          if-no-files-found: error\n            x" "if-no-files-found continued"
+mutate one-line "" "          save-if: \${{ github.ref == 'refs/heads/main' }}" "          save-if: \${{ github.ref == 'refs/heads/main' }}\n            x" "save-if continued"
+mutate one-line "" "    timeout-minutes: 180" "    timeout-minutes: 180\n      0" "the job timeout continued"
+mutate one-line "      - name: package.sh (ci mode, a development build allowed)" "        if: inputs.mode == 'ci'" "        if: inputs.mode == 'ci'\n          && false" "a ci-mode step's if: continued with && false"
+mutate one-line "$cache_pin" "        if: inputs.mode == 'ci'" "        if: inputs.mode == 'ci'\n          && false" "rust-cache's if: continued with && false"
+mutate one-line "" "          node-version: 24" "          node-version:\n            24" "node-version on a line of its own"
+# shellcheck disable=SC2016 # literal workflow text
+mutate one-line "" "          node-version: 24" '          node-version: |\n            # ${{ secrets.X }}' "a block-scalar node-version whose line looks like a comment"
+mutate one-line "" "$checkout_pin" "$checkout_pin\n        name: >-\n          # \${{ secrets.X }}" "a block-scalar action step name"
+mutate one-line "" "          node-version: 24" "          node-version: 24\n\t    0" "a continuation line indented with a tab"
+benign "" "      - name: conformance parity" "      - name: conformance parity # ADR 0060" "a comment after a step name"
+
+# --- The ADR 0037 §1 artifact names are whole values ------------------------------------------------
+mutate artifacts "" "          name: apple-xcframework" "          name: apple-xcframework-dev" "the artifact name apple-xcframework-dev"
+mutate artifacts "" "          name: apple-xcframework" "          name: apple-xcframework x" "the artifact name apple-xcframework x"
+mutate artifacts "" "          name: apple-xcframework" "          name: 'apple-xcframework x'" "a single-quoted artifact name with extra text"
+mutate artifacts "" "          name: apple-xcframework" '          name: "apple-xcframework-dev"' "a double-quoted artifact name with extra text"
+mutate artifacts "" "          name: conformance-swift-macos" "          name: conformance-swift-macos-2" "conformance-swift-macos with a suffix"
+mutate artifacts "" "          name: conformance-swift-ios-sim" "          name: conformance-swift-ios-sim x" "conformance-swift-ios-sim with extra text"
+
 # --- Benign: must still PASS ------------------------------------------------------------------
 benign "          name: apple-xcframework" "          if-no-files-found: error" "          if-no-files-found: error\n          retention-days: 30" "retention-days on an upload"
 benign "          name: conformance-swift-macos" "          if-no-files-found: error" "          if-no-files-found: error\n          compression-level: 9" "compression-level on an upload"
