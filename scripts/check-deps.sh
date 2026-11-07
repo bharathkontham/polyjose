@@ -64,7 +64,9 @@
 # Before any of that, scripts/check-no-cargo-config.sh must pass: a cargo config file in the
 # repository could replace sources or wrap rustc for every cargo command below (see check 6).
 #
-# Fails closed: if cargo or python3 is missing, or any command errors, it exits non-zero.
+# Fails closed: if cargo or python3 is missing, or any command errors, it exits non-zero; so does a
+# syntax error in this script, under macOS /bin/bash 3.2 too (the completion sentinel, F11).
+# Exit status: 0 clean, 1 a check failed, 2 the checks could not run.
 # Runs on macOS /bin/bash 3.2 and on Linux bash, so no associative arrays or mapfile.
 set -euo pipefail
 # sort and comm must agree on one byte order whatever the caller's locale is.
@@ -98,7 +100,13 @@ command -v python3 >/dev/null 2>&1 || die "python3 not found on PATH; cannot rea
 [ -f "$core_manifest" ] || die "$core_manifest not found"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/check-deps.XXXXXX") || die "mktemp failed"
-trap 'rm -rf "$work"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh):
+# with errexit, bash 3.2 runs the EXIT trap with $? = 0 after a parse error, so the trap turns an
+# exit before the last line, which sets the sentinel, into status 2. A non-zero status (check
+# failures exit 1, die exits 2) is kept.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$work"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-deps.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # Crate names compare case-insensitively with `_` and `-` equivalent, as crates.io treats them.
 normalize() { tr 'A-Z_' 'a-z-'; }
@@ -1268,4 +1276,4 @@ echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
 echo "ok: the binding trees match $binding_allowlist_dir ($(awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $2 }' "$work/bal-checked")), with serde-family crates only below each file's serde-only-below crates (ADR 0030 §1)"
-exit 0
+completed=1; exit 0
