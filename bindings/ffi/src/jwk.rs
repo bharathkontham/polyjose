@@ -58,7 +58,7 @@ pub fn jwk_to_public(jwk: String) -> Result<String, PolyjoseError> {
 #[uniffi::export]
 pub fn jwk_thumbprint(jwk: String, hash: String) -> Result<String, PolyjoseError> {
     let jwk = Zeroizing::new(jwk);
-    Ok(polyjose_surface::jwk::jwk_thumbprint(&jwk, &hash)?)
+    Ok(polyjose_surface::jwk::jwk_thumbprint(&jwk, Some(&hash))?)
 }
 
 /// The JWK Thumbprint URI of `jwk` under `hash`,
@@ -70,7 +70,7 @@ pub fn jwk_thumbprint(jwk: String, hash: String) -> Result<String, PolyjoseError
 #[uniffi::export]
 pub fn jwk_thumbprint_uri(jwk: String, hash: String) -> Result<String, PolyjoseError> {
     let jwk = Zeroizing::new(jwk);
-    Ok(polyjose_surface::jwk::jwk_thumbprint_uri(&jwk, &hash)?)
+    Ok(polyjose_surface::jwk::jwk_thumbprint_uri(&jwk, Some(&hash))?)
 }
 
 /// The member of the JWK Set `jwks` that `selector` picks (ADR 0030 §4; RFC 7517 §5, §4.2,
