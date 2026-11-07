@@ -1,14 +1,15 @@
 //! 0015 T05: `JwkSet::select` and `JwkSet::matching` against a test-side
-//! oracle written from the text of ADR 0054 §2, through the public API only
-//! (ADR 0008 layer 2).
+//! oracle written from the text of ADR 0054 §2, as ADR 0057 §1 amends it,
+//! through the public API only (ADR 0008 layer 2).
 //!
 //! **The oracle is independent on purpose.** [`oracle`] restates the five
 //! checks of ADR 0054 §2 over the *generated description* of each member
 //! ([`MemberSpec`]), never over the imported [`Jwk`] and never through a
 //! crate helper. Its family table ([`serves`]), its `alg` mode table
-//! ([`alg_mode`]) and its `use` operation table ([`use_ops`]) are
-//! restatements of RFC 7518 §3.1 / §4.1, RFC 8037 §3, RFC 8812 §3 and
-//! RFC 7517 §4.2–§4.3, written for this file. A mistake shared with the
+//! ([`alg_mode`]), its mode operation table ([`mode_ops`], ADR 0054 §2.4
+//! and ADR 0057 §1), and its `use` tables ([`use_ops`], [`op_use`]) are
+//! restatements of RFC 7518 §3.1 / §4.1, RFC 8037 §3, RFC 8812 §3,
+//! RFC 7517 §4.2–§4.3 and the ADR text, written for this file. A mistake shared with the
 //! core's tables would therefore show up as a disagreement, not be hidden
 //! by it.
 //!
@@ -24,6 +25,9 @@
 //!    the *imported* key's material and `alg`.
 //! 5. **Monotonicity:** adding a criterion never adds a match, and removing
 //!    a set member never adds a match for the remaining indexes.
+//! 6. **Setter order:** building a selector in reverse order gives an equal
+//!    selector with the same matches, incoherent `alg` + `key_op` pairs
+//!    included (ADR 0057 §1).
 //!
 //! **Generators.** Keys come only from committed fixtures (RFC 7517 App. A,
 //! RFC 7515 App. A, RFC 7520, RFC 7468, RFC 8037 App. A, and
@@ -36,11 +40,16 @@
 //! an extra unregistered `key_ops` entry ([`UNREGISTERED_OP`]), so the
 //! fail-closed paths of ADR 0054 §2.2–§2.4 are reached. Each is kept on
 //! import, none is skipped
-//! ([`unregistered_member_values_import_as_unknown`]). Selectors combine an optional `alg` (every
-//! implemented JWS and JWE key management algorithm), `kid` and `key_use`.
-//! **No selector carries a `key_op`:** how `key_op` combines with `alg` is
-//! an open owner question (feature 0015 backlog.md), so it is not
-//! generated here. No assertion depends on wall-clock timing.
+//! ([`unregistered_member_values_import_as_unknown`]). Selectors
+//! ([`selector_for`]) combine an optional `alg` (every implemented JWS and
+//! JWE key management algorithm, drawn mostly from those the generated
+//! set's families serve), `kid`, `key_use` and `key_op` (every registered
+//! operation, RFC 7517 §4.3), so `key_op` comes both with and without an `alg`
+//! (0015 F04, review NIT 6): coherent and incoherent `alg` + `key_op`
+//! pairs (ADR 0057 §1), `key_op` → U and `key_op` + `key_use` conflicts
+//! (ADR 0054 §2.3), and the `Jwk::permits` branch of §2.4
+//! ([`generators_reach_every_key_op_rule`]). No assertion depends on
+//! wall-clock timing.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
@@ -299,7 +308,8 @@ fn alg_mode(alg: &str) -> Mode {
     }
 }
 
-/// The operations an `alg` performs in either direction (ADR 0054 §2.4).
+/// The operations an `alg` performs in either direction: ADR 0054 §2.4's
+/// sets, which ADR 0057 §1 repeats for a `key_op` given with an `alg`.
 fn mode_ops(mode: Mode) -> &'static [&'static str] {
     match mode {
         Mode::Jws => &["sign", "verify"],
@@ -334,6 +344,17 @@ fn use_ops(key_use: &str) -> &'static [&'static str] {
             "deriveBits",
         ],
         other => panic!("not a use: {other}"),
+    }
+}
+
+/// The use of a registered `key_op` (ADR 0054 §2.3): "`sign`/`verify` →
+/// `sig`, the others → `enc`" (RFC 7517 §4.2: key wrapping "is a kind of
+/// encryption", and `enc` is for key agreement too).
+fn op_use(key_op: &str) -> &'static str {
+    match key_op {
+        "sign" | "verify" => "sig",
+        "encrypt" | "decrypt" | "wrapKey" | "unwrapKey" | "deriveKey" | "deriveBits" => "enc",
+        other => panic!("not a registered op: {other}"),
     }
 }
 
@@ -515,16 +536,19 @@ fn import(members: &[MemberSpec]) -> JwkSet {
     JwkSet::from_json(set_json(members).as_bytes()).unwrap()
 }
 
-/// A generated selector. `key_op` is deliberately absent (module doc).
+/// A generated selector.
 #[derive(Clone, Copy, Debug, Default)]
 struct Sel {
     alg: Option<&'static str>,
     kid: Option<&'static str>,
     key_use: Option<&'static str>,
+    key_op: Option<&'static str>,
 }
 
 impl Sel {
-    /// The selector, built through the public setters (ADR 0054 §1).
+    /// The selector, built through the public setters (ADR 0054 §1), in
+    /// the order `alg`, `kid`, `key_use`, `key_op`. Every setter succeeds,
+    /// an incoherent `alg` + `key_op` pair included (ADR 0057 §1).
     fn build(&self) -> JwkSelector {
         let mut selector = JwkSelector::new();
         if let Some(alg) = self.alg {
@@ -536,7 +560,37 @@ impl Sel {
         if let Some(key_use) = self.key_use {
             selector = selector.key_use(KeyUse::from(key_use)).unwrap();
         }
+        if let Some(key_op) = self.key_op {
+            selector = selector.key_op(KeyOp::from(key_op)).unwrap();
+        }
         selector
+    }
+
+    /// The same selector, built in the reverse order: `key_op`, `key_use`,
+    /// `kid`, `alg`.
+    fn build_reversed(&self) -> JwkSelector {
+        let mut selector = JwkSelector::new();
+        if let Some(key_op) = self.key_op {
+            selector = selector.key_op(KeyOp::from(key_op)).unwrap();
+        }
+        if let Some(key_use) = self.key_use {
+            selector = selector.key_use(KeyUse::from(key_use)).unwrap();
+        }
+        if let Some(kid) = self.kid {
+            selector = selector.kid(kid);
+        }
+        if let Some(alg) = self.alg {
+            selector = selector.alg(KeyAlg::from(alg)).unwrap();
+        }
+        selector
+    }
+
+    /// The same selector without its `key_op`.
+    fn without_key_op(self) -> Sel {
+        Sel {
+            key_op: None,
+            ..self
+        }
     }
 }
 
@@ -550,14 +604,65 @@ fn selector_alg() -> impl Strategy<Value = &'static str> {
     select(selector_algs())
 }
 
-/// A selector: optional `alg`, `kid` and `key_use`.
-fn selector() -> impl Strategy<Value = Sel> {
+/// A selector for `members`: optional `alg`, `kid`, `key_use` and
+/// `key_op`.
+///
+/// - **`alg`:** absent a quarter of the time; otherwise any implemented
+///   algorithm, or (twice as often) one that some member's family
+///   [`serves`] (this file's
+///   table, so a selector `alg` often meets a member it can match; the
+///   oracle still decides every verdict).
+/// - **`key_op`:** absent half the time; otherwise any registered
+///   operation (RFC 7517 §4.3), which with an `alg` is mostly incoherent,
+///   or one the `alg` performs by this file's [`mode_ops`] table, so that
+///   coherent and incoherent pairs both occur often (ADR 0057 §1).
+fn selector_for(members: &[MemberSpec]) -> impl Strategy<Value = Sel> + use<> {
+    let mut served: Vec<&'static str> = selector_algs()
+        .into_iter()
+        .filter(|alg| members.iter().any(|m| serves(m.family(), alg)))
+        .collect();
+    if served.is_empty() {
+        served = selector_algs();
+    }
     (
-        option::of(selector_alg()),
+        prop_oneof![
+            1 => Just(None),
+            1 => selector_alg().prop_map(Some),
+            2 => select(served).prop_map(Some),
+        ],
         option::of(select(KIDS)),
-        option::of(select(&["sig", "enc"][..])),
+        option::of(select(REGISTERED_USES)),
     )
-        .prop_map(|(alg, kid, key_use)| Sel { alg, kid, key_use })
+        .prop_flat_map(|(alg, kid, key_use)| {
+            let performed = alg.map_or(REGISTERED_OPS, |alg| mode_ops(alg_mode(alg)));
+            let key_op = prop_oneof![
+                2 => Just(None),
+                1 => select(REGISTERED_OPS).prop_map(Some),
+                1 => select(performed).prop_map(Some),
+            ];
+            (Just(alg), Just(kid), Just(key_use), key_op)
+        })
+        .prop_map(|(alg, kid, key_use, key_op)| Sel {
+            alg,
+            kid,
+            key_use,
+            key_op,
+        })
+}
+
+/// A set drawn from `members` and a selector for it ([`selector_for`]).
+fn case_of(
+    members: impl Strategy<Value = Vec<MemberSpec>>,
+) -> impl Strategy<Value = (Vec<MemberSpec>, Sel)> {
+    members.prop_flat_map(|members| {
+        let sel = selector_for(&members);
+        (Just(members), sel)
+    })
+}
+
+/// A set of 0–8 members ([`members`]) and a selector for it.
+fn case() -> impl Strategy<Value = (Vec<MemberSpec>, Sel)> {
+    case_of(members())
 }
 
 // ---------------------------------------------------------------------------
@@ -575,6 +680,10 @@ enum Check {
     /// §2.3: the selector's parts disagree on the use, or the member's
     /// `use` is present and is not the effective use.
     Purpose,
+    /// ADR 0057 §1 (amending §2.4): the selector has an `alg` and a
+    /// `key_op` that is not one of the `alg`'s operations, so it matches
+    /// nothing.
+    KeyOpNotOfAlg,
     /// §2.4: the member's `key_ops` holds none of the required operations.
     KeyOps,
     /// §2.5 (§1.2): the member's `kid` is absent or not exactly the
@@ -582,10 +691,26 @@ enum Check {
     Kid,
 }
 
-/// Whether `member` matches `sel`, per ADR 0054 §2: all five checks hold,
-/// in order, and an absent selector part skips its check. `Err` names the
-/// first check that fails.
+/// Which reading of ADR 0054 §2.4 the oracle applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reading {
+    /// ADR 0054 §2.4 as ADR 0057 §1 amends it: the rule in force.
+    Adr0057,
+    /// ADR 0054 §2.4 as first written, where a `key_op` replaced the
+    /// `alg`'s operations. Only [`generators_reach_every_key_op_rule`]
+    /// uses it, to show that ADR 0057 §1 decides some members.
+    Adr0054AsWritten,
+}
+
+/// Whether `member` matches `sel`, per ADR 0054 §2 as ADR 0057 §1 amends
+/// it: all five checks hold, in order, and an absent selector part skips
+/// its check. `Err` names the first check that fails.
 fn oracle(member: &MemberSpec, sel: &Sel) -> Result<(), Check> {
+    oracle_reading(member, sel, Reading::Adr0057)
+}
+
+/// [`oracle`] under either [`Reading`].
+fn oracle_reading(member: &MemberSpec, sel: &Sel, reading: Reading) -> Result<(), Check> {
     // §2.1 Family: with an `alg`, the member's kty/crv must serve it.
     if let Some(alg) = sel.alg
         && !serves(member.family(), alg)
@@ -610,15 +735,23 @@ fn oracle(member: &MemberSpec, sel: &Sel) -> Result<(), Check> {
         }
     }
 
-    // §2.3 Purpose: the effective use U is `key_use`, else (no `key_op` is
-    // ever generated) the use the `alg` implies. Parts that disagree match
-    // nothing. With a U, the member's `use` must be absent or U.
-    let implied = sel.alg.map(alg_use);
-    let effective = match (sel.key_use, implied) {
-        (Some(given), Some(implied)) if given != implied => return Err(Check::Purpose),
-        (Some(given), _) => Some(given),
-        (None, implied) => implied,
-    };
+    // §2.3 Purpose: the effective use U is `key_use`, else the use of
+    // `key_op` (`sign`/`verify` → `sig`, the others → `enc`), else the use
+    // the `alg` implies (JWS → `sig`, JWE → `enc`). "If parts given
+    // together disagree ... the selector matches nothing" (`key_op: verify`
+    // with `key_use: enc`, `alg: ES256` with `key_op: encrypt`). With a U,
+    // the member's `use` must be absent or U.
+    let mut effective = None;
+    for part in [sel.key_use, sel.key_op.map(op_use), sel.alg.map(alg_use)]
+        .into_iter()
+        .flatten()
+    {
+        match effective {
+            None => effective = Some(part),
+            Some(u) if u != part => return Err(Check::Purpose),
+            Some(_) => {}
+        }
+    }
     if let (Some(effective), Some(member_use)) = (effective, member.key_use) {
         // U is always `sig` or `enc` (it comes from `key_use`, which §1.1
         // limits to those, or from the `alg`). An unregistered member
@@ -632,17 +765,32 @@ fn oracle(member: &MemberSpec, sel: &Sel) -> Result<(), Check> {
         }
     }
 
-    // §2.4 `key_ops`: if present, it must contain (no `key_op` given) one
-    // operation the `alg` performs in either direction; else, with a U, one
-    // registered operation of U; otherwise it is not checked.
+    // ADR 0057 §1 (amending §2.4's first branch): "When a selector has
+    // both `alg` and `key_op`, the `key_op` must be one of the operations
+    // the `alg` performs, in either direction ... If it is not, the
+    // selector matches nothing", whatever the member's `key_ops`.
+    if reading == Reading::Adr0057
+        && let (Some(alg), Some(key_op)) = (sel.alg, sel.key_op)
+        && !mode_ops(alg_mode(alg)).contains(&key_op)
+    {
+        return Err(Check::KeyOpNotOfAlg);
+    }
+
+    // §2.4 `key_ops`: if present, it must contain the `key_op`, if one is
+    // given ("exactly `Jwk::permits`": its `use` half is §2.3 above, since
+    // U is then the `key_op`'s use); otherwise one operation the `alg`
+    // performs in either direction; else, with a U, one registered
+    // operation of U; otherwise it is not checked.
     if let Some(ops) = &member.key_ops {
-        let required = match (sel.alg, effective) {
-            (Some(alg), _) => Some(mode_ops(alg_mode(alg))),
-            (None, Some(effective)) => Some(use_ops(effective)),
-            (None, None) => None,
+        let required: Option<&[&str]> = match (&sel.key_op, sel.alg, effective) {
+            (Some(key_op), _, _) => Some(std::slice::from_ref(key_op)),
+            (None, Some(alg), _) => Some(mode_ops(alg_mode(alg))),
+            (None, None, Some(effective)) => Some(use_ops(effective)),
+            (None, None, None) => None,
         };
-        // Every operation §2.4 can require is a registered one (the `alg`
-        // rows and the ops of U are both drawn from RFC 7517 §4.3), so an
+        // Every operation §2.4 can require is a registered one (the
+        // `key_op` is one by ADR 0054 §1.1, and the `alg` rows and the ops
+        // of U are both drawn from RFC 7517 §4.3), so an
         // unregistered entry never satisfies §2.4: only the member's
         // registered entries are considered. A `key_ops` holding only
         // unregistered values fails whenever something is required.
@@ -881,7 +1029,7 @@ fn oracle_follows_the_adr_0054_examples() {
 #[test]
 fn generators_reach_every_oracle_verdict() {
     let mut runner = TestRunner::deterministic();
-    let strategy = (members(), selector());
+    let strategy = case();
     let mut checks = HashSet::new();
     let mut key_ops_modes = HashSet::new();
     let mut ecdh_kw_key_ops = false;
@@ -909,6 +1057,7 @@ fn generators_reach_every_oracle_verdict() {
         Check::Family,
         Check::JwkAlg,
         Check::Purpose,
+        Check::KeyOpNotOfAlg,
         Check::KeyOps,
         Check::Kid,
     ] {
@@ -965,7 +1114,7 @@ struct UnregisteredReach {
 #[test]
 fn generators_reach_every_unregistered_value_rule() {
     let mut runner = TestRunner::deterministic();
-    let strategy = (members(), selector());
+    let strategy = case();
     let mut reach = UnregisteredReach::default();
     for _ in 0..1000 {
         let (members, sel) = strategy.new_tree(&mut runner).unwrap().current();
@@ -1104,6 +1253,230 @@ fn unregistered_member_values_import_as_unknown() {
     assert_eq!((set.len(), set.skipped()), (0, 1));
 }
 
+/// The oracle reproduces the cases ADR 0057 §1 and ADR 0054 §2.3–§2.4
+/// spell out for a `key_op`, with and without an `alg`.
+#[test]
+fn oracle_follows_the_adr_0057_examples() {
+    let family = |family| pool().iter().position(|k| k.family == family).unwrap();
+    let oct = bare(family(Family::Oct));
+    let p256 = bare(family(Family::P256));
+    let x25519 = bare(family(Family::X25519));
+    let pair = |alg, key_op| Sel {
+        alg: Some(alg),
+        key_op: Some(key_op),
+        ..Sel::default()
+    };
+    // ADR 0057 §1: the `key_op` is one of the `alg`'s operations, or the
+    // selector matches nothing.
+    for (member, alg, key_op, verdict) in [
+        (&oct, "A128KW", "encrypt", Err(Check::KeyOpNotOfAlg)),
+        (&oct, "A128KW", "wrapKey", Ok(())),
+        (&oct, "A128KW", "unwrapKey", Ok(())),
+        (&oct, "dir", "encrypt", Ok(())),
+        (&oct, "dir", "decrypt", Ok(())),
+        (&oct, "dir", "wrapKey", Err(Check::KeyOpNotOfAlg)),
+        (&p256, "ECDH-ES", "deriveKey", Ok(())),
+        (&p256, "ECDH-ES", "deriveBits", Err(Check::KeyOpNotOfAlg)),
+        (&x25519, "ECDH-ES+A128KW", "deriveKey", Ok(())),
+        (
+            &x25519,
+            "ECDH-ES+A128KW",
+            "wrapKey",
+            Err(Check::KeyOpNotOfAlg),
+        ),
+        (&p256, "ES256", "verify", Ok(())),
+        (&oct, "HS256", "sign", Ok(())),
+        // `ES256` + `encrypt` disagree on the use first (ADR 0054 §2.3).
+        (&p256, "ES256", "encrypt", Err(Check::Purpose)),
+        (&oct, "A128KW", "verify", Err(Check::Purpose)),
+    ] {
+        assert_eq!(
+            oracle(member, &pair(alg, key_op)),
+            verdict,
+            "{alg} + {key_op}"
+        );
+    }
+    // ... even on a member whose `key_ops` holds the `key_op`, which
+    // ADR 0054 §2.4 as first written accepted.
+    let encrypt_only = MemberSpec {
+        key_ops: Some(vec!["encrypt"]),
+        ..oct.clone()
+    };
+    let a128kw_encrypt = pair("A128KW", "encrypt");
+    assert_eq!(
+        oracle(&encrypt_only, &a128kw_encrypt),
+        Err(Check::KeyOpNotOfAlg)
+    );
+    assert_eq!(
+        oracle_reading(&encrypt_only, &a128kw_encrypt, Reading::Adr0054AsWritten),
+        Ok(())
+    );
+    // A coherent pair checks the member's `key_ops` for the `key_op`
+    // itself (`Jwk::permits`), not for any of the `alg`'s operations.
+    let wrap_only = MemberSpec {
+        key_ops: Some(vec!["wrapKey"]),
+        ..oct.clone()
+    };
+    assert_eq!(oracle(&wrap_only, &pair("A128KW", "wrapKey")), Ok(()));
+    assert_eq!(
+        oracle(&wrap_only, &pair("A128KW", "unwrapKey")),
+        Err(Check::KeyOps)
+    );
+    assert_eq!(oracle(&wrap_only, &by_alg("A128KW")), Ok(()));
+
+    // Without an `alg` (ADR 0054 §2.3, §2.4).
+    let op = |key_op| Sel {
+        key_op: Some(key_op),
+        ..Sel::default()
+    };
+    // `key_op` → U: `verify` gives `sig`.
+    let enc_use = MemberSpec {
+        key_use: Some("enc"),
+        ..p256.clone()
+    };
+    assert_eq!(oracle(&enc_use, &op("verify")), Err(Check::Purpose));
+    assert_eq!(oracle(&enc_use, &op("deriveKey")), Ok(()));
+    // `key_op` + `key_use` that disagree match nothing.
+    let verify_enc = Sel {
+        key_use: Some("enc"),
+        ..op("verify")
+    };
+    assert_eq!(oracle(&p256, &verify_enc), Err(Check::Purpose));
+    // §2.4: the member's `key_ops` must contain the `key_op`.
+    let sign_only = MemberSpec {
+        key_ops: Some(vec!["sign"]),
+        ..p256.clone()
+    };
+    assert_eq!(oracle(&sign_only, &op("sign")), Ok(()));
+    assert_eq!(oracle(&sign_only, &op("verify")), Err(Check::KeyOps));
+    let unregistered_only = MemberSpec {
+        key_ops: Some(vec![UNREGISTERED_OP]),
+        ..p256.clone()
+    };
+    assert_eq!(oracle(&unregistered_only, &op("sign")), Err(Check::KeyOps));
+    // An unregistered `use` fails the U the `key_op` gives.
+    let unregistered_use = MemberSpec {
+        key_use: Some(UNREGISTERED_USE),
+        ..p256.clone()
+    };
+    assert_eq!(oracle(&unregistered_use, &op("sign")), Err(Check::Purpose));
+    // Without an `alg`, every registered `key_op` alone matches a bare key.
+    for key_op in REGISTERED_OPS {
+        assert_eq!(oracle(&p256, &op(key_op)), Ok(()), "{key_op}");
+    }
+}
+
+/// How often the deterministic generators reach each `key_op` arm of the
+/// oracle (0015 F04, review NIT 6), and how often its rule decides the
+/// verdict. Counts of members, not of cases.
+#[derive(Debug, Default)]
+struct KeyOpReach {
+    /// `alg` + coherent `key_op`: members matched.
+    coherent_matched: usize,
+    /// ... members §2.4 rejected: its `key_op` branch (`Jwk::permits`)
+    /// decided, since §2.1–§2.3 passed.
+    coherent_decided: usize,
+    /// ... of which the `alg` alone accepts: the `key_op` narrowed the
+    /// `alg`'s operations to itself.
+    coherent_narrowed: usize,
+    /// `alg` + incoherent `key_op` (ADR 0057 §1): members rejected that
+    /// ADR 0054 §2.4 as first written accepted.
+    incoherent_decided: usize,
+    /// `key_op` without `alg`: members matched.
+    alone_matched: usize,
+    /// ... members §2.4 rejected that the selector without the `key_op`
+    /// accepts.
+    alone_key_ops_decided: usize,
+    /// ... members §2.3 rejected because the `key_op`'s use is U (no
+    /// `key_use`) and the member's `use` is another.
+    alone_use_decided: usize,
+    /// ... members rejected because `key_op` and `key_use` disagree, which
+    /// the selector without the `key_op` accepts.
+    alone_conflict_decided: usize,
+}
+
+/// The generators reach every `key_op` arm: coherent and incoherent
+/// `alg` + `key_op` pairs (ADR 0057 §1) and `key_op` without `alg`
+/// (ADR 0054 §2.3 `key_op` → U and the `key_op` + `key_use` conflict,
+/// §2.4's `Jwk::permits` branch), and each decides some members, so
+/// soundness and completeness compare the crate with these rules. The
+/// same deterministic stream as [`generators_reach_every_oracle_verdict`];
+/// counts only, no timing.
+#[test]
+fn generators_reach_every_key_op_rule() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = case();
+    let mut reach = KeyOpReach::default();
+    for _ in 0..1000 {
+        let (members, sel) = strategy.new_tree(&mut runner).unwrap().current();
+        let Some(key_op) = sel.key_op else {
+            continue;
+        };
+        for member in &members {
+            let verdict = oracle(member, &sel);
+            let without = oracle(member, &sel.without_key_op());
+            match sel.alg {
+                Some(alg) if mode_ops(alg_mode(alg)).contains(&key_op) => match verdict {
+                    Ok(()) => reach.coherent_matched += 1,
+                    Err(Check::KeyOps) => {
+                        reach.coherent_decided += 1;
+                        if without.is_ok() {
+                            reach.coherent_narrowed += 1;
+                        }
+                    }
+                    Err(_) => {}
+                },
+                Some(_) => {
+                    let as_written = oracle_reading(member, &sel, Reading::Adr0054AsWritten);
+                    if verdict == Err(Check::KeyOpNotOfAlg) && as_written.is_ok() {
+                        reach.incoherent_decided += 1;
+                    }
+                }
+                None => match verdict {
+                    Ok(()) => reach.alone_matched += 1,
+                    Err(Check::KeyOps) if without.is_ok() => reach.alone_key_ops_decided += 1,
+                    Err(Check::Purpose) if without.is_ok() => match sel.key_use {
+                        None => reach.alone_use_decided += 1,
+                        Some(key_use) if key_use != op_use(key_op) => {
+                            reach.alone_conflict_decided += 1;
+                        }
+                        Some(_) => {}
+                    },
+                    Err(_) => {}
+                },
+            }
+        }
+    }
+    let KeyOpReach {
+        coherent_matched,
+        coherent_decided,
+        coherent_narrowed,
+        incoherent_decided,
+        alone_matched,
+        alone_key_ops_decided,
+        alone_use_decided,
+        alone_conflict_decided,
+    } = reach;
+    for (name, count) in [
+        ("alg + coherent key_op matching", coherent_matched),
+        ("alg + coherent key_op deciding §2.4", coherent_decided),
+        (
+            "alg + coherent key_op narrowing the alg's ops",
+            coherent_narrowed,
+        ),
+        (
+            "alg + incoherent key_op deciding (ADR 0057 §1)",
+            incoherent_decided,
+        ),
+        ("key_op without alg matching", alone_matched),
+        ("key_op without alg deciding §2.4", alone_key_ops_decided),
+        ("key_op without alg giving U", alone_use_decided),
+        ("key_op + key_use conflict", alone_conflict_decided),
+    ] {
+        assert!(count > 0, "never reached: {name}; {reach:?}");
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
@@ -1132,7 +1505,7 @@ proptest! {
     /// Soundness: every `(i, k)` that `matching` yields is a member the
     /// oracle accepts, and `k` is `keys()[i]` (ADR 0054 §2, §4).
     #[test]
-    fn matching_is_sound(members in members(), sel in selector()) {
+    fn matching_is_sound((members, sel) in case()) {
         let set = import(&members);
         let selector = sel.build();
         for (i, key) in set.matching(&selector) {
@@ -1153,7 +1526,7 @@ proptest! {
     /// Completeness: `matching` yields every member the oracle accepts,
     /// each once, in index order (ADR 0054 §4 "every match in set order").
     #[test]
-    fn matching_is_complete(members in members(), sel in selector()) {
+    fn matching_is_complete((members, sel) in case()) {
         let set = import(&members);
         let selector = sel.build();
         let found: Vec<usize> = set.matching(&selector).map(|(i, _)| i).collect();
@@ -1179,7 +1552,7 @@ proptest! {
 #[test]
 fn generators_reach_every_select_outcome() {
     let mut runner = TestRunner::deterministic();
-    let strategy = (members(), selector());
+    let strategy = case();
     let mut outcomes = [0usize; 3];
     for _ in 0..1000 {
         let (members, sel) = strategy.new_tree(&mut runner).unwrap().current();
@@ -1199,7 +1572,7 @@ proptest! {
     /// `(i, k)`, two or more → `MultipleMatchingKeys` (ADR 0054 §4,
     /// RFC 7517 §5.1: set order implies no preference).
     #[test]
-    fn select_agrees_with_matching(members in members(), sel in selector()) {
+    fn select_agrees_with_matching((members, sel) in case()) {
         let set = import(&members);
         let selector = sel.build();
         let all: Vec<(usize, *const Jwk)> = set
@@ -1212,6 +1585,25 @@ proptest! {
             1 => prop_assert_eq!(selected, Ok(all[0])),
             _ => prop_assert_eq!(selected, Err(Error::MultipleMatchingKeys)),
         }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// The setters are order-independent and infallible for supported
+    /// values, an incoherent `alg` + `key_op` pair included: building the
+    /// selector in reverse gives an equal selector with the same matches
+    /// (ADR 0057 §1).
+    #[test]
+    fn setter_order_never_matters((members, sel) in case()) {
+        let set = import(&members);
+        let forward = sel.build();
+        let reversed = sel.build_reversed();
+        prop_assert_eq!(&forward, &reversed);
+        let a: Vec<usize> = set.matching(&forward).map(|(i, _)| i).collect();
+        let b: Vec<usize> = set.matching(&reversed).map(|(i, _)| i).collect();
+        prop_assert_eq!(a, b);
     }
 }
 
@@ -1287,10 +1679,11 @@ proptest! {
         members in members(),
         alg in selector_alg(),
         kid in option::of(select(KIDS)),
-        key_use in option::of(select(&["sig", "enc"][..])),
+        key_use in option::of(select(REGISTERED_USES)),
+        key_op in option::of(select(REGISTERED_OPS)),
     ) {
         let set = import(&members);
-        let selector = Sel { alg: Some(alg), kid, key_use }.build();
+        let selector = Sel { alg: Some(alg), kid, key_use, key_op }.build();
         for (_, key) in set.matching(&selector) {
             assert_family_safe(key, alg)?;
         }
@@ -1315,17 +1708,19 @@ proptest! {
     /// Adding criteria never adds a match: `matching(s + c) ⊆ matching(s)`,
     /// where `s` is a generated selector with some of its parts dropped and
     /// `s + c` is the whole selector. Each part only adds a check
-    /// (ADR 0054 §2: "an absent selector part skips its check").
+    /// (ADR 0054 §2: "an absent selector part skips its check"), and a
+    /// `key_op` with an `alg` only narrows the `alg`'s operations to that
+    /// one, or to none (ADR 0057 §1).
     #[test]
     fn adding_a_criterion_never_adds_a_match(
-        members in members(),
-        full in selector(),
-        drop in (any::<bool>(), any::<bool>(), any::<bool>()),
+        (members, full) in case(),
+        drop in (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()),
     ) {
         let fewer = Sel {
             alg: if drop.0 { None } else { full.alg },
             kid: if drop.1 { None } else { full.kid },
             key_use: if drop.2 { None } else { full.key_use },
+            key_op: if drop.3 { None } else { full.key_op },
         };
         let set = import(&members);
         let narrow = matched(&set, &full);
@@ -1342,9 +1737,8 @@ proptest! {
     /// removed member, which is asserted too.
     #[test]
     fn removing_a_member_never_adds_a_match(
-        members in vec(member(), 1..=8),
+        (members, sel) in case_of(vec(member(), 1..=8)),
         removed in any::<Index>(),
-        sel in selector(),
     ) {
         let removed = removed.index(members.len());
         let mut fewer = members.clone();

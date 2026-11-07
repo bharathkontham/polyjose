@@ -1,5 +1,6 @@
 // Generates the SHA-384, SHA-512 and hash-name `jwk.thumbprint` vectors
-// under conformance/vectors/jwk-thumbprint/ (feature 0015 T03, ADR 0054 §8)
+// under conformance/vectors/jwk-thumbprint/ (feature 0015 T03, ADR 0054 §8;
+// the error-order vector of F04, ADR 0057 §2)
 // with node:crypto (OpenSSL-backed), an implementation independent of
 // polyjose. A generator only: CI never runs it, and its output is committed.
 //
@@ -10,7 +11,7 @@
 // <out-dir>, and nothing else. Every self-check runs before the first file
 // is written; a failed check writes nothing.
 
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -279,7 +280,54 @@ for (const reject of REJECTS) {
   });
 }
 
-check(files.size === 25, `expected 25 files, built ${files.size}`);
+// ADR 0057 §2: a `jwk.thumbprint` call fails with its JWK import error
+// first, and only then with the `hash` name. One vector with both an
+// invalid key and an invalid name pins the order: it expects the import
+// error. The key is exactly the one of the committed
+// reject-p256-off-curve.json, the P-256 generator with the lowest bit of y
+// flipped, which import refuses with InvalidKey (SEC 1 v2 §3.2.2.1,
+// RFC 7518 §6.2.1, ADR 0041 §4). The name is refused on its own above.
+const OFF_CURVE_P256 = {
+  kty: "EC",
+  crv: "P-256",
+  x: "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+  y: "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfQ",
+};
+const ORDER_HASH = "SHA-1";
+check(
+  REJECTS.some((reject) => reject.name === ORDER_HASH),
+  `${ORDER_HASH} is one of the refused hash names`,
+);
+check(
+  (() => {
+    try {
+      createPublicKey({ key: OFF_CURVE_P256, format: "jwk" });
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
+  "node:crypto refuses the off-curve P-256 key",
+);
+{
+  // With the lowest bit of y flipped back, the point is the P-256
+  // generator, a valid key: the vector's key differs from it only there.
+  const y = Buffer.from(OFF_CURVE_P256.y, "base64url");
+  y[y.length - 1] ^= 1;
+  createPublicKey({ key: { ...OFF_CURVE_P256, y: y.toString("base64url") }, format: "jwk" });
+}
+add("hash-reject-invalid-key-p256-off-curve.json", {
+  source: "ADR 0057 §2",
+  description:
+    `An invalid key and an invalid hash name together give the JWK import error (ADR 0057 §2: import first, then the hash name): ` +
+    `the key is the off-curve P-256 point of reject-p256-off-curve.json (InvalidKey, ADR 0041 §4), checked off-curve with ${ORACLE}, ` +
+    `and the name ${JSON.stringify(ORDER_HASH)} alone gives UnsupportedAlgorithm (hash-reject-upper-sha-1.json, ADR 0054 §8.2)`,
+  operation: "jwk.thumbprint",
+  input: { jwk: OFF_CURVE_P256, hash: ORDER_HASH },
+  expect: { ok: false, error: "InvalidKey" },
+});
+
+check(files.size === 26, `expected 26 files, built ${files.size}`);
 
 mkdirSync(outDir, { recursive: true });
 for (const [name, text] of files) {

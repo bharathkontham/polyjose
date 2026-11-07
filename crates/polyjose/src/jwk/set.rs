@@ -291,8 +291,12 @@ impl JwkSet {
     /// `key_index` indexes [`JwkSet::keys`] (ADR 0054 §4, ADR 0029 §4).
     ///
     /// A member matches by the rule documented on [`JwkSelector`]
-    /// (ADR 0054 §2), the same rule [`JwkSet::matching`] and
-    /// [`JwkSet::verification_candidates`] apply.
+    /// (ADR 0054 §2, as ADR 0057 §1 amends it), the same rule
+    /// [`JwkSet::matching`] and [`JwkSet::verification_candidates`] apply.
+    /// A selector whose criteria contradict each other, such as an `alg`
+    /// with a `key_op` that `alg` does not perform (`A128KW` with
+    /// `encrypt`), matches nothing: the result is
+    /// [`Error::NoMatchingKey`], not a selector error (ADR 0057 §1).
     ///
     /// ```
     /// use polyjose::Error;
@@ -330,6 +334,9 @@ impl JwkSet {
     ///   scan stops at the second match. RFC 7517 §5.1 gives the order of
     ///   a set no meaning, so polyjose does not guess: narrow the selector
     ///   (a `kid`, RFC 7517 §4.5), or try each of [`JwkSet::matching`].
+    ///   For a set of `oct` keys, pin a JWK `alg` on each key so that one
+    ///   key serves one algorithm (ADR 0050 §3, ADR 0057 §3; see
+    ///   [`JwkSelector`]).
     ///
     /// Neither error says which members were looked at.
     ///
@@ -351,7 +358,17 @@ impl JwkSet {
     ///   allow-list.
     /// - **A `kid` is only compared for equality**, exact and
     ///   case-sensitive, never used as a path, URL or query (RFC 8725
-    ///   §3.10). A `kid` from an untrusted header is safe to select by.
+    ///   §3.10). A `kid` from an untrusted header is safe to compare;
+    ///   pair it with `alg`. A `kid` alone may match keys of several
+    ///   families, and two members may share a `kid` (RFC 7517 §4.5), so
+    ///   it can give [`Error::MultipleMatchingKeys`] and it binds no key
+    ///   to an algorithm (RFC 8725 §3.1):
+    ///   - **JWS and JWT:** verify with [`jwt::verify`](crate::jwt::verify)
+    ///     and [`Keys::Set`](crate::jwt::Keys::Set), or try each of
+    ///     [`JwkSet::verification_candidates`], which select by the
+    ///     header `alg` (after the allow-list) and `kid` together.
+    ///   - **JWE:** select with the `kid` and the header `alg`, once that
+    ///     `alg` is on the decrypt allow-list.
     /// - **The outcome reveals the set's structure** when the selector
     ///   comes from an untrusted token (ADR 0054 §4):
     ///   [`Error::NoMatchingKey`] says no member matches its `kid` (or
@@ -411,7 +428,9 @@ impl JwkSet {
     /// (ADR 0054 §4).
     ///
     /// The rule is that of [`JwkSet::select`], documented on
-    /// [`JwkSelector`] (ADR 0054 §2). This never fails and has no bound:
+    /// [`JwkSelector`] (ADR 0054 §2, as ADR 0057 §1 amends it), so a
+    /// selector whose criteria contradict each other yields nothing
+    /// (ADR 0057 §1). This never fails and has no bound:
     /// selection computes no cryptography, so bounding how many keys a
     /// caller then tries is the caller's choice (ADR 0029 §4's
     /// `max_key_candidates` is a verification policy).
@@ -524,21 +543,26 @@ impl SelectorAlg<'_> {
         }
     }
 
-    /// ADR 0054 §2 item 4: whether `key_ops` holds an operation this `alg`
-    /// performs in either direction (RFC 7517 §4.3): `sign` or `verify`
+    /// Whether `op` is an operation this `alg` performs in either direction
+    /// (RFC 7517 §4.3; ADR 0054 §2 item 4, ADR 0057 §1): `sign` or `verify`
     /// for JWS, and for JWE the `jwe/key.rs` `key_op` rows (`wrapKey` or
-    /// `unwrapKey`, `encrypt` or `decrypt`, `deriveKey`).
-    fn performed_by_any(self, key_ops: &[KeyOp]) -> bool {
+    /// `unwrapKey`, `encrypt` or `decrypt`, `deriveKey`), read, not
+    /// restated.
+    fn performs(self, op: &KeyOp) -> bool {
         match self {
-            SelectorAlg::Signing(_) => key_ops
-                .iter()
-                .any(|op| matches!(op, KeyOp::Sign | KeyOp::Verify)),
+            SelectorAlg::Signing(_) => matches!(op, KeyOp::Sign | KeyOp::Verify),
             SelectorAlg::KeyMgmt(alg) => key_ops_either_direction(alg)
                 .iter()
                 .flatten()
-                .any(|op| key_ops.contains(op)),
+                .any(|performed| performed == op),
             SelectorAlg::Unservable => false,
         }
+    }
+
+    /// ADR 0054 §2 item 4: whether `key_ops` holds an operation this `alg`
+    /// [performs](SelectorAlg::performs) in either direction.
+    fn performed_by_any(self, key_ops: &[KeyOp]) -> bool {
+        key_ops.iter().any(|op| self.performs(op))
     }
 }
 
@@ -638,12 +662,17 @@ impl<'a> Criteria<'a> {
             && self.kid.is_none_or(|kid| key.kid() == Some(kid))
     }
 
-    /// ADR 0054 §2 item 4: a member's `key_ops`, if present, must contain
-    /// the `key_op` ([`Jwk::permits`]); otherwise an operation of the
-    /// `alg` in either direction; otherwise a registered operation of U.
+    /// ADR 0054 §2 item 4, as ADR 0057 §1 amends its first branch: with a
+    /// `key_op`, it must be an operation the `alg` (if any) performs in
+    /// either direction, or no member matches; and the member's `key_ops`,
+    /// if present, must contain it ([`Jwk::permits`]). Otherwise the
+    /// `key_ops` must hold an operation of the `alg` in either direction;
+    /// otherwise a registered operation of U.
     fn key_ops_allow(&self, key: &Jwk) -> bool {
         if let Some(op) = &self.key_op {
-            return key.permits(op);
+            // ADR 0057 §1: an incoherent `alg` + `key_op` pair (`A128KW` with
+            // `encrypt`) matches nothing; it is not a setter error.
+            return self.alg.is_none_or(|alg| alg.performs(op)) && key.permits(op);
         }
         let Some(key_ops) = key.key_ops() else {
             return true;
@@ -664,10 +693,12 @@ impl<'a> Criteria<'a> {
 /// Build one with [`JwkSelector::new`], which selects every member, and
 /// the setters, each of which narrows it. Every criterion is validated
 /// when it is set, before any set is read (ADR 0054 §1.1, §4), so a
-/// selector that exists is one polyjose can apply. Apply it with
+/// selector that exists is one polyjose can apply. Criteria that
+/// contradict each other are not an error, whichever was set first: the
+/// selector matches nothing (ADR 0054 §2.3, ADR 0057 §1). Apply it with
 /// [`JwkSet::select`] (one key) or [`JwkSet::matching`] (every key).
 ///
-/// # The rule (ADR 0054 §2)
+/// # The rule (ADR 0054 §2, as ADR 0057 §1 amends item 4)
 ///
 /// A member matches iff all five checks hold, in this order. A criterion
 /// that is not set skips its check.
@@ -687,12 +718,19 @@ impl<'a> Criteria<'a> {
 ///    disagree (`alg: ES256` with `key_use: enc`) match nothing. With an
 ///    effective use, the member's `use` is absent or that use
 ///    (RFC 7517 §4.2).
-/// 4. **`key_ops`.** The member's `key_ops`, if present, contains the
-///    `key_op` ([`Jwk::permits`]); without a `key_op`, an operation the
-///    `alg` performs in either direction (`sign`/`verify`;
-///    `wrapKey`/`unwrapKey`; `encrypt`/`decrypt` for `dir`; `deriveKey`
-///    for ECDH-ES); with neither, a registered operation of the effective
-///    use (RFC 7517 §4.3).
+/// 4. **`key_ops`.** The operations an `alg` performs in either direction
+///    are `sign`/`verify` (JWS), `wrapKey`/`unwrapKey` (key encryption and
+///    key wrapping), `encrypt`/`decrypt` (`dir`) and `deriveKey` (ECDH-ES
+///    and ECDH-ES+A\*KW).
+///    - With a `key_op` and an `alg`, the `key_op` must be one of the
+///      `alg`'s operations, or the selector matches nothing: `A128KW` with
+///      `encrypt` selects no key, not even one whose `key_ops` is
+///      `["encrypt"]` (ADR 0057 §1).
+///    - With a `key_op`, the member's `key_ops`, if present, contains it
+///      ([`Jwk::permits`]).
+///    - Without a `key_op`, the member's `key_ops`, if present, contains an
+///      operation of the `alg`; with neither, a registered operation of
+///      the effective use (RFC 7517 §4.3).
 /// 5. **`kid`.** The member has exactly this `kid`, case-sensitive
 ///    (RFC 7517 §4.5). A member without a `kid` never matches.
 ///
@@ -724,6 +762,16 @@ impl<'a> Criteria<'a> {
 /// polyjose verify and decrypt does (ADR 0054 §7, RFC 8725 §3.1). A `kid`
 /// is only ever compared for equality (RFC 8725 §3.10). No criterion is
 /// secret, so `Debug` prints them all.
+///
+/// **Pin `alg` on every `oct` key** (ADR 0050 §3, ADR 0057 §3). An `oct`
+/// member without a JWK `alg` matches every symmetric selector `alg`
+/// (`HS*`, A\*KW, A\*GCMKW, `dir`, PBES2), as RFC 7517 §4.4 allows, and
+/// selection checks no key size (ADR 0054 §2, "Not part of selection").
+/// So the 64-octet HMAC key of the RFC 7517 A.3 set matches `alg: A128KW`
+/// beside the A128KW key, and selecting A128KW from that set gives
+/// [`Error::MultipleMatchingKeys`]. A JWK `alg` on each `oct` key, or a
+/// `kid`, makes the choice exact and keeps one key to one algorithm
+/// (RFC 8725 §3.1).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct JwkSelector {
@@ -799,6 +847,27 @@ impl JwkSelector {
     /// Selects members whose `key_ops`, if present, contain `key_op`, and
     /// whose `use`, if present, is the use of `key_op` (RFC 7517 §4.2,
     /// §4.3; ADR 0054 §2.3, §2.4). A later call replaces it.
+    ///
+    /// With an `alg` set too, before or after, `key_op` must be one of the
+    /// operations that `alg` performs, or the selector matches nothing
+    /// (ADR 0057 §1). An incoherent pair is not an error here or in
+    /// [`JwkSelector::alg`].
+    ///
+    /// ```
+    /// use polyjose::Error;
+    /// use polyjose::jwk::{JwkSelector, JwkSet, KeyAlg, KeyOp};
+    ///
+    /// let set = JwkSet::from_json(
+    ///     br#"{"keys":[{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg","key_ops":["encrypt"]}]}"#,
+    /// )?;
+    /// // `encrypt` is a `dir` operation, so this key is a `dir` key.
+    /// let dir = JwkSelector::new().alg(KeyAlg::from("dir"))?.key_op(KeyOp::Encrypt)?;
+    /// assert_eq!(set.select(&dir)?.0, 0);
+    /// // A128KW wraps keys; it never encrypts: the pair selects nothing.
+    /// let a128kw = JwkSelector::new().key_op(KeyOp::Encrypt)?.alg(KeyAlg::from("A128KW"))?;
+    /// assert_eq!(set.select(&a128kw).unwrap_err(), Error::NoMatchingKey);
+    /// # Ok::<(), polyjose::Error>(())
+    /// ```
     ///
     /// # Errors
     ///
@@ -2080,6 +2149,153 @@ mod tests {
                 // No `key_ops` at all: not checked.
                 expected.push(ops.len() + 1);
                 assert_eq!(matched(&set, &by_alg(alg)), expected, "{alg}");
+            }
+        }
+
+        /// ADR 0057 §1: with both an `alg` and a `key_op`, the `key_op` must
+        /// be an operation the `alg` performs in either direction
+        /// (`sign`/`verify`; `wrapKey`/`unwrapKey`; `encrypt`/`decrypt` for
+        /// `dir`; `deriveKey` for ECDH-ES and ECDH-ES+A\*KW), or the selector
+        /// matches nothing, even a member whose `key_ops` holds the
+        /// `key_op`. Otherwise the member check is [`Jwk::permits`].
+        #[test]
+        fn a_key_op_with_an_alg_must_be_an_op_of_the_alg() {
+            let ops = [
+                KeyOp::Sign,
+                KeyOp::Verify,
+                KeyOp::Encrypt,
+                KeyOp::Decrypt,
+                KeyOp::WrapKey,
+                KeyOp::UnwrapKey,
+                KeyOp::DeriveKey,
+                KeyOp::DeriveBits,
+            ];
+            // (material, alg, the ops it performs in either direction).
+            let cases: &[(&str, &str, &[KeyOp])] = &[
+                (EC_P256, "ES256", &[KeyOp::Sign, KeyOp::Verify]),
+                (OCT, "HS256", &[KeyOp::Sign, KeyOp::Verify]),
+                (OCT, "A128KW", &[KeyOp::WrapKey, KeyOp::UnwrapKey]),
+                (OCT, "A256GCMKW", &[KeyOp::WrapKey, KeyOp::UnwrapKey]),
+                (
+                    OCT,
+                    "PBES2-HS256+A128KW",
+                    &[KeyOp::WrapKey, KeyOp::UnwrapKey],
+                ),
+                (
+                    RSA_2048,
+                    "RSA-OAEP-256",
+                    &[KeyOp::WrapKey, KeyOp::UnwrapKey],
+                ),
+                (OCT, "dir", &[KeyOp::Encrypt, KeyOp::Decrypt]),
+                (EC_P256, "ECDH-ES", &[KeyOp::DeriveKey]),
+                (X25519, "ECDH-ES+A128KW", &[KeyOp::DeriveKey]),
+            ];
+            for (material, alg, performed) in cases {
+                // A member that permits each op, one that permits every op,
+                // and one with neither `use` nor `key_ops`.
+                let mut members: Vec<String> = ops
+                    .iter()
+                    .map(|op| with(material, &format!(r#""key_ops":["{op}"]"#)))
+                    .collect();
+                members.push(with(
+                    material,
+                    r#""key_ops":["sign","verify","encrypt","decrypt","wrapKey","unwrapKey","deriveKey","deriveBits"]"#,
+                ));
+                members.push(material.to_string());
+                let set = set_from(&members);
+                assert_eq!(set.len(), ops.len() + 2);
+                for (i, op) in ops.iter().enumerate() {
+                    let selector = by_alg(alg).key_op(op.clone()).unwrap();
+                    let expected: Vec<usize> = if performed.contains(op) {
+                        vec![i, ops.len(), ops.len() + 1]
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(matched(&set, &selector), expected, "{alg} + {op}");
+                    if expected.is_empty() {
+                        assert_eq!(
+                            set.select(&selector).map(|(i, _)| i),
+                            Err(Error::NoMatchingKey),
+                            "{alg} + {op}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// ADR 0057 §1, the named cases, and the formerly selected member:
+        /// `A128KW` + `encrypt` no longer returns a key with
+        /// `key_ops: ["encrypt"]`, which A128KW key binding would refuse.
+        #[test]
+        fn an_incoherent_key_op_matches_nothing() {
+            let set = set_from(&[with(OCT, r#""key_ops":["encrypt"]"#)]);
+            let a128kw_encrypt = by_alg("A128KW").key_op(KeyOp::Encrypt).unwrap();
+            assert!(matched(&set, &a128kw_encrypt).is_empty());
+            assert_eq!(
+                set.select(&a128kw_encrypt).map(|(i, _)| i),
+                Err(Error::NoMatchingKey)
+            );
+            // The same member is still selected by `key_op` alone, and by
+            // `dir`, whose operation `encrypt` is.
+            let encrypt = JwkSelector::new().key_op(KeyOp::Encrypt).unwrap();
+            assert_eq!(matched(&set, &encrypt), [0]);
+            let dir_encrypt = by_alg("dir").key_op(KeyOp::Encrypt).unwrap();
+            assert_eq!(matched(&set, &dir_encrypt), [0]);
+
+            let bare_oct = set_from(&[OCT.to_owned()]);
+            let bare_p256 = set_from(&[EC_P256.to_owned()]);
+            let bare_x25519 = set_from(&[X25519.to_owned()]);
+            let pair = |alg: &str, op: KeyOp| by_alg(alg).key_op(op).unwrap();
+            let cases: &[(&JwkSet, JwkSelector, bool)] = &[
+                (&bare_oct, pair("A128KW", KeyOp::Encrypt), false),
+                (&bare_oct, pair("A128KW", KeyOp::WrapKey), true),
+                (&bare_oct, pair("A128KW", KeyOp::UnwrapKey), true),
+                (&bare_oct, pair("dir", KeyOp::Encrypt), true),
+                (&bare_oct, pair("dir", KeyOp::Decrypt), true),
+                (&bare_oct, pair("dir", KeyOp::WrapKey), false),
+                (&bare_p256, pair("ECDH-ES", KeyOp::DeriveKey), true),
+                (&bare_x25519, pair("ECDH-ES+A128KW", KeyOp::DeriveKey), true),
+                (&bare_x25519, pair("ECDH-ES+A128KW", KeyOp::WrapKey), false),
+                (&bare_p256, pair("ECDH-ES", KeyOp::DeriveBits), false),
+                (&bare_p256, pair("ES256", KeyOp::Verify), true),
+                (&bare_p256, pair("ES256", KeyOp::Encrypt), false),
+            ];
+            for (set, selector, matches) in cases {
+                let expected: &[usize] = if *matches { &[0] } else { &[] };
+                assert_eq!(matched(set, selector), expected, "{selector:?}");
+            }
+        }
+
+        /// ADR 0057 §1: the setters accept an incoherent pair, in either
+        /// order, and both orders give equal selectors and equal results.
+        #[test]
+        fn the_key_op_rule_does_not_depend_on_setter_order() {
+            let set = set_from(&[
+                OCT.to_owned(),
+                with(OCT, r#""key_ops":["encrypt"]"#),
+                with(OCT, r#""key_ops":["wrapKey"]"#),
+                EC_P256.to_owned(),
+            ]);
+            for alg in ["A128KW", "dir", "ES256", "HS256", "ECDH-ES"] {
+                for op in [
+                    KeyOp::Encrypt,
+                    KeyOp::WrapKey,
+                    KeyOp::Verify,
+                    KeyOp::DeriveKey,
+                ] {
+                    let alg_first = by_alg(alg).key_op(op.clone()).unwrap();
+                    let op_first = JwkSelector::new()
+                        .key_op(op.clone())
+                        .unwrap()
+                        .alg(KeyAlg::from(alg))
+                        .unwrap();
+                    assert_eq!(alg_first, op_first, "{alg} + {op}");
+                    assert_eq!(
+                        matched(&set, &alg_first),
+                        matched(&set, &op_first),
+                        "{alg} + {op}"
+                    );
+                }
             }
         }
 

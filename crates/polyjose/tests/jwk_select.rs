@@ -1,13 +1,16 @@
 //! `JwkSet::select` and `JwkSet::matching` (ADR 0054 §1–§4), black-box
-//! through the public API: the RFC 7517 Appendix A sets, and a JWE round
-//! trip proving a selected key passes JWE key binding (ADR 0054 §2,
-//! "Not part of selection"; RFC 7516 §5).
+//! through the public API: the RFC 7517 Appendix A sets, a JWE round trip
+//! proving a selected key passes JWE key binding (ADR 0054 §2, "Not part
+//! of selection"; RFC 7516 §5), and the ADR 0057 §1 `key_op` + `alg` rule
+//! for every mode. The binding selector has no `key_op` (ADR 0030 §4), so
+//! these tables, not shared `jwks.select` vectors, are its vectors
+//! (ADR 0057 §1).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 use polyjose::Error;
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
 use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient, decrypt_compact};
-use polyjose::jwk::{Jwk, JwkSelector, JwkSet, KeyAlg, KeyUse};
+use polyjose::jwk::{Jwk, JwkSelector, JwkSet, KeyAlg, KeyOp, KeyUse};
 
 /// RFC 7517 Appendix A.1 (line breaks inside values removed).
 const RFC7517_A1: &str = r#"{"keys":
@@ -200,4 +203,124 @@ fn a_selected_x25519_key_round_trips_ecdh_es_a128kw() {
         .unwrap()
         .kid("bob-sig");
     assert_eq!(selected(&recipient, &wrong), Err(Error::NoMatchingKey));
+}
+
+/// One key per mode, each with `key_ops` naming the operations of its mode
+/// (RFC 7517 §4.3) and a `kid` naming the mode. The `oct` keys are the
+/// RFC 7517 A.3 keys, the X25519 key is Bob's (RFC 8037 A.6) and the
+/// P-256 key is RFC 7517 A.1's.
+fn one_key_per_mode() -> JwkSet {
+    let set = set(r#"{"keys":[
+        {"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg","key_ops":["wrapKey","unwrapKey"],"kid":"wrap"},
+        {"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg","key_ops":["encrypt","decrypt"],"kid":"dir"},
+        {"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow","key_ops":["sign","verify"],"kid":"mac"},
+        {"kty":"OKP","crv":"X25519","x":"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08","key_ops":["deriveKey"],"kid":"agree"},
+        {"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","key_ops":["verify"],"kid":"sig"}
+    ]}"#);
+    assert_eq!((set.len(), set.skipped()), (5, 0));
+    set
+}
+
+/// ADR 0057 §1: with both an `alg` and a `key_op`, the `key_op` must be
+/// one of the operations the `alg` performs in either direction, or the
+/// selector matches nothing (`NoMatchingKey`, not a selector error):
+/// - JWS: `sign`, `verify`
+/// - key encryption and key wrapping: `wrapKey`, `unwrapKey`
+/// - `dir`: `encrypt`, `decrypt`
+/// - key agreement (ECDH-ES and ECDH-ES+A\*KW): `deriveKey`
+///
+/// A coherent pair then checks the member's `key_ops` as `Jwk::permits`.
+#[test]
+fn adr_0057_key_op_must_be_an_operation_of_the_alg() {
+    let set = one_key_per_mode();
+    let no = Err(Error::NoMatchingKey);
+    #[rustfmt::skip]
+    let cases: &[(&str, KeyOp, Result<usize, Error>)] = &[
+        // JWS.
+        ("HS256", KeyOp::Sign, Ok(2)),
+        ("HS256", KeyOp::Verify, Ok(2)),
+        ("HS256", KeyOp::WrapKey, no.clone()),
+        ("ES256", KeyOp::Verify, Ok(4)),
+        ("ES256", KeyOp::Sign, no.clone()), // coherent; the key's key_ops has only verify
+        ("ES256", KeyOp::Encrypt, no.clone()),
+        ("ES256", KeyOp::DeriveKey, no.clone()),
+        // Key wrapping and key encryption.
+        ("A128KW", KeyOp::WrapKey, Ok(0)),
+        ("A128KW", KeyOp::UnwrapKey, Ok(0)),
+        ("A128KW", KeyOp::Encrypt, no.clone()), // the dir key permits encrypt
+        ("A128KW", KeyOp::Decrypt, no.clone()),
+        ("A128KW", KeyOp::DeriveKey, no.clone()),
+        ("A128GCMKW", KeyOp::WrapKey, Ok(0)),
+        ("A128GCMKW", KeyOp::Encrypt, no.clone()),
+        ("PBES2-HS256+A128KW", KeyOp::UnwrapKey, Ok(0)),
+        ("PBES2-HS256+A128KW", KeyOp::Decrypt, no.clone()),
+        // Direct encryption.
+        ("dir", KeyOp::Encrypt, Ok(1)),
+        ("dir", KeyOp::Decrypt, Ok(1)),
+        ("dir", KeyOp::WrapKey, no.clone()), // the wrap key permits wrapKey
+        ("dir", KeyOp::UnwrapKey, no.clone()),
+        // Key agreement.
+        ("ECDH-ES", KeyOp::DeriveKey, Ok(3)),
+        ("ECDH-ES+A128KW", KeyOp::DeriveKey, Ok(3)),
+        ("ECDH-ES+A256KW", KeyOp::DeriveKey, Ok(3)),
+        ("ECDH-ES+A128KW", KeyOp::WrapKey, no.clone()),
+        ("ECDH-ES", KeyOp::DeriveBits, no.clone()),
+        ("ECDH-ES", KeyOp::Encrypt, no.clone()),
+    ];
+    for (alg, op, expected) in cases {
+        let alg_first = by_alg(alg).key_op(op.clone()).unwrap();
+        let op_first = JwkSelector::new()
+            .key_op(op.clone())
+            .unwrap()
+            .alg(KeyAlg::from(*alg))
+            .unwrap();
+        // The setters accept either pair in either order (ADR 0057 §1).
+        assert_eq!(alg_first, op_first, "{alg} + {op}");
+        for selector in [&alg_first, &op_first] {
+            assert_eq!(&selected(&set, selector), expected, "{alg} + {op}");
+            let matching: Vec<usize> = set.matching(selector).map(|(i, _)| i).collect();
+            let expected_matching: Vec<usize> = expected.iter().copied().collect();
+            assert_eq!(matching, expected_matching, "{alg} + {op}");
+        }
+    }
+    // Without an `alg`, `key_op` alone is unchanged: `Jwk::permits`.
+    let by_op = |op: KeyOp| JwkSelector::new().key_op(op).unwrap();
+    assert_eq!(selected(&set, &by_op(KeyOp::Encrypt)), Ok(1));
+    assert_eq!(selected(&set, &by_op(KeyOp::WrapKey)), Ok(0));
+    assert_eq!(selected(&set, &by_op(KeyOp::DeriveKey)), Ok(3));
+    assert_eq!(
+        selected(&set, &by_op(KeyOp::Verify)),
+        Err(Error::MultipleMatchingKeys)
+    );
+    assert_eq!(selected(&set, &by_op(KeyOp::DeriveBits)), no);
+}
+
+/// ADR 0057 §1, the behaviour change: under ADR 0054 §2.4 as first
+/// written, `alg: A128KW` with `key_op: encrypt` selected a key with
+/// `key_ops: ["encrypt"]`, which A128KW key binding then refused. Now
+/// selection refuses it first, and agrees with the operation.
+#[test]
+fn adr_0057_the_formerly_selected_a128kw_encrypt_key_is_not_returned() {
+    let k = "GawgguFyGrWKav7AX4VKUg";
+    let set = set(&format!(
+        r#"{{"keys":[{{"kty":"oct","k":"{k}","key_ops":["encrypt"],"kid":"e"}}]}}"#
+    ));
+    let a128kw_encrypt = by_alg("A128KW").key_op(KeyOp::Encrypt).unwrap();
+    assert_eq!(selected(&set, &a128kw_encrypt), Err(Error::NoMatchingKey));
+    assert_eq!(set.matching(&a128kw_encrypt).count(), 0);
+
+    // The key it used to return: A128KW key binding refuses it, since
+    // wrapping is `wrapKey`, not `encrypt` (RFC 7517 §4.3).
+    let key = &set.keys()[0];
+    let refused = Encryptor::new(ContentEncAlg::A128GCM)
+        .recipient(Recipient::new(KeyMgmtAlg::A128KW, key))
+        .encrypt_compact(b"never wrapped");
+    assert_eq!(refused.unwrap_err(), Error::KeyAlgorithmMismatch);
+    // Its own operation still finds it, with or without the `alg`.
+    assert_eq!(
+        selected(&set, &by_alg("dir").key_op(KeyOp::Encrypt).unwrap()),
+        Ok(0)
+    );
+    let encrypt = JwkSelector::new().key_op(KeyOp::Encrypt).unwrap();
+    assert_eq!(selected(&set, &encrypt), Ok(0));
 }

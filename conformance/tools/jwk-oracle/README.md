@@ -18,7 +18,7 @@ node conformance/tools/jwk-oracle/thumbprints.mjs conformance/vectors/jwk-thumbp
 node conformance/tools/jwk-oracle/thumbprints.mjs <dir>                                # write elsewhere, e.g. to diff against
 ```
 
-It needs Node 24 or later and nothing else: no `package.json`, no npm dependencies, and it never calls polyjose. It writes only the 25 files below, and leaves the other files of the directory alone. Each oracle-derived `description` records the Node and OpenSSL versions that produced it; the committed files come from **Node.js 24.21.0 / OpenSSL 3.5.8**, and a re-run with those versions reproduces them byte for byte. Another version changes only that text.
+It needs Node 24 or later and nothing else: no `package.json`, no npm dependencies, and it never calls polyjose. It writes only the 26 files below, and leaves the other files of the directory alone. Each oracle-derived `description` records the Node and OpenSSL versions that produced it; the committed files come from **Node.js 24.21.0 / OpenSSL 3.5.8**, and a re-run with those versions reproduces them byte for byte. Another version changes only that text.
 
 ### Inputs
 
@@ -43,8 +43,11 @@ The six keys are written into the script, each exactly as in its committed SHA-2
 | `hash-alias-upper-sha-{256,384,512}-rfc7638-3-1-rsa.json` | `SHA-256`, `SHA-384`, `SHA-512` (ADR 0030 §4) | the same as the IANA-name vector, with the IANA name in the URI |
 | `hash-alias-sha{256,384,512}-rfc7638-3-1-rsa.json` | `sha256`, `sha384`, `sha512` (panva/jose) | the same as the IANA-name vector, with the IANA name in the URI |
 | `hash-reject-{upper-sha-1,sha-1,sha-256-128,sha3-256,mixed-case-sha-256,empty}.json` | `SHA-1`, `sha-1`, `sha-256-128`, `sha3-256`, `Sha-256`, `""` | `UnsupportedAlgorithm` (ADR 0022, ADR 0054 §8.2, RFC 9278 §4) |
+| `hash-reject-invalid-key-p256-off-curve.json` | `SHA-1`, with the off-curve P-256 key of `reject-p256-off-curve.json` | the import error, `InvalidKey` (ADR 0057 §2) |
 
 The file names are lowercase, so `SHA-1` and `sha-1` can't collide on a case-insensitive file system.
+
+**The error order (ADR 0057 §2).** A `jwk.thumbprint` call reports a JWK import error first, and only then an unaccepted `hash` name. `hash-reject-invalid-key-p256-off-curve.json` pins this with both an invalid key and an invalid name, so it expects the import error. The key is copied exactly from `reject-p256-off-curve.json` (the P-256 generator with the lowest bit of y flipped; `InvalidKey`, ADR 0041 §4). That expected code is the one the ADRs give for this key, not one Node produces.
 
 ### How the values are built
 
@@ -60,6 +63,7 @@ Before it writes anything the script checks that it reproduces:
 - the RFC 9278 §6 URI
 - the RFC 8037 A.3 thumbprint (`kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k`) for both the A.2 public and the A.1 private Ed25519 key
 - output lengths of 64 (SHA-384) and 86 (SHA-512) characters for every key
+- for the error-order vector: `node:crypto` refuses its P-256 key, the same key with the lowest bit of y flipped back is accepted (so only that bit makes it invalid), and its `hash` name is one of the refused names
 
 Any failed check stops the script before it writes anything.
 
