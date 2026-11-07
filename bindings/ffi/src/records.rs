@@ -11,9 +11,14 @@
 //! - **Secrets** (ADR 0030 §7): a secret `String` input (`JwsSigner::key`, `JweRecipient::key`)
 //!   is moved into a [`SecretString`], keeping UniFFI's single Rust-heap allocation and wiping it
 //!   on drop; secret byte inputs (`detached_payload`, `aad`) move into a [`SecretBytes`]. Secret
-//!   outputs (`payload`, `plaintext`, `aad`) are copied from the surface's borrowed, zeroizing
-//!   buffer, which is wiped when the surface record drops; the copy UniFFI lowers for the host
-//!   is the documented residual of ADR 0030 §7.3.
+//!   outputs (`payload`, `plaintext`, `aad`) are copied once from the surface's borrowed,
+//!   zeroizing buffer, which is wiped when the surface record drops. UniFFI 0.32.2 then writes
+//!   the record into a buffer that grows as it is written and drops the record, and the host
+//!   frees the final `RustBuffer`, all unwiped. So each secret output leaves **at least 2** full
+//!   Rust-heap copies (the adapter's vector and the host-freed buffer), plus a full or partial
+//!   copy for each move of the growing buffer, depending on the size and the platform allocator.
+//!   These are the measured residual of ADR 0058, which supersedes ADR 0030 §7.3 for outputs;
+//!   the adapter cannot reach them without `unsafe` (counts in the `jws` and `jwe` module docs).
 //! - **Not logged:** none of these records implements `Debug`. The generated Kotlin data classes
 //!   and Swift structs of [`JwsSigner`] and [`JweRecipient`] print their key in
 //!   `toString`/`description`; never log them (ADR 0030 §3, §7).
