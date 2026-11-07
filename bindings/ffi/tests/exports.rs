@@ -17,6 +17,7 @@ use polyjose_ffi::PolyjoseError;
 use polyjose_ffi::jwk::{
     jwk_parse, jwk_thumbprint, jwk_thumbprint_uri, jwk_to_public, jwks_select,
 };
+use polyjose_ffi::keys;
 use polyjose_ffi::records::JwkSelector;
 
 /// Asserts that `$result` failed as `PolyjoseError::$variant` and that the exported `code()` is
@@ -131,6 +132,128 @@ fn jwks_select_passes_through_to_the_surface_stub() {
     };
     assert_fails!(
         jwks_select(s("not a JWK Set"), selector),
+        UnsupportedAlgorithm
+    );
+}
+
+// --- Keys (RFC 7518 §6, RFC 8037, RFC 7468, RFC 5958, RFC 5280; ADR 0018) --------------------
+
+/// The Ed25519 PKCS#8 fixture of feature 0005 (RFC 5958 §2, RFC 8410 §7) as PEM (RFC 7468
+/// §10), DER, and the JWK the core reads from it (RFC 8037 §2).
+const ED25519_PKCS8_PEM: &str =
+    include_str!("../../../crates/polyjose/tests/data/keys/openssl/ed25519-pkcs8.pem");
+const ED25519_PKCS8_DER: &[u8] =
+    include_bytes!("../../../crates/polyjose/tests/data/keys/openssl/ed25519-pkcs8.der");
+const ED25519_JWK: &str = include_str!(
+    "../../../crates/polyjose/tests/data/keys/openssl/expected/ed25519-pkcs8.jwk.json"
+);
+
+/// The string member `name` of the JSON object `text`.
+fn member(text: &str, name: &str) -> String {
+    value(text)
+        .get(name)
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("no string member {name:?} in {text}"))
+        .to_owned()
+}
+
+#[test]
+fn jwk_generate_oct_makes_a_key_of_the_length_and_rejects_a_short_one() {
+    // RFC 7518 §6.4.1: `k` holds the key octets, base64url encoded.
+    let key = keys::jwk_generate_oct(32).unwrap();
+    assert_eq!(member(&key, "kty"), "oct");
+    assert_eq!(
+        polyjose_ffi::util::base64url_decode(member(&key, "k"))
+            .unwrap()
+            .len(),
+        32
+    );
+    // ADR 0030 §5: `len_bytes` outside 16..=512 is `InvalidKey`.
+    assert_fails!(keys::jwk_generate_oct(15), InvalidKey);
+}
+
+#[test]
+fn jwk_generate_ec_makes_a_private_key_and_rejects_an_unknown_curve() {
+    // RFC 7518 §6.2.1–§6.2.2: kty, crv, x, y and the private d.
+    let key = keys::jwk_generate_ec(s("P-256")).unwrap();
+    assert_eq!(
+        (member(&key, "kty"), member(&key, "crv")),
+        (s("EC"), s("P-256"))
+    );
+    assert!(!member(&key, "d").is_empty());
+    assert_fails!(keys::jwk_generate_ec(s("P-192")), UnsupportedAlgorithm);
+}
+
+#[test]
+fn jwk_generate_okp_makes_a_private_key_and_rejects_an_unknown_curve() {
+    // RFC 8037 §2: kty OKP, crv, x and the private d. Ed448 is out of scope (ADR 0006).
+    let key = keys::jwk_generate_okp(s("Ed25519")).unwrap();
+    assert_eq!(
+        (member(&key, "kty"), member(&key, "crv")),
+        (s("OKP"), s("Ed25519"))
+    );
+    assert!(!member(&key, "d").is_empty());
+    assert_fails!(keys::jwk_generate_okp(s("Ed448")), UnsupportedAlgorithm);
+}
+
+#[test]
+fn jwk_generate_for_alg_sets_alg_and_rejects_none() {
+    // RFC 7518 §3.4: ES256 is P-256; RFC 7517 §4.4: the key's `alg` is set.
+    let key = keys::jwk_generate_for_alg(s("ES256")).unwrap();
+    assert_eq!(
+        (member(&key, "alg"), member(&key, "crv")),
+        (s("ES256"), s("P-256"))
+    );
+    // RFC 8725 §3.1, ADR 0007: `none` has no key.
+    assert_fails!(keys::jwk_generate_for_alg(s("none")), UnsupportedAlgorithm);
+}
+
+#[test]
+fn jwk_from_pem_reads_pkcs8_and_rejects_an_empty_body() {
+    assert_eq!(
+        keys::jwk_from_pem(s(ED25519_PKCS8_PEM)).unwrap(),
+        jwk_parse(s(ED25519_JWK)).unwrap()
+    );
+    assert_fails!(
+        keys::jwk_from_pem(s("-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----\n")),
+        InvalidKey
+    );
+}
+
+#[test]
+fn jwk_from_der_reads_pkcs8_and_rejects_the_wrong_structure() {
+    assert_eq!(
+        keys::jwk_from_der(ED25519_PKCS8_DER.to_vec(), s("pkcs8")).unwrap(),
+        jwk_parse(s(ED25519_JWK)).unwrap()
+    );
+    // ADR 0018 §3: no format sniffing; PKCS#8 bytes are not an SPKI.
+    assert_fails!(
+        keys::jwk_from_der(ED25519_PKCS8_DER.to_vec(), s("spki")),
+        InvalidKey
+    );
+}
+
+#[test]
+fn jwk_to_pem_writes_the_fixture_and_rejects_an_unknown_format() {
+    // ADR 0018 §3: export writes the layout OpenSSL writes, byte for byte.
+    assert_eq!(
+        keys::jwk_to_pem(s(ED25519_JWK), s("pkcs8")).unwrap(),
+        ED25519_PKCS8_PEM
+    );
+    assert_fails!(
+        keys::jwk_to_pem(s(ED25519_JWK), s("PKCS8")),
+        UnsupportedAlgorithm
+    );
+}
+
+#[test]
+fn jwk_to_der_writes_the_fixture_and_rejects_an_unknown_format() {
+    assert_eq!(
+        keys::jwk_to_der(s(ED25519_JWK), s("pkcs8")).unwrap(),
+        ED25519_PKCS8_DER
+    );
+    assert_fails!(
+        keys::jwk_to_der(s(ED25519_JWK), s("der")),
         UnsupportedAlgorithm
     );
 }
