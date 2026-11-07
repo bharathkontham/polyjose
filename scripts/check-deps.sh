@@ -1116,6 +1116,11 @@ check_binding_allowlists() {
 #     UniFFI's proc-macro and its bindgen CLI (feature 0013 T10 moves the CLI into its own package).
 #     The line must also stay exact: it fails when the tree has no serde-family crate at all, or
 #     when it names a crate the tree does not contain. Each failure prints a shortest offending path.
+#     The walk does not enter the core package (polyjose): checks 1-5 govern the core's own tree, in
+#     which no serde crate is allowed, and a feature that only a binding's build unifies onto a core
+#     crate (uniffi's cargo_metadata turning on `semver/serde` once the core depends on semver) is
+#     turned on by a crate of the binding that has its own edge to that crate, so the walk still
+#     reaches it outside the core. A change to the core is thus reported once, by the core's checks.
 check_no_serde_in_bindings() {
   local dir pkg name below file line crate path
   while read -r dir pkg; do
@@ -1129,7 +1134,7 @@ check_no_serde_in_bindings() {
       >"$work/serde.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree -p $pkg --prefix depth failed"; }
     python3 -I -c '
 import re, sys
-tree_path, below_path, family = sys.argv[1], sys.argv[2], re.compile(sys.argv[3])
+tree_path, below_path, family, core = sys.argv[1], sys.argv[2], re.compile(sys.argv[3]), sys.argv[4]
 def norm(name):
     return name.lower().replace("_", "-")
 line_re = re.compile(r"^([0-9]+)([A-Za-z0-9][A-Za-z0-9_-]*) (v[0-9][^ ]*)")
@@ -1160,13 +1165,13 @@ for name in sorted(below - present):
     print("OUTSIDE %s" % name)
 if below and not any(family.match(name) for name in present):
     print("UNNEEDED")
-# Breadth-first from the package, never entering a crate of the serde-only-below line.
+# Breadth-first from the package, never entering a crate of the serde-only-below line or the core.
 prev, todo = {root: None}, [root]
 while todo:
     nxt = []
     for node in todo:
         for dep in sorted(edges.get(node, ())):
-            if dep in prev or dep[0] in below:
+            if dep in prev or dep[0] in below or dep[0] == core:
                 continue
             prev[dep] = node
             nxt.append(dep)
@@ -1178,7 +1183,7 @@ for node in sorted(prev):
             path.append(spelled[cur])
             cur = prev[cur]
         print("HIT %s %s" % (spelled[node], " -> ".join(reversed(path))))
-' "$work/serde.depth" "$below" "$serde_family_re" </dev/null >"$work/serde.hits" \
+' "$work/serde.depth" "$below" "$serde_family_re" "$core_pkg" </dev/null >"$work/serde.hits" \
       || die "could not read the dependency graph of $pkg for serde (see above)"
     while read -r line; do
       case $line in
