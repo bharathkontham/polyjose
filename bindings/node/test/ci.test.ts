@@ -692,6 +692,32 @@ test("ci-build.sh links the msvc addons' C runtime statically and checks they im
   assert.ok(flags < build && build < check && check < pack, "flag, then build, then the check, then the pack");
 });
 
+/** The glibc floor of the gnu addons (F04): the README, ci-build.sh and the build images agree. */
+const glibcFloorValue = "2.28";
+
+test("ci-build.sh checks the gnu addons' glibc floor after the build, and only on the gnu targets", () => {
+  const raw = codeLines(ciBuildFile);
+  const gate = /^if \[ "\$glibc_check" = true \]; then$/;
+  onlyLine(raw, new RegExp(`^glibc_floor=${glibcFloorValue.replace(".", "\\.")}$`), `the floor is ${glibcFloorValue}`);
+  onlyLine(raw, /^\s*glibc_check=false$/, "glibc_check is false by default");
+  onlyLine(raw, /^\s*case \$target in \*-unknown-linux-gnu\) glibc_check=true ;; esac$/, "and true for the *-unknown-linux-gnu targets only");
+  const build = onlyLine(raw, /^\s*CARGO_BUILD_TARGET=\S+ POLYJOSE_CONFORMANCE_SUFFIX=\S+ \.\/test\.sh$/, "the build and test run");
+  const check = onlyLine(
+    raw,
+    /^\s*scripts\/glibc-floor\.sh "\$glibc_floor" "polyjose\.\$platform\.node"$/,
+    "the check on the built addon, the file pack-platform.sh packs",
+  );
+  const pack = onlyLine(raw, /^\s*scripts\/pack-platform\.sh /, "the platform pack");
+  assert.ok(insideIf(raw, check, gate), "the check runs only when glibc_check is true");
+  assert.ok(build < check && check < pack, "build, then the check, then the pack");
+  assert.ok(!raw.some((l) => /glibc_check=true/.test(l) && !/-unknown-linux-gnu\)/.test(l)), "nothing else turns it on");
+  assert.deepEqual(
+    napiTargets().filter((t) => t.endsWith("-unknown-linux-gnu")),
+    ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"],
+    "the pattern matches the two gnu targets of package.json",
+  );
+});
+
 /** The text of `const <name> = ...` in `src` up to its closing `\n}\n`. */
 function definition(src: string, name: string): string {
   const start = src.indexOf(`const ${name} = `);
