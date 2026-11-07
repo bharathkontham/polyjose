@@ -92,6 +92,8 @@ function strip(s,   i, c, q, out, prev) {
   sub(/[ \t]+$/, "", out)
   return out
 }
+# A key `name` in block form (after the indent and any "- ") or in flow form (after { or ,).
+function has_key(s, name) { return s ~ ("(^[ ]*(-[ ]+)*|[{,][ ]*)" name "[ ]*:([ ,}]|[]]|$)") }
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 function flat(s) { gsub(/[ \t]/, "", s); return s }
 # The context names and functions an expression may use.
@@ -217,6 +219,11 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
   if (code ~ /(^|[ {,[])[&*][A-Za-z0-9_]/ || code ~ /<<[ ]*:/) fail("structure: YAML anchor, alias or merge key")
   if (low ~ /[{,][ ]*["\047]?uses["\047]?[ ]*:/) fail("structure: flow-style uses:")
   if ((found = key_syntax(code)) != "") fail("structure: " found " (outside the subset)")
+  # A guard that may fail without failing its job, and a container or service image that would
+  # run the steps, in any position (security audit L3).
+  if (has_key(low, "continue-on-error")) fail("continue-on-error: not allowed (a failing step or job must fail the run)")
+  if (has_key(low, "container") || has_key(low, "services")) fail("containers: container: or services: (an image would run the steps)")
+  if (low ~ /[{,][ ]*shell[ ]*:/) fail("shell: a flow-style shell: (only a block shell: bash)")
 
   # A permissions block in progress: its children.
   if (perm_open) {
@@ -267,6 +274,8 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
     if (value == "") { perm_open = 1; perm_top = 0; perm_col = keycol; perm_children = 0; perm_ok = 1 }
     else if (flat(value) != "{}" && flat(value) != "{contents:read}") fail("permissions: only {} or contents: read is allowed")
   }
+  # Every shell, also defaults.run.shell (which wraps every step), is plain bash.
+  if (key == "shell" && value != "bash") fail("shell: only bash is allowed")
   if (key == "run") {
     if (value ~ /^[|>]/) { run_open = 1; run_col = keycol }
     else if (index(value, "${{")) fail("expressions: ${{ }} inside a run: script (pass it through env:)")
