@@ -67,10 +67,12 @@ platform_script() {
 # rust-core.json counts (a rust-core-<features>.json is a Rust build with features, which
 # scripts/conformance-parity.sh ignores). A SKIPPED or FAILed platform is never required to have a
 # file. Every platform has a line naming at least one runner; a missing or empty line FAILs parity.
+# wasm-pkg-workerd is required (feature 0013 F10): workerd comes from the pinned miniflare
+# dev-dependency, so it runs wherever npm does (0006 lead); only the browser runners are optional.
 results_runners='
 rust: rust-core rust-surface
 node: node
-wasm: wasm-node wasm-chrome? wasm-pkg-node wasm-pkg-chrome? wasm-pkg-workerd?
+wasm: wasm-node wasm-chrome? wasm-pkg-node wasm-pkg-chrome? wasm-pkg-workerd
 android: jvm android-emulator?
 apple: swift-macos swift-ios-sim?
 '
