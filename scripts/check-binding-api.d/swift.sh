@@ -9,7 +9,8 @@
 # so no build is needed:
 #   1. comments (`//`, `/* */`, nested) and string literals are blanked, keeping the line breaks;
 #   2. the declarations are read by brace depth, each line in pieces that end after a `{`, `}` or
-#      `;`, so declarations sharing a line with an extension, a brace or each other count too:
+#      `;`, so declarations sharing a line with an extension, a brace or each other count too,
+#      and without leading attributes (`@available(iOS 16, *) public func f()` is `public func f()`):
 #      - an operation is a `public func <name>(` at depth 0;
 #      - a record is a `public struct <Name>` at depth 0, and its fields are the parameters of its
 #        `public init(` (depth 1): no default is a required field, `= nil` an optional one (`?`)
@@ -77,6 +78,25 @@ BEGIN { n = split(framework, t, " "); for (i = 1; i <= n; i++) plumbing[t[i]] = 
 function where() { f = FILENAME; sub(/\.stripped$/, "", f); sub(/.*\//, "", f); return f ":" FNR }
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function count(s, ch,    k, m) { m = 0; for (k = 1; k <= length(s); k++) if (substr(s, k, 1) == ch) m++; return m }
+# A declaration without its leading attributes (`@discardableResult`, `@available(iOS 16, *)`, any
+# number, each with an optional parenthesized argument clause), so `@inlinable public func f()` is
+# read as `public func f()`. String literals are already blank, so their parentheses do not count.
+function noattrs(s,    i, d, c) {
+  while (match(s, /^@[A-Za-z_][A-Za-z0-9_]*/)) {
+    s = substr(s, RLENGTH + 1)
+    if (s ~ /^[ \t]*\(/) {
+      sub(/^[ \t]*/, "", s); d = 0
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "(") d++
+        else if (c == ")" && --d == 0) break
+      }
+      s = substr(s, i + 1)
+    }
+    s = trim(s)
+  }
+  return s
+}
 # The parameters of a collected `public init(...)`: name and the default's form.
 function params(text, record,    i, c, d, p, cur, name, list, k) {
   sub(/^[ \t]*public[ \t]+init[ \t]*\(/, "", text); sub(/\)[ \t]*(throws[ \t]*)?\{.*$/, "", text)
@@ -108,9 +128,10 @@ function piece(line) {
     depth += count(line, "{") - count(line, "}")
     return
   }
+  text = noattrs(text)
   if (depth == 0 && text == "public") { pending = 1; return }
   decl = text
-  if (pending) { decl = "public " text; pending = 0 }
+  if (pending && text != "") { decl = "public " text; pending = 0 }
   if (depth == 0 && decl ~ /^public[ \t]/) {
     rest = decl; sub(/^public[ \t]+/, "", rest)
     kind = rest; sub(/[ \t].*/, "", kind)

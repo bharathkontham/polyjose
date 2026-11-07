@@ -5,7 +5,8 @@
 # hand-written public extension member, another public declaration and a missing code() fail the
 # mode; UniFFI's own public plumbing (FfiConverter*, uniffiEnsurePolyjoseFfiInitialized) and
 # braces inside comments and strings do not count. Hand-written forms the generated code does not
-# use are seen too (F01): declarations sharing a line with an extension, a brace or each other.
+# use are seen too (F01): declarations sharing a line with an extension, a brace or each other,
+# and declarations with attributes on the same line.
 #
 # Usage: scripts/tests/check-binding-api/swift.sh (under /bin/bash 3.2 and bash 5).
 set -euo pipefail
@@ -112,6 +113,41 @@ append $src/Extra.swift 'extension JwsVerified {
 run_check swift
 check_diffs "a declaration after a closing brace on the same line is an extra operation" \
   'extra in swift (not in the inventory): op jwkPoke'
+
+new_case attribute-same-line
+append $src/Extra.swift '@available(iOS 16, *) public func extra() {}'
+run_check swift
+check_diffs "a public func with an attribute on the same line is an extra operation" \
+  'extra in swift (not in the inventory): op extra'
+
+new_case attributes-same-line
+append $src/Extra.swift '@available(*, deprecated, message: "use (jwkParse)") @inlinable public func extra() {}'
+run_check swift
+check_diffs "a public func after two attributes, one with parentheses in a string, is an extra operation" \
+  'extra in swift (not in the inventory): op extra'
+
+new_case attribute-own-line
+append $src/Extra.swift '@available(iOS 16, *)
+@inlinable
+public func extra() {}'
+run_check swift
+check_diffs "a public func after attributes on their own lines is an extra operation" \
+  'extra in swift (not in the inventory): op extra'
+
+new_case attribute-extension-member
+append $src/Extra.swift 'extension JwsVerified {
+    @discardableResult public static func extra2() -> Int { 0 }
+}'
+run_check swift
+check "a public extension member with an attribute on the same line fails" 1 \
+  'public member extra2 in an extension of JwsVerified'
+
+new_case attribute-record-var
+edit $gen 'public struct JwsVerified: Equatable, Hashable {' 'public struct JwsVerified: Equatable, Hashable {
+    @available(iOS 16, *) public var extraVar: String'
+run_check swift
+check "a record var with an attribute on the same line is still read as a public var" 1 \
+  'public var JwsVerified\.extraVar is not a parameter of its init'
 
 new_case non-public-forms
 append $src/Extra.swift 'extension JwsVerified { func helper() {}; internal var opened: Bool { false } }
