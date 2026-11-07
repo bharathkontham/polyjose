@@ -18,8 +18,8 @@
 #   3. polyjose-wasm the same way for wasm32-unknown-unknown, its shipping target (polyjose alone
 #      does not build there: getrandom needs the binding's `wasm_js` backend).
 # A workspace member with no library target (build tooling such as polyjose-uniffi-bindgen) is
-# skipped only when its tree holds neither rsa nor another workspace member; otherwise it fails
-# closed.
+# skipped only when its tree, under every feature set (default, --no-default-features and
+# --all-features), holds neither rsa nor another workspace member; otherwise it fails closed.
 # The dev profile inlines no call away, so a reference to an rsa item stays a symbol. The release
 # profile is what ships, and it compiles code the dev profile never does: anything under
 # `cfg(not(debug_assertions))`. It can inline a call away, so it adds to the dev pass and never
@@ -277,16 +277,23 @@ if CORE not in names:
     die("the workspace has no %s package" % CORE)
 # A member with no library target is build tooling (polyjose-uniffi-bindgen, the UniFFI bindgen
 # CLI of feature 0013 T10): no shipped library links it. It is skipped only while it cannot hold
-# polyjose or rsa code at all: its whole tree (every dependency kind, every target) may contain
-# neither rsa nor any other workspace member. Otherwise the check fails closed, as for any member
-# it does not know how to build.
+# polyjose or rsa code at all: its whole tree (every dependency kind, every target, and the union
+# of the default, --no-default-features and --all-features trees, as check-deps.sh binding_tree
+# reads a binding, so an optional dependency behind a feature counts) may contain neither rsa nor
+# any other workspace member. Otherwise the check fails closed, as for any member it does not know
+# how to build, and so does a tree that cargo cannot print or that does not start at the member.
 tools = []
 for p in members:
     if any(LIB_KINDS & set(t["kind"]) for t in p["targets"]):
         continue
-    tree = run(["cargo", "tree", "--locked", "-p", p["name"], "-e", "normal,build,dev", "--target", "all",
-                "--prefix", "none"], "cargo tree -p %s" % p["name"]).splitlines()
-    reached = set(line.split(" ", 1)[0] for line in tree[1:] if line.strip())
+    reached = set()
+    for flags in ([], ["--no-default-features"], ["--all-features"]):
+        argv = ["cargo", "tree", "--locked", "-p", p["name"], "-e", "normal,build,dev", "--target", "all",
+                "--prefix", "none"] + flags
+        tree = run(argv, "cargo tree -p %s%s" % (p["name"], "".join(" " + f for f in flags))).splitlines()
+        if not tree or tree[0].split(" ", 1)[0] != p["name"]:
+            die("%s printed no tree rooted at %s; check the script" % (" ".join(argv), p["name"]))
+        reached |= set(line.split(" ", 1)[0] for line in tree[1:] if line.strip())
     holds = sorted(reached & (set(names) | {"rsa"}))
     if holds:
         die("workspace member %s has no library target, and its tree contains %s; scripts/check-rsa-symbols.sh"
