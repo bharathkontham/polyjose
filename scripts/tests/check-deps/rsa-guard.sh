@@ -101,6 +101,9 @@ expect_fail "rsa SigningKey in a new binding file" "bindings/ffi/src/sign/rsa.rs
 # --- Check 9: workspace members outside bindings/ (feature 0013 security audit L1) ----------------
 # The audit's plant, as written: build tooling under tools/, which no shipped library links, still
 # must not compile RSA private-key code (the symbol check fails closed on it too, rsa-symbols.sh).
+# The plant is a workspace member, so it takes rsa from [workspace.dependencies] (the pin of ADR
+# 0055 §4, default features off) instead of a version written here, which a bump of that pin
+# would make unresolvable (cargo allows one 0.10 rsa per lock file).
 evil_manifest='[package]
 name = "polyjose-evil-tool"
 version = "0.0.0"
@@ -108,7 +111,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rsa = { version = "=0.10.0-rc.20", optional = true, default-features = false }
+rsa = { workspace = true, optional = true }
 polyjose = { path = "../../crates/polyjose", optional = true }
 
 [features]
