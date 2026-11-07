@@ -545,3 +545,46 @@ test("the PE import reader fails closed (exit 2) on anything that is not a well-
     assert.equal(peImports("--deny-crt").status, 2, "--deny-crt and no file");
   });
 });
+
+/** The index of the only line of `lines` matching `pattern`. */
+function onlyLine(lines: readonly string[], pattern: RegExp, what: string): number {
+  const found = lines.flatMap((line, i) => (pattern.test(line) ? [i] : []));
+  assert.equal(found.length, 1, `${what}: exactly one line (found ${found.length})`);
+  return found[0] ?? -1;
+}
+
+/** Whether line `at` is inside an `if <condition>; then ... fi` whose condition line matches `cond`. */
+function insideIf(lines: readonly string[], at: number, cond: RegExp): boolean {
+  let depth = 0;
+  for (let i = at - 1; i >= 0; i--) {
+    const line = (lines[i] ?? "").trim();
+    if (/^fi\b/.test(line)) depth += 1;
+    else if (/^if\b/.test(line)) {
+      if (depth === 0) return cond.test(line);
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
+test("ci-build.sh links the msvc addons' C runtime statically and checks they import no VC++ runtime DLL", () => {
+  const raw = codeLines(ciBuildFile);
+  const gate = /^if \[ "\$crt_static" = true \]; then$/;
+  onlyLine(raw, /^\s*case \$target in \*-pc-windows-msvc\) crt_static=true ;; esac$/, "crt_static is set for the *-pc-windows-msvc targets only");
+  onlyLine(raw, /^\s*crt_static=false$/, "and false otherwise");
+  const flags = onlyLine(
+    raw,
+    /^\s*export RUSTFLAGS="\$\{RUSTFLAGS:\+\$RUSTFLAGS \}-C target-feature=\+crt-static"$/,
+    "RUSTFLAGS gains -C target-feature=+crt-static (napi build appends its own flags to it)",
+  );
+  const build = onlyLine(raw, /^\s*CARGO_BUILD_TARGET=\S+ POLYJOSE_CONFORMANCE_SUFFIX=\S+ \.\/test\.sh$/, "the build and test run");
+  const check = onlyLine(
+    raw,
+    /^\s*python3 -I scripts\/pe-imports\.py --deny-crt "polyjose\.\$platform\.node"$/,
+    "the import check on the built addon",
+  );
+  const pack = onlyLine(raw, /^\s*scripts\/pack-platform\.sh /, "the platform pack");
+  assert.ok(insideIf(raw, flags, gate), "the flag is set only when crt_static is true");
+  assert.ok(insideIf(raw, check, gate), "the check runs only when crt_static is true");
+  assert.ok(flags < build && build < check && check < pack, "flag, then build, then the check, then the pack");
+});
