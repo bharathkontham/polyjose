@@ -9,7 +9,8 @@
 #      --test conformance, default features, ADR 0034 §4): api.test reads Error::CODES from it,
 #      and scripts/conformance-parity.sh compares node.json with it;
 #   5. node --test over the compiled tests, as an explicit file list (a directory argument fails
-#      on Node 24, research §8): dist/<name>.test.js for every test/<name>.test.ts.
+#      on Node 24, research §8): dist/<name>.test.js for every test/<name>.test.ts except
+#      package.test.ts, which scripts/pack.sh runs on the tarballs it packs (T04).
 # Exits non-zero on any failure.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -42,6 +43,7 @@ echo "==> @polyjose/node: node --test (compiled output)"
 tests=()
 for src in test/*.test.ts; do
   [ -e "$src" ] || { echo "no tests found (test/*.test.ts)"; exit 1; }
+  [ "$src" != test/package.test.ts ] || continue # run by scripts/pack.sh on its dist/npm/ tarballs
   name=${src#test/}
   out="dist/${name%.ts}.js"
   [ -f "$out" ] || { echo "$src was not compiled to $out"; exit 1; }
