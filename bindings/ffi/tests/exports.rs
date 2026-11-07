@@ -108,12 +108,28 @@ fn jwk_to_public_drops_the_private_member_and_rejects_an_incomplete_key() {
 #[test]
 fn jwk_thumbprint_is_rfc7638_and_rejects_an_unsupported_hash() {
     assert_eq!(
-        jwk_thumbprint(s(RFC7638_RSA), s("SHA-256")).unwrap(),
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("SHA-256"))).unwrap(),
         RFC7638_THUMBPRINT
+    );
+    // ADR 0054 §9: an absent hash is the core default, SHA-256 (RFC 9278 §5).
+    assert_eq!(
+        jwk_thumbprint(s(RFC7638_RSA), None).unwrap(),
+        RFC7638_THUMBPRINT
+    );
+    // ADR 0054 §8.2: the core parses the name; SHA-384 is 64 base64url characters.
+    assert_eq!(
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("sha384"))).unwrap(),
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("sha-384"))).unwrap()
+    );
+    assert_eq!(
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("SHA-384")))
+            .unwrap()
+            .len(),
+        64
     );
     // ADR 0022: no SHA-1 thumbprints.
     assert_fails!(
-        jwk_thumbprint(s(RFC7638_RSA), s("SHA-1")),
+        jwk_thumbprint(s(RFC7638_RSA), Some(s("SHA-1"))),
         UnsupportedAlgorithm
     );
 }
@@ -121,31 +137,65 @@ fn jwk_thumbprint_is_rfc7638_and_rejects_an_unsupported_hash() {
 #[test]
 fn jwk_thumbprint_uri_is_rfc9278_and_rejects_malformed_json() {
     assert_eq!(
-        jwk_thumbprint_uri(s(RFC7638_RSA), s("SHA-256")).unwrap(),
+        jwk_thumbprint_uri(s(RFC7638_RSA), Some(s("SHA-256"))).unwrap(),
         RFC9278_URI
     );
-    assert_fails!(jwk_thumbprint_uri(s("{"), s("SHA-256")), InvalidJson);
+    assert_eq!(
+        jwk_thumbprint_uri(s(RFC7638_RSA), None).unwrap(),
+        RFC9278_URI
+    );
+    // RFC 9278 §3, §4: the URI carries the IANA name whatever spelling was passed.
+    let sha512 = jwk_thumbprint_uri(s(RFC7638_RSA), Some(s("sha512"))).unwrap();
+    assert!(
+        sha512.starts_with("urn:ietf:params:oauth:jwk-thumbprint:sha-512:"),
+        "{sha512}"
+    );
+    assert_fails!(jwk_thumbprint_uri(s("{"), Some(s("SHA-256"))), InvalidJson);
+    assert_fails!(jwk_thumbprint_uri(s("{"), None), InvalidJson);
+    // ADR 0057 §2: the key is imported before the hash name is parsed.
+    assert_fails!(jwk_thumbprint(s("{"), Some(s("SHA-1"))), InvalidJson);
+    assert_fails!(jwk_thumbprint_uri(s("{"), Some(s("SHA-1"))), InvalidJson);
 }
 
 #[test]
-fn jwks_select_passes_through_to_the_surface_stub() {
-    // Until feature 0015 / task T14, the surface has no JWK Set selection and every call is
-    // `UnsupportedAlgorithm` (feature 0013 T06 Log); T14 replaces the valid case with a match.
-    let jwks = format!(r#"{{"keys":[{RFC7517_A1_P256_PUBLIC}]}}"#);
-    let selector = JwkSelector {
-        kid: Some(s("1")),
-        alg: None,
-        key_use: None,
+fn jwks_select_returns_the_one_match_and_reports_the_core_codes() {
+    // ADR 0054 §4, §9: one match is the member in core form; none is NoMatchingKey; two or more
+    // is MultipleMatchingKeys (RFC 7517 §5.1).
+    let ed25519 = r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","use":"sig","kid":"ed"}"#;
+    let jwks = format!(r#"{{"keys":[{RFC7517_A1_P256_PUBLIC},{ed25519}]}}"#);
+    let by = |kid: Option<&str>, alg: Option<&str>, key_use: Option<&str>| JwkSelector {
+        kid: kid.map(s),
+        alg: alg.map(s),
+        key_use: key_use.map(s),
     };
-    assert_fails!(jwks_select(jwks, selector), UnsupportedAlgorithm);
-    let selector = JwkSelector {
-        kid: None,
-        alg: None,
-        key_use: None,
-    };
+    let selected = jwks_select(jwks.clone(), by(Some("1"), None, None)).unwrap();
+    assert_eq!(selected, RFC7517_A1_P256_PUBLIC);
+    let selected = jwks_select(jwks.clone(), by(None, Some("EdDSA"), Some("sig"))).unwrap();
+    assert!(value(&selected) == value(ed25519), "{selected}");
     assert_fails!(
-        jwks_select(s("not a JWK Set"), selector),
+        jwks_select(jwks.clone(), by(Some("2"), None, None)),
+        NoMatchingKey
+    );
+    assert_fails!(
+        jwks_select(jwks.clone(), by(None, None, None)),
+        MultipleMatchingKeys
+    );
+    // ADR 0054 §1.1: the core refuses the name.
+    assert_fails!(
+        jwks_select(jwks, by(None, Some("none"), None)),
         UnsupportedAlgorithm
+    );
+    // ADR 0054 §4: set import errors come first.
+    assert_fails!(
+        jwks_select(s("not a JWK Set"), by(None, Some("none"), None)),
+        InvalidJson
+    );
+    // A private member comes back as imported (ADR 0054 §3).
+    let private = format!(r#"{{"keys":[{RFC7517_A2_P256_PRIVATE}]}}"#);
+    let selected = jwks_select(private, by(None, None, None)).unwrap();
+    assert!(
+        value(&selected) == value(RFC7517_A2_P256_PRIVATE),
+        "{selected}"
     );
 }
 

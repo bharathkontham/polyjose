@@ -14,6 +14,13 @@
 # procedural macros and the crates only they use, which also run only inside the compiler.
 # Target-specific dependencies of other targets are left out by --target.
 #
+# Features: `cargo tree -p <package>` resolves the package's default features only, and the
+# script takes no --features argument. The artifact must therefore be built with
+# `-p <package>` and default features, the 0.1.0 configuration of every binding (ADR 0034 §3).
+# A build with other features, or `cargo build --workspace` (which unifies features such as
+# uniffi's `cli` into the shipped library, see bindings/ffi/Cargo.toml), links crates these
+# notices would not list.
+#
 # For each crate: name, version, the SPDX license expression from `cargo metadata`, the
 # repository URL, and the full text of every license or notice file in the crate's source
 # directory (LICENSE*, LICENCE*, COPYING*, NOTICE*, matched case-insensitively, including the
@@ -23,7 +30,12 @@
 # License policy (fails the run, naming every offending crate, and writes nothing):
 #   - every crate needs a `license` expression (`license-file` alone is not enough);
 #   - every license the expression names must be in ALLOWED below, whatever its operators: an
-#     alternative outside the list (`MIT OR GPL-2.0-only`) fails too. Operators are OR, AND and
+#     alternative outside the list (`MIT OR GPL-2.0-only`) fails too. ALLOWED is deny.toml's
+#     [licenses].allow, so the notices never accept a license cargo deny rejects (security audit
+#     I6). The one exception is Unlicense, which deny.toml does not list: it is accepted only as
+#     an OR alternative whose other branch is wholly allowed (memchr's `Unlicense OR MIT`; memchr
+#     ships in polyjose-node through napi -> futures -> futures-util), never alone, under an AND
+#     or next to a license outside the list. Operators are OR, AND and
 #     `WITH LLVM-exception` (on Apache-2.0 only), with parentheses; the deprecated `/` separator
 #     counts as OR (Cargo reference, manifest `license` field). Identifiers match
 #     case-insensitively, operators case-sensitively (SPDX 2.3 Annex D.2);
@@ -232,13 +244,17 @@ def source_line(p):
 
 
 # --- License policy -------------------------------------------------------------------------
-# The allowlist (ADR 0020 §4; all compatible with polyjose's MIT, ADR 0015), and the one
-# exception with the only license it may modify.
+# The allowlist (ADR 0020 §4; all compatible with polyjose's MIT, ADR 0015): deny.toml's
+# [licenses].allow, and the one exception with the only license it may modify.
 ALLOWED = ["MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "ISC", "Unicode-3.0", "Zlib",
-           "Unlicense", "CC0-1.0", "MPL-2.0"]
+           "MPL-2.0"]
 EXCEPTIONS = {"LLVM-exception": "Apache-2.0"}
+# Licenses deny.toml does not allow, accepted only as a direct OR alternative to a wholly allowed
+# branch, so the allowed license can always be chosen (security audit I6; memchr).
+OR_ONLY = ["Unlicense"]
 CANONICAL = dict((x.lower(), x) for x in ALLOWED)
 CANONICAL_EXC = dict((x.lower(), x) for x in EXCEPTIONS)
+CANONICAL_OR_ONLY = dict((x.lower(), x) for x in OR_ONLY)
 
 
 class BadExpression(Exception):
@@ -246,10 +262,13 @@ class BadExpression(Exception):
 
 
 def check_expression(expr):
-    """Checks an SPDX license expression (SPDX 2.3 Annex D) against ALLOWED.
+    """Checks an SPDX license expression (SPDX 2.3 Annex D) against ALLOWED and OR_ONLY.
     Returns (problems, single): the list of reasons it is rejected (empty if accepted), and the
     canonical identifier when the whole expression is exactly one license without an exception
-    (else None)."""
+    (else None).
+
+    The tree's nodes are ("LIC", name, allowed), ("OR_ONLY", name), ("WITH", allowed),
+    ("OR", a, b) and ("AND", a, b)."""
     # `/` is Cargo's deprecated alternative to OR.
     tokens = ["OR" if t == "/" else t for t in re.findall(r"[()/]|[^\s()/]+", expr)]
     problems = []
@@ -267,14 +286,14 @@ def check_expression(expr):
         n = and_expr()
         while peek() == "OR":
             take()
-            n = (None, n, and_expr())
+            n = ("OR", n, and_expr())
         return n
 
     def and_expr():
         n = atom()
         while peek() == "AND":
             take()
-            n = (None, n, atom())
+            n = ("AND", n, atom())
         return n
 
     def atom():
@@ -289,11 +308,18 @@ def check_expression(expr):
         if t in ("AND", "OR", "WITH", ")"):
             raise BadExpression("%r where a license is expected" % t)
         lic = CANONICAL.get(t.lower())
-        if lic is None:
-            problems.append("%r is not an allowed license (%s)" % (t, ", ".join(ALLOWED)))
+        or_only = CANONICAL_OR_ONLY.get(t.lower())
+        if lic is None and or_only is None:
+            problems.append("%r is not an allowed license (%s; %s only as an OR alternative)"
+                            % (t, ", ".join(ALLOWED), ", ".join(OR_ONLY)))
         if peek() != "WITH":
-            return lic
+            if or_only is not None:
+                return ("OR_ONLY", or_only)
+            return ("LIC", lic or t, lic is not None)
         take()
+        if or_only is not None:
+            problems.append("%s takes no WITH exception here: it is accepted only as an OR "
+                            "alternative" % or_only)
         e = take()
         if e is None:
             raise BadExpression("WITH without an exception")
@@ -302,7 +328,30 @@ def check_expression(expr):
             problems.append("exception %r is not allowed (only %s)" % (e, ", ".join(sorted(EXCEPTIONS))))
         elif lic is not None and EXCEPTIONS[exc] != lic:
             problems.append("%s applies only to %s, not %s" % (exc, EXCEPTIONS[exc], lic))
-        return None
+        return ("WITH", lic is not None and exc is not None and EXCEPTIONS[exc] == lic)
+
+    def wholly_allowed(n):
+        if n[0] == "LIC":
+            return n[2]
+        if n[0] == "WITH":
+            return n[1]
+        if n[0] == "OR_ONLY":
+            return False
+        return wholly_allowed(n[1]) and wholly_allowed(n[2])
+
+    def check_or_only(n, alternative_allowed):
+        """An OR_ONLY license passes only as a direct operand of an OR whose other operand is
+        wholly allowed (alternative_allowed)."""
+        if n[0] == "OR_ONLY":
+            if not alternative_allowed:
+                problems.append("%s is accepted only as an OR alternative to an allowed license "
+                                "(deny.toml does not allow it)" % n[1])
+        elif n[0] == "OR":
+            check_or_only(n[1], wholly_allowed(n[2]))
+            check_or_only(n[2], wholly_allowed(n[1]))
+        elif n[0] == "AND":
+            check_or_only(n[1], False)
+            check_or_only(n[2], False)
 
     try:
         node = or_expr()
@@ -310,7 +359,9 @@ def check_expression(expr):
             raise BadExpression("unexpected %r" % peek())
     except BadExpression as e:
         return (["malformed expression: %s" % e], None)
-    return (problems, node if isinstance(node, str) and not problems else None)
+    check_or_only(node, False)
+    single = node[1] if node[0] == "LIC" and node[2] and not problems else None
+    return (problems, single)
 
 
 single_license = {}

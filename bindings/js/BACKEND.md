@@ -9,6 +9,7 @@
 - **Records are plain objects** with camelCase fields: `JwsVerifyOptions` is `{ allowedAlgs, detachedPayload?, maxInputLen?, maxSignatures? }`, and so on (ADR 0030 §3–§4).
   - The facade passes **only fields it has validated**.
   - It **leaves an absent optional field out**: it never passes `undefined` or `null`, because napi throws on `null` (0013 research §3).
+- **An absent optional argument is `undefined`, never `null`.** The one optional positional argument is the thumbprint `hash` (ADR 0054 §9): `jwkThumbprint` and `jwkThumbprintUri` are always called with two arguments, and the second is `undefined` when the caller gave none or `null`. Map it to `None` (napi `Option<String>`, wasm-bindgen `Option<String>`), so the core's default, SHA-256, applies. A name arrives as the caller wrote it; the core parses it (`ThumbprintHash::from_name`, nine exact names), so the native layer passes it on unchanged.
 - **Integers are checked before they reach you.** Sizes and counts are integers in 0..=2^32−1 (`u32`). `now` is a safe integer of whole seconds. wasm-bindgen would otherwise coerce `-1` to `4294967295`.
 - **Bytes are fresh copies the facade wipes.** Every byte input (payloads, `detachedPayload`, plaintext, `aad`, `apu`, `apv`, DER, `base64urlEncode` input) arrives as a plain `Uint8Array` that the facade copied from the caller's array when the operation was called (ADR 0030 §7, 0013 B06).
   - The facade wipes each copy with `fill(0)` once your call settles: when you return, throw, or your Promise resolves or rejects.
@@ -32,8 +33,8 @@
 | `base64urlDecode` | text | bytes |
 | `jwkParse` | jwk | jwk |
 | `jwkToPublic` | jwk | jwk |
-| `jwkThumbprint` | jwk, hash | string |
-| `jwkThumbprintUri` | jwk, hash | string |
+| `jwkThumbprint` | jwk, hash (a string or `undefined`) | string |
+| `jwkThumbprintUri` | jwk, hash (a string or `undefined`) | string |
 | `jwksSelect` | jwks, `{ kid?, alg?, keyUse? }` | jwk |
 | `jwkGenerateOct` | lenBytes | jwk |
 | `jwkGenerateEc` | crv | jwk |

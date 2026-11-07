@@ -1,0 +1,18 @@
+{
+  "source": "RFC 7638 §3.4 over the RFC 7517 Appendix A.3 key",
+  "description": "SHA-384 JWK Thumbprint of the RFC 7517 A.3 AES key: only \"k\" and \"kty\" are hashed; no RFC prints it: SHA-384 over the hand-built RFC 7638 §3.3 hash input with node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jwk-oracle/thumbprints.mjs; the URI carries the IANA name sha-384 (RFC 9278 §3, §4)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "alg": "A128KW",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "hash": "sha-384"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "RWKwvfhC_aZql0lGhwOTuOYcIF3-SDe_AOe9odLrXTHbzzwFpG1XErxx8oku0UCe",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-384:RWKwvfhC_aZql0lGhwOTuOYcIF3-SDe_AOe9odLrXTHbzzwFpG1XErxx8oku0UCe"
+  }
+}

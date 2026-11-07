@@ -1,0 +1,15 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): the empty selector over two members is MultipleMatchingKeys",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        { "kty": "oct", "k": "c2VjcmV0LWtleS1ieXRlcw", "kid": "a" },
+        { "kty": "oct", "k": "b3RoZXIta2V5LWJ5dGVz", "kid": "c" }
+      ]
+    },
+    "selector": {}
+  },
+  "expect": { "ok": false, "error": "MultipleMatchingKeys" }
+}

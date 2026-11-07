@@ -1,0 +1,24 @@
+{
+  "source": "ADR 0054 §1.1; RFC 7518 §7.1",
+  "description": "An empty alg is refused with UnsupportedAlgorithm, not treated as absent; decided by ADR 0054 §1.1: the empty string is no algorithm polyjose implements, so the alg setter refuses it; only an absent alg skips the alg checks (§2); outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      ]
+    },
+    "selector": {
+      "alg": ""
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}
