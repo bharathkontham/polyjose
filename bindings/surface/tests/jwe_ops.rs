@@ -155,13 +155,63 @@ fn decrypt_json_reports_the_recipient_index_and_every_header_part_of_rfc7516_a4(
 /// (`zip/rfc7520-5-9-a128kw-a128gcm-def-decrypt.json`).
 const R5_9_ZIP_JWE: &str = "eyJhbGciOiJBMTI4S1ciLCJraWQiOiI4MWIyMDk2NS04MzMyLTQzZDktYTQ2OC04MjE2MGFkOTFhYzgiLCJlbmMiOiJBMTI4R0NNIiwiemlwIjoiREVGIn0.5vUT2WOtQxKWcekM_IzVQwkGgzlFDwPi.p9pUq6XHY0jfEZIl.HbDtOsdai1oYziSx25KEeTxmwnh8L8jKMFNc1k3zmMI6VB8hry57tDZ61jXyezSPt0fdLVfe6Jf5y5-JaCap_JQBcb5opbmT60uWGml8blyiMQmOn9J--XhhlYg0m-BHaqfDO5iTOWxPxFMUedx7WCy8mxgDHj0aBMG6152PsM-w5E_o2B3jDbrYBKhpYA7qi3AyijnCJ7BP9rr3U8kxExCpG3mK420TjOw.VILuUwuIxaLVmh5X-T7kmA";
 
+fn zip_policy() -> JweDecryptOptions {
+    policy(&["A128KW"], &["A128GCM"])
+}
+
+/// Whether the core under test has its `deflate` feature (ADR 0017). The bindings ship without
+/// it (ADR 0030 §4, ADR 0034 §3), but `cargo test --workspace --all-features` unifies it on, and
+/// Cargo gives a dependent crate no `cfg` for a dependency's feature. So this asks the core, twice
+/// and independently: by decrypting RFC 7520 §5.9's `zip` token and by encrypting with
+/// `compress`. Each must succeed or fail with exactly `UnsupportedAlgorithm`, and the two must
+/// agree; anything else fails the calling test. The callers then check the full behaviour of
+/// whichever build this is, so neither answer can hide a fault.
+fn deflate_enabled() -> bool {
+    let probe = |result: Result<(), SurfaceError>| match result {
+        Ok(()) => true,
+        Err(e) => {
+            assert_eq!(e.code(), "UnsupportedAlgorithm", "{}", e.message());
+            false
+        }
+    };
+    let decrypts = probe(jwe_decrypt_compact(R5_9_ZIP_JWE, R5_8_KEY, &zip_policy()).map(drop));
+    let mut options = encrypt_options("A128GCM", vec![recipient("A128KW", A3_KEY)]);
+    options.compress = true;
+    let encrypts = probe(jwe_encrypt_compact(b"probe", &options).map(drop));
+    assert_eq!(
+        decrypts, encrypts,
+        "the zip decrypt and encrypt probes disagree"
+    );
+    decrypts
+}
+
 #[test]
-fn a_compressed_jwe_is_unsupported_without_the_deflate_feature() {
-    // The bindings build without `deflate` (ADR 0030 §4, ADR 0034 §3): `zip` is refused among
-    // the support checks, never decrypted without inflating (ADR 0017).
+fn a_compressed_jwe_decrypts_only_with_the_deflate_feature() {
+    if !deflate_enabled() {
+        // The shipped bindings (ADR 0030 §4, ADR 0034 §3): `zip` is refused among the support
+        // checks, never decrypted without inflating (ADR 0017).
+        assert_code(
+            jwe_decrypt_compact(R5_9_ZIP_JWE, R5_8_KEY, &zip_policy()),
+            "UnsupportedAlgorithm",
+        );
+        return;
+    }
+    // With `deflate`: RFC 7520 §5.9 inflates to Figure 72 (RFC 7516 §5.2 step 17).
+    let d = jwe_decrypt_compact(R5_9_ZIP_JWE, R5_8_KEY, &zip_policy()).unwrap();
+    let plaintext = b64u(R5_PLAINTEXT_B64U);
+    assert_eq!(d.plaintext.as_bytes(), plaintext);
+    assert!(d.protected_header.unwrap().contains(r#""zip":"DEF""#));
+    // `max_decompressed_len` reaches the core: the exact length inflates, one less is the
+    // uniform DecryptionFailed (ADR 0017, ADR 0007).
+    let len = u32::try_from(plaintext.len()).unwrap();
+    let mut exact = zip_policy();
+    exact.max_decompressed_len = Some(len);
+    assert!(jwe_decrypt_compact(R5_9_ZIP_JWE, R5_8_KEY, &exact).is_ok());
+    let mut short = zip_policy();
+    short.max_decompressed_len = Some(len - 1);
     assert_code(
-        jwe_decrypt_compact(R5_9_ZIP_JWE, R5_8_KEY, &policy(&["A128KW"], &["A128GCM"])),
-        "UnsupportedAlgorithm",
+        jwe_decrypt_compact(R5_9_ZIP_JWE, R5_8_KEY, &short),
+        "DecryptionFailed",
     );
 }
 
@@ -422,20 +472,36 @@ fn compact_refuses_what_it_cannot_carry() {
 }
 
 #[test]
-fn compress_is_unsupported_without_the_deflate_feature() {
-    // The bindings build without `deflate` (ADR 0030 §4, ADR 0034 §3): never an uncompressed
-    // JWE in its place (ADR 0017 §5).
+fn compress_needs_the_deflate_feature_and_never_falls_back() {
     let mut options = encrypt_options("A256GCM", vec![recipient("A128KW", A3_KEY)]);
     options.compress = true;
-    assert_code(
-        jwe_encrypt_compact(PLAINTEXT, &options),
-        "UnsupportedAlgorithm",
-    );
-    for form in ["general", "flattened"] {
+    if !deflate_enabled() {
+        // The shipped bindings (ADR 0030 §4, ADR 0034 §3): never an uncompressed JWE in its
+        // place (ADR 0017 §5).
         assert_code(
-            jwe_encrypt_json(PLAINTEXT, &options, form),
+            jwe_encrypt_compact(PLAINTEXT, &options),
             "UnsupportedAlgorithm",
         );
+        for form in ["general", "flattened"] {
+            assert_code(
+                jwe_encrypt_json(PLAINTEXT, &options, form),
+                "UnsupportedAlgorithm",
+            );
+        }
+        return;
+    }
+    // With `deflate`: `zip: DEF` is protected (RFC 7516 §4.1.3) in every serialization, and the
+    // JWE round trips.
+    let decrypt = policy(&["A128KW"], &["A256GCM"]);
+    let token = jwe_encrypt_compact(PLAINTEXT, &options).unwrap();
+    assert!(compact_protected(&token).contains(r#""zip":"DEF""#));
+    let d = jwe_decrypt_compact(&token, A3_KEY, &decrypt).unwrap();
+    assert_eq!(d.plaintext.as_bytes(), PLAINTEXT);
+    for form in ["general", "flattened"] {
+        let jwe = jwe_encrypt_json(PLAINTEXT, &options, form).unwrap();
+        assert!(json_protected(&jwe).contains(r#""zip":"DEF""#), "{jwe}");
+        let d = jwe_decrypt_json(&jwe, A3_KEY, &decrypt).unwrap();
+        assert_eq!(d.plaintext.as_bytes(), PLAINTEXT);
     }
 }
 
@@ -876,9 +942,6 @@ fn no_failing_path_puts_the_marker_in_the_error() {
     let mut o = with("A256KW", &marked);
     o.shared_unprotected_header = Some(marked_json.clone());
     cases.push(("shared header", o));
-    let mut o = with("A256KW", &marked);
-    o.compress = true;
-    cases.push(("compress", o));
     cases.push(("key size", with("A128KW", &marked)));
     cases.push(("key family", with("ECDH-ES", &marked)));
     cases.push(("RSA1_5", with("RSA1_5", &marked)));
@@ -900,6 +963,22 @@ fn no_failing_path_puts_the_marker_in_the_error() {
     for (what, options) in &cases {
         assert_no_marker(what, jwe_encrypt_compact(PLAINTEXT, options));
         assert_no_marker(what, jwe_encrypt_json(PLAINTEXT, options, "flattened"));
+    }
+    // Compression: refused without `deflate`; with it, a marked key's zip JWE over the inflate
+    // bound fails uniformly (ADR 0017). Either way the failing path runs.
+    let mut o = with("A256KW", &marked);
+    o.compress = true;
+    if deflate_enabled() {
+        let token = jwe_encrypt_compact(PLAINTEXT, &o).unwrap();
+        let mut no_room = policy(&["A256KW"], &["A256GCM"]);
+        no_room.max_decompressed_len = Some(0);
+        assert_no_marker(
+            "inflate bound",
+            jwe_decrypt_compact(&token, &marked, &no_room),
+        );
+    } else {
+        assert_no_marker("compress", jwe_encrypt_compact(PLAINTEXT, &o));
+        assert_no_marker("compress", jwe_encrypt_json(PLAINTEXT, &o, "flattened"));
     }
     // The compact-only refusal (RFC 7516 §7.1), and an unknown form holding the marker.
     let mut o = with("A256KW", &marked);
