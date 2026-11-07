@@ -1,0 +1,12 @@
+{
+  "source": "ADR 0018 §5; ADR 0030 §4; ADR 0034 §6",
+  "description": "ADR 0030 jwk_generate_oct, ADR 0018 §5: the core generates oct keys of 16 to 512 octets, so 15 is InvalidKey, decided by the core before any random byte is drawn",
+  "operation": "keys.generate_oct",
+  "input": {
+    "len_bytes": 15
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

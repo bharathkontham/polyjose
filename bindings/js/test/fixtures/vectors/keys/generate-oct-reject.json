@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): 15 octets is below the core's bound",
+  "operation": "keys.generate_oct",
+  "input": {
+    "len_bytes": 15
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

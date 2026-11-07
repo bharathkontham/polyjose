@@ -72,15 +72,27 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
       if (jwkImport(t)["kty"] === "oct") throw coded("UnsupportedAlgorithm", "oct has no PEM");
       return "-----BEGIN PUBLIC KEY-----\nMCo\n-----END PUBLIC KEY-----\n";
     }) as Handler,
+    jwkToPublic: ((t: string) => {
+      const jwk = jwkImport(t);
+      delete jwk["d"];
+      return JSON.stringify(jwk);
+    }) as Handler,
+    // Toy keys of the RFC shapes (RFC 7518 §6.2, §6.4.1; RFC 8037 §2), no alg; the core's oct bound is 16-512 octets.
+    jwkGenerateOct: ((n: number) => {
+      if (n < 16 || n > 512) throw coded("InvalidKey", "length");
+      return JSON.stringify({ kty: "oct", k: enc("k".repeat(n)) });
+    }) as Handler,
+    jwkGenerateEc: ((crv: string) => JSON.stringify({ kty: "EC", crv, x: "eA", y: "eQ", d: "ZA" })) as Handler,
+    jwkGenerateOkp: ((crv: string) => JSON.stringify({ kty: "OKP", crv, x: "eA", d: "ZA" })) as Handler,
     jwkGenerateForAlg: ((alg: string) => {
       if (alg === "A128KW") return JSON.stringify({ kty: "oct", k: enc("0123456789abcdef"), alg });
       if (alg.startsWith("ECDH-ES")) throw coded("InvalidKey", "needs a curve");
       throw coded("UnsupportedAlgorithm", "unknown");
     }) as Handler,
 
-    jwsSignCompact: ((p: Uint8Array, key: string, o: { protectedB64u?: string; detached?: boolean }) => {
+    jwsSignCompact: ((p: Uint8Array, key: string, o: { protectedHeader?: string; protectedB64u?: string; detached?: boolean }) => {
       jwkImport(key);
-      const header = o.protectedB64u ?? "";
+      const header = o.protectedB64u ?? (o.protectedHeader === undefined ? "" : enc(o.protectedHeader));
       return `${header}.${o.detached === true ? "" : b64uEncode(p)}.sig`;
     }) as Handler,
     jwsSignFlattened: ((p: Uint8Array, s: Obj, detached: boolean) => {

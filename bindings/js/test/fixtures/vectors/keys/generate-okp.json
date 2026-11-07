@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): an X25519 key's shape and an encrypt/decrypt round trip to its public key",
+  "operation": "keys.generate_okp",
+  "input": {
+    "crv": "X25519"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "OKP",
+      "crv": "X25519"
+    },
+    "use_with": {
+      "alg": "ECDH-ES",
+      "enc": "A128GCM"
+    }
+  }
+}
