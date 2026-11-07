@@ -6,12 +6,14 @@
 //! apart. Every behaviour is the core's: these tests show that the surface passes each argument
 //! through and converts each result, adding nothing (ADR 0030 §3, §6).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
+
 use polyjose::json::{self, Value};
 use polyjose_surface::jws::{
     jws_sign_compact, jws_sign_flattened, jws_sign_general, jws_verify_compact, jws_verify_json,
 };
 use polyjose_surface::records::{JwsSignOptions, JwsSigner, JwsVerified, JwsVerifyOptions};
-use polyjose_surface::{SecretBytes, SecretString, SurfaceError, util};
+use polyjose_surface::{SecretBytes, SecretString, SurfaceError, SurfaceResult, util};
 
 // --- Vectors ----------------------------------------------------------------------------------
 
@@ -756,12 +758,11 @@ fn es256_compact_round_trips_through_the_surface() {
 fn secrets_are_borrowed_in_and_wiped_out() {
     // Payloads are borrowed as `&[u8]` and keys as `&str` (ADR 0030 §7.1); the verified payload
     // is SecretBytes (ADR 0049 §4). Each binding compiles against exactly these types.
-    let _: fn(&[u8], &str, &JwsSignOptions) -> Result<String, SurfaceError> = jws_sign_compact;
-    let _: fn(&[u8], &JwsSigner, bool) -> Result<String, SurfaceError> = jws_sign_flattened;
-    let _: fn(&[u8], &[JwsSigner], bool) -> Result<String, SurfaceError> = jws_sign_general;
-    let _: fn(&str, &str, &JwsVerifyOptions) -> Result<JwsVerified, SurfaceError> =
-        jws_verify_compact;
-    let _: fn(&str, &str, &JwsVerifyOptions) -> Result<JwsVerified, SurfaceError> = jws_verify_json;
+    let _: fn(&[u8], &str, &JwsSignOptions) -> SurfaceResult<String> = jws_sign_compact;
+    let _: fn(&[u8], &JwsSigner, bool) -> SurfaceResult<String> = jws_sign_flattened;
+    let _: fn(&[u8], &[JwsSigner], bool) -> SurfaceResult<String> = jws_sign_general;
+    let _: fn(&str, &str, &JwsVerifyOptions) -> SurfaceResult<JwsVerified> = jws_verify_compact;
+    let _: fn(&str, &str, &JwsVerifyOptions) -> SurfaceResult<JwsVerified> = jws_verify_json;
     let payload: fn(&JwsVerified) -> &SecretBytes = |v| &v.payload;
     let _ = payload;
 
