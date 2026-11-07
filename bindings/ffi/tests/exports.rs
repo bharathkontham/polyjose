@@ -23,10 +23,14 @@ use polyjose_ffi::jwk::{
 use polyjose_ffi::jws::{
     jws_sign_compact, jws_sign_flattened, jws_sign_general, jws_verify_compact, jws_verify_json,
 };
+use polyjose_ffi::jwt::{
+    jwt_decrypt_nested, jwt_decrypt_nested_with_jwks, jwt_encrypt_nested, jwt_sign, jwt_verify,
+    jwt_verify_with_jwks,
+};
 use polyjose_ffi::keys;
 use polyjose_ffi::records::{
     JweDecryptOptions, JweEncryptOptions, JweRecipient, JwkSelector, JwsSignOptions, JwsSigner,
-    JwsVerifyOptions,
+    JwsVerifyOptions, JwtSignOptions, JwtVerifyOptions,
 };
 
 /// Asserts that `$result` failed as `PolyjoseError::$variant` and that the exported `code()` is
@@ -538,5 +542,185 @@ fn jwe_encrypt_json_round_trips_the_aad_and_rejects_an_unknown_form() {
             s("compact")
         ),
         UnsupportedAlgorithm
+    );
+}
+
+// --- JWT (RFC 7519, RFC 8725; ADR 0027, ADR 0028, ADR 0029) -----------------------------------
+
+/// RFC 7519 §3.1: the example JWT, an HS256 JWS with the RFC 7515 Appendix A.1 key; its `exp`
+/// is 1300819380.
+const RFC7519_3_1_JWT: &str = RFC7515_A1_JWS;
+
+/// 60 s before the RFC 7519 §3.1 `exp` (the `jwt/rfc7519/3-1-hs256-before-exp` vector).
+const BEFORE_EXP: i64 = 1_300_819_320;
+
+/// One hour after the RFC 7519 §3.1 `exp`, past any leeway the core allows (ADR 0027).
+const AFTER_EXP: i64 = 1_300_822_980;
+
+fn jwt_options(now: i64) -> JwtVerifyOptions {
+    JwtVerifyOptions {
+        allowed_algs: vec![s("HS256")],
+        now: Some(now),
+        issuers: None,
+        audiences: None,
+        subject: None,
+        leeway: None,
+        max_age: None,
+        required_claims: None,
+        allow_missing_exp: false,
+        ignore_audience: false,
+        typ: None,
+        any_typ: false,
+        profile: None,
+        max_key_candidates: None,
+        max_input_len: None,
+    }
+}
+
+fn hs256_sign_options() -> JwtSignOptions {
+    JwtSignOptions {
+        alg: s("HS256"),
+        typ: None,
+        omit_typ: false,
+        access_token: false,
+        header: None,
+    }
+}
+
+/// The JWK Set holding only the RFC 7515 Appendix A.1 key (RFC 7517 §5).
+fn a1_jwks() -> String {
+    format!(r#"{{"keys":[{RFC7515_A1_KEY}]}}"#)
+}
+
+/// A nested JWT (RFC 7519 §5.2, Appendix A.2): the RFC 7519 §3.1 JWT encrypted to the RFC 7516
+/// A.3 key.
+fn nested_jwt() -> String {
+    jwt_encrypt_nested(s(RFC7519_3_1_JWT), a3_encrypt_options(None, 1)).unwrap()
+}
+
+#[test]
+fn jwt_verify_validates_rfc7519_3_1_and_rejects_it_after_exp() {
+    let verified = jwt_verify(
+        s(RFC7519_3_1_JWT),
+        s(RFC7515_A1_KEY),
+        jwt_options(BEFORE_EXP),
+    )
+    .unwrap();
+    assert_eq!(verified.alg, "HS256");
+    assert_eq!(member(&verified.claims, "iss"), "joe");
+    assert_eq!(member(&verified.header, "typ"), "JWT");
+    // ADR 0029 §4: a single key is not a set.
+    assert_eq!(verified.key_index, None);
+    // RFC 7519 §4.1.4.
+    assert_fails!(
+        jwt_verify(
+            s(RFC7519_3_1_JWT),
+            s(RFC7515_A1_KEY),
+            jwt_options(AFTER_EXP)
+        ),
+        TokenExpired
+    );
+}
+
+#[test]
+fn jwt_verify_with_jwks_reports_the_member_and_rejects_a_set_without_a_candidate() {
+    let verified =
+        jwt_verify_with_jwks(s(RFC7519_3_1_JWT), a1_jwks(), jwt_options(BEFORE_EXP)).unwrap();
+    assert_eq!(member(&verified.claims, "iss"), "joe");
+    assert_eq!(verified.key_index, Some(0));
+    // ADR 0029 §4: no member can verify HS256 (the binding-surface/jwt-jwks-no-candidate
+    // vector).
+    let ec_only = format!(r#"{{"keys":[{RFC7517_A1_P256_PUBLIC}]}}"#);
+    assert_fails!(
+        jwt_verify_with_jwks(s(RFC7519_3_1_JWT), ec_only, jwt_options(BEFORE_EXP)),
+        NoMatchingKey
+    );
+}
+
+#[test]
+fn jwt_sign_round_trips_and_rejects_typ_with_omit_typ() {
+    let token = jwt_sign(
+        s(r#"{"iss":"joe","exp":1300819380}"#),
+        s(RFC7515_A1_KEY),
+        hs256_sign_options(),
+    )
+    .unwrap();
+    let verified = jwt_verify(token, s(RFC7515_A1_KEY), jwt_options(BEFORE_EXP)).unwrap();
+    assert_eq!(member(&verified.claims, "iss"), "joe");
+    // RFC 7519 §5.1: the core's default `typ`.
+    assert_eq!(member(&verified.header, "typ"), "JWT");
+    // ADR 0030 §4: `typ` together with `omit_typ` is `InvalidHeader`.
+    let both = JwtSignOptions {
+        typ: Some(s("JWT")),
+        omit_typ: true,
+        ..hs256_sign_options()
+    };
+    assert_fails!(
+        jwt_sign(s(r#"{"iss":"joe"}"#), s(RFC7515_A1_KEY), both),
+        InvalidHeader
+    );
+}
+
+#[test]
+fn jwt_encrypt_nested_sets_cty_and_rejects_a_token_that_is_not_a_jws() {
+    let decrypted =
+        jwe_decrypt_compact(nested_jwt(), s(RFC7516_A3_KEY), a3_decrypt_options()).unwrap();
+    // RFC 7519 §5.2: the outer header says the content is a JWT.
+    assert_eq!(member(&decrypted.header, "cty"), "JWT");
+    assert_eq!(decrypted.plaintext, RFC7519_3_1_JWT.as_bytes());
+    assert_fails!(
+        jwt_encrypt_nested(s("not.a-jws"), a3_encrypt_options(None, 1)),
+        InvalidFormat
+    );
+}
+
+#[test]
+fn jwt_decrypt_nested_validates_the_inner_jwt_and_rejects_an_enc_outside_the_allow_list() {
+    let verified = jwt_decrypt_nested(
+        nested_jwt(),
+        s(RFC7516_A3_KEY),
+        a3_decrypt_options(),
+        s(RFC7515_A1_KEY),
+        jwt_options(BEFORE_EXP),
+    )
+    .unwrap();
+    assert_eq!(member(&verified.inner.claims, "iss"), "joe");
+    assert_eq!(member(&verified.outer_header, "cty"), "JWT");
+    assert_eq!(verified.recipient_index, 0);
+    // RFC 8725 §3.1, ADR 0007.
+    assert_fails!(
+        jwt_decrypt_nested(
+            nested_jwt(),
+            s(RFC7516_A3_KEY),
+            decrypt_options(&["A128KW"], &["A256GCM"]),
+            s(RFC7515_A1_KEY),
+            jwt_options(BEFORE_EXP),
+        ),
+        AlgorithmNotAllowed
+    );
+}
+
+#[test]
+fn jwt_decrypt_nested_with_jwks_reports_the_member_and_rejects_an_expired_inner_jwt() {
+    let verified = jwt_decrypt_nested_with_jwks(
+        nested_jwt(),
+        s(RFC7516_A3_KEY),
+        a3_decrypt_options(),
+        a1_jwks(),
+        jwt_options(BEFORE_EXP),
+    )
+    .unwrap();
+    assert_eq!(member(&verified.inner.claims, "iss"), "joe");
+    assert_eq!(verified.inner.key_index, Some(0));
+    // RFC 7519 §4.1.4, checked on the inner JWT (RFC 7519 §7.2 step 8).
+    assert_fails!(
+        jwt_decrypt_nested_with_jwks(
+            nested_jwt(),
+            s(RFC7516_A3_KEY),
+            a3_decrypt_options(),
+            a1_jwks(),
+            jwt_options(AFTER_EXP),
+        ),
+        TokenExpired
     );
 }
