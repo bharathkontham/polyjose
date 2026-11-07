@@ -365,14 +365,33 @@ fn every_other_hash_name_is_unsupported() {
 }
 
 #[test]
-fn an_unknown_hash_is_reported_before_the_key_is_parsed() {
-    // The hash name is checked first, so a bad key with a bad hash reports the hash.
+fn the_key_is_imported_before_the_hash_is_parsed() {
+    // ADR 0057 §2: JWK import errors come first, then the hash name, so a bad key with a bad
+    // hash reports the key (as the jwk-thumbprint/hash-reject-invalid-key-p256-off-curve vector).
+    let off_curve = r#"{"kty":"EC","crv":"P-256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfQ"}"#;
+    for hash in ["SHA-1", "sha-1", "", "sha3-256"] {
+        assert_eq!(code(jwk::jwk_thumbprint("{", Some(hash))), "InvalidJson");
+        assert_eq!(
+            code(jwk::jwk_thumbprint_uri("{", Some(hash))),
+            "InvalidJson"
+        );
+        assert_eq!(
+            code(jwk::jwk_thumbprint(off_curve, Some(hash))),
+            "InvalidKey"
+        );
+        assert_eq!(
+            code(jwk::jwk_thumbprint_uri(off_curve, Some(hash))),
+            "InvalidKey"
+        );
+        // An RSA private JWK fails its import (ADR 0021) before the name is looked at.
+        assert_eq!(
+            code(jwk::jwk_thumbprint(RFC7517_A2_RSA_PRIVATE, Some(hash))),
+            "UnsupportedAlgorithm"
+        );
+    }
+    // With a valid key, the bad name is the outcome.
     assert_eq!(
-        code(jwk::jwk_thumbprint("{", Some("SHA-1"))),
-        "UnsupportedAlgorithm"
-    );
-    assert_eq!(
-        code(jwk::jwk_thumbprint_uri("{", Some("SHA-1"))),
+        code(jwk::jwk_thumbprint(RFC7638_RSA, Some("SHA-1"))),
         "UnsupportedAlgorithm"
     );
 }
