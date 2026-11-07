@@ -28,21 +28,25 @@ check "codes in another order fail (the order is the core's)" 1 \
   "the inventory's error codes differ from polyjose::Error::CODES" '^check-binding-api: inventory: FAIL$'
 check_absent "no mode runs after an inventory failure" 'surface: (PASS|FAIL)'
 
+# The core's last two codes (lib.sh), so a code the core adds does not change these cases.
+last_code=$(core_codes | tail -n 1)
+prev_code=$(core_codes | awk '{ p = l; l = $0 } END { print p }')
+
 new_case codes-missing-last
-edit $inv 'code NoMatchingKey
-' ''
+edit $inv "code $last_code
+" ''
 run_check surface
-check "an inventory without NoMatchingKey fails" 1 \
-  "the inventory's error codes differ" '^  core: .* InvalidFormat NoMatchingKey $'
+check "an inventory without the core's last code fails" 1 \
+  "the inventory's error codes differ" "^  core: .* $prev_code $last_code \$"
 
 new_case core-new-code
-edit $err '        "NoMatchingKey",
-    ];' '        "NoMatchingKey",
-        "TokenReplayed",
-    ];'
+edit $err "        \"$last_code\",
+    ];" "        \"$last_code\",
+        \"TokenReplayed\",
+    ];"
 run_check surface
 check "a code added to the core but not to the inventory fails" 1 \
-  "the inventory's error codes differ" '^  core: .* NoMatchingKey TokenReplayed $'
+  "the inventory's error codes differ" "^  core: .* $last_code TokenReplayed \$"
 
 new_case core-no-codes
 edit $err 'pub const CODES: &' 'pub const ALL_CODES: &'
