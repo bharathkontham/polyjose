@@ -19,7 +19,10 @@ command -v cargo >/dev/null 2>&1 || lib_die "cargo not found on PATH"
 command -v python3 >/dev/null 2>&1 || lib_die "python3 not found on PATH"
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/third-party-notices-test.XXXXXX") || lib_die "mktemp failed"
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh): finish
+# (each test's last statement) sets the sentinel, so a test that stops before finish never exits 0.
+completed=""
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "${0##*/}: stopped before finish (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 pass() { tests_run=$((tests_run + 1)); echo "ok   - $1"; }
 fail() { tests_run=$((tests_run + 1)); tests_failed=$((tests_failed + 1)); echo "FAIL - $1"; }
@@ -166,7 +169,9 @@ expect_reject() {
   fi
 }
 
+# finish: prints the summary, sets the sentinel and fails if any check failed.
 finish() {
   echo "$tests_run checks, $tests_failed failed"
+  completed=1
   [ "$tests_failed" -eq 0 ]
 }
