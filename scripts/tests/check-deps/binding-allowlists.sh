@@ -185,6 +185,42 @@ expect_fail "a crate added to polyjose-surface" \
   "FAIL: the tree of polyjose-surface \\(bindings/surface\\) $not_allowed" "$not_allowed"
 expect_also "the offending crate is named" '^  - base64ct$'
 
+# --- Check 13: build-dependencies (security audit L2 of feature 0013) ---------------------------------
+# A build script and its build-dependencies run on every machine that builds the binding, so they
+# are in the tree check 13 pins (`-e normal,build`, ADR 0030 §1), as for the core (check 1).
+
+# The audit's reproduction: a build.rs with an unvetted build crate in the framework-free surface.
+new_surface_case surface-build-dep
+append_to bindings/surface/build.rs 'fn main() -> anyhow::Result<()> { Ok(()) }'
+append_to bindings/surface/Cargo.toml $'\n[build-dependencies]\nanyhow = "1"'
+relock
+expect_fail "a build.rs with [build-dependencies] anyhow added to polyjose-surface" \
+  "FAIL: the tree of polyjose-surface \\(bindings/surface\\) $not_allowed" "$not_allowed"
+expect_also "the build crate is named" '^  - anyhow$'
+
+new_case node-build-feature
+python3 -I -c '
+import sys
+p = sys.argv[1]
+t = open(p).read()
+if "\n[build-dependencies]\n" not in t:
+    sys.exit("no [build-dependencies] table in %s" % p)
+t = t.replace("\n[build-dependencies]\n", "\n[build-dependencies]\nbase64ct = { version = \"1\", optional = true }\n", 1)
+t = t.replace("\n[dependencies]\n", "\n[features]\nfixture = [\"dep:base64ct\"]\n\n[dependencies]\n", 1)
+open(p, "w").write(t)
+' "$case_dir/bindings/node/Cargo.toml"
+relock
+expect_fail "a build-dependency of polyjose-node behind a feature (--all-features)" \
+  "FAIL: the tree of polyjose-node \\(bindings/node\\) $not_allowed" "$not_allowed"
+expect_also "the build crate is named" '^  - base64ct$'
+
+new_case wasm-build-target
+append_to bindings/wasm/Cargo.toml $'\n[target.\'cfg(windows)\'.build-dependencies]\nbase64ct = "1"'
+relock
+expect_fail "a build-dependency of polyjose-wasm on Windows only (--target all)" \
+  "FAIL: the tree of polyjose-wasm \\(bindings/wasm\\) $not_allowed" "$not_allowed"
+expect_also "the build crate is named" '^  - base64ct$'
+
 # --- Check 14: no serde in the bindings -------------------------------------------------------------------
 
 # The criterion's reproduction: serde_json in polyjose-node fails check 14, and check 13 too.
