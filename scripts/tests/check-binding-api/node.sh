@@ -136,6 +136,14 @@ check_diffs "a required field made optional fails" \
   'missing from node (in the inventory): field JwsVerified.signatureIndex' \
   'extra in node (not in the inventory): field JwsVerified.signatureIndex?'
 
+node_case flag-required
+edit $pkg/binding.d.ts '  compress?:' '  compress:'
+fresh
+run_check node
+check_diffs "a flag must be optional in binding.d.ts (napi-rs Option<bool>)" \
+  'missing from node (in the inventory): field JweEncryptOptions.compress?' \
+  'extra in node (not in the inventory): field JweEncryptOptions.compress'
+
 node_case extra-record
 append $pkg/binding.d.ts '
 export interface JwsPeeked {
@@ -194,6 +202,16 @@ edit $pkg/facade/error-codes.d.ts "\"$code1\", \"$code2\"" "\"$code2\", \"$code1
 fresh
 run_check node
 check "the shipped ERROR_CODES in another order fail" 1 \
+  '^  error codes of node differ from the inventory.s \(same codes, same order\):$' '^check-binding-api: node: FAIL '
+
+# A build from before the core's last code was added (the 16-code build of 0007 B02) fails even
+# when its files are newer than their sources: why this test does not read the checkout's build.
+code_last=$(sed -n '$p' "$scratch/codes")
+node_case code-missing
+edit $pkg/facade/error-codes.d.ts ", \"$code_last\"]" "]"
+fresh
+run_check node
+check "a shipped ERROR_CODES without the core's last code fails" 1 \
   '^  error codes of node differ from the inventory.s \(same codes, same order\):$' '^check-binding-api: node: FAIL '
 
 status=0
