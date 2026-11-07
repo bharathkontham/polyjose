@@ -46,3 +46,6 @@ pub mod jws;
 pub mod jwt;
 pub mod keys;
 pub mod util;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod rules;
