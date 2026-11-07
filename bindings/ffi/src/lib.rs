@@ -6,5 +6,6 @@
 uniffi::setup_scaffolding!();
 
 pub mod error;
+pub mod util;
 
 pub use error::PolyjoseError;
