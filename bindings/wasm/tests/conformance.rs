@@ -2200,6 +2200,15 @@ fn jwks_select_maps_the_selector_member_by_member() {
 }
 
 #[wasm_bindgen_test]
+fn error_codes_end_with_multiple_matching_keys() {
+    // ADR 0054 §5: appended last, after NoMatchingKey, at index 16 of `Error::CODES`.
+    let codes = util::error_codes();
+    assert_eq!(codes.len(), 17);
+    assert_eq!(codes[15], "NoMatchingKey");
+    assert_eq!(codes[16], "MultipleMatchingKeys");
+}
+
+#[wasm_bindgen_test]
 fn the_results_document_names_this_runner_and_the_adapter_codes() {
     let some = "0".repeat(64);
     let doc = JSON::parse(&results_document(&[], Vec::new(), &some)).unwrap();
