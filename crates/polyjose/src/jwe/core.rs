@@ -83,8 +83,9 @@ pub(crate) struct JweParts {
     pub(crate) ciphertext: Vec<u8>,
     /// The JWE Authentication Tag, decoded.
     pub(crate) tag: Vec<u8>,
-    /// The JWE AAD (`aad`), decoded, JSON only.
-    pub(crate) aad: Option<Vec<u8>>,
+    /// The JWE AAD (`aad`), decoded, JSON only. Wiped on drop: it can
+    /// carry application secrets (ADR 0050 §4, ADR 0030 §7.2).
+    pub(crate) aad: Option<Zeroizing<Vec<u8>>>,
 }
 
 /// The only `zip` value defined (RFC 7516 §4.1.3, RFC 7518 §7.3): raw
@@ -389,7 +390,8 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
         return Err(best.unwrap_or(Error::DecryptionFailed));
     }
 
-    let aad = content::aad(&parts.protected_b64, parts.aad.as_deref());
+    let jwe_aad = parts.aad.as_deref().map(Vec::as_slice);
+    let aad = content::aad(&parts.protected_b64, jwe_aad);
     // ADR 0050 §2: one PBKDF2 budget for the whole call, so the sum of
     // `p2c` over the PBES2 candidates tried is at most `max_pbes2_count`.
     let mut pbes2_budget = pbes2::Budget::new(policy);
@@ -419,7 +421,7 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
                 recipient_header: parts.recipients.swap_remove(index).header,
                 header: headers.swap_remove(index),
                 // ADR 0050 §4: the AAD is wiped on drop.
-                aad: parts.aad.take().map(Zeroizing::new),
+                aad: parts.aad.take(),
                 recipient: index,
             });
         }
@@ -683,7 +685,7 @@ pub(crate) fn encrypt(
         plaintext
     };
     // §5.1 steps 14-15.
-    let aad = content::aad(&protected_b64, encryptor.aad.as_deref());
+    let aad = content::aad(&protected_b64, encryptor.aad.as_deref().map(Vec::as_slice));
     let (ciphertext, tag) = content::encrypt(enc, &cek, &iv, &aad, plaintext)?;
     Ok(JweParts {
         protected_b64,
@@ -693,6 +695,7 @@ pub(crate) fn encrypt(
         iv,
         ciphertext,
         tag,
+        // ADR 0050 §4: a copy that is wiped on drop, as the encryptor's is.
         aad: encryptor.aad.clone(),
     })
 }
@@ -1073,7 +1076,7 @@ mod tests {
         c.protected_b64.push('A');
         cases.push(c);
         let mut c = base.clone();
-        c.aad = Some(b"aad".to_vec());
+        c.aad = Some(Zeroizing::new(b"aad".to_vec()));
         cases.push(c);
         for parts in cases {
             let e = decrypt(parts, &k, &p).map(|_| ()).unwrap_err();
@@ -1493,5 +1496,27 @@ mod tests {
             assert_eq!(code(run(&b64url_encode(bad))), "InvalidFormat");
         }
         assert_eq!(code(run("e30=")), "InvalidFormat");
+    }
+
+    /// The JWE AAD (RFC 7516 §7.2.1 `aad`) can carry application secrets
+    /// (ADR 0050 §4, ADR 0030 §7.2), so the parts hold it in a buffer wiped
+    /// on drop, on encrypt and on decrypt alike (0006 security audit L3).
+    #[test]
+    fn the_parts_hold_the_aad_in_a_buffer_wiped_on_drop() {
+        fn is_zeroizing(_: &Option<Zeroizing<Vec<u8>>>) {}
+        let k = oct(&[1; 16], "");
+        let e = compact_encryptor(A::A128KW, &k).aad(*b"MARKERaad");
+        let form = Serialization::Json(JsonForm::Flattened);
+        let parts = encrypt(&e, b"x", form, &mut OsRandom, None).unwrap_or_else(|e| panic!("{e}"));
+        is_zeroizing(&parts.aad);
+        assert_eq!(
+            parts.aad.as_deref().map(Vec::as_slice),
+            Some(&b"MARKERaad"[..])
+        );
+        let d = decrypt(parts, &k, &policy(&[A::A128KW])).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            (d.plaintext(), d.aad()),
+            (&b"x"[..], Some(&b"MARKERaad"[..]))
+        );
     }
 }

@@ -30,6 +30,8 @@
 //! 6. the shared and per-recipient unprotected headers, typed the same way
 //!    → `InvalidHeader`.
 
+use zeroize::Zeroizing;
+
 use super::api::{DecryptPolicy, JsonForm};
 use super::core::{self, JweParts, RecipientParts};
 use crate::header::Header;
@@ -107,7 +109,7 @@ pub(crate) fn parse(jwe: &str, policy: &DecryptPolicy) -> Result<JweParts> {
     for recipient in &raw.recipients {
         encrypted_keys.push(decode(recipient.encrypted_key.as_ref())?.unwrap_or_default());
     }
-    let aad = decode(raw.aad.as_ref())?;
+    let aad = decode(raw.aad.as_ref())?.map(Zeroizing::new);
     let iv = decode(raw.iv.as_ref())?.unwrap_or_default();
     let ciphertext = b64url_decode(&raw.ciphertext)?;
     let tag = decode(raw.tag.as_ref())?.unwrap_or_default();
@@ -354,7 +356,7 @@ pub(crate) fn serialize(parts: &JweParts, form: JsonForm) -> Result<String> {
             out.insert("recipients", entries);
         }
     }
-    match parts.aad.as_deref() {
+    match parts.aad.as_deref().map(Vec::as_slice) {
         None => {}
         Some([]) => {
             return Err(Error::InvalidFormat(
@@ -916,7 +918,10 @@ mod tests {
         );
         let parts = parsed(&jwe);
         assert_eq!(parts.protected_b64, encoded);
-        assert_eq!(parts.aad.as_deref(), Some(&b"[\"vcard\"]"[..]));
+        assert_eq!(
+            parts.aad.as_deref().map(Vec::as_slice),
+            Some(&b"[\"vcard\"]"[..])
+        );
         let out = serialize(&parts, JsonForm::Flattened).unwrap_or_else(|e| panic!("{e}"));
         assert!(
             out.contains(&format!(r#""protected":"{encoded}""#)),
@@ -969,7 +974,7 @@ mod tests {
         // An empty JWE AAD was part of the AAD computation (§5.1 step 14)
         // but §7.2.1 cannot carry it.
         let mut empty_aad = parsed(A5);
-        empty_aad.aad = Some(Vec::new());
+        empty_aad.aad = Some(Zeroizing::new(Vec::new()));
         for form in [JsonForm::Flattened, JsonForm::General] {
             assert_eq!(
                 serialize(&empty_aad, form),

@@ -120,6 +120,7 @@ mod tests {
     use super::*;
     use crate::header::Header;
     use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
+    use zeroize::Zeroizing;
 
     /// RFC 7516 A.3.7.
     const A3: &str = "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0.\
@@ -267,7 +268,7 @@ mod tests {
         let mut per_recipient = base();
         per_recipient.recipients[0].header = Some(Header::new());
         let mut aad = base();
-        aad.aad = Some(Vec::new());
+        aad.aad = Some(Zeroizing::new(Vec::new()));
         let mut no_protected = base();
         no_protected.protected_b64.clear();
         for parts in [two, none, shared, per_recipient, aad, no_protected] {
