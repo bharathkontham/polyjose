@@ -12,9 +12,9 @@
 # `mode` input, ADR 0037 §1). Until then the only trigger is a manual dispatch, and nobody dispatches
 # it without the owner. It is shaped for that change:
 #   - no inputs yet; any added later are declared identically under both triggers, and reach a
-#     script only through a step's `env:` (read there as "$MODE"), never as `${{ inputs.mode }}` inside
-#     `run:`, so an input value is data, never shell code (review-security.md I6). test/ci.test.ts
-#     rejects any inputs expression in a run: block;
+#     script only through a step's `env:` (read there as "$MODE"), never as
+#     `${{ inputs.mode }}` inside `run:`, so an input value is data, never shell code
+#     (review-security.md I6). test/ci.test.ts rejects any inputs expression in a run: block;
 #   - nothing reads PR or event context, only `matrix.*`;
 #   - artifact names are fixed: npm-<target> (the platform tarball) and conformance-node-<label>
 #     (target/conformance/node-<label>.json), ADR 0037 §1;
@@ -28,6 +28,18 @@
 # Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
 # that SHA was resolved from. Bump both together (ci.yml's convention). The Alpine images are pinned
 # by digest the same way.
+#
+# Exception, apk packages (review-code.md N3): inside that image, `apk add` installs bash,
+# build-base, git, python3 and rustup at the versions Alpine's v3.23 repository holds when the
+# job runs, unpinned. Alpine keeps one build of each package per release branch: measured on
+# 2026-11-07, the v3.23 main and community indexes held exactly one version of each of these
+# (and of 27,428 of their 27,433 packages), so a `pkg=version-rN` pin would fail the job as soon
+# as Alpine replaces that build, and there is no dated snapshot to pin to.
+# What stays fixed: the image digest fixes the base system, the repository branch and apk's
+# signing keys, against which apk checks every index and package; the Rust toolchain comes from
+# rust-toolchain.toml's exact channel through rustup, not from apk. What can move between runs
+# is the C toolchain of build-base (gcc, binutils' linker, musl-dev), which links the musl
+# addons, plus bash, git, python3 and rustup itself.
 name: binding-node
 
 on:
