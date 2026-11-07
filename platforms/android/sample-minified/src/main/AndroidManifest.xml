@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The R8 sample app (feature 0008 T04): no activity, no permission; its test calls R8Probe. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="polyjose R8 sample" android:allowBackup="false" />
+</manifest>
