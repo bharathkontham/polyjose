@@ -50,26 +50,7 @@ outputs=$android_dir/polyjose/build/outputs
 xml_dir=$outputs/androidTest-results/connected
 pulled_dir=$outputs/connected_android_test_additional_output
 
-# waive <token> <reason>: no emulator to run on (see the header).
-waive() {
-  echo "android-emulator: NOT RUN: $2"
-  echo "SKIPPED-RUNNER (android-emulator: host:$1)"
-  exit 0
-}
-
-# A stale file from an earlier run must never stand in for this one (ADR 0060).
-rm -f "$results"
-
-sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
-[ -n "$sdk" ] || waive no-android-sdk "neither ANDROID_HOME nor ANDROID_SDK_ROOT is set"
-adb=$sdk/platform-tools/adb
-emulator=$sdk/emulator/emulator
-[ -x "$adb" ] || waive no-android-sdk "no adb at $adb"
-
-# The serials adb lists, in any state (device, offline, unauthorized).
-listed_serials() { "$adb" devices 2>/dev/null | awk 'NR > 1 && NF >= 2 { print $1 }'; }
-boot_completed() { [ "$("$adb" -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; }
-
+# The emulator this script started (its serial and PID) and its log dir, removed on exit.
 serial="" started_pid="" work=""
 cleanup() {
   if [ -n "$started_pid" ]; then
@@ -86,6 +67,30 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# waive <token> <reason>: no emulator to run on (see the header). The emulator this script
+# started, if any, is stopped first, so the waiver is the last line.
+waive() {
+  cleanup
+  echo "android-emulator: NOT RUN: $2"
+  echo "SKIPPED-RUNNER (android-emulator: host:$1)"
+  exit 0
+}
+# finish <status> <line>: stops this script's emulator, then prints the final line.
+finish() { cleanup; echo "$2"; exit "$1"; }
+
+# A stale file from an earlier run must never stand in for this one (ADR 0060).
+rm -f "$results"
+
+sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
+[ -n "$sdk" ] || waive no-android-sdk "neither ANDROID_HOME nor ANDROID_SDK_ROOT is set"
+adb=$sdk/platform-tools/adb
+emulator=$sdk/emulator/emulator
+[ -x "$adb" ] || waive no-android-sdk "no adb at $adb"
+
+# The serials adb lists, in any state (device, offline, unauthorized).
+listed_serials() { "$adb" devices 2>/dev/null | awk 'NR > 1 && NF >= 2 { print $1 }'; }
+boot_completed() { [ "$("$adb" -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; }
 
 serial=$("$adb" devices 2>/dev/null | awk 'NR > 1 && $1 ~ /^emulator-[0-9]+$/ && $2 == "device" { print $1; exit }')
 if [ -n "$serial" ]; then
@@ -166,18 +171,15 @@ fi
 # The results document AGP pulled (see the header).
 pulled=$(find "$pulled_dir" -type f -name android-emulator.json 2>/dev/null)
 if [ -z "$pulled" ] || [ "$(printf '%s\n' "$pulled" | wc -l)" -ne 1 ]; then
-  echo "android-emulator: expected one pulled android-emulator.json under ${pulled_dir#"$android_dir/"}, found ${pulled:-none}"
-  exit 1
+  finish 1 "android-emulator: expected one pulled android-emulator.json under ${pulled_dir#"$android_dir/"}, found ${pulled:-none}"
 fi
 if ! grep -q '^  "runner": "android-emulator",$' "$pulled" ||
   ! grep -Eq '^  "vectors_digest": "[0-9a-f]{64}",$' "$pulled"; then
-  echo "android-emulator: the pulled file is not android-emulator's results document: $pulled"; exit 1
+  finish 1 "android-emulator: the pulled file is not android-emulator's results document: $pulled"
 fi
-mkdir -p "$(dirname "$results")" && cp "$pulled" "$results" || exit 1
+{ mkdir -p "$(dirname "$results")" && cp "$pulled" "$results"; } || finish 1 "android-emulator: cannot write $results"
 digest=$(sed -n 's/^  "vectors_digest": "\([0-9a-f]*\)",$/\1/p' "$results")
 count() { grep -c "\"status\":\"$1\"" "$results"; }
 summary="$(count pass) passed, $(count fail) failed, $(count skipped) skipped; vectors_digest $digest"
-if [ "$failed" -ne 0 ]; then
-  echo "android-emulator: FAILED ($summary; wrote ${results#"$repo/"})"; exit 1
-fi
-echo "android-emulator: $summary; wrote ${results#"$repo/"}"
+[ "$failed" -eq 0 ] || finish 1 "android-emulator: FAILED ($summary; wrote ${results#"$repo/"})"
+finish 0 "android-emulator: $summary; wrote ${results#"$repo/"}"
