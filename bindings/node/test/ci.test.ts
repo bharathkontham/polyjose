@@ -726,6 +726,15 @@ test("check-rsa-symbols.sh's residual-risk note names the node prebuild targets 
   assert.ok(note.includes("binding-node.yml"), "and where they are checked");
 });
 
+/** The workflow's header comment (the lines before `name:`) as one line of prose, without the `#`s. */
+const headerProse = (src: string): string =>
+  src
+    .slice(0, src.indexOf("\nname:"))
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^#\s?/, "").trim())
+    .join(" ")
+    .replace(/\s+/g, " ");
+
 /** The text of every `run:` of a workflow: the value and, for a block scalar, the lines under it. */
 function runBlocks(lines: readonly Line[]): { line: Line; text: string }[] {
   return lines.flatMap((line, i) => {
@@ -751,8 +760,7 @@ test("no run: block of binding-node.yml interpolates an input; inputs reach scri
     assert.ok(!r.text.includes("${{ inputs."), `binding-node.yml:${r.line.no}: an input inside run: (pass it through env:)`);
   }
   // The rule is stated where 0012 will add the inputs.
-  const header = src.slice(0, src.indexOf("\nname:"));
-  assert.match(header, /never as `\$\{\{ inputs\.mode \}\}` inside\s+#\s+`run:`/, "the header states the env:-only rule");
+  assert.ok(headerProse(src).includes("never as `${{ inputs.mode }}` inside `run:`"), "the header states the env:-only rule");
 });
 
 test("binding-node.yml pins the Alpine packages, or states the exception and its reason (review-code.md N3)", () => {
@@ -763,8 +771,10 @@ test("binding-node.yml pins the Alpine packages, or states the exception and its
   assert.ok(packages.length > 0);
   const unpinned = packages.filter((p) => !/^[a-z0-9+._-]+=\S+$/.test(p));
   if (unpinned.length === 0) return;
-  const header = src.slice(0, src.indexOf("\nname:"));
-  assert.match(header, /# Exception, apk packages \(review-code\.md N3\):/, "the header states the exception");
-  for (const p of unpinned) assert.ok(header.includes(p), `the exception names ${p}`);
-  assert.match(header, /keeps one build of each package per release\s+#\s+branch/, "and why a version pin would not hold");
+  const header = headerProse(src);
+  const at = header.indexOf("Exception, apk packages (review-code.md N3):");
+  assert.ok(at >= 0, "the header states the exception");
+  const exception = header.slice(at);
+  for (const p of unpinned) assert.ok(exception.includes(p), `the exception names ${p}`);
+  assert.ok(exception.includes("keeps one build of each package per release branch"), "and why a version pin would not hold");
 });
