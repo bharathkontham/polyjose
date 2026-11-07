@@ -7,8 +7,10 @@
 # scripts/test-all.sh's negative-test step runs it.
 #
 # Exits with the self-test's status (0 passed, 1 a case failed, 2 a setup error). Its output passes
-# through unchanged, including a `SKIPPED (actionlint missing)` last line when actionlint isn't
-# installed (the text cases still ran and passed). Usage: scripts/tests/check-workflow/wasm.sh.
+# through unchanged (exec, nothing added or rewritten), including the last line
+# `SKIPPED (host:actionlint)` when actionlint isn't installed: the text cases still ran and passed,
+# and only the actionlint case was skipped (pipeline rule 9; the host:<tool> form of feature 0013
+# F10). Usage: scripts/tests/check-workflow/wasm.sh.
 # Runs on macOS /bin/bash 3.2 and Linux bash.
 set -uo pipefail
 repo=$(cd "$(dirname "$0")/../../.." && pwd -P) || exit 2
