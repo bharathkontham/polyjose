@@ -8,11 +8,31 @@
  *   `Backend*` shapes (`bindings/wasm/src/write.rs`), so they are asserted here, and the facade
  *   still checks every result field before returning it (ADR 0031 §1).
  * - `ready()` instantiates the module lazily, on the first call of any operation, so no entry
- *   uses top-level await (ADR 0031 §3). How the bytes or the `WebAssembly.Module` are found
+ *   uses top-level await (ADR 0031 §3). How the `WebAssembly.Module` is found and checked
  *   differs per runtime, so each entry (`node.mts`, `browser.mts`, `workerd.mts`) registers
  *   its loader with {@link setLoader} before anything can call the API.
  * - Errors are the glue's own: a core failure is a JS `Error` named `PolyjoseError` with a
  *   stable `code` (ADR 0030 §5, ADR 0031 §3), which the facade re-wraps.
+ *
+ * Load-time integrity (feature 0006 F05, security audit L1). The glue keeps one instance in a
+ * module-level variable, and its first initialisation wins for every importer of the file, so
+ * the package must make sure that instance is the one it checked:
+ * - {@link setLoader} is one-shot: a second registration, or one after `ready()` began, throws;
+ * - `ready()` instantiates only the module the entry's loader returned (which the Node and
+ *   browser entries have checked against the SHA-384 in `integrity.js`), and fails closed if
+ *   the glue was already initialised, or is being initialised, by other code: a file-URL import
+ *   of `polyjose_wasm.js` reaches the same glue instance that the `exports` map hides;
+ * - the module's `version()` must equal this package's version, baked in at build time.
+ * Any script in the same JS realm can still patch `WebAssembly`, `crypto` or `fetch`; those
+ * are trusted, and the package can't defend against them.
+ *
+ * A trap (review S3). A `WebAssembly.RuntimeError` (for example an allocation failure, which
+ * wasm32 turns into `unreachable`) leaves the instance mid-call: no Rust destructor ran, so no
+ * `Zeroizing` buffer of that call was wiped, and the glue's shadow-stack pointer is not
+ * restored. The instance is then poisoned: the error is rethrown unchanged, and every later
+ * operation, `version()`, `errorCodes()` and `ready()` throw an `Error` that says to reload
+ * the module. `PolyjoseError`s and the adapter's reader `TypeError`s are ordinary results of a
+ * completed call and don't poison.
  */
 import type {
   Backend,
@@ -21,34 +41,132 @@ import type {
   BackendJwtNestedVerified,
   BackendJwtVerified,
 } from "./facade/backend.js";
-import * as glue from "./polyjose_wasm.js";
-
-/** Instantiates the wasm module; the glue makes a repeated call a no-op. */
-export type Loader = () => void | Promise<void>;
-
-let loader: Loader | undefined;
+import init, * as glue from "./polyjose_wasm.js";
+import { PACKAGE_VERSION } from "./integrity.js";
 
 /**
- * Registers how this runtime instantiates the module. Called once by the package entry that
- * the `exports` conditions selected (ADR 0031 §3), when that entry is evaluated.
+ * Returns the `WebAssembly.Module` of this package's `.wasm`, checked as far as the runtime
+ * allows (the entries say how). It never instantiates the module: `ready()` does.
+ */
+export type Loader = () => WebAssembly.Module | Promise<WebAssembly.Module>;
+
+/** Captured at evaluation, so a later reassignment of the global doesn't change the check. */
+const RuntimeError = WebAssembly.RuntimeError;
+const WasmModule = WebAssembly.Module;
+
+let loader: Loader | undefined;
+/** `ready()` has been called: from then on no loader can be registered. */
+let started = false;
+/** The pending or completed instantiation, shared by concurrent `ready()` calls. */
+let instantiating: Promise<void> | undefined;
+/** Set for good when the glue holds a module this package didn't check, or the wrong version. */
+let refused: Error | undefined;
+/** Set for good when a call trapped (review S3). */
+let trapped = false;
+
+/**
+ * Registers how this runtime finds the module. Called once, by the package entry that the
+ * `exports` conditions selected (ADR 0031 §3), when that entry is evaluated. One-shot (0006
+ * F05, audit L1): a second call, or a call after `ready()` began, throws and changes nothing.
+ * If other code registers first, the genuine entry's own registration throws, so importing the
+ * package fails instead of running on that loader.
  */
 export function setLoader(load: Loader): void {
+  if (loader !== undefined || started) {
+    throw new Error("polyjose: the WebAssembly loader is already registered (or initialisation has begun); it can't be replaced");
+  }
   loader = load;
 }
 
-/** The glue as the facade's backend (BACKEND.md). */
-export const backend: Backend = {
-  /**
-   * Awaited once by the facade before the first call; if it rejects, the call rejects with this
-   * error and the next call tries again (BACKEND.md).
-   */
-  async ready(): Promise<void> {
-    const load = loader;
-    if (load === undefined) {
-      throw new Error("polyjose: no WebAssembly loader registered (import @polyjose/wasm, not its internal files)");
+function trapError(): Error {
+  return new Error(
+    "polyjose: the WebAssembly instance trapped in an earlier call and is unusable; secrets of that call may remain in its memory. Reload @polyjose/wasm (restart the process or worker, or reload the page)",
+  );
+}
+
+/**
+ * Instantiates the loader's module through the glue's `init`, and checks that this call is the
+ * one that initialised the glue (0006 F05, audit L1).
+ *
+ * The glue reads the `module_or_path` member only when it is about to instantiate: it returns
+ * early, without reading it, if an instance exists or another `init` is pending (wasm-bindgen
+ * 0.2.130 `__wbg_init`). So the getter runs exactly when the glue instantiates our module.
+ * `init` is used in every runtime, not `initSync`: `initSync` doesn't see a pending `init`,
+ * whose instance would replace ours when it settles. `WebAssembly.instantiate` of a compiled
+ * module is allowed in Workers too (only compiling from bytes is not).
+ */
+async function instantiate(load: Loader): Promise<void> {
+  const module = await load();
+  if (!(module instanceof WasmModule)) throw new Error("polyjose: the WebAssembly loader did not return a WebAssembly.Module");
+  let ours = false;
+  await init({
+    get module_or_path(): WebAssembly.Module {
+      ours = true;
+      return module;
+    },
+  });
+  if (!ours) {
+    refused = new Error(
+      "polyjose: the WebAssembly module was initialised by other code (an import of @polyjose/wasm's internal files), so it is not the module this package checked; refusing to use it",
+    );
+    throw refused;
+  }
+  const version = glue.version();
+  if (version !== PACKAGE_VERSION) {
+    refused = new Error(`polyjose: the WebAssembly module is version ${version}, but this package is ${PACKAGE_VERSION}; refusing to use it`);
+    throw refused;
+  }
+}
+
+/**
+ * Awaited by the facade before its first call; if it rejects, the call rejects with this error
+ * and the next call tries again (BACKEND.md). A refusal or a trap is final.
+ */
+async function ready(): Promise<void> {
+  if (trapped) throw trapError();
+  if (refused !== undefined) throw refused;
+  const load = loader;
+  if (load === undefined) {
+    throw new Error("polyjose: no WebAssembly loader registered (import @polyjose/wasm, not its internal files)");
+  }
+  started = true;
+  instantiating ??= instantiate(load).catch((e: unknown) => {
+    instantiating = undefined;
+    throw e;
+  });
+  return instantiating;
+}
+
+/**
+ * `call`, refused once the instance has trapped; a `WebAssembly.RuntimeError` from the glue
+ * poisons the instance and is rethrown unchanged (review S3). V8 reports stack exhaustion
+ * inside wasm as a `RangeError`, which leaves the instance in the same state, so it poisons
+ * too. Nothing else does.
+ */
+function guarded<A extends unknown[], R>(call: (...args: A) => R): (...args: A) => R {
+  return (...args: A): R => {
+    if (trapped) throw trapError();
+    try {
+      return call(...args);
+    } catch (e) {
+      if (e instanceof RuntimeError || e instanceof RangeError) trapped = true;
+      throw e;
     }
-    await load();
-  },
+  };
+}
+
+/** Every glue call of the backend, each one {@link guarded}. */
+type Operations = Omit<Backend, "ready">;
+
+function guardAll(ops: Operations): Operations {
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const [name, call] of Object.entries(ops) as [string, (...args: unknown[]) => unknown][]) {
+    out[name] = guarded(call);
+  }
+  return out as unknown as Operations;
+}
+
+const operations: Operations = {
   version: () => glue.version(),
   errorCodes: () => glue.errorCodes(),
 
@@ -89,3 +207,6 @@ export const backend: Backend = {
   jwtDecryptNestedWithJwks: (token, decryptKey, decryptOptions, jwks, verifyOptions) =>
     glue.jwtDecryptNestedWithJwks(token, decryptKey, decryptOptions, jwks, verifyOptions) as BackendJwtNestedVerified,
 };
+
+/** The glue as the facade's backend (BACKEND.md). */
+export const backend: Backend = Object.freeze({ ready, ...guardAll(operations) });

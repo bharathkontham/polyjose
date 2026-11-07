@@ -14,9 +14,12 @@
 #      src/error-codes.ts, tsc -p .); its sources are never edited;
 #   4. this package's TypeScript (bindings/wasm/js/*.ts, *.mts), compiled with bindings/js's
 #      pinned tsc and the ADR 0047 options (extending bindings/js/tsconfig.json), in a staging
-#      copy laid out like the package so its imports resolve;
+#      copy laid out like the package so its imports resolve. With them, the machine-generated
+#      integrity.ts (0006 F05, audit L1): the package version, read back from the generated
+#      package.json, and the SHA-384 of the final (post-wasm-opt) .wasm, which the entries check
+#      before the module is instantiated;
 #   5. bindings/wasm/pkg/: the .wasm and its `web` glue, the facade's compiled .js and .d.ts
-#      unchanged in facade/, backend.js, index.js and index.d.ts, the entries node.mjs,
+#      unchanged in facade/, backend.js, integrity.js, index.js and index.d.ts, the entries node.mjs,
 #      browser.mjs and workerd.mjs, LICENSE, README.md, THIRD-PARTY-NOTICES.txt (from
 #      scripts/third-party-notices.sh, ADR 0020 §4) and package.json from package.template.json.
 #      No .ts source and no source map is shipped. It checks that no entry uses top-level await
@@ -28,7 +31,7 @@
 # Exit status: 0 done; 1 a step failed; 2 usage error; 3 the package is assembled but the .wasm
 # is over the size budget (no tarball is written). Runs on macOS /bin/bash 3.2 and Linux bash 5.
 # Needs cargo with the wasm32-unknown-unknown target, wasm-pack 0.15.1, node (>= 22.18, for the
-# facade's error-code generator), npm, gzip and brotli.
+# facade's error-code generator; it also hashes the .wasm), npm, gzip and brotli.
 set -euo pipefail
 export LC_ALL=C
 
@@ -65,11 +68,21 @@ pkg=$wasm/pkg
 dist=$repo/dist/npm
 template=$wasm/package.template.json
 
+# --- 1. Guards ---------------------------------------------------------------------------------
+
+# No rustflags from the environment (0006 review N2, ADR 0005). getrandom 0.4.3 selects a
+# `getrandom_backend` cfg (`custom`, `unsupported`, `extern_impl`) before `wasm_js`, so one
+# `--cfg getrandom_backend=…` here would silently change the RNG of the shipped .wasm. Cargo
+# reads rustflags from these four variables, ahead of any config file (CARGO_ENCODED_RUSTFLAGS,
+# then RUSTFLAGS, then target.<triple>.rustflags, then build.rustflags); the shipped build takes
+# its only Cargo override from WASM_CARGO_ARGS above (ADR 0059). An empty variable is no flag.
+for var in RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS; do
+  [ -z "${!var:-}" ] || die "$var is set; unset it: the shipped .wasm is built without environment rustflags (0006 review N2, ADR 0005)"
+done
+
 for tool in cargo wasm-pack node npm gzip brotli; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH"
 done
-
-# --- 1. Guards ---------------------------------------------------------------------------------
 
 echo "==> $me: no publish command (publishing is Gate 3, ADR 0011)"
 publish_re='(npm|pnpm|yarn|wasm-pack)[[:space:]]+publish|napi[[:space:]]+pre-?publish|"(pre|post)?publish(Only)?"[[:space:]]*:'
@@ -132,6 +145,21 @@ version=$(awk '/^\[workspace\.package\]/ { inside = 1; next } /^\[/ { inside = 0
 sed "s/@VERSION@/$version/" "$template" >"$stage/package.json"
 grep -q '@VERSION@' "$stage/package.json" && die "package.json still has a @VERSION@ placeholder"
 
+# The values the entries check at load time (0006 F05, audit L1), baked in now and never read at
+# run time from a mutable place: the version from the package.json just generated, and the
+# SHA-384 of the .wasm exactly as it is shipped (wasm-opt has run), in base64 as W3C Subresource
+# Integrity metadata writes it, for fetch's `integrity` and node:crypto alike.
+# sha384_b64 <file>: the SHA-384 (FIPS 180-4) of the file, base64, with node:crypto; node is
+# already required (tsc, the error-code generator), so the build needs no other hasher.
+sha384_b64() {
+  node -e 'process.stdout.write(require("node:crypto").createHash("sha384").update(require("node:fs").readFileSync(process.argv[1])).digest("base64"))' "$1"
+}
+pkg_version=$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$stage/package.json")
+[ "$pkg_version" = "$version" ] || die "the generated package.json has version '$pkg_version', expected '$version'"
+wasm_sha384=$(sha384_b64 "$glue/polyjose_wasm_bg.wasm") || die "node could not hash polyjose_wasm_bg.wasm"
+[ ${#wasm_sha384} -eq 64 ] || die "the SHA-384 of polyjose_wasm_bg.wasm is not 64 base64 characters: '$wasm_sha384'"
+echo "$me: polyjose_wasm_bg.wasm: sha384-$wasm_sha384"
+
 echo "==> $me: tsc (bindings/wasm/js, ADR 0047 options)"
 ts=$stage/ts
 mkdir -p "$ts/facade" || die "could not create $ts"
@@ -146,6 +174,20 @@ for f in "$wasm"/js/*.ts "$wasm"/js/*.mts; do
   cp "$f" "$ts/" && sources+=("${f##*/}")
 done
 [ ${#sources[@]} -gt 0 ] || die "no TypeScript sources in bindings/wasm/js"
+[ ! -e "$wasm/js/integrity.ts" ] || die "bindings/wasm/js/integrity.ts must not exist: this script generates it"
+cat >"$ts/integrity.ts" <<EOF
+// Generated by bindings/wasm/scripts/build-package.sh (feature 0006 F05, audit L1). Do not edit.
+
+/** The version of this package, from its package.json; the module's version() must equal it. */
+export const PACKAGE_VERSION = "$pkg_version";
+
+/**
+ * The SHA-384 of polyjose_wasm_bg.wasm as shipped, base64 (W3C Subresource Integrity): the
+ * browser entry fetches the module with this integrity, the Node entry hashes what it reads.
+ */
+export const WASM_SHA384 = "$wasm_sha384";
+EOF
+sources+=(integrity.ts)
 files_json=$(printf '"%s", ' "${sources[@]}"); files_json=${files_json%, }
 # The ADR 0047 options come from bindings/js/tsconfig.json. Added here: the DOM library, which
 # the generated glue's declarations use (RequestInfo, Response, URL, BufferSource, WebAssembly),
@@ -174,7 +216,7 @@ rm -rf "$pkg"
 mkdir -p "$pkg/facade" || die "could not create $pkg"
 cp "$glue/polyjose_wasm_bg.wasm" "$glue/polyjose_wasm.js" "$glue/polyjose_wasm.d.ts" "$pkg/"
 (cd "$facade" && find . -type f \( -name '*.js' -o -name '*.d.ts' \) -exec cp {} "$pkg/facade/" \;)
-for f in backend.js index.js index.d.ts node.mjs browser.mjs workerd.mjs; do
+for f in backend.js integrity.js index.js index.d.ts node.mjs browser.mjs workerd.mjs; do
   [ -f "$out/$f" ] || die "tsc did not produce $f"
   cp "$out/$f" "$pkg/"
 done
@@ -184,10 +226,16 @@ cp "$stage/package.json" "$pkg/package.json"
 "$repo/scripts/third-party-notices.sh" -p polyjose-wasm --target wasm32-unknown-unknown \
   -o "$pkg/THIRD-PARTY-NOTICES.txt" || die "scripts/third-party-notices.sh failed"
 
+echo "==> $me: the shipped .wasm has the SHA-384 the entries check (0006 F05)"
+shipped=$(sha384_b64 "$pkg/polyjose_wasm_bg.wasm") || die "node could not hash pkg/polyjose_wasm_bg.wasm"
+[ "$shipped" = "$wasm_sha384" ] || die "pkg/polyjose_wasm_bg.wasm is sha384-$shipped, integrity.js has sha384-$wasm_sha384"
+grep -qF "\"$wasm_sha384\"" "$pkg/integrity.js" || die "integrity.js does not hold sha384-$wasm_sha384"
+grep -qF "\"$pkg_version\"" "$pkg/integrity.js" || die "integrity.js does not hold the version $pkg_version"
+
 echo "==> $me: no top-level await in the entries (ADR 0031 §3)"
 # tsc output keeps the source layout: top-level statements start in column 0, function bodies
 # are indented. A comment line is not code.
-for f in backend.js index.js node.mjs browser.mjs workerd.mjs; do
+for f in backend.js integrity.js index.js node.mjs browser.mjs workerd.mjs; do
   if hits=$(grep -nE '^[^[:space:]/*].*\bawait\b|^await\b' "$pkg/$f"); then
     echo "$f: $hits"; die "$f uses top-level await"
   fi

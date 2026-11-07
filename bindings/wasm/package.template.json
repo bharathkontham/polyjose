@@ -43,6 +43,7 @@
     "facade/types.js",
     "index.d.ts",
     "index.js",
+    "integrity.js",
     "node.mjs",
     "polyjose_wasm.d.ts",
     "polyjose_wasm.js",
