@@ -138,6 +138,12 @@ fn key_pair(spec: KeySpec) -> (String, String) {
     )
 }
 
+/// A fresh 128-bit `oct` key, for A128KW (RFC 7518 §4.4).
+fn oct_key() -> String {
+    let key = generate(KeySpec::Oct { bytes: 16 }).expect("generates");
+    key.to_json().as_str().to_owned()
+}
+
 /// Seconds since the epoch, read the way the test itself reads the time.
 fn wall_clock() -> i64 {
     let since = SystemTime::now()
@@ -270,7 +276,7 @@ fn an_empty_or_none_allow_list_is_refused_by_the_core() {
 #[test]
 fn a_jwe_or_a_json_jws_is_not_a_signed_jwt() {
     // ADR 0027 §7: signed and nested JWTs have separate entry points.
-    let (private, _) = key_pair(KeySpec::Oct { bytes: 16 });
+    let private = oct_key();
     let nested = jwt_encrypt_nested(
         RFC7519_3_1,
         &JweEncryptOptions::new(
@@ -979,12 +985,12 @@ fn ecdh_es_a256gcm_round_trips() {
 
 #[test]
 fn a128kw_a128cbc_hs256_round_trips() {
-    let (key, _) = key_pair(KeySpec::Oct { bytes: 16 });
+    let key = oct_key();
     nested_round_trip("A128KW", "A128CBC-HS256", &key, &key);
 }
 
 fn a128kw_nested() -> (String, String) {
-    let (key, _) = key_pair(KeySpec::Oct { bytes: 16 });
+    let key = oct_key();
     let nested = jwt_encrypt_nested(
         RFC7519_3_1,
         &JweEncryptOptions::new(
@@ -1002,7 +1008,7 @@ fn a128kw_decrypt() -> JweDecryptOptions {
 
 #[test]
 fn a_signed_jwt_is_not_a_nested_jwt() {
-    let (key, _) = key_pair(KeySpec::Oct { bytes: 16 });
+    let key = oct_key();
     let decrypt = a128kw_decrypt();
     assert_eq!(
         code(jwt_decrypt_nested(
@@ -1078,7 +1084,7 @@ fn the_nested_policies_reach_the_core() {
         "AlgorithmNotAllowed"
     );
     // The wrong key-encryption key.
-    let (wrong, _) = key_pair(KeySpec::Oct { bytes: 16 });
+    let wrong = oct_key();
     assert_eq!(
         code(jwt_decrypt_nested(
             &nested,
@@ -1157,7 +1163,7 @@ fn nested_inputs_are_read_in_the_conformance_order() {
 
 #[test]
 fn encrypt_nested_options_reach_the_core() {
-    let (key, _) = key_pair(KeySpec::Oct { bytes: 16 });
+    let key = oct_key();
     let recipient = || JweRecipient::new("A128KW".to_owned(), secret(&key));
 
     // The caller's protected header is kept, plus cty JWT (RFC 7519 §5.2).
