@@ -65,6 +65,12 @@ export async function usage(): Promise<void> {
   await api.jwsVerifyCompact("a.b.c", jwk, { allowedAlgs: "ES256" });
   // @ts-expect-error a misspelled member is rejected (issuers, not issuer).
   await api.jwtVerify("a.b.c", jwk, { allowedAlgs: ["ES256"], issuer: "joe" });
+  // The one profile is RFC 9068 §4's "access_token" (review N5): the name type-checks ...
+  await api.jwtVerify("a.b.c", jwk, { allowedAlgs: ["ES256"], issuers: ["joe"], audiences: ["api"], profile: "access_token" });
+  // @ts-expect-error ... and a typo of it does not compile.
+  await api.jwtVerify("a.b.c", jwk, { allowedAlgs: ["ES256"], profile: "access-token" });
+  // @ts-expect-error nor does another profile name (the core would answer UnsupportedAlgorithm).
+  await api.jwtVerifyWithJwks("a.b.c", { keys: [] }, { allowedAlgs: ["ES256"], profile: "id_token" });
   // @ts-expect-error bytes are Uint8Array, not a string.
   await api.base64urlEncode("AQI");
 
