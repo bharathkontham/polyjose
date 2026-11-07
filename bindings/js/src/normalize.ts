@@ -137,11 +137,19 @@ export function optJson(v: unknown, at: string): string | undefined {
   return isAbsent(v) ? undefined : json(v, at);
 }
 
-/** A list, item by item (holes are `undefined`, so they fail the item check), copied. */
+/**
+ * A list, item by item, copied. Only the array's own elements below its `length` are read: a
+ * hole is a TypeError naming its index, never read through `Array.prototype`, where a pollution
+ * bug elsewhere in the host app could have put a value (0013 F04, security audit M1).
+ */
 export function list<T>(v: unknown, at: string, item: (x: unknown, at: string) => T): T[] {
   if (!Array.isArray(v)) throw fail(at, "an array");
+  const n = v.length;
   const out: T[] = [];
-  for (let i = 0; i < v.length; i++) out.push(item(v[i], `${at}[${i}]`));
+  for (let i = 0; i < n; i++) {
+    if (!Object.hasOwn(v, i)) throw fail(`${at}[${i}]`, "present: an array without holes");
+    out.push(item(v[i], `${at}[${i}]`));
+  }
   return out;
 }
 
@@ -163,18 +171,39 @@ export function allowList(v: unknown, at: string): string[] {
 }
 
 /**
+ * A record with no prototype, holding only `init`'s own members. Every record the facade hands
+ * the backend is one, so a backend that reads a member by name or tests it with `in` sees only
+ * what the facade put there, never an inherited member of a polluted `Object.prototype`
+ * (0013 F04, security audit M1; ADR 0030 §3: an absent member is the core default).
+ */
+export function bare<T extends object>(init: T): T {
+  return Object.assign(Object.create(null) as T, init);
+}
+
+/**
  * A record argument: a plain object whose own enumerable members are all among `members`.
- * Absent means `{}`. An unknown member is a TypeError, so a misspelling (`issuer` for
+ * Absent means no members. An unknown member is a TypeError, so a misspelling (`issuer` for
  * `issuers`) can never silently drop a check. The message lists the accepted members, not the
  * unknown one.
+ *
+ * Returns a {@link bare} copy of the caller's own enumerable members, each read exactly once, and
+ * the facade reads options only from that copy (0013 F04, review S2, security audit M1). An
+ * inherited member, such as `Object.prototype.ignoreAudience = true` set by a pollution bug
+ * elsewhere in the host app, is never read, so it can't loosen policy, lift a limit, stand in
+ * for a missing required member or inject a header: ADR 0030 §3 makes an absent option the core
+ * default, and the host's global state must not write one either. A non-enumerable own member is
+ * not read either, and reading once means a getter can't pass the type check with one value and
+ * reach the backend with another.
  */
 export function record(v: unknown, at: string, members: readonly string[]): Record<string, unknown> {
-  if (isAbsent(v)) return {};
+  const out = bare<Record<string, unknown>>({});
+  if (isAbsent(v)) return out;
   if (!isPlainObject(v)) throw fail(at, "a plain object");
   for (const key of Object.keys(v)) {
     if (!members.includes(key)) throw fail(at, `an object with only the members ${members.join(", ")}`);
+    out[key] = v[key];
   }
-  return v;
+  return out;
 }
 
 /** Sets `out[key]` only when `value` is present, so absent optional fields are left out. */
