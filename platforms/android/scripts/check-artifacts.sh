@@ -17,9 +17,13 @@
 #            (llvm-readelf -l from the NDK; Google Play's 16 KB page-size requirement); the AAR
 #            under 4 MB (4,000,000 bytes; ADR 0033 §1); each .so size and the AAR size printed.
 #   notices  META-INF/polyjose/THIRD-PARTY-NOTICES.txt in the AAR's classes.jar and in the JVM
-#            jar, byte-identical to a fresh scripts/third-party-notices.sh run for the shipped
-#            target, and every other library's crate set a subset of the shipped file's (it fails
-#            naming the crates; ADR 0020 §4).
+#            jar: one file per artifact over the union of its libraries' crate trees (ADR 0020 §4,
+#            ADR 0033 §4; feature 0008 F01). The targets are read from the libraries the artifact
+#            carries (jni/<abi>/ of the AAR, the JNA prefixes of the jar), never from the file:
+#            its Target:/Targets: line must name exactly them (a missing one is named), the file
+#            must be byte-identical to a fresh scripts/third-party-notices.sh run with one
+#            --target per library, and each library's crate set must be a subset of the file's
+#            (it fails naming the target and the crates).
 #   jar      the classes, the host libraries under their JNA prefixes (each of the right
 #            architecture), and a Polyjose-Native-Platforms manifest attribute listing exactly
 #            the prefixes present; no native library or notices file in the sources jar.
@@ -80,34 +84,70 @@ crate_list() {
   awk '/^Third-party crates \(/{f=1; getline; next} f&&/^$/{exit} f' "$1" | sort
 }
 
-# check_notices <label> <shipped file> <shipped target> <other target>...
+# The targets a notices file names: its "Target: <t>" or "Targets: <t1>, <t2>, ..." line.
+notices_targets() {
+  awk '/^Targets?: /{sub(/^Targets?: /, ""); gsub(/, /, "\n"); print; exit}' "$1" | sort -u
+}
+
+# check_notices <label> <shipped file> <target>...: the targets are those of the libraries the
+# artifact carries, one per library.
 check_notices() {
-  local label=$1 file=$2 primary=$3; shift 3
-  local fresh="$work/notices-$primary.txt"
-  if ! grep -qx "Target: $primary" "$file"; then
-    fail "$label notices: not generated for $primary"; return
+  local label=$1 file=$2; shift 2
+  if [ $# -eq 0 ]; then
+    fail "$label notices: no library in the artifact to check them against"; return
+  fi
+  local targets header fresh="$work/notices-$label.txt" args=() target missing extra
+  targets=$(printf '%s\n' "$@" | sort -u)
+  # third-party-notices.sh's header: `Target: <t>` for one target, else `Targets: ` and the sorted
+  # targets joined by ", " (feature 0013 F14).
+  if [ "$(printf '%s\n' "$targets" | wc -l | tr -d ' ')" = 1 ]; then
+    header="Target: $targets"
+  else
+    header="Targets: $(printf '%s\n' "$targets" | awk '{ printf "%s%s", sep, $0; sep = ", " }')"
+  fi
+  if grep -qx "$header" "$file"; then
+    pass "$label notices: $header (exactly the artifact's libraries)"
+  else
+    missing=$(comm -23 <(printf '%s\n' "$targets") <(notices_targets "$file") | paste -sd, -)
+    extra=$(comm -13 <(printf '%s\n' "$targets") <(notices_targets "$file") | paste -sd, -)
+    fail "$label notices: not generated for exactly the artifact's libraries ($header);${missing:+ missing target(s): $missing;}${extra:+ extra target(s): $extra;} the file says: $(grep -m 1 -E '^Targets?: ' "$file" || echo 'no Target(s) line')"
   fi
   if ! grep -qx "Artifact: polyjose-ffi $version" "$file"; then
     fail "$label notices: not for polyjose-ffi $version"
   fi
-  "$repo/scripts/third-party-notices.sh" -p polyjose-ffi --target "$primary" -o "$fresh" >/dev/null \
-    || { fail "$label notices: third-party-notices.sh failed for $primary"; return; }
-  if cmp -s "$file" "$fresh"; then
-    pass "$label notices: $notices_path is current for $primary ($(crate_list "$file" | wc -l | tr -d ' ') third-party crates)"
-  else
-    fail "$label notices: $notices_path differs from a fresh run for $primary (stale build?)"
-  fi
-  local target missing
-  for target in "$@"; do
-    "$repo/scripts/third-party-notices.sh" -p polyjose-ffi --target "$target" -o "$work/notices-$target.txt" >/dev/null \
-      || { fail "$label notices: third-party-notices.sh failed for $target"; continue; }
-    missing=$(comm -13 <(crate_list "$file") <(crate_list "$work/notices-$target.txt") | awk '{print $1" "$2}' | paste -sd, -)
-    if [ -n "$missing" ]; then
-      fail "$label notices: $target compiles crates the $primary file does not list: $missing"
+  for target in $targets; do args+=(--target "$target"); done
+  if "$repo/scripts/third-party-notices.sh" -p polyjose-ffi "${args[@]}" -o "$fresh" >/dev/null; then
+    if cmp -s "$file" "$fresh"; then
+      pass "$label notices: $notices_path is current for $(printf '%s\n' "$targets" | paste -sd' ' -) ($(crate_list "$file" | wc -l | tr -d ' ') third-party crates)"
     else
-      pass "$label notices: $target is covered by $primary"
+      fail "$label notices: $notices_path differs from a fresh run for $(printf '%s\n' "$targets" | paste -sd' ' -) (stale build?)"
+    fi
+  else
+    fail "$label notices: third-party-notices.sh failed for $(printf '%s\n' "$targets" | paste -sd' ' -)"
+  fi
+  # Each library on its own, independent of the union run above: a crate a library compiles and
+  # the shipped file does not list is named.
+  for target in $targets; do
+    "$repo/scripts/third-party-notices.sh" -p polyjose-ffi --target "$target" -o "$work/notices-$label-$target.txt" >/dev/null \
+      || { fail "$label notices: third-party-notices.sh failed for $target"; continue; }
+    missing=$(comm -13 <(crate_list "$file") <(crate_list "$work/notices-$label-$target.txt") | awk '{print $1" "$2}' | paste -sd, -)
+    if [ -n "$missing" ]; then
+      fail "$label notices: $target compiles crates the shipped file does not list: $missing"
+    else
+      pass "$label notices: $target ($(crate_list "$work/notices-$label-$target.txt" | wc -l | tr -d ' ') third-party crates) is covered"
     fi
   done
+}
+
+# The Rust target of an Android ABI (ADR 0033 §2).
+abi_triple() {
+  case $1 in
+    arm64-v8a) echo aarch64-linux-android ;;
+    armeabi-v7a) echo armv7-linux-androideabi ;;
+    x86_64) echo x86_64-linux-android ;;
+    x86) echo i686-linux-android ;;
+    *) echo "unknown-abi-$1" ;;
+  esac
 }
 
 # --- AAR ----------------------------------------------------------------------------------------
@@ -135,8 +175,13 @@ else
   fi
   if unzip -p "$work/aar/classes.jar" "$notices_path" >"$work/aar-notices.txt" 2>/dev/null && [ -s "$work/aar-notices.txt" ]; then
     pass "AAR: classes.jar holds $notices_path"
-    check_notices AAR "$work/aar-notices.txt" aarch64-linux-android \
-      armv7-linux-androideabi x86_64-linux-android i686-linux-android
+    # The Rust target of each ABI the AAR carries.
+    aar_targets=""
+    for abi in $(sed -n 's|^jni/\([^/]*\)/libpolyjose_ffi\.so$|\1|p' "$work/aar.list"); do
+      aar_targets="$aar_targets $(abi_triple "$abi")"
+    done
+    # shellcheck disable=SC2086 # one word per target
+    check_notices AAR "$work/aar-notices.txt" $aar_targets
   else
     fail "AAR: classes.jar has no $notices_path"
   fi
@@ -170,7 +215,6 @@ fi
 # --- JVM jar ------------------------------------------------------------------------------------
 echo "==> JVM jar"
 jar="$android/polyjose-jvm/build/libs/polyjose-jvm-$version.jar"
-host_triple=$(rustc -vV | awk '/^host:/{print $2}')
 # JNA's resource prefix for a Rust target triple (ADR 0033 §3a).
 triple_of() {
   case $1 in
@@ -179,7 +223,7 @@ triple_of() {
     linux-x86-64) echo x86_64-unknown-linux-gnu ;;
     linux-aarch64) echo aarch64-unknown-linux-gnu ;;
     win32-x86-64) echo x86_64-pc-windows-msvc ;;
-    *) echo unknown ;;
+    *) echo "unknown-prefix-$1" ;;
   esac
 }
 if [ ! -f "$jar" ]; then
@@ -228,12 +272,10 @@ for l in out:
   fi
   if [ -s "$work/jar/$notices_path" ]; then
     pass "jar: holds $notices_path"
-    others=""
-    for prefix in $present; do
-      t=$(triple_of "$prefix"); [ "$t" = "$host_triple" ] || others="$others $t"
-    done
-    # shellcheck disable=SC2086
-    check_notices jar "$work/jar/$notices_path" "$host_triple" $others
+    jar_targets=""
+    for prefix in $present; do jar_targets="$jar_targets $(triple_of "$prefix")"; done
+    # shellcheck disable=SC2086 # one word per target
+    check_notices jar "$work/jar/$notices_path" $jar_targets
   else
     fail "jar: no $notices_path"
   fi
