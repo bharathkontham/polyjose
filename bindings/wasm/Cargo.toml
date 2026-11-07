@@ -34,6 +34,17 @@ zeroize.workspace = true
 # wasm-bindgen unconditionally, which this binding does. Not used directly: it only adds the feature.
 getrandom = { workspace = true, features = ["wasm_js"] }
 
+# The wasm-bindgen-test harness of tests/ (0006 T02; ADR 0031 §3, ADR 0034): the conformance runner
+# and the engine checks under `wasm-pack test --node` and `--headless --chrome --features browser`.
+# Pinned exactly to the version 0006 measured with wasm-bindgen 0.2.130 (research §7). Dev-only:
+# it never reaches the shipped .wasm, and scripts/check-deps.sh checks only the normal tree.
+[dev-dependencies]
+wasm-bindgen-test = "=0.3.80"
+# The test oracle of the runner's ADR 0060 `vectors_digest` (SHA-256 of the vector files it parsed),
+# called directly, never through polyjose's API under test (ADR 0060 §5). The core's own sha2
+# (the workspace pin, default features off), so no crate is added to the tree.
+sha2.workspace = true
+
 [features]
 # Test-only: T02's wasm-bindgen-test suite enables `run_in_browser` with it for the Chrome run
 # (without it, the browser run skips every test and exits 0: 0006 research §7, ADR 0031 §3). It
