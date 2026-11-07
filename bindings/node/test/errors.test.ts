@@ -99,3 +99,54 @@ test("each napi argument Status the real backend throws becomes a TypeError with
   }
 });
 
+// --- 3. everything else passes through (ADR 0061 rule 3) -------------------------------------------
+
+test("a non-argument napi Status or an unknown code from a wrapped backend function is re-thrown unchanged", async () => {
+  for (const code of ["GenericFailure", "PendingException", "Cancelled", "Unknown", "NotAPolyjoseCode"]) {
+    for (const how of ["sync", "async"] as const) {
+      const thrown = Object.assign(new Error(`the backend failed (${code})`), { code });
+      const e = await failure(() =>
+        createApi(
+          withJwkParse(() => {
+            if (how === "async") return Promise.reject(thrown);
+            throw thrown;
+          }),
+        ).jwkParse(OCT),
+      );
+      assert.equal(e, thrown, `${code} (${how}): the same object`);
+      assert.equal(ownData(e, "code"), code, `${code} (${how}): the same code`);
+      assert.ok(!(e instanceof TypeError) && !(e instanceof PolyjoseError), `${code} (${how}): neither class`);
+    }
+  }
+});
+
+test("an exception the real backend propagates from argument conversion is re-thrown unchanged", async () => {
+  // A getter that throws while napi reads a record: napi-rs sees napi_pending_exception and leaves
+  // the getter's own value pending, so the Promise is never made and the call throws that value.
+  const coded = Object.assign(new RangeError("the getter refused"), { code: "GenericFailure" });
+  const plain = { reason: "not an Error" };
+  for (const value of [coded, plain]) {
+    const options = {
+      get protectedHeader(): string {
+        throw value;
+      },
+    };
+    const raw = (): unknown => backend.jwsSignCompact(new Uint8Array(1), KEY, options);
+    assert.equal(await failure(raw), value, "the addon throws the getter's value");
+    const api = createApi({ ...backend, jwsSignCompact: raw as Backend["jwsSignCompact"] });
+    const e = await failure(() => api.jwsSignCompact(new Uint8Array(1), OCT, { protectedHeader: { alg: "HS256" } }));
+    assert.equal(e, value, "the facade re-throws the same value");
+    assert.ok(!(e instanceof TypeError) && !(e instanceof PolyjoseError), "neither class");
+  }
+});
+
+test("a non-core failure never consults errorCodes(): a refusing errorCodes() does not hide it", async () => {
+  const thrown = Object.assign(new Error("the backend is unusable"), { code: "GenericFailure" });
+  const refusing: Backend = {
+    ...withJwkParse(() => Promise.reject(thrown)),
+    errorCodes: () => {
+      throw new Error("errorCodes() refused");
+    },
+  };
+  assert.equal(await failure(() => createApi(refusing).jwkParse(OCT)), thrown, "the backend's own error, not the facade's");
+});
