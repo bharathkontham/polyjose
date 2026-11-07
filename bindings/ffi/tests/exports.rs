@@ -14,6 +14,9 @@
 
 use polyjose::json::{self, Value};
 use polyjose_ffi::PolyjoseError;
+use polyjose_ffi::jwe::{
+    jwe_decrypt_compact, jwe_decrypt_json, jwe_encrypt_compact, jwe_encrypt_json,
+};
 use polyjose_ffi::jwk::{
     jwk_parse, jwk_thumbprint, jwk_thumbprint_uri, jwk_to_public, jwks_select,
 };
@@ -21,7 +24,10 @@ use polyjose_ffi::jws::{
     jws_sign_compact, jws_sign_flattened, jws_sign_general, jws_verify_compact, jws_verify_json,
 };
 use polyjose_ffi::keys;
-use polyjose_ffi::records::{JwkSelector, JwsSignOptions, JwsSigner, JwsVerifyOptions};
+use polyjose_ffi::records::{
+    JweDecryptOptions, JweEncryptOptions, JweRecipient, JwkSelector, JwsSignOptions, JwsSigner,
+    JwsVerifyOptions,
+};
 
 /// Asserts that `$result` failed as `PolyjoseError::$variant` and that the exported `code()` is
 /// the variant's name, the stable code (ADR 0030 §5).
@@ -394,5 +400,143 @@ fn jws_verify_json_verifies_a_flattened_jws_and_rejects_the_wrong_key() {
     assert_fails!(
         jws_verify_json(jws, s(OTHER_HMAC_KEY), verify_options(&["HS256"])),
         InvalidSignature
+    );
+}
+
+// --- JWE (RFC 7516, RFC 7518 §4–§5) -----------------------------------------------------------
+
+/// RFC 7516 Appendix A.3.3: the A128KW key.
+const RFC7516_A3_KEY: &str = r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#;
+
+/// RFC 7516 Appendix A.3.7: the compact JWE (A128KW, A128CBC-HS256).
+const RFC7516_A3_JWE: &str = "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0.6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ.AxY8DCtDaGlsbGljb3RoZQ.KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY.U0m_YmjN04DJvceFICbCVQ";
+
+/// RFC 7516 Appendix A.5: the flattened JWE JSON Serialization of the A.3 content, with `alg`
+/// and `kid` in the per-recipient header and `jku` in the shared unprotected header.
+const RFC7516_A5_JWE: &str = r#"{"protected":"eyJlbmMiOiJBMTI4Q0JDLUhTMjU2In0","unprotected":{"jku":"https://server.example.com/keys.jwks"},"header":{"alg":"A128KW","kid":"7"},"encrypted_key":"6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ","iv":"AxY8DCtDaGlsbGljb3RoZQ","ciphertext":"KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY","tag":"Mz-VPPyU4RlcuYv1IwIvzw"}"#;
+
+/// RFC 7516 Appendix A.3: the plaintext.
+const RFC7516_A3_PLAINTEXT: &[u8] = b"Live long and prosper.";
+
+fn decrypt_options(allowed_algs: &[&str], allowed_enc: &[&str]) -> JweDecryptOptions {
+    JweDecryptOptions {
+        allowed_algs: allowed_algs.iter().map(|a| s(a)).collect(),
+        allowed_enc: allowed_enc.iter().map(|e| s(e)).collect(),
+        max_pbes2_count: None,
+        max_decompressed_len: None,
+        max_input_len: None,
+        max_recipients: None,
+        understood_crit: None,
+    }
+}
+
+fn a3_decrypt_options() -> JweDecryptOptions {
+    decrypt_options(&["A128KW"], &["A128CBC-HS256"])
+}
+
+/// Encryption to the RFC 7516 A.3 key with A128KW and A128CBC-HS256, as RFC 7516 Appendix A.3.
+fn a3_encrypt_options(aad: Option<Vec<u8>>, recipients: usize) -> JweEncryptOptions {
+    JweEncryptOptions {
+        enc: s("A128CBC-HS256"),
+        recipients: (0..recipients)
+            .map(|_| JweRecipient {
+                alg: s("A128KW"),
+                key: s(RFC7516_A3_KEY),
+                header: None,
+                apu: None,
+                apv: None,
+                p2c: None,
+                p2s_len: None,
+            })
+            .collect(),
+        protected_header: None,
+        shared_unprotected_header: None,
+        aad,
+        compress: false,
+    }
+}
+
+#[test]
+fn jwe_decrypt_compact_decrypts_rfc7516_a3_and_rejects_an_enc_outside_the_allow_list() {
+    let decrypted =
+        jwe_decrypt_compact(s(RFC7516_A3_JWE), s(RFC7516_A3_KEY), a3_decrypt_options()).unwrap();
+    assert_eq!(decrypted.plaintext, RFC7516_A3_PLAINTEXT);
+    assert_eq!(decrypted.recipient_index, 0);
+    assert_eq!(member(&decrypted.header, "alg"), "A128KW");
+    assert!(decrypted.protected_header.is_some());
+    assert!(decrypted.aad.is_none());
+    // RFC 8725 §3.1, ADR 0007: `enc` must be in the caller's list too.
+    assert_fails!(
+        jwe_decrypt_compact(
+            s(RFC7516_A3_JWE),
+            s(RFC7516_A3_KEY),
+            decrypt_options(&["A128KW"], &["A256GCM"])
+        ),
+        AlgorithmNotAllowed
+    );
+}
+
+#[test]
+fn jwe_decrypt_json_decrypts_rfc7516_a5_and_rejects_the_wrong_key() {
+    let decrypted =
+        jwe_decrypt_json(s(RFC7516_A5_JWE), s(RFC7516_A3_KEY), a3_decrypt_options()).unwrap();
+    assert_eq!(decrypted.plaintext, RFC7516_A3_PLAINTEXT);
+    assert_eq!(decrypted.recipient_index, 0);
+    let recipient_header = decrypted
+        .recipient_header
+        .expect("A.5 has a per-recipient header");
+    assert_eq!(member(&recipient_header, "kid"), "7");
+    let shared = decrypted
+        .shared_unprotected_header
+        .expect("A.5 has a shared header");
+    assert_eq!(
+        member(&shared, "jku"),
+        "https://server.example.com/keys.jwks"
+    );
+    // RFC 7516 §11.5: one code for every failure once key management starts.
+    assert_fails!(
+        jwe_decrypt_json(
+            s(RFC7516_A5_JWE),
+            s(r#"{"kty":"oct","k":"AAECAwQFBgcICQoLDA0ODw"}"#),
+            a3_decrypt_options()
+        ),
+        DecryptionFailed
+    );
+}
+
+#[test]
+fn jwe_encrypt_compact_round_trips_and_rejects_two_recipients() {
+    let jwe =
+        jwe_encrypt_compact(RFC7516_A3_PLAINTEXT.to_vec(), a3_encrypt_options(None, 1)).unwrap();
+    let decrypted = jwe_decrypt_compact(jwe, s(RFC7516_A3_KEY), a3_decrypt_options()).unwrap();
+    assert_eq!(decrypted.plaintext, RFC7516_A3_PLAINTEXT);
+    // RFC 7516 §7.1: the compact form has exactly one recipient.
+    assert_fails!(
+        jwe_encrypt_compact(RFC7516_A3_PLAINTEXT.to_vec(), a3_encrypt_options(None, 2)),
+        InvalidFormat
+    );
+}
+
+#[test]
+fn jwe_encrypt_json_round_trips_the_aad_and_rejects_an_unknown_form() {
+    // RFC 7516 §5.1 step 14: the JWE AAD is authenticated and returned on decryption.
+    let aad = b"additional authenticated data".to_vec();
+    let jwe = jwe_encrypt_json(
+        RFC7516_A3_PLAINTEXT.to_vec(),
+        a3_encrypt_options(Some(aad.clone()), 1),
+        s("flattened"),
+    )
+    .unwrap();
+    let decrypted = jwe_decrypt_json(jwe, s(RFC7516_A3_KEY), a3_decrypt_options()).unwrap();
+    assert_eq!(decrypted.plaintext, RFC7516_A3_PLAINTEXT);
+    assert_eq!(decrypted.aad, Some(aad));
+    // ADR 0030 §5: an unknown form name is `UnsupportedAlgorithm`.
+    assert_fails!(
+        jwe_encrypt_json(
+            RFC7516_A3_PLAINTEXT.to_vec(),
+            a3_encrypt_options(None, 1),
+            s("compact")
+        ),
+        UnsupportedAlgorithm
     );
 }
