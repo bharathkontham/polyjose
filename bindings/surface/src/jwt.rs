@@ -106,12 +106,17 @@ pub fn jwt_verify_with_jwks(
 /// Encrypts the signed JWT `signed_jwt` into a compact JWE for exactly one recipient, with
 /// `cty: "JWT"` set by the core (ADR 0030 §4; RFC 7519 §5.2, §11.2).
 ///
-/// `options` becomes a core `Encryptor` member by member (ADR 0030 §3: `None`/`false` calls
-/// nothing), then the core's [`jwt::encrypt_nested`] checks and encrypts.
+/// `options` becomes the core `Encryptor` exactly as for
+/// [`jwe_encrypt_compact`](crate::jwe::jwe_encrypt_compact), by the same conversion (ADR 0030
+/// §1; §3: `None`/`false` calls nothing), then the core's [`jwt::encrypt_nested`] checks and
+/// encrypts.
 ///
 /// # Errors
 ///
-/// The core's: `InvalidKey` and the other JWK errors for a recipient key; `InvalidJson` or
+/// The core's, and the first error wins, in the conformance order (conformance/README.md,
+/// "Step order", `jwe.encrypt`): each recipient's key, then its header, then the protected
+/// header, then the shared header, then the nested-JWT checks and encryption. So:
+/// `InvalidKey` and the other JWK errors for a recipient key; `InvalidJson` or
 /// `InvalidHeader` for a header; `InvalidFormat` unless `signed_jwt` is a signed compact JWS,
 /// or unless there is exactly one recipient and no unprotected header or `aad` (RFC 7516
 /// §7.1); `InvalidHeader` for a `cty` other than `JWT` or for compression (RFC 8725 §3.6);
@@ -125,8 +130,10 @@ pub fn jwt_encrypt_nested(signed_jwt: &str, options: &JweEncryptOptions) -> Surf
 /// JWT with one `key` (ADR 0030 §4; RFC 7519 §5.2, §7.2 step 8; RFC 8725 §3.3).
 ///
 /// The steps run in the conformance order (conformance/README.md, "Step order"): import
-/// `decrypt_key`, build the JWE policy from `decrypt_options`, import `key`, build the JWT
-/// policy from `options` as for [`jwt_verify`], then the core's [`jwt::decrypt_nested`]. So
+/// `decrypt_key`, build the JWE policy from `decrypt_options` (by the conversion
+/// [`jwe_decrypt_compact`](crate::jwe::jwe_decrypt_compact) uses, ADR 0030 §1), import `key`,
+/// build the JWT policy from `options` as for [`jwt_verify`], then the core's
+/// [`jwt::decrypt_nested`]. So
 /// every option is checked before `token` is read (0004 implementer note 7). The decrypt key is
 /// parsed into the core's `Jwk`, which wipes itself on drop, like every key (ADR 0030 §7).
 ///
