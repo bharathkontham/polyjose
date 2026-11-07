@@ -236,6 +236,104 @@ pub(crate) mod tests {
         }
     }
 
+    /// The text of the block that starts at `header` in `text`, up to its closing `}` at column 0.
+    fn block<'t>(text: &'t str, header: &str) -> &'t str {
+        let start = text.find(header).unwrap_or_else(|| panic!("no `{header}`"));
+        let body = &text[start..];
+        &body[..body.find("\n}\n").unwrap_or(body.len())]
+    }
+
+    /// `(name, [(field, type)])` of every output record of records.rs (`object_from_js = false`).
+    fn output_records(records: &str) -> Vec<(String, Vec<(String, String)>)> {
+        let marker = concat!("#[napi(object, ", "object_from_js = false)]\npub struct ");
+        records
+            .match_indices(marker)
+            .map(|(i, _)| {
+                let rest = &records[i + marker.len()..];
+                let name = rest
+                    .split(['<', ' '])
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+                let fields = block(rest, &name)
+                    .lines()
+                    .skip(1)
+                    .map(str::trim)
+                    .filter_map(|line| line.strip_prefix("pub "))
+                    .filter_map(|line| line.split_once(": "))
+                    .map(|(field, ty)| (field.to_owned(), ty.trim_end_matches(',').to_owned()))
+                    .collect();
+                (name, fields)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn no_task_resolves_with_an_owned_string() {
+        // review-code.md SF-6: napi copies an owned `String` into V8 and then frees it unwiped, and
+        // a token embeds base64url(payload), which ADR 0049 §4 treats as secret. So every string
+        // result, whatever its classification (ADR 0058 owner decision 2 leaves JWT claims plain
+        // in the API), is moved into a `Zeroizing` owner and copied into V8 from a borrow; the JS
+        // type stays `string`.
+        let task = include_str!("task.rs");
+        let string = block(task, concat!("impl<'env> ToJs<'env> for ", "String {"));
+        for line in [
+            "type Js = JsString<'env>;",
+            "let value = Zeroizing::new(self);",
+            "env.create_string(value.as_str())",
+        ] {
+            assert!(string.contains(line), "ToJs for String lacks `{line}`:\n{string}");
+        }
+        for (file, text) in SOURCES {
+            for needle in [
+                concat!("type Js = ", "String;"),
+                concat!("_env: &'env ", "Env"),
+            ] {
+                assert!(!text.contains(needle), "{file} contains `{needle}`");
+            }
+        }
+
+        let records = include_str!("records.rs");
+        let outputs = output_records(records);
+        let names: Vec<&str> = outputs.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "JwsVerified",
+                "JweDecrypted",
+                "JwtVerified",
+                "JwtNestedVerified"
+            ]
+        );
+        for (name, fields) in &outputs {
+            let to_js = block(
+                records,
+                &format!("impl<'env> ToJs<'env> for surface::{name} {{"),
+            );
+            assert!(
+                to_js.contains(&format!("type Js = {name}<'env>;")),
+                "{name}: its ToJs builds the JS record with the env"
+            );
+            for (field, ty) in fields {
+                assert!(
+                    !ty.replace("JsString", "").contains("String"),
+                    "{name}.{field}: `{ty}` hands an owned String to napi"
+                );
+                if !ty.contains("JsString") {
+                    continue;
+                }
+                let moved = [
+                    format!("Zeroizing::new(self.{field})"),
+                    format!("self.{field}.map(Zeroizing::new)"),
+                ];
+                assert!(
+                    moved.iter().any(|m| to_js.contains(m.as_str())),
+                    "{name}.{field}: the surface string is not moved into a Zeroizing owner"
+                );
+            }
+        }
+    }
+
     #[test]
     fn secret_record_fields_are_copied_slices() {
         let records = include_str!("records.rs");
