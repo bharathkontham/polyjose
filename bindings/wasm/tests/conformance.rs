@@ -39,6 +39,10 @@
 //!   integer-like member names to the front, which would reorder `jwt.issue` claims (ADR 0027 §1),
 //!   so a JSON argument with such a name fails the vector instead (README implementer note 4).
 //! - **The clock** is the vector's `now`, always (ADR 0028 §4); this runner never reads one.
+//! - **The corpus digest** (ADR 0060): the SHA-256 over the byte-sorted `<id>\t<sha256>` lines
+//!   of the embedded bytes it parsed (`tests/digest/mod.rs`, with `sha2` as the oracle, never
+//!   polyjose). An empty corpus fails before any results line. It goes into the results document
+//!   once [`EMIT_VECTORS_DIGEST`] is on; until then it is printed in the summary line.
 //!
 //! The browser can't write files, so the ADR 0034 §2 results document is printed as one line
 //! prefixed `POLYJOSE-CONFORMANCE-RESULTS ` (before any assertion, so a failing run is recorded),
@@ -48,6 +52,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 mod common;
+mod digest;
 mod vectors;
 
 use js_sys::{Array, JSON, JsString, Object, Reflect, RegExp, Uint8Array};
@@ -63,6 +68,18 @@ const SCHEMA: &str = include_str!("../../../conformance/schema.json");
 
 /// The prefix of the one results line that `bindings/wasm/test.sh` extracts.
 const MARKER: &str = "POLYJOSE-CONFORMANCE-RESULTS ";
+
+/// Whether the results document carries the ADR 0060 `vectors_digest` member.
+///
+/// ADR 0060 §1 makes it a required member of every results file. On this base
+/// `conformance/schema/results.schema.json` does not define it yet and closes the top level
+/// (`additionalProperties: false`), so `scripts/conformance-parity.sh`, which validates every
+/// results file against that schema, would reject `wasm-node.json` and `wasm-chrome.json` with it.
+/// The digest is still computed and checked on every run (`conformance_vectors`, and
+/// `tests/vector_index.rs` against the ADR's shell reference); only writing it waits.
+/// **Flip this to `true` when feature 0013 F08 makes `results.schema.json` require the member**
+/// (0006 T06; decided with the 0006 lead, 2026-11-07).
+const EMIT_VECTORS_DIGEST: bool = false;
 
 /// The vector-file name of `polyjose/deflate` (README "Features").
 const DEFLATE: &str = "deflate";
@@ -1717,6 +1734,8 @@ struct Report {
     skipped: Vec<String>,
     failures: Vec<String>,
     results: Vec<JsValue>,
+    /// The ADR 0060 digest of every file run, `None` for an empty corpus.
+    digest: Option<String>,
 }
 
 fn run_all(enabled: &[&str]) -> Report {
@@ -1745,12 +1764,24 @@ fn run_all(enabled: &[&str]) -> Report {
             .results
             .push(result_entry(&format!("{path}#0"), trace, &status));
     }
+    // ADR 0060 §2: one line per file read, over the embedded bytes the run parsed (`text` is the
+    // `include_str!` of the file, taken as bytes with no conversion), with its results-file id.
+    let ids: Vec<String> = vectors::VECTORS
+        .iter()
+        .map(|(path, _)| format!("{path}#0"))
+        .collect();
+    report.digest = digest::vectors_digest(
+        ids.iter()
+            .zip(vectors::VECTORS)
+            .map(|(id, (_, text))| (id.as_str(), text.as_bytes())),
+    );
     report
 }
 
 /// The ADR 0034 §2 results document on one line: the runner, the adapter's `version()`, the
-/// enabled features, its `errorCodes()` (ADR 0034 §8) and one result per vector file.
-fn results_document(enabled: &[&str], results: Vec<JsValue>) -> String {
+/// enabled features, its `errorCodes()` (ADR 0034 §8), one result per vector file and, once
+/// [`EMIT_VECTORS_DIGEST`] is on, the ADR 0060 `vectors_digest`.
+fn results_document(enabled: &[&str], results: Vec<JsValue>, digest: &str) -> String {
     let doc = Rec::new();
     doc.set("runner", common::RUNNER);
     doc.set("polyjose", util::version());
@@ -1768,6 +1799,9 @@ fn results_document(enabled: &[&str], results: Vec<JsValue>) -> String {
         ),
     );
     doc.set("results", array_of(results));
+    if EMIT_VECTORS_DIGEST {
+        doc.set("vectors_digest", digest);
+    }
     stringify(&doc.value())
 }
 
@@ -1779,7 +1813,19 @@ fn conformance_vectors() {
     let enabled = enabled_features();
     let report = run_all(&enabled);
     let files = report.results.len();
-    console_log!("{MARKER}{}", results_document(&enabled, report.results));
+    // ADR 0060 §3: a run that read no vector file fails and writes no results.
+    let Some(digest) = report.digest else {
+        panic!("no vector files were run (tests/vectors/mod.rs is empty): no results written");
+    };
+    assert_ne!(
+        digest,
+        digest::EMPTY_DIGEST,
+        "the empty-input digest (ADR 0060 §3)"
+    );
+    console_log!(
+        "{MARKER}{}",
+        results_document(&enabled, report.results, &digest)
+    );
     assert!(
         report.failures.is_empty(),
         "{} of {files} conformance vector file(s) failed through the WASM adapter ({}):\n  {}",
@@ -1788,7 +1834,8 @@ fn conformance_vectors() {
         report.failures.join("\n  ")
     );
     console_log!(
-        "conformance ({}, {agent}): {} of {files} vectors passed; {} skipped",
+        "conformance ({}, {agent}): {} of {files} vectors passed; {} skipped; \
+         vectors_digest {digest}",
         common::RUNNER,
         report.passed,
         report.skipped.len()
@@ -2027,7 +2074,12 @@ fn an_integer_like_member_name_fails_instead_of_being_reordered() {
 
 #[wasm_bindgen_test]
 fn the_results_document_names_this_runner_and_the_adapter_codes() {
-    let doc = JSON::parse(&results_document(&[], Vec::new())).unwrap();
+    let some = "0".repeat(64);
+    let doc = JSON::parse(&results_document(&[], Vec::new(), &some)).unwrap();
+    assert_eq!(
+        get(&doc, "vectors_digest").and_then(|d| d.as_string()),
+        EMIT_VECTORS_DIGEST.then_some(some)
+    );
     assert_eq!(
         get(&doc, "runner").and_then(|r| r.as_string()).as_deref(),
         Some(common::RUNNER)
@@ -2038,4 +2090,12 @@ fn the_results_document_names_this_runner_and_the_adapter_codes() {
         .collect();
     assert_eq!(codes, util::error_codes());
     assert!(!codes.is_empty());
+}
+
+#[wasm_bindgen_test]
+fn the_digest_of_the_adr_0060_worked_example_in_this_engine() {
+    let (files, want) = digest::WORKED_EXAMPLE;
+    let got = digest::vectors_digest(files.iter().map(|(id, bytes)| (*id, *bytes)));
+    assert_eq!(got.as_deref(), Some(want));
+    assert_eq!(digest::vectors_digest(std::iter::empty()), None);
 }
