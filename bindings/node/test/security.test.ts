@@ -4,8 +4,10 @@
 //     with a PolyjoseError whose message, string form, stack and inspected form hold none of them;
 //   - off the JS thread: a costly PBES2 decrypt resolves while the event loop keeps running timers;
 //   - input copy: the payload is copied when the call is made, so the caller may reuse its buffer;
+//   - the security decisions (allow-lists, RSA public-key only, no SHA-1) reach JS unchanged, for
+//     the JS call shapes the conformance vectors cannot express, such as a missing allowedAlgs.
 // No assertion reads a clock (pipeline rule 8): event-loop progress is a count of timer ticks.
-import { assert, test } from "../../js/dist/node/builtins.js";
+import { assert, fs, path, test } from "../../js/dist/node/builtins.js";
 import {
   ERROR_CODES,
   PolyjoseError,
@@ -17,6 +19,8 @@ import {
   jwkGenerateEc,
   jwkGenerateOct,
   jwkParse,
+  jwkThumbprint,
+  jwkThumbprintUri,
   jwkToPem,
   jwkToPublic,
   jwsSignCompact,
@@ -26,13 +30,17 @@ import {
   jwtSign,
   jwtVerify,
 } from "@polyjose/node";
-import type { JweDecryptOptions, JwkObject } from "@polyjose/node";
+import type { JweDecryptOptions, JwkObject, JwsVerifyOptions, JwtVerifyOptions, ThumbprintHash } from "@polyjose/node";
 
 // Node built-ins without @types/node (ADR 0047), typed with only what this file calls.
+interface NodeUrl {
+  fileURLToPath(url: string): string;
+}
 interface NodeUtil {
   inspect(value: unknown): string;
 }
 interface Host {
+  getBuiltinModule(id: "node:url"): NodeUrl;
   getBuiltinModule(id: "node:util"): NodeUtil;
   readonly env: Readonly<Record<string, string | undefined>>;
 }
@@ -43,9 +51,19 @@ interface Timers {
 const host = (globalThis as unknown as { process: Host }).process;
 const timers = globalThis as unknown as Timers;
 const util = host.getBuiltinModule("node:util");
+const thisFile = host.getBuiltinModule("node:url").fileURLToPath((import.meta as unknown as { url: string }).url);
+/** The repository root: this file is bindings/node/dist/security.test.js. */
+const repo = path.resolve(path.dirname(thisFile), "..", "..", "..");
 
 /** The ASCII bytes of `s`. */
 const ascii = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
+
+/** One input of a conformance vector (conformance/vectors/binding-surface, ADR 0034 §6). */
+function vectorInput(name: string): Record<string, unknown> {
+  const file = path.join(repo, "conformance", "vectors", "binding-surface", name);
+  const vector = JSON.parse(fs.readFileSync(file, "utf8")) as { input: Record<string, unknown> };
+  return vector.input;
+}
 
 /**
  * `call` returns a Promise that rejects with a PolyjoseError of `code` (ADR 0030 §5, ADR 0031 §1),
@@ -258,4 +276,82 @@ test("jwsSignCompact copies the payload when called: changing the caller's bytes
   const kept = original.slice();
   await jwsSignCompact(kept, key, { protectedHeader: { alg: "HS256" } });
   assert.deepEqual(kept, original, "the caller's payload is left as it was");
+});
+
+// --- Security decisions reach JS unchanged (ADR 0030 §6, RFC 8725 §3.1) ---------------------------------
+
+test("jwsVerifyCompact rejects an empty, a none-only and a missing allowedAlgs with AlgorithmNotAllowed", async () => {
+  // RFC 7515 Appendix A.1: an HS256 JWS and its key, which verify under ["HS256"].
+  const a1 = vectorInput("jws-verify-allowed-algs-none-only.json");
+  const jws = a1["jws"] as string;
+  const key = a1["key"] as JwkObject;
+  assert.equal((await jwsVerifyCompact(jws, key, { allowedAlgs: ["HS256"] })).alg, "HS256");
+  // An Unsecured JWS (RFC 7515 §A.5 form, `alg: none`): never accepted (ADR 0007), even when listed.
+  const unsecured = `${await base64urlEncode(ascii('{"alg":"none"}'))}.${await base64urlEncode(ascii("x"))}.`;
+
+  const shapes: [string, string, unknown][] = [
+    ["allowedAlgs: []", jws, { allowedAlgs: [] }],
+    ['allowedAlgs: ["none"]', jws, { allowedAlgs: ["none"] }],
+    ['allowedAlgs: ["none"], alg none token', unsecured, { allowedAlgs: ["none"] }],
+    ["no allowedAlgs property", jws, {}],
+    ["allowedAlgs: undefined", jws, { allowedAlgs: undefined }],
+    ["allowedAlgs: null", jws, { allowedAlgs: null }],
+  ];
+  for (const [what, token, options] of shapes) {
+    await rejectsWithoutSecrets(
+      `jwsVerifyCompact ${what}`,
+      () => jwsVerifyCompact(token, key, options as JwsVerifyOptions),
+      "AlgorithmNotAllowed",
+      [key["k"] as string],
+    );
+  }
+});
+
+test("JWE decrypt and JWT verify without their allow-lists reject with AlgorithmNotAllowed", async () => {
+  const key = await jwkGenerateOct(16);
+  const jwe = await jweEncryptCompact(ascii("x"), { enc: "A128GCM", recipients: [{ alg: "A128KW", key }] });
+  const jweShapes: [string, unknown][] = [
+    ["no options properties", {}],
+    ["no allowedEnc", { allowedAlgs: ["A128KW"] }],
+    ["no allowedAlgs", { allowedEnc: ["A128GCM"] }],
+  ];
+  for (const [what, options] of jweShapes) {
+    await assert.rejects(
+      jweDecryptCompact(jwe, key, options as JweDecryptOptions),
+      (e: unknown) => e instanceof PolyjoseError && e.code === "AlgorithmNotAllowed",
+      `jweDecryptCompact ${what}`,
+    );
+  }
+  const hs = await jwkGenerateOct(32);
+  const jwt = await jwtSign({ sub: "s" }, hs, { alg: "HS256" });
+  await assert.rejects(
+    jwtVerify(jwt, hs, {} as JwtVerifyOptions),
+    (e: unknown) => e instanceof PolyjoseError && e.code === "AlgorithmNotAllowed",
+    "jwtVerify without allowedAlgs",
+  );
+});
+
+test("an RSA private JWK is UnsupportedAlgorithm (ADR 0021), and so is a SHA-1 thumbprint (ADR 0022)", async () => {
+  // RFC 7515 Appendix A.2's RSA private JWK.
+  const signer = (vectorInput("jws-sign-rsa-private-jwk.json")["signers"] as { key: JwkObject }[])[0];
+  assert.ok(signer !== undefined, "the vector has a signer");
+  const rsa = signer.key;
+  const rsaSecrets = [rsa["d"] as string, rsa["p"] as string, rsa["q"] as string];
+  await rejectsWithoutSecrets("jwkParse RSA private", () => jwkParse(rsa), "UnsupportedAlgorithm", rsaSecrets);
+  await rejectsWithoutSecrets("jwkToPublic RSA private", () => jwkToPublic(rsa), "UnsupportedAlgorithm", rsaSecrets);
+  await rejectsWithoutSecrets(
+    "jwsSignCompact RSA private",
+    () => jwsSignCompact(ascii("x"), rsa, { protectedHeader: { alg: "RS256" } }),
+    "UnsupportedAlgorithm",
+    rsaSecrets,
+  );
+
+  const jwk = await jwkGenerateOct(32);
+  const sha1 = "SHA-1" as ThumbprintHash; // outside the type on purpose: a JS caller can pass it
+  await rejectsWithoutSecrets("jwkThumbprint SHA-1", () => jwkThumbprint(jwk, sha1), "UnsupportedAlgorithm", [
+    jwk["k"] as string,
+  ]);
+  await rejectsWithoutSecrets("jwkThumbprintUri SHA-1", () => jwkThumbprintUri(jwk, sha1), "UnsupportedAlgorithm", [
+    jwk["k"] as string,
+  ]);
 });
