@@ -103,6 +103,30 @@ run_api_names() {
   if [ "$found" -eq 0 ]; then echo "no binding API modes found (scripts/check-binding-api.d/*.sh)"; record api-names FAIL; fi
 }
 
+# The UniFFI-generated Kotlin and Swift names (feature 0013 F05, review S4; T12; ADR 0030 §2, §3,
+# §8; ADR 0032 §3): bindings/ffi/tests/generated-names.sh builds polyjose-ffi and the bindgen,
+# generates both languages, requires every bindings/api-inventory.txt entry in each (required
+# fields such as allowedAlgs with no default) and type-checks the Swift under Swift 6. It stands in
+# for the kotlin and swift modes of check-binding-api.sh, so features 0008 and 0009 remove this
+# step when they add them. One step, "api-names: ffi-generated", run under this script's bash. The
+# exit status decides PASS or FAIL (exit 2, a setup error such as a failed bindgen build, FAILs
+# too); `SKIPPED (<reason>)` on a line of its output with exit 0 (no xcrun, so no Swift typecheck)
+# is reported as SKIPPED, never as passing (pipeline rule 9); any other line starting with SKIPPED
+# FAILs, and so does a missing script. Needs cargo (the caller skips it without).
+run_ffi_generated_names() {
+  local name="api-names: ffi-generated" script=bindings/ffi/tests/generated-names.sh out rc skipped
+  echo "==> $name"
+  if [ ! -f "$script" ]; then echo "$script not found"; record "$name" FAIL; return 0; fi
+  out="$scratch/ffi-generated.out"
+  "${BASH:-bash}" "$script" </dev/null 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+  if [ "$rc" -ne 0 ]; then echo "$script exited $rc"; record "$name" FAIL; return 0; fi
+  if awk '{ sub(/\r$/, ""); sub(/[ \t]+$/, "") } /^SKIPPED/ && !/^SKIPPED \(.+\)$/ { bad = 1 } END { exit !bad }' "$out"; then
+    echo "$script: a line starting with SKIPPED is not SKIPPED (<reason>)"; record "$name" FAIL; return 0
+  fi
+  skipped=$(awk '{ sub(/\r$/, ""); sub(/[ \t]+$/, "") } /^SKIPPED \(.+\)$/ { print; exit }' "$out")
+  if [ -n "$skipped" ]; then record "$name" "$skipped"; else record "$name" PASS; fi
+}
+
 # Conformance results files (ADR 0034 §2) left by an earlier run must never count in the parity
 # check below: each run starts with an empty target/conformance/, which this run's suites refill.
 results_dir=target/conformance
@@ -117,6 +141,10 @@ for p in "${platforms[@]}"; do
       # Every binding's exported names against the API inventory (needs no cargo), before the
       # cargo steps, so a renamed or missing name fails before any conformance run.
       run_api_names
+      # The same for the UniFFI-generated Kotlin and Swift (needs cargo to build them), still before
+      # the cargo steps below.
+      if have cargo; then run_ffi_generated_names
+      else record "api-names: ffi-generated" "SKIPPED (cargo missing)"; fi
       if have cargo; then run rust bash -c 'cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
       else record rust "SKIPPED (cargo missing)"; fi
       # The workspace run above uses default features; this one also covers polyjose's
