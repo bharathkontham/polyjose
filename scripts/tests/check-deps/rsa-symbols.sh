@@ -23,6 +23,8 @@
 # Must fail closed (exit 2, before any build):
 #  10.   a workspace member with no library target (build tooling, like polyjose-uniffi-bindgen)
 #        whose tree holds a workspace member (here polyjose), which the gate cannot read.
+#  11-13. the same, whose tree holds rsa without polyjose: as a normal, a build- or a
+#        dev-dependency (the tree is read with -e normal,build,dev).
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
 # so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
 # release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
@@ -273,5 +275,31 @@ else
   sed 's/^/       /' "$scratch/out"
   tests_failed=$((tests_failed + 1))
 fi
+
+# 11-13. A library-less member whose tree holds rsa (and no workspace member) is not skipped either,
+#        whichever kind of dependency reaches rsa.
+for kind in dependencies build-dependencies dev-dependencies; do
+  new_case "tool-with-rsa-$kind"
+  append_to tools/rsa-tool/Cargo.toml "[package]
+name = \"rsa-tool\"
+version = \"0.0.0\"
+edition = \"2024\"
+publish = false
+
+[$kind]
+rsa = { workspace = true }"
+  append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+  replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+  tests_run=$((tests_run + 1))
+  rc=0
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member rsa-tool has no library target, and its tree contains rsa;' "$scratch/out"; then
+    echo "ok   - library-less member with rsa as a $kind: $gate_name fails closed"
+  else
+    echo "FAIL - library-less member with rsa as a $kind: exit $rc (expected 2) with the no-library-target error"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
 
 finish
