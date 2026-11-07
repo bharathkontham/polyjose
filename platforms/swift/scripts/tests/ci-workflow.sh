@@ -65,6 +65,10 @@
 #                continued onto the next line (B05): YAML escapes and escaped line breaks could
 #                spell an expression or a context name no other check sees. A quote opens a
 #                scalar after any white space, a TAB too, and after `[`, `{`, `,` or `:` (B06).
+#   one-line     outside run values every value sits on its key's line (B07): each line is a
+#                `key:` entry or a `- ` item, none continues the value above it (a plain scalar
+#                folds a more-indented line in), no value is a block scalar, and no line is
+#                indented with a TAB. The checks that read a value from its line see all of it.
 #   continue     no `continue-on-error` anywhere.
 #   steps        every run step equals, exactly, one of the canonical steps held in this script,
 #                each once and in order (compared without its name line, trailing whitespace,
@@ -89,9 +93,10 @@
 # lines inserted, in a scratch copy) must fail the check named for it, so that every check is
 # shown to reject what it is there to reject: a pull_request trigger, a write permission, a secret
 # in any spelling, an unpinned action, --allow-dev in release mode, an expression in a run script
-# of any form, a required step turned into a no-op, and so on (including every case of bugs B02,
-# B03 and B04). A list of benign edits (retention-days, a renamed step, comments, a blank line, a
-# longer timeout) must still pass, so that the checks are not simply brittle. About 45 s.
+# of any form, a required step turned into a no-op, a value continued onto the next line, and so
+# on (including every case of bugs B02 to B07). A list of benign edits (retention-days, a renamed
+# step, comments, a blank line, a longer timeout) must still pass, so that the checks are not
+# simply brittle. About a minute.
 #
 # Exit status: 0 every check passed; 1 a check failed; 2 a usage error.
 # Bash 3.2 compatible (macOS /bin/bash). Needs awk, grep, sed and actionlint.
@@ -617,6 +622,59 @@ if [ -s "$work/quoting" ]; then
   done <"$work/quoting"
 else
   ok "quoting: no backslash in a double-quoted scalar and no quoted scalar over several lines (outside run values)"
+fi
+
+# --- one-line (B07) -------------------------------------------------------------------------
+# The checks read a value from its key's line, but YAML lets a value go on over later lines: a
+# plain scalar continues on every more-indented line that is not a comment, folded in with a space
+# (YAML 1.2 §7.3.3 and §6.5: `name: apple-xcframework` and `  -dev` below it are the name
+# `apple-xcframework -dev`; `if: inputs.mode == 'ci'` and `  && false` never run the step); a
+# block scalar (`|` or `>`, §8.1) holds the lines below its key, even lines that look like
+# comments; a flow collection may span lines (§7.4); and a value may start on the line after its
+# key. So outside the run values ("steps" compares those exactly) every free value sits on its
+# key's line: each non-blank line that is not a comment is a `key:` entry or a `- ` item, indented
+# no deeper than the key (or the `-`) of the value above it; no value is a block scalar; and no line
+# is indented with a TAB (§6.1 forbids it; spaces then a TAB would continue a value unseen).
+awk '
+  function indent(l) { match(l, /^ */); return RLENGTH }
+  BEGIN { pend = -1 }
+  {
+    line = $0
+    if (line ~ /^[ \t]*$/) next
+    i = indent(line); rest = substr(line, i + 1)
+    if (inrun) { if (i > rind) next; inrun = 0 }
+    if (rest ~ /^[ \t]*#/) next
+    if (pend >= 0 && i > pend) { print FNR "\ta continuation of the value on line " pline; next }
+    pend = -1
+    if (rest ~ /^\t/) { print FNR "\ta TAB in the indentation"; next }
+    item = 0
+    while (rest ~ /^-([ \t]|$)/) {
+      item = 1; d = length(line) - length(rest)
+      rest = substr(rest, 2); sub(/^[ \t]+/, "", rest)
+    }
+    k = length(line) - length(rest)
+    if (rest == "") next
+    if (match(rest, /^([A-Za-z0-9_][A-Za-z0-9_.\/-]*|"[^"]*"|\047[^\047]*\047):([ \t]|$)/)) {
+      key = substr(rest, 1, RLENGTH); sub(/:[ \t]*$/, "", key); gsub(/["\047]/, "", key)
+      v = substr(rest, RLENGTH + 1); sub(/^[ \t]+/, "", v)
+      if (v ~ /^#/) v = ""
+      if (key == "run") { inrun = 1; rind = k; next }
+      if (v == "") next
+      if (v ~ /^([!&][^ \t]*[ \t]+)*[|>]/) { print FNR "\ta block scalar (| or >)"; next }
+      pend = k; pline = FNR
+    } else if (item) {
+      pend = d; pline = FNR
+    } else {
+      print FNR "\tneither a key: entry nor a - item (a value on a line of its own)"
+    }
+  }
+' "$workflow" >"$work/oneline"
+if [ -s "$work/oneline" ]; then
+  while IFS="$(printf '\t')" read -r n why; do
+    bad "one-line" "$why (line $n); outside run values every value sits on its key's line"
+  done <"$work/oneline"
+else
+  ok "one-line: every value outside the run values sits on its key's line (no continuation, block scalar or TAB indentation)"
 fi
 
 # --- xcode ----------------------------------------------------------------------------------
