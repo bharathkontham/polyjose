@@ -27,7 +27,8 @@
 #   artifacts    the uploads are exactly apple-xcframework (dist/apple/*), conformance-swift-macos
 #                and conformance-swift-ios-sim (target/conformance/swift-*.json), each once, with
 #                `if-no-files-found: error` (ADR 0037 §1).
-#   scripts      every script path the file names exists and is executable, and the steps call
+#   scripts      every script path the file names exists (and is executable when it starts with
+#                `#!`; a sourced library need not be), and the steps call
 #                test.sh, build-xcframework.sh, package.sh, check-no-cargo-config.sh and
 #                conformance-parity.sh.
 #   one job      a single job on a macOS runner with a timeout, so the rust-core reference, the
@@ -321,9 +322,9 @@ for p in $(grep -oE '(platforms|scripts)/[A-Za-z0-9_./-]+\.sh' "$code" | sort -u
   if [ ! -f "$root/$p" ]; then
     scripts_ok=0
     bad "scripts" "$p does not exist"
-  elif [ "${p%.sh}" != "$p" ] && [ ! -x "$root/$p" ]; then
+  elif [ "$(head -c 2 "$root/$p")" = '#!' ] && [ ! -x "$root/$p" ]; then
     scripts_ok=0
-    bad "scripts" "$p is not executable"
+    bad "scripts" "$p has a #! line but is not executable"
   fi
 done
 for p in scripts/check-no-cargo-config.sh platforms/swift/test.sh \
@@ -334,10 +335,10 @@ for p in scripts/check-no-cargo-config.sh platforms/swift/test.sh \
     bad "scripts" "no step runs $p"
   fi
 done
-[ "$scripts_ok" = 1 ] && ok "scripts: every script named exists and is executable; the steps run the five required ones"
+[ "$scripts_ok" = 1 ] && ok "scripts: every file named exists (executable when it has a #! line); the steps run the five required ones"
 
 # --- one job --------------------------------------------------------------------------------
-jobs=$(block "jobs:" 0 | keys 2 | tr '\n' ' ')
+jobs=$(block "jobs:" 0 | keys 2 | tr '\n' ' ' | sed 's/ $//')
 job_block=$(block "jobs:" 0)
 if [ "$(echo "$jobs" | wc -w | tr -d ' ')" != 1 ]; then
   bad "one job" "expected exactly one job, got: $jobs"
