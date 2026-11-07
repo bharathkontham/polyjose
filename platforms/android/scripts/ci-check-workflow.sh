@@ -21,10 +21,14 @@
 #   publishing   no `publish` and no signing (`sign`, `signing`, gpg, `.asc`).
 #   expressions  every `${{ }}` reads only the inputs, github, matrix, steps, needs, runner, job
 #                and strategy contexts and status or string functions (no vars, env or secrets),
-#                and no `${{ }}` appears inside a `run:` script (values reach scripts through env:,
-#                so an input cannot inject shell code).
+#                the github context only as github.<property> (never whole, as in toJSON(github),
+#                indexed or as github.*, since it holds the token), and no `${{ }}` appears inside
+#                a `run:` script (values reach scripts through env:, so an input cannot inject
+#                shell code).
 #   structure    no YAML anchors, aliases or merge keys, no second document, no tab indentation,
-#                no flow-style `uses:`.
+#                no flow-style `uses:`, and only plain keys: no quoted ("uses": / 'uses':),
+#                explicit (? uses) or tagged (!!str uses:) key; a quoted uses key also fails the
+#                actions rule.
 #   scripts      the steps call each of ci-host-natives.sh, ci-android-sdk.sh, ci-emulator.sh,
 #                ci-assemble-jar.sh and ci-parity.sh, and every platforms/android/scripts/ci-*.sh
 #                the workflow names exists and is executable.
