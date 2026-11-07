@@ -8,7 +8,8 @@
 # allows "a few", and each one is public API, so it must be in the inventory too). A text parse,
 # so no build is needed:
 #   1. comments (`//`, `/* */`, nested) and string literals are blanked, keeping the line breaks;
-#   2. the declarations are read by brace depth:
+#   2. the declarations are read by brace depth, each line in pieces that end after a `{`, `}` or
+#      `;`, so declarations sharing a line with an extension, a brace or each other count too:
 #      - an operation is a `public func <name>(` at depth 0;
 #      - a record is a `public struct <Name>` at depth 0, and its fields are the parameters of its
 #        `public init(` (depth 1): no default is a required field, `= nil` an optional one (`?`)
@@ -97,16 +98,17 @@ function params(text, record,    i, c, d, p, cur, name, list, k) {
     print "field " record "." name
   }
 }
-FNR == 1 { depth = 0; pending = 0; collecting = 0 }
-{
-  line = $0; text = trim(line)
+# One piece of a line: the text up to and including its first `{`, `}` or `;`, or the rest of the
+# line (see the main rule below).
+function piece(line) {
+  text = trim(line)
   if (collecting) {
     init = init " " text
     if (text ~ /\)[ \t]*(throws[ \t]*)?\{/) { params(init, block_name); inits[block_name]++; collecting = 0 }
     depth += count(line, "{") - count(line, "}")
-    next
+    return
   }
-  if (depth == 0 && text == "public") { pending = 1; next }
+  if (depth == 0 && text == "public") { pending = 1; return }
   decl = text
   if (pending) { decl = "public " text; pending = 0 }
   if (depth == 0 && decl ~ /^public[ \t]/) {
@@ -150,6 +152,20 @@ FNR == 1 { depth = 0; pending = 0; collecting = 0 }
   }
   depth += count(line, "{") - count(line, "}")
   if (depth < 0) { print "error " where() ": unbalanced braces"; depth = 0 }
+}
+FNR == 1 { depth = 0; pending = 0; collecting = 0 }
+# Each line is read in pieces that end after a `{`, `}` or `;`, so a declaration that shares its
+# line with a brace or another declaration (`extension T { public func f() {} }`, `} public func
+# g() {}`, `public func a() {}; public func b() {}`) is read at its own depth like one on a line of
+# its own. A line with at most one brace, at its end, is one piece.
+{
+  rest_of_line = $0
+  do {
+    if (match(rest_of_line, /[{};]/)) {
+      chunk = substr(rest_of_line, 1, RSTART); rest_of_line = substr(rest_of_line, RSTART + 1)
+    } else { chunk = rest_of_line; rest_of_line = "" }
+    piece(chunk)
+  } while (rest_of_line != "")
 }
 END {
   if (!seen_error) print "error no public enum " error_type " (ADR 0030 §5)"

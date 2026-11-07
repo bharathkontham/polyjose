@@ -4,7 +4,8 @@
 # Swift module Polyjose fails with exactly that difference; a default on a required field, a
 # hand-written public extension member, another public declaration and a missing code() fail the
 # mode; UniFFI's own public plumbing (FfiConverter*, uniffiEnsurePolyjoseFfiInitialized) and
-# braces inside comments and strings do not count.
+# braces inside comments and strings do not count. Hand-written forms the generated code does not
+# use are seen too (F01): declarations sharing a line with an extension, a brace or each other.
 #
 # Usage: scripts/tests/check-binding-api/swift.sh (under /bin/bash 3.2 and bash 5).
 set -euo pipefail
@@ -89,5 +90,36 @@ public func jwkPeek(jwk: String) -> String { jwk }'
 run_check swift
 check_diffs "braces in comments and strings do not change the depth" \
   'extra in swift (not in the inventory): op jwkPeek'
+
+# Hand-written forms the generated code does not use (F01): every one must still be seen.
+
+new_case one-line-extension
+append $src/Extra.swift 'extension PolyjoseError { public func leak() -> String { "" } }'
+run_check swift
+check "a public member declared on one line with its extension fails" 1 \
+  'public member leak in an extension of PolyjoseError'
+
+new_case declarations-on-one-line
+append $src/Extra.swift 'public func jwkPeek(jwk: String) -> String { jwk }; public func jwkPoke() {}'
+run_check swift
+check_diffs "two declarations on one line are both extra operations" \
+  'extra in swift (not in the inventory): op jwkPeek' \
+  'extra in swift (not in the inventory): op jwkPoke'
+
+new_case declaration-after-brace
+append $src/Extra.swift 'extension JwsVerified {
+} public func jwkPoke() {}'
+run_check swift
+check_diffs "a declaration after a closing brace on the same line is an extra operation" \
+  'extra in swift (not in the inventory): op jwkPoke'
+
+new_case non-public-forms
+append $src/Extra.swift 'extension JwsVerified { func helper() {}; internal var opened: Bool { false } }
+@inlinable func internalHelper() {}
+private let openSesame = 1
+fileprivate struct Plain {}'
+run_check swift
+check_last_line "internal, private and fileprivate declarations, also on one line, do not count" 0 \
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
 
 finish
