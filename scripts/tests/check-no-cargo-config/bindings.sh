@@ -9,8 +9,10 @@
 #
 # Must pass:
 #   1. the unchanged tree, which holds the ADR 0059 line;
-#   2. look-alikes under bindings/: a comment line with `--config`, a `[A-Z]` regex, an `env!` of
-#      CARGO_MANIFEST_DIR and a read of `${WASM_CARGO_ARGS[@]}` and `${#WASM_CARGO_ARGS[@]}`.
+#   2. look-alikes under bindings/: a `#` comment line with `--config`, `//` and `//!` comment
+#      lines with `--config`, `-Z` and a RUSTFLAGS assignment in Rust and TypeScript files (as in
+#      tests/memory.rs's docs), a `[A-Z]` regex, an `env!` of CARGO_MANIFEST_DIR and a read of
+#      `${WASM_CARGO_ARGS[@]}` and `${#WASM_CARGO_ARGS[@]}`.
 # Must fail, on rule 2 only, naming the file and line:
 #   3. the audit's plant: the ADR 0059 line plus a `build.rustflags` --cfg and a `[patch]`;
 #   4. the ADR 0059 line with another value (opt-level "s"), and emptied (`WASM_CARGO_ARGS=()`);
@@ -19,7 +21,9 @@
 #   7. `--config` on another command line in a bindings script;
 #   8. `-Z` (attached and separate) in a bindings script, and `-Z` in a scripts/ file;
 #   9. a RUSTFLAGS prefix assignment, an exported CARGO_TARGET_<triple>_RUSTFLAGS, a
-#      `RUSTFLAGS:` key in a TypeScript file, and a `.cargo/config.toml` write, under bindings/.
+#      `RUSTFLAGS:` key in a TypeScript file, and a `.cargo/config.toml` write, under bindings/;
+#  10. `--config` in Rust code (not a comment), and on a shell line that starts with `//` (a path,
+#      not a comment, in a shell script).
 #
 # The planted flags and variable names are assembled from pieces below, because this file is under
 # scripts/, which the gate scans: its own text must hold none of them.
@@ -93,6 +97,9 @@ append_to bindings/wasm/test.sh "# a comment may name cargo $cfg 'profile.releas
 n=\${#WASM_CARGO_ARGS[@]}; args=(\"\${WASM_CARGO_ARGS[@]}\"); echo \"\$n \${args[*]}\""
 append_to bindings/wasm/test-pkg/src/f06-look-alike.ts 'export const upper = /[A-Z]+/; // [a-zA-Z0-9_-Z]'
 append_to bindings/wasm/src/f06_look_alike.rs 'pub const DIR: &str = env!("CARGO_MANIFEST_DIR");'
+append_to bindings/wasm/src/f06_look_alike.rs "//! wasm-pack test --release -- $cfg 'profile.release.opt-level=\"z\"' --test memory
+    // rustc $zf unstable-options --print target-spec-json, with $rf=--cfg"
+append_to bindings/wasm/test-pkg/src/f06-look-alike.ts "  // $rf='--cfg x' cargo build $cfg 'build.rustc-wrapper=\"w\"'"
 expect_pass "comments, regexes, env!(CARGO_MANIFEST_DIR) and reads of WASM_CARGO_ARGS under bindings/"
 
 # --- Must fail ------------------------------------------------------------------------------------
@@ -163,6 +170,14 @@ expect_fail "a $rf: key in a TypeScript file" "^  - bindings/wasm/test-pkg/src/f
 new_case config-write
 append_to bindings/wasm/test.sh "mkdir -p $dotcargo && echo '[build]' >$dotcargo/config.toml"
 expect_fail "a $dotcargo/config.toml write in bindings/wasm/test.sh" "^  - bindings/wasm/test\\.sh:[0-9]+: mkdir -p " "$rule2"
+
+new_case rust-code
+append_to bindings/wasm/src/f06_spawn.rs "pub fn f() { let _ = std::process::Command::new(\"cargo\").args([\"$cfg\", \"x\"]); }"
+expect_fail "$cfg in Rust code" "^  - bindings/wasm/src/f06_spawn\\.rs:1: " "$rule2"
+
+new_case slashes-in-shell
+append_to bindings/wasm/test.sh "//usr/bin/env cargo build $cfg 'build.rustc-wrapper=\"/tmp/wrap\"'"
+expect_fail "a shell line starting with // (a path, not a comment)" "^  - bindings/wasm/test\\.sh:[0-9]+: //usr/bin/env cargo build " "$rule2"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
