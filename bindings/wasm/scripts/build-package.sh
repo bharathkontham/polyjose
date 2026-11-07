@@ -32,13 +32,16 @@
 set -euo pipefail
 export LC_ALL=C
 
-# Extra `cargo build` arguments for the wasm build, passed after `--` to wasm-pack. The workspace
-# release profile is used as it is (fat LTO, one codegen unit, stripped; opt-level 3). Measured in
-# 0006 T03: a [profile.release.package.polyjose-wasm] override does not reach the budget under fat
-# LTO (1,178,395 bytes raw), and wasm-pack 0.15.1 with `--profile <custom>` ignores the wasm-opt
-# arguments of the package metadata. How the wasm build is optimized for size is pending a
-# decision; it is made here, for this build only.
-WASM_CARGO_ARGS=()
+# Extra `cargo build` arguments for the wasm build, passed after `--` to wasm-pack. ADR 0059
+# (superseding ADR 0031 §3 in part): this one invocation overrides the workspace release profile's
+# opt-level to "z"; the rest of the profile (fat LTO, one codegen unit, stripped) is used as it is,
+# and the native release builds keep opt-level 3, since the override exists only on this command
+# line. Measured in 0006 T03: a [profile.release.package.polyjose-wasm] override does not reach
+# the budget under fat LTO (1,178,395 bytes raw), because every dependency is optimized at
+# opt-level 3 before the link. It is not a named profile because wasm-pack 0.15.1's
+# `--profile <name>` hard-codes wasm-opt `-O` and ignores the wasm-opt arguments of the package
+# metadata (`-Oz` and the feature flags), so wasm-opt then rejects the stripped module.
+WASM_CARGO_ARGS=(--config 'profile.release.opt-level="z"')
 
 # The size budget of the .wasm, in bytes (ADR 0031 §3: 1 MiB raw).
 SIZE_BUDGET=1048576
