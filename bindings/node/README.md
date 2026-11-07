@@ -14,7 +14,9 @@ npm install @polyjose/node
 ```
 
 npm also installs the matching prebuilt addon, `@polyjose/node-<platform>`, for macOS (x64,
-arm64), Linux glibc and musl (x64, arm64) and Windows (x64, arm64).
+arm64), Linux glibc and musl (x64, arm64) and Windows (x64, arm64). Each is an optional
+dependency at exactly this package's version, and npm installs only the one for your platform.
+If you install with `--omit=optional`, no addon is installed and the import throws.
 
 ## Module format
 
