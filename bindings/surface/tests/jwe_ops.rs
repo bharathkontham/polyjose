@@ -811,3 +811,127 @@ fn every_failure_after_key_management_is_the_same_decryption_failed() {
         assert_eq!(e.message(), errors[0].message());
     }
 }
+
+// --- No input in errors (ADR 0030 §5, ADR 0007) -------------------------------------------------
+
+/// A distinctive value standing in for key material and other input (the core's marker style).
+const MARKER: &str = "pj-SECRET-marker-7f3a";
+
+/// A valid 256-bit `oct` key whose `k` holds the marker: the marker's 21 base64url characters
+/// and 22 `A`s are 43 characters, 32 octets, with zero trailing bits (RFC 4648 §5).
+fn marked_oct_256() -> String {
+    format!(r#"{{"kty":"oct","k":"{MARKER}{}"}}"#, "A".repeat(22))
+}
+
+fn assert_no_marker<T: core::fmt::Debug>(what: &str, result: Result<T, SurfaceError>) {
+    let err = result.unwrap_err();
+    for rendered in [
+        err.code().to_owned(),
+        err.message().to_owned(),
+        err.to_string(),
+        format!("{err:?}"),
+    ] {
+        assert!(!rendered.contains(MARKER), "{what}: {rendered}");
+    }
+}
+
+#[test]
+fn no_failing_path_puts_the_marker_in_the_error() {
+    let marked = marked_oct_256();
+    let marked_unparseable = [
+        // 21 base64url characters: no base64url text has that length.
+        format!(r#"{{"kty":"oct","k":"{MARKER}"}}"#),
+        format!(r#"{{"kty":"EC","crv":"P-256","x":"{MARKER}","y":"{MARKER}","d":"{MARKER}"}}"#),
+        // A syntax error next to the marker, where a quoting parser would echo it.
+        format!(r#"{{"kty":"oct","k":"{MARKER}" {MARKER}}}"#),
+    ];
+    let marked_json = format!(r#"{{"kid":"{MARKER}" {MARKER}}}"#);
+    let with = |alg: &str, key: &str| encrypt_options("A256GCM", vec![recipient(alg, key)]);
+
+    // Encrypt: every failing step of `encryptor` and of the core call.
+    let mut cases: Vec<(&str, JweEncryptOptions)> = Vec::new();
+    for key in &marked_unparseable {
+        cases.push(("unparseable key", with("A256KW", key)));
+    }
+    let mut o = with("A256KW", &marked);
+    o.recipients[0].header = Some(marked_json.clone());
+    cases.push(("recipient header", o));
+    let mut o = with("A256KW", &marked);
+    o.protected_header = Some(marked_json.clone());
+    cases.push(("protected header", o));
+    let mut o = with("A256KW", &marked);
+    o.shared_unprotected_header = Some(marked_json.clone());
+    cases.push(("shared header", o));
+    let mut o = with("A256KW", &marked);
+    o.compress = true;
+    cases.push(("compress", o));
+    cases.push(("key size", with("A128KW", &marked)));
+    cases.push(("key family", with("ECDH-ES", &marked)));
+    cases.push(("RSA1_5", with("RSA1_5", &marked)));
+    cases.push(("alg name", with(MARKER, &marked)));
+    cases.push((
+        "enc name",
+        encrypt_options(MARKER, vec![recipient("A256KW", &marked)]),
+    ));
+    let mut o = with("PBES2-HS256+A128KW", &marked);
+    o.recipients[0].p2c = Some(1_000_001);
+    cases.push(("p2c", o));
+    cases.push((
+        "two recipients",
+        encrypt_options(
+            "A256GCM",
+            vec![recipient("A256KW", &marked), recipient("dir", &marked)],
+        ),
+    ));
+    for (what, options) in &cases {
+        assert_no_marker(what, jwe_encrypt_compact(PLAINTEXT, options));
+        assert_no_marker(what, jwe_encrypt_json(PLAINTEXT, options, "flattened"));
+    }
+    // The compact-only refusal (RFC 7516 §7.1), and an unknown form holding the marker.
+    let mut o = with("A256KW", &marked);
+    o.aad = Some(SecretBytes::from(MARKER.as_bytes().to_vec()));
+    assert_no_marker("compact aad", jwe_encrypt_compact(PLAINTEXT, &o));
+    assert_no_marker(
+        "form",
+        jwe_encrypt_json(PLAINTEXT, &with("A256KW", &marked), MARKER),
+    );
+
+    // Decrypt: the key, the policy, the token, the header rules and the cryptography.
+    let gcmkw = jwe_encrypt_compact(PLAINTEXT, &with("A256GCMKW", OCT_256)).unwrap();
+    let allowed = policy(&["A256GCMKW"], &["A256GCM"]);
+    let marked_names = policy(&[MARKER], &[MARKER]);
+    let mut marked_crit = allowed.clone();
+    marked_crit.understood_crit = Some(list(&[MARKER]));
+    let marked_token = format!("{MARKER}.{MARKER}.{MARKER}.{MARKER}.{MARKER}");
+    let empty = policy(&[], &[]);
+    let ecdh = policy(&["ECDH-ES+A128KW"], &["A128GCM"]);
+    let compact: Vec<(&str, &str, &str, &JweDecryptOptions)> = vec![
+        ("empty allow-list", &gcmkw, &marked, &empty),
+        ("allow-list names", &gcmkw, &marked, &marked_names),
+        ("understood crit", &gcmkw, MARKER, &marked_crit),
+        ("token", &marked_token, &marked, &allowed),
+        ("token part", MARKER, &marked, &allowed),
+        ("wrong key", &gcmkw, &marked, &allowed),
+        ("key family", R5_4_JWE, &marked, &ecdh),
+    ];
+    let cross_mode = policy(&["A128GCMKW", "dir"], &["A128GCM"]);
+    for (what, token, key, options) in compact {
+        assert_no_marker(what, jwe_decrypt_compact(token, key, options));
+    }
+    for key in &marked_unparseable {
+        assert_no_marker(
+            "unparseable key",
+            jwe_decrypt_compact(&gcmkw, key, &allowed),
+        );
+        assert_no_marker("unparseable key", jwe_decrypt_json(A4_JWE, key, &allowed));
+    }
+    let marked_jwe = format!(r#"{{"protected":"{MARKER}","ciphertext":"{MARKER}"}}"#);
+    for (what, jwe, options) in [
+        ("empty allow-list", A4_JWE, &empty),
+        ("json", marked_json.as_str(), &allowed),
+        ("json members", marked_jwe.as_str(), &allowed),
+        ("unprotected dir", DIR_NO_PROTECTED, &cross_mode),
+    ] {
+        assert_no_marker(what, jwe_decrypt_json(jwe, &marked, options));
+    }
+}
