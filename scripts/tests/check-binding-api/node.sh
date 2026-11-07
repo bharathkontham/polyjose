@@ -4,9 +4,13 @@
 # equal the inventory, so one renamed export in either fails with exactly that difference; without
 # node, without the package or before (or after a stale) build the mode is SKIPPED, never passed.
 #
-# The cases use the real declarations of the built package (bindings/node/scripts/build.sh), copied
-# with the package sources into each case; a case changes the copy only (lib.sh). When the package
-# is not built here only the SKIPPED cases run, and a note says so.
+# Hermetic (0007 B02; pipeline rule 9): the cases never read the checkout's build output
+# (bindings/node/{binding.d.ts,index.d.ts,facade/}, git-ignored), so a fresh clone, a stale build
+# and a fresh build give the same result. Each case runs on a copy of the package's sources with
+# declarations in the build's layout derived from the copy's inventory and Error::CODES
+# (fixtures/node/declarations.py), so they grow with the API and cannot drift from it; a case
+# changes the copy only (lib.sh). That the real build has this layout is checked by
+# bindings/node/test.sh, which runs this mode on the package it has just built (0007 B01).
 #
 # Usage: scripts/tests/check-binding-api/node.sh (under /bin/bash 3.2 and bash 5).
 set -euo pipefail
@@ -15,23 +19,21 @@ export LC_ALL=C
 . "$(dirname "$0")/lib.sh"
 
 pkg=bindings/node
-generated="$pkg/binding.d.ts $pkg/facade/api.d.ts $pkg/facade/types.d.ts $pkg/facade/backend.d.ts $pkg/facade/normalize.d.ts $pkg/facade/error-codes.d.ts $pkg/index.d.ts"
-built=1
-for f in $generated; do [ -f "$repo/$f" ] || built=0; done
+fixtures=$repo/scripts/tests/check-binding-api/fixtures/node
+# The declarations the mode reads, in build order (build.sh: binding.d.ts, facade/, index.d.ts).
+generated="$pkg/binding.d.ts $pkg/facade/api.d.ts $pkg/facade/error-codes.d.ts $pkg/index.d.ts"
 
-# The package's sources, and its generated declarations when built, join the base copy.
+# The package's tracked sources join the base copy, then the fixture declarations.
 (cd "$repo" && tar -cf - $pkg/package.json $pkg/Cargo.toml $pkg/build.rs $pkg/src) | (cd "$base" && tar -xf -) \
   || lib_die "could not copy the bindings/node sources to $base"
-if [ "$built" -eq 1 ]; then
-  # shellcheck disable=SC2086 # $generated is a list of paths without spaces
-  (cd "$repo" && tar -cf - $generated) | (cd "$base" && tar -xf -) || lib_die "could not copy the declarations"
-fi
+core_codes >"$scratch/codes"
+python3 -I "$fixtures/declarations.py" "$base/bindings/api-inventory.txt" "$scratch/codes" "$base/$pkg" \
+  || lib_die "could not write the fixture declarations to $base/$pkg"
 
 # fresh: makes the case's generated files newer than their sources, in build order (a copy, and
 # an edit of one generated file, give files new modification times in no particular order).
 fresh() {
   local f
-  [ "$built" -eq 1 ] || return 0
   for f in $generated; do touch "$case_dir/$f"; done
 }
 
@@ -72,17 +74,11 @@ check_last_line "before the package is built the node mode is SKIPPED with the r
   'SKIPPED (node: bindings/node/binding.d.ts missing (not built: run bindings/node/scripts/build.sh))'
 check_absent "an unbuilt package is not reported as passing" 'PASS'
 
-if [ "$built" -eq 0 ]; then
-  echo "note: bindings/node is not built (bindings/node/scripts/build.sh); the cases that read its declarations did not run"
-  finish
-  exit
-fi
-
-# --- The real declarations pass ----------------------------------------------------------------------
+# --- The declarations pass ---------------------------------------------------------------------------
 
 # The counts are the inventory's operations, records and fields and the core's codes (lib.sh), so
 # the case does not change when the API grows (0013 B08).
-n_codes=$(core_codes | awk 'END { print NR }')
+n_codes=$(awk 'END { print NR }' "$scratch/codes")
 node_case pass
 run_check node
 check_last_line "the package's declarations match the inventory" 0 \
@@ -122,7 +118,7 @@ check_diffs "a renamed record field fails as missing and extra" \
   'extra in node (not in the inventory): field JwkSelector.keyUsage?'
 
 node_case required-to-optional
-edit $pkg/binding.d.ts '  signatureIndex: number' '  signatureIndex?: number'
+edit $pkg/binding.d.ts '  signatureIndex:' '  signatureIndex?:'
 fresh
 run_check node
 check_diffs "a required field made optional fails" \
@@ -179,8 +175,11 @@ check "index.d.ts must re-export the facade's records" 1 \
 
 # --- Codes -------------------------------------------------------------------------------------------
 
+# The first two codes swapped; the codes come from the core (lib.sh), not from this file.
+code1=$(sed -n 1p "$scratch/codes")
+code2=$(sed -n 2p "$scratch/codes")
 node_case code-order
-edit $pkg/facade/error-codes.d.ts '"InvalidBase64", "InvalidJson"' '"InvalidJson", "InvalidBase64"'
+edit $pkg/facade/error-codes.d.ts "\"$code1\", \"$code2\"" "\"$code2\", \"$code1\""
 fresh
 run_check node
 check "the shipped ERROR_CODES in another order fail" 1 \
