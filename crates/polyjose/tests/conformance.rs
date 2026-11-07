@@ -39,8 +39,9 @@
 //! - a success expectation lists exactly the outputs, so an optional one
 //!   (`key_index`) can't be left out unnoticed;
 //! - a vector whose optional top-level `features` names a cargo feature
-//!   this build does not enable is reported **SKIPPED**, with the feature
-//!   names; it is never counted as passing.
+//!   this build does not enable, or whose `features_absent` names one it
+//!   enables (ADR 0056), is reported **SKIPPED**, with the feature names;
+//!   it is never counted as passing.
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
@@ -74,7 +75,7 @@ const TOP_LEVEL: &[&str] = &["source", "description", "operation", "input", "exp
 
 /// The optional top-level members, after [`TOP_LEVEL`] in the schema's
 /// `properties`.
-const TOP_LEVEL_OPTIONAL: &[&str] = &["features"];
+const TOP_LEVEL_OPTIONAL: &[&str] = &["features", "features_absent"];
 
 /// The names a vector's top-level `features` may list, each with the cargo
 /// feature of `polyjose` it stands for. A vector needing one this build
@@ -887,6 +888,9 @@ struct Vector {
     expect: Expect,
     /// The cargo features it needs (top-level `features`), deduplicated.
     features: Vec<&'static str>,
+    /// The cargo features it must run without (top-level
+    /// `features_absent`, ADR 0056), deduplicated, none in `features`.
+    features_absent: Vec<&'static str>,
 }
 
 /// A schema violation: the JSON pointer and what is wrong there.
@@ -1175,7 +1179,21 @@ fn validate(value: &Value) -> Result<Vector, String> {
             return Err(violation(&format!("/{name}"), "required member is missing"));
         }
     }
-    let features = vector_features(root)?;
+    let features = vector_features(root, "features")?;
+    let features_absent = vector_features(root, "features_absent")?;
+    if root.contains("features_absent") && features_absent.is_empty() {
+        return Err(violation(
+            "/features_absent",
+            "must not be empty (minItems 1)",
+        ));
+    }
+    // ADR 0056 §3: a name can't be both needed and forbidden.
+    if let Some(both) = features.iter().find(|f| features_absent.contains(f)) {
+        return Err(violation(
+            "/features_absent",
+            format!("\"{both}\" is listed in `features` too"),
+        ));
+    }
     for name in ["source", "description"] {
         let text = root.get(name).and_then(Value::as_str);
         if !text.is_some_and(is_text) {
@@ -1238,7 +1256,7 @@ fn validate(value: &Value) -> Result<Vector, String> {
         }
     };
     if operation == "jwe.encrypt" && spec(operation).is_some() {
-        check_jwe_encrypt_features(input, &features)?;
+        check_jwe_encrypt_features(input, &features, &features_absent)?;
     }
     if operation == "jwt.issue" {
         check_jwt_issue(input, &expect)?;
@@ -1248,18 +1266,19 @@ fn validate(value: &Value) -> Result<Vector, String> {
         input: input.clone(),
         expect,
         features,
+        features_absent,
     })
 }
 
-/// The top-level `features`: an array of [`FEATURES`] names, each at most
-/// once (schema: `uniqueItems`).
-fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
-    let Some(value) = root.get("features") else {
+/// The top-level `features` or `features_absent` (`member`): an array of
+/// [`FEATURES`] names, each at most once (schema: `uniqueItems`).
+fn vector_features(root: &Object, member: &str) -> Result<Vec<&'static str>, String> {
+    let Some(value) = root.get(member) else {
         return Ok(Vec::new());
     };
     let items = value
         .as_array()
-        .ok_or_else(|| violation("/features", "must be an array"))?;
+        .ok_or_else(|| violation(&format!("/{member}"), "must be an array"))?;
     let mut features = Vec::with_capacity(items.len());
     for (i, item) in items.iter().enumerate() {
         let feature = item
@@ -1267,13 +1286,13 @@ fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
             .and_then(|s| FEATURES.iter().map(|(name, _)| name).find(|f| **f == s))
             .ok_or_else(|| {
                 violation(
-                    &format!("/features/{i}"),
+                    &format!("/{member}/{i}"),
                     format!("must be one of {:?}", feature_names()),
                 )
             })?;
         if features.contains(feature) {
             return Err(violation(
-                &format!("/features/{i}"),
+                &format!("/{member}/{i}"),
                 "listed twice (uniqueItems)",
             ));
         }
@@ -1287,19 +1306,29 @@ fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
 /// `rng_b64u` and `protected_b64u` need `fixed-rng` (cargo feature
 /// `insecure-test-vectors`)
 /// (`Encryptor::encrypt_reproducible`, ADR 0041 §3), `compress` needs
-/// `deflate` (ADR 0017).
-fn check_jwe_encrypt_features(input: &Object, features: &[&str]) -> Result<(), String> {
-    for (member, feature) in [
-        ("rng_b64u", "fixed-rng"),
-        ("protected_b64u", "fixed-rng"),
-        ("compress", "deflate"),
-    ] {
+/// `deflate` (ADR 0017) listed in `features`, or in `features_absent` to
+/// pin `UnsupportedAlgorithm` without it (ADR 0056 §4, ADR 0030 §4).
+fn check_jwe_encrypt_features(
+    input: &Object,
+    features: &[&str],
+    features_absent: &[&str],
+) -> Result<(), String> {
+    for (member, feature) in [("rng_b64u", "fixed-rng"), ("protected_b64u", "fixed-rng")] {
         if input.contains(member) && !features.contains(&feature) {
             return Err(violation(
                 "/features",
                 format!("`input/{member}` needs \"{feature}\" listed in `features`"),
             ));
         }
+    }
+    if input.contains("compress")
+        && !features.contains(&"deflate")
+        && !features_absent.contains(&"deflate")
+    {
+        return Err(violation(
+            "/features",
+            "`input/compress` needs \"deflate\" listed in `features` or `features_absent`",
+        ));
     }
     Ok(())
 }
@@ -1704,17 +1733,12 @@ fn jwe_encrypt_reproducible(
     )
 }
 
-/// `Encryptor::compress` (RFC 7516 §4.1.3, feature `deflate`).
-#[cfg(feature = "deflate")]
+/// `Encryptor::compress` (RFC 7516 §4.1.3). It exists in every build:
+/// without `deflate` the encryption then fails with `UnsupportedAlgorithm`
+/// (ADR 0017 §5, ADR 0030 §4), which a `features_absent: ["deflate"]`
+/// vector pins (ADR 0056).
 fn jwe_compress(encryptor: Encryptor) -> Encryptor {
     encryptor.compress()
-}
-
-/// Never reached: such a vector declares `deflate` and is SKIPPED in this
-/// build.
-#[cfg(not(feature = "deflate"))]
-fn jwe_compress(_encryptor: Encryptor) -> Encryptor {
-    unreachable!("a vector with compress is skipped without deflate")
 }
 
 /// The recipients of a `jwe.encrypt` vector, in order: for each, import
@@ -2548,9 +2572,27 @@ enum Passed {
         /// Whether it expects a failure (`"ok": false`).
         negative: bool,
     },
-    /// It needs these features, which this build does not enable; it was
-    /// validated but not run, and never counts as passing.
-    Skipped { features: Vec<&'static str> },
+    /// It needs `missing`, which this build does not enable, or must run
+    /// without `present`, which it enables (ADR 0056); it was validated but
+    /// not run, and never counts as passing.
+    Skipped {
+        missing: Vec<&'static str>,
+        present: Vec<&'static str>,
+    },
+}
+
+impl Passed {
+    /// A skip's results-file `reason` (ADR 0034 §3, ADR 0056 §2):
+    /// `feature:`, the missing names in `features` order, then each
+    /// enabled `features_absent` name as `!<name>` in its order.
+    fn skip_reason(missing: &[&str], present: &[&str]) -> String {
+        let names: Vec<String> = missing
+            .iter()
+            .map(|f| (*f).to_owned())
+            .chain(present.iter().map(|f| format!("!{f}")))
+            .collect();
+        format!("feature:{}", names.join(","))
+    }
 }
 
 /// Parses a vector file. Vector files are trusted test data, so they get a
@@ -2615,8 +2657,14 @@ fn check_vector_traced(
         .copied()
         .filter(|f| !enabled.contains(f))
         .collect();
-    if !missing.is_empty() {
-        return Ok(Passed::Skipped { features: missing });
+    let present: Vec<&'static str> = vector
+        .features_absent
+        .iter()
+        .copied()
+        .filter(|f| enabled.contains(f))
+        .collect();
+    if !missing.is_empty() || !present.is_empty() {
+        return Ok(Passed::Skipped { missing, present });
     }
     let outcome = catch_unwind(AssertUnwindSafe(|| execute(&vector)))
         .map_err(|_| fail("panicked while running".to_owned()))?
@@ -2690,8 +2738,8 @@ fn result_entry(id: String, trace: Trace, result: &Result<Passed, String>) -> Ob
     }
     match result {
         Ok(Passed::Ran { .. }) => {}
-        Ok(Passed::Skipped { features }) => {
-            entry.insert("reason", format!("feature:{}", features.join(",")));
+        Ok(Passed::Skipped { missing, present }) => {
+            entry.insert("reason", Passed::skip_reason(missing, present));
         }
         Err(message) => {
             entry.insert("reason", message.as_str());
@@ -2768,14 +2816,25 @@ fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
                 }
                 *report.passed.entry(operation).or_default() += 1;
             }
-            Ok(Passed::Skipped { features }) => report.skipped.push(format!(
-                "{name}: SKIPPED (needs feature {})",
-                features
-                    .iter()
-                    .map(|f| format!("`{}`", cargo_feature(f)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
+            Ok(Passed::Skipped { missing, present }) => {
+                let cargo = |names: &[&str]| {
+                    names
+                        .iter()
+                        .map(|f| format!("`{}`", cargo_feature(f)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let mut why = Vec::new();
+                if !missing.is_empty() {
+                    why.push(format!("needs feature {}", cargo(&missing)));
+                }
+                if !present.is_empty() {
+                    why.push(format!("needs feature {} off", cargo(&present)));
+                }
+                report
+                    .skipped
+                    .push(format!("{name}: SKIPPED ({})", why.join("; ")));
+            }
             Err(msg) => report.failures.push(msg),
         }
     }
@@ -3163,8 +3222,18 @@ fn schema_and_runner_agree() {
     expected.insert("items", features);
     assert_eq!(
         annotated(at(&schema, &["properties", "features"])),
-        Value::from(expected),
+        Value::from(expected.clone()),
         "features"
+    );
+    // ADR 0056: the same names, at least one.
+    let mut absent = parse(r#"{"type":"array","minItems":1,"uniqueItems":true}"#)
+        .into_object()
+        .unwrap();
+    absent.insert("items", expected.get("items").unwrap().clone());
+    assert_eq!(
+        annotated(at(&schema, &["properties", "features_absent"])),
+        Value::from(absent),
+        "features_absent"
     );
     for name in ["source", "description"] {
         let property = annotated(at(&schema, &["properties", name]));
@@ -3755,6 +3824,7 @@ fn reserved_but_unimplemented_operations_fail() {
         input: Object::new(),
         expect: Expect::Ok(Object::new()),
         features: Vec::new(),
+        features_absent: Vec::new(),
     };
     let problem = execute(&reserved).unwrap_err();
     assert!(problem.contains("not implemented"), "{problem}");
@@ -5533,13 +5603,14 @@ fn vectors_needing_a_disabled_feature_are_skipped_by_name() {
     );
     // Its expectation is wrong, but with the features off it does not run.
     match check_vector_with("needs.json", needs.as_bytes(), &[]) {
-        Ok(Passed::Skipped { features }) => {
-            assert_eq!(features, ["deflate", "fixed-rng"])
+        Ok(Passed::Skipped { missing, present }) => {
+            assert_eq!(missing, ["deflate", "fixed-rng"]);
+            assert!(present.is_empty());
         }
         other => panic!("expected SKIPPED, got {other:?}"),
     }
     match check_vector_with("needs.json", needs.as_bytes(), &["fixed-rng"]) {
-        Ok(Passed::Skipped { features }) => assert_eq!(features, ["deflate"]),
+        Ok(Passed::Skipped { missing, .. }) => assert_eq!(missing, ["deflate"]),
         other => panic!("expected SKIPPED, got {other:?}"),
     }
     // With the features on, it runs, and fails.
@@ -5572,6 +5643,172 @@ fn vectors_needing_a_disabled_feature_are_skipped_by_name() {
         usize::from(cfg!(feature = "deflate"))
             + usize::from(cfg!(feature = "insecure-test-vectors"))
     );
+}
+
+/// `features_absent` (ADR 0056): a vector that must run without a feature
+/// the build enables is SKIPPED with `feature:!<name>`, after the missing
+/// `features` names; it is never counted as passing, and it is still
+/// validated.
+#[test]
+fn vectors_forbidding_an_enabled_feature_are_skipped_by_name() {
+    let forbids = |absent: &str| {
+        vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+        )
+        .replacen(
+            r#""operation""#,
+            &format!(r#""features_absent":{absent},"operation""#),
+            1,
+        )
+    };
+    let both = forbids(r#"["deflate","fixed-rng"]"#);
+    // Its expectation is wrong, but with the features on it does not run.
+    match check_vector_with("forbids.json", both.as_bytes(), &feature_names()) {
+        Ok(Passed::Skipped { missing, present }) => {
+            assert!(missing.is_empty());
+            assert_eq!(present, ["deflate", "fixed-rng"]);
+        }
+        other => panic!("expected SKIPPED, got {other:?}"),
+    }
+    match check_vector_with("forbids.json", both.as_bytes(), &["fixed-rng"]) {
+        Ok(Passed::Skipped { present, .. }) => assert_eq!(present, ["fixed-rng"]),
+        other => panic!("expected SKIPPED, got {other:?}"),
+    }
+    // With the features off, it runs, and fails.
+    assert!(check_vector_with("forbids.json", both.as_bytes(), &[]).is_err());
+    // A schema-invalid vector fails even when it would be skipped.
+    let invalid = both.replace(r#""allowed_enc""#, r#""allowed_encs""#);
+    assert!(check_vector_with("invalid.json", invalid.as_bytes(), &feature_names()).is_err());
+
+    // Needed and forbidden at once: the missing names first (ADR 0056 §2).
+    let mixed = with_features(&forbids(r#"["deflate"]"#), r#"["fixed-rng"]"#);
+    let dir = TempDir::new("skip-absent");
+    dir.write("a/forbids.json", &forbids(r#"["deflate","fixed-rng"]"#));
+    dir.write("a/mixed.json", &mixed);
+    dir.write(
+        "a/runs.json",
+        &vector(
+            "b64url.encode",
+            r#"{"bytes_hex":"66"}"#,
+            r#"{"ok":true,"b64u":"Zg"}"#,
+        ),
+    );
+    let report = run_dir_with(&dir.0, &["deflate"]);
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(report.passed.values().sum::<usize>(), 1, "{report:?}");
+    assert_eq!(
+        report.skipped,
+        [
+            "a/forbids.json: SKIPPED (needs feature `deflate` off)",
+            "a/mixed.json: SKIPPED (needs feature `insecure-test-vectors`; needs feature `deflate` off)",
+        ]
+    );
+    let reasons: Vec<Option<&str>> = report
+        .results
+        .iter()
+        .map(|entry| entry.get("reason").and_then(Value::as_str))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            Some("feature:!deflate"),
+            Some("feature:fixed-rng,!deflate"),
+            None
+        ]
+    );
+    for entry in &report.results[..2] {
+        assert_eq!(entry.get("status").and_then(Value::as_str), Some("skipped"));
+        assert!(entry.get("actual").is_none(), "{entry:?}");
+    }
+}
+
+/// The schema rules of `features_absent` (ADR 0056 §1, §3, §4): known
+/// names, each once, at least one, none also in `features`; and a
+/// `compress` vector may list `deflate` in either.
+#[test]
+fn features_absent_is_strict() {
+    let input = jwe_decrypt_input(JWE_A3, JWE_A3_KEY, "");
+    let ok = &format!(r#"{{"ok":true,"plaintext_b64u":"{JWE_A3_PLAINTEXT_B64U}","recipient":0}}"#);
+    let absent = |vector: &str, list: &str| {
+        vector.replacen(
+            r#""operation""#,
+            &format!(r#""features_absent":{list},"operation""#),
+            1,
+        )
+    };
+    let decrypt = vector("jwe.decrypt", &input, ok);
+    for (what, json, needle) in [
+        (
+            "an unknown name",
+            absent(&decrypt, r#"["sha1"]"#),
+            "/features_absent/0: must be one of",
+        ),
+        (
+            "a name listed twice",
+            absent(&decrypt, r#"["deflate","deflate"]"#),
+            "/features_absent/1: listed twice",
+        ),
+        (
+            "an empty list",
+            absent(&decrypt, "[]"),
+            "/features_absent: must not be empty",
+        ),
+        (
+            "not an array",
+            absent(&decrypt, r#""deflate""#),
+            "/features_absent: must be an array",
+        ),
+        (
+            "a name in both lists",
+            absent(&with_features(&decrypt, r#"["deflate"]"#), r#"["deflate"]"#),
+            "/features_absent: \"deflate\" is listed in `features` too",
+        ),
+        (
+            "a misspelled member",
+            decrypt.replacen(
+                r#""operation""#,
+                r#""feature_absent":["deflate"],"operation""#,
+                1,
+            ),
+            "/feature_absent: unknown member",
+        ),
+        (
+            "compress with only fixed-rng absent",
+            absent(
+                &vector(
+                    "jwe.encrypt",
+                    &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","compress":true"#),
+                    r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+                ),
+                r#"["fixed-rng"]"#,
+            ),
+            "needs \"deflate\" listed in `features` or `features_absent`",
+        ),
+    ] {
+        fails_naming_source(&format!("schema ({what}).json"), &json, needle);
+    }
+    // `compress` with `deflate` absent: UnsupportedAlgorithm without the
+    // codec (ADR 0017 §5, ADR 0030 §4), skipped where it is built in.
+    let compress = absent(
+        &vector(
+            "jwe.encrypt",
+            &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","compress":true"#),
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+        ),
+        r#"["deflate"]"#,
+    );
+    match check_vector("compress.json", compress.as_bytes()) {
+        Ok(Passed::Skipped { present, .. }) => {
+            assert!(cfg!(feature = "deflate"));
+            assert_eq!(present, ["deflate"]);
+        }
+        Ok(Passed::Ran { negative, .. }) => {
+            assert!(!cfg!(feature = "deflate") && negative);
+        }
+        Err(e) => panic!("{e}"),
+    }
 }
 
 /// Every JWE vector is binding-ready (see [`binding_ready`]): the bindings
@@ -6696,7 +6933,7 @@ const RESULT_ID_PATTERN: &str = "^[^#/\\\\][^#\\\\]*\\.json#0$";
 
 /// `$defs/skipped/properties/reason/pattern`: `feature:` and the missing
 /// feature names, comma-separated (ADR 0034 §3).
-const SKIP_REASON_PATTERN: &str = "^feature:[a-z0-9-]+(,[a-z0-9-]+)*$";
+const SKIP_REASON_PATTERN: &str = "^feature:!?[a-z0-9-]+(,!?[a-z0-9-]+)*$";
 
 /// [`RESULT_ID_PATTERN`], by hand (no regex crate, ADR 0016).
 fn is_result_id(s: &str) -> bool {
@@ -6714,10 +6951,12 @@ fn is_result_id(s: &str) -> bool {
             .is_some_and(|stem| !stem.is_empty())
 }
 
-/// [`SKIP_REASON_PATTERN`], by hand.
+/// [`SKIP_REASON_PATTERN`], by hand: each name may carry a `!` (a
+/// `features_absent` name the build enables, ADR 0056 §2).
 fn is_skip_reason(s: &str) -> bool {
     s.strip_prefix("feature:").is_some_and(|names| {
         names.split(',').all(|name| {
+            let name = name.strip_prefix('!').unwrap_or(name);
             !name.is_empty()
                 && name
                     .bytes()
@@ -6942,6 +7181,12 @@ fn results_schema_uses_only_supported_keywords() {
     for (reason, ok) in [
         ("feature:deflate", true),
         ("feature:deflate,fixed-rng", true),
+        ("feature:!deflate", true),
+        ("feature:fixed-rng,!deflate", true),
+        ("feature:!deflate,!fixed-rng", true),
+        ("feature:!", false),
+        ("feature:!!deflate", false),
+        ("feature:deflate!", false),
         ("feature:", false),
         ("feature:deflate,", false),
         ("feature:Deflate", false),
