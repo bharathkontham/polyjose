@@ -10,7 +10,8 @@
 #   1. comments (`//`, `/* */`, nested) and string literals are blanked, keeping the line breaks;
 #   2. the declarations are read by brace depth, each line in pieces that end after a `{`, `}` or
 #      `;`, so declarations sharing a line with an extension, a brace or each other count too,
-#      and without leading attributes (`@available(iOS 16, *) public func f()` is `public func f()`)
+#      and without leading attributes (`@available(iOS 16, *) public func f()` is `public func f()`,
+#      also when the arguments span lines and the declaration follows the closing `)`)
 #      or modifiers before the access keyword (`@MainActor final public class Y` is `public class Y`);
 #      `open` (public, and also subclassable or overridable outside the module) counts as `public`:
 #      - an operation is a `public func <name>(` at depth 0;
@@ -82,7 +83,10 @@ function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function count(s, ch,    k, m) { m = 0; for (k = 1; k <= length(s); k++) if (substr(s, k, 1) == ch) m++; return m }
 # A declaration without its leading attributes (`@discardableResult`, `@available(iOS 16, *)`, any
 # number, each with an optional parenthesized argument clause), so `@inlinable public func f()` is
-# read as `public func f()`. String literals are already blank, so their parentheses do not count.
+# read as `public func f()`. String literals and comments are already blank, so their parentheses
+# do not count. An argument clause still open at the end of the piece (`@available(iOS 16,`) is
+# left open in attr_open, its depth, and the pieces after it are read by attr_close. One still open
+# at the end of its file fails the mode, so a parse gone wrong cannot hide the rest of the file.
 function noattrs(s,    i, d, c) {
   while (match(s, /^@[A-Za-z_][A-Za-z0-9_]*/)) {
     s = substr(s, RLENGTH + 1)
@@ -93,11 +97,23 @@ function noattrs(s,    i, d, c) {
         if (c == "(") d++
         else if (c == ")" && --d == 0) break
       }
+      if (d > 0) { attr_open = d; attr_at = where(); return "" }
       s = substr(s, i + 1)
     }
     s = trim(s)
   }
   return s
+}
+# The rest of a piece after the `)` that closes an attribute's argument clause left open by an
+# earlier piece or line (attr_open), or "" while it is still open. The rest is then read as the
+# start of a declaration: `@available(iOS 16,` then `*) public func f() {}` is `public func f()`.
+function attr_close(s,    i, c) {
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c == "(") attr_open++
+    else if (c == ")" && --attr_open == 0) return trim(substr(s, i + 1))
+  }
+  return ""
 }
 # A declaration from its access keyword on, when declaration modifiers (any number, each with an
 # optional argument such as `nonisolated(unsafe)`, mixed with attributes) come before `public` or
@@ -141,6 +157,7 @@ function piece(line) {
     depth += count(line, "{") - count(line, "}")
     return
   }
+  if (attr_open > 0) text = attr_close(text)
   text = lead(text)
   if (depth == 0 && (text == "public" || text == "open")) { pending = text; return }
   decl = text
@@ -189,7 +206,8 @@ function piece(line) {
   depth += count(line, "{") - count(line, "}")
   if (depth < 0) { print "error " where() ": unbalanced braces"; depth = 0 }
 }
-FNR == 1 { depth = 0; pending = ""; collecting = 0 }
+function attr_unclosed() { if (attr_open > 0) print "error " attr_at ": attribute argument list never closed" }
+FNR == 1 { attr_unclosed(); depth = 0; pending = ""; collecting = 0; attr_open = 0 }
 # Each line is read in pieces that end after a `{`, `}` or `;`, so a declaration that shares its
 # line with a brace or another declaration (`extension T { public func f() {} }`, `} public func
 # g() {}`, `public func a() {}; public func b() {}`) is read at its own depth like one on a line of
@@ -204,6 +222,7 @@ FNR == 1 { depth = 0; pending = ""; collecting = 0 }
   } while (rest_of_line != "")
 }
 END {
+  attr_unclosed()
   if (!seen_error) print "error no public enum " error_type " (ADR 0030 §5)"
   else if (!has_code) print "error " error_type " has no public func code() -> String (ADR 0030 §5)"
   for (r in records) if (inits[r] != 1) print "error record " r " has " (inits[r] + 0) " public init(...), not 1"
