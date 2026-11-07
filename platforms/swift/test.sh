@@ -3,6 +3,11 @@
 # swift` (feature 0013 T04's dispatcher) or directly, from any directory.
 #
 # Steps, each failing the suite on error:
+#   0. platforms/swift/scripts/tests/ci-workflow.sh: the Swift (iOS) workflow,
+#      .github/workflows/binding-apple.yml, has only its two triggers and the mode input, reads the
+#      repository only, pins its actions and calls scripts that exist, and actionlint accepts it,
+#      with the script's self-test (feature 0009 T05; the workflow is never run on PRs, ADR 0044).
+#      Needs actionlint;
 #   1. (re)builds platforms/swift/build/PolyjoseFFI.xcframework with
 #      platforms/swift/scripts/build-xcframework.sh when it is missing or stale, and prints why:
 #      its polyjose-build.txt records the commit it was built from, and it is stale when that
@@ -44,6 +49,9 @@ for tool in swift xcodebuild cargo; do
     exit 0
   fi
 done
+
+echo "==> $me: scripts/tests/ci-workflow.sh"
+"$swift_dir/scripts/tests/ci-workflow.sh"
 
 xcframework="$swift_dir/build/PolyjoseFFI.xcframework"
 echo "==> $me: test-xcframework-stale.sh"
