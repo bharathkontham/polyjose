@@ -79,6 +79,13 @@ Imports `jwk` and computes its JWK Thumbprint (RFC 7638 §3) and JWK Thumbprint 
 
 `thumbprint_uri` always carries the IANA Hash Name String (`sha-256`, `sha-384` or `sha-512`, RFC 9278 §4), whatever spelling `hash` uses. The SHA-384, SHA-512 and hash-name vectors (`jwk-thumbprint/sha384-*`, `sha512-*`, `hash-*`) come from [`tools/jwk-oracle/thumbprints.mjs`](tools/jwk-oracle/README.md).
 
+**Error order (ADR 0057 §2).** A runner imports `jwk` first and parses `hash` second, so the outcome is:
+
+1. the JWK import error (`InvalidJson`, `InvalidKey`, `InvalidBase64`, `UnsupportedAlgorithm` for an RSA private JWK, and so on)
+2. then `UnsupportedAlgorithm` for a `hash` name that isn't accepted
+
+`jwk-thumbprint/hash-reject-invalid-key-p256-off-curve.json` has both an invalid key and an invalid name, and expects the import error. This matches the `jwks.select` step order below (ADR 0054 §4: import, then the selector).
+
 ## `jwks.select`
 
 Selects exactly one key from a JWK Set (RFC 7517 §5) with a selector, under ADR 0054 §1–§4. It is the binding operation `jwks_select(jwks, JwkSelector { kid?, alg?, key_use? }) -> jwk` of ADR 0030 §4, as amended by ADR 0054 §9.
