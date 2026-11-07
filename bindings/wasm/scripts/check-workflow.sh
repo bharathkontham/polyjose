@@ -108,7 +108,8 @@ text_rules() {
       }
 
       # --- content rules, on every non-comment line -------------------------------------------------
-      if (line ~ /(^|[^[:alnum:]_-])(write-all|read-all)([^[:alnum:]_-]|$)/ || line ~ /:[[:space:]]*write$/)
+      # `<scope>: write`, quoted or not, as a block entry or inside a flow mapping.
+      if (line ~ /(^|[^[:alnum:]_-])(write-all|read-all)([^[:alnum:]_-]|$)/ || line ~ /:[[:space:]]*["'"'"']?write["'"'"']?[[:space:]]*([,}]|$)/)
         fail("permissions", "write or blanket permission: " line)
       if (lower ~ /secrets|token/)
         fail("secrets", "secrets and tokens are not allowed: " raw)
@@ -254,6 +255,8 @@ self_test() {
   expect_fail top-extra permissions $'permissions:\n  contents: read\n' $'permissions:\n  contents: read\n  packages: read\n'
   expect_fail job-write permissions "$run_marker" $'    permissions:\n      contents: write\n    steps:\n'
   expect_fail write-all permissions "$run_marker" $'    permissions: write-all\n    steps:\n'
+  expect_fail job-write-quoted permissions "$run_marker" $'    permissions:\n      packages: "write"\n    steps:\n'
+  expect_fail job-write-flow permissions "$run_marker" $'    permissions: { contents: read, pull-requests: write }\n    steps:\n'
   expect_fail unpinned pin "uses: $pin_line" "uses: ${pin_line%%@*}@v7"
   expect_fail sha-without-tag pin "uses: $pin_line" "uses: ${pin_line%% #*}"
 
