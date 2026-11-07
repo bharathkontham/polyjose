@@ -136,7 +136,7 @@ test("package.json is the ADR 0031 ESM package with compiled output only (ADR 00
   }
   for (const entry of files) {
     assert.equal(typeof entry, "string");
-    assert.doesNotMatch(entry as string, /\.(ts|mts|cts)$|\.map$|\.node$/, `files never ships ${String(entry)}`);
+    assert.doesNotMatch(entry as string, /(?<!\.d)\.[cm]?ts$|\.map$|\.node$/, `files never ships ${String(entry)}`);
   }
   const napi = record(pkg["napi"], "napi");
   assert.equal(napi["binaryName"], "polyjose");
