@@ -1078,6 +1078,7 @@ name = "polyjose-surface"
 version = "0.1.0"
 dependencies = [
  "polyjose",
+ "sha2",
  "zeroize",
 ]
 
