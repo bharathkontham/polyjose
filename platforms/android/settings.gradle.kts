@@ -4,6 +4,9 @@
 // Versions live in gradle/libs.versions.toml; the Gradle version in gradle/wrapper.
 
 pluginManagement {
+    // `polyjose.packaging` (notices, version, POM) shared by the two published modules; core
+    // Gradle plugins only (build-logic/settings.gradle.kts).
+    includeBuild("build-logic")
     repositories {
         // Google's repository serves only the Android and AndroidX groups; everything else comes
         // from Maven Central or the plugin portal, so no artifact can be shadowed from a second source.
@@ -37,3 +40,7 @@ dependencyResolutionManagement {
 rootProject.name = "polyjose-android"
 
 include(":polyjose", ":polyjose-jvm")
+
+// An app that minifies with R8 and runs polyjose calls on the emulator, proving that the AAR's
+// consumer-rules.pro keeps what JNA and UniFFI need (ADR 0033 §2). Never published.
+include(":sample-minified")

@@ -2,10 +2,21 @@
 // UniFFI-generated Kotlin (shared with `:polyjose-jvm`) plus libpolyjose_ffi.so for the four ABIs
 // from cargo-ndk. AGP 9 compiles Kotlin itself, so no Kotlin plugin is applied here.
 
+import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.SourcesJar
+import dev.polyjose.gradle.PackagingPlugin
+import dev.polyjose.gradle.ThirdPartyNotices
 import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.library)
+    // Group, workspace version, thirdPartyNotices and the POM (build-logic).
+    id("polyjose.packaging")
+    // vanniktech 0.37.0's base plugin (same artifact as the catalog's maven-publish alias, on the
+    // root classpath): nothing is configured from Gradle properties, so no property can switch
+    // on Central publishing (ADR 0011; Central is Gate 3).
+    id("com.vanniktech.maven.publish.base")
 }
 
 /** The polyjose repository root (the cargo workspace). */
@@ -73,6 +84,15 @@ abstract class SyncFromRootBuild @Inject constructor(private val fs: FileSystemO
     }
 }
 
+// META-INF/polyjose/THIRD-PARTY-NOTICES.txt inside the AAR's classes.jar (ADR 0020 §4, ADR 0033 §4;
+// a subfolder of META-INF, which AGP's packaging does not exclude). Generated for arm64-v8a; the
+// task fails if the crates of another ABI's library are not all listed in it. armeabi-v7a has one
+// crate fewer (no cpufeatures), so the file covers all four (feature 0008 T04).
+val thirdPartyNotices = tasks.named<ThirdPartyNotices>("thirdPartyNotices") {
+    primaryTarget = "aarch64-linux-android"
+    targets.addAll("armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android")
+}
+
 androidComponents {
     onVariants { variant ->
         val name = variant.name.replaceFirstChar { it.uppercase() }
@@ -86,6 +106,8 @@ androidComponents {
             source.from(files(sharedBuild.dir("jniLibs")).builtBy(":cargoNdkBuild"))
         }
         variant.sources.jniLibs?.addGeneratedSourceDirectory(jniLibs, SyncFromRootBuild::outputDir)
+        // Java resources end up in classes.jar.
+        variant.sources.resources?.addGeneratedSourceDirectory(thirdPartyNotices, ThirdPartyNotices::getOutputDir)
     }
 }
 
@@ -100,4 +122,29 @@ dependencies {
 
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.junit4)
+}
+
+// dev.polyjose:polyjose, the release AAR (ADR 0011, ADR 0033 §4), with a sources jar and an empty
+// javadoc jar (Central requires one; no Dokka, feature 0008 T04). Feature tasks publish only to
+// the build-local file repository: `./gradlew publishAllPublicationsToBuildLocalRepository`.
+mavenPublishing {
+    configure(AndroidSingleVariantLibrary(JavadocJar.Empty(), SourcesJar.Sources(), "release"))
+    coordinates(PackagingPlugin.GROUP, "polyjose", version.toString())
+    pom {
+        PackagingPlugin.pom(
+            this,
+            "polyjose",
+            "polyjose for Android: JOSE (JWS, JWE, JWK, JWT) in pure Rust, with Kotlin bindings.",
+        )
+    }
+    if (PackagingPlugin.signingKeyPresent(providers)) signAllPublications()
+}
+
+publishing {
+    repositories {
+        maven {
+            name = "buildLocal"
+            url = uri(isolated.rootProject.projectDirectory.dir("build/repo"))
+        }
+    }
 }
