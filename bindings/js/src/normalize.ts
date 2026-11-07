@@ -63,7 +63,7 @@ export function bytes(v: unknown, at: string, copies: Uint8Array[]): Uint8Array 
   } catch {
     throw fail(at, "a Uint8Array over an attached ArrayBuffer");
   }
-  copies.push(copy);
+  append(copies, copy);
   return copy;
 }
 
@@ -235,7 +235,7 @@ export function list<T>(v: unknown, at: string, item: (x: unknown, at: string) =
   const out: T[] = [];
   for (let i = 0; i < n; i++) {
     if (!Object.hasOwn(v, i)) throw fail(`${at}[${i}]`, "present: an array without holes");
-    out.push(item(v[i], `${at}[${i}]`));
+    append(out, item(v[i], `${at}[${i}]`));
   }
   return out;
 }
@@ -315,6 +315,18 @@ export function put<T extends object, K extends keyof T>(out: T, key: K, value: 
   if (value !== undefined) define(out, key, value);
 }
 
+/**
+ * Adds `value` at the end of `out` as an own data element ({@link define} at index `length`,
+ * which also grows `length`, ECMA-262 ArrayDefineOwnProperty). Never `push`: `push` assigns the
+ * next index (Array.prototype.push, Set(O, len, E, true)), so an accessor a pollution bug put on
+ * `Array.prototype[0]` or `Object.prototype[0]` would receive the element (a byte copy of a
+ * secret, a `JweRecipient` with its key) and leave a hole, and a non-writable one would make the
+ * call a TypeError (0013 F13).
+ */
+export function append<T>(out: T[], value: T): void {
+  define(out, out.length, value);
+}
+
 // --- outputs (what the backend returned) -------------------------------------------------
 
 function badResult(at: string, expected: string): TypeError {
@@ -345,7 +357,7 @@ export function outList<T>(v: unknown, at: string, item: (x: unknown, at: string
   if (!Array.isArray(v)) throw badResult(at, "an array");
   const n = v.length;
   const out: T[] = [];
-  for (let i = 0; i < n; i++) out.push(item(Object.hasOwn(v, i) ? v[i] : undefined, `${at}[${i}]`));
+  for (let i = 0; i < n; i++) append(out, item(Object.hasOwn(v, i) ? v[i] : undefined, `${at}[${i}]`));
   return out;
 }
 
