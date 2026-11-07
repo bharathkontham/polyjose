@@ -146,7 +146,7 @@ check_inventory() {
 # --- Modes -----------------------------------------------------------------------------------------
 
 skip() { printf '%s\n' "$*" >"$mode_scratch/skip-reason"; exit 77; }
-mode_fail() { echo "$me: $mode: $*"; exit 1; }
+mode_fail() { echo "$me: $mode: $*"; echo "$me: $mode: FAIL"; exit 1; }
 
 # kinds_filter <kinds>: keeps the lines whose kind is in the space-separated list.
 kinds_filter() { awk -v kinds="$1" 'BEGIN { n = split(kinds, k, " "); for (i = 1; i <= n; i++) want[k[i]] = 1 } ($1 in want)'; }
@@ -187,7 +187,7 @@ run_mode() {
     mode_derive "$mode_scratch/derived" || mode_fail "mode_derive failed"
     [ -f "$mode_scratch/derived" ] || mode_fail "mode_derive wrote nothing"
     if grep -q '^error ' "$mode_scratch/derived"; then
-      sed -n "s/^error /$me: $mode: /p" "$mode_scratch/derived"; exit 1
+      sed -n "s/^error /$me: $mode: /p" "$mode_scratch/derived"; echo "$me: $mode: FAIL"; exit 1
     fi
     bad=$(grep -Ev '^(op [a-z][A-Za-z0-9]*|record [A-Z][A-Za-z0-9]*|field [A-Z][A-Za-z0-9]*\.[a-z][A-Za-z0-9]*(\?|=false)?|code [A-Z][A-Za-z0-9]*)$' "$mode_scratch/derived")
     [ -z "$bad" ] || mode_fail "derived lines not in the normal form: $bad"
