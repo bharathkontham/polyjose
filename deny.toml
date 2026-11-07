@@ -8,7 +8,16 @@ deny = [
   { name = "boring" }, { name = "boring-sys" },
   { name = "libsodium-sys" },
   # C/C++ build tooling: a pure-Rust tree never compiles native code (ADR 0002).
-  { name = "cc" }, { name = "cmake" },
+  #
+  # `cc` has one exception, approved by the owner for feature 0006 T02 (pipeline Gate 2): its only
+  # allowed direct dependent is `minicov`. wasm-bindgen-test 0.3.80 (a dev-dependency of
+  # bindings/wasm) lists minicov, whose build script uses cc, only under
+  # cfg(all(target_arch = "wasm32", wasm_bindgen_unstable_test_coverage)), a cfg nothing in this
+  # repository sets, so neither crate is ever compiled. cargo-deny checks every target, so it still
+  # sees them. `wrappers` (cargo-deny 0.20 src/bans.rs) allows a banned crate only when *every*
+  # crate depending on it directly is listed: cc through any other crate, or through minicov plus
+  # another crate, stays banned. scripts/tests/deny/cc-wrapper.sh proves that on a planted copy.
+  { name = "cc", wrappers = ["minicov"] }, { name = "cmake" },
 ]
 
 [sources]
