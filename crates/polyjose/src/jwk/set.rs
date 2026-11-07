@@ -334,6 +334,9 @@ impl JwkSet {
     ///   scan stops at the second match. RFC 7517 §5.1 gives the order of
     ///   a set no meaning, so polyjose does not guess: narrow the selector
     ///   (a `kid`, RFC 7517 §4.5), or try each of [`JwkSet::matching`].
+    ///   For a set of `oct` keys, pin a JWK `alg` on each key so that one
+    ///   key serves one algorithm (ADR 0050 §3, ADR 0057 §3; see
+    ///   [`JwkSelector`]).
     ///
     /// Neither error says which members were looked at.
     ///
@@ -355,7 +358,17 @@ impl JwkSet {
     ///   allow-list.
     /// - **A `kid` is only compared for equality**, exact and
     ///   case-sensitive, never used as a path, URL or query (RFC 8725
-    ///   §3.10). A `kid` from an untrusted header is safe to select by.
+    ///   §3.10). A `kid` from an untrusted header is safe to compare;
+    ///   pair it with `alg`. A `kid` alone may match keys of several
+    ///   families, and two members may share a `kid` (RFC 7517 §4.5), so
+    ///   it can give [`Error::MultipleMatchingKeys`] and it binds no key
+    ///   to an algorithm (RFC 8725 §3.1):
+    ///   - **JWS and JWT:** verify with [`jwt::verify`](crate::jwt::verify)
+    ///     and [`Keys::Set`](crate::jwt::Keys::Set), or try each of
+    ///     [`JwkSet::verification_candidates`], which select by the
+    ///     header `alg` (after the allow-list) and `kid` together.
+    ///   - **JWE:** select with the `kid` and the header `alg`, once that
+    ///     `alg` is on the decrypt allow-list.
     /// - **The outcome reveals the set's structure** when the selector
     ///   comes from an untrusted token (ADR 0054 §4):
     ///   [`Error::NoMatchingKey`] says no member matches its `kid` (or
@@ -749,6 +762,16 @@ impl<'a> Criteria<'a> {
 /// polyjose verify and decrypt does (ADR 0054 §7, RFC 8725 §3.1). A `kid`
 /// is only ever compared for equality (RFC 8725 §3.10). No criterion is
 /// secret, so `Debug` prints them all.
+///
+/// **Pin `alg` on every `oct` key** (ADR 0050 §3, ADR 0057 §3). An `oct`
+/// member without a JWK `alg` matches every symmetric selector `alg`
+/// (`HS*`, A\*KW, A\*GCMKW, `dir`, PBES2), as RFC 7517 §4.4 allows, and
+/// selection checks no key size (ADR 0054 §2, "Not part of selection").
+/// So the 64-octet HMAC key of the RFC 7517 A.3 set matches `alg: A128KW`
+/// beside the A128KW key, and selecting A128KW from that set gives
+/// [`Error::MultipleMatchingKeys`]. A JWK `alg` on each `oct` key, or a
+/// `kid`, makes the choice exact and keeps one key to one algorithm
+/// (RFC 8725 §3.1).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct JwkSelector {
