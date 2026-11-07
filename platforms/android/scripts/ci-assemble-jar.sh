@@ -14,8 +14,8 @@
 # 1. Each folder must be a JNA prefix of the jar holding exactly that platform's library (file(1)).
 #    The prefixes this host builds itself (on macOS both darwin ones, ADR 0033 §4; elsewhere the
 #    host's) are rebuilt by Gradle and not passed in, since the jar build rejects a platform it
-#    gets twice; the script prints both SHA-256s. Every other prefix is passed to the jar build
-#    with -Ppolyjose.jvmNativesDir (T04's hook in polyjose-jvm/build.gradle.kts).
+#    gets twice; step 3 compares the rebuilt library with the CI one. Every other prefix is passed
+#    to the jar build with -Ppolyjose.jvmNativesDir (T04's hook in polyjose-jvm/build.gradle.kts).
 # 2. `./gradlew --no-daemon :polyjose:assembleRelease :polyjose-jvm:jar
 #    :sample-minified:assembleRelease publishAllPublicationsToBuildLocalRepository`, then
 #    `scripts/check-artifacts.sh --no-build` (AAR contents, 16 KB alignment, size, notices, the
@@ -25,8 +25,10 @@
 #    not list. That is so for the five-platform jar today (feature 0008 T05 log: linux adds
 #    linux-raw-sys, windows adds windows-link and windows-sys), and this script does not work
 #    around it.
-# 3. The jar must carry each passed-in library byte for byte (so it ships what CI tested), and
-#    with --require-all all five platforms, with no Polyjose-Native-Platforms-Missing attribute.
+# 3. The jar must carry what CI tested, byte for byte: each passed-in library, and each library
+#    this host rebuilt for a prefix CI also built (printing both SHA-256s; a mismatch fails, as
+#    the jar would ship a library the host-natives tests never loaded). With --require-all, all
+#    five platforms and no Polyjose-Native-Platforms-Missing attribute.
 # 4. Outputs, one folder per artifact (ADR 0037 §1): <out>/android-aar/polyjose-<v>.aar,
 #    <out>/jvm-jar/polyjose-jvm-<v>.jar, <out>/maven-repo/ (a copy of build/repo).
 #
@@ -59,6 +61,7 @@ stage=$ci_android/build/ci-jvm-natives
 rm -rf "$stage" "$ci_out/android-aar" "$ci_out/jvm-jar" "$ci_out/maven-repo"
 mkdir -p "$stage" || fail "cannot create $stage"
 passed=""
+rebuilt=""
 found=0
 for d in "$natives"/*; do
   [ -e "$d" ] || continue
@@ -76,7 +79,8 @@ for d in "$natives"/*; do
   found=$((found + 1))
   case " $built_here " in
     *" $prefix "*)
-      echo "ci-assemble-jar: $prefix: built on this host by the jar build (CI library sha256 $(ci_sha256 "$d/$lib"))" ;;
+      rebuilt="$rebuilt $prefix"
+      echo "ci-assemble-jar: $prefix: built on this host by the jar build (CI library sha256 $(ci_sha256 "$d/$lib")), compared after the build" ;;
     *)
       ci_copy "$d/$lib" "$stage/$prefix" || fail "cannot stage $name"
       passed="$passed $prefix"
@@ -107,6 +111,15 @@ for prefix in $passed; do
   lib=$(ci_library_of "$prefix")
   cmp -s "$stage/$prefix/$lib" "$work/$prefix/$lib" || fail "the jar's $prefix/$lib is not the CI library"
   echo "ci-assemble-jar: jar: $prefix/$lib is the CI library"
+done
+for prefix in $rebuilt; do
+  lib=$(ci_library_of "$prefix")
+  tested=$natives/jvm-natives-$prefix/$lib
+  [ -f "$work/$prefix/$lib" ] || fail "the jar has no $prefix/$lib, which this host should have built"
+  echo "ci-assemble-jar: jar: $prefix/$lib sha256 $(ci_sha256 "$work/$prefix/$lib") (rebuilt here), CI library sha256 $(ci_sha256 "$tested")"
+  cmp -s "$tested" "$work/$prefix/$lib" \
+    || fail "the jar's $prefix/$lib (rebuilt on this host) is not byte for byte the jvm-natives-$prefix library CI tested"
+  echo "ci-assemble-jar: jar: $prefix/$lib is the CI library (rebuilt here, byte for byte)"
 done
 present=""
 for prefix in $ci_prefixes; do
