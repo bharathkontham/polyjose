@@ -63,7 +63,8 @@
 #                the waiver does so only when "$MODE" is ci.
 #   quoting      outside run values, no backslash in a double-quoted scalar and no quoted scalar
 #                continued onto the next line (B05): YAML escapes and escaped line breaks could
-#                spell an expression or a context name no other check sees.
+#                spell an expression or a context name no other check sees. A quote opens a
+#                scalar after any white space, a TAB too, and after `[`, `{`, `,` or `:` (B06).
 #   continue     no `continue-on-error` anywhere.
 #   steps        every run step equals, exactly, one of the canonical steps held in this script,
 #                each once and in order (compared without its name line, trailing whitespace,
@@ -577,16 +578,20 @@ done <"$work/expr"
 # "steps" compares exactly) a double-quoted scalar may not hold a backslash, and no quoted scalar
 # may continue onto the next line. Free strings are plain or single-quoted on one line (a
 # single-quoted scalar has no escapes, so a backslash in it is literal and allowed).
+# B06: YAML separates a value from `key:`, `-` or `?` with any white space (YAML 1.2 §6.2
+# s-separate-in-line: spaces or TABs), so a quote after a space or a TAB opens a scalar, as does
+# one right after a flow indicator `[`, `{`, `,` or a `:` (a JSON-like flow `{"a":"..."}`, §7.4);
+# a `#` after either kind of white space starts a comment (§6.6).
 awk '
   function indent(l) { match(l, /^ */); return RLENGTH }
   {
     line = $0
-    if (line ~ /^[ ]*$/) next
+    if (line ~ /^[ \t]*$/) next
     i = indent(line); rest = substr(line, i + 1); k = i
     if (substr(rest, 1, 2) == "- ") { k = i + 2; rest = substr(rest, 3) }
     if (inrun && i <= rind) inrun = 0
     if (inrun) next
-    if (rest ~ /^#/) next
+    if (rest ~ /^[ \t]*#/) next
     if (rest ~ /^["\047]?run["\047]?:/) { inrun = 1; rind = k; next }
     q = ""; prev = " "
     for (c = i + 1; c <= length(line); c++) {
@@ -596,9 +601,9 @@ awk '
         if (ch == "\"") q = ""
       } else if (q == "\047") {
         if (ch == "\047") { if (substr(line, c + 1, 1) == "\047") c++; else q = "" }
-      } else if (prev ~ /[ \[{,]/ && (ch == "\"" || ch == "\047")) {
+      } else if (prev ~ /[ \t\[{,:]/ && (ch == "\"" || ch == "\047")) {
         q = ch
-      } else if (ch == "#" && prev == " ") {
+      } else if (ch == "#" && prev ~ /[ \t]/) {
         break
       }
       prev = ch
