@@ -27,6 +27,7 @@ pub mod error;
 pub mod jwe;
 pub mod jwk;
 pub mod jws;
+pub mod jwt;
 pub mod keys;
 pub mod records;
 mod task;
