@@ -1,4 +1,4 @@
-//! The JWK exports (ADR 0030 §4, "JWK"): `jwkParse`, `jwkToPublic`, `jwkThumbprint`,
+//! The JWK exports (ADR 0030 §4, "JWK"; ADR 0054 §9): `jwkParse`, `jwkToPublic`, `jwkThumbprint`,
 //! `jwkThumbprintUri` and `jwksSelect` (RFC 7517, RFC 7638, RFC 9278).
 //!
 //! JWKs and JWK Sets are JSON text, taken by value and wiped on return because they may hold a
@@ -30,24 +30,34 @@ pub fn jwk_to_public(jwk: String) -> Result<String, JsValue> {
     jwk::jwk_to_public(&jwk).map_err(polyjose_error)
 }
 
-/// The RFC 7638 thumbprint of `jwk` with `hash` (`SHA-256`, RFC 7638 §3), base64url
-/// (RFC 7638 §3.1). An unsupported hash fails with `UnsupportedAlgorithm` (ADR 0022, ADR 0030 §5).
+/// The RFC 7638 thumbprint of `jwk`, base64url (RFC 7638 §3, §3.4; RFC 7515 §2).
+///
+/// `hash` is optional (ADR 0054 §9): JS `undefined` or `null` is `None`, which the surface turns
+/// into the core default, SHA-256 (RFC 9278 §5; ADR 0030 §3: the adapter writes no default). A
+/// name is passed on as given and parsed by the core (`ThumbprintHash::from_name`, ADR 0054 §8.2:
+/// `sha-256`, `SHA-256`, `sha256` and the 384 and 512 forms); any other name fails with
+/// `UnsupportedAlgorithm` (ADR 0022, ADR 0030 §5), after the JWK's own import errors
+/// (ADR 0057 §2).
 #[wasm_bindgen(js_name = jwkThumbprint)]
-pub fn jwk_thumbprint(jwk: String, hash: &str) -> Result<String, JsValue> {
+pub fn jwk_thumbprint(jwk: String, hash: Option<String>) -> Result<String, JsValue> {
     let jwk = Zeroizing::new(jwk);
-    jwk::jwk_thumbprint(&jwk, hash).map_err(polyjose_error)
+    jwk::jwk_thumbprint(&jwk, hash.as_deref()).map_err(polyjose_error)
 }
 
-/// The RFC 9278 thumbprint URI of `jwk` with `hash`
-/// (`urn:ietf:params:oauth:jwk-thumbprint:sha-256:…`, RFC 9278 §3).
+/// The RFC 9278 thumbprint URI of `jwk`, `urn:ietf:params:oauth:jwk-thumbprint:<hash>:<value>`
+/// (RFC 9278 §3), with the IANA hash name whichever accepted spelling was passed (RFC 9278 §4,
+/// ADR 0054 §8.3). `hash` and the errors are as for [`jwk_thumbprint`].
 #[wasm_bindgen(js_name = jwkThumbprintUri)]
-pub fn jwk_thumbprint_uri(jwk: String, hash: &str) -> Result<String, JsValue> {
+pub fn jwk_thumbprint_uri(jwk: String, hash: Option<String>) -> Result<String, JsValue> {
     let jwk = Zeroizing::new(jwk);
-    jwk::jwk_thumbprint_uri(&jwk, hash).map_err(polyjose_error)
+    jwk::jwk_thumbprint_uri(&jwk, hash.as_deref()).map_err(polyjose_error)
 }
 
-/// The member of the JWK Set `jwks` that `selector` (`{ kid?, alg?, keyUse? }`) picks
-/// (RFC 7517 §5, §4.2, §4.4, §4.5; ADR 0029). The set may hold private keys.
+/// The one member of the JWK Set `jwks` that `selector` (`{ kid?, alg?, keyUse? }`) picks, by the
+/// core's `JwkSet::select` (RFC 7517 §5, §4.2, §4.4, §4.5; ADR 0054 §1-§4, §9). The first error
+/// is the outcome: the set's import errors, then `UnsupportedAlgorithm` for an `alg` or `keyUse`
+/// the core refuses, then `NoMatchingKey` or `MultipleMatchingKeys` (ADR 0054 §4, §5). The set
+/// and the result may hold private keys.
 #[wasm_bindgen(js_name = jwksSelect)]
 pub fn jwks_select(jwks: String, selector: &JsValue) -> Result<JsString, JsValue> {
     let jwks = Zeroizing::new(jwks);

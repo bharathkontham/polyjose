@@ -1,0 +1,31 @@
+{
+  "source": "ADR 0054 §2.1, §3; RFC 7518 §6.2.2",
+  "description": "ES256 on a set holding one EC private key returns it with its private member d; decided by ADR 0054 §2.1 (the P-256 member serves ES256) and §3: EC members are returned as imported, private parts included (the caller calls to_public before publishing one), so the returned key carries d (RFC 7518 §6.2.2.1); outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+          "d": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "ES256"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+      "d": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"
+    }
+  }
+}

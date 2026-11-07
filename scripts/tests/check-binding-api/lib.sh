@@ -35,6 +35,33 @@ mkdir -p "$base" || lib_die "could not create $base"
   bindings/surface/src crates/polyjose/src/error.rs bindings/js) | (cd "$base" && tar -xf -) \
   || lib_die "could not copy the inputs of the name check to $base"
 
+# Expected counts come from the copied sources, never from numbers written into a case, so a code
+# or an operation added to the API does not break the tests (B08).
+
+# core_codes: polyjose::Error::CODES of the base, in order, one per line. Parsed here with Python,
+# independently of the awk parse of the main script, so a mistake in that parse is not repeated.
+core_codes() {
+  python3 -I -c '
+import re, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    text = f.read()
+blocks = re.findall(r"pub const CODES: &\x27static \[&\x27static str\] = &\[(.*?)\];", text, re.S)
+if len(blocks) != 1:
+    sys.exit("expected exactly one Error::CODES block in %s, found %d" % (sys.argv[1], len(blocks)))
+codes = re.findall(r"\"([^\"]*)\"", blocks[0])
+if not codes:
+    sys.exit("the Error::CODES block of %s has no codes" % sys.argv[1])
+print("\n".join(codes))
+' "$base/crates/polyjose/src/error.rs" || lib_die "could not read Error::CODES from the copy"
+}
+
+# inventory_count <kind>: the number of <kind> entries (op, record, field, code) in the base's
+# inventory. Leading whitespace is layout and '#' starts a comment line (the inventory's format).
+inventory_count() {
+  awk -v kind="$1" '$1 == kind { n++ } END { print n + 0 }' "$base/bindings/api-inventory.txt" \
+    || lib_die "could not count the inventory's $1 entries"
+}
+
 # js_modules: a bindings/js/node_modules whose tsc runs here, set up on first use (needs node, npm).
 js_modules=""
 need_js_modules() {

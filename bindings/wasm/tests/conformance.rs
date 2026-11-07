@@ -84,9 +84,6 @@ const EMIT_VECTORS_DIGEST: bool = false;
 /// The vector-file name of `polyjose/deflate` (README "Features").
 const DEFLATE: &str = "deflate";
 
-/// The `jwk.thumbprint` hash names of the schema, mapped to the adapter's (ADR 0030 §4).
-const HASHES: &[(&str, &str)] = &[("sha-256", "SHA-256")];
-
 /// The members a generated private key has (RFC 7518 §6.2.1–§6.2.2, RFC 8037 §2,
 /// RFC 7518 §6.4.1), plus `alg` (RFC 7517 §4.4), sorted.
 fn generated_members(kty: &str) -> Option<&'static [&'static str]> {
@@ -926,6 +923,7 @@ fn execute(vector: &JsValue) -> Result<Outcome, String> {
         "b64url.encode" => b64url_encode(&input, &mut out),
         "b64url.decode" => b64url_decode(&input, &mut out),
         "jwk.thumbprint" => jwk_thumbprint(&input, &mut out),
+        "jwks.select" => jwks_select(&input, &mut out),
         "jws.sign" => jws_sign(&input, &expect, &mut out),
         "jws.verify" => jws_verify(&input, &mut out),
         "keys.import_pem" => keys_import_pem(&input, &mut out),
@@ -968,16 +966,51 @@ fn b64url_decode(input: &JsValue, out: &mut Out) -> Step<()> {
     Ok(())
 }
 
-/// `jwk.thumbprint` → `jwkThumbprint` then `jwkThumbprintUri` (RFC 7638 §3, RFC 9278 §3);
-/// `hash` `sha-256` is the adapter's `SHA-256`.
+/// `jwk.thumbprint` → `jwkThumbprint(jwk, hash)` then `jwkThumbprintUri(jwk, hash)`
+/// (RFC 7638 §3, §3.4, RFC 9278 §3).
+///
+/// The vector's `hash` is passed exactly as given, and an absent one as `None`, the core default
+/// (ADR 0054 §9; README `jwk.thumbprint`). The core parses the name
+/// (`ThumbprintHash::from_name`, ADR 0054 §8.2), so the runner keeps no name table and a name the
+/// core rejects is the vector's outcome.
 fn jwk_thumbprint(input: &JsValue, out: &mut Out) -> Step<()> {
-    let hash = str_of(input, "hash")?;
-    let Some((_, name)) = HASHES.iter().find(|(h, _)| *h == hash) else {
-        return harness(format!("hash `{hash}` has no adapter name"));
+    let hash = if has(input, "hash") {
+        Some(str_of(input, "hash")?)
+    } else {
+        None
     };
     let jwk = json_arg(input, "jwk")?;
-    out.set("thumbprint", lib(jwk::jwk_thumbprint(jwk.clone(), name))?);
-    out.set("thumbprint_uri", lib(jwk::jwk_thumbprint_uri(jwk, name))?);
+    out.set(
+        "thumbprint",
+        lib(jwk::jwk_thumbprint(jwk.clone(), hash.clone()))?,
+    );
+    out.set("thumbprint_uri", lib(jwk::jwk_thumbprint_uri(jwk, hash))?);
+    Ok(())
+}
+
+/// `jwks.select` → `jwksSelect(jwks, { kid, alg, keyUse })` (RFC 7517 §5; ADR 0054 §1-§4, §9;
+/// README `jwks.select`).
+///
+/// The set goes as JSON text in file order, and the selector member by member, each as given and
+/// only when present (`key_use` → `keyUse`): the surface and the core parse, validate and select,
+/// so the runner maps, normalizes and pre-checks nothing. The returned key (a secret-bearing
+/// string) is parsed as JSON and compared as a JSON value.
+fn jwks_select(input: &JsValue, out: &mut Out) -> Step<()> {
+    let Some(criteria) = get(input, "selector") else {
+        return harness("no member `selector`");
+    };
+    let selector = Rec::new();
+    for (vector_name, adapter_name) in [("kid", "kid"), ("alg", "alg"), ("key_use", "keyUse")] {
+        if has(&criteria, vector_name) {
+            selector.set(adapter_name, str_of(&criteria, vector_name)?);
+        }
+    }
+    let jwks = json_arg(input, "jwks")?;
+    let selected = lib(jwk::jwks_select(jwks, &selector.value()))?;
+    out.set(
+        "jwk",
+        parse_output(&String::from(selected), "the selected JWK")?,
+    );
     Ok(())
 }
 
@@ -2070,6 +2103,109 @@ fn an_integer_like_member_name_fails_instead_of_being_reordered() {
     assert!(json_arg(&value, "key").is_ok());
     assert!(is_array_index("0") && is_array_index("4294967294"));
     assert!(!is_array_index("01") && !is_array_index("4294967295") && !is_array_index("-1"));
+}
+
+/// RFC 8037 A.3's Ed25519 public key and its RFC 7638 SHA-256 thumbprint.
+const RFC8037_A3_JWK: &str =
+    r#"{"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#;
+const RFC8037_A3_THUMBPRINT: &str = "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k";
+
+#[wasm_bindgen_test]
+fn jwk_thumbprint_passes_the_hash_as_given_and_an_absent_one_as_absent() {
+    let uri = format!("urn:ietf:params:oauth:jwk-thumbprint:sha-256:{RFC8037_A3_THUMBPRINT}");
+    let ok = format!(
+        r#"{{"ok": true, "thumbprint": "{RFC8037_A3_THUMBPRINT}", "thumbprint_uri": "{uri}"}}"#
+    );
+    // No `hash`: the core default, SHA-256 (ADR 0054 §9, RFC 9278 §5).
+    let input = format!(r#"{{"jwk": {RFC8037_A3_JWK}}}"#);
+    let (status, trace) = status_of(&vector("jwk.thumbprint", &input, &ok, ""), &[]);
+    assert!(matches!(status, Status::Pass));
+    assert_eq!(trace.actual, Some(Ok(())));
+    // Every accepted SHA-256 spelling, as given; the URI keeps the IANA name (RFC 9278 §4).
+    for name in ["sha-256", "SHA-256", "sha256"] {
+        let input = format!(r#"{{"jwk": {RFC8037_A3_JWK}, "hash": "{name}"}}"#);
+        let (status, _) = status_of(&vector("jwk.thumbprint", &input, &ok, ""), &[]);
+        assert!(matches!(status, Status::Pass), "hash {name}");
+    }
+    // A name the core rejects is the outcome, never a runner failure (ADR 0054 §8.2, ADR 0022).
+    let failure = r#"{"ok": false, "error": "UnsupportedAlgorithm"}"#;
+    for name in ["SHA-1", "", "Sha-256"] {
+        let input = format!(r#"{{"jwk": {RFC8037_A3_JWK}, "hash": "{name}"}}"#);
+        let (status, trace) = status_of(&vector("jwk.thumbprint", &input, failure, ""), &[]);
+        assert!(matches!(status, Status::Pass), "hash {name:?}");
+        assert_eq!(trace.actual, Some(Err("UnsupportedAlgorithm".to_owned())));
+    }
+    // The adapter itself: `None` is the core default, not a runner-supplied name.
+    let jwk = || RFC8037_A3_JWK.to_owned();
+    assert_eq!(
+        jwk::jwk_thumbprint(jwk(), None).ok().as_deref(),
+        Some(RFC8037_A3_THUMBPRINT)
+    );
+    assert_eq!(jwk::jwk_thumbprint_uri(jwk(), None).ok(), Some(uri));
+    assert_eq!(
+        jwk::jwk_thumbprint(jwk(), Some("sha-512".to_owned()))
+            .map(|t| t.len())
+            .ok(),
+        Some(86),
+        "SHA-512 is 86 base64url characters (ADR 0054 §8.1)"
+    );
+}
+
+/// Two `oct` keys, one per `use`, for the `jwks.select` runner tests.
+const SELECT_SET: &str = r#"{"keys": [{"kty": "oct", "k": "AAECAwQFBgcICQoLDA0ODw", "use": "sig", "kid": "a"}, {"kty": "oct", "k": "EBESExQVFhcYGRobHB0eHw", "use": "enc", "kid": "b"}]}"#;
+
+fn select(selector: &str, expect: &str) -> (Status, Trace) {
+    let input = format!(r#"{{"jwks": {SELECT_SET}, "selector": {selector}}}"#);
+    status_of(&vector("jwks.select", &input, expect, ""), &[])
+}
+
+#[wasm_bindgen_test]
+fn jwks_select_maps_the_selector_member_by_member() {
+    // `kid` and `key_use` (the adapter's `keyUse`) each select one member, compared as a JSON
+    // value (README `jwks.select`).
+    let b = r#"{"ok": true, "jwk": {"kid": "b", "use": "enc", "k": "EBESExQVFhcYGRobHB0eHw", "kty": "oct"}}"#;
+    for selector in [r#"{"kid": "b"}"#, r#"{"key_use": "enc"}"#] {
+        let (status, trace) = select(selector, b);
+        assert!(matches!(status, Status::Pass), "selector {selector}");
+        assert_eq!(trace.actual, Some(Ok(())));
+    }
+    // `alg` HS256 implies `use` `sig` (ADR 0054 §2), so only `a` matches.
+    let a = r#"{"ok": true, "jwk": {"kty": "oct", "k": "AAECAwQFBgcICQoLDA0ODw", "use": "sig", "kid": "a"}}"#;
+    let (status, _) = select(r#"{"alg": "HS256", "kid": "a"}"#, a);
+    assert!(matches!(status, Status::Pass));
+    let (status, _) = select(r#"{"alg": "HS256"}"#, a);
+    assert!(matches!(status, Status::Pass));
+    // ADR 0054 §4, §5: none, several, and a refused name are the core's outcomes.
+    for (selector, code) in [
+        (r#"{"kid": "c"}"#, "NoMatchingKey"),
+        ("{}", "MultipleMatchingKeys"),
+        (r#"{"alg": "none"}"#, "UnsupportedAlgorithm"),
+        (r#"{"key_use": "SIG"}"#, "UnsupportedAlgorithm"),
+    ] {
+        let expect = format!(r#"{{"ok": false, "error": "{code}"}}"#);
+        let (status, trace) = select(selector, &expect);
+        assert!(matches!(status, Status::Pass), "selector {selector}");
+        assert_eq!(
+            trace.actual,
+            Some(Err(code.to_owned())),
+            "selector {selector}"
+        );
+    }
+    // The selector is closed: `key_op` is not part of 0.1.0 (ADR 0054 §9), so it is a broken
+    // vector, and so is the host spelling `keyUse` in a vector file.
+    for selector in [r#"{"key_op": "sign"}"#, r#"{"keyUse": "sig"}"#] {
+        let input = format!(r#"{{"jwks": {SELECT_SET}, "selector": {selector}}}"#);
+        assert_fails(&vector("jwks.select", &input, b, ""), "schema:");
+    }
+}
+
+#[wasm_bindgen_test]
+fn error_codes_end_with_multiple_matching_keys() {
+    // ADR 0054 §5: appended last, after NoMatchingKey, at index 16 of `Error::CODES`.
+    let codes = util::error_codes();
+    assert_eq!(codes.len(), 17);
+    assert_eq!(codes[15], "NoMatchingKey");
+    assert_eq!(codes[16], "MultipleMatchingKeys");
 }
 
 #[wasm_bindgen_test]

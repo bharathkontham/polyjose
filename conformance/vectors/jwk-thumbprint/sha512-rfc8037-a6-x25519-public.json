@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7638 §3.4 over the RFC 8037 Appendix A.6 key",
+  "description": "SHA-512 JWK Thumbprint of Bob's X25519 public key from RFC 8037 A.6 (RFC 7748 §6.1); no RFC prints it: SHA-512 over the hand-built RFC 7638 §3.3 hash input with node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jwk-oracle/thumbprints.mjs; the URI carries the IANA name sha-512 (RFC 9278 §3, §4)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "X25519",
+      "kid": "Bob",
+      "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+    },
+    "hash": "sha-512"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "9wxUxAq1TJqN2pu1MKQ7M4us-aoqObqe4OLGzU6FzHUJ7K_wZkyd87XUd-PYe5NRnp91rYn5zK1Vap3cd7DiBA",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-512:9wxUxAq1TJqN2pu1MKQ7M4us-aoqObqe4OLGzU6FzHUJ7K_wZkyd87XUd-PYe5NRnp91rYn5zK1Vap3cd7DiBA"
+  }
+}

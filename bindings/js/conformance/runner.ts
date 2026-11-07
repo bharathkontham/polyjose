@@ -25,7 +25,7 @@
  */
 
 import type { PolyjoseApi } from "../src/api.js";
-import type { EcCurve, JsonObject, JwtVerifyOptions, JweDecryptOptions, OkpCurve } from "../src/types.js";
+import type { EcCurve, JsonObject, JwkSelector, JwtVerifyOptions, JweDecryptOptions, OkpCurve, ThumbprintHash } from "../src/types.js";
 import { scanJson, textAt, type JsonNode } from "./json-text.js";
 import { jsonEqual, schemaViolation } from "./schema.js";
 
@@ -78,9 +78,6 @@ interface Vector {
   features_absent?: string[];
 }
 type Outcome = { ok: true; out: Out } | { ok: false; error: string };
-
-/** The `jwk.thumbprint` hash names of the schema, mapped to the facade's (ADR 0030 §4). */
-const HASHES: Readonly<Record<string, string>> = { "sha-256": "SHA-256" };
 
 type Members = Readonly<Record<string, readonly string[]>>;
 
@@ -316,13 +313,28 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
   "b64url.decode": async (api, input, _expect, _text, out) => {
     out["bytes_hex"] = hexEncode(await lib(api, () => api.base64urlDecode(str(input["b64u"]))));
   },
-  // jwk.thumbprint → jwkThumbprint + jwkThumbprintUri (RFC 7638 §3, RFC 9278 §3); hash "sha-256" → "SHA-256".
+  // jwk.thumbprint → jwkThumbprint + jwkThumbprintUri (RFC 7638 §3, §3.4, RFC 9278 §3). The
+  // vector's hash is passed as given and an absent one as undefined, the core default (ADR 0054
+  // §9): the core parses the name (§8.2), so there is no runner table and a name the core
+  // rejects is the vector's outcome. The cast only widens the type: vectors may name any string.
   "jwk.thumbprint": async (api, input, _expect, text, out) => {
-    const hash = HASHES[str(input["hash"])];
-    if (hash === undefined) throw new HarnessError(`hash \`${str(input["hash"])}\` has no facade name`);
+    const hash = input["hash"] === undefined ? undefined : (str(input["hash"]) as ThumbprintHash);
     const jwk = text.at("input", "jwk");
-    out["thumbprint"] = await lib(api, () => api.jwkThumbprint(jwk, hash as "SHA-256"));
-    out["thumbprint_uri"] = await lib(api, () => api.jwkThumbprintUri(jwk, hash as "SHA-256"));
+    out["thumbprint"] = await lib(api, () => api.jwkThumbprint(jwk, hash));
+    out["thumbprint_uri"] = await lib(api, () => api.jwkThumbprintUri(jwk, hash));
+  },
+  // jwks.select → jwksSelect(jwks, { kid, alg, keyUse }) (RFC 7517 §5; ADR 0054 §1-§4, §9). The
+  // set goes as its own text, the selector member by member, each as given and only when present
+  // (`key_use` → `keyUse`): the core parses, validates and selects, so the runner maps nothing.
+  // The facade returns the selected key parsed, compared as a JSON value.
+  "jwks.select": async (api, input, _expect, text, out) => {
+    const criteria = input["selector"] as Out;
+    const selector: JwkSelector = {};
+    if (criteria["kid"] !== undefined) selector.kid = str(criteria["kid"]);
+    if (criteria["alg"] !== undefined) selector.alg = str(criteria["alg"]);
+    if (criteria["key_use"] !== undefined) selector.keyUse = str(criteria["key_use"]);
+    const jwks = text.at("input", "jwks");
+    out["jwk"] = await lib(api, () => api.jwksSelect(jwks, selector));
   },
 
   // jws.sign → jwsSignCompact / jwsSignFlattened / jwsSignGeneral (RFC 7515 §5.1, §7).
@@ -675,7 +687,7 @@ function jwtVerifyOptions(object: Out): JwtVerifyOptions {
     ignoreAudience?: boolean;
     typ?: string;
     anyTyp?: boolean;
-    profile?: string;
+    profile?: JwtVerifyOptions["profile"];
     maxKeyCandidates?: number;
   } = { allowedAlgs: strs(object["allowed_algs"]), now: object["now"] as number };
   const typ = isObject(policy["typ"]) ? policy["typ"] : undefined;
@@ -694,7 +706,9 @@ function jwtVerifyOptions(object: Out): JwtVerifyOptions {
   if (policy["ignore_audience"] === true) opts.ignoreAudience = true;
   if (typ?.["mode"] === "exact") opts.typ = str(typ["value"]);
   if (typ?.["mode"] === "any") opts.anyTyp = true;
-  if (typeof policy["profile"] === "string") opts.profile = policy["profile"];
+  // The vector's profile is passed as written, even a name the literal type doesn't allow, so
+  // the core's answer (UnsupportedAlgorithm for any other name, ADR 0030 §4) is what it checks.
+  if (typeof policy["profile"] === "string") opts.profile = policy["profile"] as JwtVerifyOptions["profile"];
   if (typeof policy["max_key_candidates"] === "number") opts.maxKeyCandidates = policy["max_key_candidates"];
   return opts;
 }

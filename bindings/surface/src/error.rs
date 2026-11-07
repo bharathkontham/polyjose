@@ -96,6 +96,7 @@ mod tests {
             Error::RandomnessUnavailable,
             Error::InvalidFormat("compact JWS must have three parts"),
             Error::NoMatchingKey,
+            Error::MultipleMatchingKeys,
         ]
     }
 

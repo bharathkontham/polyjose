@@ -1,0 +1,26 @@
+{
+  "source": "ADR 0054 §2.4, §4; RFC 7517 §4.3",
+  "description": "A128KW on a set whose only oct key has key_ops [sign, verify] fails with NoMatchingKey; decided by ADR 0054 §2.4 (key_ops): with an alg and no key_op, key_ops must hold an operation A128KW performs in either direction (wrapKey or unwrapKey), and [sign, verify] holds neither, so zero members match (§4); outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "X8EwrK_w_mNZySX8TCh4Bw",
+          "key_ops": [
+            "sign",
+            "verify"
+          ]
+        }
+      ]
+    },
+    "selector": {
+      "alg": "A128KW"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

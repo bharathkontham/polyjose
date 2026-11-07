@@ -8,6 +8,9 @@
 //! - **Secrets out** (ADR 0030 §7.2): no export returns bytes as `Vec<u8>`, and only the listed
 //!   public results return an owned `String`; everything else is built from a borrowed slice. No
 //!   source copies a secret out of its owner (`as_str().to_…`, `as_bytes().to_…`).
+//! - **Optional `hash`, no default** (ADR 0054 §9, ADR 0030 §1, §3): `jwkThumbprint` and
+//!   `jwkThumbprintUri` take `hash: Option<String>` and hand it to the surface as `as_deref()`;
+//!   the adapter names no hash, so an absent one is the core's default (SHA-256).
 //! - **No clock** (ADR 0028, ADR 0030 §4): the facade passes JWT `now`; nothing here reads time.
 //! - **No `unsafe`, no logging** (workspace rules, ADR 0030 §7.5).
 //! - **Coverage** (ADR 0030 §4, BACKEND.md): one export per `op` of `bindings/api-inventory.txt`.
@@ -19,6 +22,10 @@ use std::path::{Path, PathBuf};
 /// Parameter names that may be borrowed (`&str`): registered identifiers, public by definition
 /// (RFC 7518 §3.1, §4.1, §5.1 names; RFC 7638 hash names; key format and JSON form names).
 const IDENTIFIER_PARAMS: [&str; 5] = ["alg", "crv", "form", "format", "hash"];
+
+/// Identifier parameters that are optional, as `Option<String>` (wasm-bindgen maps JS
+/// `undefined` and `null` to `None`): only the thumbprint `hash` (ADR 0054 §9, BACKEND.md).
+const OPTIONAL_IDENTIFIER_PARAMS: [&str; 1] = ["hash"];
 
 /// Exports allowed to return an owned `String`: results that carry no secret (ADR 0030 §7.2):
 /// the version, a public JWK, thumbprints (RFC 7638 §7) and JWE ciphertext (RFC 7516).
@@ -192,12 +199,14 @@ fn borrowed_and_other_parameters_are_public_only() {
             let ok = match ty.as_str() {
                 "String" | "Vec<u8>" | "u32" | "bool" | "&JsValue" => true,
                 "&str" => IDENTIFIER_PARAMS.contains(&name.as_str()),
+                "Option<String>" => OPTIONAL_IDENTIFIER_PARAMS.contains(&name.as_str()),
                 _ => false,
             };
             assert!(
                 ok,
                 "{}: {}: parameter `{name}: {ty}`: JOSE data is taken by value (String, Vec<u8>) \
-                 and records as &JsValue; &str only for {IDENTIFIER_PARAMS:?}",
+                 and records as &JsValue; &str only for {IDENTIFIER_PARAMS:?}, Option<String> \
+                 only for {OPTIONAL_IDENTIFIER_PARAMS:?}",
                 e.file, e.js_name
             );
         }
@@ -297,4 +306,39 @@ fn every_inventory_operation_is_exported_once() {
         exported, ops,
         "exports differ from bindings/api-inventory.txt"
     );
+}
+
+#[test]
+fn the_thumbprint_hash_is_optional_and_passed_through_without_a_default() {
+    let thumbprints: Vec<Export> = exports()
+        .into_iter()
+        .filter(|e| e.js_name == "jwkThumbprint" || e.js_name == "jwkThumbprintUri")
+        .collect();
+    assert_eq!(thumbprints.len(), 2, "jwkThumbprint and jwkThumbprintUri");
+    for e in &thumbprints {
+        assert!(
+            e.params
+                .iter()
+                .any(|(n, t)| n == "hash" && t == "Option<String>"),
+            "{}: {}: `hash` must be `Option<String>` (ADR 0054 §9)",
+            e.file,
+            e.js_name
+        );
+        let body: String = e.body.split_whitespace().collect();
+        assert!(
+            body.contains("hash.as_deref()"),
+            "{}: {}: `hash` goes to the surface as `hash.as_deref()`",
+            e.file,
+            e.js_name
+        );
+        for default in ["unwrap_or", "map_or", "SHA-", "sha-", "sha2", "\"sha"] {
+            assert!(
+                !body.contains(default),
+                "{}: {}: the adapter writes no hash default ({default}); the core has it \
+                 (ADR 0030 §3)",
+                e.file,
+                e.js_name
+            );
+        }
+    }
 }

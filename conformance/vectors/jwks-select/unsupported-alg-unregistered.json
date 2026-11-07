@@ -1,0 +1,24 @@
+{
+  "source": "ADR 0054 §1.1; RFC 7518 §7.1",
+  "description": "An unregistered alg foo is refused with UnsupportedAlgorithm; decided by ADR 0054 §1.1: the alg setter refuses an unregistered name (ADR 0030 §5), before any set member is read; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "foo"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

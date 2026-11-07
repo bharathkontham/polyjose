@@ -1,0 +1,26 @@
+{
+  "source": "ADR 0054 §2.1, §7; RFC 8725 §3.1",
+  "description": "RS256 on a set of oct keys only fails with NoMatchingKey; decided by ADR 0054 §2.1 (family): no oct key serves RS256, so a secret key is never returned for an asymmetric alg (§7, RFC 8725 §3.1) and zero members match (§4); outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+        },
+        {
+          "kty": "oct",
+          "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "RS256"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

@@ -1,0 +1,591 @@
+{
+  "comment": [
+    "The jwks.select vector spec (feature 0015 T04). node conformance/tools/jwk-oracle/select.mjs conformance/tools/jwk-oracle/specs/select.json conformance/vectors/jwks-select writes one file per entry, named <id>.json (ADR 0045).",
+    "Every expected outcome below is written by hand from the ADR 0054 §1-§4 text, with the rule that decides it in 'rule'; the generator never decides one, and polyjose never computes one. Member positions in 'expect.member' and in the rules count every entry of 'keys', skipped ones included.",
+    "Keys are references into the committed fixtures: { \"$key\": name } or { \"$public\": name }, with an optional 'with' merged over the key (null deletes a member), as in conformance/tools/jwt-oracle/README.md; names are those of conformance/tools/jwt-oracle/keys.json plus rsa1024, x25519-bob and secp256k1 (conformance/tools/jwk-oracle/README.md). { \"$set\": \"rfc7517-a1\" | \"rfc7517-a2\" | \"rfc7517-a3\" } is that RFC 7517 Appendix A set as printed. Any other member object is a literal, passed through unchanged.",
+    "No entry depends on the key_op + alg interaction (an open owner question, feature 0015 backlog.md): the binding selector has no key_op (ADR 0054 §9)."
+  ],
+  "vectors": [
+    {
+      "id": "select-kid-mixed-families",
+      "source": "ADR 0054 §1.2, §2.5; RFC 7517 §4.5",
+      "description": "kid alone, on a set of one oct, one EC, one OKP and one RSA key, returns the one member with that kid",
+      "rule": "decided by ADR 0054 §2.5 (kid, exact equality, §1.2): only member 1 has kid ec-1; with no alg there is no family (§2.1) or JWK alg (§2.2) check, and with neither alg nor key_use there is no effective use, so use (§2.3) and key_ops (§2.4) are not checked; a selector without alg may match any family (§7)",
+      "jwks": { "keys": [
+        { "$key": "oct-32", "with": { "kid": "oct-1" } },
+        { "$public": "p256", "with": { "kid": "ec-1" } },
+        { "$public": "ed25519", "with": { "kid": "okp-1" } },
+        { "$public": "rsa-2048-rfc7515-a2", "with": { "kid": "rsa-1" } }
+      ] },
+      "selector": { "kid": "ec-1" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-es256-p256-not-p384",
+      "source": "ADR 0054 §2.1; RFC 7518 §3.4",
+      "description": "ES256 on a P-256 and a P-384 key returns the P-256 key",
+      "rule": "decided by ADR 0054 §2.1 (family): ES256 is served by a P-256 key only (RFC 7518 §3.4), so the P-384 member is out; member 0 has no alg, use (U = sig from ES256) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "p256" }, { "$public": "p384" } ] },
+      "selector": { "alg": "ES256" },
+      "expect": { "member": 0 }
+    },
+    {
+      "id": "select-es384-p384-not-p256",
+      "source": "ADR 0054 §2.1; RFC 7518 §3.4",
+      "description": "ES384 on a P-256 and a P-384 key returns the P-384 key",
+      "rule": "decided by ADR 0054 §2.1 (family): ES384 is served by a P-384 key only (RFC 7518 §3.4), so the P-256 member is out; member 1 has no alg, use (U = sig from ES384) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "p256" }, { "$public": "p384" } ] },
+      "selector": { "alg": "ES384" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-eddsa-ed25519-not-x25519",
+      "source": "ADR 0054 §2.1; RFC 8037 §3.1",
+      "description": "EdDSA on an X25519 and an Ed25519 key returns the Ed25519 key",
+      "rule": "decided by ADR 0054 §2.1 (family): EdDSA is served by an Ed25519 key, and X25519 never matches EdDSA (RFC 8037 §3.1, §3.2); member 1 has no alg, use or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "x25519-bob" }, { "$public": "ed25519" } ] },
+      "selector": { "alg": "EdDSA" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-ecdh-es-x25519-not-ed25519",
+      "source": "ADR 0054 §2.1; RFC 8037 §3.2, RFC 7518 §4.6",
+      "description": "ECDH-ES on an Ed25519 and an X25519 key returns the X25519 key",
+      "rule": "decided by ADR 0054 §2.1 (family): ECDH-ES is served by P-256, P-384, P-521 and X25519 keys, and Ed25519 never matches ECDH-ES (RFC 8037 §3.2); member 1 has no alg, use (U = enc from ECDH-ES) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "ed25519" }, { "$public": "x25519-bob" } ] },
+      "selector": { "alg": "ECDH-ES" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-ecdh-es-a128kw-p256-not-secp256k1",
+      "source": "ADR 0054 §2.1; RFC 7518 §4.6",
+      "description": "ECDH-ES+A128KW on a secp256k1 and a P-256 key returns the P-256 key",
+      "rule": "decided by ADR 0054 §2.1 (family): ECDH-ES+A128KW is served by P-256, P-384, P-521 and X25519 keys, and secp256k1 never matches ECDH-ES (RFC 7518 §4.6 names the NIST curves); member 1 has no alg, use (U = enc) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "secp256k1" }, { "$public": "p256-ecdh" } ] },
+      "selector": { "alg": "ECDH-ES+A128KW" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-es256k-secp256k1-not-p256",
+      "source": "ADR 0054 §2.1; RFC 8812 §3.2",
+      "description": "ES256K on a secp256k1 and a P-256 key returns the secp256k1 key",
+      "rule": "decided by ADR 0054 §2.1 (family): ES256K is served by a secp256k1 key only (RFC 8812 §3.2), so the P-256 member is out; member 0 has no alg, use (U = sig) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "secp256k1" }, { "$public": "p256-ecdh" } ] },
+      "selector": { "alg": "ES256K" },
+      "expect": { "member": 0 }
+    },
+    {
+      "id": "select-rs256-rsa-not-oct",
+      "source": "ADR 0054 §2.1, §7; RFC 7518 §3.3, RFC 8725 §3.1",
+      "description": "RS256 on an oct and an RSA-2048 key returns the RSA key, never the secret oct key",
+      "rule": "decided by ADR 0054 §2.1 (family): RS256 is served by an RSA key only (RFC 7518 §3.3), so an oct key is never returned for an asymmetric alg (§7, RFC 8725 §3.1); member 1 has no alg, use (U = sig) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$key": "oct-32" }, { "$public": "rsa-2048-rfc7515-a2" } ] },
+      "selector": { "alg": "RS256" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-hs256-oct-not-rsa",
+      "source": "ADR 0054 §2.1, §7; RFC 7518 §3.2, RFC 8725 §3.1",
+      "description": "HS256 on an RSA-2048 and an oct key returns the oct key, never the asymmetric one",
+      "rule": "decided by ADR 0054 §2.1 (family): HS256 is served by an oct key only (RFC 7518 §3.2), so an asymmetric key is never returned for a symmetric alg (§7); member 1 has no alg, use (U = sig) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "rsa-2048-rfc7515-a2" }, { "$key": "oct-32" } ] },
+      "selector": { "alg": "HS256" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-rsa-oaep-256-use-enc",
+      "source": "ADR 0054 §2.3; RFC 7517 §4.2, RFC 7518 §4.3",
+      "description": "RSA-OAEP-256 on an RSA key with use sig and an RSA key with use enc returns the use enc key",
+      "rule": "decided by ADR 0054 §2.3 (purpose): RSA-OAEP-256 implies U = enc, so the use sig member is out and the use enc member stays; both are RSA (§2.1), neither has alg or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "rsa-2048" }, { "$public": "rsa-2048-rfc7515-a2", "with": { "use": "enc" } } ] },
+      "selector": { "alg": "RSA-OAEP-256" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-ps256-use-sig",
+      "source": "ADR 0054 §2.3; RFC 7517 §4.2, RFC 7518 §3.5",
+      "description": "PS256 on an RSA key with use sig and an RSA key with use enc returns the use sig key",
+      "rule": "decided by ADR 0054 §2.3 (purpose): PS256 implies U = sig, so the use enc member is out and the use sig member stays; both are RSA (§2.1), neither has alg or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "rsa-2048" }, { "$public": "rsa-2048-rfc7515-a2", "with": { "use": "enc" } } ] },
+      "selector": { "alg": "PS256" },
+      "expect": { "member": 0 }
+    },
+    {
+      "id": "select-a256kw-member-without-alg",
+      "source": "ADR 0054 §2.2; RFC 7517 §4.4, RFC 7518 §4.4",
+      "description": "A256KW on an oct key with alg A128KW and an oct key without alg returns the key without alg",
+      "rule": "decided by ADR 0054 §2.2 (JWK alg): member 0's alg A128KW is not A256KW, so it is out, and member 1 has none; both are oct (§2.1), neither has use (U = enc) or key_ops, and selection checks no key size (§2, not part of selection)",
+      "jwks": { "keys": [ { "$key": "oct-16", "with": { "alg": "A128KW" } }, { "$key": "oct-32" } ] },
+      "selector": { "alg": "A256KW" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-dir-oct-with-enc-alg",
+      "source": "ADR 0054 §2.1, §2.2; RFC 7518 §4.5",
+      "description": "dir on an oct key with alg A256GCM and an EC key returns the oct key",
+      "rule": "decided by ADR 0054 §2.2's one exception: for dir, a member whose alg is a content encryption algorithm (A256GCM) matches, the exact enc being checked at use; the EC member does not serve dir (§2.1); member 0 has no use (U = enc) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$key": "oct-32", "with": { "alg": "A256GCM" } }, { "$public": "p256" } ] },
+      "selector": { "alg": "dir" },
+      "expect": { "member": 0 }
+    },
+    {
+      "id": "select-dir-member-alg-dir-not-a128kw",
+      "source": "ADR 0054 §2.2; RFC 7517 §4.4, RFC 7518 §4.5",
+      "description": "dir on an oct key with alg A128KW and an oct key with alg dir returns the alg dir key",
+      "rule": "decided by ADR 0054 §2.2 (JWK alg): member 1's alg is exactly dir; member 0's A128KW is neither dir nor a content encryption algorithm, so the §2.2 exception does not apply; both are oct (§2.1), neither has use or key_ops",
+      "jwks": { "keys": [ { "$key": "oct-16", "with": { "alg": "A128KW" } }, { "$key": "oct-32", "with": { "alg": "dir" } } ] },
+      "selector": { "alg": "dir" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-a128gcmkw-key-ops-wrapkey",
+      "source": "ADR 0054 §2.4; RFC 7517 §4.3, RFC 7518 §4.7",
+      "description": "A128GCMKW on an oct key with key_ops [sign] and an oct key with key_ops [wrapKey] returns the wrapKey key",
+      "rule": "decided by ADR 0054 §2.4 (key_ops): with an alg and no key_op, key_ops must hold an operation A128GCMKW performs in either direction (wrapKey or unwrapKey); [sign] does not, [wrapKey] does; both are oct (§2.1), neither has alg or use",
+      "jwks": { "keys": [ { "$key": "oct-32", "with": { "key_ops": [ "sign" ] } }, { "$key": "oct-16", "with": { "key_ops": [ "wrapKey" ] } } ] },
+      "selector": { "alg": "A128GCMKW" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-eddsa-member-alg-ed25519-out",
+      "source": "ADR 0054 §2.2; RFC 7517 §4.4, RFC 8725 §3.1",
+      "description": "EdDSA on an Ed25519 key with alg Ed25519 and an Ed25519 key without alg returns the key without alg",
+      "rule": "decided by ADR 0054 §2.2 (JWK alg): a member alg must equal the selector's exactly, and EdDSA is not Ed25519; both members are Ed25519 (§2.1), neither has use or key_ops",
+      "jwks": { "keys": [ { "$public": "ed25519", "with": { "alg": "Ed25519" } }, { "$public": "ed25519-other" } ] },
+      "selector": { "alg": "EdDSA" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-ed25519-member-alg-eddsa-out",
+      "source": "ADR 0054 §2.2; RFC 7517 §4.4, RFC 8725 §3.1",
+      "description": "Ed25519 on an Ed25519 key with alg EdDSA and an Ed25519 key without alg returns the key without alg",
+      "rule": "decided by ADR 0054 §2.2 (JWK alg): a member alg must equal the selector's exactly, and Ed25519 is not EdDSA; both members are Ed25519, which serves both algs (§2.1), neither has use or key_ops",
+      "jwks": { "keys": [ { "$public": "ed25519", "with": { "alg": "EdDSA" } }, { "$public": "ed25519-other" } ] },
+      "selector": { "alg": "Ed25519" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-key-use-enc-only",
+      "source": "ADR 0054 §2.3; RFC 7517 §4.2",
+      "description": "key_use enc alone, on a P-256 key with use sig and a P-256 key with use enc, returns the use enc key",
+      "rule": "decided by ADR 0054 §2.3 (purpose): key_use enc gives U = enc, so the use sig member is out; with no alg there is no family or JWK alg check (§2.1, §2.2), neither member has key_ops (§2.4), and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "p256-kid-a", "with": { "use": "sig" } }, { "$public": "p256-kid-b", "with": { "use": "enc" } } ] },
+      "selector": { "key_use": "enc" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-kid-and-alg",
+      "source": "ADR 0054 §2.1, §2.5; RFC 7517 §4.5, RFC 7518 §3.4",
+      "description": "kid and alg together pick the one P-256 key with that kid, where each alone matches two members",
+      "rule": "decided by ADR 0054 §2.1 and §2.5 together: kid a alone matches members 0 and 2, ES256 alone matches the P-256 members 0 and 1; only member 0 is P-256 with kid a, and it has no alg, use or key_ops",
+      "jwks": { "keys": [ { "$public": "p256-kid-a" }, { "$public": "p256-kid-b" }, { "$key": "oct-32", "with": { "kid": "a" } } ] },
+      "selector": { "kid": "a", "alg": "ES256" },
+      "expect": { "member": 0 }
+    },
+    {
+      "id": "select-alg-and-key-use-agree",
+      "source": "ADR 0054 §2.3; RFC 7517 §4.2",
+      "description": "ES256 with key_use sig, on a P-256 key with use enc and a P-256 key without use, returns the key without use",
+      "rule": "decided by ADR 0054 §2.3 (purpose): key_use sig and the sig that ES256 implies agree, so U = sig and the use enc member is out; both are P-256 (§2.1), neither has alg or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "p256-kid-a", "with": { "use": "enc" } }, { "$public": "p256-kid-b" } ] },
+      "selector": { "alg": "ES256", "key_use": "sig" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-ec-private-member-keeps-d",
+      "source": "ADR 0054 §2.1, §3; RFC 7518 §6.2.2",
+      "description": "ES256 on a set holding one EC private key returns it with its private member d",
+      "rule": "decided by ADR 0054 §2.1 (the P-256 member serves ES256) and §3: EC members are returned as imported, private parts included (the caller calls to_public before publishing one), so the returned key carries d (RFC 7518 §6.2.2.1)",
+      "jwks": { "keys": [ { "$key": "p256" } ] },
+      "selector": { "alg": "ES256" },
+      "expect": { "member": 0 }
+    },
+    {
+      "id": "select-empty-selector-after-skips",
+      "source": "ADR 0054 §1.3, §3; RFC 7517 §5",
+      "description": "The empty selector on a set of an unknown kty, a 1024-bit RSA key and a P-256 key returns the P-256 key",
+      "rule": "decided by ADR 0054 §3 (ADR 0041 §2): the unknown kty member 0 and the RSA member 1 with a modulus under 2048 bits are skipped at import (RFC 7517 §5, SHOULD ignore), and the empty selector matches every member left (§1.3), of which there is one",
+      "jwks": { "keys": [ { "kty": "XYZ", "kid": "x" }, { "$key": "rsa1024" }, { "$public": "p256" } ] },
+      "selector": {},
+      "expect": { "member": 2 }
+    },
+    {
+      "id": "select-rfc7517-a1-by-kid-rsa",
+      "source": "RFC 7517 App. A.1; ADR 0054 §1.2, §2.5",
+      "description": "The RFC 7517 A.1 set by kid 2011-04-29 returns its RSA key",
+      "rule": "decided by ADR 0054 §2.5 (kid, exact equality): only the RSA member has kid 2011-04-29; with no alg or key_use nothing else is checked",
+      "jwks": { "$set": "rfc7517-a1" },
+      "selector": { "kid": "2011-04-29" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-rfc7517-a1-by-kid-ec",
+      "source": "RFC 7517 App. A.1; ADR 0054 §1.2, §2.5",
+      "description": "The RFC 7517 A.1 set by kid 1 returns its EC key",
+      "rule": "decided by ADR 0054 §2.5 (kid, exact equality): only the EC member has kid 1; with no alg or key_use nothing else is checked, so its use enc does not matter",
+      "jwks": { "$set": "rfc7517-a1" },
+      "selector": { "kid": "1" },
+      "expect": { "member": 0 }
+    },
+    {
+      "id": "select-rfc7517-a1-by-alg-rs256",
+      "source": "RFC 7517 App. A.1; ADR 0054 §2.1, §2.2; RFC 7518 §3.3",
+      "description": "The RFC 7517 A.1 set by alg RS256 returns its RSA key",
+      "rule": "decided by ADR 0054 §2.1 (family): only the RSA member serves RS256; its alg is RS256 (§2.2), it has no use (U = sig) or key_ops, and the selector has no kid",
+      "jwks": { "$set": "rfc7517-a1" },
+      "selector": { "alg": "RS256" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-rfc7517-a1-by-alg-ecdh-es",
+      "source": "RFC 7517 App. A.1; ADR 0054 §2.1, §2.3; RFC 7518 §4.6",
+      "description": "The RFC 7517 A.1 set by alg ECDH-ES returns its EC key",
+      "rule": "decided by ADR 0054 §2.1 (family): only the P-256 member serves ECDH-ES; its use enc is the U = enc that ECDH-ES implies (§2.3), it has no alg or key_ops, and the selector has no kid",
+      "jwks": { "$set": "rfc7517-a1" },
+      "selector": { "alg": "ECDH-ES" },
+      "expect": { "member": 0 }
+    },
+    {
+      "id": "select-rfc7517-a3-by-kid",
+      "source": "RFC 7517 App. A.3; ADR 0054 §1.2, §2.5",
+      "description": "The RFC 7517 A.3 set by the kid of its HMAC key returns that key",
+      "rule": "decided by ADR 0054 §2.5 (kid, exact equality): member 0 has no kid, so it never matches a selector with one (§1.2), and member 1's kid is equal; with no alg or key_use nothing else is checked",
+      "jwks": { "$set": "rfc7517-a3" },
+      "selector": { "kid": "HMAC key used in JWS spec Appendix A.1 example" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-rfc7517-a3-by-alg-hs256",
+      "source": "RFC 7517 App. A.3; ADR 0054 §2.2; RFC 7518 §3.2",
+      "description": "The RFC 7517 A.3 set by alg HS256 returns its HMAC key",
+      "rule": "decided by ADR 0054 §2.2 (JWK alg): member 0's alg A128KW is not HS256, and member 1 has no alg; both are oct (§2.1), neither has use or key_ops, and the selector has no kid",
+      "jwks": { "$set": "rfc7517-a3" },
+      "selector": { "alg": "HS256" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "select-pbes2-oct-not-ec",
+      "source": "ADR 0054 §2.1; RFC 7518 §4.8",
+      "description": "PBES2-HS256+A128KW on a P-256 key and an oct key returns the oct key",
+      "rule": "decided by ADR 0054 §2.1 (family): PBES2 is served by an oct key only (its k is the password, RFC 7518 §4.8), and an asymmetric key is never returned for it; member 1 has no alg, use (U = enc) or key_ops, and the selector has no kid",
+      "jwks": { "keys": [ { "$public": "p256" }, { "$key": "oct-16" } ] },
+      "selector": { "alg": "PBES2-HS256+A128KW" },
+      "expect": { "member": 1 }
+    },
+    {
+      "id": "no-match-empty-keys",
+      "source": "ADR 0054 §1.3, §4; RFC 7517 §5",
+      "description": "The empty selector on a set with an empty keys array fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §4: zero matches is NoMatchingKey, an empty set included; the empty selector (§1.3) has no member to match",
+      "jwks": { "keys": [] },
+      "selector": {},
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-unknown-kid",
+      "source": "ADR 0054 §2.5, §4; RFC 7517 §4.5",
+      "description": "A kid that no member carries fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §2.5 (kid): the only member's kid is a, not z, so zero members match (§4)",
+      "jwks": { "keys": [ { "$public": "p256-kid-a" } ] },
+      "selector": { "kid": "z" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-kid-case-mismatch",
+      "source": "ADR 0054 §1.2, §4; RFC 7517 §4.5",
+      "description": "kid a against a member with kid A fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §1.2: kid is compared for exact, case-sensitive equality only (RFC 7517 §4.5), so a is not A and zero members match (§4)",
+      "jwks": { "keys": [ { "$public": "p256-kid-a", "with": { "kid": "A" } } ] },
+      "selector": { "kid": "a" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-kid-member-without-kid",
+      "source": "ADR 0054 §1.2, §4; RFC 7517 §4.5",
+      "description": "A selector kid against a set whose only member has no kid fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §1.2: a member without a kid never matches a selector that has one, so zero members match (§4)",
+      "jwks": { "keys": [ { "$public": "p256" } ] },
+      "selector": { "kid": "a" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-rs256-oct-only",
+      "source": "ADR 0054 §2.1, §7; RFC 8725 §3.1",
+      "description": "RS256 on a set of oct keys only fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §2.1 (family): no oct key serves RS256, so a secret key is never returned for an asymmetric alg (§7, RFC 8725 §3.1) and zero members match (§4)",
+      "jwks": { "keys": [ { "$key": "oct-32" }, { "$key": "oct-64" } ] },
+      "selector": { "alg": "RS256" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-hs256-ec-rsa-only",
+      "source": "ADR 0054 §2.1, §7; RFC 8725 §3.1",
+      "description": "HS256 on a set of an EC and an RSA key fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §2.1 (family): HS256 is served by oct keys only, so an asymmetric key is never returned for it (§7, RFC 8725 §3.1) and zero members match (§4)",
+      "jwks": { "keys": [ { "$public": "p256" }, { "$public": "rsa-2048-rfc7515-a2" } ] },
+      "selector": { "alg": "HS256" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-eddsa-x25519-only",
+      "source": "ADR 0054 §2.1; RFC 8037 §3.1, §3.2",
+      "description": "EdDSA on a set holding only an X25519 key fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §2.1 (family): X25519 never matches EdDSA (RFC 8037 §3.2 is key agreement), so zero members match (§4)",
+      "jwks": { "keys": [ { "$public": "x25519-bob" } ] },
+      "selector": { "alg": "EdDSA" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-es256-key-use-enc-contradiction",
+      "source": "ADR 0054 §2.3, §4; RFC 7517 §4.2",
+      "description": "ES256 with key_use enc fails with NoMatchingKey on a P-256 key that either part alone would select",
+      "rule": "decided by ADR 0054 §2.3 (purpose): key_use enc disagrees with the sig that ES256 implies, so the selector matches nothing; the member, a P-256 key without use or key_ops, matches ES256 alone and key_use enc alone",
+      "jwks": { "keys": [ { "$public": "p256" } ] },
+      "selector": { "alg": "ES256", "key_use": "enc" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-member-alg-binds",
+      "source": "ADR 0054 §2.2, §7; RFC 7517 §4.4, RFC 8725 §3.1",
+      "description": "HS256 on a set whose only oct key has alg HS384 fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §2.2 (JWK alg): a member alg present must equal the selector's, and HS384 is not HS256, so the key stays bound to the alg it names (§7, RFC 8725 §3.1) and zero members match (§4)",
+      "jwks": { "keys": [ { "$key": "oct-48", "with": { "alg": "HS384" } } ] },
+      "selector": { "alg": "HS256" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-key-ops-sign-verify-for-a128kw",
+      "source": "ADR 0054 §2.4, §4; RFC 7517 §4.3",
+      "description": "A128KW on a set whose only oct key has key_ops [sign, verify] fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §2.4 (key_ops): with an alg and no key_op, key_ops must hold an operation A128KW performs in either direction (wrapKey or unwrapKey), and [sign, verify] holds neither, so zero members match (§4)",
+      "jwks": { "keys": [ { "$key": "oct-16", "with": { "key_ops": [ "sign", "verify" ] } } ] },
+      "selector": { "alg": "A128KW" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-every-member-skipped",
+      "source": "ADR 0054 §3, §4; RFC 7517 §5",
+      "description": "The empty selector on a set whose every entry is skipped at import fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §3 (ADR 0041 §2): the unknown kty and the RSA key with a modulus under 2048 bits are both skipped (RFC 7517 §5, SHOULD ignore), so the imported set is empty and zero members match (§4)",
+      "jwks": { "keys": [ { "kty": "XYZ" }, { "$key": "rsa1024" } ] },
+      "selector": {},
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "no-match-rfc7517-a1-es256",
+      "source": "RFC 7517 App. A.1; ADR 0054 §2.1, §2.3",
+      "description": "The RFC 7517 A.1 set by alg ES256 fails with NoMatchingKey",
+      "rule": "decided by ADR 0054 §2.3 (purpose): the only P-256 member has use enc, but ES256 implies U = sig; the RSA member does not serve ES256 (§2.1); so zero members match (§4)",
+      "jwks": { "$set": "rfc7517-a1" },
+      "selector": { "alg": "ES256" },
+      "expect": { "error": "NoMatchingKey" }
+    },
+    {
+      "id": "multiple-es256-two-kidless-p256",
+      "source": "ADR 0054 §4, §5; RFC 7517 §5.1, RFC 7518 §3.4",
+      "description": "ES256 on two P-256 keys without kid fails with MultipleMatchingKeys",
+      "rule": "decided by ADR 0054 §4: both P-256 members pass every check (§2.1; neither has alg, use, key_ops or kid), so two match, and set order implies no preference (RFC 7517 §5.1)",
+      "jwks": { "keys": [ { "$public": "p256-cand-1" }, { "$public": "p256-cand-2" } ] },
+      "selector": { "alg": "ES256" },
+      "expect": { "error": "MultipleMatchingKeys" }
+    },
+    {
+      "id": "multiple-duplicate-kid",
+      "source": "ADR 0054 §2.5, §4; RFC 7517 §4.5",
+      "description": "A kid that two members of different families carry fails with MultipleMatchingKeys",
+      "rule": "decided by ADR 0054 §2.5 (kid): both members carry kid dup, and with no alg or key_use nothing else is checked, so two match (§4)",
+      "jwks": { "keys": [ { "$public": "p256-kid-a", "with": { "kid": "dup" } }, { "$key": "oct-32", "with": { "kid": "dup" } } ] },
+      "selector": { "kid": "dup" },
+      "expect": { "error": "MultipleMatchingKeys" }
+    },
+    {
+      "id": "multiple-duplicate-kid-es256",
+      "source": "ADR 0054 §2.1, §2.5, §4; RFC 7517 §4.5",
+      "description": "ES256 with a kid that two P-256 members carry fails with MultipleMatchingKeys",
+      "rule": "decided by ADR 0054 §2.1 and §2.5: both members are P-256 with kid dup and neither has alg, use or key_ops, so two match (§4)",
+      "jwks": { "keys": [ { "$public": "p256-kid-a", "with": { "kid": "dup" } }, { "$public": "p256-kid-b", "with": { "kid": "dup" } } ] },
+      "selector": { "kid": "dup", "alg": "ES256" },
+      "expect": { "error": "MultipleMatchingKeys" }
+    },
+    {
+      "id": "multiple-empty-selector-two-keys",
+      "source": "ADR 0054 §1.3, §4; RFC 7517 §5.1",
+      "description": "The empty selector on a set of two keys fails with MultipleMatchingKeys",
+      "rule": "decided by ADR 0054 §1.3: the empty selector matches every member, here two, so §4 gives MultipleMatchingKeys",
+      "jwks": { "keys": [ { "$key": "oct-32" }, { "$public": "p256" } ] },
+      "selector": {},
+      "expect": { "error": "MultipleMatchingKeys" }
+    },
+    {
+      "id": "multiple-ecdh-es-p256-and-x25519",
+      "source": "ADR 0054 §2.1, §4; RFC 7518 §4.6, RFC 8037 §3.2",
+      "description": "ECDH-ES on a P-256 and an X25519 key fails with MultipleMatchingKeys",
+      "rule": "decided by ADR 0054 §2.1 (family): ECDH-ES is served by both P-256 (RFC 7518 §4.6) and X25519 (RFC 8037 §3.2), neither member has alg, use or key_ops, and the selector has no kid, so two match (§4); crv selection is backlog (ADR 0054 Consequences)",
+      "jwks": { "keys": [ { "$public": "p256-ecdh" }, { "$public": "x25519-bob" } ] },
+      "selector": { "alg": "ECDH-ES" },
+      "expect": { "error": "MultipleMatchingKeys" }
+    },
+    {
+      "id": "multiple-rfc7517-a3-empty-selector",
+      "source": "RFC 7517 App. A.3; ADR 0054 §1.3, §4",
+      "description": "The RFC 7517 A.3 set with the empty selector fails with MultipleMatchingKeys",
+      "rule": "decided by ADR 0054 §1.3: the empty selector matches both oct members, so §4 gives MultipleMatchingKeys",
+      "jwks": { "$set": "rfc7517-a3" },
+      "selector": {},
+      "expect": { "error": "MultipleMatchingKeys" }
+    },
+    {
+      "id": "multiple-rfc7517-a3-by-alg-a128kw",
+      "source": "RFC 7517 App. A.3; ADR 0054 §2.1, §2.2, §4",
+      "description": "The RFC 7517 A.3 set by alg A128KW fails with MultipleMatchingKeys",
+      "rule": "decided by ADR 0054 §2.2 (JWK alg): member 0's alg is A128KW, and member 1 has no alg, use or key_ops, so it matches any symmetric alg its oct family serves (§2.1); selection checks no key size (§2, not part of selection), so its 64 octets do not exclude it, and two match (§4); a kid disambiguates",
+      "jwks": { "$set": "rfc7517-a3" },
+      "selector": { "alg": "A128KW" },
+      "expect": { "error": "MultipleMatchingKeys" }
+    },
+    {
+      "id": "unsupported-alg-none",
+      "source": "ADR 0054 §1.1; RFC 7518 §3.6, RFC 8725 §3.1",
+      "description": "alg none is refused with UnsupportedAlgorithm",
+      "rule": "decided by ADR 0054 §1.1: the alg setter refuses none, which is not a JWS algorithm polyjose implements (RFC 8725 §3.1), before any set member is read",
+      "jwks": { "keys": [ { "$public": "p256" } ] },
+      "selector": { "alg": "none" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "unsupported-alg-rsa1-5",
+      "source": "ADR 0054 §1.1; RFC 7518 §4.2",
+      "description": "alg RSA1_5 is refused with UnsupportedAlgorithm",
+      "rule": "decided by ADR 0054 §1.1: the alg setter refuses RSA1_5, a key management algorithm polyjose does not implement (ADR 0021), before any set member is read",
+      "jwks": { "keys": [ { "$public": "rsa-2048-rfc7515-a2" } ] },
+      "selector": { "alg": "RSA1_5" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "unsupported-alg-rsa-oaep",
+      "source": "ADR 0054 §1.1; RFC 7518 §4.3",
+      "description": "alg RSA-OAEP is refused with UnsupportedAlgorithm",
+      "rule": "decided by ADR 0054 §1.1: the alg setter refuses RSA-OAEP, which uses SHA-1 and which polyjose does not implement (ADR 0022), before any set member is read",
+      "jwks": { "keys": [ { "$public": "rsa-2048-rfc7515-a2" } ] },
+      "selector": { "alg": "RSA-OAEP" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "unsupported-alg-a256gcm-enc-name",
+      "source": "ADR 0054 §1.1; RFC 7518 §5.1",
+      "description": "alg A256GCM, a content encryption name, is refused with UnsupportedAlgorithm even when a member's alg is A256GCM",
+      "rule": "decided by ADR 0054 §1.1: A256GCM is an enc name (RFC 7518 §5.1), neither a JWS nor a key management alg, so the alg setter refuses it; a dir key is selected with alg dir (§2.2)",
+      "jwks": { "keys": [ { "$key": "oct-32", "with": { "alg": "A256GCM" } } ] },
+      "selector": { "alg": "A256GCM" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "unsupported-alg-unregistered",
+      "source": "ADR 0054 §1.1; RFC 7518 §7.1",
+      "description": "An unregistered alg foo is refused with UnsupportedAlgorithm",
+      "rule": "decided by ADR 0054 §1.1: the alg setter refuses an unregistered name (ADR 0030 §5), before any set member is read",
+      "jwks": { "keys": [ { "$public": "p256" } ] },
+      "selector": { "alg": "foo" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "unsupported-alg-case-variant",
+      "source": "ADR 0054 §1.1; RFC 7515 §4.1.1",
+      "description": "alg es256, a case variant of ES256, is refused with UnsupportedAlgorithm",
+      "rule": "decided by ADR 0054 §1.1: alg values are case-sensitive (RFC 7515 §4.1.1), so es256 is an unregistered name and the alg setter refuses it",
+      "jwks": { "keys": [ { "$public": "p256" } ] },
+      "selector": { "alg": "es256" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "unsupported-alg-empty-string",
+      "source": "ADR 0054 §1.1; RFC 7518 §7.1",
+      "description": "An empty alg is refused with UnsupportedAlgorithm, not treated as absent",
+      "rule": "decided by ADR 0054 §1.1: the empty string is no algorithm polyjose implements, so the alg setter refuses it; only an absent alg skips the alg checks (§2)",
+      "jwks": { "keys": [ { "$public": "p256" } ] },
+      "selector": { "alg": "" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "unsupported-key-use-unregistered",
+      "source": "ADR 0054 §1.1; RFC 7517 §4.2",
+      "description": "key_use foo is refused with UnsupportedAlgorithm",
+      "rule": "decided by ADR 0054 §1.1: the key_use setter accepts only sig and enc (RFC 7517 §4.2), before any set member is read",
+      "jwks": { "keys": [ { "$public": "p256" } ] },
+      "selector": { "key_use": "foo" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "unsupported-rsa-private-member",
+      "source": "RFC 7517 App. A.2; ADR 0054 §3, §4",
+      "description": "The RFC 7517 A.2 set, which holds an RSA private key, fails with UnsupportedAlgorithm",
+      "rule": "decided by ADR 0054 §3 (ADR 0021, ADR 0029 §3): an RSA private member fails the whole set import, so no selection runs (§4 precedence 1)",
+      "jwks": { "$set": "rfc7517-a2" },
+      "selector": {},
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "invalid-key-keys-missing",
+      "source": "ADR 0054 §4; RFC 7517 §5",
+      "description": "A JWK Set without a keys member fails with InvalidKey",
+      "rule": "decided by ADR 0054 §4 precedence 1 (ADR 0041 §2): a set must have a keys array (RFC 7517 §5, MUST), so the import fails with InvalidKey before any selection",
+      "jwks": {},
+      "selector": {},
+      "expect": { "error": "InvalidKey" }
+    },
+    {
+      "id": "invalid-key-keys-not-array",
+      "source": "ADR 0054 §4; RFC 7517 §5",
+      "description": "A JWK Set whose keys member is one JWK object, not an array, fails with InvalidKey",
+      "rule": "decided by ADR 0054 §4 precedence 1 (ADR 0041 §2): keys must be an array of JWKs (RFC 7517 §5), so the import fails with InvalidKey before any selection",
+      "jwks": { "keys": { "kty": "oct", "k": "X8EwrK_w_mNZySX8TCh4Bw" } },
+      "selector": {},
+      "expect": { "error": "InvalidKey" }
+    },
+    {
+      "id": "precedence-keys-not-array-before-alg",
+      "source": "ADR 0054 §4; RFC 7517 §5",
+      "description": "A keys member that is a string, with an unregistered alg foo, fails with InvalidKey: the set import comes first",
+      "rule": "decided by ADR 0054 §4 precedence: JWK Set import errors (1) come before selector validation (2), so InvalidKey and not the UnsupportedAlgorithm of alg foo",
+      "jwks": { "keys": "not an array" },
+      "selector": { "alg": "foo" },
+      "expect": { "error": "InvalidKey" }
+    },
+    {
+      "id": "precedence-keys-null-before-key-use",
+      "source": "ADR 0054 §4; RFC 7517 §5",
+      "description": "A keys member that is null, with key_use foo, fails with InvalidKey: the set import comes first",
+      "rule": "decided by ADR 0054 §4 precedence: JWK Set import errors (1) come before selector validation (2), so InvalidKey and not the UnsupportedAlgorithm of key_use foo",
+      "jwks": { "keys": null },
+      "selector": { "key_use": "foo" },
+      "expect": { "error": "InvalidKey" }
+    },
+    {
+      "id": "precedence-empty-set-alg-before-no-match",
+      "source": "ADR 0054 §4; RFC 7518 §7.1",
+      "description": "An empty set with an unregistered alg foo fails with UnsupportedAlgorithm: the selector is validated before selection",
+      "rule": "decided by ADR 0054 §4 precedence: selector validation (2) comes before selection (3), so UnsupportedAlgorithm and not the NoMatchingKey of an empty set",
+      "jwks": { "keys": [] },
+      "selector": { "alg": "foo" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "precedence-key-use-before-multiple",
+      "source": "ADR 0054 §4; RFC 7517 §4.2",
+      "description": "Two keys with key_use foo fail with UnsupportedAlgorithm: the selector is validated before selection",
+      "rule": "decided by ADR 0054 §4 precedence: selector validation (2) comes before selection (3), so UnsupportedAlgorithm and not the MultipleMatchingKeys that the two members would give an empty selector",
+      "jwks": { "keys": [ { "$key": "oct-32" }, { "$public": "p256" } ] },
+      "selector": { "key_use": "foo" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    },
+    {
+      "id": "precedence-rsa-private-before-no-match",
+      "source": "RFC 7517 App. A.2; ADR 0054 §3, §4",
+      "description": "The RFC 7517 A.2 set with a kid no member carries fails with UnsupportedAlgorithm: the set import comes first",
+      "rule": "decided by ADR 0054 §4 precedence: the RSA private member fails the import (1; §3, ADR 0021) before selection (3) could give NoMatchingKey for the unknown kid",
+      "jwks": { "$set": "rfc7517-a2" },
+      "selector": { "kid": "no-such-kid" },
+      "expect": { "error": "UnsupportedAlgorithm" }
+    }
+  ]
+}
