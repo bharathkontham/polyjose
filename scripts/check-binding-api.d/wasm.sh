@@ -19,7 +19,7 @@
 # (ADR 0031 §3). That is the build's failure, reported by the script itself and by the package
 # build, not a naming one: the names are still checked, and a note says so. Any other build
 # failure fails the mode. Without wasm-pack, cargo, the wasm32-unknown-unknown target, node, npm,
-# gzip or brotli the mode is SKIPPED, never passed.
+# gzip, brotli or openssl the mode is SKIPPED, never passed.
 
 MODE_KINDS="op"
 
@@ -29,7 +29,7 @@ mode_derive() {
   for f in Cargo.toml scripts/build-package.sh package.template.json; do
     [ -f "$wasm/$f" ] || skip "bindings/wasm/$f missing"
   done
-  for tool in cargo wasm-pack node npm gzip brotli; do
+  for tool in cargo wasm-pack node npm gzip brotli openssl; do
     command -v "$tool" >/dev/null 2>&1 || skip "$tool missing"
   done
   if command -v rustup >/dev/null 2>&1; then
