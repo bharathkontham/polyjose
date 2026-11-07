@@ -157,3 +157,34 @@ the host process, such as a core dump, a heap read or swap. The output figure "o
 value" in ADR 0030 §7.3, which ADR 0033 §6 restates, is corrected by ADR 0058; the counts above
 apply. The planned fix is opaque key handles and caller-provided output buffers in 0.2.0 (ADR 0058,
 owner decision 1). A zeroizing global allocator stays in the backlog (owner decision 3).
+
+### Which native library the desktop JVM loads
+
+Android is not affected: the app loads `libpolyjose_ffi.so` from its own read-only native library
+directory.
+
+On the desktop JVM, the generated `findLibraryName` (in `polyjose_ffi.kt`) returns the bare name
+`polyjose_ffi`, unless the system property `uniffi.component.polyjose_ffi.libraryOverride` is set.
+JNA then looks for the library in this order. This is the current behaviour, read from JNA 5.19.1's
+`NativeLibrary.loadLibrary` with `javap -c` (0008 code review, S3):
+
+1. the directories in `jna.library.path`;
+2. the OS loader's search for the bare name: `LD_LIBRARY_PATH`, the `DYLD_*` variables and the dyld
+   fallback paths, and on Windows the executable's directory, the current directory and `PATH`;
+3. the system library paths;
+4. versioned variants of the name;
+5. only then the copy inside the jar, which JNA first extracts into its temporary directory
+   (`jna.tmpdir`, or else a per-user cache directory).
+
+So a `libpolyjose_ffi.so`, `libpolyjose_ffi.dylib` or `polyjose_ffi.dll` found by steps 1 to 4 is
+loaded instead of the jar's copy. UniFFI's checksum check does not prevent that, because a planted
+library can export matching checksums. For a hardened desktop deployment:
+
+- point the loader at a library you control, in a directory the application cannot write to, with
+  `-Duniffi.component.polyjose_ffi.libraryOverride=<absolute path in a read-only directory>` or
+  `-Djna.library.path=<read-only directory>`;
+- and set `-Djna.tmpdir=<a private directory>`, so that an extracted copy is not written to a
+  shared location.
+
+Task F05 of feature 0008 may change this default so that the jar loads only its own verified copy.
+This section is updated when it lands.
