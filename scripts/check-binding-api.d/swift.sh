@@ -8,7 +8,12 @@
 # allows "a few", and each one is public API, so it must be in the inventory too). A text parse,
 # so no build is needed:
 #   1. comments (`//`, `/* */`, nested) and string literals are blanked, keeping the line breaks;
-#   2. the declarations are read by brace depth:
+#   2. the declarations are read by brace depth, each line in pieces that end after a `{`, `}` or
+#      `;`, so declarations sharing a line with an extension, a brace or each other count too,
+#      and without leading attributes (`@available(iOS 16, *) public func f()` is `public func f()`,
+#      also when the arguments span lines and the declaration follows the closing `)`)
+#      or modifiers before the access keyword (`@MainActor final public class Y` is `public class Y`);
+#      `open` (public, and also subclassable or overridable outside the module) counts as `public`:
 #      - an operation is a `public func <name>(` at depth 0;
 #      - a record is a `public struct <Name>` at depth 0, and its fields are the parameters of its
 #        `public init(` (depth 1): no default is a required field, `= nil` an optional one (`?`)
@@ -76,6 +81,51 @@ BEGIN { n = split(framework, t, " "); for (i = 1; i <= n; i++) plumbing[t[i]] = 
 function where() { f = FILENAME; sub(/\.stripped$/, "", f); sub(/.*\//, "", f); return f ":" FNR }
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function count(s, ch,    k, m) { m = 0; for (k = 1; k <= length(s); k++) if (substr(s, k, 1) == ch) m++; return m }
+# A declaration without its leading attributes (`@discardableResult`, `@available(iOS 16, *)`, any
+# number, each with an optional parenthesized argument clause), so `@inlinable public func f()` is
+# read as `public func f()`. String literals and comments are already blank, so their parentheses
+# do not count. An argument clause still open at the end of the piece (`@available(iOS 16,`) is
+# left open in attr_open, its depth, and the pieces after it are read by attr_close. One still open
+# at the end of its file fails the mode, so a parse gone wrong cannot hide the rest of the file.
+function noattrs(s,    i, d, c) {
+  while (match(s, /^@[A-Za-z_][A-Za-z0-9_]*/)) {
+    s = substr(s, RLENGTH + 1)
+    if (s ~ /^[ \t]*\(/) {
+      sub(/^[ \t]*/, "", s); d = 0
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "(") d++
+        else if (c == ")" && --d == 0) break
+      }
+      if (d > 0) { attr_open = d; attr_at = where(); return "" }
+      s = substr(s, i + 1)
+    }
+    s = trim(s)
+  }
+  return s
+}
+# The rest of a piece after the `)` that closes an attribute's argument clause left open by an
+# earlier piece or line (attr_open), or "" while it is still open. The rest is then read as the
+# start of a declaration: `@available(iOS 16,` then `*) public func f() {}` is `public func f()`.
+function attr_close(s,    i, c) {
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c == "(") attr_open++
+    else if (c == ")" && --attr_open == 0) return trim(substr(s, i + 1))
+  }
+  return ""
+}
+# A declaration from its access keyword on, when declaration modifiers (any number, each with an
+# optional argument such as `nonisolated(unsafe)`, mixed with attributes) come before `public` or
+# `open`: `@MainActor final public class Y` is read as `public class Y`. Without `public` or `open`
+# after them, the modifiers stay (`final class Z` is not public), only the attributes go.
+function lead(s,    t) {
+  s = noattrs(s); t = s
+  while (match(t, /^(final|nonisolated|override|static|class|convenience|required|dynamic|lazy|mutating|nonmutating|indirect|prefix|postfix|infix|unowned|weak|optional|distributed)([ \t]*\([^()]*\))?[ \t]+/))
+    t = noattrs(substr(t, RLENGTH + 1))
+  if (t != s && t ~ /^(public|open)([ \t]|$)/) return t
+  return s
+}
 # The parameters of a collected `public init(...)`: name and the default's form.
 function params(text, record,    i, c, d, p, cur, name, list, k) {
   sub(/^[ \t]*public[ \t]+init[ \t]*\(/, "", text); sub(/\)[ \t]*(throws[ \t]*)?\{.*$/, "", text)
@@ -97,20 +147,24 @@ function params(text, record,    i, c, d, p, cur, name, list, k) {
     print "field " record "." name
   }
 }
-FNR == 1 { depth = 0; pending = 0; collecting = 0 }
-{
-  line = $0; text = trim(line)
+# One piece of a line: the text up to and including its first `{`, `}` or `;`, or the rest of the
+# line (see the main rule below).
+function piece(line) {
+  text = trim(line)
   if (collecting) {
     init = init " " text
     if (text ~ /\)[ \t]*(throws[ \t]*)?\{/) { params(init, block_name); inits[block_name]++; collecting = 0 }
     depth += count(line, "{") - count(line, "}")
-    next
+    return
   }
-  if (depth == 0 && text == "public") { pending = 1; next }
+  if (attr_open > 0) text = attr_close(text)
+  text = lead(text)
+  if (depth == 0 && (text == "public" || text == "open")) { pending = text; return }
   decl = text
-  if (pending) { decl = "public " text; pending = 0 }
-  if (depth == 0 && decl ~ /^public[ \t]/) {
-    rest = decl; sub(/^public[ \t]+/, "", rest)
+  if (pending != "" && text != "") { decl = pending " " text; pending = "" }
+  if (depth == 0 && decl ~ /^(public|open)[ \t]/) {
+    access = decl; sub(/[ \t].*/, "", access)
+    rest = decl; sub(/^(public|open)[ \t]+/, "", rest)
     kind = rest; sub(/[ \t].*/, "", kind)
     name = rest; sub(/^[a-z]+[ \t]+/, "", name); sub(/[^A-Za-z0-9_].*/, "", name)
     framework_item = (index(name, prefix) == 1 || (name in plumbing))
@@ -121,7 +175,7 @@ FNR == 1 { depth = 0; pending = 0; collecting = 0 }
     } else if (kind == "enum" && name == error_type) {
       seen_error = 1
     } else if (!framework_item) {
-      print "error " where() ": public " kind " " name " is neither an operation, a record nor the error type"
+      print "error " where() ": " access " " kind " " name " is neither an operation, a record nor the error type"
     }
   }
   if (depth == 0) {
@@ -143,15 +197,32 @@ FNR == 1 { depth = 0; pending = 0; collecting = 0 }
         if (text ~ /\)[ \t]*(throws[ \t]*)?\{/) { params(init, block_name); inits[block_name]++ } else collecting = 1
       }
     }
-    if (block_kind == "extension" && index(block_name, prefix) != 1 && text ~ /^public[ \t]/) {
-      m = text; sub(/^public[ \t]+((static|final|override|mutating|convenience)[ \t]+)*(var|let|func|init|subscript)[ \t]*/, "", m); sub(/[^A-Za-z0-9_].*/, "", m)
-      print "error " where() ": public member " (m == "" ? "init" : m) " in an extension of " block_name " (a hand-written member is public API: add it to the inventory and to this mode)"
+    if (block_kind == "extension" && index(block_name, prefix) != 1 && text ~ /^(public|open)[ \t]/) {
+      access = text; sub(/[ \t].*/, "", access)
+      m = text; sub(/^(public|open)[ \t]+((static|class|final|override|mutating|convenience)[ \t]+)*(var|let|func|init|subscript)[ \t]*/, "", m); sub(/[^A-Za-z0-9_].*/, "", m)
+      print "error " where() ": " access " member " (m == "" ? "init" : m) " in an extension of " block_name " (a hand-written member is public API: add it to the inventory and to this mode)"
     }
   }
   depth += count(line, "{") - count(line, "}")
   if (depth < 0) { print "error " where() ": unbalanced braces"; depth = 0 }
 }
+function attr_unclosed() { if (attr_open > 0) print "error " attr_at ": attribute argument list never closed" }
+FNR == 1 { attr_unclosed(); depth = 0; pending = ""; collecting = 0; attr_open = 0 }
+# Each line is read in pieces that end after a `{`, `}` or `;`, so a declaration that shares its
+# line with a brace or another declaration (`extension T { public func f() {} }`, `} public func
+# g() {}`, `public func a() {}; public func b() {}`) is read at its own depth like one on a line of
+# its own. A line with at most one brace, at its end, is one piece.
+{
+  rest_of_line = $0
+  do {
+    if (match(rest_of_line, /[{};]/)) {
+      chunk = substr(rest_of_line, 1, RSTART); rest_of_line = substr(rest_of_line, RSTART + 1)
+    } else { chunk = rest_of_line; rest_of_line = "" }
+    piece(chunk)
+  } while (rest_of_line != "")
+}
 END {
+  attr_unclosed()
   if (!seen_error) print "error no public enum " error_type " (ADR 0030 §5)"
   else if (!has_code) print "error " error_type " has no public func code() -> String (ADR 0030 §5)"
   for (r in records) if (inits[r] != 1) print "error record " r " has " (inits[r] + 0) " public init(...), not 1"
