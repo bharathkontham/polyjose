@@ -57,7 +57,11 @@ let package = Package(
         .testTarget(
             name: "PolyjoseTests",
             dependencies: ["Polyjose"],
-            path: "platforms/swift/Tests/PolyjoseTests"
+            path: "platforms/swift/Tests/PolyjoseTests",
+            resources: [
+                .copy("Resources/vectors"),
+                .copy("Resources/schema.json"),
+            ]
         ),
     ],
     swiftLanguageModes: [.v6]
