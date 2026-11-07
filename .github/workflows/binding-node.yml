@@ -115,9 +115,25 @@ jobs:
         if: ${{ !matrix.image }}
         run: bindings/node/scripts/ci-build.sh "${{ matrix.target }}"
 
-      # musl jobs: the same script inside Alpine. rustup comes from Alpine's own package; the
-      # container's default target is the runner's musl target, built dynamically linked (napi
-      # build adds -crt-static for musl).
+      # The RSA symbol guard (ADR 0049 §1) for this job's target (review-security.md L2). The guard
+      # builds for the host, and on these runners the host is the target (ci-build.sh checked
+      # that), so code compiled only for linux, musl or windows is read as object code too, not only
+      # by check-deps.sh's text scan. It needs the toolchain's llvm-nm and llvm-ar (llvm-tools); it
+      # looks for them in the toolchain without an .exe suffix, so on Windows their directory goes
+      # on PATH, where its PATH lookup finds them. The musl jobs run it inside Alpine, below.
+      - name: RSA symbol guard (native)
+        if: ${{ !matrix.image }}
+        run: |
+          rustup component add llvm-tools
+          if [ "$RUNNER_OS" = Windows ]; then
+            host=$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')
+            PATH="$(cygpath -u "$(rustc --print sysroot)")/lib/rustlib/$host/bin:$PATH"
+          fi
+          scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
+
+      # musl jobs: the same script inside Alpine, then the RSA symbol guard there (L2, above).
+      # rustup comes from Alpine's own package; the container's default target is the runner's
+      # musl target, built dynamically linked (napi build adds -crt-static for musl).
       - name: ci-build.sh (Alpine)
         if: ${{ matrix.image }}
         env:
@@ -132,8 +148,10 @@ jobs:
               . "$HOME/.cargo/env"
               rustup toolchain install
               rustup target add "$TARGET"
+              rustup component add llvm-tools
               rustup show
               bindings/node/scripts/ci-build.sh "$TARGET"
+              scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
             '
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
