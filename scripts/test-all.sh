@@ -38,7 +38,13 @@ has_wasm_suite() {
 }
 run() { local name=$1; shift; echo "==> $name"; if "$@"; then record "$name" PASS; else record "$name" FAIL; fi; }
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/test-all.XXXXXX") || { echo "mktemp failed"; exit 2; }
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed (feature 0013 F10, pipeline rule 9): macOS /bin/bash 3.2 runs an EXIT trap with
+# $? = 0 after a syntax error when errexit is on (bash 5 keeps 2), so a guard broken by an edit
+# could exit 0. `completed` is set only by the last line; the trap keeps a non-zero status and
+# turns 0 into 2 when the script stopped before it. Every scripts/*.sh with an EXIT trap does the
+# same (scripts/tests/syntax/guards.sh).
+completed=""
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-all.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 # Each binding feature owns its platform's suite as one script (feature 0013 T04, ADR 0030 §1), so
 # the four can change their test commands without editing this file. platform_script prints it.
 platform_script() {
@@ -390,4 +396,4 @@ summary="$summary$missing_results$waived_results"
 $skipped_runners"
 
 printf "\nSummary:%b\n" "$summary"
-exit $status
+completed=1; exit "$status"
