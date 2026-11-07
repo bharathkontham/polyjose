@@ -1,0 +1,23 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a JSON JWS with a bad signature",
+  "operation": "jws.verify",
+  "input": {
+    "jws": {
+      "payload": "cGF5bG9hZA",
+      "protected": "eyJhbGciOiJIUzI1NiJ9",
+      "signature": "bad"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "allowed_algs": [
+      "HS256"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): ECDH-ES needs a curve, so it is refused",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "ECDH-ES"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

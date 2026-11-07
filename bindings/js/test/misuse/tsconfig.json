@@ -1,0 +1,12 @@
+// A project that must FAIL to type-check (test.sh checks it does, with the expected
+// diagnostics). It imports the facade by its package name, so it type-checks against the
+// tsc-generated declarations in dist/ (ADR 0047), not the sources.
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../.."
+  },
+  "include": ["*.ts"],
+  "exclude": []
+}

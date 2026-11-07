@@ -1,0 +1,30 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a compact JWE with every decrypt option",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "h.k.iv.ct-fixture.tag",
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "allowed_algs": [
+      "A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ],
+    "understood_crit": [
+      "exp"
+    ],
+    "max_input_len": 1000,
+    "max_recipients": 1,
+    "max_pbes2_count": 10000,
+    "max_decompressed_len": 250000
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "Zml4dHVyZQ",
+    "recipient": 0
+  }
+}
