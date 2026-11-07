@@ -40,6 +40,15 @@
 //! [`JwkSet::verification_candidates`](crate::jwk::JwkSet::verification_candidates)
 //! picks the keys that may verify a JWS by family, `alg`, `use`, `key_ops`
 //! and `kid` (ADR 0029 §2).
+//! [`JwkSelector`](crate::jwk::JwkSelector) holds validated `kid`, `alg`,
+//! `use` and `key_ops` criteria for picking keys from a set (ADR 0054 §1).
+//!
+//! # Thumbprints
+//!
+//! [`Jwk::thumbprint`][thumbprint] and [`Jwk::thumbprint_uri`][thumbprint_uri]
+//! give the RFC 7638 §3 thumbprint and the RFC 9278 §3 URI with SHA-256,
+//! SHA-384 or SHA-512, chosen by [`ThumbprintHash`](crate::jwk::ThumbprintHash)
+//! (ADR 0054 §8).
 //!
 //! # What import checks
 //!
@@ -189,6 +198,8 @@
 //! [to_public]: crate::jwk::Jwk::to_public
 //! [permits]: crate::jwk::Jwk::permits
 //! [other_params]: crate::jwk::Jwk::other_params
+//! [thumbprint]: crate::jwk::Jwk::thumbprint
+//! [thumbprint_uri]: crate::jwk::Jwk::thumbprint_uri
 
 use core::cmp::Ordering;
 use core::fmt;
@@ -211,7 +222,8 @@ mod set;
 mod thumbprint;
 pub(crate) mod x25519_consistency;
 
-pub use set::JwkSet;
+pub use set::{JwkSelector, JwkSet};
+pub use thumbprint::ThumbprintHash;
 use x25519_consistency::{X25519_PRIVATE_MISMATCH, x25519_private_matches};
 
 /// The `kty` (key type) values polyjose supports (RFC 7517 §4.1,

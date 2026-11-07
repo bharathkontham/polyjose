@@ -16,8 +16,14 @@ export interface Dirent {
   isSymbolicLink(): boolean;
 }
 
+/** A Node `Buffer`: the raw bytes of a file, decoded only on request. */
+export interface NodeBuffer extends Uint8Array {
+  toString(encoding?: "utf8"): string;
+}
+
 export interface NodeFs {
   readFileSync(path: string, encoding: "utf8"): string;
+  readFileSync(path: string): NodeBuffer;
   writeFileSync(path: string, data: string): void;
   readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
   mkdirSync(path: string, options: { recursive: true }): string | undefined;
@@ -33,6 +39,15 @@ export interface NodePath {
   relative(from: string, to: string): string;
   dirname(path: string): string;
   readonly sep: string;
+}
+
+export interface NodeHash {
+  update(data: Uint8Array): NodeHash;
+  digest(): NodeBuffer;
+}
+
+export interface NodeCrypto {
+  createHash(algorithm: "sha256"): NodeHash;
 }
 
 export interface NodeOs {
@@ -74,6 +89,7 @@ export interface NodeProcess {
   getBuiltinModule(id: "node:fs"): NodeFs;
   getBuiltinModule(id: "node:path"): NodePath;
   getBuiltinModule(id: "node:os"): NodeOs;
+  getBuiltinModule(id: "node:crypto"): NodeCrypto;
   getBuiltinModule(id: "node:test"): NodeTest;
   getBuiltinModule(id: "node:assert/strict"): NodeAssert;
 }
@@ -84,5 +100,6 @@ export const process: NodeProcess = (globalThis as unknown as { process: NodePro
 export const fs: NodeFs = process.getBuiltinModule("node:fs");
 export const path: NodePath = process.getBuiltinModule("node:path");
 export const os: NodeOs = process.getBuiltinModule("node:os");
+export const crypto: NodeCrypto = process.getBuiltinModule("node:crypto");
 export const assert: NodeAssert = process.getBuiltinModule("node:assert/strict");
 export const test: NodeTest["test"] = process.getBuiltinModule("node:test").test;

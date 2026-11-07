@@ -14,52 +14,20 @@ export LC_ALL=C
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-# writes_results <platform script> <runner>...: the fixture also writes target/conformance/<runner>.json.
-writes_results() {
-  local script=$1 runner
-  shift
-  for runner in "$@"; do
-    fixture_append "$script" "mkdir -p target/conformance && echo '{}' >target/conformance/$runner.json"
-  done
-}
-
-# parity_fixture <exit status> <line>...: a fixture scripts/conformance-parity.sh that also prints its
-# arguments and which results files it found.
-parity_fixture() {
-  fixture scripts/conformance-parity.sh "$@"
-  fixture_append scripts/conformance-parity.sh 'echo "parity fixture args: $*"'
-  fixture_append scripts/conformance-parity.sh 'echo "parity fixture saw: $(cd target/conformance && ls | tr "\n" " ")"'
-}
-
-# line_of <ERE>: the number of the first line of the last output that matches, or 0.
-line_of() { grep -nE -- "$1" "$scratch/out" | head -1 | cut -d: -f1 || true; }
-
-# check_order <description> <ERE before> <ERE after>: both match, the first one earlier.
-check_order() {
-  local a b
-  tests_run=$((tests_run + 1))
-  a=$(line_of "$2"); b=$(line_of "$3")
-  if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then
-    echo "ok   - $1"
-  else
-    echo "FAIL - $1: wanted /$2/ (line ${a:-none}) before /$3/ (line ${b:-none})"
-    sed 's/^/       /' "$scratch/out"
-    tests_failed=$((tests_failed + 1))
-  fi
-}
-
 # --- Parity runs after the platform suites --------------------------------------------------------------
 
 new_case pass
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
-writes_results bindings/wasm/test.sh rust-core wasm-node
+writes_results bindings/wasm/test.sh rust-core
+writes_own_results bindings/wasm/test.sh wasm
 fixture platforms/android/test.sh 0 'fixture android suite ran'
-parity_fixture 0 'SKIPPED (no results: node)' 'SKIPPED (no results: jvm)' 'parity: 1 runner matches rust-core'
+writes_own_results platforms/android/test.sh android
+parity_fixture 0 'SKIPPED (no results: node)' 'SKIPPED (no results: swift-macos)' 'parity: 6 runners match rust-core'
 run_test_all wasm android
 check "parity runs when rust-core.json exists and passes on exit 0" 0 \
   '^  wasm: PASS$' '^  android: PASS$' '^  parity: PASS$' \
-  '^    SKIPPED \(no results: node\)$' '^    SKIPPED \(no results: jvm\)$' \
-  '^parity fixture args: target/conformance$' '^parity fixture saw: rust-core\.json wasm-node\.json $'
+  '^    SKIPPED \(no results: node\)$' '^    SKIPPED \(no results: swift-macos\)$' \
+  '^parity fixture args: target/conformance$' '^parity fixture saw: .*jvm\.json rust-core\.json .*wasm-node\.json '
 check_order "parity runs after every platform suite" '^fixture android suite ran$' '^==> parity$'
 check_order "the parity line follows the platform lines in the summary" '^  android: PASS$' '^  parity: PASS$'
 check_order "the SKIPPED runner lines follow the parity line" '^  parity: PASS$' '^    SKIPPED \(no results: node\)$'
@@ -69,7 +37,8 @@ else echo "FAIL - parity runs once per test-all.sh run"; tests_failed=$((tests_f
 
 new_case fail
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
-writes_results bindings/wasm/test.sh rust-core wasm-node
+writes_results bindings/wasm/test.sh rust-core
+writes_own_results bindings/wasm/test.sh wasm
 parity_fixture 1 'SKIPPED (no results: node)' 'wasm-node.json#3: rust-core ok, wasm-node AlgorithmNotAllowed'
 run_test_all wasm
 check "a parity script that exits non-zero FAILs parity and the run" 1 \
@@ -82,29 +51,33 @@ mkdir -p "$case_dir/target/conformance"
 echo '{}' >"$case_dir/target/conformance/rust-core.json"
 echo '{}' >"$case_dir/target/conformance/node.json"
 fixture platforms/android/test.sh 0 'fixture android suite ran'
+writes_own_results platforms/android/test.sh android
 parity_fixture 0 'parity: ok'
 run_test_all android
 check "results left by an earlier run are cleared, so parity has no reference" 0 \
   '^  android: PASS$' '^  parity: SKIPPED \(no reference results: target/conformance/rust-core\.json'
 check_absent "parity does not run on stale results" '^parity fixture'
 tests_run=$((tests_run + 1))
-if [ ! -e "$case_dir/target/conformance" ]; then echo "ok   - target/conformance/ is removed before the suites"
-else echo "FAIL - target/conformance/ still exists: $(ls "$case_dir/target/conformance")"; tests_failed=$((tests_failed + 1)); fi
+if [ ! -e "$case_dir/target/conformance/rust-core.json" ] && [ ! -e "$case_dir/target/conformance/node.json" ]; then
+  echo "ok   - target/conformance/ is cleared before the suites (only this run's files remain)"
+else echo "FAIL - stale results remain: $(ls "$case_dir/target/conformance")"; tests_failed=$((tests_failed + 1)); fi
 
 new_case stale-mixed
 mkdir -p "$case_dir/target/conformance"
 echo '{}' >"$case_dir/target/conformance/node.json"
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 writes_results bindings/wasm/test.sh rust-core
+writes_own_results bindings/wasm/test.sh wasm
 parity_fixture 0 'parity: ok'
 run_test_all wasm
-check "only this run's results files reach the parity check" 0 '^  parity: PASS$' '^parity fixture saw: rust-core\.json $'
+check "only this run's results files reach the parity check" 0 '^  parity: PASS$' '^parity fixture saw: rust-core\.json wasm-'
+check_absent "a results file left by an earlier run is not seen" '^parity fixture saw: (.* )?node\.json'
 
 # --- Missing pieces are SKIPPED or FAIL, never PASS ----------------------------------------------------
 
 new_case no-reference
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
-writes_results bindings/wasm/test.sh wasm-node
+writes_own_results bindings/wasm/test.sh wasm
 parity_fixture 0 'parity: ok'
 run_test_all wasm
 check "without rust-core.json parity is SKIPPED" 0 '^  parity: SKIPPED \(no reference results: target/conformance/rust-core\.json'
@@ -113,6 +86,7 @@ check_absent "parity does not run without the reference" '^parity fixture'
 new_case no-script
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 writes_results bindings/wasm/test.sh rust-core
+writes_own_results bindings/wasm/test.sh wasm
 rm -f "$case_dir/scripts/conformance-parity.sh"
 run_test_all wasm
 check "without scripts/conformance-parity.sh parity is SKIPPED" 0 \
@@ -121,6 +95,7 @@ check "without scripts/conformance-parity.sh parity is SKIPPED" 0 \
 new_case not-executable
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 writes_results bindings/wasm/test.sh rust-core
+writes_own_results bindings/wasm/test.sh wasm
 parity_fixture 0 'parity: ok'
 chmod -x "$case_dir/scripts/conformance-parity.sh"
 run_test_all wasm

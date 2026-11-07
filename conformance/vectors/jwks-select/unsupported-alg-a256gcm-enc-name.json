@@ -1,0 +1,23 @@
+{
+  "source": "ADR 0054 §1.1; RFC 7518 §5.1",
+  "description": "alg A256GCM, a content encryption name, is refused with UnsupportedAlgorithm even when a member's alg is A256GCM; decided by ADR 0054 §1.1: A256GCM is an enc name (RFC 7518 §5.1), neither a JWS nor a key management alg, so the alg setter refuses it; a dir key is selected with alg dir (§2.2); outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA",
+          "alg": "A256GCM"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "A256GCM"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

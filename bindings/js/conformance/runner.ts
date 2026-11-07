@@ -25,7 +25,7 @@
  */
 
 import type { PolyjoseApi } from "../src/api.js";
-import type { EcCurve, JsonObject, JwtVerifyOptions, JweDecryptOptions, OkpCurve } from "../src/types.js";
+import type { EcCurve, JsonObject, JwkSelector, JwtVerifyOptions, JweDecryptOptions, OkpCurve, ThumbprintHash } from "../src/types.js";
 import { scanJson, textAt, type JsonNode } from "./json-text.js";
 import { jsonEqual, schemaViolation } from "./schema.js";
 
@@ -79,9 +79,6 @@ interface Vector {
 }
 type Outcome = { ok: true; out: Out } | { ok: false; error: string };
 
-/** The `jwk.thumbprint` hash names of the schema, mapped to the facade's (ADR 0030 §4). */
-const HASHES: Readonly<Record<string, string>> = { "sha-256": "SHA-256" };
-
 type Members = Readonly<Record<string, readonly string[]>>;
 
 /** The members a generated private key has (RFC 7518 §6.2.1-§6.2.2, RFC 8037 §2, RFC 7518 §6.4.1), plus `alg`. */
@@ -117,6 +114,78 @@ function hexEncode(bytes: Uint8Array): string {
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+// --- The vector-set digest (ADR 0060 §2-§3) ----------------------------------------------------
+
+/**
+ * A SHA-256 of the platform the driver runs on, never polyjose's API under test (ADR 0060 §5):
+ * `node:crypto` in `node-main.ts`, {@link subtleSha256} in a browser or worker driver.
+ */
+export type Sha256 = (bytes: Uint8Array) => Uint8Array | ArrayBuffer | Promise<Uint8Array | ArrayBuffer>;
+
+/**
+ * One vector file the driver read, for the digest: its results-entry id (`<path>#0`) and the raw
+ * bytes it parsed, with no line-ending, BOM or encoding change (ADR 0060 §2). An unreadable file
+ * or a symbolic link is a `fail` result and is not handed in.
+ */
+export interface DigestInput {
+  readonly id: string;
+  readonly bytes: Uint8Array;
+}
+
+/** `crypto.subtle.digest("SHA-256", bytes)`: the browser and worker path's SHA-256 (ADR 0060 §5). */
+export const subtleSha256: Sha256 = async (bytes) => {
+  const subtle = (globalThis as unknown as { crypto?: { subtle?: SubtleDigest } }).crypto?.subtle;
+  if (subtle === undefined) throw new Error("polyjose conformance: crypto.subtle is not available for the vectors digest");
+  return subtle.digest("SHA-256", bytes);
+};
+
+interface SubtleDigest {
+  digest(algorithm: "SHA-256", data: Uint8Array): Promise<ArrayBuffer>;
+}
+
+/** The platform's UTF-8 encoder (Node, browsers and workerd all have `TextEncoder`). */
+function utf8(text: string): Uint8Array {
+  const Encoder = (globalThis as unknown as { TextEncoder: new () => { encode(s: string): Uint8Array } }).TextEncoder;
+  return new Encoder().encode(text);
+}
+
+/** Ascending unsigned lexicographic byte order; a shorter prefix sorts first (ADR 0060 §2). */
+function compareBytes(a: Uint8Array, b: Uint8Array): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return a.length - b.length;
+}
+
+async function sha256Hex(sha256: Sha256, bytes: Uint8Array): Promise<string> {
+  const out = await sha256(bytes);
+  const digest = out instanceof Uint8Array ? out : new Uint8Array(out);
+  if (digest.length !== 32) throw new Error(`polyjose conformance: SHA-256 returned ${digest.length} bytes, not 32 bytes`);
+  return hexEncode(digest);
+}
+
+/**
+ * `vectors_digest` (ADR 0060 §2-§3): one line `<id>` TAB `<lowercase hex SHA-256 of the bytes>`
+ * LF per file, encoded as UTF-8 and sorted by those bytes (not by JS string order, which is
+ * UTF-16), then the lowercase hex SHA-256 of their concatenation. An empty corpus is invalid, so
+ * no files is an error: the run must fail and write no results file.
+ */
+export async function vectorsDigest(files: readonly DigestInput[], sha256: Sha256): Promise<string> {
+  if (files.length === 0) throw new Error("polyjose conformance: no vector file was read, so there is no vectors digest");
+  const lines: Uint8Array[] = [];
+  for (const file of files) lines.push(utf8(`${file.id}\t${await sha256Hex(sha256, file.bytes)}\n`));
+  lines.sort(compareBytes);
+  const all = new Uint8Array(lines.reduce((n, line) => n + line.length, 0));
+  let at = 0;
+  for (const line of lines) {
+    all.set(line, at);
+    at += line.length;
+  }
+  return sha256Hex(sha256, all);
 }
 
 /** Runs every file and returns one result per file, in order. */
@@ -316,13 +385,28 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
   "b64url.decode": async (api, input, _expect, _text, out) => {
     out["bytes_hex"] = hexEncode(await lib(api, () => api.base64urlDecode(str(input["b64u"]))));
   },
-  // jwk.thumbprint → jwkThumbprint + jwkThumbprintUri (RFC 7638 §3, RFC 9278 §3); hash "sha-256" → "SHA-256".
+  // jwk.thumbprint → jwkThumbprint + jwkThumbprintUri (RFC 7638 §3, §3.4, RFC 9278 §3). The
+  // vector's hash is passed as given and an absent one as undefined, the core default (ADR 0054
+  // §9): the core parses the name (§8.2), so there is no runner table and a name the core
+  // rejects is the vector's outcome. The cast only widens the type: vectors may name any string.
   "jwk.thumbprint": async (api, input, _expect, text, out) => {
-    const hash = HASHES[str(input["hash"])];
-    if (hash === undefined) throw new HarnessError(`hash \`${str(input["hash"])}\` has no facade name`);
+    const hash = input["hash"] === undefined ? undefined : (str(input["hash"]) as ThumbprintHash);
     const jwk = text.at("input", "jwk");
-    out["thumbprint"] = await lib(api, () => api.jwkThumbprint(jwk, hash as "SHA-256"));
-    out["thumbprint_uri"] = await lib(api, () => api.jwkThumbprintUri(jwk, hash as "SHA-256"));
+    out["thumbprint"] = await lib(api, () => api.jwkThumbprint(jwk, hash));
+    out["thumbprint_uri"] = await lib(api, () => api.jwkThumbprintUri(jwk, hash));
+  },
+  // jwks.select → jwksSelect(jwks, { kid, alg, keyUse }) (RFC 7517 §5; ADR 0054 §1-§4, §9). The
+  // set goes as its own text, the selector member by member, each as given and only when present
+  // (`key_use` → `keyUse`): the core parses, validates and selects, so the runner maps nothing.
+  // The facade returns the selected key parsed, compared as a JSON value.
+  "jwks.select": async (api, input, _expect, text, out) => {
+    const criteria = input["selector"] as Out;
+    const selector: JwkSelector = {};
+    if (criteria["kid"] !== undefined) selector.kid = str(criteria["kid"]);
+    if (criteria["alg"] !== undefined) selector.alg = str(criteria["alg"]);
+    if (criteria["key_use"] !== undefined) selector.keyUse = str(criteria["key_use"]);
+    const jwks = text.at("input", "jwks");
+    out["jwk"] = await lib(api, () => api.jwksSelect(jwks, selector));
   },
 
   // jws.sign → jwsSignCompact / jwsSignFlattened / jwsSignGeneral (RFC 7515 §5.1, §7).
@@ -675,7 +759,7 @@ function jwtVerifyOptions(object: Out): JwtVerifyOptions {
     ignoreAudience?: boolean;
     typ?: string;
     anyTyp?: boolean;
-    profile?: string;
+    profile?: JwtVerifyOptions["profile"];
     maxKeyCandidates?: number;
   } = { allowedAlgs: strs(object["allowed_algs"]), now: object["now"] as number };
   const typ = isObject(policy["typ"]) ? policy["typ"] : undefined;
@@ -694,7 +778,9 @@ function jwtVerifyOptions(object: Out): JwtVerifyOptions {
   if (policy["ignore_audience"] === true) opts.ignoreAudience = true;
   if (typ?.["mode"] === "exact") opts.typ = str(typ["value"]);
   if (typ?.["mode"] === "any") opts.anyTyp = true;
-  if (typeof policy["profile"] === "string") opts.profile = policy["profile"];
+  // The vector's profile is passed as written, even a name the literal type doesn't allow, so
+  // the core's answer (UnsupportedAlgorithm for any other name, ADR 0030 §4) is what it checks.
+  if (typeof policy["profile"] === "string") opts.profile = policy["profile"] as JwtVerifyOptions["profile"];
   if (typeof policy["max_key_candidates"] === "number") opts.maxKeyCandidates = policy["max_key_candidates"];
   return opts;
 }

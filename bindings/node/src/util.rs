@@ -86,6 +86,25 @@ mod tests {
     }
 
     #[test]
+    fn error_codes_end_with_multiple_matching_keys() {
+        // ADR 0054 §5: `MultipleMatchingKeys` is appended last, after `NoMatchingKey`, at index
+        // 16, giving the 17 codes of 0.1.0. Codes are never reordered or removed (ADR 0030 §8),
+        // so these indices stay; a code added later goes after them.
+        let codes = error_codes();
+        assert_eq!(codes.len(), 17, "{codes:?}");
+        assert_eq!(codes[15], "NoMatchingKey");
+        assert_eq!(codes[16], "MultipleMatchingKeys");
+        assert_eq!(
+            codes.last().map(String::as_str),
+            Some("MultipleMatchingKeys")
+        );
+        let mut unique = codes.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), codes.len(), "no code twice");
+    }
+
+    #[test]
     fn base64url_reproduces_rfc4648_section_10() {
         for (plain, encoded) in RFC4648_SECTION_10 {
             let mut encode = Base64urlEncodeTask {

@@ -1,0 +1,21 @@
+{
+  "source": "RFC 7638 §3.4 over the RFC 7517 Appendix A.1 key",
+  "description": "SHA-512 JWK Thumbprint of the RFC 7517 A.1 P-256 public key; no RFC prints it: SHA-512 over the hand-built RFC 7638 §3.3 hash input with node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jwk-oracle/thumbprints.mjs; the URI carries the IANA name sha-512 (RFC 9278 §3, §4)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+      "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+      "use": "enc",
+      "kid": "1"
+    },
+    "hash": "sha-512"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "87wrLaz3s_FhzVDc1S8PBGMBK7SlogjruZ8x3hrvMMS28Zq4-1ugZG2qoqUcBatvWxzlCLGqHCRv4eVefHCsyg",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-512:87wrLaz3s_FhzVDc1S8PBGMBK7SlogjruZ8x3hrvMMS28Zq4-1ugZG2qoqUcBatvWxzlCLGqHCRv4eVefHCsyg"
+  }
+}

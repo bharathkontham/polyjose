@@ -1,0 +1,18 @@
+{
+  "source": "RFC 7638 §3.4 over the RFC 8037 Appendix A.2 key",
+  "description": "SHA-512 JWK Thumbprint of the RFC 8037 A.2 Ed25519 public key; no RFC prints it: SHA-512 over the hand-built RFC 7638 §3.3 hash input with node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jwk-oracle/thumbprints.mjs; the URI carries the IANA name sha-512 (RFC 9278 §3, §4)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    },
+    "hash": "sha-512"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "SfSqAgfmPYvpuNzfHCiQXi6Mr51GG78hHopngoabsV9xvLR0hcUfVCoJLfyzi08Dbnds6kmcAt23CpNV-8qLTg",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-512:SfSqAgfmPYvpuNzfHCiQXi6Mr51GG78hHopngoabsV9xvLR0hcUfVCoJLfyzi08Dbnds6kmcAt23CpNV-8qLTg"
+  }
+}

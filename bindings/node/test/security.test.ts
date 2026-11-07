@@ -23,6 +23,7 @@ import {
   jwkThumbprintUri,
   jwkToPem,
   jwkToPublic,
+  jwksSelect,
   jwsSignCompact,
   jwsVerifyCompact,
   jwtDecryptNested,
@@ -150,6 +151,21 @@ test("a failing call of every family keeps the secrets that hold a marker out of
   await rejectsWithoutSecrets("jwkParse EC", () => jwkParse(ecMarker), "InvalidKey", secrets);
   await rejectsWithoutSecrets("jwkToPublic EC", () => jwkToPublic(ecMarker), "InvalidKey", secrets);
   await rejectsWithoutSecrets("jwkToPem oct", () => jwkToPem(octMarker, "pkcs8"), "UnsupportedAlgorithm", secrets);
+  // JWK Set selection (RFC 7517 §5, ADR 0054 §4-§5): a set of private members that hold the
+  // marker, with no match, several matches, and a refused selector after the import.
+  const markerSet = { keys: [{ ...octMarker, kid: "m1" }, { ...octMarker, kid: "m2" }] };
+  secrets.push(JSON.stringify(markerSet));
+  await rejectsWithoutSecrets("jwksSelect no match", () => jwksSelect(markerSet, { kid: "m3" }), "NoMatchingKey", secrets);
+  await rejectsWithoutSecrets("jwksSelect several", () => jwksSelect(markerSet, { alg: "HS256" }), "MultipleMatchingKeys", secrets);
+  await rejectsWithoutSecrets("jwksSelect keyUse", () => jwksSelect(markerSet, { keyUse: "foo" }), "UnsupportedAlgorithm", secrets);
+  // A member the core cannot use (the off-key EC `d`) is skipped by the import (ADR 0054 §3), so
+  // asking for it is no match, and its marker stays out of the error too.
+  await rejectsWithoutSecrets(
+    "jwksSelect skipped member",
+    () => jwksSelect({ keys: [{ ...octMarker, kid: "m1" }, { ...ecMarker, kid: "e1" }] }, { kid: "e1" }),
+    "NoMatchingKey",
+    secrets,
+  );
   // Bytes that are not a PKCS #8 structure (RFC 5958): InvalidKey (bindings/surface keys.rs).
   await rejectsWithoutSecrets("jwkFromDer", () => jwkFromDer(payload, "pkcs8"), "InvalidKey", secrets);
   // JWS (RFC 7515 §5): a key of another family, a key that does not match, a wrong key.
@@ -342,6 +358,13 @@ test("an RSA private JWK is UnsupportedAlgorithm (ADR 0021), and so is a SHA-1 t
   await rejectsWithoutSecrets(
     "jwsSignCompact RSA private",
     () => jwsSignCompact(ascii("x"), rsa, { protectedHeader: { alg: "RS256" } }),
+    "UnsupportedAlgorithm",
+    rsaSecrets,
+  );
+  // A JWK Set with an RSA private member is refused whole, before selection (ADR 0021, ADR 0054 §4).
+  await rejectsWithoutSecrets(
+    "jwksSelect RSA private member",
+    () => jwksSelect({ keys: [rsa] }, { kid: "no-such-kid" }),
     "UnsupportedAlgorithm",
     rsaSecrets,
   );

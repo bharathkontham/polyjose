@@ -41,8 +41,23 @@ export type JwkSet = string | JwkSetObject;
 /** A JSON object argument (a header, a Claims Set, a JWS/JWE JSON serialization): text or a plain object. */
 export type JsonInput = string | JsonObject;
 
-/** JWK Thumbprint hashes (RFC 7638 §3, RFC 9278); SHA-1 is not offered (ADR 0022). */
-export type ThumbprintHash = "SHA-256" | "SHA-384" | "SHA-512";
+/**
+ * JWK Thumbprint hash names (RFC 7638 §3.4, RFC 9278 §4): the nine names the core accepts,
+ * matched exactly (ADR 0054 §8.2). Each hash has its IANA Named Information name (`sha-256`,
+ * canonical, the one the URI carries), the ADR 0030 §4 form (`SHA-256`) and the panva/jose form
+ * (`sha256`). SHA-1 is not offered (ADR 0022). The core parses the name; the facade passes it
+ * as given.
+ */
+export type ThumbprintHash =
+  | "sha-256"
+  | "SHA-256"
+  | "sha256"
+  | "sha-384"
+  | "SHA-384"
+  | "sha384"
+  | "sha-512"
+  | "SHA-512"
+  | "sha512";
 
 /** EC curves `jwkGenerateEc` takes (RFC 7518 §6.2.1.1, RFC 8812 §3.1). */
 export type EcCurve = "P-256" | "P-384" | "P-521" | "secp256k1";
@@ -56,7 +71,10 @@ export type KeyFormat = "pkcs8" | "sec1" | "spki" | "pkcs1";
 /** The JWE JSON serializations (RFC 7516 §7.2.1 general, §7.2.2 flattened). */
 export type JweJsonForm = "general" | "flattened";
 
-/** `jwksSelect` criteria (RFC 7517 §4.2, §4.4, §4.5; 0001 T07 selection rules). */
+/**
+ * `jwksSelect` criteria (RFC 7517 §4.2, §4.4, §4.5; ADR 0054 §1). Each is optional and passed
+ * to the core as given: `alg` a JWS or JWE key management algorithm, `keyUse` `sig` or `enc`.
+ */
 export interface JwkSelector {
   kid?: string | undefined;
   alg?: string | undefined;
@@ -193,8 +211,13 @@ export interface JwtVerifyOptions {
   ignoreAudience?: boolean | undefined;
   typ?: string | undefined;
   anyTyp?: boolean | undefined;
-  /** `"access_token"`: the RFC 9068 §4 profile. */
-  profile?: string | undefined;
+  /**
+   * `"access_token"`: the RFC 9068 §4 JWT access-token profile (`Policy::access_token`), the only
+   * profile, so a typo fails to compile (0013 F04, review N5). The type is the only check: an
+   * untyped caller's other string still reaches the core, which refuses it with
+   * `UnsupportedAlgorithm` (ADR 0030 §4).
+   */
+  profile?: "access_token" | undefined;
   maxKeyCandidates?: number | undefined;
   maxInputLen?: number | undefined;
 }

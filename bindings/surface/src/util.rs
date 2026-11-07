@@ -11,8 +11,8 @@ pub fn version() -> &'static str {
 }
 
 /// Every stable error code, equal to [`polyjose::Error::CODES`] and in its order (ADR 0030 §4,
-/// §5). Codes are append-only: `InvalidFormat` (ADR 0026) and `NoMatchingKey` (ADR 0029 §4),
-/// the newest, come last.
+/// §5). Codes are append-only: `InvalidFormat` (ADR 0026), `NoMatchingKey` (ADR 0029 §4) and
+/// `MultipleMatchingKeys` (ADR 0054 §5, RFC 7517 §4.5, §5.1), the newest, come last.
 ///
 /// Every binding exposes this list, and its tests assert that the binding's own error code set
 /// equals it (ADR 0030 §5).
@@ -70,7 +70,11 @@ mod tests {
     #[test]
     fn error_codes_are_the_core_codes_in_core_order() {
         assert_eq!(error_codes(), polyjose::Error::CODES);
-        assert_eq!(error_codes().last(), Some(&"NoMatchingKey"));
+        // ADR 0054 §5: `MultipleMatchingKeys` is appended right after `NoMatchingKey`.
+        assert_eq!(
+            error_codes()[error_codes().len() - 2..],
+            ["NoMatchingKey", "MultipleMatchingKeys"]
+        );
         assert!(error_codes().contains(&"InvalidFormat"));
     }
 

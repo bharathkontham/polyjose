@@ -1,0 +1,18 @@
+{
+  "source": "RFC 7638 §3.4 over the RFC 7517 Appendix A.3 key",
+  "description": "SHA-512 JWK Thumbprint of the RFC 7517 A.3 AES key: only \"k\" and \"kty\" are hashed; no RFC prints it: SHA-512 over the hand-built RFC 7638 §3.3 hash input with node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jwk-oracle/thumbprints.mjs; the URI carries the IANA name sha-512 (RFC 9278 §3, §4)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "alg": "A128KW",
+      "k": "GawgguFyGrWKav7AX4VKUg"
+    },
+    "hash": "sha-512"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "EdMfw87VZ3q_6wWykCQSEVMV_H6Nq0t7GWvcH4Mp0zn7Qaq2Myj2_DsTxeb4fT8H_ls19_bAfTH84bOg0vniFg",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-512:EdMfw87VZ3q_6wWykCQSEVMV_H6Nq0t7GWvcH4Mp0zn7Qaq2Myj2_DsTxeb4fT8H_ls19_bAfTH84bOg0vniFg"
+  }
+}

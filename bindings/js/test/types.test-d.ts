@@ -24,6 +24,16 @@ export async function usage(): Promise<void> {
   await api.jwkParse('{"kty":"oct","k":"AAAA"}');
   const tp: string = await api.jwkThumbprint(jwk, "SHA-256");
   void tp;
+  // The hash is optional (absent = the core default, SHA-256) and takes the nine names of
+  // ADR 0054 §8.2.
+  await api.jwkThumbprint(jwk);
+  await api.jwkThumbprintUri(jwk, undefined);
+  for (const hash of ["sha-256", "SHA-256", "sha256", "sha-384", "SHA-384", "sha384", "sha-512", "SHA-512", "sha512"] as const) {
+    await api.jwkThumbprint(jwk, hash);
+    await api.jwkThumbprintUri(jwk, hash);
+  }
+  const ambiguous: ErrorCode = "MultipleMatchingKeys";
+  void ambiguous;
 
   const verified: JwsVerified = await api.jwsVerifyCompact("a.b.c", jwk, { allowedAlgs: ["ES256"] });
   const payload: Uint8Array = verified.payload;
@@ -46,10 +56,21 @@ export async function usage(): Promise<void> {
   await api.jwtDecryptNested("t", jwk, { allowedAlgs: ["dir"], allowedEnc: ["A128GCM"] }, jwk, {});
   // @ts-expect-error SHA-1 thumbprints are not offered (ADR 0022).
   await api.jwkThumbprint(jwk, "SHA-1");
+  // @ts-expect-error names are exact (ADR 0054 §8.2): no other case forms.
+  await api.jwkThumbprintUri(jwk, "Sha-256");
+  // @ts-expect-error not a polyjose error code.
+  const notACode: ErrorCode = "MultipleKeys";
+  void notACode;
   // @ts-expect-error allowedAlgs is a list, not a single name.
   await api.jwsVerifyCompact("a.b.c", jwk, { allowedAlgs: "ES256" });
   // @ts-expect-error a misspelled member is rejected (issuers, not issuer).
   await api.jwtVerify("a.b.c", jwk, { allowedAlgs: ["ES256"], issuer: "joe" });
+  // The one profile is RFC 9068 §4's "access_token" (review N5): the name type-checks ...
+  await api.jwtVerify("a.b.c", jwk, { allowedAlgs: ["ES256"], issuers: ["joe"], audiences: ["api"], profile: "access_token" });
+  // @ts-expect-error ... and a typo of it does not compile.
+  await api.jwtVerify("a.b.c", jwk, { allowedAlgs: ["ES256"], profile: "access-token" });
+  // @ts-expect-error nor does another profile name (the core would answer UnsupportedAlgorithm).
+  await api.jwtVerifyWithJwks("a.b.c", { keys: [] }, { allowedAlgs: ["ES256"], profile: "id_token" });
   // @ts-expect-error bytes are Uint8Array, not a string.
   await api.base64urlEncode("AQI");
 
