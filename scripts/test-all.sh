@@ -2,6 +2,8 @@
 # Run polyjose's test suites on every platform (or the ones named as arguments).
 # A platform whose toolchain or test suite is missing is reported as SKIPPED with the reason,
 # never silently passed; a suite that exists always runs and can FAIL.
+# wasm, node, android and apple run their binding's own script when it exists (bindings/wasm/test.sh,
+# bindings/node/test.sh, platforms/android/test.sh, platforms/swift/test.sh; see dispatch below).
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 platforms=("$@"); [ ${#platforms[@]} -eq 0 ] && platforms=(rust wasm node android apple)
@@ -19,6 +21,45 @@ has_wasm_suite() {
        END { exit !found }' bindings/wasm/Cargo.toml
 }
 run() { local name=$1; shift; echo "==> $name"; if "$@"; then record "$name" PASS; else record "$name" FAIL; fi; }
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/test-all.XXXXXX") || { echo "mktemp failed"; exit 2; }
+trap 'rm -rf "$scratch"' EXIT
+# Each binding feature owns its platform's suite as one script (feature 0013 T04, ADR 0030 §1), so
+# the four can change their test commands without editing this file. platform_script prints it.
+platform_script() {
+  case $1 in
+    wasm) echo bindings/wasm/test.sh ;;
+    node) echo bindings/node/test.sh ;;
+    android) echo platforms/android/test.sh ;;
+    apple) echo platforms/swift/test.sh ;;
+    *) return 1 ;;
+  esac
+}
+# dispatch <platform>: runs the platform's script from the repository root, with no stdin, and
+# returns 0; returns 1 if there is none, so the caller runs the inline commands below (and their
+# SKIPPED reasons, 0001 T14). The script's exit status decides PASS or FAIL. A script that cannot
+# run its suite (no simulator, no emulator) exits 0 with `SKIPPED (<reason>)` as its last non-blank
+# line, which is reported as SKIPPED and never as passing (pipeline rule 9); a last line that starts
+# with SKIPPED in any other form FAILs, and so does a script that exists but is not an executable
+# file (falling back to the inline commands would hide that the platform's own suite never ran).
+dispatch() {
+  local name=$1 script out last rc
+  script=$(platform_script "$name") || return 1
+  [ -e "$script" ] || [ -L "$script" ] || return 1
+  echo "==> $name ($script)"
+  if [ ! -f "$script" ] || [ ! -x "$script" ]; then
+    echo "$script exists but is not an executable file (chmod +x $script)"; record "$name" FAIL; return 0
+  fi
+  out="$scratch/$name.out"
+  "./$script" </dev/null 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+  last=$(awk 'NF { line = $0 } END { sub(/\r$/, "", line); sub(/[ \t]+$/, "", line); print line }' "$out")
+  if [ "$rc" -ne 0 ]; then echo "$script exited $rc"; record "$name" FAIL; return 0; fi
+  case $last in
+    "SKIPPED ("?*")") record "$name" "$last" ;;
+    SKIPPED*) echo "$script: last line \"$last\" is not SKIPPED (<reason>)"; record "$name" FAIL ;;
+    *) record "$name" PASS ;;
+  esac
+  return 0
+}
 # The negative tests of the gate scripts: every scripts/tests/<gate>/*.sh, each its own step
 # ("negative: <gate>/<script>"), except lib.sh, the helpers they source. A script that is not
 # executable FAILs (it would otherwise drop out unnoticed), and so does finding none at all.
@@ -83,7 +124,8 @@ for p in "${platforms[@]}"; do
       if have cargo; then run_negative_tests
       else record negative-tests "SKIPPED (cargo missing)"; fi ;;
     wasm)
-      if ! have wasm-pack; then record wasm "SKIPPED (wasm-pack missing)"
+      if dispatch wasm; then :
+      elif ! have wasm-pack; then record wasm "SKIPPED (wasm-pack missing)"
       elif ! has_wasm_suite; then record wasm "SKIPPED (no wasm test suite yet: no wasm-bindgen-test dev-dependency in bindings/wasm/Cargo.toml)"
       else run wasm bash -c 'cd bindings/wasm && wasm-pack test --node && wasm-pack test --headless --chrome'; fi ;;
     node)
@@ -93,15 +135,18 @@ for p in "${platforms[@]}"; do
       if have node; then run rsa-oaep-oracle node conformance/tools/rsa-oaep-oracle.mjs
       else record rsa-oaep-oracle "SKIPPED (node missing)"; fi
       # `npm pkg get` prints {} for a missing key; an unreadable package.json is not skipped, so it FAILs.
-      if ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"
+      if dispatch node; then :
+      elif ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"
       elif [ ! -f bindings/node/package-lock.json ]; then record node "SKIPPED (no node test suite yet: bindings/node/package-lock.json missing)"
       elif [ "$(cd bindings/node && npm pkg get scripts.test 2>/dev/null)" = "{}" ]; then record node "SKIPPED (no node test suite yet: no test script in bindings/node/package.json)"
       else run node bash -c 'cd bindings/node && npm ci && npm run build && npm test'; fi ;;
     android)
-      if have cargo-ndk && [ -x platforms/android/gradlew ]; then run android bash -c 'cd platforms/android && ./gradlew test'
+      if dispatch android; then :
+      elif have cargo-ndk && [ -x platforms/android/gradlew ]; then run android bash -c 'cd platforms/android && ./gradlew test'
       else record android "SKIPPED (cargo-ndk or Gradle project missing)"; fi ;;
     apple)
-      if have swift && [ -f Package.swift ]; then run apple bash -c 'swift test'
+      if dispatch apple; then :
+      elif have swift && [ -f Package.swift ]; then run apple bash -c 'swift test'
       else record apple "SKIPPED (swift or Package.swift missing)"; fi ;;
     *) echo "unknown platform: $p"; exit 2 ;;
   esac
