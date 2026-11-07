@@ -11,7 +11,10 @@
 # into a reusable workflow (0012 T03 adds `workflow_call` next to `workflow_dispatch`, and its
 # `mode` input, ADR 0037 §1). Until then the only trigger is a manual dispatch, and nobody dispatches
 # it without the owner. It is shaped for that change:
-#   - no inputs yet; any added later are declared identically under both triggers;
+#   - no inputs yet; any added later are declared identically under both triggers, and reach a
+#     script only through a step's `env:` (read there as "$MODE"), never as `${{ inputs.mode }}` inside
+#     `run:`, so an input value is data, never shell code (review-security.md I6). test/ci.test.ts
+#     rejects any inputs expression in a run: block;
 #   - nothing reads PR or event context, only `matrix.*`;
 #   - artifact names are fixed: npm-<target> (the platform tarball) and conformance-node-<label>
 #     (target/conformance/node-<label>.json), ADR 0037 §1;
