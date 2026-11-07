@@ -1,0 +1,35 @@
+{
+  "source": "ADR 0054 §2.1; RFC 7518 §4.6",
+  "description": "ECDH-ES+A128KW on a secp256k1 and a P-256 key returns the P-256 key; decided by ADR 0054 §2.1 (family): ECDH-ES+A128KW is served by P-256, P-384, P-521 and X25519 keys, and secp256k1 never matches ECDH-ES (RFC 7518 §4.6 names the NIST curves); member 1 has no alg, use (U = enc) or key_ops, and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "secp256k1",
+          "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+          "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "5FxKAdx2QOg6I41sPlVcn19PKg0OcgfyFiKe8ISqRlg",
+          "y": "crIh0z2HqMDizKTzRQPncgE0V6NPoS5vNOP615m_Glc"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "ECDH-ES+A128KW"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "5FxKAdx2QOg6I41sPlVcn19PKg0OcgfyFiKe8ISqRlg",
+      "y": "crIh0z2HqMDizKTzRQPncgE0V6NPoS5vNOP615m_Glc"
+    }
+  }
+}

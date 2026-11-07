@@ -1,0 +1,30 @@
+{
+  "source": "ADR 0054 §2.1, §4; RFC 7518 §4.6, RFC 8037 §3.2",
+  "description": "ECDH-ES on a P-256 and an X25519 key fails with MultipleMatchingKeys; decided by ADR 0054 §2.1 (family): ECDH-ES is served by both P-256 (RFC 7518 §4.6) and X25519 (RFC 8037 §3.2), neither member has alg, use or key_ops, and the selector has no kid, so two match (§4); crv selection is backlog (ADR 0054 Consequences); outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "5FxKAdx2QOg6I41sPlVcn19PKg0OcgfyFiKe8ISqRlg",
+          "y": "crIh0z2HqMDizKTzRQPncgE0V6NPoS5vNOP615m_Glc"
+        },
+        {
+          "kty": "OKP",
+          "crv": "X25519",
+          "kid": "Bob",
+          "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "ECDH-ES"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "MultipleMatchingKeys"
+  }
+}
