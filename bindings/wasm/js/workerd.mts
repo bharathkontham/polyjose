@@ -1,7 +1,7 @@
 /**
- * The `workerd` and `worker` entry of `@polyjose/wasm` (ADR 0031 §3): Cloudflare Workers. The
- * static `.wasm` import is a compiled `WebAssembly.Module` there, because Workers forbid
- * compiling wasm from bytes at run time (0006 research §5). On the first call, the backend
+ * The `workerd` entry of `@polyjose/wasm` (ADR 0031 §3; ADR 0063 dropped `worker`): Cloudflare
+ * Workers. The static `.wasm` import is a compiled `WebAssembly.Module` there, because Workers
+ * forbid compiling wasm from bytes at run time (0006 research §5). On the first call, the backend
  * instantiates it, refusing a glue that other code initialised first and a module of another
  * version (0006 F05, audit L1). There is no top-level await.
  */
