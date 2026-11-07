@@ -1,0 +1,13 @@
+# UniFFI generator settings for polyjose-ffi, read by uniffi-bindgen 0.32 from the crate root
+# through `cargo metadata` (no --config flag; ADR 0032 §2). Key names confirmed in
+# uniffi_bindgen 0.32.2 (bindings/kotlin/gen_kotlin/mod.rs, bindings/swift/gen_swift/mod.rs).
+
+# Kotlin: the generated sources live in package dev.polyjose (ADR 0033; groupId dev.polyjose).
+[bindings.kotlin]
+package_name = "dev.polyjose"
+
+# Swift: the Swift module is Polyjose (the SwiftPM target and product, ADR 0032 §4); the C module
+# of the XCFramework's header and modulemap is PolyjoseFFI (ADR 0032 §2).
+[bindings.swift]
+module_name = "Polyjose"
+ffi_module_name = "PolyjoseFFI"

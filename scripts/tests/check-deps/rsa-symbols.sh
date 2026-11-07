@@ -20,6 +20,11 @@
 #        release configuration compiles.
 # (An uncalled `#[inline] pub fn` and an uninstantiated generic `pub fn` are never codegened in
 # polyjose, so they have no symbol to find: the text scan's macro rule catches those, rsa-guard.sh.)
+# Must fail closed (exit 2, before any build):
+#  10.   a workspace member with no library target (build tooling, like polyjose-uniffi-bindgen)
+#        whose tree holds a workspace member (here polyjose), which the gate cannot read.
+#  11-13. the same, whose tree holds rsa without polyjose: as a normal, a build- or a
+#        dev-dependency (the tree is read with -e normal,build,dev).
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
 # so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
 # release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
@@ -79,6 +84,13 @@ pkcs1_sign='rsa::pkcs1v15::signing_key::SigningKey<sha2::Sha256>'
 new_case clean
 dump_dir="$scratch/dump-clean"
 expect_pass "unchanged tree"
+tests_run=$((tests_run + 1))
+if grep -Fqx '  skipped polyjose-uniffi-bindgen: no library target, and neither rsa nor a workspace member in its tree' "$scratch/out"; then
+  echo "ok   - unchanged tree: the library-less polyjose-uniffi-bindgen is skipped, and says so"
+else
+  echo "FAIL - unchanged tree: no line saying polyjose-uniffi-bindgen was skipped"
+  tests_failed=$((tests_failed + 1))
+fi
 expect_symbol "unchanged tree" "rsa::public_key::RsaPublicKey"
 expect_symbol "unchanged tree" "rsa::pkcs1v15::verifying_key::VerifyingKey<sha2::Sha256>"
 expect_symbol "unchanged tree" "rsa::pss::verifying_key::VerifyingKey<sha2::Sha512>"
@@ -238,5 +250,56 @@ expect_symbol "look-alikes" "polyjose::cbc::Decryptor<u8>>::decrypt"
 expect_symbol "look-alikes" "polyjose::jws::rsa::traits::Decryptor>::decrypt"
 expect_symbol "look-alikes" "polyjose::jws::rsa::private_key::RsaPrivateKey>::new"
 dump_dir=""
+
+# 10. A library-less member (build tooling such as polyjose-uniffi-bindgen) is skipped only while
+#     its tree holds neither rsa nor a workspace member. One that depends on polyjose could carry
+#     polyjose code the gate never reads, so the gate stops.
+new_case tool-with-core
+append_to tools/rsa-tool/Cargo.toml '[package]
+name = "rsa-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polyjose = { path = "../../crates/polyjose" }'
+append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member rsa-tool has no library target, and its tree contains polyjose' "$scratch/out"; then
+  echo "ok   - library-less member depending on polyjose: $gate_name fails closed"
+else
+  echo "FAIL - library-less member depending on polyjose: exit $rc (expected 2) with the no-library-target error"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+
+# 11-13. A library-less member whose tree holds rsa (and no workspace member) is not skipped either,
+#        whichever kind of dependency reaches rsa.
+for kind in dependencies build-dependencies dev-dependencies; do
+  new_case "tool-with-rsa-$kind"
+  append_to tools/rsa-tool/Cargo.toml "[package]
+name = \"rsa-tool\"
+version = \"0.0.0\"
+edition = \"2024\"
+publish = false
+
+[$kind]
+rsa = { workspace = true }"
+  append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+  replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+  tests_run=$((tests_run + 1))
+  rc=0
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member rsa-tool has no library target, and its tree contains rsa;' "$scratch/out"; then
+    echo "ok   - library-less member with rsa as a $kind: $gate_name fails closed"
+  else
+    echo "FAIL - library-less member with rsa as a $kind: exit $rc (expected 2) with the no-library-target error"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
 
 finish

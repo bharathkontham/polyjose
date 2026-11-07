@@ -17,6 +17,9 @@
 #      it ships as a cdylib or staticlib), on the host;
 #   3. polyjose-wasm the same way for wasm32-unknown-unknown, its shipping target (polyjose alone
 #      does not build there: getrandom needs the binding's `wasm_js` backend).
+# A workspace member with no library target (build tooling such as polyjose-uniffi-bindgen) is
+# skipped only when its tree holds neither rsa nor another workspace member; otherwise it fails
+# closed.
 # The dev profile inlines no call away, so a reference to an rsa item stays a symbol. The release
 # profile is what ships, and it compiles code the dev profile never does: anything under
 # `cfg(not(debug_assertions))`. It can inline a call away, so it adds to the dev pass and never
@@ -38,11 +41,12 @@
 # (`$LT$` -> `<`, `..` -> `::`, ...), since llvm-nm's Itanium demangler leaves those escapes;
 # rustc 1.99 emits v0 names, but the check does not depend on it.
 #
-# Fails closed (exit 2), with the reason, when: cargo, rustc, python3, ar or nm is missing; a build
-# fails; a build does not report polyjose's (or the binding's) rlib; an rlib holds no object or a
-# member it does not expect; the symbol tool cannot read an object or prints a line it cannot
-# parse; or the symbols are not demangled (each crate must show a `<crate>::` path, and each
-# polyjose rlib rsa::public_key::RsaPublicKey, which RS*/PS* verification always uses).
+# Fails closed (exit 2), with the reason, when: cargo, rustc, python3, ar or nm is missing; a
+# workspace member has no library target and its tree holds rsa or another member; a build fails;
+# a build does not report polyjose's (or the binding's) rlib; an rlib holds no object or a member
+# it does not expect; the symbol tool cannot read an object or prints a line it cannot parse; or
+# the symbols are not demangled (each crate must show a `<crate>::` path, and each polyjose rlib
+# rsa::public_key::RsaPublicKey, which RS*/PS* verification always uses).
 #
 # Tools, first found: the toolchain's own llvm-ar and llvm-nm (the llvm-tools component:
 # `rustup component add llvm-tools`; the only choice that reads wasm32 objects everywhere), then
@@ -262,11 +266,25 @@ LIB_KINDS = {"lib", "rlib", "cdylib", "staticlib", "dylib"}
 names = sorted(p["name"] for p in members)
 if CORE not in names:
     die("the workspace has no %s package" % CORE)
+# A member with no library target is build tooling (polyjose-uniffi-bindgen, the UniFFI bindgen
+# CLI of feature 0013 T10): no shipped library links it. It is skipped only while it cannot hold
+# polyjose or rsa code at all: its whole tree (every dependency kind, every target) may contain
+# neither rsa nor any other workspace member. Otherwise the check fails closed, as for any member
+# it does not know how to build.
+tools = []
 for p in members:
-    if not any(LIB_KINDS & set(t["kind"]) for t in p["targets"]):
-        die("workspace member %s has no library target; scripts/check-rsa-symbols.sh builds every"
-            " member's library, so decide how to check it and update the script" % p["name"])
-bindings = [n for n in names if n != CORE]
+    if any(LIB_KINDS & set(t["kind"]) for t in p["targets"]):
+        continue
+    tree = run(["cargo", "tree", "--locked", "-p", p["name"], "-e", "normal,build,dev", "--target", "all",
+                "--prefix", "none"], "cargo tree -p %s" % p["name"]).splitlines()
+    reached = set(line.split(" ", 1)[0] for line in tree[1:] if line.strip())
+    holds = sorted(reached & (set(names) | {"rsa"}))
+    if holds:
+        die("workspace member %s has no library target, and its tree contains %s; scripts/check-rsa-symbols.sh"
+            " builds every member's library, so decide how to check it and update the script"
+            % (p["name"], ", ".join(holds)))
+    tools.append(p["name"])
+bindings = [n for n in names if n != CORE and n not in tools]
 if WASM_BINDING not in bindings:
     die("the workspace has no %s package, whose %s build this check reads" % (WASM_BINDING, WASM_TARGET))
 
@@ -440,4 +458,6 @@ print("ok: no RSA private-key, signing or decryption symbol in the compiled obje
       " (defined and undefined), read with %s%s" % (len(configs), totals[0], totals[1], totals[2], NM, narrowed))
 for label, _, _, crates in configs:
     print("  %s: %s" % (label, ", ".join(c.replace("-", "_") for c in crates)))
+for name in tools:
+    print("  skipped %s: no library target, and neither rsa nor a workspace member in its tree" % name)
 PY

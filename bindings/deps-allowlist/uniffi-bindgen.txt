@@ -1,0 +1,120 @@
+# Crates allowed in the normal dependency tree of polyjose-uniffi-bindgen (bindings/uniffi-bindgen,
+# the UniFFI bindgen CLI) beyond the core's: what
+#   cargo tree -p polyjose-uniffi-bindgen -e normal --target all --prefix none
+# lists (also with --no-default-features and --all-features), other than workspace packages, crates
+# of deps-allowlist.txt and crates of the core's own tree, which check 1 governs. scripts/check-deps.sh
+# (check 13) enforces this file in both directions, like deps-allowlist.txt (ADR 0016 §4): a crate
+# in that tree that is not listed fails, and so does an entry the tree no longer contains, or one
+# that deps-allowlist.txt already allows. Adding an entry needs an ADR (ADR 0016 §4, ADR 0030 §1).
+#
+# This package is build tooling, not a binding: a binary run on the developer's or the release
+# machine to generate the Kotlin and Swift sources from the compiled polyjose-ffi library
+# (`cargo run -p polyjose-uniffi-bindgen -- generate ...`, ADR 0032 §2, ADR 0033). It does not
+# depend on polyjose or polyjose-ffi, is never published (`publish = false`) and nothing of it is
+# linked into, or shipped with, any artifact. It lives in its own package precisely so that
+# uniffi's `cli` feature stays out of the tree of polyjose-ffi (ADR 0030 §1, ADR 0032 §1, feature
+# 0013 T10). Its crates are reviewed like any dependency all the same.
+#
+# Format: one crate name per line; `#` starts a comment. No serde-family crate may appear in the
+# tree (check 14) unless a `# serde-only-below: <crate>...` line, followed by comment lines that
+# explain it, names the crates every path to it must go through.
+#
+# Measured 2026-11-07 (feature 0013 T10) with uniffi =0.32.2, features `cli` and the default
+# `cargo-metadata`.
+
+# serde-only-below: uniffi_macros uniffi_bindgen cargo_metadata camino uniffi_pipeline
+# Every path from polyjose-uniffi-bindgen to serde, serde_core, serde_derive, serde_json or
+# serde_spanned goes through one of these crates, and all of them only run at build time, in this
+# CLI or in the compiler; none is linked into a shipped library:
+# - uniffi_macros is UniFFI's proc-macro (it parses uniffi.toml with toml and serde, non-optional
+#   dependencies of uniffi_macros 0.32.2);
+# - uniffi_bindgen is the generator itself (it reads uniffi.toml and its templates' config with
+#   toml, basic-toml and serde);
+# - cargo_metadata (uniffi's `cargo-metadata` feature, how the generator finds the crate-root
+#   uniffi.toml, ADR 0032 §2) parses `cargo metadata` JSON with serde_json, and turns on camino's
+#   serde support for its paths;
+# - uniffi_pipeline is the generator's IR pass framework: in this package only, feature unification
+#   with uniffi_bindgen turns on indexmap's `serde` feature, so serde is reachable through its
+#   indexmap (in polyjose-ffi's tree, the same uniffi_pipeline reaches no serde).
+
+# UniFFI runtime and pipeline, as in ffi.txt: uniffi, uniffi_core (anyhow, bytes, once_cell,
+# static_assertions) and uniffi_pipeline (heck, indexmap with equivalent and hashbrown, tempfile with
+# fastrand, rustix, errno, linux-raw-sys, bitflags, windows-sys, windows-link).
+uniffi
+uniffi_core
+anyhow
+bytes
+once_cell
+static_assertions
+uniffi_pipeline
+heck
+indexmap
+equivalent
+hashbrown
+tempfile
+fastrand
+rustix
+errno
+linux-raw-sys
+bitflags
+windows-sys
+windows-link
+
+# UniFFI proc-macros, as in ffi.txt: uniffi_macros, uniffi_internal_macros and uniffi_meta, with
+# toml (toml_datetime, toml_parser, toml_writer, serde_spanned, winnow), serde (serde_core,
+# serde_derive), camino, fs-err and siphasher.
+uniffi_macros
+uniffi_internal_macros
+uniffi_meta
+toml
+toml_datetime
+toml_parser
+toml_writer
+serde_spanned
+winnow
+serde
+serde_core
+serde_derive
+camino
+fs-err
+siphasher
+
+# The bindgen CLI (uniffi's `cli` and `cargo-metadata` features): uniffi_bindgen with uniffi_udl
+# (weedle2, nom, memchr, minimal-lexical), askama templates (askama_derive, askama_macros,
+# askama_parser, basic-toml), clap (clap_builder, clap_derive, clap_lex, anstyle, strsim),
+# cargo_metadata (cargo-platform, serde_json with itoa and zmij), goblin (scroll, scroll_derive,
+# plain) for reading the library's metadata, textwrap (smawk), glob, log, thiserror
+# (thiserror-impl) and rustc-hash.
+uniffi_bindgen
+uniffi_udl
+weedle2
+nom
+memchr
+minimal-lexical
+askama
+askama_derive
+askama_macros
+askama_parser
+basic-toml
+clap
+clap_builder
+clap_derive
+clap_lex
+anstyle
+strsim
+cargo_metadata
+cargo-platform
+serde_json
+itoa
+zmij
+goblin
+scroll
+scroll_derive
+plain
+textwrap
+smawk
+glob
+log
+thiserror
+thiserror-impl
+rustc-hash
