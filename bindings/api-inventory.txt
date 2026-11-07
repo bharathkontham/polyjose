@@ -35,8 +35,9 @@ op jwkToPublic
 # jwkThumbprint/jwkThumbprintUri take (jwk, hash?): hash is optional, absent means the core default
 # SHA-256, and a name is one of ADR 0054 §8.2's nine, parsed by the core (ADR 0054 §9; Rust
 # Option<&str>, UniFFI String? = null, JS hash?). This format lists no operation parameters, so the
-# optional hash is recorded here. jwksSelect is part of 0.1.0 (owner decision, feature 0013); its
-# core support arrives with feature 0015 (JwkSet::select), with no signature change.
+# optional hash is recorded here (bindings/ffi/tests/generated-names.sh checks the UniFFI default).
+# jwksSelect is part of 0.1.0 (owner decision, feature 0013), backed by the core JwkSet::select
+# (ADR 0054 §9), with no signature change.
 op jwkThumbprint
 op jwkThumbprintUri
 op jwksSelect
