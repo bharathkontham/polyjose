@@ -10,7 +10,10 @@
 //   - its prebuild matrix is exactly the eight napi targets of package.json (ADR 0031 §2), each
 //     built by scripts/ci-build.sh and uploaded with a stable artifact name, plus the Node 22, 24
 //     and 26 runs and the parity job (ADR 0034 §5);
-//   - scripts/ci-build.sh and scripts/pack-platform.sh never publish (Gate 3, ADR 0011).
+//   - scripts/ci-build.sh and scripts/pack-platform.sh never publish (Gate 3, ADR 0011);
+//   - the build is reproducible from the committed lockfiles (review-code.md SF-3, N2): ci-build.sh
+//     first checks Cargo.lock with `cargo metadata --locked`, every cargo and napi build or test
+//     the scripts run passes `--locked`, and every `npm ci` passes `--ignore-scripts`.
 // The YAML is read with the minimal line reader below (indentation, keys, flow mappings), enough
 // for the shape this workflow uses; no YAML dependency (ADR 0047: typescript is the only one).
 import { assert, fs, path, test } from "../../js/dist/node/builtins.js";
@@ -26,6 +29,8 @@ const repo = path.resolve(pkgDir, "..", "..");
 const workflowFile = path.join(repo, ".github", "workflows", "binding-node.yml");
 const ciBuildFile = path.join(pkgDir, "scripts", "ci-build.sh");
 const packPlatformFile = path.join(pkgDir, "scripts", "pack-platform.sh");
+const buildFile = path.join(pkgDir, "scripts", "build.sh");
+const testShFile = path.join(pkgDir, "test.sh");
 
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -362,4 +367,60 @@ test("ci-build.sh and pack-platform.sh never publish (npm publish and napi pre-p
       assert.equal(m[1], "build", `${name}: napi ${m[1]} is build`);
     }
   }
+});
+
+// --- Lockfiles (review-code.md SF-3, N2) ------------------------------------------------------------
+
+/** Every script ci-build.sh runs, directly or through test.sh and build.sh. */
+const buildScripts = (): string[] => [ciBuildFile, testShFile, buildFile, packPlatformFile];
+
+/** The code lines of a script with quoted text emptied, so a message that names a command is not a run of it. */
+const commands = (file: string): string[] =>
+  codeLines(file).map((line) => line.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'));
+
+test("ci-build.sh checks Cargo.lock with cargo metadata --locked before anything else", () => {
+  const code = commands(ciBuildFile);
+  const metadata = code.findIndex((line) => line.trim() === "cargo metadata --locked --format-version 1 >/dev/null");
+  assert.ok(metadata >= 0, "ci-build.sh runs `cargo metadata --locked --format-version 1 >/dev/null`");
+  // Only the shell preamble and the argument check may come first: no node, no build, no test.
+  const first = code.findIndex((line) => /\b(node|npm|napi|cargo)\b|test\.sh|scripts\//.test(line));
+  assert.equal(first, metadata, `the first tool ci-build.sh runs is cargo metadata, not: ${code[first] ?? ""}`);
+});
+
+test("every cargo and napi build or test the CI build reaches passes --locked", () => {
+  let cargoRuns = 0;
+  let napiBuilds = 0;
+  for (const file of buildScripts()) {
+    const name = path.relative(pkgDir, file);
+    const raw = codeLines(file);
+    commands(file).forEach((line, i) => {
+      if (/\bcargo[ \t]+(build|test|run|check|metadata|clippy|install)\b/.test(line)) {
+        cargoRuns += 1;
+        assert.match(line, /[ \t]--locked\b/, `${name}: cargo without --locked: ${line.trim()}`);
+      }
+      // The raw line: build.sh runs napi as "$napi", which the quote stripping would empty. An
+      // echo that names the command is a message, not a run.
+      const napiLine = raw[i] ?? "";
+      if (!/^\s*echo\b/.test(napiLine) && /\bnapi\b"?[ \t]+build\b/.test(napiLine)) {
+        napiBuilds += 1;
+        // napi build passes the options after `--` on to cargo build (and to its cargo metadata).
+        assert.match(napiLine, /[ \t]--[ \t]+--locked\b/, `${name}: napi build without \`-- --locked\`: ${napiLine.trim()}`);
+      }
+    });
+  }
+  assert.ok(cargoRuns >= 2, `found the cargo metadata and cargo test runs (${cargoRuns})`);
+  assert.equal(napiBuilds, 1, "build.sh's napi build is the one addon build");
+});
+
+test("every npm ci in the build scripts passes --ignore-scripts", () => {
+  let runs = 0;
+  for (const file of buildScripts()) {
+    const name = path.relative(pkgDir, file);
+    for (const line of commands(file)) {
+      if (!/\bnpm[ \t]+ci\b/.test(line)) continue;
+      runs += 1;
+      assert.match(line, /\bnpm[ \t]+ci\b[^;&|)]*[ \t]--ignore-scripts\b/, `${name}: npm ci without --ignore-scripts: ${line.trim()}`);
+    }
+  }
+  assert.equal(runs, 4, "test.sh and build.sh each run npm ci in bindings/node and bindings/js");
 });

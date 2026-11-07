@@ -7,7 +7,7 @@
 //! `Zeroizing` task fields on the JS thread (ADR 0030 §7). `now` comes from the facade
 //! (ADR 0028 §4); the adapter passes whatever arrives, and reads no clock.
 
-use napi::bindgen_prelude::AsyncTask;
+use napi::bindgen_prelude::{AsyncTask, Object};
 use napi_derive::napi;
 use polyjose_surface::jwt as op;
 use polyjose_surface::records as surface;
@@ -103,12 +103,16 @@ surface_task! {
 #[napi]
 pub fn jwt_encrypt_nested(
     signed_jwt: String,
-    options: JweEncryptOptions<'_>,
-) -> AsyncTask<JwtEncryptNestedTask> {
-    AsyncTask::new(JwtEncryptNestedTask {
-        signed_jwt: Zeroizing::new(signed_jwt),
-        options: options.into(),
-    })
+    #[napi(ts_arg_type = "JweEncryptOptions")] options: Object<'_>,
+) -> napi::Result<AsyncTask<JwtEncryptNestedTask>> {
+    // review-security.md L1: napi has converted every argument; only reading the record can run
+    // JS, so the byte argument is copied first and the strings are in their owners before it.
+    let signed_jwt = Zeroizing::new(signed_jwt);
+    let options = JweEncryptOptions::read(&options)?;
+    Ok(AsyncTask::new(JwtEncryptNestedTask {
+        signed_jwt,
+        options,
+    }))
 }
 
 surface_task! {
