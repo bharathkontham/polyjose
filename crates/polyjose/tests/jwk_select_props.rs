@@ -38,15 +38,18 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use polyjose::json::{Object, Value, parse};
 use polyjose::jwa::{KeyMgmtAlg, SigningAlg};
-use polyjose::jwk::{JwkSelector, JwkSet, KeyAlg};
+use polyjose::jwk::{JwkSelector, JwkSet, KeyAlg, KeyUse};
 use proptest::collection::vec;
 use proptest::option;
 use proptest::prelude::*;
 use proptest::sample::{select, subsequence};
+use proptest::strategy::ValueTree;
+use proptest::test_runner::TestRunner;
 
 // ---------------------------------------------------------------------------
 // Fixed keys (committed fixtures only)
@@ -238,7 +241,7 @@ fn serves(family: Family, alg: &str) -> bool {
 
 /// The JWE key management mode of an `alg` (RFC 7516 §2), as ADR 0054
 /// §2.4 groups them for `key_ops`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Mode {
     /// A JWS algorithm.
     Jws,
@@ -423,10 +426,41 @@ struct Sel {
     key_use: Option<&'static str>,
 }
 
+impl Sel {
+    /// The selector, built through the public setters (ADR 0054 §1).
+    fn build(&self) -> JwkSelector {
+        let mut selector = JwkSelector::new();
+        if let Some(alg) = self.alg {
+            selector = selector.alg(KeyAlg::from(alg)).unwrap();
+        }
+        if let Some(kid) = self.kid {
+            selector = selector.kid(kid);
+        }
+        if let Some(key_use) = self.key_use {
+            selector = selector.key_use(KeyUse::from(key_use)).unwrap();
+        }
+        selector
+    }
+}
+
 /// Every selector `alg`: each implemented JWS and JWE key management
 /// algorithm.
 fn selector_algs() -> Vec<&'static str> {
     JWS_ALGS.iter().chain(KEY_MGMT_ALGS).copied().collect()
+}
+
+fn selector_alg() -> impl Strategy<Value = &'static str> {
+    select(selector_algs())
+}
+
+/// A selector: optional `alg`, `kid` and `key_use`.
+fn selector() -> impl Strategy<Value = Sel> {
+    (
+        option::of(selector_alg()),
+        option::of(select(KIDS)),
+        option::of(select(&["sig", "enc"][..])),
+    )
+        .prop_map(|(alg, kid, key_use)| Sel { alg, kid, key_use })
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +468,7 @@ fn selector_algs() -> Vec<&'static str> {
 // ---------------------------------------------------------------------------
 
 /// The ADR 0054 §2 check that rejected a member.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Check {
     /// §2.1: the member's `kty`/`crv` does not serve the selector `alg`.
     Family,
@@ -510,6 +544,16 @@ fn oracle(member: &MemberSpec, sel: &Sel) -> Result<(), Check> {
     }
 
     Ok(())
+}
+
+/// The indexes of the members the oracle accepts, in set order.
+fn oracle_indexes(members: &[MemberSpec], sel: &Sel) -> Vec<usize> {
+    members
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| oracle(m, sel).is_ok())
+        .map(|(i, _)| i)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +692,61 @@ fn oracle_follows_the_adr_0054_examples() {
     assert_eq!(oracle(&upper, &kid_a), Err(Check::Kid));
 }
 
+/// The generators reach every oracle verdict, so agreement in the
+/// properties below is not vacuous: each §2 check rejects some member, and
+/// the `key_ops` check (§2.4) rejects some member under every `alg` mode,
+/// including key agreement with key wrapping. Deterministic seed; counts
+/// only, no timing.
+#[test]
+fn generators_reach_every_oracle_verdict() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = (members(), selector());
+    let mut checks = HashSet::new();
+    let mut key_ops_modes = HashSet::new();
+    let mut ecdh_kw_key_ops = false;
+    let mut accepted = 0usize;
+    for _ in 0..1000 {
+        let (members, sel) = strategy.new_tree(&mut runner).unwrap().current();
+        for member in &members {
+            match oracle(member, &sel) {
+                Ok(()) => accepted += 1,
+                Err(check) => {
+                    checks.insert(check);
+                    if check == Check::KeyOps {
+                        let alg = sel.alg.unwrap_or("none");
+                        if alg != "none" {
+                            key_ops_modes.insert(alg_mode(alg));
+                        }
+                        ecdh_kw_key_ops |= alg.starts_with("ECDH-ES+");
+                    }
+                }
+            }
+        }
+    }
+    assert!(accepted > 0);
+    for check in [
+        Check::Family,
+        Check::JwkAlg,
+        Check::Purpose,
+        Check::KeyOps,
+        Check::Kid,
+    ] {
+        assert!(checks.contains(&check), "no member rejected by {check:?}");
+    }
+    for mode in [
+        Mode::Jws,
+        Mode::KeyEncryptionOrWrapping,
+        Mode::Direct,
+        Mode::KeyAgreement,
+    ] {
+        assert!(
+            key_ops_modes.contains(&mode),
+            "no key_ops rejection under {mode:?}"
+        );
+    }
+    assert!(ecdh_kw_key_ops, "no key_ops rejection under ECDH-ES+A*KW");
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
@@ -661,5 +760,52 @@ proptest! {
         for (member, key) in members.iter().zip(set.keys()) {
             prop_assert_eq!(key.kid(), member.kid, "{}", pool()[member.key].label);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Soundness and completeness (ADR 0054 §2, §4)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// Soundness: every `(i, k)` that `matching` yields is a member the
+    /// oracle accepts, and `k` is `keys()[i]` (ADR 0054 §2, §4).
+    #[test]
+    fn matching_is_sound(members in members(), sel in selector()) {
+        let set = import(&members);
+        let selector = sel.build();
+        for (i, key) in set.matching(&selector) {
+            prop_assert!(i < members.len(), "index {} out of range", i);
+            prop_assert!(core::ptr::eq(key, &set.keys()[i]), "matching gave a key that is not keys()[{}]", i);
+            prop_assert_eq!(
+                oracle(&members[i], &sel),
+                Ok(()),
+                "member {} ({}) matched {:?} in {}",
+                i,
+                pool()[members[i].key].label,
+                sel,
+                set_json(&members)
+            );
+        }
+    }
+
+    /// Completeness: `matching` yields every member the oracle accepts,
+    /// each once, in index order (ADR 0054 §4 "every match in set order").
+    #[test]
+    fn matching_is_complete(members in members(), sel in selector()) {
+        let set = import(&members);
+        let selector = sel.build();
+        let found: Vec<usize> = set.matching(&selector).map(|(i, _)| i).collect();
+        let expected = oracle_indexes(&members, &sel);
+        prop_assert_eq!(
+            &found,
+            &expected,
+            "{:?} on {}: oracle verdicts {:?}",
+            sel,
+            set_json(&members),
+            members.iter().map(|m| oracle(m, &sel)).collect::<Vec<_>>()
+        );
     }
 }
