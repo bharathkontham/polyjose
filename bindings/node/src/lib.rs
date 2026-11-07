@@ -1,5 +1,7 @@
 //! polyjose-node: the napi-rs adapter of `@polyjose/node` (ADR 0030 §1, ADR 0031 §2).
 
+pub mod error;
+
 use napi_derive::napi;
 
 /// Encodes `data` as unpadded base64url (RFC 4648 §5).
