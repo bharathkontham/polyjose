@@ -79,6 +79,7 @@ check_absent "a non-executable script is not run" '^fixture apple suite ran$'
 
 new_case stdin
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
+# shellcheck disable=SC2016 # expanded by the fixture, not here
 fixture_append bindings/wasm/test.sh 'read -r line && echo "read stdin: $line"'
 rc=0
 (cd "$case_dir" && "${BASH:-bash}" scripts/test-all.sh wasm) <<<"caller input" >"$scratch/out" 2>&1 || rc=$?

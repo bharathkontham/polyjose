@@ -14,40 +14,6 @@ export LC_ALL=C
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-# writes_results <platform script> <runner>...: the fixture also writes target/conformance/<runner>.json.
-writes_results() {
-  local script=$1 runner
-  shift
-  for runner in "$@"; do
-    fixture_append "$script" "mkdir -p target/conformance && echo '{}' >target/conformance/$runner.json"
-  done
-}
-
-# parity_fixture <exit status> <line>...: a fixture scripts/conformance-parity.sh that also prints its
-# arguments and which results files it found.
-parity_fixture() {
-  fixture scripts/conformance-parity.sh "$@"
-  fixture_append scripts/conformance-parity.sh 'echo "parity fixture args: $*"'
-  fixture_append scripts/conformance-parity.sh 'echo "parity fixture saw: $(cd target/conformance && ls | tr "\n" " ")"'
-}
-
-# line_of <ERE>: the number of the first line of the last output that matches, or 0.
-line_of() { grep -nE -- "$1" "$scratch/out" | head -1 | cut -d: -f1 || true; }
-
-# check_order <description> <ERE before> <ERE after>: both match, the first one earlier.
-check_order() {
-  local a b
-  tests_run=$((tests_run + 1))
-  a=$(line_of "$2"); b=$(line_of "$3")
-  if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then
-    echo "ok   - $1"
-  else
-    echo "FAIL - $1: wanted /$2/ (line ${a:-none}) before /$3/ (line ${b:-none})"
-    sed 's/^/       /' "$scratch/out"
-    tests_failed=$((tests_failed + 1))
-  fi
-}
-
 # --- Parity runs after the platform suites --------------------------------------------------------------
 
 new_case pass
