@@ -44,7 +44,9 @@ use std::sync::OnceLock;
 use polyjose::Error;
 use polyjose::json::{Object, Value, parse};
 use polyjose::jwa::{KeyMgmtAlg, SigningAlg};
-use polyjose::jwk::{JwkSelector, JwkSet, KeyAlg, KeyUse};
+use polyjose::jwk::{
+    EcCurve, Jwk, JwkSelector, JwkSet, KeyAlg, KeyMaterial, KeyType, KeyUse, OkpCurve,
+};
 use proptest::collection::vec;
 use proptest::option;
 use proptest::prelude::*;
@@ -203,6 +205,26 @@ const CONTENT_ENC_ALGS: &[&str] = &[
     "A128GCM",
     "A192GCM",
     "A256GCM",
+];
+
+/// The selector algorithms that take a symmetric key, as ADR 0054 §2.1
+/// lists them: HS*, A*KW, A*GCMKW, `dir` and PBES2. Every other selector
+/// `alg` takes an asymmetric key. Kept apart from [`serves`] so the family
+/// safety property checks the ADR's partition directly.
+const SYMMETRIC_ALGS: &[&str] = &[
+    "HS256",
+    "HS384",
+    "HS512",
+    "A128KW",
+    "A192KW",
+    "A256KW",
+    "A128GCMKW",
+    "A192GCMKW",
+    "A256GCMKW",
+    "dir",
+    "PBES2-HS256+A128KW",
+    "PBES2-HS384+A192KW",
+    "PBES2-HS512+A256KW",
 ];
 
 /// Whether a key of `family` serves the JWS or JWE key management `alg`
@@ -606,21 +628,6 @@ fn by_alg(alg: &'static str) -> Sel {
 /// misreading of it.
 #[test]
 fn oracle_follows_the_adr_0054_examples() {
-    let symmetric = [
-        "HS256",
-        "HS384",
-        "HS512",
-        "A128KW",
-        "A192KW",
-        "A256KW",
-        "A128GCMKW",
-        "A192GCMKW",
-        "A256GCMKW",
-        "dir",
-        "PBES2-HS256+A128KW",
-        "PBES2-HS384+A192KW",
-        "PBES2-HS512+A256KW",
-    ];
     for (key, pool_key) in pool().iter().enumerate() {
         let member = bare(key);
         // §1.3: the empty selector matches every member.
@@ -629,7 +636,7 @@ fn oracle_follows_the_adr_0054_examples() {
             let verdict = oracle(&member, &by_alg(alg));
             // §2.1: an `oct` key never for an asymmetric alg, an asymmetric
             // key never for HS*, A*KW, A*GCMKW, dir or PBES2.
-            if (pool_key.family == Family::Oct) != symmetric.contains(&alg) {
+            if (pool_key.family == Family::Oct) != SYMMETRIC_ALGS.contains(&alg) {
                 assert_eq!(verdict, Err(Check::Family), "{} {alg}", pool_key.label);
             }
             // §2.1: X25519 never matches EdDSA; Ed25519 and secp256k1
@@ -844,7 +851,7 @@ proptest! {
     fn select_agrees_with_matching(members in members(), sel in selector()) {
         let set = import(&members);
         let selector = sel.build();
-        let all: Vec<(usize, *const polyjose::jwk::Jwk)> = set
+        let all: Vec<(usize, *const Jwk)> = set
             .matching(&selector)
             .map(|(i, key)| (i, core::ptr::from_ref(key)))
             .collect();
@@ -853,6 +860,91 @@ proptest! {
             0 => prop_assert_eq!(selected, Err(Error::NoMatchingKey)),
             1 => prop_assert_eq!(selected, Ok(all[0])),
             _ => prop_assert_eq!(selected, Err(Error::MultipleMatchingKeys)),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Family safety (ADR 0054 §2.1, §2.2, §7; RFC 8725 §3.1)
+// ---------------------------------------------------------------------------
+
+/// The family of an *imported* key, read from its material (RFC 7518 §6,
+/// RFC 8037 §2), independent of the generator's description.
+fn imported_family(key: &Jwk) -> Family {
+    match key.material() {
+        KeyMaterial::Oct(_) => Family::Oct,
+        KeyMaterial::Rsa(_) => Family::Rsa,
+        KeyMaterial::Ec(ec) => match ec.crv() {
+            EcCurve::P256 => Family::P256,
+            EcCurve::P384 => Family::P384,
+            EcCurve::P521 => Family::P521,
+            EcCurve::Secp256k1 => Family::Secp256k1,
+            _ => panic!("a curve outside the pool"),
+        },
+        KeyMaterial::Okp(okp) => match okp.crv() {
+            OkpCurve::Ed25519 => Family::Ed25519,
+            OkpCurve::X25519 => Family::X25519,
+            _ => panic!("a curve outside the pool"),
+        },
+        _ => panic!("a key type outside the pool"),
+    }
+}
+
+/// A key selected for `alg` is of a family that serves `alg` and carries
+/// no other `alg` (ADR 0054 §2.1, §2.2, §7; RFC 8725 §3.1 "each key MUST
+/// be used with exactly one algorithm").
+fn assert_family_safe(key: &Jwk, alg: &str) -> Result<(), TestCaseError> {
+    let family = imported_family(key);
+    prop_assert!(serves(family, alg), "{:?} key selected for {}", family, alg);
+    // The ADR's partition, checked directly: never `oct` for an asymmetric
+    // alg, never an asymmetric key for HS*, A*KW, A*GCMKW, dir or PBES2.
+    prop_assert_eq!(
+        key.key_type() == KeyType::Oct,
+        SYMMETRIC_ALGS.contains(&alg),
+        "{:?} key selected for {}",
+        key.key_type(),
+        alg
+    );
+    // X25519 never for EdDSA; Ed25519 and secp256k1 never for ECDH-ES.
+    if family == Family::X25519 {
+        prop_assert!(alg != "EdDSA" && alg != "Ed25519", "X25519 for {}", alg);
+    }
+    if matches!(family, Family::Ed25519 | Family::Secp256k1) {
+        prop_assert!(!alg.starts_with("ECDH-ES"), "{:?} for {}", family, alg);
+    }
+    // §2.2: a JWK `alg`, when present, is the selector `alg`; the one
+    // exception is `dir` with a content encryption `alg` (RFC 7518 §4.5).
+    if let Some(jwk_alg) = key.alg() {
+        let dir_exception = alg == "dir" && matches!(jwk_alg, KeyAlg::ContentEnc(_));
+        prop_assert!(
+            jwk_alg.as_str() == alg || dir_exception,
+            "a key with alg {} selected for {}",
+            jwk_alg,
+            alg
+        );
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// For every selector with an `alg`, every key `matching` yields, and
+    /// the key `select` returns, is family safe.
+    #[test]
+    fn selection_by_alg_is_family_safe(
+        members in members(),
+        alg in selector_alg(),
+        kid in option::of(select(KIDS)),
+        key_use in option::of(select(&["sig", "enc"][..])),
+    ) {
+        let set = import(&members);
+        let selector = Sel { alg: Some(alg), kid, key_use }.build();
+        for (_, key) in set.matching(&selector) {
+            assert_family_safe(key, alg)?;
+        }
+        if let Ok((_, key)) = set.select(&selector) {
+            assert_family_safe(key, alg)?;
         }
     }
 }
