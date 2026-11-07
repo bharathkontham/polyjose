@@ -119,14 +119,48 @@ dispatch() {
 # executable FAILs (it would otherwise drop out unnoticed), and so does finding none at all.
 # The gate scripts guard what CI relies on, e.g. check-deps.sh's ADR 0021 guard, which deny.toml's
 # RUSTSEC-2023-0071 ignore depends on, so their own tests gate too.
+# Each runs with no stdin; its exit status decides PASS or FAIL. A skipped negative test is never
+# PASS (pipeline rule 9; feature 0013 F10): with exit 0 and `SKIPPED (host:<tool>)` as its last
+# non-blank line, it is reported SKIPPED with that reason if <tool> is in negative_skip_tools below,
+# and FAILs otherwise; a last line starting with SKIPPED in any other form (another reason, no
+# reason, leading blanks) FAILs too. A SKIPPED line before the last line is ordinary output.
+#
+# negative_skip_tools: the host tools a negative test may lack, each owner-accepted because:
+#   actionlint  lints the CI workflows, which are disabled (ADR 0044); feature 0006 T05's accepted
+#               criterion runs it "SKIPPED if actionlint is missing, never passing", and the
+#               workflow check's text rules still run without it (0006 F04).
+# Adding a tool needs the owner's acceptance, recorded here with the reason.
+negative_skip_tools="actionlint"
 run_negative_tests() {
-  local t name found=0
+  local t name found=0 out rc last tool
   for t in scripts/tests/*/*.sh; do
     [ -e "$t" ] || continue # bash 3.2 has no nullglob by default: an unmatched glob stays literal
     case ${t##*/} in lib.sh) continue ;; esac
     found=1; name="negative: ${t#scripts/tests/}"
-    if [ -x "$t" ]; then run "$name" "$t"
-    else echo "$t is not executable"; record "$name" FAIL; fi
+    echo "==> $name"
+    if [ ! -x "$t" ]; then echo "$t is not executable"; record "$name" FAIL; continue; fi
+    out="$scratch/negative-$(printf '%s' "${t#scripts/tests/}" | tr '/ ' '__').out"
+    "$t" </dev/null 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+    if [ "$rc" -ne 0 ]; then echo "$t exited $rc"; record "$name" FAIL; continue; fi
+    last=$(awk '{ sub(/\r$/, "") } NF { line = $0 } END { sub(/[ \t]+$/, "", line); print line }' "$out")
+    case $last in
+      "SKIPPED (host:"*")")
+        tool=${last#"SKIPPED (host:"}; tool=${tool%")"}
+        case $tool in
+          "" | -* | *[!a-z0-9-]*)
+            echo "$t: last line \"$last\" is not SKIPPED (host:<tool>)"; record "$name" FAIL ;;
+          *)
+            case " $negative_skip_tools " in
+              *" $tool "*) record "$name" "$last" ;;
+              *) echo "$t: skipped for host tool $tool, which is not in negative_skip_tools (scripts/test-all.sh)"
+                record "$name" FAIL ;;
+            esac ;;
+        esac ;;
+      [[:space:]]*SKIPPED* | SKIPPED*)
+        echo "$t: last line \"$last\" is not SKIPPED (host:<tool>) for a tool in negative_skip_tools"
+        record "$name" FAIL ;;
+      *) record "$name" PASS ;;
+    esac
   done
   if [ "$found" -eq 0 ]; then echo "no negative tests found (scripts/tests/*/*.sh)"; record negative-tests FAIL; fi
 }
