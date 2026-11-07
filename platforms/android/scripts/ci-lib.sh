@@ -29,6 +29,33 @@ ci_default_avd=polyjose-ci-api36
 
 ci_die() { echo "${0##*/}: $*" >&2; exit 2; }
 
+# The SHA-256 of gradle/wrapper/gradle-wrapper.jar (feature 0008 F06, audit M2): the value Gradle
+# publishes for the 9.8.2 wrapper jar,
+#   https://services.gradle.org/distributions/gradle-9.8.2-wrapper.jar.sha256
+# (fetched 2026-11-07; equal to the committed jar, as T01 found). The wrapper jar is the code
+# `./gradlew` runs first, so a jar that is not Gradle's must never run (Gradle's user manual, "The
+# Gradle Wrapper", verifying the wrapper JAR). Upgrading the wrapper means updating this pin from
+# the new version's published .sha256.
+ci_gradle_wrapper_version=9.8.2
+ci_gradle_wrapper_sha256=3b8a25775a69158b5ad2b1d17a80a88dc7b40a352a73eb27d06c612a7ce68e98
+
+# ci_check_gradle_wrapper [<jar>]: returns 0 when the jar (default: platforms/android's
+# gradle/wrapper/gradle-wrapper.jar) has the pinned SHA-256; otherwise prints why and returns 1.
+# Called before any `./gradlew` (platforms/android/test.sh; the workflow jobs, feature 0008 F08).
+ci_check_gradle_wrapper() {
+  local jar=${1:-$ci_android/gradle/wrapper/gradle-wrapper.jar} sum
+  [ -f "$jar" ] || { echo "gradle wrapper: no jar at $jar"; return 1; }
+  if command -v sha256sum >/dev/null 2>&1; then sum=$(sha256sum "$jar") || sum=""
+  elif command -v shasum >/dev/null 2>&1; then sum=$(shasum -a 256 "$jar") || sum=""
+  else echo "gradle wrapper: neither sha256sum nor shasum is available to hash $jar"; return 1
+  fi
+  sum=${sum%% *}; sum=${sum#\\}
+  if [ "$sum" != "$ci_gradle_wrapper_sha256" ]; then
+    echo "gradle wrapper: $jar has SHA-256 ${sum:-unknown}, not Gradle $ci_gradle_wrapper_version's $ci_gradle_wrapper_sha256"
+    return 1
+  fi
+}
+
 # ci_triple_of <prefix>: the Rust target triple of a JNA prefix; empty for an unknown prefix.
 ci_triple_of() {
   case $1 in
