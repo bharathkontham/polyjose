@@ -16,7 +16,8 @@
     ".": {
       "types": "./index.d.ts",
       "default": "./index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "index.js",
