@@ -749,3 +749,190 @@ fn es256_compact_round_trips_through_the_surface() {
     assert_eq!(verified.payload.as_bytes(), payload);
     assert_eq!(verified.alg, "ES256");
 }
+
+// --- Secrets (ADR 0030 §7, ADR 0049 §4) -------------------------------------------------------
+
+#[test]
+fn secrets_are_borrowed_in_and_wiped_out() {
+    // Payloads are borrowed as `&[u8]` and keys as `&str` (ADR 0030 §7.1); the verified payload
+    // is SecretBytes (ADR 0049 §4). Each binding compiles against exactly these types.
+    let _: fn(&[u8], &str, &JwsSignOptions) -> Result<String, SurfaceError> = jws_sign_compact;
+    let _: fn(&[u8], &JwsSigner, bool) -> Result<String, SurfaceError> = jws_sign_flattened;
+    let _: fn(&[u8], &[JwsSigner], bool) -> Result<String, SurfaceError> = jws_sign_general;
+    let _: fn(&str, &str, &JwsVerifyOptions) -> Result<JwsVerified, SurfaceError> =
+        jws_verify_compact;
+    let _: fn(&str, &str, &JwsVerifyOptions) -> Result<JwsVerified, SurfaceError> = jws_verify_json;
+    let payload: fn(&JwsVerified) -> &SecretBytes = |v| &v.payload;
+    let _ = payload;
+
+    let verified = verify_vector(&vector(A1_COMPACT_VERIFY)).unwrap();
+    assert_eq!(format!("{:?}", verified.payload), "<redacted>");
+    assert!(!format!("{verified:?}").contains("joe"));
+}
+
+/// A marker standing for key material and payload bytes (the core's marker style). It is
+/// base64url, so a key can hold it and still be valid, reaching the paths after key parsing.
+const MARKER: &str = "pjSECRETmarker7f3a";
+
+/// A valid HS256 key whose `k` holds the marker three times (41 octets, RFC 7518 §3.2).
+fn marked_oct() -> String {
+    format!(r#"{{"kty":"oct","k":"{MARKER}{MARKER}{MARKER}A"}}"#)
+}
+
+/// A valid P-256 private key whose `d` is replaced by marked text: invalid, so it fails at
+/// parsing with the marker inside the rejected member.
+fn marked_bad_ec() -> String {
+    format!(
+        r#"{{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","d":"{MARKER}"}}"#
+    )
+}
+
+fn assert_no_marker<T>(what: &str, result: Result<T, SurfaceError>) {
+    let Err(e) = result else {
+        panic!("{what}: expected a failure");
+    };
+    for rendered in [
+        e.code().to_owned(),
+        e.message().to_owned(),
+        e.to_string(),
+        format!("{e:?}"),
+    ] {
+        assert!(!rendered.contains(MARKER), "{what} leaks input: {rendered}");
+    }
+}
+
+#[test]
+fn no_failing_path_puts_a_key_or_payload_in_the_error() {
+    let oct = marked_oct();
+    assert_eq!(
+        code(jws_sign_compact(
+            b"p",
+            &oct,
+            &header_json(r#"{"alg":"HS256"}"#)
+        )),
+        "Ok",
+        "the marked key is a valid HS256 key"
+    );
+    let bad_ec = marked_bad_ec();
+    let payload = format!("{MARKER}.{MARKER}");
+    let payload = payload.as_bytes();
+    let unencoded = header_json(r#"{"alg":"HS256","b64":false,"crit":["b64"]}"#);
+
+    // jws_sign_compact: key, header form, header JSON/base64url, alg, key binding, payload.
+    let both = JwsSignOptions {
+        protected_header: Some(r#"{"alg":"HS256"}"#.to_owned()),
+        protected_b64u: Some("eyJhbGciOiJIUzI1NiJ9".to_owned()),
+        detached: false,
+    };
+    let compact_failures: [(&str, &str, JwsSignOptions); 10] = [
+        ("bad key", &bad_ec, header_json(r#"{"alg":"ES256"}"#)),
+        ("both forms", &oct, both),
+        ("neither form", &oct, JwsSignOptions::default()),
+        (
+            "header JSON",
+            &oct,
+            header_json(&format!("{{\"{MARKER}\" {MARKER}}}")),
+        ),
+        ("header base64url", &oct, header_b64u(&format!("{MARKER}="))),
+        ("no alg", &oct, header_json("{}")),
+        ("none", &oct, header_json(r#"{"alg":"none"}"#)),
+        ("RS256", &oct, header_json(r#"{"alg":"RS256"}"#)),
+        ("key binding", &oct, header_json(r#"{"alg":"ES256"}"#)),
+        ("b64:false payload", &oct, unencoded),
+    ];
+    for (what, key, options) in &compact_failures {
+        assert_no_marker(what, jws_sign_compact(payload, key, options));
+    }
+
+    // jws_sign_flattened and jws_sign_general: the same, plus the unprotected header rules.
+    let signer = |key: &str, protected: Option<&str>, unprotected: Option<&str>| {
+        let mut s = JwsSigner::new(secret(key));
+        s.protected_header = protected.map(str::to_owned);
+        s.unprotected_header = unprotected.map(str::to_owned);
+        s
+    };
+    let bad_json = format!("{{\"{MARKER}\" {MARKER}}}");
+    let mut both_forms = signer(&oct, Some(r#"{"alg":"HS256"}"#), None);
+    both_forms.protected_b64u = Some("eyJhbGciOiJIUzI1NiJ9".to_owned());
+    let json_failures = [
+        ("bad key", signer(&bad_ec, None, Some(r#"{"alg":"ES256"}"#))),
+        ("both forms", both_forms),
+        ("no header", signer(&oct, None, None)),
+        ("protected JSON", signer(&oct, Some(&bad_json), None)),
+        ("unprotected JSON", signer(&oct, None, Some(&bad_json))),
+        (
+            "overlap",
+            signer(
+                &oct,
+                Some(r#"{"alg":"HS256","kid":"a"}"#),
+                Some(r#"{"kid":"a"}"#),
+            ),
+        ),
+        ("RS256", signer(&oct, None, Some(r#"{"alg":"RS256"}"#))),
+        (
+            "key binding",
+            signer(&oct, None, Some(r#"{"alg":"EdDSA"}"#)),
+        ),
+    ];
+    for (what, s) in &json_failures {
+        assert_no_marker(what, jws_sign_flattened(payload, s, false));
+        assert_no_marker(
+            what,
+            jws_sign_general(payload, std::slice::from_ref(s), true),
+        );
+    }
+    assert_no_marker("no signers", jws_sign_general(payload, &[], false));
+
+    // jws_verify_compact and jws_verify_json: key, allow-list, limits, shape, signature and a
+    // marked detached payload.
+    let token = jws_sign_compact(payload, &oct, &header_json(r#"{"alg":"HS256"}"#)).unwrap();
+    let mut s = JwsSigner::new(secret(&oct));
+    s.protected_header = Some(r#"{"alg":"HS256"}"#.to_owned());
+    let flattened = jws_sign_flattened(payload, &s, false).unwrap();
+    let other_key = OCT;
+    let hs256 = || JwsVerifyOptions::new(list(&["HS256"]));
+    let mut tiny = hs256();
+    tiny.max_input_len = Some(1);
+    let mut detached = hs256();
+    detached.detached_payload = Some(SecretBytes::from(payload.to_vec()));
+    let tampered = format!("{token}{MARKER}");
+    let verify_failures: [(&str, &str, &str, JwsVerifyOptions); 7] = [
+        ("bad key", &token, &bad_ec, hs256()),
+        (
+            "empty allow-list",
+            &token,
+            &oct,
+            JwsVerifyOptions::new(vec![]),
+        ),
+        (
+            "not allowed",
+            &token,
+            &oct,
+            JwsVerifyOptions::new(list(&["ES256"])),
+        ),
+        ("limit", &token, &oct, tiny),
+        ("detached against attached", &token, &oct, detached),
+        ("tampered", &tampered, &oct, hs256()),
+        ("wrong key", &token, other_key, hs256()),
+    ];
+    for (what, jws, key, options) in &verify_failures {
+        assert_no_marker(what, jws_verify_compact(jws, key, options));
+    }
+    let tampered_json = flattened.replace("\"payload\":\"", &format!("\"payload\":\"{MARKER}"));
+    let marked_json = format!("{{\"{MARKER}\" {MARKER}}}");
+    let json_verify_failures: [(&str, &str, &str, JwsVerifyOptions); 5] = [
+        ("bad key", &flattened, &bad_ec, hs256()),
+        (
+            "empty allow-list",
+            &flattened,
+            &oct,
+            JwsVerifyOptions::new(vec![]),
+        ),
+        ("JSON", &marked_json, &oct, hs256()),
+        ("tampered", &tampered_json, &oct, hs256()),
+        ("wrong key", &flattened, other_key, hs256()),
+    ];
+    for (what, jws, key, options) in &json_verify_failures {
+        assert_no_marker(what, jws_verify_json(jws, key, options));
+    }
+}
