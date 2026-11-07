@@ -146,8 +146,9 @@ export interface Backend {
 
   jwkParse(jwk: string): MaybePromise<string>;
   jwkToPublic(jwk: string): MaybePromise<string>;
-  jwkThumbprint(jwk: string, hash: string): MaybePromise<string>;
-  jwkThumbprintUri(jwk: string, hash: string): MaybePromise<string>;
+  /** `hash` is `undefined` when the caller gave none: the core default, SHA-256 (ADR 0054 §9). */
+  jwkThumbprint(jwk: string, hash: string | undefined): MaybePromise<string>;
+  jwkThumbprintUri(jwk: string, hash: string | undefined): MaybePromise<string>;
   jwksSelect(jwks: string, selector: BackendJwkSelector): MaybePromise<string>;
   jwkGenerateOct(lenBytes: number): MaybePromise<string>;
   jwkGenerateEc(crv: string): MaybePromise<string>;

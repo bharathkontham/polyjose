@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://polyjose.dev/brand/lockup-dark.svg">
+    <img alt="polyjose" src="https://polyjose.dev/brand/lockup-light.svg" width="360">
+  </picture>
+</p>
+
 # polyjose
 
 **One JOSE implementation, every platform.** polyjose is a pure-Rust implementation of JSON Object Signing and Encryption (JWA, JWK, JWS, JWE, JWT). It builds from a single core into:

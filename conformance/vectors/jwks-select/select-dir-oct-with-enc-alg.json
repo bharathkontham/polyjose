@@ -1,0 +1,33 @@
+{
+  "source": "ADR 0054 §2.1, §2.2; RFC 7518 §4.5",
+  "description": "dir on an oct key with alg A256GCM and an EC key returns the oct key; decided by ADR 0054 §2.2's one exception: for dir, a member whose alg is a content encryption algorithm (A256GCM) matches, the exact enc being checked at use; the EC member does not serve dir (§2.1); member 0 has no use (U = enc) or key_ops, and the selector has no kid; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA",
+          "alg": "A256GCM"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      ]
+    },
+    "selector": {
+      "alg": "dir"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA",
+      "alg": "A256GCM"
+    }
+  }
+}

@@ -88,6 +88,8 @@ test("strings stay strings and bytes are Uint8Array", async () => {
   assert.deepEqual(await api.base64urlDecode("-w"), new Uint8Array([0xfb]));
   assert.equal(await api.jwkThumbprint(KEY, "SHA-256"), "tp");
   assert.equal(await api.jwkThumbprintUri(KEY, "SHA-256"), "urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp");
+  assert.equal(await api.jwkThumbprint(KEY), "tp");
+  assert.equal(await api.jwkThumbprintUri(KEY), "urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp");
   assert.equal(await api.jwkToPem(KEY, "pkcs8"), "PEM");
   assert.deepEqual(await api.jwkToDer(KEY, "pkcs8"), new Uint8Array([1, 2]));
   assert.equal(await api.jwsSignCompact(new Uint8Array(), KEY, { protectedB64u: "e30" }), "a.b.c");
@@ -231,6 +233,24 @@ test("every core code maps to PolyjoseError", async () => {
     const fake = fakeBackend({ handlers: { jwkParse: () => { throw coded(code, code); } } });
     await assert.rejects(createApi(fake.backend).jwkParse(KEY), (e: unknown) => e instanceof PolyjoseError && e.code === code);
   }
+});
+
+test("jwksSelect: no match and several matches reject with their codes (ADR 0054 §4, §5)", async () => {
+  for (const code of ["NoMatchingKey", "MultipleMatchingKeys"] as const) {
+    const fake = fakeBackend({ handlers: { jwksSelect: () => { throw coded(code, "selection"); } } });
+    const api = createApi(fake.backend);
+    await assert.rejects(api.jwksSelect({ keys: [] }, { alg: "ES256" }), (e: unknown) => {
+      assert.ok(e instanceof PolyjoseError);
+      assert.equal(e.code, code);
+      return true;
+    });
+    // The criteria reach the backend as given, with no name mapped (ADR 0054 §9).
+    assert.deepEqual(fake.of("jwksSelect")[0]?.args, ['{"keys":[]}', { alg: "ES256" }]);
+  }
+  // A selected private key comes back as the backend wrote it, `d` included (ADR 0054 §3).
+  const privateKey = '{"kty":"EC","crv":"P-256","x":"a","y":"b","d":"c","kid":"1"}';
+  const fake = fakeBackend({ handlers: { jwksSelect: () => privateKey } });
+  assert.deepEqual(await createApi(fake.backend).jwksSelect(`{"keys":[${privateKey}]}`, { kid: "1" }), JSON.parse(privateKey));
 });
 
 test("a napi argument error (InvalidArg, StringExpected) becomes a TypeError with the original message", async () => {

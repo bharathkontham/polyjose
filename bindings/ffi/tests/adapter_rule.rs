@@ -71,13 +71,23 @@ struct Export {
     body: String,
 }
 
-/// Every `#[uniffi::export]` free function of [`SOURCES`], by name.
+/// Every `#[uniffi::export]` free function of [`SOURCES`], by name, with or without export
+/// arguments (`#[uniffi::export(default(hash = None))]`). An export the scan missed fails
+/// [`the_table_names_every_export_and_only_exports`].
 fn exports() -> BTreeMap<String, Export> {
     let mut out = BTreeMap::new();
     for file in SOURCES {
         let path = format!("{}/src/{file}.rs", env!("CARGO_MANIFEST_DIR"));
         let source = std::fs::read_to_string(&path).unwrap();
-        for chunk in source.split("#[uniffi::export]\npub fn ").skip(1) {
+        for chunk in source.split("#[uniffi::export").skip(1) {
+            let Some((attribute, rest)) = chunk.split_once('\n') else {
+                continue;
+            };
+            let arguments =
+                attribute == "]" || (attribute.starts_with('(') && attribute.ends_with(")]"));
+            let Some(chunk) = rest.strip_prefix("pub fn ").filter(|_| arguments) else {
+                continue;
+            };
             let name = chunk[..chunk.find('(').unwrap()].to_owned();
             let open = chunk.find('(').unwrap();
             let close = open + chunk[open..].find(')').unwrap();

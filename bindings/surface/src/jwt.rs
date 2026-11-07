@@ -363,7 +363,7 @@ fn json_object(text: &str) -> polyjose::Result<Object> {
 fn nested_verified(v: VerifiedNestedJwt) -> polyjose::Result<JwtNestedVerified> {
     Ok(JwtNestedVerified {
         outer_header: v.outer_header.to_json()?,
-        recipient_index: index(v.recipient),
+        recipient_index: index(v.recipient)?,
         inner: verified(v.inner)?,
     })
 }
@@ -375,15 +375,19 @@ fn verified(v: VerifiedJwt) -> polyjose::Result<JwtVerified> {
         claims: v.claims.to_json(),
         header: v.header.to_json()?,
         alg: v.alg.as_str().to_owned(),
-        key_index: v.key_index.map(index),
+        key_index: v.key_index.map(index).transpose()?,
         kid: v.kid,
     })
 }
 
-/// A core index (a JWK Set member, a JWE recipient) as the surface's `u32` (ADR 0030 §2). The
-/// core's input limits keep every index far below `u32::MAX`; it saturates rather than panics.
-fn index(i: usize) -> u32 {
-    u32::try_from(i).unwrap_or(u32::MAX)
+/// A core index (a JWK Set member, a JWE recipient) as the surface's `u32` (ADR 0030 §2).
+///
+/// The core's input limits keep every index far below `u32::MAX`, so the error is unreachable.
+/// Past it the conversion fails closed with `InvalidFormat`, the convention of `jwe.rs` for the
+/// JWE recipient index (review N8), rather than saturating to an index that names another
+/// member.
+fn index(i: usize) -> polyjose::Result<u32> {
+    u32::try_from(i).map_err(|_| Error::InvalidFormat("index does not fit in u32"))
 }
 
 #[cfg(test)]
@@ -446,11 +450,18 @@ mod tests {
     }
 
     #[test]
-    fn index_converts_losslessly_and_saturates() {
-        assert_eq!(index(0), 0);
-        assert_eq!(index(1), 1);
-        assert_eq!(index(usize::try_from(u32::MAX).unwrap()), u32::MAX);
+    fn index_converts_losslessly_and_fails_closed_past_u32() {
+        assert_eq!(index(0).unwrap(), 0);
+        assert_eq!(index(1).unwrap(), 1);
+        let max = usize::try_from(u32::MAX).unwrap();
+        assert_eq!(index(max).unwrap(), u32::MAX);
+        // Past u32::MAX: the code jwe.rs gives the same case (review N8), never a saturated
+        // index that names another JWK Set member or recipient.
         #[cfg(target_pointer_width = "64")]
-        assert_eq!(index(usize::MAX), u32::MAX);
+        for past in [max + 1, usize::MAX] {
+            let err = index(past).unwrap_err();
+            assert!(matches!(err, Error::InvalidFormat(_)), "{past}: {err:?}");
+            assert_eq!(err.code(), "InvalidFormat");
+        }
     }
 }
