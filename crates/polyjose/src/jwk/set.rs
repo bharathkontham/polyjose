@@ -2083,6 +2083,154 @@ mod tests {
             }
         }
 
+        /// ADR 0057 §1: with both an `alg` and a `key_op`, the `key_op` must
+        /// be an operation the `alg` performs in either direction
+        /// (`sign`/`verify`; `wrapKey`/`unwrapKey`; `encrypt`/`decrypt` for
+        /// `dir`; `deriveKey` for ECDH-ES and ECDH-ES+A\*KW), or the selector
+        /// matches nothing, even a member whose `key_ops` holds the
+        /// `key_op`. Otherwise the member check is [`Jwk::permits`].
+        #[test]
+        fn a_key_op_with_an_alg_must_be_an_op_of_the_alg() {
+            let ops = [
+                KeyOp::Sign,
+                KeyOp::Verify,
+                KeyOp::Encrypt,
+                KeyOp::Decrypt,
+                KeyOp::WrapKey,
+                KeyOp::UnwrapKey,
+                KeyOp::DeriveKey,
+                KeyOp::DeriveBits,
+            ];
+            // (material, alg, the ops it performs in either direction).
+            let cases: &[(&str, &str, &[KeyOp])] = &[
+                (EC_P256, "ES256", &[KeyOp::Sign, KeyOp::Verify]),
+                (OCT, "HS256", &[KeyOp::Sign, KeyOp::Verify]),
+                (OCT, "A128KW", &[KeyOp::WrapKey, KeyOp::UnwrapKey]),
+                (OCT, "A256GCMKW", &[KeyOp::WrapKey, KeyOp::UnwrapKey]),
+                (
+                    OCT,
+                    "PBES2-HS256+A128KW",
+                    &[KeyOp::WrapKey, KeyOp::UnwrapKey],
+                ),
+                (
+                    RSA_2048,
+                    "RSA-OAEP-256",
+                    &[KeyOp::WrapKey, KeyOp::UnwrapKey],
+                ),
+                (OCT, "dir", &[KeyOp::Encrypt, KeyOp::Decrypt]),
+                (EC_P256, "ECDH-ES", &[KeyOp::DeriveKey]),
+                (X25519, "ECDH-ES+A128KW", &[KeyOp::DeriveKey]),
+            ];
+            for (material, alg, performed) in cases {
+                // A member that permits each op, one that permits every op,
+                // and one with neither `use` nor `key_ops`.
+                let mut members: Vec<String> = ops
+                    .iter()
+                    .map(|op| with(material, &format!(r#""key_ops":["{op}"]"#)))
+                    .collect();
+                members.push(with(
+                    material,
+                    r#""key_ops":["sign","verify","encrypt","decrypt","wrapKey","unwrapKey","deriveKey","deriveBits"]"#,
+                ));
+                members.push(material.to_string());
+                let set = set_from(&members);
+                assert_eq!(set.len(), ops.len() + 2);
+                for (i, op) in ops.iter().enumerate() {
+                    let selector = by_alg(alg).key_op(op.clone()).unwrap();
+                    let expected: Vec<usize> = if performed.contains(op) {
+                        vec![i, ops.len(), ops.len() + 1]
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(matched(&set, &selector), expected, "{alg} + {op}");
+                    if expected.is_empty() {
+                        assert_eq!(
+                            set.select(&selector).map(|(i, _)| i),
+                            Err(Error::NoMatchingKey),
+                            "{alg} + {op}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// ADR 0057 §1, the named cases, and the formerly selected member:
+        /// `A128KW` + `encrypt` no longer returns a key with
+        /// `key_ops: ["encrypt"]`, which A128KW key binding would refuse.
+        #[test]
+        fn an_incoherent_key_op_matches_nothing() {
+            let encrypt_only = with(OCT, r#""key_ops":["encrypt"]"#);
+            let set = set_from(&[encrypt_only.clone()]);
+            let a128kw_encrypt = by_alg("A128KW").key_op(KeyOp::Encrypt).unwrap();
+            assert!(matched(&set, &a128kw_encrypt).is_empty());
+            assert_eq!(
+                set.select(&a128kw_encrypt).map(|(i, _)| i),
+                Err(Error::NoMatchingKey)
+            );
+            // The same member is still selected by `key_op` alone, and by
+            // `dir`, whose operation `encrypt` is.
+            let encrypt = JwkSelector::new().key_op(KeyOp::Encrypt).unwrap();
+            assert_eq!(matched(&set, &encrypt), [0]);
+            let dir_encrypt = by_alg("dir").key_op(KeyOp::Encrypt).unwrap();
+            assert_eq!(matched(&set, &dir_encrypt), [0]);
+
+            let bare_oct = set_from(&[OCT.to_owned()]);
+            let bare_p256 = set_from(&[EC_P256.to_owned()]);
+            let bare_x25519 = set_from(&[X25519.to_owned()]);
+            let pair = |alg: &str, op: KeyOp| by_alg(alg).key_op(op).unwrap();
+            let cases: &[(&JwkSet, JwkSelector, bool)] = &[
+                (&bare_oct, pair("A128KW", KeyOp::Encrypt), false),
+                (&bare_oct, pair("A128KW", KeyOp::WrapKey), true),
+                (&bare_oct, pair("A128KW", KeyOp::UnwrapKey), true),
+                (&bare_oct, pair("dir", KeyOp::Encrypt), true),
+                (&bare_oct, pair("dir", KeyOp::Decrypt), true),
+                (&bare_oct, pair("dir", KeyOp::WrapKey), false),
+                (&bare_p256, pair("ECDH-ES", KeyOp::DeriveKey), true),
+                (&bare_x25519, pair("ECDH-ES+A128KW", KeyOp::DeriveKey), true),
+                (&bare_x25519, pair("ECDH-ES+A128KW", KeyOp::WrapKey), false),
+                (&bare_p256, pair("ECDH-ES", KeyOp::DeriveBits), false),
+                (&bare_p256, pair("ES256", KeyOp::Verify), true),
+                (&bare_p256, pair("ES256", KeyOp::Encrypt), false),
+            ];
+            for (set, selector, matches) in cases {
+                let expected: &[usize] = if *matches { &[0] } else { &[] };
+                assert_eq!(matched(set, selector), expected, "{selector:?}");
+            }
+        }
+
+        /// ADR 0057 §1: the setters accept an incoherent pair, in either
+        /// order, and both orders give equal selectors and equal results.
+        #[test]
+        fn the_key_op_rule_does_not_depend_on_setter_order() {
+            let set = set_from(&[
+                OCT.to_owned(),
+                with(OCT, r#""key_ops":["encrypt"]"#),
+                with(OCT, r#""key_ops":["wrapKey"]"#),
+                EC_P256.to_owned(),
+            ]);
+            for alg in ["A128KW", "dir", "ES256", "HS256", "ECDH-ES"] {
+                for op in [
+                    KeyOp::Encrypt,
+                    KeyOp::WrapKey,
+                    KeyOp::Verify,
+                    KeyOp::DeriveKey,
+                ] {
+                    let alg_first = by_alg(alg).key_op(op.clone()).unwrap();
+                    let op_first = JwkSelector::new()
+                        .key_op(op.clone())
+                        .unwrap()
+                        .alg(KeyAlg::from(alg))
+                        .unwrap();
+                    assert_eq!(alg_first, op_first, "{alg} + {op}");
+                    assert_eq!(
+                        matched(&set, &alg_first),
+                        matched(&set, &op_first),
+                        "{alg} + {op}"
+                    );
+                }
+            }
+        }
+
         /// The helper reads `jwe/key.rs` `key_op` for both directions, for
         /// every implemented JWE key management `alg`.
         #[test]
