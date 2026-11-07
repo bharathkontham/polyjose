@@ -47,12 +47,48 @@ table=$(sed -n "/^results_runners='\$/,/^'\$/p" "$repo/scripts/test-all.sh")
 want="results_runners='
 rust: rust-core rust-surface
 node: node
-wasm: wasm-node wasm-chrome? wasm-pkg-node wasm-pkg-chrome? wasm-pkg-workerd?
+wasm: wasm-node wasm-chrome? wasm-pkg-node wasm-pkg-chrome? wasm-pkg-workerd
 android: jvm android-emulator?
 apple: swift-macos swift-ios-sim?
 '"
 if [ "$table" = "$want" ]; then echo "ok   - the runner table names ADR 0034 §2's runners, the host-optional ones marked ?"
 else echo "FAIL - the runner table is not the agreed one:"; printf '%s\n' "$table" | sed 's/^/       /'; tests_failed=$((tests_failed + 1)); fi
+
+# --- The real wasm line: wasm-pkg-workerd is required (F10) -------------------------------------------
+# workerd comes from the pinned miniflare dev-dependency, so it runs wherever npm does (0006 lead);
+# only the browser runners stay optional on a host. These cases use the copy's real table.
+
+# wasm_real_case <name> <runner whose file is written>... -- <line>...: a passing wasm fixture that
+# writes the reference and the named runners' files and prints the lines.
+wasm_real_case() {
+  local name=$1 r
+  shift
+  new_case "$name"
+  fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
+  writes_results bindings/wasm/test.sh rust-core
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do writes_results bindings/wasm/test.sh "$1"; shift; done
+  [ $# -gt 0 ] && shift
+  for r in "$@"; do fixture_append bindings/wasm/test.sh "echo '$r'"; done
+  parity_fixture 0 'parity: ok'
+}
+
+wasm_real_case workerd-declared wasm-node wasm-chrome wasm-pkg-node wasm-pkg-chrome -- \
+  'SKIPPED-RUNNER (wasm-pkg-workerd: host:no-workerd)'
+run_test_all wasm
+check "SKIPPED-RUNNER for wasm-pkg-workerd, a required runner, FAILs parity" 1 \
+  '^  wasm: PASS$' '^  parity: FAIL$' '^    FAIL \(SKIPPED-RUNNER for wasm-pkg-workerd, a required runner of wasm\)$'
+check_absent "wasm-pkg-workerd is not reported as skipped" '^    SKIPPED \(wasm-pkg-workerd: '
+
+wasm_real_case workerd-missing wasm-node wasm-chrome wasm-pkg-node wasm-pkg-chrome --
+run_test_all wasm
+check "a passing wasm without wasm-pkg-workerd.json FAILs parity" 1 \
+  '^  parity: FAIL$' '^    FAIL \(no results: wasm-pkg-workerd; the wasm platform passed\)$'
+
+wasm_real_case workerd-browsers-skipped wasm-node wasm-pkg-node wasm-pkg-workerd -- \
+  'SKIPPED-RUNNER (wasm-chrome: host:no-chrome)' 'SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)'
+run_test_all wasm
+check "the browser runners stay optional: waived, parity passes" 0 \
+  '^  parity: PASS$' '^    SKIPPED \(wasm-chrome: host:no-chrome\)$' '^    SKIPPED \(wasm-pkg-chrome: host:no-chrome\)$'
 
 # --- A passing platform must have written its runners' files ------------------------------------------
 
