@@ -16,7 +16,7 @@
 #
 # Features: `cargo tree -p <package>` resolves the package's default features only, and the
 # script takes no --features argument. The artifact must therefore be built with
-# `-p <package>` and default features, the 0.1.0 configuration of every binding (ADR 0030 §4).
+# `-p <package>` and default features, the 0.1.0 configuration of every binding (ADR 0034 §3).
 # A build with other features, or `cargo build --workspace` (which unifies features such as
 # uniffi's `cli` into the shipped library, see bindings/ffi/Cargo.toml), links crates these
 # notices would not list.
