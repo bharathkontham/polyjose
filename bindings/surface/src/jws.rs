@@ -300,3 +300,53 @@ fn verified_from_core(verified: Verified) -> polyjose::Result<JwsVerified> {
         signature_index,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RFC 7515 Appendix A.1's HMAC key.
+    const OCT: &str = r#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#;
+
+    fn core_verified(payload: &[u8]) -> Verified {
+        let key = parse_key(OCT).unwrap();
+        let protected = protected_header(Some(r#"{"alg":"HS256"}"#), None)
+            .unwrap()
+            .unwrap();
+        let token =
+            polyjose::jws::sign_compact(&protected, payload, &key, &SignOptions::new()).unwrap();
+        let allowed = [SigningAlg::HS256];
+        let opts = VerifyOptions::new(&allowed).unwrap();
+        polyjose::jws::verify_compact(&token, &key, &opts).unwrap()
+    }
+
+    #[test]
+    fn the_verified_payload_is_moved_into_secret_bytes_not_copied() {
+        // ADR 0049 §4: the core's Zeroizing buffer becomes the surface's SecretBytes, so the
+        // payload exists in one wiped-on-drop allocation only.
+        let verified = core_verified(b"a secret payload");
+        let core_buffer = verified.payload.as_ptr();
+        let surface = verified_from_core(verified).unwrap();
+        assert_eq!(surface.payload.as_bytes().as_ptr(), core_buffer);
+        assert_eq!(surface.payload.as_bytes(), b"a secret payload");
+    }
+
+    #[test]
+    fn the_conversion_keeps_the_core_values() {
+        let surface = verified_from_core(core_verified(b"p")).unwrap();
+        assert_eq!(surface.alg, "HS256");
+        assert_eq!(
+            surface.protected_header.as_deref(),
+            Some(r#"{"alg":"HS256"}"#)
+        );
+        assert_eq!(surface.unprotected_header, None);
+        assert_eq!(surface.signature_index, 0);
+    }
+
+    #[test]
+    fn detached_false_leaves_the_core_default() {
+        // ADR 0030 §3: `false` calls no setter.
+        assert_eq!(sign_options(false), SignOptions::new());
+        assert!(sign_options(true).detached);
+    }
+}
