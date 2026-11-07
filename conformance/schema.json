@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "polyjose conformance vector",
-  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. A vector may list in \"features\" the polyjose cargo features it needs; a runner where one is not enabled reports the vector SKIPPED with the feature names, and never counts it as passing. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* and jwe.* operations give octets as canonical base64url (members ending in _b64u), the form JOSE fields natively have; the codec is not under test there. The keys.* operations give keys as PEM text, JWK objects and DER as canonical base64url (der_b64u), never hex. The jwt.* operations give tokens as text, keys as JWK and JWK Set objects, and the time as integer seconds (now); a runner builds a fixed clock from now and never reads its platform's clock (ADR 0028).",
+  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. A vector may list in \"features\" the polyjose cargo features it needs, and in \"features_absent\" those it must run without (ADR 0056); a runner where a needed one is not enabled, or an absent one is, reports the vector SKIPPED with the feature names, and never counts it as passing. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* and jwe.* operations give octets as canonical base64url (members ending in _b64u), the form JOSE fields natively have; the codec is not under test there. The keys.* operations give keys as PEM text, JWK objects and DER as canonical base64url (der_b64u), never hex. The jwt.* operations give tokens as text, keys as JWK and JWK Set objects, and the time as integer seconds (now); a runner builds a fixed clock from now and never reads its platform's clock (ADR 0028).",
   "type": "object",
   "required": ["source", "description", "operation", "input", "expect"],
   "additionalProperties": false,
@@ -26,6 +26,9 @@
         "keys.import_der",
         "keys.export_der",
         "keys.generate_for",
+        "keys.generate_oct",
+        "keys.generate_ec",
+        "keys.generate_okp",
         "jwe.encrypt",
         "jwe.decrypt",
         "jwt.validate",
@@ -47,6 +50,13 @@
     "features": {
       "description": "Optional. The polyjose cargo features the vector needs: fixed-rng (the test-vector RNG feature of ADR 0041 §3; conformance/README.md gives its cargo name) for jwe.encrypt with rng_b64u or protected_b64u, deflate for zip (ADR 0017). A runner whose build lacks one reports the vector SKIPPED, naming the features, and never counts it as passing. No binding enables the test-vector RNG (ADR 0005), so fixed-rng vectors are Rust-only.",
       "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["deflate", "fixed-rng"] }
+    },
+    "features_absent": {
+      "description": "Optional. The polyjose cargo features the vector must run without (ADR 0056), as features names them: a runner whose build enables one reports the vector SKIPPED with reason feature:!<name> and never counts it as passing. At least one name, each at most once, and none also listed in features (a runner rule, conformance/README.md). A jwe.encrypt vector with compress lists deflate here or in features: here it pins compress: true to UnsupportedAlgorithm without deflate (ADR 0030 §4).",
+      "type": "array",
+      "minItems": 1,
       "uniqueItems": true,
       "items": { "enum": ["deflate", "fixed-rng"] }
     }
@@ -250,6 +260,47 @@
               { "$ref": "#/$defs/failure" }
             ]
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.generate_oct" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_generate_oct_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/keys_generate_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.generate_ec" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_generate_ec_input" },
+          "expect": { "$ref": "#/$defs/keys_generate_ok" }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "keys.generate_okp" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/keys_generate_okp_input" },
+          "expect": { "$ref": "#/$defs/keys_generate_ok" }
         }
       }
     },
@@ -629,7 +680,7 @@
           "$ref": "#/$defs/base64url"
         },
         "compress": {
-          "description": "Compress with zip DEF (RFC 7516 §4.1.3; feature deflate, which the vector must list in features).",
+          "description": "Compress with zip DEF (RFC 7516 §4.1.3; feature deflate, which the vector must list in features, or in features_absent to pin UnsupportedAlgorithm without it, ADR 0056).",
           "type": "boolean"
         },
         "rng_b64u": {
@@ -832,7 +883,67 @@
       "additionalProperties": false,
       "properties": {
         "ok": { "const": true },
-        "shape": { "$ref": "#/$defs/keys_generated_shape" }
+        "shape": { "$ref": "#/$defs/keys_generated_shape" },
+        "use_with": { "$ref": "#/$defs/keys_use_with" }
+      }
+    },
+    "keys_use_with": {
+      "description": "A use round trip of a generated key (ADR 0034 §6), checked by the runner and never an outcome. Without enc: a compact JWS (RFC 7515 §7.1) of the payload polyjose (cG9seWpvc2U) with the protected header {\"alg\": alg}, signed with the key and verified with its public key (the key itself for oct) and allow-list [alg]. With enc: a compact JWE (RFC 7516 §7.1) of the same plaintext to one recipient with alg and the key's public key (the key itself for oct), decrypted with the key and allow-lists [alg] and [enc]. Any failure there fails the vector.",
+      "type": "object",
+      "required": ["alg"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "type": "string" },
+        "enc": { "type": "string" }
+      }
+    },
+    "keys_generate_oct_input": {
+      "description": "Generate an oct key of len_bytes random octets (RFC 7518 §6.4.1) with the library's generate (ADR 0018 §5; ADR 0030 jwk_generate_oct) from the OS CSPRNG. The library accepts 16 to 512 octets; other lengths are InvalidKey.",
+      "type": "object",
+      "required": ["len_bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "len_bytes": { "$ref": "#/$defs/count" }
+      }
+    },
+    "keys_generate_ec_input": {
+      "description": "Generate an EC key pair on crv (RFC 7518 §6.2, RFC 8812 §3.1) with the library's generate (ADR 0018 §5; ADR 0030 jwk_generate_ec) from the OS CSPRNG. crv is one of the curves polyjose generates, so the operation cannot fail.",
+      "type": "object",
+      "required": ["crv"],
+      "additionalProperties": false,
+      "properties": {
+        "crv": { "enum": ["P-256", "P-384", "P-521", "secp256k1"] }
+      }
+    },
+    "keys_generate_okp_input": {
+      "description": "Generate an OKP key pair on crv (RFC 8037 §2) with the library's generate (ADR 0018 §5; ADR 0030 jwk_generate_okp) from the OS CSPRNG. crv is one of the curves polyjose generates, so the operation cannot fail.",
+      "type": "object",
+      "required": ["crv"],
+      "additionalProperties": false,
+      "properties": {
+        "crv": { "enum": ["Ed25519", "X25519"] }
+      }
+    },
+    "keys_generated_key": {
+      "description": "What a key from keys.generate_oct, keys.generate_ec or keys.generate_okp is, without its random material: kty, crv (EC and OKP only) and the length of k in octets (oct only). Such a key has no alg. Compared as a JSON value, so a member the generated key has and the shape omits fails too.",
+      "type": "object",
+      "required": ["kty"],
+      "additionalProperties": false,
+      "properties": {
+        "kty": { "enum": ["EC", "OKP", "oct"] },
+        "crv": { "type": "string" },
+        "k_octets": { "$ref": "#/$defs/count" }
+      }
+    },
+    "keys_generate_ok": {
+      "description": "A generated key's shape and its use round trip (use_with). The runner also checks that the key is private, has exactly the members RFC 7518 §6.2.1-§6.2.2 (EC), RFC 8037 §2 (OKP) or RFC 7518 §6.4.1 (oct) define, and imports back unchanged; any failure there fails the vector.",
+      "type": "object",
+      "required": ["ok", "shape", "use_with"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "shape": { "$ref": "#/$defs/keys_generated_key" },
+        "use_with": { "$ref": "#/$defs/keys_use_with" }
       }
     },
     "jwt_typ": {

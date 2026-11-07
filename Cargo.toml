@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/polyjose", "bindings/surface", "bindings/node", "bindings/wasm", "bindings/ffi"]
+members = ["crates/polyjose", "bindings/surface", "bindings/node", "bindings/wasm", "bindings/ffi", "bindings/uniffi-bindgen"]
 
 [workspace.package]
 version = "0.1.0"

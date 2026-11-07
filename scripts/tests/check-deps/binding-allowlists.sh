@@ -14,13 +14,13 @@
 # exist is skipped with a message and passes.
 # Check 14: serde, serde_json, serde_derive, serde-wasm-bindgen or any other serde-family crate in the
 # normal tree of a bindings/* package fails, unless every path to it goes through a crate that a
-# `# serde-only-below:` line of the package's allowlist names (ffi.txt: UniFFI's proc-macro and
-# bindgen CLI) and comment lines explain. Cases: serde_json added to polyjose-node (the criterion's
-# reproduction), also with the allowlist widened so only check 14 is left; serde_json as a direct
-# dependency of polyjose-ffi, whose allowlist lists it below the bindgen; a crate dropped from
+# `# serde-only-below:` line of the package's allowlist names (ffi.txt: UniFFI's proc-macro;
+# uniffi-bindgen.txt: the proc-macro and the bindgen CLI, feature 0013 T10) and comment lines
+# explain. Cases: serde_json added to polyjose-node (the criterion's reproduction), also with the
+# allowlist widened so only check 14 is left; serde_json as a direct dependency of polyjose-ffi, and
+# of polyjose-uniffi-bindgen, whose allowlist lists it below the bindgen; uniffi_macros dropped from
 # ffi.txt's line, or the line removed; the line with no explanation, unneeded, or naming a crate
-# outside the tree; and a core dependency on semver, which polyjose-ffi's build gives a serde edge,
-# reported by the core's check 5 only.
+# outside the tree; and a core dependency on semver, reported by the core's check 5 only.
 # The unchanged tree must pass. Usage: scripts/tests/check-deps/binding-allowlists.sh
 set -euo pipefail
 export LC_ALL=C
@@ -28,7 +28,7 @@ export LC_ALL=C
 . "$(dirname "$0")/lib.sh"
 
 not_allowed='contains crates that bindings/deps-allowlist/[a-z-]+\.txt does not allow'
-serde='is in the normal tree of polyjose-[a-z]+ \(bindings/[a-z]+\)'
+serde='is in the normal tree of polyjose-[a-z-]+ \(bindings/[a-z-]+\)'
 format='^FAIL: bindings/deps-allowlist/[a-z-]+\.txt:[0-9]+: '
 
 # expect_also <description> <ERE>: the output of the last expect_pass/expect_fail also matches.
@@ -201,23 +201,33 @@ allow_new_crates node polyjose-node
 expect_fail "serde_json in polyjose-node and in node.txt" \
   "FAIL: serde_json $serde \\(ADR 0030 §1: no serde in the bindings\\): polyjose-node -> serde_json$" "$serde"
 
-# ffi.txt lists serde_json (below uniffi's bindgen CLI); a direct path avoids every crate of its line.
+# A direct serde_json in polyjose-ffi (whose tree has none since T10) fails check 14 by its path, and
+# check 13 as an unlisted crate.
 new_case ffi-serde-json
 add_dependency bindings/ffi/Cargo.toml 'serde_json = "1"'
 expect_fail "serde_json as a direct dependency of polyjose-ffi" \
-  "FAIL: serde_json $serde \\(ADR 0030 §1: no serde in the bindings\\): polyjose-ffi -> serde_json$" "$serde"
+  "FAIL: serde_json $serde \\(ADR 0030 §1: no serde in the bindings\\): polyjose-ffi -> serde_json$" \
+  "$serde|$not_allowed"
+expect_also "check 13 also rejects it" "FAIL: the tree of polyjose-ffi \\(bindings/ffi\\) $not_allowed"
+
+# uniffi-bindgen.txt lists serde_json (below the bindgen CLI's cargo_metadata); a direct path avoids
+# every crate of its line, so check 14 alone fails.
+new_case bindgen-serde-json
+add_dependency bindings/uniffi-bindgen/Cargo.toml 'serde_json = "1"'
+expect_fail "serde_json as a direct dependency of polyjose-uniffi-bindgen" \
+  "FAIL: serde_json $serde \\(ADR 0030 §1: no serde in the bindings\\): polyjose-uniffi-bindgen -> serde_json$" "$serde"
 
 # A change to the core is reported by the core's checks alone: with semver a direct dependency of
-# the core, polyjose-ffi's build turns on semver's `serde` feature (through uniffi's cargo_metadata),
-# so serde hangs below the core's semver only there; check 14 does not walk into the core, and check
-# 5 (guarded group dalek-build) is what fails.
+# the core, check 14 does not walk into the core (before T10, polyjose-ffi's build turned on semver's
+# `serde` feature through uniffi's cargo_metadata), and check 5 (guarded group dalek-build) is what
+# fails.
 new_case core-semver
 add_core_dependency 'semver = { version = "1", default-features = false }'
 expect_fail "a core change that a binding's build unifies serde onto" \
   'FAIL: semver \(guarded group dalek-build\)' 'FAIL: semver \(guarded group dalek-build\)'
 
 new_case ffi-below-narrowed
-set_directive bindings/deps-allowlist/ffi.txt '# serde-only-below: uniffi_bindgen cargo_metadata camino uniffi_pipeline'
+set_directive bindings/deps-allowlist/ffi.txt '# serde-only-below: uniffi_core'
 expect_fail "uniffi_macros dropped from ffi.txt's serde-only-below line" \
   "FAIL: serde $serde \\(ADR 0030 §1: no serde in the bindings\\): polyjose-ffi -> uniffi -> uniffi_macros -> serde$" "$serde"
 
@@ -232,7 +242,7 @@ while end < len(lines) and lines[end].startswith("#"):
     end += 1
 open(p, "w").write("\n".join(lines[:start] + lines[end:]))
 ' "$case_dir/bindings/deps-allowlist/ffi.txt"
-expect_fail "ffi.txt without its serde-only-below line" "FAIL: serde_json $serde" "$serde"
+expect_fail "ffi.txt without its serde-only-below line" "FAIL: serde $serde" "$serde"
 
 new_case ffi-below-unexplained
 python3 -I -c '
@@ -253,7 +263,7 @@ expect_fail "a serde-only-below line in an allowlist whose tree has no serde" \
   "serde-only-below"
 
 new_case ffi-below-outside
-set_directive bindings/deps-allowlist/ffi.txt '# serde-only-below: uniffi_macros uniffi_bindgen cargo_metadata camino uniffi_pipeline napi'
+set_directive bindings/deps-allowlist/ffi.txt '# serde-only-below: uniffi_macros napi'
 expect_fail "a serde-only-below line naming a crate outside the tree" \
   "FAIL: bindings/deps-allowlist/ffi\\.txt: serde-only-below names napi, which is not in the tree of polyjose-ffi" \
   "serde-only-below"

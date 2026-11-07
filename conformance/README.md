@@ -25,7 +25,7 @@ The format is defined by [`schema.json`](schema.json) (JSON Schema draft 2020-12
 
 ## Members
 
-The five members below are required, `features` is optional, and no others are allowed. Every object the schema defines is closed (`additionalProperties: false`).
+The five members below are required, `features` and `features_absent` are optional, and no others are allowed. Every object the schema defines is closed (`additionalProperties: false`).
 
 | Member | Meaning |
 |---|---|
@@ -35,6 +35,7 @@ The five members below are required, `features` is optional, and no others are a
 | `input` | The operation's input. |
 | `expect` | `{ "ok": true, ...outputs }`, or `{ "ok": false, "error": <code> }` where `<code>` is one of the stable error codes (`Error::CODES` in `crates/polyjose/src/error.rs`). |
 | `features` | Optional. The polyjose cargo features the vector needs, each at most once: `"fixed-rng"` (the cargo feature `insecure-test-vectors`, ADR 0041 §3) or `"deflate"` (ADR 0017). See [Features](#features). |
+| `features_absent` | Optional. The polyjose cargo features the vector must run **without** (ADR 0056), by the same names: at least one, each at most once, none also in `features`. See [Features](#features). |
 
 ## Operations
 
@@ -49,7 +50,10 @@ The five members below are required, `features` is optional, and no others are a
 | `keys.export_pem` | `jwk` (a JSON object), `format` (`"pkcs8"`, `"sec1"`, `"spki"` or `"pkcs1"`) ([below](#keysexport_pem)) | `pem` (exact text) | yes |
 | `keys.import_der` | `der_b64u`, `format` (as `keys.export_pem`) ([below](#keysimport_der)) | `jwk` (a JSON object) | yes |
 | `keys.export_der` | `jwk` (a JSON object), `format` (as `keys.export_pem`) ([below](#keysexport_der)) | `der_b64u` (exact) | yes |
-| `keys.generate_for` | `alg` (any string) ([below](#keysgenerate_for)) | `shape` (the key without its random material) | yes |
+| `keys.generate_for` | `alg` (any string) ([below](#keysgenerate_for)) | `shape` (the key without its random material), and optionally `use_with` | yes |
+| `keys.generate_oct` | `len_bytes` (a count) ([below](#keysgenerate_oct-keysgenerate_ec-keysgenerate_okp)) | `shape`, `use_with` | yes |
+| `keys.generate_ec` | `crv` (`"P-256"`, `"P-384"`, `"P-521"` or `"secp256k1"`) | `shape`, `use_with` | no |
+| `keys.generate_okp` | `crv` (`"Ed25519"` or `"X25519"`) | `shape`, `use_with` | no |
 | `jwe.encrypt` | `serialization`, `enc`, `plaintext_b64u`, `recipients`, and optionally `protected`, `protected_b64u`, `unprotected`, `aad_b64u`, `compress`, `rng_b64u` ([below](#jweencrypt)) | `jwe` (exact), or `decrypt_with` (round trip) | yes |
 | `jwe.decrypt` | `jwe`, `key`, `allowed_algs`, `allowed_enc`, and optionally `understood_crit`, `max_input_len`, `max_recipients`, `max_pbes2_count`, `max_decompressed_len` ([below](#jwedecrypt)) | `plaintext_b64u`, `recipient` | yes |
 | `jwt.validate` | `token`, `now`, `allowed_algs`, exactly one of `key` or `jwks`, and optionally `policy`, `decrypt` ([below](#jwtvalidate)) | `claims`, `alg`, and `key_index` exactly when the input has `jwks` | yes |
@@ -178,6 +182,23 @@ The failures are:
 - `InvalidKey` for `ECDH-ES` and `ECDH-ES+A*KW`. They work on several curves (RFC 7518 §4.6), so the request lacks a curve, and polyjose never picks one. A binding must not substitute a default;
 - `UnsupportedAlgorithm` for the RSA algorithms (ADR 0021), `dir` (its key size depends on `enc`, RFC 7518 §4.5), `PBES2-*` (passwords aren't generated), `none`, and any unknown or wrongly cased name.
 
+A success expectation may also have **`use_with`**, a round trip the runner runs with the generated key (ADR 0034 §6). It is a check, never an outcome, and the runner echoes it back as an output, as it does `verify_with`:
+
+| `use_with` member | Meaning |
+|---|---|
+| `alg` | Required. Without `enc`: the JWS `alg`. The runner signs a compact JWS (RFC 7515 §7.1) of the payload `polyjose` (`cG9seWpvc2U`) under the protected header `{"alg": alg}` with the key, then verifies it with the key's public form and the allow-list `[alg]`. With `enc`: the JWE key management `alg`. |
+| `enc` | Optional. The runner encrypts a compact JWE (RFC 7516 §7.1) of the same plaintext to one recipient with `alg` and the key's public form, then decrypts it with the key and the allow-lists `[alg]` and `[enc]`. |
+
+The "public form" is the key itself for `oct` (RFC 7518 §6.4). Any failure in the round trip, or a payload that comes back different, fails the vector.
+
+## `keys.generate_oct`, `keys.generate_ec`, `keys.generate_okp`
+
+Generate a key with the library's generator (ADR 0018 §5; ADR 0030 §4 `jwk_generate_oct`, `jwk_generate_ec`, `jwk_generate_okp`) from the OS CSPRNG: an `oct` key of `len_bytes` octets (RFC 7518 §6.4.1), or a key pair on `crv` (EC: RFC 7518 §6.2, RFC 8812 §3.1; OKP: RFC 8037 §2). Such a key is bound to no algorithm, so it has no `alg`.
+
+Expect `{ "ok": true, "shape", "use_with" }`, both required: one vector per generator, by shape and by a use round trip (ADR 0034 §6). `shape` is the `keys.generate_for` shape **without** `alg` (`kty`; `crv` for EC and OKP; `k_octets` for `oct`), and the runner checks the key as it does there, with the members of the RFC sections above and no `alg`. `use_with` is the round trip of [`keys.generate_for`](#keysgenerate_for).
+
+Only `keys.generate_oct` can fail: the core generates `oct` keys of 16 to 512 octets, and another length is `InvalidKey`. The schema allows only the curves polyjose generates, so `keys.generate_ec` and `keys.generate_okp` always succeed.
+
 ## `jwe.encrypt`
 
 Encrypts `plaintext_b64u` (RFC 7516 §5.1) in one serialization.
@@ -192,7 +213,7 @@ Encrypts `plaintext_b64u` (RFC 7516 §5.1) in one serialization.
 | `protected_b64u` | The exact encoded protected header to reproduce. Used verbatim for the AAD and the output only if it decodes to a header JSON-equal to the one polyjose builds (member order aside), otherwise `InvalidFormat`. Needs `"fixed-rng"`. |
 | `unprotected` | The JWE Shared Unprotected Header (§7.2.1), JSON only. |
 | `aad_b64u` | The JWE AAD octets (§7.2.1), JSON only. |
-| `compress` | `true` compresses with `zip: "DEF"` (§4.1.3). Needs `"deflate"`. |
+| `compress` | `true` compresses with `zip: "DEF"` (§4.1.3). Needs `"deflate"` in `features`; or, in `features_absent`, the vector pins `UnsupportedAlgorithm` without the codec (ADR 0056, ADR 0030 §4). |
 | `rng_b64u` | The octets the encryption draws instead of the OS CSPRNG, in the documented order: the CEK (when the `alg` needs a random one), then each recipient's key management values in order (ECDH ephemeral key, PBES2 salt, AES-GCM key wrap IV), then the content IV. Every octet must be drawn; a leftover fails the vector, so the vector pins the order. Needs `"fixed-rng"`. |
 
 The runner calls the library's reproducible encryption when `rng_b64u` or `protected_b64u` is present (both need `"fixed-rng"`, and a vector using them without listing it is schema-invalid), and its ordinary encrypt on the OS CSPRNG otherwise.
@@ -305,7 +326,7 @@ A vector may need a cargo feature of polyjose, written in `features` as:
 | Name in a vector | Cargo feature | Needed by |
 |---|---|---|
 | `"fixed-rng"` | `insecure-test-vectors` (ADR 0041 §3) | a byte-exact `jwe.encrypt` (`rng_b64u`, `protected_b64u`) |
-| `"deflate"` | `deflate` (ADR 0017) | `zip` (`compress`, and the `zip` decrypt vectors) |
+| `"deflate"` | `deflate` (ADR 0017) | `zip` (`compress`, and the `zip` decrypt vectors), in `features` or `features_absent` |
 
 The test RNG's cargo name may appear only in `crates/polyjose`, `scripts/check-test-vectors-off.sh` and Markdown (that script fails the build otherwise, so no build file can switch it on, ADR 0005); vector files therefore use `"fixed-rng"`. A runner whose build does not enable every listed feature:
 
@@ -314,6 +335,8 @@ The test RNG's cargo name may appear only in `crates/polyjose`, `scripts/check-t
 - never counts it as passing.
 
 The bindings never enable `insecure-test-vectors` (ADR 0005), so `fixed-rng` vectors are Rust-only; every RFC output they reproduce also has a `jwe.decrypt` vector that every platform runs.
+
+`features_absent` is the mirror form (ADR 0056): the features a vector must run **without**. A runner whose build enables one of them does the same three things, and reports the vector SKIPPED with `!` before that name (the Rust runner: ``<file>: SKIPPED (needs feature `deflate` off)``). It exists for the binding configuration's decisions, which hold only without a feature: `zip: DEF` and `compress: true` are `UnsupportedAlgorithm` while the bindings build without `deflate` (ADR 0030 §4). In the binding configuration those vectors run everywhere, the `rust-core` reference included. A name may not be listed in both `features` and `features_absent`, and the list may not be empty; a runner fails such a vector.
 
 ## Binding readiness
 
@@ -337,7 +360,7 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 - load every `*.json` file under `vectors/`, recursively (a glob of `conformance/vectors/**`, never a list of directories), `third_party/` included, so a new directory such as `jws-limits/` is picked up without a runner change;
 - parse vector files with an input limit of at least 4 MiB, or with the platform's native JSON parser. Vector files are trusted test data, and a vector of a JWS just over the library's 1 MiB default `max_input_len` (ADR 0026 §7) is itself over 1 MiB. The library under test keeps its own defaults;
 - **fail** on a file that is not schema-valid, including a misspelled or unknown member anywhere: every object the schema defines is closed;
-- **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks, reported SKIPPED by name ([Features](#features));
+- **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks or whose `features_absent` it has, reported SKIPPED by name ([Features](#features));
 - **fail** when it finds no vector files, so a wrong path can't pass vacuously;
 - run every vector and report every failure, not only the first, each naming the file and its `source`;
 - write one results file, `target/conformance/<runner>.json`, with an entry for every vector file ([Binding runners](#binding-runners), ADR 0034 §2).
@@ -406,11 +429,11 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 | `results[].op` | The vector's `operation`, as written. Required unless the file doesn't parse or names none. |
 | `results[].status` | `pass`: the vector ran and met its expectation (exact outputs, shape and round-trip checks included). `skipped`: only under [the skip rule](#the-skip-rule). `fail`: anything else. |
 | `results[].actual` | The outcome of the operation's calls in the [mapping](#operation-mapping): `{ "ok": true }` when every call returned, or `{ "ok": false, "error": <code> }` with the first call's error code. It's the library's outcome, recorded before any comparison, so a vector whose expectation is wrong still records what happened. Required for `pass`; on a `fail`, present when the operation completed, its runner checks included; never on a skip. The output comparison after the operation decides `pass` or `fail` but never changes `actual`. A runner check *inside* the operation (a shape or round-trip check of `verify_with`, `decrypt_with` or a `jwt.issue` round trip, or an input the runner can't decode) that fails makes the vector a `fail` **without** `actual`, as the Rust reference does. |
-| `results[].reason` | `skipped`: `feature:` and the missing feature names. `fail`: a message saying why (the file, the `source`, the problem). |
+| `results[].reason` | `skipped`: `feature:` and the feature names of [the skip rule](#the-skip-rule). `fail`: a message saying why (the file, the `source`, the problem). |
 
 ### The skip rule
 
-A vector is skipped **only** when its `features` lists a feature the runner's build doesn't enable (ADR 0034 §3). `reason` is `feature:` followed by the missing names, in the vector's order, comma-separated: `feature:fixed-rng`, `feature:deflate`, `feature:deflate,fixed-rng`. The vector is still validated against `schema.json` first, and a schema-invalid one is a `fail`.
+A vector is skipped **only** when its `features` lists a feature the runner's build doesn't enable (ADR 0034 §3), or its `features_absent` lists one the build enables (ADR 0056). `reason` is `feature:` followed by the missing `features` names in the vector's order, then each enabled `features_absent` name as `!<name>` in its order, comma-separated: `feature:fixed-rng`, `feature:deflate,fixed-rng`, `feature:!deflate`, `feature:fixed-rng,!deflate`. The vector is still validated against `schema.json` first, and a schema-invalid one is a `fail`.
 
 The binding configuration for 0.1.0 is the core's default features: never `fixed-rng` (ADR 0005), and no `deflate` (ADR 0030 §4). So every binding skips exactly the vectors the `rust-core` reference skips, with the same reasons. An unknown operation, an operation the runner hasn't mapped, an unreadable or unparseable file, an exception in the harness, and a host-side error that isn't a polyjose error (implementer note 8) are each a **`fail`**, never a skip.
 
@@ -448,7 +471,8 @@ How each vector `operation` maps to the ADR 0030 operations. Names are the surfa
 | `keys.export_pem` | `jwk_to_pem(jwk, format)`; `format` is passed as given (`pkcs8`, `sec1`, `spki`, `pkcs1`) | `pem` (exact text) |
 | `keys.import_der` | `jwk_from_der(der, format)`, where `der` is `der_b64u` decoded | `jwk`, as `keys.import_pem` |
 | `keys.export_der` | `jwk_to_der(jwk, format)` | `der_b64u` = the result |
-| `keys.generate_for` | `jwk_generate_for_alg(alg)`, `alg` passed as given | `shape`, after the checks of [`keys.generate_for`](#keysgenerate_for). The import-back check is `jwk_parse(<the generated JWK>)`, compared with it as a JSON value. |
+| `keys.generate_for` | `jwk_generate_for_alg(alg)`, `alg` passed as given | `shape`, after the checks of [`keys.generate_for`](#keysgenerate_for). The import-back check is `jwk_parse(<the generated JWK>)`, compared with it as a JSON value. Then the `use_with` round trip, when the vector has one (note 14) |
+| `keys.generate_oct`, `_ec`, `_okp` | `jwk_generate_oct(len_bytes)`, `jwk_generate_ec(crv)`, `jwk_generate_okp(crv)` | `shape` (no `alg`), after the same checks; then the `use_with` round trip (note 14) |
 | `jwe.encrypt`, `"compact"` | `jwe_encrypt_compact(plaintext, options)` | `jwe` (a string), or the `decrypt_with` round trip |
 | `jwe.encrypt`, `"flattened"` or `"general"` | `jwe_encrypt_json(plaintext, options, serialization)` | `jwe`: the JSON text parsed and compared as a JSON value; or `decrypt_with` |
 | `jwe.encrypt` options | `JweEncryptOptions { enc, recipients, protected_header: protected, shared_unprotected_header: unprotected, aad: aad_b64u, compress }`, with one `JweRecipient { alg, key, header, apu: apu_b64u, apv: apv_b64u, p2c, p2s_len }` per `recipients` entry, in order. `rng_b64u` and `protected_b64u` occur only in `fixed-rng` vectors, which every binding skips, so they have no mapping. | |
@@ -494,6 +518,8 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 10. **`jwt.issue` `{ "ok": true }` is runner logic.** The runner checks that the token has three compact parts (five with `encrypt`), then validates it with `validate` through the `jwt.validate` mapping. The validated `alg` must be the issued one, and the claims must equal the issued `claims` as a JSON value. Any failure there is a `fail`, and the result then has **no** `actual` (as for every failed runner check inside an operation, see `results[].actual`); a passing vector's `actual` is `{ "ok": true }`.
 11. **A `jws.sign` signer may have only an unprotected header** (RFC 7515 §7.2.1, ADR 0045 §1): `header` and no `protected_b64u`, in the flattened and general serializations. It maps to a `JwsSigner` with `unprotected_header` only, and the surface signs it over `"." || payload`. Compact signers always have `protected_b64u`.
 12. **The RFC 7520 §4.7 vectors are never skipped.** `third_party/rfc7520/jws/4-7-unprotected-only-hs256-{flattened,general}-{sign,verify}.json` need no feature, so every binding runs them (ADR 0045 §1), like every other vector without `features`.
+13. **`features_absent` vectors run in every binding** (ADR 0056). A binding builds without `deflate`, so `binding-surface/jwe-decrypt-zip-def-without-deflate.json` and `jwe-encrypt-compress-without-deflate.json` run and must give `UnsupportedAlgorithm`, as `rust-core` does. Compute the skip from both lists, missing names first, and never treat `features_absent` as `features`: `feature:deflate` where the reference has `feature:!deflate` is a parity failure.
+14. **`use_with` is runner logic, with surface calls only.** Without `enc`: `jws_sign_compact(b"polyjose", <the key>, JwsSignOptions { protected_header: {"alg": alg} })`, then `jws_verify_compact(<token>, <public form>, JwsVerifyOptions { allowed_algs: [alg] })`. With `enc`: `jwe_encrypt_compact(b"polyjose", JweEncryptOptions { enc, recipients: [JweRecipient { alg, key: <public form> }] })`, then `jwe_decrypt_compact(<token>, <the key>, JweDecryptOptions { allowed_algs: [alg], allowed_enc: [enc] })`. The public form is `jwk_to_public(<the key>)`, or the key itself for `oct`. Any failure there is a `fail` without `actual`, as for `verify_with`.
 
 ## Writing vectors
 
@@ -511,16 +537,18 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 - **Negative vectors are mandatory:** tampered signatures, `alg: none`, alg/key mismatch, wrong `crit`, expired JWTs, invalid curve points, non-canonical encodings.
 - Imported upstream suites that every platform runs (the RFC 7520 cookbook) live in `vectors/third_party/`, converted to this format, with their licenses alongside them (non-JSON files are ignored).
 - JWT vectors live under `jwt/`, one vector per file like every other (ADR 0045), in one directory per origin: `jwt/rfc7519/` (the RFC 7519 §3.1 and §6.1 examples and the RFC 7515 A.2 token that is RFC 7519 A.2's inner JWT; `source` the RFC section), and the directories of feature 0004 T11–T13 (oracle positives, negatives, nested). Tokens that aren't RFC-published come from `tools/jwt-oracle` (`node:crypto`), never from polyjose; a spec given to it as a single entry writes a single vector, which is the form a vector file must have. An expected token or value an RFC doesn't print is derived independently and the `description` says how (for example `jwt/rfc7519/3-1-hs256-issue-exact.json`, an HMAC computed with Python's `hmac`).
-- **`binding-surface/`** pins the core's defaults and security decisions that a binding could otherwise re-state or bypass (ADR 0034 §6), so the first vector to fail when a binding substitutes a default of its own is one of these. Each `source` names the ADR it pins. They need no feature, so every platform runs them:
+- **`binding-surface/`** pins the core's defaults and security decisions that a binding could otherwise re-state or bypass (ADR 0034 §6), so the first vector to fail when a binding substitutes a default of its own is one of these. Each `source` names the ADR it pins. Apart from the two `features_absent` vectors below, they need no feature, so every platform runs them:
   - allow-lists (ADR 0007): `jws-verify-allowed-algs-{empty,none-only}`, `jwe-decrypt-allowed-algs-{empty,none-only}`, `jwe-decrypt-allowed-enc-empty`, all `AlgorithmNotAllowed`;
   - the PBES2 bound (ADR 0023): `pbes2-p2c-10000-default-decrypts`, `pbes2-p2c-10001-default-fails` (`DecryptionFailed`), `pbes2-p2c-10001-bound-20000-decrypts`; the per-token budget (ADR 0050 §2): `pbes2-two-recipients-over-default-budget` (`DecryptionFailed`) and `pbes2-two-recipients-budget-raised`;
   - JWS limits (ADR 0026 §7): `jws-verify-17-signatures-default` and `jws-verify-max-input-len-small`, both `InvalidFormat`;
   - RSA public-key only (ADR 0021) and no RSA-OAEP (ADR 0022): `jws-sign-rsa-private-jwk`, `jws-sign-rs256-public-key`, `jwe-decrypt-rsa-oaep-256` and `jwe-encrypt-rsa-oaep`, all `UnsupportedAlgorithm`;
-  - JWK Set selection (ADR 0029): `jwt-jwks-kidless-second-key` (`key_index` 1) and `jwt-jwks-no-candidate` (`NoMatchingKey`).
+  - JWK Set selection (ADR 0029): `jwt-jwks-kidless-second-key` (`key_index` 1) and `jwt-jwks-no-candidate` (`NoMatchingKey`);
+  - no DEFLATE in the binding configuration (ADR 0030 §4): `jwe-decrypt-zip-def-without-deflate` and `jwe-encrypt-compress-without-deflate`, both `UnsupportedAlgorithm`. They have `features_absent: ["deflate"]` (ADR 0056), so the only skips among these files are in builds with `deflate` (`feature:!deflate`);
+  - one vector per generator (ADR 0030 §4, ADR 0034 §6), by shape and a `use_with` round trip: `generate-oct-32-hs256`, `generate-ec-p256-es256`, `generate-okp-ed25519-eddsa`, `generate-okp-x25519-ecdh-es`; the `oct` length bound, `generate-oct-15-invalid-key` (`InvalidKey`); and `generate-for-alg-es256` and `generate-for-alg-a128kw`, which add the round trip to `jwk_generate_for_alg`.
 
   Pins that existing vectors already make, which every platform runs too: a `dir` JWE with an unprotected `alg` is `InvalidHeader` (ADR 0050 §1: `jwe/negative-cross-mode/dir-alg-shared-enc-protected.json`, `dir-no-protected-header.json`); an unprotected-only JSON signer (ADR 0045 §1: `third_party/rfc7520/jws/4-7-unprotected-only-hs256-*.json`); an access token whose `client_id` is a number is `InvalidClaim` (ADR 0052: `jwt/negative/identity-access-token-client-id-not-string-number.json`); `jwk_generate_for_alg` per algorithm, by shape (`keys/generate-*.json`, `keys/reject-generate-*.json`, including `ECDH-ES` → `InvalidKey`).
 
-  Not pinned yet, because each needs a schema change (0013 T11): a SHA-1 thumbprint (`hash` allows only `sha-256`), a vector per `jwk_generate_oct`/`_ec`/`_okp` with a use round trip, and the `zip: DEF` / `compress` → `UnsupportedAlgorithm` pins, which hold only without `deflate` while `--all-features` builds turn it on.
+  Not pinned yet: a SHA-1 thumbprint → `UnsupportedAlgorithm` (`hash` allows only `sha-256`). It lands with 0013 T14, where the core's hash-taking thumbprint decides the code.
 
   `binding-surface/generate.mjs <repo-root> [<out-dir>]` writes them all: the RFC inputs come from the committed vectors it names, and the PBES2 tokens are built with node:crypto from SHA-256-derived bytes and opened with it before writing. Edit the script, not the files.
 - **Wycheproof is not here.** It lives in `crates/polyjose/tests/third_party/wycheproof/`, in its upstream format, because it is a Rust-layer suite (ADR 0008 layer 1): it exercises the primitives through polyjose's JOSE layer, and the bindings add nothing to that.
@@ -530,7 +558,7 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 The scripts that generated or check vectors live in [`tools/`](tools/). They read only data (the vendored ietf-jose cookbook and Wycheproof files, the RFC text, committed key files) and use only Node's built-ins (node:crypto, which is OpenSSL) and Python's standard library: no npm or pip packages, and none of them calls polyjose. Paths below are relative to this directory (`conformance/`). The index of the JWE vectors, with the generator of each directory, is [`vectors/jwe/README.md`](vectors/jwe/README.md).
 
 - **`tools/jwe/reproduce.sh <rfc-dir>`** re-runs every JWE generator below into a temporary directory and compares each file it writes with the committed vector, byte for byte; a historical generator is reported as such. `<rfc-dir>` holds `rfc7516.txt` and `rfc7517.txt` from `https://www.rfc-editor.org/rfc/` (the script checks their SHA-256). The Node generators write the Node and OpenSSL versions into `source` or `description`, so they reproduce byte for byte with the versions named in the committed files (Node.js 24.21.0, OpenSSL 3.5.8); another version changes only that text.
-- **`vectors/binding-surface/generate.mjs <repo-root> [<out-dir>]`**, the one generator kept beside its vectors, writes the 18 files of `binding-surface/` (0013 T11, ADR 0034 §6; see [Writing vectors](#writing-vectors)) and reproduces them byte for byte with the Node version named in their descriptions.
+- **`vectors/binding-surface/generate.mjs <repo-root> [<out-dir>]`**, the one generator kept beside its vectors, writes the 27 files of `binding-surface/` (0013 T11, T15, ADR 0034 §6; see [Writing vectors](#writing-vectors)) and reproduces them byte for byte with the Node version named in their descriptions.
 - **`tools/jwt-oracle/gen.mjs <spec.json> <out.json>`** builds `jwt.validate` and `jwt.issue` vectors from a spec: compact and flattened JWSs over raw payload octets (so malformed claims sit behind valid signatures) and nested JWEs, with `node:crypto` only. Its [README](tools/jwt-oracle/README.md) has the spec format and the fixed test keys.
 - **`tools/rsa-oaep-oracle.mjs [vector-dir]`** checks every exact RSA-OAEP-256 `jwe.encrypt` vector in `vectors/jwe/rsa-oaep-256/` against its test-only private key (`keys/*.private.jwk`) with Node's built-in RSA, independently of polyjose, which has no RSA private-key code (ADR 0021).
 - **`tools/jwe/t09-extract-rfc-inputs.py <rfc7516.txt> <cookbook jwe dir> <out.json>`**: *historical.* Extracts the RFC 7516 App. A.1 and A.2 and RFC 7520 §5.1 and §5.2 compact JWEs and RSA public keys used by four `negative-structure/` vectors. The script that wrote `compact/` and `negative-structure/` (0003 T09) was not preserved, so those 60 files have no generator; `reproduce.sh` checks that the four extracted inputs match their vectors.

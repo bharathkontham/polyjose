@@ -5,13 +5,22 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+# `lib` (rlib) is kept for the Rust tests; the Apple build adds LTO with
+# `cargo rustc --crate-type staticlib` (ADR 0032 §1), and Android uses the cdylib (ADR 0033).
 [lib]
 crate-type = ["cdylib", "staticlib", "lib"]
 
+# ADR 0030 §1: the adapter adds only its framework, UniFFI, pinned exactly (feature 0013 risk
+# table) to the version the Kotlin and Swift spikes measured (ADR 0032, ADR 0033). Default
+# features off: the default `cargo-metadata` feature (cargo_metadata, serde_json) and `cli`
+# (uniffi_bindgen, clap, askama) belong to the bindgen CLI only, which lives in
+# bindings/uniffi-bindgen so none of it is linked into the shipped cdylib or staticlib (ADR 0032
+# §1: 64 MB -> 24 MB per Apple slice). The scaffolding macros need no feature.
+# Build the shipped library with `-p polyjose-ffi` alone: a build that also selects
+# polyjose-uniffi-bindgen (such as `cargo build --workspace`) unifies `cli` into uniffi.
 [dependencies]
 polyjose.workspace = true
-uniffi = { version = "0.32", features = ["cli"] }
-
-[[bin]]
-name = "uniffi-bindgen"
-path = "uniffi-bindgen.rs"
+polyjose-surface = { path = "../surface" }
+uniffi = { version = "=0.32.2", default-features = false }
+# Secret-bearing inputs are moved into `Zeroizing` in each export's first statement (ADR 0030 §7.1).
+zeroize.workspace = true

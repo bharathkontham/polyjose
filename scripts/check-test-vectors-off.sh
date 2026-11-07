@@ -8,7 +8,10 @@
 #      the cargo checks below see it.
 #   2. Per binding package: the inverted feature tree of polyjose with ALL of the binding's
 #      features on (optional ones too), every dependency kind and every target shows no
-#      `insecure-test-vectors` node.
+#      `insecure-test-vectors` node. A member is skipped only when its whole tree (every
+#      dependency kind, all features, every target) holds no polyjose package, as for build
+#      tooling such as polyjose-uniffi-bindgen: it cannot enable a feature of a crate it never
+#      builds. If that tree cannot be read, the member fails.
 #   3. Workspace-wide, with every member's features on: no normal or build edge enables it, so
 #      feature unification in a `--workspace` build can't either. polyjose itself is excluded as
 #      a root, because --all-features would otherwise switch its own feature on.
@@ -89,6 +92,22 @@ done <<<"$manifests"
 
 # --- 2. Per binding: inverted feature tree, all features, every target -----------------------------
 for pkg in "${pkgs[@]}"; do
+  # `cargo tree -i polyjose` errors on a member that never builds polyjose (build tooling such as
+  # polyjose-uniffi-bindgen, the UniFFI bindgen CLI of feature 0013 T10). Such a member cannot
+  # enable a polyjose feature, so it is skipped, but only when its whole tree (every dependency
+  # kind, all features, every target) shows it and no polyjose package. Anything else is checked
+  # below, and a probe that fails or shows no tree fails the member (ADR 0005).
+  if ! whole=$(cargo tree --locked -p "$pkg" -e normal,build,dev --all-features --target all \
+    --prefix none 2>&1); then
+    echo "$whole"; fail "cargo tree failed for $pkg (its whole tree)"; continue
+  fi
+  if ! grep -q "^$pkg v" <<<"$whole"; then
+    echo "$whole"; fail "the whole tree of $pkg does not show $pkg; check the script"; continue
+  fi
+  if ! grep -q '^polyjose v' <<<"$whole"; then
+    echo "skipped $pkg: polyjose not in its tree (every dependency kind, all features, every target)"
+    continue
+  fi
   if ! tree=$(cargo tree --locked -e features -i polyjose -p "$pkg" --all-features --target all 2>&1); then
     echo "$tree"; fail "cargo tree failed for $pkg"; continue
   fi

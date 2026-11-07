@@ -2,12 +2,15 @@
 // the literal "sig" and ciphertexts are ids into a table. It knows exactly enough to give the
 // fixture vectors under test/fixtures/vectors their expected outcomes, so the runner's mapping,
 // round trips and comparisons are exercised end to end. Nothing here is cryptography.
+// Like the real backends (BACKEND.md), it never keeps or returns the byte arrays it receives:
+// the facade wipes them once the call settles, so it stores and returns copies.
 import { b64uDecode, b64uEncode, coded, fakeBackend, type Fake, type Handler, type Operation } from "./fake-backend.js";
 
 const ascii = (b: Uint8Array): string => String.fromCharCode(...b);
 const bytesOf = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const enc = (s: string): string => b64uEncode(bytesOf(s));
 const dec = (s: string): string => ascii(b64uDecode(s));
+const copy = (b: Uint8Array): Uint8Array => Uint8Array.from(b);
 
 type Obj = Record<string, unknown>;
 
@@ -80,15 +83,27 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
       if (jwkImport(t)["kty"] === "oct") throw coded("UnsupportedAlgorithm", "oct has no PEM");
       return "-----BEGIN PUBLIC KEY-----\nMCo\n-----END PUBLIC KEY-----\n";
     }) as Handler,
+    jwkToPublic: ((t: string) => {
+      const jwk = jwkImport(t);
+      delete jwk["d"];
+      return JSON.stringify(jwk);
+    }) as Handler,
+    // Toy keys of the RFC shapes (RFC 7518 §6.2, §6.4.1; RFC 8037 §2), no alg; the core's oct bound is 16-512 octets.
+    jwkGenerateOct: ((n: number) => {
+      if (n < 16 || n > 512) throw coded("InvalidKey", "length");
+      return JSON.stringify({ kty: "oct", k: enc("k".repeat(n)) });
+    }) as Handler,
+    jwkGenerateEc: ((crv: string) => JSON.stringify({ kty: "EC", crv, x: "eA", y: "eQ", d: "ZA" })) as Handler,
+    jwkGenerateOkp: ((crv: string) => JSON.stringify({ kty: "OKP", crv, x: "eA", d: "ZA" })) as Handler,
     jwkGenerateForAlg: ((alg: string) => {
       if (alg === "A128KW") return JSON.stringify({ kty: "oct", k: enc("0123456789abcdef"), alg });
       if (alg.startsWith("ECDH-ES")) throw coded("InvalidKey", "needs a curve");
       throw coded("UnsupportedAlgorithm", "unknown");
     }) as Handler,
 
-    jwsSignCompact: ((p: Uint8Array, key: string, o: { protectedB64u?: string; detached?: boolean }) => {
+    jwsSignCompact: ((p: Uint8Array, key: string, o: { protectedHeader?: string; protectedB64u?: string; detached?: boolean }) => {
       jwkImport(key);
-      const header = o.protectedB64u ?? "";
+      const header = o.protectedB64u ?? (o.protectedHeader === undefined ? "" : enc(o.protectedHeader));
       return `${header}.${o.detached === true ? "" : b64uEncode(p)}.sig`;
     }) as Handler,
     jwsSignFlattened: ((p: Uint8Array, s: Obj, detached: boolean) => {
@@ -119,7 +134,7 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
       const alg = (JSON.parse(header) as Obj)["alg"];
       allowed(o.allowedAlgs, alg);
       if (s !== "sig") throw coded("InvalidSignature", "bad signature");
-      return { alg, payload: o.detachedPayload ?? b64uDecode(p), protectedHeader: header, signatureIndex: 0 };
+      return { alg, payload: o.detachedPayload === undefined ? b64uDecode(p) : copy(o.detachedPayload), protectedHeader: header, signatureIndex: 0 };
     }) as Handler,
     jwsVerifyJson: ((text: string, key: string, o: { allowedAlgs: string[]; detachedPayload?: Uint8Array }) => {
       jwkImport(key);
@@ -129,7 +144,7 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
         const s = sigs[i] ?? {};
         const header = typeof s["protected"] === "string" ? (JSON.parse(dec(s["protected"])) as Obj) : ((s["header"] as Obj | undefined) ?? {});
         if (s["signature"] === "sig" && o.allowedAlgs.includes(header["alg"] as string)) {
-          const payload = o.detachedPayload ?? b64uDecode((jws["payload"] as string | undefined) ?? "");
+          const payload = o.detachedPayload === undefined ? b64uDecode((jws["payload"] as string | undefined) ?? "") : copy(o.detachedPayload);
           return { alg: header["alg"], payload, signatureIndex: i };
         }
       }
@@ -140,13 +155,13 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
       if (o.recipients.length !== 1) throw coded("InvalidFormat", "one recipient");
       jwkImport(o.recipients[0]?.["key"] as string);
       const id = `ct${next++}`;
-      ciphertexts.set(id, p);
+      ciphertexts.set(id, copy(p));
       return `h.k.iv.${id}.tag`;
     }) as Handler,
     jweEncryptJson: ((p: Uint8Array, o: { recipients: Obj[] }, form: string) => {
       for (const r of o.recipients) jwkImport(r["key"] as string);
       const id = `ct${next++}`;
-      ciphertexts.set(id, p);
+      ciphertexts.set(id, copy(p));
       return JSON.stringify(form === "general" ? { recipients: o.recipients.map(() => ({ encrypted_key: "k" })), ciphertext: id } : { encrypted_key: "k", ciphertext: id });
     }) as Handler,
     jweDecryptCompact: ((token: string, key: string, o: { allowedAlgs: string[]; allowedEnc: string[] }) => {
