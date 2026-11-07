@@ -74,9 +74,11 @@ check_diffs "an extra PolyjoseApi member fails" 'extra in js (not in the invento
 
 new_case renamed-op
 use_js_modules
-# The interface member and createApi's implementation (facade_only).
-edit $api '  jwtVerifyWithJwks(token: string,' '  jwtVerifyJwks(token: string,'
-edit $api '    jwtVerifyWithJwks: async (' '    jwtVerifyJwks: async ('
+# The interface member and createApi's implementation (facade_only). Each edit matches the
+# member's name and the token after it at its indent, not its parameters or body, so a change to
+# the signature or to how createApi implements it does not break the case.
+edit $api '  jwtVerifyWithJwks(' '  jwtVerifyJwks('
+edit $api '    jwtVerifyWithJwks:' '    jwtVerifyJwks:'
 facade_only
 run_check js
 check_diffs "a renamed operation fails as missing and extra" \
