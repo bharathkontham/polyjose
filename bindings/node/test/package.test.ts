@@ -343,7 +343,9 @@ test(
     scratch.push(dir);
     const manifest = { name: "polyjose-node-smoke", version: "0.0.0", private: true, type: "module" };
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(manifest));
-    fs.writeFileSync(path.join(dir, "npmrc"), "");
+    // npm refuses to load one file as both the user and the global config.
+    fs.writeFileSync(path.join(dir, "user.npmrc"), "");
+    fs.writeFileSync(path.join(dir, "global.npmrc"), "");
     // Hermetic npm: a temporary cache and empty user and global configs, offline, no scripts.
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(host.env)) {
@@ -351,8 +353,8 @@ test(
     }
     Object.assign(env, {
       npm_config_cache: path.join(dir, "cache"),
-      npm_config_userconfig: path.join(dir, "npmrc"),
-      npm_config_globalconfig: path.join(dir, "npmrc"),
+      npm_config_userconfig: path.join(dir, "user.npmrc"),
+      npm_config_globalconfig: path.join(dir, "global.npmrc"),
       npm_config_offline: "true",
       npm_config_audit: "false",
       npm_config_fund: "false",
