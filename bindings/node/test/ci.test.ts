@@ -740,6 +740,20 @@ test("ci-build.sh checks the gnu addons' glibc floor after the build, and only o
   );
 });
 
+test("the README states the glibc floor, the distributions it covers, and that Amazon Linux 2 is not supported (F04)", () => {
+  const readme = read(path.join(pkgDir, "README.md")).replace(/\s+/g, " ");
+  const at = readme.indexOf("### Linux glibc floor");
+  assert.ok(at >= 0, "the README has a glibc floor section");
+  const end = readme.indexOf(" ## ", at);
+  const section = readme.slice(at, end < 0 ? undefined : end);
+  assert.ok(section.includes(`glibc ${glibcFloorValue} or later`), `it states the floor, ${glibcFloorValue}`);
+  for (const distro of ["RHEL", "Debian 11", "Debian 12", "Ubuntu 20.04", "Ubuntu 22.04", "Ubuntu 24.04", "Amazon Linux 2023"]) {
+    assert.ok(section.includes(distro), `it lists ${distro}`);
+  }
+  assert.match(section, /Amazon Linux 2 \(glibc 2\.26\) is not supported/, "and says Amazon Linux 2 is not");
+  assert.ok(section.includes("manylinux_2_28"), "and how the floor is reached");
+});
+
 /** The text of `const <name> = ...` in `src` up to its closing `\n}\n`. */
 function definition(src: string, name: string): string {
   const start = src.indexOf(`const ${name} = `);
