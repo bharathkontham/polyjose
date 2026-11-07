@@ -15,9 +15,12 @@ use polyjose_surface::{SecretBytes, SecretString, SurfaceError, util};
 
 // --- Vectors ----------------------------------------------------------------------------------
 
-/// A conformance vector file, parsed by the core's own JSON parser.
+/// A conformance vector file, parsed by the core's own JSON parser. The input limit is the
+/// file's own length: the ADR 0026 §7 limit vectors hold a JWS just over the 1 MiB default.
 fn vector(text: &str) -> Value {
-    json::parse(text.as_bytes()).expect("a conformance vector is valid JSON")
+    let mut limits = json::Limits::default();
+    limits.max_input_len = limits.max_input_len.max(text.len());
+    json::parse_with_limits(text.as_bytes(), &limits).expect("a conformance vector is valid JSON")
 }
 
 /// The string at `path` (member names) inside `value`.
