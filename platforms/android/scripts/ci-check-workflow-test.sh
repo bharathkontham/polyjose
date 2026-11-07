@@ -104,12 +104,34 @@ expect_fail "actions: a local action" "actions:" insert_after "$steps_anchor" " 
 expect_fail "actions: a docker action" "actions:" insert_after "$steps_anchor" "      - uses: docker://alpine:3.22"
 expect_fail "structure: flow-style uses" "structure: flow-style uses:" insert_after "$steps_anchor" "      - { uses: $checkout }"
 
+# Quoted keys (F03): the uses: scan must see them, and a quoted key is outside the subset.
+expect_fail "actions: a double-quoted uses key, unpinned" "actions:" insert_after "$steps_anchor" '      - "uses": evil/x@v1'
+expect_fail "actions: a single-quoted uses key, unpinned" "actions:" insert_after "$steps_anchor" "      - 'uses': evil/x@v1"
+expect_fail "actions: a quoted uses key, pinned but not allowed" "actions:" insert_after "$steps_anchor" "      - \"uses\": reactivecircus/android-emulator-runner@$sha40 # v2.35.0"
+expect_fail "actions: a quoted uses key after a space" "actions:" insert_after "$steps_anchor" "      - 'uses' : evil/x@v1"
+expect_fail "actions: a quoted uses key on its own line" "actions:" insert_after "$steps_anchor" '      - name: x\n        "uses": evil/x@v1'
+expect_fail "structure: a quoted uses key with an allowed pin" "structure: a quoted key" insert_after "$steps_anchor" "      - \"uses\": $checkout"
+expect_fail "structure: an escaped double-quoted uses key" "structure: a quoted key" insert_after "$steps_anchor" '      - "u\\x73es": evil/x@v1'
+expect_fail "structure: flow-style double-quoted uses" "structure: flow-style uses:" insert_after "$steps_anchor" '      - { "uses": evil/x@v1 }'
+expect_fail "structure: flow-style single-quoted uses" "structure: flow-style uses:" insert_after "$steps_anchor" "      - { 'uses': evil/x@v1 }"
+expect_fail "structure: flow-style quoted uses without spaces" "structure: a quoted key" insert_after "$steps_anchor" '      - {"name":"x","uses":"evil/x@v1"}'
+expect_fail "structure: flow-style quoted key after a comma" "structure: a quoted key" insert_after "$steps_anchor" "      - { name: x, 'uses': evil/x@v1 }"
+expect_fail "structure: an explicit ? key" "structure: an explicit ? key" insert_after "$steps_anchor" "      - ? uses\n        : evil/x@v1"
+expect_fail "structure: a tagged uses key" "structure: a YAML tag" insert_after "$steps_anchor" "      - !!str uses: evil/x@v1"
+expect_fail "trigger: a quoted pull_request key" "trigger:" insert_after "on:" '  "pull_request":'
+expect_fail "trigger: a quoted pull_request key is outside the subset" "structure: a quoted key" insert_after "on:" "  'pull_request':"
+expect_fail "permissions: a quoted job permissions key" "structure: a quoted key" replace_str "    permissions: {}" "    \"permissions\": {}"
+expect_fail "credentials: a quoted secrets key" "credentials: secrets" insert_after "    timeout-minutes: 5" "    'secrets': inherit"
+expect_pass "structure: quoted values with a colon or an apostrophe are not keys" insert_after "$env_anchor" "          X: \"a: b\"\n          Y: 'it''s: fine'\n          Z: { a: \"x\", b: 'y: z' }"
+
 # Credentials.
 expect_fail "credentials: secrets context" "credentials: secrets" insert_after "$env_anchor" '          X: ${{ secrets.X }}'
 expect_fail "credentials: secrets[...] context" "credentials: secrets" insert_after "$env_anchor" "          X: \${{ secrets['X'] }}"
 expect_fail "credentials: secrets: inherit" "credentials: secrets" insert_after "    timeout-minutes: 5" "    secrets: inherit"
 expect_fail "credentials: github.token" "credentials: a token" insert_after "$env_anchor" '          X: ${{ github.token }}'
 expect_fail "credentials: GITHUB_TOKEN in a script" "credentials: a token" insert_after "$run_anchor" '          curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com'
+expect_fail "credentials: github['token']" "credentials: a token" insert_after "$env_anchor" "          X: \${{ github['token'] }}"
+expect_fail "credentials: github[\"token\"]" "credentials: a token" insert_after "$env_anchor" '          X: ${{ github["token"] }}'
 expect_fail "credentials: a github-token input" "credentials: a token" insert_after "          pattern: conformance-*" "          github-token: x"
 expect_fail "credentials: persist-credentials: true" "credentials: password, username or credential" replace_str "persist-credentials: false" "persist-credentials: true"
 expect_fail "credentials: Sonatype user" "credentials:" insert_after "$env_anchor" "          $central_user: x"
@@ -128,6 +150,16 @@ expect_fail "publishing: sign" "publishing: signing" insert_after "$run_anchor" 
 # Expressions.
 expect_fail "expressions: vars context" "expressions:" insert_after "$env_anchor" '          X: ${{ vars.X }}'
 expect_fail "expressions: env context" "expressions:" insert_after "$env_anchor" '          X: ${{ env.X }}'
+expect_fail "expressions: toJSON(github)" "whole github context" insert_after "$env_anchor" '          X: ${{ toJSON(github) }}'
+expect_fail "expressions: toJSON(secrets)" "credentials: secrets" insert_after "$env_anchor" '          X: ${{ toJSON(secrets) }}'
+expect_fail "expressions: toJSON(env)" "expressions:" insert_after "$env_anchor" '          X: ${{ toJSON(env) }}'
+expect_fail "expressions: the bare github context" "whole github context" insert_after "$env_anchor" '          X: ${{ github }}'
+expect_fail "expressions: github['token'] indexes the github context" "whole github context" insert_after "$env_anchor" "          X: \${{ github['token'] }}"
+expect_fail "expressions: github[\"token\"] indexes the github context" "whole github context" insert_after "$env_anchor" '          X: ${{ github["token"] }}'
+expect_fail "expressions: a computed github index" "whole github context" insert_after "$env_anchor" "          X: \${{ github[format('{0}{1}', 'tok', 'en')] }}"
+expect_fail "expressions: the github.* object filter" "whole github context" insert_after "$env_anchor" '          X: ${{ toJSON(github.*) }}'
+expect_fail "expressions: fromJSON(toJSON(github))" "whole github context" insert_after "$env_anchor" '          X: ${{ fromJSON(toJSON(github)).sha }}'
+expect_pass "expressions: a github property stays allowed" insert_after "$env_anchor" '          X: ${{ github.sha }}\n          Y: ${{ toJSON(github.event.inputs) }}'
 expect_fail "expressions: an input inside run:" "inside a run: script" replace_line "$run_anchor" '          case ${{ inputs.mode }} in'
 expect_fail "expressions: inline run: with \${{ }}" "inside a run: script" replace_line "        run: platforms/android/scripts/ci-parity.sh target/ci-results" '        run: platforms/android/scripts/ci-parity.sh ${{ github.workspace }}/target/ci-results'
 

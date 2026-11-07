@@ -21,10 +21,14 @@
 #   publishing   no `publish` and no signing (`sign`, `signing`, gpg, `.asc`).
 #   expressions  every `${{ }}` reads only the inputs, github, matrix, steps, needs, runner, job
 #                and strategy contexts and status or string functions (no vars, env or secrets),
-#                and no `${{ }}` appears inside a `run:` script (values reach scripts through env:,
-#                so an input cannot inject shell code).
+#                the github context only as github.<property> (never whole, as in toJSON(github),
+#                indexed or as github.*, since it holds the token), and no `${{ }}` appears inside
+#                a `run:` script (values reach scripts through env:, so an input cannot inject
+#                shell code).
 #   structure    no YAML anchors, aliases or merge keys, no second document, no tab indentation,
-#                no flow-style `uses:`.
+#                no flow-style `uses:`, and only plain keys: no quoted ("uses": / 'uses':),
+#                explicit (? uses) or tagged (!!str uses:) key; a quoted uses key also fails the
+#                actions rule.
 #   scripts      the steps call each of ci-host-natives.sh, ci-android-sdk.sh, ci-emulator.sh,
 #                ci-assemble-jar.sh and ci-parity.sh, and every platforms/android/scripts/ci-*.sh
 #                the workflow names exists and is executable.
@@ -56,7 +60,8 @@ pin_re='^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-
 pin_of() { sed -E "s|$pin_re|\\2|" | sed -E 's/[[:space:]]+#[[:space:]]+/ # /'; }
 pins_of() { grep -E "$pin_re" "$1" | pin_of; }
 allowed=$( { pins_of "$ci"; printf '%s\n' "$extra_pins"; } | sort -u)
-uses=$(grep -nE '^[[:space:]]*(-[[:space:]]+)?uses[[:space:]]*:' "$wf")
+# Every uses key, also a quoted one ("uses" or 'uses'), which pin_re then rejects.
+uses=$(grep -nE "^[[:space:]]*(-[[:space:]]+)?(uses|\"uses\"|'uses')[[:space:]]*:" "$wf")
 if [ -z "$uses" ]; then fail "actions: no uses: line"; fi
 while IFS= read -r line; do
   [ -n "$line" ] || continue
@@ -94,7 +99,7 @@ function allowed_word(w) {
           w ~ /^(always|cancelled|success|failure|contains|startsWith|endsWith|format|join|toJSON|fromJSON)$/ ||
           w ~ /^(true|false|null)$/)
 }
-function check_expressions(s,   i, j, rest, e, k, c, q, w, prev) {
+function check_expressions(s,   i, j, rest, e, k, c, q, w, prev, m) {
   while ((i = index(s, "${{")) > 0) {
     rest = substr(s, i + 3); j = index(rest, "}}")
     if (j == 0) { fail("expressions: unterminated ${{"); return }
@@ -108,11 +113,57 @@ function check_expressions(s,   i, j, rest, e, k, c, q, w, prev) {
         w = c
         while (k < length(e) && substr(e, k + 1, 1) ~ /[A-Za-z0-9_-]/) { k++; w = w substr(e, k, 1) }
         if (prev != "." && !allowed_word(w)) fail("expressions: ${{ }} uses \"" w "\" (only inputs, github, matrix, steps, needs, runner, job, strategy)")
+        # The github context holds github.token, so it is read only as github.<property>: not
+        # whole (${{ github }}, toJSON(github)), not by index (github[...], also a computed
+        # github[format(...)]) and not by the github.* object filter.
+        if (prev != "." && w == "github") {
+          for (m = k + 1; substr(e, m, 1) == " "; m++) ;
+          if (substr(e, m, 1) != "." || substr(e, m + 1, 1) !~ /[A-Za-z_]/) fail("expressions: ${{ }} uses the whole github context (only github.<property>; it holds the token)")
+        }
         prev = "w"; continue
       }
       if (c != " ") prev = c
     }
   }
+}
+# Key syntax outside the subset, which the line-based rules (the uses: scan, parse_key) would not
+# read as the key it is: a quoted key (YAML 1.2.2 §7.3.1, §7.3.2: a double- or single-quoted
+# uses, also one with escapes such as `"u\x73es":`), an explicit key (§8.2.2: `? uses`) and a
+# tag (§6.9.1: `!!str uses:`). Each is looked for at the start of a node: after the indent and any
+# "- " markers, after a flow `{`, `[` or `,`, and after a `: `. A quote in the middle of a plain
+# scalar is plain text, and ${{ }} expressions are skipped. Returns "" or what was found.
+function key_syntax(s,   i, j, n, c, nx, q, qkey, start, t) {
+  t = ""
+  while ((i = index(s, "${{")) > 0 && (j = index(substr(s, i), "}}")) > 0) {
+    t = t substr(s, 1, i - 1) "E"; s = substr(s, i + j + 1)
+  }
+  s = t s; n = length(s); q = ""; qkey = 0; start = 1
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (q != "") {
+      if (q == "\"" && c == "\\") { i++; continue }
+      if (c != q) continue
+      if (q == "\047" && substr(s, i + 1, 1) == "\047") { i++; continue }
+      q = ""
+      if (qkey) {
+        for (j = i + 1; substr(s, j, 1) == " "; j++) ;
+        if (substr(s, j, 1) == ":") return "a quoted key"
+      }
+      continue
+    }
+    if (c == " ") continue
+    nx = substr(s, i + 1, 1)
+    if (start) {
+      start = 0
+      if (c == "-" && (nx == " " || nx == "")) { start = 1; continue }
+      if (c == "\"" || c == "\047") { q = c; qkey = 1; continue }
+      if (c == "?" && (nx == " " || nx == "")) return "an explicit ? key"
+      if (c == "!") return "a YAML tag"
+    }
+    if (c == "{" || c == "[" || c == ",") start = 1
+    else if (c == ":" && (nx == " " || nx == "")) start = 1
+  }
+  return ""
 }
 # A key line: indent, an optional "- ", the key, a colon, the value.
 function parse_key(s,   m, rest) {
@@ -163,7 +214,8 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
   }
   run_open = 0
   if (code ~ /(^|[ {,[])[&*][A-Za-z0-9_]/ || code ~ /<<[ ]*:/) fail("structure: YAML anchor, alias or merge key")
-  if (low ~ /[{,][ ]*uses[ ]*:/) fail("structure: flow-style uses:")
+  if (low ~ /[{,][ ]*["\047]?uses["\047]?[ ]*:/) fail("structure: flow-style uses:")
+  if ((found = key_syntax(code)) != "") fail("structure: " found " (outside the subset)")
 
   # A permissions block in progress: its children.
   if (perm_open) {
