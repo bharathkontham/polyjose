@@ -85,6 +85,45 @@ test("jwk.thumbprint passes the vector's hash to the facade unchanged, with no n
   assert.deepEqual(fake.of("jwkThumbprintUri")[0]?.args[1], "sha-256");
 });
 
+test("jwk.thumbprint passes an absent hash as undefined, and a refused name is the outcome", async () => {
+  // ADR 0054 §9: no name is supplied for an absent hash; ADR 0057 §2: the key error comes first.
+  const fake = toyBackend();
+  const absent = vector("jwk-thumbprint/absent.json", {
+    operation: "jwk.thumbprint",
+    input: { jwk: { kty: "oct", k: "AA" } },
+    expect: { ok: true, thumbprint: "tp-oct", thumbprint_uri: "urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp-oct" },
+  });
+  assert.equal((await one(absent, fake)).status, "pass");
+  assert.equal(fake.of("jwkThumbprint")[0]?.args.length, 2);
+  assert.equal(fake.of("jwkThumbprint")[0]?.args[1], undefined);
+  const both = vector("jwk-thumbprint/both.json", {
+    operation: "jwk.thumbprint",
+    input: { jwk: { k: "AA" }, hash: "SHA-1" },
+    expect: { ok: false, error: "InvalidKey" },
+  });
+  assert.equal((await one(both)).status, "pass");
+});
+
+test("jwks.select maps the selector member by member and passes the set as its own text", async () => {
+  // README jwks.select: kid, alg, key_use as given (key_use → keyUse), absent members unset; the
+  // set's text in file order; the selected key compared as a JSON value.
+  const fake = toyBackend();
+  const picked = await one(fixture("jwks-select/select-kid.json"), fake);
+  assert.equal(picked.status, "pass");
+  const [set, sel] = fake.of("jwksSelect")[0]?.args ?? [];
+  assert.equal(set, '{"keys":[{"kty":"oct","k":"c2VjcmV0LWtleS1ieXRlcw","kid":"a"},{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","kid":"b"}]}');
+  assert.deepEqual(sel, { kid: "b", alg: "EdDSA", keyUse: "sig" });
+  const empty = toyBackend();
+  const several = await one(fixture("jwks-select/multiple-empty-selector.json"), empty);
+  assert.deepEqual(several.actual, { ok: false, error: "MultipleMatchingKeys" });
+  assert.deepEqual(empty.of("jwksSelect")[0]?.args[1], {});
+  // A wrong key back is a failed vector, not a pass.
+  const wrong = await one(fixture("jwks-select/select-kid.json"), toyBackend({ jwksSelect: () => '{"kty":"oct","k":"AA"}' }));
+  assert.equal(wrong.status, "fail");
+  // The runner never pre-validates a name: a refused key_use is the library's outcome.
+  assert.deepEqual((await one(fixture("jwks-select/unsupported-key-use.json"))).actual, { ok: false, error: "UnsupportedAlgorithm" });
+});
+
 // --- 0004 T10-r1 implementer notes, ADR 0045 ----------------------------------------------
 
 test("jwt.issue passes claims as the vector's own text, so integer-like members keep their order", async () => {
