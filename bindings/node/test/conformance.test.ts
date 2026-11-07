@@ -22,6 +22,9 @@ const thisFile = host.getBuiltinModule("node:url").fileURLToPath((import.meta as
 /** The repository root: this file is bindings/node/dist/conformance.test.js. */
 const repo = path.resolve(path.dirname(thisFile), "..", "..", "..");
 
+/** SHA-256 of the empty input: a run that read no vector file (ADR 0060 §3 makes it invalid). */
+const EMPTY_CORPUS_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
 /** The CI matrix label (ADR 0034 §2 suffix), or undefined for the local run. */
 const suffix = host.env["POLYJOSE_CONFORMANCE_SUFFIX"];
 const fileName = suffix === undefined ? "node.json" : `node-${suffix}.json`;
@@ -43,12 +46,18 @@ test(`every conformance vector passes through @polyjose/node; results in target/
   const report = JSON.parse(fs.readFileSync(file, "utf8")) as {
     runner: unknown;
     polyjose: unknown;
+    vectors_digest: unknown;
     features: unknown;
     error_codes: unknown;
     results: { id: string; status: string; reason?: string }[];
   };
   assert.equal(report.runner, "node");
   assert.equal(report.polyjose, await api.version());
+  // ADR 0060 §1, §3 (review-code.md N5): the digest of the vector files read, checked here so this
+  // test fails on its own, not only through scripts/conformance-parity.sh.
+  assert.equal(typeof report.vectors_digest, "string", "vectors_digest is present");
+  assert.match(report.vectors_digest as string, /^[0-9a-f]{64}$/, "vectors_digest is lowercase hex SHA-256");
+  assert.notEqual(report.vectors_digest, EMPTY_CORPUS_DIGEST, "vectors_digest is not the empty-corpus digest");
   assert.deepEqual(report.features, []);
   assert.deepEqual(report.error_codes, await api.errorCodes());
   assert.ok(report.results.length > 0, "vectors ran");
@@ -59,5 +68,16 @@ test(`every conformance vector passes through @polyjose/node; results in target/
   );
   for (const r of report.results.filter((r) => r.status === "skipped")) {
     assert.match(r.reason ?? "", /^feature:/, `${r.id}: a skip is only ever for a feature the build lacks`);
+  }
+  // ADR 0054 §9: jwksSelect and the optional thumbprint hash run through the real adapter, every
+  // vector of both directories passing (none of them needs a feature).
+  for (const dir of ["jwks-select/", "jwk-thumbprint/"]) {
+    const ran = report.results.filter((r) => r.id.startsWith(dir));
+    assert.ok(ran.length > 0, `the ${dir} vectors ran`);
+    assert.deepEqual(
+      ran.filter((r) => r.status !== "pass").map((r) => r.id),
+      [],
+      `every ${dir} vector passes`,
+    );
   }
 });
