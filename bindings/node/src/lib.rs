@@ -18,6 +18,25 @@
 //! (`StringExpected`, `InvalidArg`), before a Promise exists; the facade type-checks first and
 //! maps those to `TypeError` (ADR 0031 §1, research §2, §3).
 //!
+//! # The facade is the safety boundary
+//!
+//! `@polyjose/node`'s public API is the shared facade (`index.js`, ADR 0031 §1). This backend,
+//! `binding.cjs`, ships in the package because the facade loads it, but it is **not a supported
+//! API**: it checks only what napi's conversions check, and trusts the facade for the rest
+//! (`bindings/js/BACKEND.md`). Called directly, it:
+//! - **wraps integers** (review-code.md N8): napi converts every `u32` and `i64` field with
+//!   Node-API's own coercion, so `-1` becomes `4294967295`, `2**32` becomes `0` and `1.5` is
+//!   truncated. The facade checks every size, count and `now` first;
+//! - **does not check shape or attachment** (review-security.md I3): a detached `Uint8Array` is
+//!   read as empty input, and a primitive where a record belongs reads as an empty record. The
+//!   facade refuses both with a `TypeError`;
+//! - **assumes plain data** (review-security.md L1): a record with getters or a `Proxy` runs JS
+//!   while napi converts the arguments. The adapter makes that safe for the bytes it reads: each
+//!   byte argument is copied before any record is read, and each byte field as napi hands it
+//!   over ([`records`]), so a getter that detaches and frees a byte argument cannot make it read
+//!   freed memory. It does not make such objects supported. The facade snapshots every byte input
+//!   and builds fresh plain records before the backend is reached (0013 B06).
+//!
 //! # Secrets (ADR 0030 §7, ADR 0031 §2)
 //!
 //! - **Inputs** are copied on the JS thread into `Zeroizing` task fields (or surface records
@@ -28,17 +47,17 @@
 //!   buffer (`env.create_string`, `Uint8ArraySlice::copy_from`), never by handing an owned
 //!   `String`/`Vec<u8>` to napi, so no un-wiped Rust copy remains. JS strings are immutable and
 //!   cannot be wiped (ADR 0030 §7.4).
-//! - **Residual, on the misuse path only:** napi converts the arguments, and the fields of a
-//!   record, one after another before the function body runs. When a later one fails to convert
-//!   (a host type error), the secret `String`s already converted (a `key` argument, or the keys
-//!   of earlier `JwsSigner`/`JweRecipient` entries) are dropped by napi's generated code without
-//!   being wiped. The facade's type checks run first, so a call through `@polyjose/node` does not
-//!   reach this path. Closing it needs a hand-written `unsafe` `FromNapiValue`, which this crate
-//!   does not have. To keep the window small, the secrets are converted last: `key` is declared
-//!   last in `JwsSigner` and `JweRecipient`, and `recipients` last in `JweEncryptOptions`, so no
-//!   other field of the options (`aad`, `compress`, …) can fail after a recipient key has been
-//!   converted (review-code.md N1). A failure inside the recipients array, or in a later
-//!   argument, still drops the keys converted before it.
+//! - **Residual, on the misuse path only:** napi converts the positional arguments one after
+//!   another before the function body runs. When a later one fails to convert (a host type
+//!   error), the secret `String`s already converted (a `token` or `key` argument) are dropped by
+//!   napi's generated code without being wiped. The facade's type checks run first, so a call
+//!   through `@polyjose/node` does not reach this path. Closing it needs a hand-written `unsafe`
+//!   `FromNapiValue`, which this crate does not have. The records read by hand
+//!   ([`records`]: `JwsSigner`, `JweRecipient`, `JweEncryptOptions`, …) do not add to it: their
+//!   functions take them as an `Object`, whose conversion cannot fail, move every string
+//!   argument into its zeroizing owner before reading them, and move each record key into a
+//!   `SecretString` as it is read, last in its record (review-code.md N1,
+//!   review-security.md L1). So a failing field drops nothing secret unwiped.
 //! - Nothing is logged, and no hand-written `unsafe` exists; the only `unsafe` is what
 //!   napi-derive generates.
 
