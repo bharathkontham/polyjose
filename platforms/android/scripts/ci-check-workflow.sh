@@ -186,6 +186,63 @@ function end_permissions() {
   }
   perm_open = 0
 }
+# curl or wget whose output runs as code (security audit L3): a pipe into a shell or interpreter
+# (also through sudo, env, a path or flags: `curl -fsSL u | sudo -E bash -`), or a shell, eval or
+# source fed by a process or command substitution (`bash <(curl u)`, `sh -c "$(wget -qO- u)"`).
+# s is one logical line of a run: script, in lower case. A download to a file passes.
+function is_runner(t) {
+  gsub(/["\047\\]/, "", t); sub(/.*\//, "", t)
+  return t ~ /^(sh|bash|zsh|dash|ksh|mksh|ash|fish|csh|tcsh|pwsh|powershell|python[0-9.]*|perl|ruby|node|php)$/
+}
+function runs_code(seg,   tok, n, i, t) {
+  n = split(seg, tok, " ")
+  for (i = 1; i <= n; i++) {
+    t = tok[i]; gsub(/["\047]/, "", t)
+    if (t == "" || t ~ /^[a-z_][a-z0-9_]*=/) continue
+    if (is_runner(t)) return 1
+    sub(/.*\//, "", t)
+    if (t !~ /^(sudo|doas|env|command|exec|nohup|time|nice|stdbuf|xargs|busybox)$/) return 0
+    for (i++; i <= n; i++) if (is_runner(tok[i])) return 1
+    return 0
+  }
+  return 0
+}
+function check_download(s, n, r,   dl, rest, parts, k, i, seg, before, c2, t, m, tok, j) {
+  dl = "(^|[^a-z0-9_.-])(curl|wget)([^a-z0-9_.-]|$)"
+  if (s !~ dl) return
+  match(s, dl); rest = substr(s, RSTART + RLENGTH - 1)
+  gsub(/\|\|/, " ", rest)
+  k = split(rest, parts, "|")
+  for (i = 2; i <= k; i++) {
+    seg = parts[i]; sub(/[;&)].*/, "", seg)
+    if (runs_code(seg)) { fail_at(n, r, "downloads: curl or wget piped to a shell (download to a file, check its hash, then run it)"); return }
+  }
+  for (i = 1; i <= length(s); i++) {
+    c2 = substr(s, i, 2)
+    if (c2 != "<(" && c2 != "$(" && substr(s, i, 1) != "`") continue
+    if (substr(s, i) !~ dl) continue
+    before = substr(s, 1, i - 1); sub(/.*[;&|]/, "", before)
+    m = split(before, tok, " ")
+    for (j = 1; j <= m; j++) {
+      t = tok[j]; gsub(/["\047]/, "", t)
+      if (is_runner(t) || t == "eval" || t == "source" || t == ".") {
+        fail_at(n, r, "downloads: curl or wget piped to a shell (download to a file, check its hash, then run it)"); return
+      }
+    }
+  }
+}
+# A run: script is checked one logical line at a time: lines joined at a trailing \ or | in a
+# literal (|) block, and all lines joined in a folded (>) block or a plain or quoted scalar, as
+# YAML folds them.
+function run_add(s) {
+  s = trim(s)
+  if (acc == "") { acc_line = NR; acc_raw = raw; acc = s } else acc = acc " " s
+  if (run_fold) return
+  if (acc ~ /\\$/) { sub(/\\$/, "", acc); return }
+  if (acc ~ /(^|[^|])\|$/) return
+  run_end()
+}
+function run_end() { if (acc != "") check_download(acc, acc_line, acc_raw); acc = "" }
 function fail_at(n, r, msg) { printf "FAIL: %s: line %d: %s\n", msg, n, r }
 # The end of a list item (a step): its with: keys against the allow-list of its action.
 function end_item(   i, k, v, list, pcf) {
@@ -211,6 +268,7 @@ function end_item(   i, k, v, list, pcf) {
 BEGIN {
   on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top_perm_ok = 0; run_open = 0
   item_open = 0; item_action = ""; item_uses = 0; item_with = 0; wk_n = 0; with_open = 0
+  run_maybe = 0; run_fold = 0; acc = ""
   # The with: keys each action may take (security audit L3): a checkout only of this repository
   # at the dispatched commit (no repository, ref, path, ssh-key or token), and no other action
   # input than the shipped workflow uses. An action not listed takes none. Add a key here only
@@ -244,11 +302,20 @@ BEGIN {
   if (w ~ /:[ ]*write([ ]|$|,|})|write-all|read-all/) fail("permissions: a write or read-all grant")
   check_expressions(code)
 
-  # Inside a run: script (a block scalar): shell, not YAML; ${{ }} is forbidden.
+  # A run: with no value on its line: a mapping (defaults.run) when a key follows, else a plain
+  # scalar script that starts on the next line.
+  if (run_maybe) {
+    run_maybe = 0
+    if (indent > run_col && !parse_key(code)) { run_open = 1; run_fold = 1; acc = "" }
+  }
+  # Inside a run: script (a block scalar or the rest of a multi-line scalar): shell, not YAML;
+  # ${{ }} is forbidden.
   if (run_open && indent > run_col) {
     if (index(code, "${{")) fail("expressions: ${{ }} inside a run: script (pass it through env:)")
+    run_add(low)
     next
   }
+  if (run_open) run_end()
   run_open = 0
   if (code ~ /(^|[ {,[])[&*][A-Za-z0-9_]/ || code ~ /<<[ ]*:/) fail("structure: YAML anchor, alias or merge key")
   if (low ~ /[{,][ ]*["\047]?uses["\047]?[ ]*:/) fail("structure: flow-style uses:")
@@ -259,6 +326,7 @@ BEGIN {
   if (has_key(low, "container") || has_key(low, "services")) fail("containers: container: or services: (an image would run the steps)")
   if (low ~ /[{,][ ]*shell[ ]*:/) fail("shell: a flow-style shell: (only a block shell: bash)")
   if (low ~ /[{,][ ]*with[ ]*:/) fail("structure: flow-style with:")
+  if (low ~ /[{,][ ]*run[ ]*:/) fail("structure: flow-style run:")
 
   # Steps: a list item ends at the next line indented no deeper than its "-". The keys of its
   # with: block (one indentation level) are collected and checked by end_item.
@@ -345,11 +413,17 @@ BEGIN {
   # Every shell, also defaults.run.shell (which wraps every step), is plain bash.
   if (key == "shell" && value != "bash") fail("shell: only bash is allowed")
   if (key == "run") {
-    if (value ~ /^[|>]/) { run_open = 1; run_col = keycol }
-    else if (index(value, "${{")) fail("expressions: ${{ }} inside a run: script (pass it through env:)")
+    run_col = keycol; acc = ""
+    if (value ~ /^[|>]/) { run_open = 1; run_fold = (value ~ /^>/) }
+    else if (value == "") run_maybe = 1
+    else {
+      if (index(value, "${{")) fail("expressions: ${{ }} inside a run: script (pass it through env:)")
+      run_open = 1; run_fold = 1; acc = tolower(value); acc_line = NR; acc_raw = raw
+    }
   }
 }
 END {
+  if (run_open) run_end()
   if (item_open) end_item()
   NR = 0; raw = "(end of file)"
   end_permissions()
