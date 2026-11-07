@@ -1,0 +1,293 @@
+# Swift (iOS) binding (feature 0009 T05; ADR 0032 §1, §5, §6, ADR 0037 §1, ADR 0046, ADR 0060).
+#
+# Builds the XCFramework (every slice of ADR 0032 §1), runs the Swift (iOS) suite on the macOS host
+# and the iOS Simulator (platforms/swift/test.sh: swift-macos and swift-ios-sim; no tvOS run, ADR
+# 0046 §2), packages dist/apple/ (platforms/swift/scripts/package.sh), and checks conformance
+# parity against a rust-core reference made in this job. All of the build and test logic is in the
+# scripts, so a local `platforms/swift/test.sh` and a run of this workflow check the same things.
+# The file name stays binding-apple.yml because ADR 0037 and feature 0012 T03 refer to it; the
+# binding is called Swift (iOS) everywhere else (ADR 0046 §1).
+#
+# When it runs (ADR 0044; owner, 2026-11-07): never on PRs, pushes or a schedule. It has two
+# triggers: a manual dispatch, which nobody starts without the owner (pipeline rule 8), and
+# workflow_call, through which feature 0012's ci.yml (mode: ci) and release.yml (its candidate
+# run, mode: release) call it (ADR 0037 §1, §2).
+#   - One input, `mode`, declared identically under both triggers: `ci` (the default) or
+#     `release`. The first step rejects any other value. It reaches the scripts only through the
+#     job's `env:` (as "$MODE"), never as an expression inside `run:`, so an input value is data,
+#     never shell code (feature 0007 review-security.md I6); `if:` conditions read inputs.mode.
+#   - Nothing reads PR or event context.
+#   - No workflow-level concurrency group: inside a called workflow, github.workflow is the
+#     caller's name, so a group here could collide with the caller's own.
+#   - Artifact names are fixed (ADR 0037 §1): apple-xcframework (the dist/apple/ files),
+#     conformance-swift-macos and conformance-swift-ios-sim (target/conformance/swift-*.json).
+#
+# Modes:
+#   - ci: the stable toolchain of rust-toolchain.toml only. test.sh builds the XCFramework, which
+#     without the pinned nightly is a development build (its watchOS library lacks arm64_32,
+#     polyjose-build.txt says `arm64_32: missing`), so package.sh runs with --allow-dev. That zip
+#     is a CI artifact only and must never be released (ADR 0032 §1). rust-cache restores the
+#     cargo cache; only runs on main save it.
+#   - release: also installs the nightly named in platforms/swift/nightly-toolchain with rust-src,
+#     builds with build-xcframework.sh --release (which fails without the arm64_32 slice), and
+#     runs package.sh without --allow-dev, so a development or stale build is refused. No cache is
+#     restored: the release artifacts are built from the checkout alone.
+#
+# One job, so the parity reference (rust-core.json, `cargo test -p polyjose --test conformance`) is
+# made from the same checkout, the same vectors and the same version as the Swift results (ADR
+# 0060). Nothing is downloaded from another run.
+#
+# The iOS Simulator run needs the iOS 27.2 runtime. When the runner image lacks it, a step tries to
+# download it (`xcodebuild -downloadPlatform`, best effort); if it is still missing,
+# test-simulators.sh prints `SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)`, the results
+# step turns that into a visible warning and the job summary says SKIPPED, and the
+# conformance-swift-ios-sim artifact is not uploaded. Any other missing results file fails.
+#
+# It never publishes: top-level `contents: read` only, no secrets, no token, no OIDC, no gh, no
+# release, no registry, and checkout keeps no credentials. release.yml (feature 0012) attaches the
+# zip to the draft release from the apple-xcframework artifact.
+#
+# Xcode 27.2 (build 27B52, the version the suite is measured with) is selected through DEVELOPER_DIR
+# at its runner-image path, and the second step fails if xcodebuild reports another version.
+#
+# Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
+# that SHA was resolved from (re-resolved with the GitHub API on 2026-11-07). The pins are the ones
+# ci.yml and binding-node.yml use; bump them together. actionlint, which test.sh's workflow check
+# needs, is fetched as its release binary and checked against a pinned SHA-256.
+#
+# platforms/swift/scripts/tests/ci-workflow.sh checks this file on every test.sh run (triggers,
+# mode input, permissions, forbidden strings, pins, artifacts, scripts, order, modes, actionlint).
+name: Swift (iOS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "ci (default; packages a development build) or release (with the nightly arm64_32 slice; refuses a development build)"
+        type: string
+        required: false
+        default: ci
+  workflow_call:
+    inputs:
+      mode:
+        description: "ci (default; packages a development build) or release (with the nightly arm64_32 slice; refuses a development build)"
+        type: string
+        required: false
+        default: ci
+
+# Least privilege: the workflow only reads the repository.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  swift:
+    name: Swift (iOS) (${{ inputs.mode }})
+    runs-on: macos-latest
+    # The XCFramework (11 Rust targets; in release mode also std for arm64_32 with -Zbuild-std),
+    # swift test, the packaging tests, the simulator run and the rust-core reference.
+    timeout-minutes: 180
+    env:
+      MODE: ${{ inputs.mode }}
+      XCODE_VERSION: "27.2"
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: mode is ci or release
+        run: |
+          case "$MODE" in
+            ci | release) echo "mode: $MODE" ;;
+            *) echo "::error::the mode input must be ci or release"; exit 1 ;;
+          esac
+
+      - name: Xcode 27.2
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::Xcode $XCODE_VERSION is not at $DEVELOPER_DIR on this runner image"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          xcodebuild -version
+          actual=$(xcodebuild -version | sed -n 's/^Xcode //p')
+          if [ "$actual" != "$XCODE_VERSION" ]; then
+            echo "::error::expected Xcode $XCODE_VERSION, xcodebuild reports $actual"
+            exit 1
+          fi
+          swift --version
+          sw_vers
+          uname -m
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # As in ci.yml: before anything that invokes cargo (rust-cache too), so no cargo config file
+      # in the repository can change sources, flags or the compiler for the builds below.
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      # rustup reads rust-toolchain.toml: the pinned channel and every stable Apple target of the
+      # XCFramework (ADR 0032 §1).
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+          cargo --version
+
+      # Release mode only: the one nightly step of ADR 0032 §1, for arm64_32-apple-watchos
+      # (-Zbuild-std needs rust-src). The toolchain is named once, in platforms/swift/nightly-toolchain.
+      - name: Install the pinned nightly (release mode)
+        if: inputs.mode == 'release'
+        run: |
+          nightly=$(tr -d '[:space:]' < platforms/swift/nightly-toolchain)
+          rustup toolchain install "$nightly" --profile minimal --component rust-src
+          rustc "+$nightly" --version
+
+      # ci mode only, so a release build never starts from a cache. As in ci.yml, only runs on main
+      # save the cache.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: inputs.mode == 'ci'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # scripts/conformance-parity.sh runs on node.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # test.sh runs platforms/swift/scripts/tests/ci-workflow.sh, which needs actionlint. The
+      # release binary is checked against its published SHA-256 (actionlint_1.7.12_checksums.txt;
+      # the same digest GitHub records for the asset).
+      - name: actionlint 1.7.12
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
+        run: |
+          [ "$(uname -m)" = arm64 ] || { echo "::error::the actionlint pin is for darwin arm64"; exit 1; }
+          dir="$RUNNER_TEMP/actionlint"
+          tarball="actionlint_${ACTIONLINT_VERSION}_darwin_arm64.tar.gz"
+          mkdir -p "$dir"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$dir/$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
+          echo "$ACTIONLINT_SHA256  $dir/$tarball" | shasum -a 256 -c -
+          tar -xzf "$dir/$tarball" -C "$dir" actionlint
+          "$dir/actionlint" -version
+          echo "$dir" >>"$GITHUB_PATH"
+
+      # Release mode: every slice, and a failure instead of a development build when the arm64_32
+      # slice cannot be built. test.sh then finds the XCFramework up to date. In ci mode test.sh
+      # builds it itself.
+      - name: XCFramework (release mode, platforms/swift/scripts/build-xcframework.sh --release)
+        if: inputs.mode == 'release'
+        run: platforms/swift/scripts/build-xcframework.sh --release
+
+      # Best effort: when the image lacks the runtime test-simulators.sh uses, try to download it.
+      # The runtime id is read from that script, so it is named in one place. If the download
+      # fails, test-simulators.sh prints the SKIPPED-RUNNER waiver, which the results step reports.
+      - name: iOS Simulator runtime
+        id: ios-runtime
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          runtime=$(sed -n 's/^runtime_id=//p' platforms/swift/scripts/test-simulators.sh)
+          [ -n "$runtime" ] || { echo "::error::no runtime_id in test-simulators.sh"; exit 1; }
+          . platforms/swift/scripts/simulator-lib.sh
+          xcrun simctl list runtimes -j >"$RUNNER_TEMP/runtimes.json"
+          if sim_runtime_available "$RUNNER_TEMP/runtimes.json" "$runtime"; then
+            echo "$runtime is installed"
+            exit 0
+          fi
+          version=${runtime##*.iOS-}
+          version=${version//-/.}
+          echo "$runtime is missing; downloading the iOS $version simulator runtime"
+          xcodebuild -downloadPlatform iOS -buildVersion "$version"
+          xcrun simctl list runtimes
+
+      # The suite: the XCFramework (rebuilt when stale), check-generated, swift test on the macOS
+      # host (swift-macos), the packaging tests, the workflow check and the iOS Simulator run
+      # (swift-ios-sim). test.sh prints SKIPPED and exits 0 when its tools are missing, so the step
+      # requires its PASS line.
+      - name: platforms/swift/test.sh (macOS host and the iOS Simulator)
+        run: |
+          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then
+            echo "::error::platforms/swift/test.sh did not end with its PASS line"
+            exit 1
+          fi
+
+      # parity reports an absent runner as SKIPPED without failing, so the files this workflow
+      # promises are required here. swift-ios-sim may be missing only with test-simulators.sh's
+      # waiver (no iOS 27.2 runtime on the runner), and then the run says so.
+      - name: every results file is present
+        id: results
+        run: |
+          if [ ! -f target/conformance/swift-macos.json ]; then
+            echo "::error::missing target/conformance/swift-macos.json"
+            exit 1
+          fi
+          echo "present: target/conformance/swift-macos.json"
+          if [ -f target/conformance/swift-ios-sim.json ]; then
+            echo "present: target/conformance/swift-ios-sim.json"
+            echo "ios_sim=present" >>"$GITHUB_OUTPUT"
+          elif grep -qxF 'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)' "$RUNNER_TEMP/swift-test.log"; then
+            echo "::warning::swift-ios-sim SKIPPED: the runner has no iOS 27.2 simulator runtime, so the iOS Simulator suite did not run"
+            echo "swift-ios-sim: SKIPPED (no iOS 27.2 simulator runtime on the runner)" >>"$GITHUB_STEP_SUMMARY"
+            echo "ios_sim=skipped" >>"$GITHUB_OUTPUT"
+          else
+            echo "::error::missing target/conformance/swift-ios-sim.json, and test-simulators.sh printed no waiver"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-swift-macos
+          path: target/conformance/swift-macos.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.results.outputs.ios_sim == 'present'
+        with:
+          name: conformance-swift-ios-sim
+          path: target/conformance/swift-ios-sim.json
+          if-no-files-found: error
+
+      # ADR 0060: the reference comes from this checkout, in this job (default features, ADR 0034
+      # §4), never from another run.
+      - name: rust-core reference
+        run: cargo test --locked -p polyjose --test conformance
+
+      - name: conformance parity
+        run: scripts/conformance-parity.sh
+
+      - name: package.sh (release mode)
+        if: inputs.mode == 'release'
+        run: platforms/swift/scripts/package.sh
+
+      - name: package.sh (ci mode, a development build allowed)
+        if: inputs.mode == 'ci'
+        run: platforms/swift/scripts/package.sh --allow-dev
+
+      # The builds and tests must not change a tracked file (Cargo.lock, the generated Swift).
+      - name: the checkout is unchanged
+        run: git diff --exit-code --stat HEAD
+
+      - name: dist/apple holds the three packaged files
+        run: |
+          for f in PolyjoseFFI.xcframework.zip PolyjoseFFI.xcframework.zip.sha256 binaryTarget.swift.txt; do
+            [ -f "dist/apple/$f" ] || { echo "::error::missing dist/apple/$f"; exit 1; }
+          done
+          ls -l dist/apple
+          cat dist/apple/PolyjoseFFI.xcframework.zip.sha256
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apple-xcframework
+          path: dist/apple/*
+          if-no-files-found: error
