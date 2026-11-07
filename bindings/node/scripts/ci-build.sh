@@ -64,12 +64,36 @@ esac
 
 command -v node >/dev/null 2>&1 || die "node not found on PATH"
 # The platform the napi loader (binding.cjs) picks on this host: <platform>-<arch>, plus -gnu or
-# -musl on Linux (a glibc runtime version in the process report means glibc) and -msvc on Windows.
+# -musl on Linux and -msvc on Windows. On Linux, musl is decided exactly as the loader's isMusl()
+# decides it, in its order (review-code.md N4), so this guard and the loader cannot disagree (for
+# example on Alpine with gcompat): /usr/bin/ldd names musl or not; if it cannot be read, the
+# process report (a glibc runtime version means glibc, else a libc.musl-/ld-musl- shared object
+# means musl); if there is no report, `ldd --version` names musl (failing means glibc).
+# test/ci.test.ts checks this order against the generated binding.cjs.
 # shellcheck disable=SC2016 # the ${...} below are JavaScript template literals, not shell expansions
 host=$(node -e '
 const { platform, arch } = process;
+function isMusl() {
+  try {
+    return require("fs").readFileSync("/usr/bin/ldd", "utf8").includes("musl");
+  } catch {}
+  let report = null;
+  if (process.report && typeof process.report.getReport === "function") {
+    process.report.excludeNetwork = true;
+    report = process.report.getReport();
+  }
+  if (report) {
+    if (report.header && report.header.glibcVersionRuntime) return false;
+    return Array.isArray(report.sharedObjects) && report.sharedObjects.some((f) => f.includes("libc.musl-") || f.includes("ld-musl-"));
+  }
+  try {
+    return require("child_process").execSync("ldd --version", { encoding: "utf8" }).includes("musl");
+  } catch {
+    return false;
+  }
+}
 let name = `${platform}-${arch}`;
-if (platform === "linux") name += process.report.getReport().header.glibcVersionRuntime ? "-gnu" : "-musl";
+if (platform === "linux") name += isMusl() ? "-musl" : "-gnu";
 if (platform === "win32") name += "-msvc";
 process.stdout.write(name);
 ')
