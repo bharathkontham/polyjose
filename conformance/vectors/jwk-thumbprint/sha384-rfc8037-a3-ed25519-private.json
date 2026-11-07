@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7638 §3.4 over the RFC 8037 Appendix A.1 key",
+  "description": "SHA-384 JWK Thumbprint of the RFC 8037 A.1 Ed25519 private key: \"d\" is not hashed (RFC 7638 §3.2.1), so it equals the public key's; no RFC prints it: SHA-384 over the hand-built RFC 7638 §3.3 hash input with node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jwk-oracle/thumbprints.mjs; the URI carries the IANA name sha-384 (RFC 9278 §3, §4)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    },
+    "hash": "sha-384"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "ePy6LSb6I7JWK2uWQyYJQ4DBrwGE4QoxPl6INUviCtqplTLCwzo6fD9Eaw69Wvtt",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-384:ePy6LSb6I7JWK2uWQyYJQ4DBrwGE4QoxPl6INUviCtqplTLCwzo6fD9Eaw69Wvtt"
+  }
+}
