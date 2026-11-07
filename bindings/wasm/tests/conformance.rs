@@ -976,7 +976,11 @@ fn jwk_thumbprint(input: &JsValue, out: &mut Out) -> Step<()> {
         return harness(format!("hash `{hash}` has no adapter name"));
     };
     let jwk = json_arg(input, "jwk")?;
-    out.set("thumbprint", lib(jwk::jwk_thumbprint(jwk.clone(), name))?);
+    let name = Some((*name).to_owned());
+    out.set(
+        "thumbprint",
+        lib(jwk::jwk_thumbprint(jwk.clone(), name.clone()))?,
+    );
     out.set("thumbprint_uri", lib(jwk::jwk_thumbprint_uri(jwk, name))?);
     Ok(())
 }
