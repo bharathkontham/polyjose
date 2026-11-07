@@ -2,10 +2,14 @@
 //! ADR 0026, ADR 0045, ADR 0049).
 //!
 //! Keys are JWK JSON text, borrowed (ADR 0030 §7.1). Payloads are treated as secret: they are
-//! borrowed on the way in, and a verified payload is [`SecretBytes`](crate::secret::SecretBytes)
-//! (ADR 0049 §4). Verification takes the caller's allow-list and nothing else selects the
-//! algorithm (ADR 0007, RFC 8725 §3.1); RSA signing fails with `UnsupportedAlgorithm`
-//! (ADR 0021).
+//! borrowed on the way in, and a verified payload is [`SecretBytes`] (ADR 0049 §4).
+//! Verification takes the caller's allow-list and nothing else selects the algorithm (ADR 0007,
+//! RFC 8725 §3.1); RSA signing fails with `UnsupportedAlgorithm` (ADR 0021).
+//!
+//! Each operation parses its JSON arguments with the core's own parser, converts the surface
+//! records to core options, calls the core once and converts the result (ADR 0030 §3, §4). It
+//! writes no default and adds no check or ordering of its own beyond the header-form rule of
+//! ADR 0030 §4, so every code and every precedence is the core's (ADR 0026 §2, ADR 0048).
 
 use polyjose::Error;
 use polyjose::header::Header;
