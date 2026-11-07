@@ -439,7 +439,7 @@ enum Plant {
     /// A getter returning [`DECOY`] and a setter that records what it receives.
     Accessor,
     /// `{ value: DECOY, writable: false }`: an OrdinarySet of that name returns `false`
-    /// (ECMA-262 §10.1.9.2 step 2.a).
+    /// (ECMA-262 §10.1.9.2 step 3.a).
     ReadOnly,
 }
 

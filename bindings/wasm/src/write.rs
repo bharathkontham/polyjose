@@ -8,25 +8,45 @@
 //! - **Absent optional members are left out** (BACKEND.md: "may be absent"), never written as
 //!   `null`. JSON-valued members (headers, claims) are the core's JSON text; the facade parses
 //!   them (ADR 0030 §2).
-//!
-//! `Reflect.set` on a fresh ordinary object defines an own data property (ECMA-262,
-//! OrdinarySet), so the `?` below is never taken in practice; it only forwards whatever a JS
-//! engine would throw.
+//! - **Own data, whatever `Object.prototype` holds** (BACKEND.md "Results", 0006 review S1,
+//!   security audit I2). Each result is created with a null prototype (`Object.create(null)`,
+//!   ECMA-262 §20.1.2.2), so `Reflect.set` has no parent to consult: OrdinarySetWithOwnDescriptor
+//!   (ECMA-262 §10.1.9.2, step 2.c) finds no inherited setter and no inherited read-only member,
+//!   and creates an own, enumerable, writable, configurable data property (CreateDataProperty,
+//!   §7.3.5). On an object inheriting from `Object.prototype`, an accessor planted there would
+//!   receive the secret `payload`, `plaintext` or `aad` and no own member would be made, and a
+//!   read-only member there would make `Reflect.set` return `false` with the member missing. The
+//!   facade reads results by own members only (`Object.hasOwn`, 0013 F09), which a prototype-less
+//!   object meets.
+//! - **A `false` is never dropped.** `Reflect.set` cannot return `false` for a new key on a fresh,
+//!   extensible, prototype-less object, but if an engine ever did, the call fails with the
+//!   adapter's `TypeError` (ADR 0031 §3) instead of returning a result without that member.
 
 use js_sys::{Object, Reflect, Uint8Array};
 use polyjose_surface::records::{JweDecrypted, JwsVerified, JwtNestedVerified, JwtVerified};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
+
+use crate::error::type_error;
 
 /// A JS object being filled.
 struct Out(Object);
 
 impl Out {
+    /// A new result object with a null prototype (ECMA-262 §20.1.2.2 `Object.create(null)`).
     fn new() -> Self {
-        Self(Object::new())
+        Self(Object::create(JsValue::NULL.unchecked_ref()))
     }
 
+    /// Writes `key` as an own data property; a `false` from `Reflect.set` is the adapter's
+    /// `TypeError`, and a JS exception is forwarded unchanged.
     fn set(&self, key: &str, value: &JsValue) -> Result<(), JsValue> {
-        Reflect::set(&self.0, &JsValue::from_str(key), value).map(drop)
+        if Reflect::set(&self.0, &JsValue::from_str(key), value)? {
+            Ok(())
+        } else {
+            Err(type_error(&format!(
+                "could not write the result member `{key}`"
+            )))
+        }
     }
 
     fn str(&self, key: &str, value: &str) -> Result<(), JsValue> {
