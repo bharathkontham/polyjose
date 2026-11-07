@@ -41,6 +41,7 @@
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+use polyjose::Error;
 use polyjose::json::{Object, Value, parse};
 use polyjose::jwa::{KeyMgmtAlg, SigningAlg};
 use polyjose::jwk::{JwkSelector, JwkSet, KeyAlg, KeyUse};
@@ -807,5 +808,51 @@ proptest! {
             set_json(&members),
             members.iter().map(|m| oracle(m, &sel)).collect::<Vec<_>>()
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// select agrees with matching (ADR 0054 §4)
+// ---------------------------------------------------------------------------
+
+/// The deterministic generators give every `select` outcome: no match, one
+/// match and several (by the oracle's count), so the agreement property
+/// exercises each branch. Counts only, no timing.
+#[test]
+fn generators_reach_every_select_outcome() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = (members(), selector());
+    let mut outcomes = [0usize; 3];
+    for _ in 0..1000 {
+        let (members, sel) = strategy.new_tree(&mut runner).unwrap().current();
+        outcomes[oracle_indexes(&members, &sel).len().min(2)] += 1;
+    }
+    assert!(
+        outcomes.iter().all(|n| *n > 0),
+        "outcomes (0, 1, ≥2): {outcomes:?}"
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// `select` is `matching` reduced to one answer: zero matches →
+    /// `NoMatchingKey` (an empty set included), one → `Ok` with that
+    /// `(i, k)`, two or more → `MultipleMatchingKeys` (ADR 0054 §4,
+    /// RFC 7517 §5.1: set order implies no preference).
+    #[test]
+    fn select_agrees_with_matching(members in members(), sel in selector()) {
+        let set = import(&members);
+        let selector = sel.build();
+        let all: Vec<(usize, *const polyjose::jwk::Jwk)> = set
+            .matching(&selector)
+            .map(|(i, key)| (i, core::ptr::from_ref(key)))
+            .collect();
+        let selected = set.select(&selector).map(|(i, key)| (i, core::ptr::from_ref(key)));
+        match all.len() {
+            0 => prop_assert_eq!(selected, Err(Error::NoMatchingKey)),
+            1 => prop_assert_eq!(selected, Ok(all[0])),
+            _ => prop_assert_eq!(selected, Err(Error::MultipleMatchingKeys)),
+        }
     }
 }
