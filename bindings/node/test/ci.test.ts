@@ -398,9 +398,10 @@ test("every cargo and napi build or test the CI build reaches passes --locked", 
         cargoRuns += 1;
         assert.match(line, /[ \t]--locked\b/, `${name}: cargo without --locked: ${line.trim()}`);
       }
-      // The raw line: build.sh runs napi as "$napi", which the quote stripping would empty.
+      // The raw line: build.sh runs napi as "$napi", which the quote stripping would empty. An
+      // echo that names the command is a message, not a run.
       const napiLine = raw[i] ?? "";
-      if (/\bnapi\b"?[ \t]+build\b/.test(napiLine)) {
+      if (!/^\s*echo\b/.test(napiLine) && /\bnapi\b"?[ \t]+build\b/.test(napiLine)) {
         napiBuilds += 1;
         // napi build passes the options after `--` on to cargo build (and to its cargo metadata).
         assert.match(napiLine, /[ \t]--[ \t]+--locked\b/, `${name}: napi build without \`-- --locked\`: ${napiLine.trim()}`);
