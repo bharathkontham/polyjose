@@ -638,3 +638,53 @@ test("ci-build.sh tells glibc from musl as the loader does: /usr/bin/ldd, the pr
   );
   assert.match(script, /name \+= isMusl\(\) \? "-musl" : "-gnu"/, "the libc suffix comes from that order alone");
 });
+
+/** The steps of a job block: each `- ...` item of its `steps:` list with the lines under it. */
+function stepsOf(job: readonly Line[]): { line: Line; text: string }[] {
+  const at = job.findIndex((l) => l.text === "steps:");
+  assert.ok(at >= 0, "the job has steps");
+  const block = blockUnder(job, at);
+  const items = entriesOf(block).map((e) => block.indexOf(e.line));
+  return items.map((start, i) => ({
+    line: block[start] as Line,
+    text: block
+      .slice(start, items[i + 1] ?? block.length)
+      .map((l) => l.text.replace(/^-\s+/, ""))
+      .join("\n"),
+  }));
+}
+
+test("binding-node.yml runs the compiled tests on Node 22.12.0 exactly, the engines floor, with its own label", () => {
+  const { lines } = workflow();
+  const pkg: unknown = JSON.parse(read(path.join(pkgDir, "package.json")));
+  assert.ok(isRecord(pkg) && isRecord(pkg["engines"]));
+  assert.equal(pkg["engines"]["node"], ">=22.12", "the floor the run below proves (ADR 0031 §2)");
+  const floor = "22.12.0";
+  const label = "x86_64-unknown-linux-gnu-node22.12";
+
+  const steps = stepsOf(jobBlock(lines, "node-versions"));
+  const build = steps.findIndex((s) => /ci-build\.sh x86_64-unknown-linux-gnu /.test(s.text));
+  assert.ok(build >= 0, "node-versions builds with ci-build.sh first");
+  const setup = steps.findIndex((s) => /^uses: actions\/setup-node@/.test(s.text) && /node-version: 22\.12\.0$/m.test(s.text));
+  assert.ok(setup > build, `after the build, setup-node installs exactly ${floor} (not a range or 22.x)`);
+  const run = steps.findIndex((s) => /\bnode --test\b/.test(s.text));
+  assert.ok(run > setup, "then runs node --test");
+  const upload = steps.findIndex((s) => s.text.includes(`name: conformance-node-${label}`));
+  assert.ok(upload > run, "then uploads its results");
+  for (const i of [setup, run, upload]) {
+    assert.match(steps[i]?.text ?? "", /^if: matrix\.node == 22$/m, "on the Node 22 leg, whose build is the newest 22.x");
+  }
+
+  const floorRun = steps[run]?.text ?? "";
+  assert.match(floorRun, /^working-directory: bindings\/node$/m);
+  assert.match(floorRun, new RegExp(`^POLYJOSE_CONFORMANCE_SUFFIX: ${label.replace(/\./g, "\\.")}$`, "m"), "its own results label");
+  assert.match(floorRun, /\[ "\$\(node --version\)" = v22\.12\.0 \]/, "it checks that the Node it runs is 22.12.0");
+  assert.match(floorRun, /for f in dist\/\*\.test\.js; do/, "the already compiled tests ...");
+  assert.match(floorRun, /\[ "\$f" = dist\/package\.test\.js \] \|\| tests\+=\("\$f"\)/, "... except package.test.js, as in test.sh");
+  assert.match(floorRun, /node --test --test-reporter=spec "\$\{tests\[@\]\}"/);
+  assert.doesNotMatch(floorRun, /\b(npm|npx|napi|cargo|tsc)\b|test\.sh|build\.sh/, "nothing is built or installed on 22.12.0");
+  assert.match(steps[upload]?.text ?? "", new RegExp(`path: target/conformance/node-${label.replace(/\./g, "\\.")}\\.json`));
+
+  const parity = jobBlock(lines, "parity").map((l) => l.text).join("\n");
+  assert.ok(parity.includes(label), `parity requires node-${label}.json`);
+});
