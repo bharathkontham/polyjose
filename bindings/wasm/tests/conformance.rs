@@ -84,9 +84,6 @@ const EMIT_VECTORS_DIGEST: bool = false;
 /// The vector-file name of `polyjose/deflate` (README "Features").
 const DEFLATE: &str = "deflate";
 
-/// The `jwk.thumbprint` hash names of the schema, mapped to the adapter's (ADR 0030 §4).
-const HASHES: &[(&str, &str)] = &[("sha-256", "SHA-256")];
-
 /// The members a generated private key has (RFC 7518 §6.2.1–§6.2.2, RFC 8037 §2,
 /// RFC 7518 §6.4.1), plus `alg` (RFC 7517 §4.4), sorted.
 fn generated_members(kty: &str) -> Option<&'static [&'static str]> {
@@ -968,20 +965,25 @@ fn b64url_decode(input: &JsValue, out: &mut Out) -> Step<()> {
     Ok(())
 }
 
-/// `jwk.thumbprint` → `jwkThumbprint` then `jwkThumbprintUri` (RFC 7638 §3, RFC 9278 §3);
-/// `hash` `sha-256` is the adapter's `SHA-256`.
+/// `jwk.thumbprint` → `jwkThumbprint(jwk, hash)` then `jwkThumbprintUri(jwk, hash)`
+/// (RFC 7638 §3, §3.4, RFC 9278 §3).
+///
+/// The vector's `hash` is passed exactly as given, and an absent one as `None`, the core default
+/// (ADR 0054 §9; README `jwk.thumbprint`). The core parses the name
+/// (`ThumbprintHash::from_name`, ADR 0054 §8.2), so the runner keeps no name table and a name the
+/// core rejects is the vector's outcome.
 fn jwk_thumbprint(input: &JsValue, out: &mut Out) -> Step<()> {
-    let hash = str_of(input, "hash")?;
-    let Some((_, name)) = HASHES.iter().find(|(h, _)| *h == hash) else {
-        return harness(format!("hash `{hash}` has no adapter name"));
+    let hash = if has(input, "hash") {
+        Some(str_of(input, "hash")?)
+    } else {
+        None
     };
     let jwk = json_arg(input, "jwk")?;
-    let name = Some((*name).to_owned());
     out.set(
         "thumbprint",
-        lib(jwk::jwk_thumbprint(jwk.clone(), name.clone()))?,
+        lib(jwk::jwk_thumbprint(jwk.clone(), hash.clone()))?,
     );
-    out.set("thumbprint_uri", lib(jwk::jwk_thumbprint_uri(jwk, name))?);
+    out.set("thumbprint_uri", lib(jwk::jwk_thumbprint_uri(jwk, hash))?);
     Ok(())
 }
 
@@ -2074,6 +2076,52 @@ fn an_integer_like_member_name_fails_instead_of_being_reordered() {
     assert!(json_arg(&value, "key").is_ok());
     assert!(is_array_index("0") && is_array_index("4294967294"));
     assert!(!is_array_index("01") && !is_array_index("4294967295") && !is_array_index("-1"));
+}
+
+/// RFC 8037 A.3's Ed25519 public key and its RFC 7638 SHA-256 thumbprint.
+const RFC8037_A3_JWK: &str =
+    r#"{"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#;
+const RFC8037_A3_THUMBPRINT: &str = "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k";
+
+#[wasm_bindgen_test]
+fn jwk_thumbprint_passes_the_hash_as_given_and_an_absent_one_as_absent() {
+    let uri = format!("urn:ietf:params:oauth:jwk-thumbprint:sha-256:{RFC8037_A3_THUMBPRINT}");
+    let ok = format!(
+        r#"{{"ok": true, "thumbprint": "{RFC8037_A3_THUMBPRINT}", "thumbprint_uri": "{uri}"}}"#
+    );
+    // No `hash`: the core default, SHA-256 (ADR 0054 §9, RFC 9278 §5).
+    let input = format!(r#"{{"jwk": {RFC8037_A3_JWK}}}"#);
+    let (status, trace) = status_of(&vector("jwk.thumbprint", &input, &ok, ""), &[]);
+    assert!(matches!(status, Status::Pass));
+    assert_eq!(trace.actual, Some(Ok(())));
+    // Every accepted SHA-256 spelling, as given; the URI keeps the IANA name (RFC 9278 §4).
+    for name in ["sha-256", "SHA-256", "sha256"] {
+        let input = format!(r#"{{"jwk": {RFC8037_A3_JWK}, "hash": "{name}"}}"#);
+        let (status, _) = status_of(&vector("jwk.thumbprint", &input, &ok, ""), &[]);
+        assert!(matches!(status, Status::Pass), "hash {name}");
+    }
+    // A name the core rejects is the outcome, never a runner failure (ADR 0054 §8.2, ADR 0022).
+    let failure = r#"{"ok": false, "error": "UnsupportedAlgorithm"}"#;
+    for name in ["SHA-1", "", "Sha-256"] {
+        let input = format!(r#"{{"jwk": {RFC8037_A3_JWK}, "hash": "{name}"}}"#);
+        let (status, trace) = status_of(&vector("jwk.thumbprint", &input, failure, ""), &[]);
+        assert!(matches!(status, Status::Pass), "hash {name:?}");
+        assert_eq!(trace.actual, Some(Err("UnsupportedAlgorithm".to_owned())));
+    }
+    // The adapter itself: `None` is the core default, not a runner-supplied name.
+    let jwk = || RFC8037_A3_JWK.to_owned();
+    assert_eq!(
+        jwk::jwk_thumbprint(jwk(), None).ok().as_deref(),
+        Some(RFC8037_A3_THUMBPRINT)
+    );
+    assert_eq!(jwk::jwk_thumbprint_uri(jwk(), None).ok(), Some(uri));
+    assert_eq!(
+        jwk::jwk_thumbprint(jwk(), Some("sha-512".to_owned()))
+            .map(|t| t.len())
+            .ok(),
+        Some(86),
+        "SHA-512 is 86 base64url characters (ADR 0054 §8.1)"
+    );
 }
 
 #[wasm_bindgen_test]
