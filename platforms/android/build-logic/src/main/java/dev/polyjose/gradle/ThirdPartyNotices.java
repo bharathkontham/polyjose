@@ -113,11 +113,11 @@ public abstract class ThirdPartyNotices extends DefaultTask {
             extra.removeAll(crates);
             if (!missing.isEmpty()) {
                 problems.add(target + " compiles crates the " + primary + " notices do not list: "
-                        + String.join(", ", missing));
+                        + names(missing));
             } else {
                 getLogger().lifecycle("thirdPartyNotices: {} ({} third-party crates) is covered by {}{}",
                         target, crates.size(), primary,
-                        extra.isEmpty() ? " (identical)" : " (it lacks " + String.join(", ", extra) + ")");
+                        extra.isEmpty() ? " (identical)" : " (it lacks " + names(extra) + ")");
             }
         }
         if (!problems.isEmpty()) {
@@ -133,6 +133,15 @@ public abstract class ThirdPartyNotices extends DefaultTask {
         Files.copy(primaryFile.toPath(), out.toPath());
         getLogger().lifecycle("thirdPartyNotices: {} ({} third-party crates) -> {}",
                 primary, covered.size(), NOTICES_PATH);
+    }
+
+    /** "name version" of each "name version  license" line, for messages. */
+    private static String names(Set<String> crates) {
+        List<String> out = new ArrayList<>();
+        for (String line : crates) {
+            out.add(line.split("  ", 2)[0]);
+        }
+        return String.join(", ", out);
     }
 
     private File run(String target, File work) {
