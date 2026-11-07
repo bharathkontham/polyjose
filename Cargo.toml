@@ -82,7 +82,7 @@ ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["zer
 # `hazmat`. scripts/check-deps.sh rejects any rsa feature and any private-key use, and deny.toml
 # ignores the advisory only while that guard holds. Exact pin on a release candidate: the 0.10 API
 # may still change before 0.10.0, so moving to a newer rc is its own PR.
-rsa = { version = "=0.10.0-rc.20", default-features = false }
+rsa = { version = "=0.10.0-rc.21", default-features = false }
 # X25519 (RFC 7748) keys for the OKP `X25519` curve (RFC 8037 §2, §3.2): key generation derives the
 # public `x` from a 32-octet private key (RFC 7748 §6.1), and feature 0003 runs ECDH-ES on it.
 # `static_secrets` gives `StaticSecret`, the reusable private key a JWK holds (an `EphemeralSecret`
