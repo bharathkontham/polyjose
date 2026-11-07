@@ -69,7 +69,22 @@ function isOurs(site: string): boolean {
 }
 
 /** Plants a trap of `kind` on `target` for each member; none may already be an own member. */
-export function plant(target: object, members: readonly PropertyKey[], kind: TrapKind, polluted: (member: PropertyKey) => unknown): Planted {
+export interface PlantOptions {
+  /**
+   * An accessor's setter also creates the member as an own data property of the object written
+   * to, after recording the write, so code that isn't under test (a fake backend, Node itself)
+   * keeps working while the traps stay planted across many awaits. Every write is still recorded.
+   */
+  readonly passThrough?: boolean;
+}
+
+export function plant(
+  target: object,
+  members: readonly PropertyKey[],
+  kind: TrapKind,
+  polluted: (member: PropertyKey) => unknown,
+  options: PlantOptions = {},
+): Planted {
   const writes: TrapWrite[] = [];
   const planted: PropertyKey[] = [];
   const remove = (): void => {
@@ -84,13 +99,16 @@ export function plant(target: object, members: readonly PropertyKey[], kind: Tra
         kind === "accessor"
           ? {
               get: () => value,
-              set: (v: unknown) => {
+              set(this: unknown, v: unknown) {
                 // Recorded with a fixed index, never push: this setter may be an `Array.prototype` index trap.
                 Object.defineProperty(
                   writes,
                   writes.length,
                   desc({ value: { member, value: v, site: writeSite() }, enumerable: true, writable: true, configurable: true }),
                 );
+                if (options.passThrough === true && typeof this === "object" && this !== null) {
+                  Object.defineProperty(this, member, desc({ value: v, enumerable: true, writable: true, configurable: true }));
+                }
               },
               enumerable: false,
               configurable: true,
