@@ -130,7 +130,8 @@ version=$(cd "$root" && cargo metadata --locked --offline --no-deps --format-ver
   python3 -I -c 'import json, sys
 print("".join(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "polyjose-ffi"))') \
   || die "cargo metadata failed (offline: run \`cargo fetch --locked\` first)"
-printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+[[ $version =~ $semver ]] \
   || die "polyjose-ffi's version '$version' is not SemVer"
 
 stage=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-package.XXXXXX") || die "mktemp failed"
