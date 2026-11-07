@@ -17,7 +17,7 @@
 //!     flag not set, `false`, which likewise calls no core setter: the surface's own reading of
 //!     ADR 0030 §3, and the same as UniFFI's `default = false` (`bindings/ffi`).
 //! - **Outputs** (`object_from_js = false`) are built on the JS thread in `resolve`
-//!   ([`ToJs`]); secret bytes (`payload`, `plaintext`, `aad`) are copied into new JS memory from
+//!   (`ToJs`); secret bytes (`payload`, `plaintext`, `aad`) are copied into new JS memory from
 //!   the surface's borrowed, zeroizing buffer, which is wiped when the surface record drops
 //!   (ADR 0030 §7.2). Optional fields that are `None` are left out of the JS object.
 //! - **Not logged:** none of these records implements `Debug` (ADR 0030 §7.5).

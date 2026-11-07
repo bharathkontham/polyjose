@@ -2,7 +2,7 @@
 //! `jwkThumbprintUri`, `jwksSelect` (RFC 7517, RFC 7638, RFC 9278).
 //!
 //! Each `#[napi]` function copies its arguments into a task on the JS thread and returns a Promise
-//! ([`crate::task`]). JWKs and JWK Sets may be private, so they are held in `Zeroizing` fields;
+//! (the private `task` module). JWKs and JWK Sets may be private, so they are held in `Zeroizing` fields;
 //! a result that can be private (`jwkParse`, `jwksSelect`) is created from the surface's
 //! `SecretString` (ADR 0030 §7).
 

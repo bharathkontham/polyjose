@@ -7,19 +7,34 @@
 //! turns the `snake_case` Rust names into those `camelCase` names.
 //!
 //! - [`util`]: `version` and `errorCodes` (synchronous), `base64urlEncode`, `base64urlDecode`;
-//! - [`error`]: [`error::Code`], the stable code on every rejected Promise (ADR 0030 §5);
-//! - the operations, each returning a Promise from an `AsyncTask` that runs on the libuv pool
-//!   (ADR 0031 §2, 0007 research §3).
+//! - [`jwk`], [`keys`], [`jws`], [`jwe`], [`jwt`]: the operations, each returning a Promise from
+//!   an `AsyncTask` that runs on the libuv pool (ADR 0031 §2, 0007 research §3);
+//! - [`records`]: the `#[napi(object)]` mirrors of the surface records, converted with `From`;
+//! - [`error`]: [`error::Code`], the stable code on every rejected Promise (ADR 0030 §5).
+//!
+//! A core failure rejects the Promise with an `Error` whose `code` is the core code and whose
+//! `message` is the core text. napi's own argument-conversion failures (a number for a string, a
+//! `null` field, a missing required field) are thrown synchronously with napi's codes
+//! (`StringExpected`, `InvalidArg`), before a Promise exists; the facade type-checks first and
+//! maps those to `TypeError` (ADR 0031 §1, research §2, §3).
 //!
 //! # Secrets (ADR 0030 §7, ADR 0031 §2)
 //!
 //! - **Inputs** are copied on the JS thread into `Zeroizing` task fields (or surface records
 //!   whose secret fields are `SecretString`/`SecretBytes`), which wipe when the task drops after
-//!   `resolve`. `compute` never reads borrowed JS memory.
+//!   `resolve`. `compute` never reads borrowed JS memory. A JS string arrives as one Rust-owned
+//!   `String` (napi copies it once), which is moved, not copied, into its zeroizing owner.
 //! - **Outputs** that are secret are created by copying from a borrow of the surface's zeroizing
 //!   buffer (`env.create_string`, `Uint8ArraySlice::copy_from`), never by handing an owned
 //!   `String`/`Vec<u8>` to napi, so no un-wiped Rust copy remains. JS strings are immutable and
 //!   cannot be wiped (ADR 0030 §7.4).
+//! - **Residual, on the misuse path only:** napi converts the arguments, and the fields of a
+//!   record, one after another before the function body runs. When a later one fails to convert
+//!   (a host type error), the secret `String`s already converted (a `key` argument, or the keys
+//!   of earlier `JwsSigner`/`JweRecipient` entries) are dropped by napi's generated code without
+//!   being wiped. The facade's type checks run first, so a call through `@polyjose/node` does not
+//!   reach this path. Closing it needs a hand-written `unsafe` `FromNapiValue`, which this crate
+//!   does not have. `key` is declared last in both records to keep the window small.
 //! - Nothing is logged, and no hand-written `unsafe` exists; the only `unsafe` is what
 //!   napi-derive generates.
 
