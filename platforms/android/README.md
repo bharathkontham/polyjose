@@ -81,3 +81,110 @@ SKIPPED runner under parity, never as passing (0013 F05). Overrides: `POLYJOSE_A
 Only arm64-v8a runs (an Apple Silicon host has no x86_64 system image), so x86_64 is NOT RUN. The
 AVD has 4 KB pages, so 16 KB page-size runtime testing is SKIPPED with that reason; the 16 KB
 alignment of the `.so` files is checked statically (`scripts/check-artifacts.sh`).
+
+## Secrets
+
+polyjose wipes the secrets it owns in Rust. Some copies are outside its reach: those UniFFI 0.32.2
+leaves on the Rust heap, and those on the JVM heap. This section says which ones remain and what
+the caller should do. The rules come from ADR 0030 §3 and §7, ADR 0033 §6 and ADR 0058. The module
+docs in `bindings/ffi/src/` and the generated KDoc give the same counts per function.
+
+### What the caller should do
+
+- **Wipe the `ByteArray`s you receive** once you are done with them (ADR 0030 §7.4). The secret
+  byte outputs are `JwsVerified.payload`, `JweDecrypted.plaintext`, `JweDecrypted.aad` and the
+  result of `jwkToDer`. The same applies to `base64urlDecode` when the decoded bytes are secret.
+  Wipe the array in place:
+
+  ```kotlin
+  val verified = jwsVerifyCompact(token, publicJwk, JwsVerifyOptions(allowedAlgs = listOf("ES256")))
+  try {
+      process(verified.payload)
+  } finally {
+      verified.payload.fill(0)
+  }
+  ```
+
+  Do the same for the secret `ByteArray`s you pass in (the payload to sign, the plaintext to
+  encrypt, the DER to import) after the call returns.
+- **Never log `JwsSigner` or `JweRecipient`.** They are Kotlin data classes, and their generated
+  `toString` prints every field, including `key`, the private JWK (or the PBES2 password as an
+  `oct` JWK) in plain text (ADR 0030 §3). That includes string templates, `println` and exception
+  messages built from them.
+- **Do not put secrets in JWT claims.** `JwtVerified.claims` and the inner claims of
+  `JwtNestedVerified` are plain `String` results, outside ADR 0030 §7's secret handling, even when
+  they were decrypted from a nested JWT (ADR 0058, owner decision 2). Claims are usually not
+  secret. Carry secrets in a JWE payload instead.
+
+### Copies on the JVM heap (ADR 0030 §7.4, ADR 0033 §6)
+
+JVM `String`s are immutable and garbage-collected, so neither polyjose nor the caller can wipe
+them. The generated code also makes copies of its own that it does not wipe:
+
+- every `String` argument, and every `String` field of a record argument such as
+  `JwsSigner.key`, is encoded into a JVM-heap `ByteBuffer` (`FfiConverterString.toUtf8`) before it
+  is copied into Rust memory;
+- every `String` result, and every `String` field of a record result, is read into a temporary
+  `ByteArray` (`FfiConverterString.lift`/`read`) and then decoded into the `String`.
+
+`ByteArray` arguments are written straight into the Rust-allocated buffer, and `ByteArray` results
+are the arrays you receive, which you can wipe. These host-side copies come on top of the Rust-heap
+counts below.
+
+### Copies left on the Rust heap (ADR 0058)
+
+UniFFI 0.32.2 copies values in and out of a `RustBuffer` and frees it without wiping. The adapter
+cannot reach those copies without `unsafe` (ADR 0058, "Why the adapter cannot fix it"). ADR 0058
+measured them:
+
+| Value | Unwiped Rust-heap copies |
+|---|---|
+| A `String` result (generated, imported, parsed and exported keys, PEM) | exactly 1: the buffer the host frees |
+| A `ByteArray` result or secret `ByteArray` record field (`jwkToDer`, `payload`, `plaintext`, `aad`) | at least 2 full copies (the adapter's vector and the buffer the host frees), plus growth copies (below) |
+| A secret `ByteArray` argument, or a secret field of a record argument (`JwsSigner.key`, `JweRecipient.key`, `detachedPayload`, `aad`) | 1 each |
+| A bare `String` argument (for example a key or a JWK Set) | none |
+
+For byte outputs UniFFI writes into a buffer that grows by doubling. Each move of that buffer after
+the secret is fully written adds a full copy, and each move while it is being written adds a
+partial copy that holds a prefix of the secret. There are at most log2(C/8) growth steps, where C
+is the next power of two at or above the lowered length. Whether a step moves the buffer depends on
+the allocator. On macOS arm64 ADR 0058 measured 2 to 5 full copies, depending on the output and
+its size. Android's scudo allocator and glibc were not measured, so their counts may differ within
+that rule. polyjose does not rely on the allocator scrubbing freed memory.
+
+These copies are freed memory that the process reuses. Reading them takes a memory disclosure in
+the host process, such as a core dump, a heap read or swap. The output figure "one per returned
+value" in ADR 0030 §7.3, which ADR 0033 §6 restates, is corrected by ADR 0058; the counts above
+apply. The planned fix is opaque key handles and caller-provided output buffers in 0.2.0 (ADR 0058,
+owner decision 1). A zeroizing global allocator stays in the backlog (owner decision 3).
+
+### Which native library the desktop JVM loads
+
+Android is not affected: the app loads `libpolyjose_ffi.so` from its own read-only native library
+directory.
+
+On the desktop JVM, the generated `findLibraryName` (in `polyjose_ffi.kt`) returns the bare name
+`polyjose_ffi`, unless the system property `uniffi.component.polyjose_ffi.libraryOverride` is set.
+JNA then looks for the library in this order. This is the current behaviour, read from JNA 5.19.1's
+`NativeLibrary.loadLibrary` with `javap -c` (0008 code review, S3):
+
+1. the directories in `jna.library.path`;
+2. the OS loader's search for the bare name: `LD_LIBRARY_PATH`, the `DYLD_*` variables and the dyld
+   fallback paths, and on Windows the executable's directory, the current directory and `PATH`;
+3. the system library paths;
+4. versioned variants of the name;
+5. only then the copy inside the jar, which JNA first extracts into its temporary directory
+   (`jna.tmpdir`, or else a per-user cache directory).
+
+So a `libpolyjose_ffi.so`, `libpolyjose_ffi.dylib` or `polyjose_ffi.dll` found by steps 1 to 4 is
+loaded instead of the jar's copy. UniFFI's checksum check does not prevent that, because a planted
+library can export matching checksums. For a hardened desktop deployment:
+
+- point the loader at a library you control, in a directory the application cannot write to, with
+  `-Duniffi.component.polyjose_ffi.libraryOverride=<absolute path in a read-only directory>` or
+  `-Djna.library.path=<read-only directory>`;
+- and set `-Djna.tmpdir=<a private directory>`, so that an extracted copy is not written to a
+  shared location.
+
+Task F05 of feature 0008 may change this default so that the jar loads only its own verified copy.
+This section is updated when it lands.
