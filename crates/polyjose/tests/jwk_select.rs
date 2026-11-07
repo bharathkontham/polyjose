@@ -38,6 +38,20 @@ const RFC7517_A3: &str = r#"{"keys":
   ]
 }"#;
 
+/// RFC 7517 Appendix A.3 plus one member: a `kid` on the A128KW key. A.3
+/// as published gives that key no `kid`.
+const RFC7517_A3_WITH_KW_KID: &str = r#"{"keys":
+  [
+    {"kty":"oct",
+     "alg":"A128KW",
+     "k":"GawgguFyGrWKav7AX4VKUg",
+     "kid":"a128kw"},
+    {"kty":"oct",
+     "k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
+     "kid":"HMAC key used in JWS spec Appendix A.1 example"}
+  ]
+}"#;
+
 fn set(json: &str) -> JwkSet {
     JwkSet::from_json(json.as_bytes()).unwrap()
 }
@@ -95,6 +109,25 @@ fn rfc7517_a3_select_by_alg() {
     assert_eq!(
         selected(&a3, &JwkSelector::new()),
         Err(Error::MultipleMatchingKeys)
+    );
+    // `alg: A128KW` is ambiguous too. The HMAC member has no `alg`, `use`
+    // or `key_ops`, so an `oct` key may serve A128KW (ADR 0054 §2 items
+    // 1-4), and selection checks no key size: its 64-octet `k` is refused
+    // only at use, by JWE key binding (ADR 0054 §2, "Not part of
+    // selection").
+    assert_eq!(
+        selected(&a3, &by_alg("A128KW")),
+        Err(Error::MultipleMatchingKeys)
+    );
+    // A `kid` disambiguates: the HMAC key's own `kid` picks it.
+    let hmac = by_alg("A128KW").kid("HMAC key used in JWS spec Appendix A.1 example");
+    assert_eq!(selected(&a3, &hmac), Ok(1));
+    // With a `kid` on the A128KW member, that `kid` picks it.
+    let with_kid = set(RFC7517_A3_WITH_KW_KID);
+    let (index, key) = with_kid.select(&by_alg("A128KW").kid("a128kw")).unwrap();
+    assert_eq!(
+        (index, key.alg()),
+        (0, Some(&KeyAlg::KeyMgmt(KeyMgmtAlg::A128KW)))
     );
 }
 
