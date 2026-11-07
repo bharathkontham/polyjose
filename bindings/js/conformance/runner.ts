@@ -687,7 +687,7 @@ function jwtVerifyOptions(object: Out): JwtVerifyOptions {
     ignoreAudience?: boolean;
     typ?: string;
     anyTyp?: boolean;
-    profile?: string;
+    profile?: JwtVerifyOptions["profile"];
     maxKeyCandidates?: number;
   } = { allowedAlgs: strs(object["allowed_algs"]), now: object["now"] as number };
   const typ = isObject(policy["typ"]) ? policy["typ"] : undefined;
@@ -706,7 +706,9 @@ function jwtVerifyOptions(object: Out): JwtVerifyOptions {
   if (policy["ignore_audience"] === true) opts.ignoreAudience = true;
   if (typ?.["mode"] === "exact") opts.typ = str(typ["value"]);
   if (typ?.["mode"] === "any") opts.anyTyp = true;
-  if (typeof policy["profile"] === "string") opts.profile = policy["profile"];
+  // The vector's profile is passed as written, even a name the literal type doesn't allow, so
+  // the core's answer (UnsupportedAlgorithm for any other name, ADR 0030 §4) is what it checks.
+  if (typeof policy["profile"] === "string") opts.profile = policy["profile"] as JwtVerifyOptions["profile"];
   if (typeof policy["max_key_candidates"] === "number") opts.maxKeyCandidates = policy["max_key_candidates"];
   return opts;
 }

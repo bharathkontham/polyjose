@@ -147,6 +147,17 @@ test("null is undefined: null options and fields are left out, never passed to t
   assert.deepEqual(fake.of("jweEncryptCompact")[0]?.args[1], { enc: "A128GCM", recipients: [{ alg: "dir", key: KEY }] });
 });
 
+test("profile: any string still reaches the backend unchanged; only the type is literal (review N5)", async () => {
+  // JwtVerifyOptions.profile is typed "access_token", but an untyped caller's other string is
+  // passed on for the core to refuse with UnsupportedAlgorithm (ADR 0030 §4): no facade check.
+  const { fake, fn } = setup();
+  for (const profile of ["access_token", "access-token", "id_token", ""]) {
+    await fn("jwtVerify")("a.b.c", KEY, { allowedAlgs: ["HS256"], profile });
+    assert.equal((fake.of("jwtVerify").at(-1)?.args[2] as Record<string, unknown> | undefined)?.["profile"], profile);
+  }
+  await assert.rejects(fn("jwtVerify")("a.b.c", KEY, { allowedAlgs: ["HS256"], profile: 1 }), TypeError);
+});
+
 test("a missing allowedAlgs or allowedEnc is passed as [] (the core answers AlgorithmNotAllowed)", async () => {
   const { fake, fn } = setup();
   await fn("jwsVerifyCompact")("t", KEY);
