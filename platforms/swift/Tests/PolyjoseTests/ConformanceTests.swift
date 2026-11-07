@@ -57,7 +57,7 @@ final class ConformanceTests: XCTestCase {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try Data((document + "\n").utf8).write(to: url)
             }
-            print(Self.marker + document)
+            Self.printLine(Self.marker + document)
         } else {
             print("conformance: no ADR 0034 runner name for this platform; no results document")
         }
@@ -84,6 +84,15 @@ final class ConformanceTests: XCTestCase {
             checked += 1
         }
         XCTAssertGreaterThan(checked, 0)
+    }
+
+    /// Writes `line` and a LF to standard output in one piece. A plain `print` of a line this long
+    /// (over 100 KB) is split by stdio buffering, and XCTest's own output lands in between
+    /// (measured with `swift test`), so pending stdio output is flushed first and the line goes to
+    /// the file descriptor directly.
+    static func printLine(_ line: String) {
+        fflush(nil)
+        FileHandle.standardOutput.write(Data((line + "\n").utf8))
     }
 
     /// The ADR 0034 §2 / ADR 0060 §1 results document as one line of JSON
