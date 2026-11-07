@@ -8,9 +8,11 @@
 # 1. Device. An emulator that `adb devices` lists as `device` is used as it is and never stopped
 #    (the machine is shared). Otherwise this script boots the AVD headless on a free console port,
 #      emulator -avd <avd> -port <port> -no-window -no-audio -no-snapshot -gpu swiftshader_indirect
-#    waits at most POLYJOSE_EMULATOR_BOOT_TIMEOUT seconds for sys.boot_completed, and stops that
-#    emulator, and only that one, with `adb -s <serial> emu kill` when it exits, also on an error
-#    or an interrupt (a trap). Nothing is ever stopped by process pattern.
+#    and stops that emulator, and only that one, with `adb -s <serial> emu kill` when it exits,
+#    also on an error or an interrupt (a trap). Nothing is ever stopped by process pattern.
+#    Either way it waits, at most POLYJOSE_EMULATOR_BOOT_TIMEOUT seconds in all, until the device
+#    is ready for Gradle: sys.boot_completed = 1, init.svc.bootanim = stopped (when the property
+#    exists) and `pm path android` answers (pending_readiness; feature 0008 F02).
 # 2. `./gradlew --no-daemon :polyjose:connectedDebugAndroidTest` with ANDROID_SERIAL=<serial>.
 # 3. Judged by the JUnit XML under polyjose/build/outputs/androidTest-results/connected/, not by
 #    Gradle's exit status alone (AGP can report BUILD SUCCESSFUL when the instrumentation crashed,
@@ -26,8 +28,8 @@
 # the platform is not SKIPPED: the runner is waived with the last line, exactly
 #   SKIPPED-RUNNER (android-emulator: host:<token>)        (scripts/test-all.sh, 0013 F05)
 # and exit 0. Tokens: no-android-sdk (no ANDROID_HOME/ANDROID_SDK_ROOT, adb or emulator binary),
-# no-avd (the AVD does not exist), emulator-boot-timeout, emulator-exited (the emulator this script
-# started stopped before it booted).
+# no-avd (the AVD does not exist), emulator-boot-timeout (not ready within the budget),
+# emulator-exited (the emulator this script started stopped before it was ready).
 #
 # Only arm64-v8a runs on this Apple Silicon host's AVD; x86_64 is NOT RUN (no x86_64 system image).
 # The AVD has 4 KB pages, so 16 KB page-size runtime testing is SKIPPED with that reason (the
