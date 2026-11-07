@@ -9,7 +9,7 @@
 //     runs in a child process on a temporary copy of the package, with a planted WASI sentinel
 //     that records being loaded; a control run of the raw loader proves the sentinel is reachable.
 import { assert, path, test } from "../../js/dist/node/builtins.js";
-import { backend } from "../backend.js";
+import { LOADER_PLATFORMS, backend } from "../backend.js";
 
 // Node built-ins without @types/node (ADR 0047), typed with only what this file calls.
 interface SpawnResult {
@@ -166,6 +166,10 @@ test("the loader's require targets are exactly the pinned set (SF-4 a)", () => {
     ...OVERRIDE_TARGETS,
   ].sort();
   assert.deepEqual(loadTargets(), [...new Set(expected)].sort());
+});
+
+test("backend.ts checks every platform the loader probes (LOADER_PLATFORMS)", () => {
+  assert.deepEqual([...LOADER_PLATFORMS].sort(), [...Object.values(SHIPPED), ...TEMPLATE_EXTRA].sort());
 });
 
 test("the eight pinned platforms are package.json's napi.targets", () => {
@@ -641,6 +645,45 @@ test("M1: the genuine install loads, rejects the forged token, and shadows an an
       assert.equal(outcome.forged, false, `${what}: the forged token is rejected`);
       assert.equal(outcome.forgeryRejectedWith, "PolyjoseError", `${what}: by the core`);
       assert.ok(!fs.existsSync(site.marker), `${what}: the fake never ran`);
+    });
+  }
+});
+
+test("M1: two copies of the package in one process both load (one shared or two own platform packages)", () => {
+  for (const own of [false, true]) {
+    withSite({ genuine: true }, (site) => {
+      // A second copy deeper in the tree: it shares <app>/node_modules/@polyjose/node-<platform>
+      // through the walk up, or has its own, so two .node files are loaded in one process (which
+      // a "one .node in the cache" rule would refuse).
+      const modules = path.join(site.root, "app", "node_modules", "dep", "node_modules", "@polyjose");
+      const second = path.join(modules, "node");
+      copyPackageFiles(second);
+      if (own) {
+        const p = path.join(modules, `node-${hostPlatform}`);
+        fs.mkdirSync(p, { recursive: true });
+        fs.copyFileSync(path.join(pkgDir, "npm", hostPlatform, "package.json"), path.join(p, "package.json"));
+        fs.copyFileSync(path.join(pkgDir, hostAddon), path.join(p, hostAddon));
+      }
+      const script = [
+        'import { createRequire } from "node:module";',
+        'import { pathToFileURL } from "node:url";',
+        'import { join } from "node:path";',
+        "const out = { versions: [], addons: 0 };",
+        "for (const dir of process.argv.slice(1)) {",
+        '  try { const api = await import(pathToFileURL(join(dir, "index.js")).href); out.versions.push(await api.version()); }',
+        "  catch (e) { out.versions.push(e instanceof Error ? e.message : String(e)); }",
+        "}",
+        'out.addons = Object.keys(createRequire(join(process.argv[1], "probe.cjs")).cache).filter((f) => f.endsWith(".node")).length;',
+        "process.stdout.write(JSON.stringify(out));",
+      ].join("\n");
+      const r = cp.spawnSync(host.execPath, ["--input-type=module", "-e", script, site.pkg, second], {
+        env: childEnv({}),
+        encoding: "utf8",
+        cwd: os.tmpdir(),
+      });
+      assert.equal(r.status, 0, `the probe exits 0 (stderr: ${r.stderr})`);
+      const version = (JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as { version: string }).version;
+      assert.deepEqual(JSON.parse(r.stdout), { versions: [version, version], addons: own ? 2 : 1 });
     });
   }
 });
