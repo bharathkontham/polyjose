@@ -14,6 +14,13 @@
 # procedural macros and the crates only they use, which also run only inside the compiler.
 # Target-specific dependencies of other targets are left out by --target.
 #
+# Features: `cargo tree -p <package>` resolves the package's default features only, and the
+# script takes no --features argument. The artifact must therefore be built with
+# `-p <package>` and default features, the 0.1.0 configuration of every binding (ADR 0030 §4).
+# A build with other features, or `cargo build --workspace` (which unifies features such as
+# uniffi's `cli` into the shipped library, see bindings/ffi/Cargo.toml), links crates these
+# notices would not list.
+#
 # For each crate: name, version, the SPDX license expression from `cargo metadata`, the
 # repository URL, and the full text of every license or notice file in the crate's source
 # directory (LICENSE*, LICENCE*, COPYING*, NOTICE*, matched case-insensitively, including the
