@@ -1,0 +1,165 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034,SC2154 # sourced by scripts/check-binding-api.sh, which reads MODE_KINDS
+# and sets repo, mode_scratch and camel_awk
+# Mode "swift" of scripts/check-binding-api.sh: the Swift (iOS) binding's public API, the Swift
+# module Polyjose of the root Package.swift (ADR 0032 §3-§4). Its sources are
+# platforms/swift/Sources/Polyjose/*.swift: the committed UniFFI-generated Polyjose.swift (kept
+# fresh by platforms/swift/scripts/check-generated.sh) and any hand-written extension (ADR 0030 §1
+# allows "a few", and each one is public API, so it must be in the inventory too). A text parse,
+# so no build is needed:
+#   1. comments (`//`, `/* */`, nested) and string literals are blanked, keeping the line breaks;
+#   2. the declarations are read by brace depth:
+#      - an operation is a `public func <name>(` at depth 0;
+#      - a record is a `public struct <Name>` at depth 0, and its fields are the parameters of its
+#        `public init(` (depth 1): no default is a required field, `= nil` an optional one (`?`)
+#        and `= false` a flag (`=false`, ADR 0030 §3); any other default fails the mode. Each
+#        parameter must also be a `public var` of the struct, and each `public var` a parameter;
+#      - the codes are the `case <Code>(` lines of `public enum PolyjoseError` (depth 1), in order,
+#        and the enum must have the exported `public func code() -> String` (ADR 0030 §5);
+#      - a `public` member of an extension (depth 1) of any type but UniFFI's converters fails the
+#        mode: the inventory has no form for hand-written members yet, so adding one is a review
+#        decision that extends the inventory and this mode together;
+#      - any other public declaration at depth 0 (class, protocol, enum, typealias, var, let,
+#        extension) fails the mode, so nothing public escapes the comparison.
+# The derived set must equal the inventory exactly (ADR 0030 §8), codes also in order.
+#
+# SWIFT_FRAMEWORK lists what is UniFFI's own public plumbing, not polyjose API: the converter
+# structs and their lift/lower functions (`FfiConverter*`, used by the generated code itself), and
+# the initialization check `uniffiEnsurePolyjoseFfiInitialized`. SWIFT_ERROR is the error type
+# (ADR 0030 §5: Swift's is PolyjoseError), whose cases are the codes. Adding a name here is a review
+# decision, like an inventory change.
+
+MODE_KINDS="op record field code"
+SWIFT_FRAMEWORK_PREFIX="FfiConverter"
+SWIFT_FRAMEWORK="uniffiEnsurePolyjoseFfiInitialized"
+SWIFT_ERROR="PolyjoseError"
+
+mode_derive() {
+  local out=$1 src=$repo/platforms/swift/Sources/Polyjose f
+  [ -d "$src" ] || skip "platforms/swift/Sources/Polyjose missing"
+  set -- "$src"/*.swift
+  [ -e "$1" ] || skip "no .swift files in platforms/swift/Sources/Polyjose"
+  [ -f "$src/Polyjose.swift" ] || mode_fail "platforms/swift/Sources/Polyjose/Polyjose.swift (the generated API) is missing"
+
+  # 1. Blank comments and string literals, keeping every line (and so the brace structure).
+  cat >"$mode_scratch/strip.awk" <<'AWK'
+FNR == 1 { block = 0; str = 0 }
+{
+  line = $0; out = ""; n = length(line); i = 1
+  while (i <= n) {
+    c = substr(line, i, 1); two = substr(line, i, 2)
+    if (block > 0) {
+      if (two == "*/") { block--; i += 2 } else if (two == "/*") { block++; i += 2 } else i++
+      out = out " "; continue
+    }
+    if (str) {
+      if (c == "\\") { i += 2; out = out "  "; continue }
+      if (c == "\"") str = 0
+      out = out " "; i++; continue
+    }
+    if (two == "//") break
+    if (two == "/*") { block = 1; i += 2; out = out "  "; continue }
+    if (c == "\"") { str = 1; out = out " "; i++; continue }
+    out = out c; i++
+  }
+  str = 0 # Swift single-line strings end at the line end
+  print out
+}
+AWK
+  for f in "$@"; do
+    awk -f "$mode_scratch/strip.awk" "$f" >"$mode_scratch/${f##*/}.stripped" || return 1
+  done
+
+  # 2. Declarations by brace depth.
+  cat >"$mode_scratch/swift.awk" <<'AWK'
+BEGIN { n = split(framework, t, " "); for (i = 1; i <= n; i++) plumbing[t[i]] = 1 }
+function where() { f = FILENAME; sub(/\.stripped$/, "", f); sub(/.*\//, "", f); return f ":" FNR }
+function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+function count(s, ch,    k, m) { m = 0; for (k = 1; k <= length(s); k++) if (substr(s, k, 1) == ch) m++; return m }
+# The parameters of a collected `public init(...)`: name and the default's form.
+function params(text, record,    i, c, d, p, cur, name, list, k) {
+  sub(/^[ \t]*public[ \t]+init[ \t]*\(/, "", text); sub(/\)[ \t]*(throws[ \t]*)?\{.*$/, "", text)
+  d = 0; cur = ""; k = 0
+  for (i = 1; i <= length(text); i++) {
+    c = substr(text, i, 1)
+    if (c == "(" || c == "[" || c == "<") d++
+    if (c == ")" || c == "]" || c == ">") d--
+    if (c == "," && d == 0) { list[++k] = cur; cur = "" } else cur = cur c
+  }
+  list[++k] = cur
+  for (i = 1; i <= k; i++) {
+    p = trim(list[i]); if (p == "") continue
+    name = p; sub(/[ \t]*:.*/, "", name)
+    initparam[record "." name] = 1
+    if (p ~ /=[ \t]*nil$/) name = name "?"
+    else if (p ~ /=[ \t]*false$/) name = name "=false"
+    else if (p ~ /=/) { print "error " record "." name " has a default other than nil or false (ADR 0030 §3): " p; continue }
+    print "field " record "." name
+  }
+}
+FNR == 1 { depth = 0; pending = 0; collecting = 0 }
+{
+  line = $0; text = trim(line)
+  if (collecting) {
+    init = init " " text
+    if (text ~ /\)[ \t]*(throws[ \t]*)?\{/) { params(init, block_name); inits[block_name]++; collecting = 0 }
+    depth += count(line, "{") - count(line, "}")
+    next
+  }
+  if (depth == 0 && text == "public") { pending = 1; next }
+  decl = text
+  if (pending) { decl = "public " text; pending = 0 }
+  if (depth == 0 && decl ~ /^public[ \t]/) {
+    rest = decl; sub(/^public[ \t]+/, "", rest)
+    kind = rest; sub(/[ \t].*/, "", kind)
+    name = rest; sub(/^[a-z]+[ \t]+/, "", name); sub(/[^A-Za-z0-9_].*/, "", name)
+    framework_item = (index(name, prefix) == 1 || (name in plumbing))
+    if (kind == "func") {
+      if (!framework_item) print "op " name
+    } else if (kind == "struct") {
+      if (!framework_item) { print "record " name; records[name] = 1 }
+    } else if (kind == "enum" && name == error_type) {
+      seen_error = 1
+    } else if (!framework_item) {
+      print "error " where() ": public " kind " " name " is neither an operation, a record nor the error type"
+    }
+  }
+  if (depth == 0) {
+    block_kind = ""; block_name = ""
+    if (decl ~ /^public[ \t]+struct[ \t]/ || decl ~ /^public[ \t]+enum[ \t]/) { block_kind = "type"; block_name = name }
+    if (decl ~ /^(public[ \t]+)?extension[ \t]/) {
+      block_kind = "extension"; block_name = decl; sub(/^(public[ \t]+)?extension[ \t]+/, "", block_name); sub(/[^A-Za-z0-9_].*/, "", block_name)
+    }
+  }
+  if (depth == 1 && block_name != "") {
+    if (block_kind == "type" && block_name == error_type && text ~ /^case[ \t]+[A-Za-z0-9_]+/) {
+      code = text; sub(/^case[ \t]+/, "", code); sub(/[^A-Za-z0-9_].*/, "", code); print "code " code
+    }
+    if (block_kind == "type" && block_name == error_type && text ~ /^public[ \t]+func[ \t]+code\(\)[ \t]*->[ \t]*String/) has_code = 1
+    if (block_kind == "type" && (block_name in records)) {
+      if (text ~ /^public[ \t]+var[ \t]/) { v = text; sub(/^public[ \t]+var[ \t]+/, "", v); sub(/[^A-Za-z0-9_].*/, "", v); vars[block_name "." v] = 1 }
+      if (text ~ /^public[ \t]+init[ \t]*\(/) {
+        init = text
+        if (text ~ /\)[ \t]*(throws[ \t]*)?\{/) { params(init, block_name); inits[block_name]++ } else collecting = 1
+      }
+    }
+    if (block_kind == "extension" && index(block_name, prefix) != 1 && text ~ /^public[ \t]/) {
+      m = text; sub(/^public[ \t]+((static|final|override|mutating|convenience)[ \t]+)*(var|let|func|init|subscript)[ \t]*/, "", m); sub(/[^A-Za-z0-9_].*/, "", m)
+      print "error " where() ": public member " (m == "" ? "init" : m) " in an extension of " block_name " (a hand-written member is public API: add it to the inventory and to this mode)"
+    }
+  }
+  depth += count(line, "{") - count(line, "}")
+  if (depth < 0) { print "error " where() ": unbalanced braces"; depth = 0 }
+}
+END {
+  if (!seen_error) print "error no public enum " error_type " (ADR 0030 §5)"
+  else if (!has_code) print "error " error_type " has no public func code() -> String (ADR 0030 §5)"
+  for (r in records) if (inits[r] != 1) print "error record " r " has " (inits[r] + 0) " public init(...), not 1"
+  for (k in vars) if (!(k in initparam)) print "error public var " k " is not a parameter of its init"
+  for (k in initparam) if (!(k in vars)) print "error init parameter " k " is not a public var"
+}
+AWK
+  awk -v framework="$SWIFT_FRAMEWORK" -v prefix="$SWIFT_FRAMEWORK_PREFIX" -v error_type="$SWIFT_ERROR" \
+    -f "$mode_scratch/swift.awk" "$mode_scratch"/*.stripped >"$out" || return 1
+  grep -q '^op ' "$out" || mode_fail "no public func found in platforms/swift/Sources/Polyjose (has the layout changed?)"
+}

@@ -2,7 +2,7 @@
 # Run polyjose's test suites on every platform (or the ones named as arguments).
 # A platform whose toolchain or test suite is missing is reported as SKIPPED with the reason,
 # never silently passed; a suite that exists always runs and can FAIL.
-# wasm, node, android and apple run their binding's own script when it exists (bindings/wasm/test.sh,
+# wasm, node, android and swift run their binding's own script when it exists (bindings/wasm/test.sh,
 # bindings/node/test.sh, platforms/android/test.sh, platforms/swift/test.sh; see dispatch below).
 # After the suites, scripts/conformance-parity.sh compares their conformance results (ADR 0034 §5),
 # and each platform that passed must have written the results files of its runners (results_runners).
@@ -13,7 +13,9 @@
 # SKIPPED-RUNNER, or one naming a required runner or a runner not on the platform's line, FAILs.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
-platforms=("$@"); [ ${#platforms[@]} -eq 0 ] && platforms=(rust wasm node android apple)
+platforms=("$@"); [ ${#platforms[@]} -eq 0 ] && platforms=(rust wasm node android swift)
+# The Swift (iOS) platform's key is swift (ADR 0046 §1); apple, its key before, is an alias of it.
+for i in "${!platforms[@]}"; do [ "${platforms[$i]}" = apple ] && platforms[i]=swift; done
 summary=""; status=0
 # passed and ran: the steps that reported PASS, and PASS or FAIL (not SKIPPED), as |<name>|...; a
 # platform's status is that of its step of the same name (rust: the cargo fmt/clippy/test step).
@@ -46,7 +48,7 @@ platform_script() {
     wasm) echo bindings/wasm/test.sh ;;
     node) echo bindings/node/test.sh ;;
     android) echo platforms/android/test.sh ;;
-    apple) echo platforms/swift/test.sh ;;
+    swift) echo platforms/swift/test.sh ;;
     *) return 1 ;;
   esac
 }
@@ -66,7 +68,7 @@ rust: rust-core rust-surface
 node: node
 wasm: wasm-node wasm-chrome? wasm-pkg-node wasm-pkg-chrome? wasm-pkg-workerd?
 android: jvm android-emulator?
-apple: swift-macos swift-ios-sim?
+swift: swift-macos swift-ios-sim?
 '
 # runners_of <platform>: prints the runners on the platform's line; returns 1 if it has no line.
 runners_of() {
@@ -251,10 +253,10 @@ for p in "${platforms[@]}"; do
       if dispatch android; then :
       elif have cargo-ndk && [ -x platforms/android/gradlew ]; then run android bash -c 'cd platforms/android && ./gradlew test'
       else record android "SKIPPED (cargo-ndk or Gradle project missing)"; fi ;;
-    apple)
-      if dispatch apple; then :
-      elif have swift && [ -f Package.swift ]; then run apple bash -c 'swift test'
-      else record apple "SKIPPED (swift or Package.swift missing)"; fi ;;
+    swift)
+      if dispatch swift; then :
+      elif have swift && [ -f Package.swift ]; then run swift bash -c 'swift test'
+      else record swift "SKIPPED (swift or Package.swift missing)"; fi ;;
     *) echo "unknown platform: $p"; exit 2 ;;
   esac
 done

@@ -28,14 +28,14 @@ reference_by_wasm() {
   writes_own_results bindings/wasm/test.sh wasm
 }
 
-# apple_case <name> <line>...: apple's line is `swift-macos swift-ios-sim?`; its passing fixture
+# swift_case <name> <line>...: swift's line is `swift-macos swift-ios-sim?`; its passing fixture
 # prints the lines and writes swift-macos.json. The reference comes from wasm.
-apple_case() {
+swift_case() {
   new_case "$1"
   shift
   reference_by_wasm
-  set_runners apple swift-macos 'swift-ios-sim?'
-  fixture platforms/swift/test.sh 0 'fixture apple suite ran' "$@"
+  set_runners swift swift-macos 'swift-ios-sim?'
+  fixture platforms/swift/test.sh 0 'fixture swift suite ran' "$@"
   writes_results platforms/swift/test.sh swift-macos
   parity_fixture 0 'SKIPPED (no results: swift-ios-sim)' 'parity: ok'
 }
@@ -49,7 +49,7 @@ rust: rust-core rust-surface
 node: node
 wasm: wasm-node wasm-chrome? wasm-pkg-node wasm-pkg-chrome? wasm-pkg-workerd?
 android: jvm android-emulator?
-apple: swift-macos swift-ios-sim?
+swift: swift-macos swift-ios-sim?
 '"
 if [ "$table" = "$want" ]; then echo "ok   - the runner table names ADR 0034 §2's runners, the host-optional ones marked ?"
 else echo "FAIL - the runner table is not the agreed one:"; printf '%s\n' "$table" | sed 's/^/       /'; tests_failed=$((tests_failed + 1)); fi
@@ -128,47 +128,47 @@ check "without the parity script, a missing required file still FAILs parity" 1 
 
 # --- Optional runners and SKIPPED-RUNNER --------------------------------------------------------------
 
-apple_case optional-skip 'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-simulator)' 'fixture apple suite done'
-run_test_all wasm apple
+swift_case optional-skip 'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-simulator)' 'fixture swift suite done'
+run_test_all wasm swift
 check "an optional runner declared SKIPPED-RUNNER (<runner>: host:<token>) is reported SKIPPED, parity passes" 0 \
-  '^  apple: PASS$' '^  parity: PASS$' '^    SKIPPED \(swift-ios-sim: host:no-ios-simulator\)$'
+  '^  swift: PASS$' '^  parity: PASS$' '^    SKIPPED \(swift-ios-sim: host:no-ios-simulator\)$'
 check_absent "the waived runner is not listed twice" '^    SKIPPED \(no results: swift-ios-sim\)$'
 check_absent "the waived runner is never reported as passing" 'swift-ios-sim.*PASS'
 
-apple_case optional-skip-last-line 'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-simulator)'
-run_test_all wasm apple
+swift_case optional-skip-last-line 'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-simulator)'
+run_test_all wasm swift
 check "a SKIPPED-RUNNER line as the script's last line is not a platform SKIPPED line" 0 \
-  '^  apple: PASS$' '^  parity: PASS$' '^    SKIPPED \(swift-ios-sim: host:no-ios-simulator\)$'
+  '^  swift: PASS$' '^  parity: PASS$' '^    SKIPPED \(swift-ios-sim: host:no-ios-simulator\)$'
 
-apple_case optional-absent-undeclared
-run_test_all wasm apple
+swift_case optional-absent-undeclared
+run_test_all wasm swift
 check "an optional runner absent with no SKIPPED-RUNNER line FAILs parity" 1 \
-  '^  apple: PASS$' '^  parity: FAIL$' '^    FAIL \(no results: swift-ios-sim; the apple platform passed\)$'
+  '^  swift: PASS$' '^  parity: FAIL$' '^    FAIL \(no results: swift-ios-sim; the swift platform passed\)$'
 
-apple_case optional-present
+swift_case optional-present
 writes_results platforms/swift/test.sh swift-ios-sim
-run_test_all wasm apple
+run_test_all wasm swift
 check "an optional runner that wrote its file passes" 0 '^  parity: PASS$'
 check_absent "an optional runner that wrote its file is not reported" '^    (SKIPPED|FAIL) \(swift-ios-sim'
 
-apple_case required-declared 'SKIPPED-RUNNER (swift-macos: host:no-macos)'
+swift_case required-declared 'SKIPPED-RUNNER (swift-macos: host:no-macos)'
 writes_results platforms/swift/test.sh swift-ios-sim
-run_test_all wasm apple
+run_test_all wasm swift
 check "a declared skip of a required runner FAILs parity" 1 \
-  '^  parity: FAIL$' '^    FAIL \(SKIPPED-RUNNER for swift-macos, a required runner of apple\)$'
+  '^  parity: FAIL$' '^    FAIL \(SKIPPED-RUNNER for swift-macos, a required runner of swift\)$'
 check_absent "a required runner is never reported SKIPPED" '^    SKIPPED \(swift-macos'
 
-apple_case unknown-runner 'SKIPPED-RUNNER (swift-tvos-sim: host:no-tvos-simulator)'
+swift_case unknown-runner 'SKIPPED-RUNNER (swift-tvos-sim: host:no-tvos-simulator)'
 writes_results platforms/swift/test.sh swift-ios-sim
-run_test_all wasm apple
+run_test_all wasm swift
 check "a declared runner that is not on the platform's line FAILs parity" 1 \
-  '^  parity: FAIL$' '^    FAIL \(SKIPPED-RUNNER for swift-tvos-sim, not a runner of apple\)$'
+  '^  parity: FAIL$' '^    FAIL \(SKIPPED-RUNNER for swift-tvos-sim, not a runner of swift\)$'
 
-apple_case other-platforms-runner 'SKIPPED-RUNNER (android-emulator: host:no-emulator)'
+swift_case other-platforms-runner 'SKIPPED-RUNNER (android-emulator: host:no-emulator)'
 writes_results platforms/swift/test.sh swift-ios-sim
-run_test_all wasm apple
+run_test_all wasm swift
 check "another platform's optional runner is not this platform's to waive" 1 \
-  '^  parity: FAIL$' '^    FAIL \(SKIPPED-RUNNER for android-emulator, not a runner of apple\)$'
+  '^  parity: FAIL$' '^    FAIL \(SKIPPED-RUNNER for android-emulator, not a runner of swift\)$'
 
 n=0
 for bad in 'SKIPPED-RUNNER (swift-ios-sim: no simulator)' 'SKIPPED-RUNNER (swift-ios-sim: host:)' \
@@ -176,10 +176,10 @@ for bad in 'SKIPPED-RUNNER (swift-ios-sim: no simulator)' 'SKIPPED-RUNNER (swift
   'SKIPPED-RUNNER (swift-ios-sim)' 'SKIPPED-RUNNER swift-ios-sim: host:no-sim' 'SKIPPED-RUNNER' \
   '  SKIPPED-RUNNER (swift-ios-sim: host:no-sim)' 'SKIPPED-RUNNER (swift-ios-sim: host:no-sim) extra'; do
   n=$((n + 1))
-  apple_case "bad-line-$n" "$bad"
-  run_test_all wasm apple
+  swift_case "bad-line-$n" "$bad"
+  run_test_all wasm swift
   check "a malformed SKIPPED-RUNNER line or reason FAILs parity: \"$bad\"" 1 \
-    '^  parity: FAIL$' '^    FAIL \(bad SKIPPED-RUNNER line from apple: .*; the form is SKIPPED-RUNNER \(<runner>: host:<token>\)\)$'
+    '^  parity: FAIL$' '^    FAIL \(bad SKIPPED-RUNNER line from swift: .*; the form is SKIPPED-RUNNER \(<runner>: host:<token>\)\)$'
   check_absent "a bad declaration waives nothing: \"$bad\"" '^    SKIPPED \(swift-ios-sim'
 done
 
@@ -187,12 +187,12 @@ done
 
 new_case skipped-platform
 reference_by_wasm
-set_runners apple swift-macos 'swift-ios-sim?'
+set_runners swift swift-macos 'swift-ios-sim?'
 fixture platforms/swift/test.sh 0 'SKIPPED-RUNNER (swift-macos: anything)' 'SKIPPED (iOS 27.2 simulator missing)'
 parity_fixture 0 'parity: ok'
-run_test_all wasm apple
+run_test_all wasm swift
 check "a SKIPPED platform without results files is not a failure, whatever it declared" 0 \
-  '^  apple: SKIPPED \(iOS 27\.2 simulator missing\)$' '^  parity: PASS$'
+  '^  swift: SKIPPED \(iOS 27\.2 simulator missing\)$' '^  parity: PASS$'
 check_absent "a SKIPPED platform's runners are not reported missing" '^    FAIL \('
 
 new_case failed-platform
