@@ -20,7 +20,9 @@
 # Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
 # that SHA was resolved from. Bump both together. The tools are pinned too: Rust by
 # rust-toolchain.toml, wasm-pack, Node, and Chrome for Testing with the chromedriver of the same
-# release (a driver of another major version refuses Chrome; 0006 research §7).
+# release (a driver of another major version refuses Chrome; 0006 research §7). So are the two
+# tools wasm-pack would otherwise download unverified at build time (review S4), which generate the
+# shipped glue and rewrite the shipped .wasm: wasm-bindgen-cli and binaryen's wasm-opt.
 name: binding-wasm
 
 on:
@@ -41,6 +43,15 @@ env:
   # wasm-pack 0.15.1 (ADR 0031 §3), and Node 24, the current LTS line (engines.node >= 22.12).
   WASM_PACK_VERSION: 0.15.1
   NODE_VERSION: 24.21.0
+  # wasm-bindgen-cli: exactly the wasm-bindgen version of Cargo.lock (check-workflow.sh compares
+  # them), or wasm-pack ignores it and downloads its own.
+  WASM_BINDGEN_VERSION: 0.2.130
+  # binaryen: the release wasm-pack 0.15.1 itself downloads (src/install/mod.rs:218, version_130),
+  # linux x86_64. install-action has no binaryen manifest, so the archive's SHA-256 is pinned here,
+  # as for Chrome for Testing (from the release's .sha256 file, which matches GitHub's asset digest
+  # and a fresh download, 2026-11-07). Bump the version and the hash together.
+  BINARYEN_VERSION: version_130
+  BINARYEN_SHA256: 0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
   # Chrome for Testing, Chrome and chromedriver from this one release, linux64. The Chrome for
   # Testing JSON endpoints publish no checksums, so the archives' SHA-256 are pinned here
   # (computed 2026-11-07 from storage.googleapis.com/chrome-for-testing-public/<version>/linux64/).
@@ -99,6 +110,47 @@ jobs:
         run: |
           wasm-pack --version
           [ "$(wasm-pack --version)" = "wasm-pack $WASM_PACK_VERSION" ]
+
+      # wasm-bindgen-cli (wasm-bindgen, wasm-bindgen-test-runner), the same hash-checked prebuilt
+      # release install. wasm-pack 0.15.1 uses a wasm-bindgen on PATH whose --version equals the
+      # Cargo.lock version and takes wasm-bindgen-test-runner from the same directory
+      # (src/install/mod.rs:66-72); only otherwise does it print "Installing wasm-bindgen..." and
+      # download one. The test.sh step fails on that line.
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: wasm-bindgen@${{ env.WASM_BINDGEN_VERSION }}
+          fallback: none
+
+      - name: wasm-bindgen version
+        run: |
+          wasm-bindgen --version
+          wasm-bindgen-test-runner --version
+          [ "$(wasm-bindgen --version)" = "wasm-bindgen $WASM_BINDGEN_VERSION" ]
+          [ "$(wasm-bindgen-test-runner --version)" = "wasm-bindgen-test-runner $WASM_BINDGEN_VERSION" ]
+
+      # binaryen's wasm-opt, checked against the pinned hash and put on PATH. wasm-pack 0.15.1 uses
+      # the first wasm-opt on PATH, logging `found wasm-opt at "<path>"` (src/wasm_opt.rs:49-51),
+      # and downloads binaryen only when there is none. The test.sh step requires that line for
+      # this path.
+      - name: binaryen ${{ env.BINARYEN_VERSION }} (wasm-opt)
+        run: |
+          dir=$RUNNER_TEMP/binaryen
+          archive=$dir/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz
+          mkdir -p "$dir"
+          curl -fsS --proto '=https' --tlsv1.2 --retry 3 --max-time 600 -o "$archive" \
+            "https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz"
+          printf '%s  %s\n' "$BINARYEN_SHA256" "$archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$dir"
+          bin=$dir/binaryen-$BINARYEN_VERSION/bin
+          echo "$bin" >>"$GITHUB_PATH"
+          echo "WASM_OPT=$bin/wasm-opt" >>"$GITHUB_ENV"
+
+      # A separate step, so PATH includes the directory added above.
+      - name: wasm-opt version
+        run: |
+          wasm-opt --version
+          [ "$(command -v wasm-opt)" = "$WASM_OPT" ]
+          [ "$(wasm-opt --version)" = "wasm-opt version ${BINARYEN_VERSION#version_} ($BINARYEN_VERSION)" ]
 
       # No dependency cache, here or for cargo: this job builds a release-candidate artifact from a
       # clean state.
@@ -189,16 +241,25 @@ jobs:
           test -s target/conformance/rust-core.json
 
       # SKIPPED is a pass locally when a tool is missing, but every tool is installed here, so only
-      # a full PASS line counts.
+      # a full PASS line counts. wasm-pack must have used the pinned tools: no "Installing
+      # wasm-bindgen" line (a download, from wasm-pack build or test), and the package build's
+      # wasm-opt line for the pinned path.
       - name: bindings/wasm/test.sh
         id: wasm
         run: |
-          bindings/wasm/test.sh 2>&1 | tee "$RUNNER_TEMP/wasm-test.log"
-          last=$(tail -n 1 "$RUNNER_TEMP/wasm-test.log")
+          log=$RUNNER_TEMP/wasm-test.log
+          bindings/wasm/test.sh 2>&1 | tee "$log"
+          last=$(tail -n 1 "$log")
           case $last in
             "wasm: PASS (wasm-node, wasm-chrome, wasm-pkg-node, wasm-pkg-chrome, wasm-pkg-workerd)") ;;
             *) echo "::error::bindings/wasm/test.sh did not run every wasm runner: $last"; exit 1 ;;
           esac
+          if grep -F "Installing wasm-bindgen" "$log"; then
+            echo "::error::wasm-pack downloaded wasm-bindgen instead of using the pinned $WASM_BINDGEN_VERSION on PATH"
+            exit 1
+          fi
+          grep -F "found wasm-opt at \"$WASM_OPT\"" "$log" \
+            || { echo "::error::wasm-pack did not use the pinned wasm-opt ($WASM_OPT)"; exit 1; }
 
       # test.sh builds with cargo commands that do not pass --locked; a changed lock file here
       # would mean the build resolved other dependencies than the committed ones.
