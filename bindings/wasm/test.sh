@@ -62,9 +62,11 @@ cargo test -p polyjose-wasm --test vector_index || fail "vector index"
 # --- 2, 3. wasm-pack runs --------------------------------------------------------------------
 
 # tests_ran <log> <test file>: whether the run of tests/<file>.rs reported at least one test.
+# Cargo's own target lines are indented ("     Running tests/x.rs (…)"); the browser runner's
+# "Running headless tests in Chrome on …" is not, and belongs to the current target.
 tests_ran() {
   awk -v want="tests/$2.rs" '
-    /^[[:space:]]*Running / { current = index($0, "Running " want " ") > 0; next }
+    /^[[:space:]]+Running / { current = index($0, "Running " want " ") > 0; next }
     current && /^running [0-9]+ tests?$/ { if ($2 + 0 > 0) found = 1 }
     END { exit !found }' "$1"
 }
