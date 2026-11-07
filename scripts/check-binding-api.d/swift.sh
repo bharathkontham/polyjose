@@ -10,7 +10,8 @@
 #   1. comments (`//`, `/* */`, nested) and string literals are blanked, keeping the line breaks;
 #   2. the declarations are read by brace depth, each line in pieces that end after a `{`, `}` or
 #      `;`, so declarations sharing a line with an extension, a brace or each other count too,
-#      and without leading attributes (`@available(iOS 16, *) public func f()` is `public func f()`);
+#      and without leading attributes (`@available(iOS 16, *) public func f()` is `public func f()`)
+#      or modifiers before the access keyword (`@MainActor final public class Y` is `public class Y`);
 #      `open` (public, and also subclassable or overridable outside the module) counts as `public`:
 #      - an operation is a `public func <name>(` at depth 0;
 #      - a record is a `public struct <Name>` at depth 0, and its fields are the parameters of its
@@ -98,6 +99,17 @@ function noattrs(s,    i, d, c) {
   }
   return s
 }
+# A declaration from its access keyword on, when declaration modifiers (any number, each with an
+# optional argument such as `nonisolated(unsafe)`, mixed with attributes) come before `public` or
+# `open`: `@MainActor final public class Y` is read as `public class Y`. Without `public` or `open`
+# after them, the modifiers stay (`final class Z` is not public), only the attributes go.
+function lead(s,    t) {
+  s = noattrs(s); t = s
+  while (match(t, /^(final|nonisolated|override|static|class|convenience|required|dynamic|lazy|mutating|nonmutating|indirect|prefix|postfix|infix|unowned|weak|optional|distributed)([ \t]*\([^()]*\))?[ \t]+/))
+    t = noattrs(substr(t, RLENGTH + 1))
+  if (t != s && t ~ /^(public|open)([ \t]|$)/) return t
+  return s
+}
 # The parameters of a collected `public init(...)`: name and the default's form.
 function params(text, record,    i, c, d, p, cur, name, list, k) {
   sub(/^[ \t]*public[ \t]+init[ \t]*\(/, "", text); sub(/\)[ \t]*(throws[ \t]*)?\{.*$/, "", text)
@@ -129,7 +141,7 @@ function piece(line) {
     depth += count(line, "{") - count(line, "}")
     return
   }
-  text = noattrs(text)
+  text = lead(text)
   if (depth == 0 && (text == "public" || text == "open")) { pending = text; return }
   decl = text
   if (pending != "" && text != "") { decl = pending " " text; pending = "" }

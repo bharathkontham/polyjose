@@ -6,7 +6,8 @@
 # mode; UniFFI's own public plumbing (FfiConverter*, uniffiEnsurePolyjoseFfiInitialized) and
 # braces inside comments and strings do not count. Hand-written forms the generated code does not
 # use are seen too (F01): declarations sharing a line with an extension, a brace or each other,
-# declarations with attributes on the same line, and `open` declarations, read like `public`.
+# declarations with attributes or modifiers (`final`, `nonisolated`, ...) before the access
+# keyword, and `open` declarations, read like `public`.
 #
 # Usage: scripts/tests/check-binding-api/swift.sh (under /bin/bash 3.2 and bash 5).
 set -euo pipefail
@@ -173,6 +174,63 @@ append $src/Extra.swift 'extension JwsVerified {
 }'
 run_check swift
 check "an open extension member fails like a public one" 1 'open member extra4 in an extension of JwsVerified'
+
+new_case modifier-final-class
+append $src/Extra.swift 'final public class X {}'
+run_check swift
+check "a public class after a modifier fails" 1 'public class X is neither an operation, a record nor the error type'
+
+new_case modifier-nonisolated-func
+append $src/Extra.swift 'nonisolated public func f() {}'
+run_check swift
+check_diffs "a public func after a modifier is an extra operation" \
+  'extra in swift (not in the inventory): op f'
+
+new_case modifier-after-attribute
+append $src/Extra.swift '@MainActor final public class Y {}'
+run_check swift
+check "a public class after an attribute and a modifier fails" 1 'public class Y is neither an operation, a record nor the error type'
+
+new_case modifiers-and-attributes-mixed
+append $src/Extra.swift '@MainActor nonisolated @available(iOS 16, *) final dynamic public func h() {}'
+run_check swift
+check_diffs "a public func after modifiers mixed with attributes is an extra operation" \
+  'extra in swift (not in the inventory): op h'
+
+new_case modifier-with-argument
+append $src/Extra.swift 'nonisolated(unsafe) public let shared = 1'
+run_check swift
+check "a public let after a modifier with an argument fails" 1 'public let shared is neither an operation, a record nor the error type'
+
+new_case modifier-public-own-line
+append $src/Extra.swift 'final public
+class W {}'
+run_check swift
+check "a modifier and public on their own line apply to the next declaration" 1 \
+  'public class W is neither an operation, a record nor the error type'
+
+new_case modifier-extension-member
+append $src/Extra.swift 'extension JwsVerified {
+    static public func g() {}
+}'
+run_check swift
+check "a public extension member after a modifier fails" 1 'public member g in an extension of JwsVerified'
+
+new_case modifier-open-extension-member
+append $src/Extra.swift 'extension JwsVerified {
+    @objc final override open func j() {}
+}'
+run_check swift
+check "an open extension member after an attribute and modifiers fails" 1 'open member j in an extension of JwsVerified'
+
+new_case non-public-modifiers
+append $src/Extra.swift 'final class Z {}
+@MainActor final class Z2 {}
+extension JwsVerified { static func helper() {}; final private class Hidden {} }
+infix operator <~>: AdditionPrecedence'
+run_check swift
+check_last_line "declarations with modifiers but no public or open do not count" 0 \
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
 
 new_case non-public-forms
 append $src/Extra.swift 'extension JwsVerified { func helper() {}; internal var opened: Bool { false } }
