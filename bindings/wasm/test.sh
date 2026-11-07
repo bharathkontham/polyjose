@@ -12,8 +12,9 @@
 #   3. `wasm-pack test --headless --chrome --chromedriver <driver> --features browser`: the same in
 #      headless Chrome -> target/conformance/wasm-chrome.json, with the chromedriver of
 #      scripts/chromedriver.sh (a driver of another major version refuses Chrome);
-#   4. when test-pkg/run.sh exists (T04): scripts/build-package.sh (the tarball, with the ADR 0059
-#      size override and the 1 MiB check), then test-pkg/run.sh (wasm-pkg-node, -chrome, -workerd).
+#   4. always: scripts/build-package.sh (the tarball, with the ADR 0059 size override and the 1 MiB
+#      check), then test-pkg/run.sh (wasm-pkg-node, -chrome, -workerd). A missing or
+#      non-executable run.sh is a FAIL, never a silent drop of those three runners (review N6).
 #
 # A wasm-pack run passes only if it exits 0, prints exactly one POLYJOSE-CONFORMANCE-RESULTS line
 # and ran at least one test in tests/conformance.rs and tests/engine.rs: a run whose tests all
@@ -122,32 +123,31 @@ fi
 
 # --- 4. The package tests (T04) --------------------------------------------------------------
 
+# Unconditional: the T04 toggle (`if [ -e test-pkg/run.sh ]`) is gone, so no state of the tree
+# drops the three package runners (review N6).
 pkg_chrome_skip=""
-if [ -e test-pkg/run.sh ]; then
-  echo "==> $me: the package (scripts/build-package.sh)"
-  if ! scripts/build-package.sh; then
-    fail "wasm-pkg: scripts/build-package.sh failed"
+echo "==> $me: the package (scripts/build-package.sh)"
+if ! scripts/build-package.sh; then
+  fail "wasm-pkg: scripts/build-package.sh failed"
+else
+  echo "==> $me: the package tests (test-pkg/run.sh)"
+  test-pkg/run.sh </dev/null 2>&1 | tee "$work/test-pkg.out"
+  rc=${PIPESTATUS[0]}
+  if [ "$rc" -ne 0 ]; then
+    [ -f test-pkg/run.sh ] && [ -x test-pkg/run.sh ] || echo "$me: test-pkg/run.sh is missing or not executable"
+    fail "wasm-pkg: test-pkg/run.sh exited $rc"
   else
-    echo "==> $me: the package tests (test-pkg/run.sh)"
-    test-pkg/run.sh </dev/null 2>&1 | tee "$work/test-pkg.out"
-    rc=${PIPESTATUS[0]}
-    if [ "$rc" -ne 0 ]; then
-      fail "wasm-pkg: test-pkg/run.sh exited $rc"
+    line=$(sed -n 's/^[[:space:]]*chrome: \(SKIPPED (.*)\)[[:space:]]*$/\1/p' "$work/test-pkg.out" | tail -n 1)
+    waiver=$(grep -c '^SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)$' "$work/test-pkg.out" || true)
+    if [ -n "$line" ]; then
+      pkg_chrome_skip=${line#SKIPPED (}; pkg_chrome_skip=${pkg_chrome_skip%)}
+      # Chrome is either missing for both runs or for neither: an installed Chrome must run.
+      [ -n "$chrome_skip" ] || fail "wasm-pkg-chrome: test-pkg/run.sh skipped Chrome ($pkg_chrome_skip), but Chrome is installed"
+      [ "$waiver" -eq 1 ] || fail "wasm-pkg-chrome: test-pkg/run.sh skipped Chrome without exactly one SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome) line"
     else
-      line=$(sed -n 's/^[[:space:]]*chrome: \(SKIPPED (.*)\)[[:space:]]*$/\1/p' "$work/test-pkg.out" | tail -n 1)
-      waiver=$(grep -c '^SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)$' "$work/test-pkg.out" || true)
-      if [ -n "$line" ]; then
-        pkg_chrome_skip=${line#SKIPPED (}; pkg_chrome_skip=${pkg_chrome_skip%)}
-        # Chrome is either missing for both runs or for neither: an installed Chrome must run.
-        [ -n "$chrome_skip" ] || fail "wasm-pkg-chrome: test-pkg/run.sh skipped Chrome ($pkg_chrome_skip), but Chrome is installed"
-        [ "$waiver" -eq 1 ] || fail "wasm-pkg-chrome: test-pkg/run.sh skipped Chrome without exactly one SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome) line"
-      else
-        [ "$waiver" -eq 0 ] || fail "wasm-pkg-chrome: test-pkg/run.sh printed a SKIPPED-RUNNER line, but its Chrome run was not skipped"
-      fi
+      [ "$waiver" -eq 0 ] || fail "wasm-pkg-chrome: test-pkg/run.sh printed a SKIPPED-RUNNER line, but its Chrome run was not skipped"
     fi
   fi
-else
-  fail "wasm-pkg: test-pkg/run.sh missing"
 fi
 
 # --- Result ----------------------------------------------------------------------------------
