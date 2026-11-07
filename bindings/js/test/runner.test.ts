@@ -77,6 +77,14 @@ test("an enabled feature runs the vector instead of skipping it", async () => {
   assert.equal(rng?.status, "fail");
 });
 
+test("jwk.thumbprint passes the vector's hash to the facade unchanged, with no name table", async () => {
+  // ADR 0054 §8.2, §9: the core parses the name, so the IANA name reaches the backend as written.
+  const fake = toyBackend();
+  assert.equal((await one(fixture("jwk-thumbprint/oct.json"), fake)).status, "pass");
+  assert.deepEqual(fake.of("jwkThumbprint")[0]?.args[1], "sha-256");
+  assert.deepEqual(fake.of("jwkThumbprintUri")[0]?.args[1], "sha-256");
+});
+
 // --- 0004 T10-r1 implementer notes, ADR 0045 ----------------------------------------------
 
 test("jwt.issue passes claims as the vector's own text, so integer-like members keep their order", async () => {

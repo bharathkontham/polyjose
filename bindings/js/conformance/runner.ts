@@ -24,7 +24,7 @@
  */
 
 import type { PolyjoseApi } from "../src/api.js";
-import type { JsonObject, JwtVerifyOptions, JweDecryptOptions } from "../src/types.js";
+import type { JsonObject, JwtVerifyOptions, JweDecryptOptions, ThumbprintHash } from "../src/types.js";
 import { scanJson, textAt, type JsonNode } from "./json-text.js";
 import { jsonEqual, schemaViolation } from "./schema.js";
 
@@ -67,9 +67,6 @@ class LibraryError extends Error {
 
 type Out = Record<string, unknown>;
 type Outcome = { ok: true; out: Out } | { ok: false; error: string };
-
-/** The `jwk.thumbprint` hash names of the schema, mapped to the facade's (ADR 0030 §4). */
-const HASHES: Readonly<Record<string, string>> = { "sha-256": "SHA-256" };
 
 /** The members a generated private key has (RFC 7518 §6.2.1-§6.2.2, RFC 8037 §2, RFC 7518 §6.4.1), plus `alg`. */
 const GENERATED_MEMBERS: Readonly<Record<string, readonly string[]>> = {
@@ -281,13 +278,15 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
   "b64url.decode": async (api, input, _expect, _text, out) => {
     out["bytes_hex"] = hexEncode(await lib(api, () => api.base64urlDecode(str(input["b64u"]))));
   },
-  // jwk.thumbprint → jwkThumbprint + jwkThumbprintUri (RFC 7638 §3, RFC 9278 §3); hash "sha-256" → "SHA-256".
+  // jwk.thumbprint → jwkThumbprint + jwkThumbprintUri (RFC 7638 §3, §3.4, RFC 9278 §3). The
+  // vector's hash is passed as given and an absent one as undefined, the core default (ADR 0054
+  // §9): the core parses the name (§8.2), so there is no runner table and a name the core
+  // rejects is the vector's outcome. The cast only widens the type: vectors may name any string.
   "jwk.thumbprint": async (api, input, _expect, text, out) => {
-    const hash = HASHES[str(input["hash"])];
-    if (hash === undefined) throw new HarnessError(`hash \`${str(input["hash"])}\` has no facade name`);
+    const hash = input["hash"] === undefined ? undefined : (str(input["hash"]) as ThumbprintHash);
     const jwk = text.at("input", "jwk");
-    out["thumbprint"] = await lib(api, () => api.jwkThumbprint(jwk, hash as "SHA-256"));
-    out["thumbprint_uri"] = await lib(api, () => api.jwkThumbprintUri(jwk, hash as "SHA-256"));
+    out["thumbprint"] = await lib(api, () => api.jwkThumbprint(jwk, hash));
+    out["thumbprint_uri"] = await lib(api, () => api.jwkThumbprintUri(jwk, hash));
   },
 
   // jws.sign → jwsSignCompact / jwsSignFlattened / jwsSignGeneral (RFC 7515 §5.1, §7).

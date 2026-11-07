@@ -18,6 +18,15 @@ function jwkImport(text: string): Obj {
   return jwk;
 }
 
+/** The core's thumbprint hash parse, modelled (ADR 0054 §8.2, §9): the IANA name of the hash. */
+function thumbprintHash(name: string | undefined): string {
+  if (name === undefined) return "sha-256";
+  for (const bits of ["256", "384", "512"]) {
+    if ([`sha-${bits}`, `SHA-${bits}`, `sha${bits}`].includes(name)) return `sha-${bits}`;
+  }
+  throw coded("UnsupportedAlgorithm", "hash");
+}
+
 function allowed(list: readonly string[], name: unknown): void {
   if (list.length === 0 || typeof name !== "string" || !list.includes(name)) throw coded("AlgorithmNotAllowed", "not allowed");
 }
@@ -47,12 +56,14 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
 
   const handlers: Partial<Record<Operation, Handler>> = {
     jwkParse: ((t: string) => JSON.stringify(jwkImport(t))) as Handler,
-    jwkThumbprint: ((t: string, h: string) => {
-      const kty = jwkImport(t)["kty"] as string;
-      if (h !== "SHA-256") throw coded("UnsupportedAlgorithm", "hash");
-      return `tp-${kty}`;
+    jwkThumbprint: ((t: string, h: string | undefined) => {
+      thumbprintHash(h);
+      return `tp-${jwkImport(t)["kty"] as string}`;
     }) as Handler,
-    jwkThumbprintUri: ((t: string) => `urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp-${jwkImport(t)["kty"] as string}`) as Handler,
+    jwkThumbprintUri: ((t: string, h: string | undefined) => {
+      const iana = thumbprintHash(h);
+      return `urn:ietf:params:oauth:jwk-thumbprint:${iana}:tp-${jwkImport(t)["kty"] as string}`;
+    }) as Handler,
     jwkFromPem: ((pem: string) => {
       if (!pem.includes("PUBLIC KEY")) throw coded("InvalidKey", "pem");
       return OKP;
