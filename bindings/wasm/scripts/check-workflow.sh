@@ -25,6 +25,15 @@
 #   [pin]         every `uses:` of a third-party action is pinned to a full 40-character commit SHA
 #                 followed by its `# v<tag>` comment (ADR 0037 §1 "Pins"); local `./` workflows are
 #                 exempt;
+#   [tool-pin]    the tools wasm-pack would otherwise download unverified at build time are pinned
+#                 (review S4): the top-level env has WASM_BINDGEN_VERSION, an exact x.y.z equal to
+#                 Cargo.lock's wasm-bindgen version (else wasm-pack ignores it and downloads its
+#                 own), BINARYEN_VERSION (version_<n>) and BINARYEN_SHA256 (64 hex digits); a step
+#                 has exactly `tool: wasm-bindgen@${{ env.WASM_BINDGEN_VERSION }}`; one line
+#                 checks "$BINARYEN_SHA256" with `sha256sum -c`; every taiki-e/install-action step
+#                 sets `fallback: none`; and the job fails on a wasm-pack download (a
+#                 `grep -F "Installing wasm-bindgen"` check) and without wasm-pack's
+#                 `found wasm-opt at` line (a `grep -F "found wasm-opt at` check);
 #   [actionlint]  actionlint (which also runs shellcheck on `run:` scripts when it is installed)
 #                 reports nothing.
 # The text rules never depend on actionlint (pipeline rule 9): without it they still run, and only
@@ -42,7 +51,10 @@
 # schedule or pull_request_target trigger, workflow_call inputs or secrets, an inline `on:`, a
 # quoted "on" key, an `npm publish`, `cargo publish` or `wasm-pack publish` step, a setup-node
 # registry-url, a `secrets.` reference, `secrets: inherit`, a GITHUB_TOKEN, write permissions at
-# the top or on a job, `write-all`, and an unpinned action. Each copy must fail, with every FAIL
+# the top or on a job, `write-all`, an unpinned action, and for [tool-pin]: a missing or inexact
+# wasm-bindgen pin, a wasm-bindgen version other than Cargo.lock's, an install-action step without
+# `fallback: none`, a missing or malformed binaryen version or hash, a missing hash check, and a
+# missing download or wasm-opt log check. Each copy must fail, with every FAIL
 # line of the expected rule, so no other rule is what caught the change. With actionlint
 # installed, a copy with a broken expression must fail actionlint too; without it every text case
 # still runs, and only that one case is skipped, ending with the same two lines. The repository
@@ -62,9 +74,16 @@ default_file=$repo/.github/workflows/binding-wasm.yml
 
 usage() { echo "usage: $0 [--self-test | <workflow file>]" >&2; exit 2; }
 
+# lock_version <crate>: the version of <crate> in the repository's Cargo.lock (empty if absent).
+lock_version() {
+  awk -v want="name = \"$1\"" '
+    $0 == want { getline; if ($0 ~ /^version = "/) { sub(/^version = "/, ""); sub(/"$/, ""); print; exit } }
+  ' "$repo/Cargo.lock" 2>/dev/null
+}
+
 # text_rules <file>: prints one FAIL line per violation of a text rule; exits 1 if there was one.
 text_rules() {
-  awk -v file="$1" -v me="$me" '
+  awk -v file="$1" -v me="$me" -v lock_bindgen="$(lock_version wasm-bindgen)" '
     function fail(rule, msg) { printf "%s: FAIL [%s] %s:%d: %s\n", me, rule, file, NR, msg; bad = 1 }
     function fail_end(rule, msg) { printf "%s: FAIL [%s] %s: %s\n", me, rule, file, msg; bad = 1 }
     function indent(s) { match(s, /^ */); return RLENGTH }
@@ -92,6 +111,7 @@ text_rules() {
         key = key_of(line); value = value_of(line)
         if (line !~ /:/ || !(key in top_allowed)) fail("top-level", "top-level key " key " is not allowed")
         else if (++seen[key] > 1) fail("top-level", "duplicate top-level key " key)
+        if (key == "env") { section = "env"; env_indent = -1 }
         if (key == "on") {
           if (value != "") fail("trigger", "on: must be a block mapping of workflow_dispatch and workflow_call, not \"" value "\"")
           section = "on"; trigger_indent = -1
@@ -109,6 +129,9 @@ text_rules() {
           else triggers[key]++
           if (value != "" && value != "{}" && value != "null" && value != "~") fail("trigger", key " must have no configuration, not \"" value "\"")
         }
+      } else if (section == "env") {
+        if (env_indent < 0) env_indent = ind
+        if (ind == env_indent) env[key_of(line)] = value_of(line)
       } else if (section == "permissions") {
         permissions_lines++
         if (line !~ /^[[:space:]]+contents:[[:space:]]+read$/) fail("permissions", "the top-level permissions must be exactly \"contents: read\": " line)
@@ -122,6 +145,24 @@ text_rules() {
         fail("secrets", "secrets and tokens are not allowed: " raw)
       if (lower ~ /(npm|pnpm|yarn|bun|wasm-pack|cargo)[[:space:]]+publish|napi[[:space:]]+pre-?publish|npm[[:space:]]+(login|adduser)|gh[[:space:]]+release|publish(and)?(release)?tomavencentral|registry-url/)
         fail("publish", "publishing is Gate 3 and never in this workflow: " raw)
+      # --- [tool-pin]: install-action steps and the pinned tools -------------------------------------
+      # An install-action step ends at the next line at or left of its "- " (the next step or key).
+      if (ia_open && ind <= ia_indent) {
+        if (!ia_fallback) fail("tool-pin", "the taiki-e/install-action step of line " ia_line " has no fallback: none")
+        ia_open = 0
+      }
+      if (ia_open && line ~ /^[[:space:]]+fallback:/) {
+        if (line ~ /^[[:space:]]+fallback:[[:space:]]+none$/) ia_fallback = 1
+        else fail("tool-pin", "install-action must use fallback: none: " line)
+      }
+      if (line ~ /^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*taiki-e\/install-action@/) {
+        ia_open = 1; ia_line = NR; ia_fallback = 0; ia_indent = ind
+      }
+      if (line ~ /^[[:space:]]+tool:[[:space:]]+wasm-bindgen@\$\{\{ env\.WASM_BINDGEN_VERSION \}\}$/) bindgen_tool++
+      if (raw ~ /"\$BINARYEN_SHA256"/ && raw ~ /sha256sum[[:space:]]+-c/) binaryen_check++
+      if (index(raw, "grep -F \"Installing wasm-bindgen\"") > 0) download_check++
+      if (index(raw, "grep -F \"found wasm-opt at ") > 0) wasm_opt_check++
+
       if (raw ~ /^[[:space:]]*(-[[:space:]]+)?uses:/) {
         target = raw; sub(/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*/, "", target)
         gsub(/["'"'"']/, "", target)
@@ -129,6 +170,16 @@ text_rules() {
       }
     }
     END {
+      if (ia_open && !ia_fallback) fail_end("tool-pin", "the taiki-e/install-action step of line " ia_line " has no fallback: none")
+      v = env["WASM_BINDGEN_VERSION"]
+      if (v !~ /^[0-9]+\.[0-9]+\.[0-9]+$/) fail_end("tool-pin", "env WASM_BINDGEN_VERSION must be an exact x.y.z version, not \"" v "\"")
+      else if (v != lock_bindgen) fail_end("tool-pin", "env WASM_BINDGEN_VERSION " v " is not Cargo.lock'"'"'s wasm-bindgen version \"" lock_bindgen "\" (wasm-pack would download its own)")
+      if (env["BINARYEN_VERSION"] !~ /^version_[0-9]+$/) fail_end("tool-pin", "env BINARYEN_VERSION must be an exact binaryen release (version_<n>), not \"" env["BINARYEN_VERSION"] "\"")
+      if (env["BINARYEN_SHA256"] !~ /^[0-9a-f]+$/ || length(env["BINARYEN_SHA256"]) != 64) fail_end("tool-pin", "env BINARYEN_SHA256 must be the 64-hex-digit SHA-256 of the binaryen archive")
+      if (bindgen_tool != 1) fail_end("tool-pin", "exactly one install-action step must have tool: wasm-bindgen@${{ env.WASM_BINDGEN_VERSION }} (found " bindgen_tool + 0 ")")
+      if (binaryen_check < 1) fail_end("tool-pin", "no line checks the binaryen archive against \"$BINARYEN_SHA256\" with sha256sum -c")
+      if (download_check < 1) fail_end("tool-pin", "no grep -F \"Installing wasm-bindgen\" check of the build log")
+      if (wasm_opt_check < 1) fail_end("tool-pin", "no grep -F \"found wasm-opt at ...\" check of the build log")
       if (!seen["on"]) fail_end("trigger", "no on: key")
       if (seen["on"] && triggers["workflow_dispatch"] != 1) fail_end("trigger", "workflow_dispatch must be listed exactly once")
       if (seen["on"] && triggers["workflow_call"] != 1) fail_end("trigger", "workflow_call must be listed exactly once")
@@ -266,6 +317,30 @@ self_test() {
   expect_fail job-write-flow permissions "$run_marker" $'    permissions: { contents: read, pull-requests: write }\n    steps:\n'
   expect_fail unpinned pin "uses: $pin_line" "uses: ${pin_line%%@*}@v7"
   expect_fail sha-without-tag pin "uses: $pin_line" "uses: ${pin_line%% #*}"
+
+  # [tool-pin] (review S4). Each edit takes its old text from the workflow itself.
+  local bindgen_tool bindgen_env binaryen_env hash_env hash_check
+  bindgen_tool=$'          tool: wasm-bindgen@${{ env.WASM_BINDGEN_VERSION }}\n'
+  bindgen_env=$(grep -m 1 -E '^  WASM_BINDGEN_VERSION: ' "$default_file")
+  binaryen_env=$(grep -m 1 -E '^  BINARYEN_VERSION: ' "$default_file")
+  hash_env=$(grep -m 1 -E '^  BINARYEN_SHA256: ' "$default_file")
+  # shellcheck disable=SC2016 # the workflow's literal text, not an expansion
+  hash_check=$(grep -m 1 -F '"$BINARYEN_SHA256"' "$default_file")
+  for v in bindgen_env binaryen_env hash_env hash_check; do
+    [ -n "${!v}" ] || { echo "$me: self-test error: no $v line in the workflow" >&2; exit 2; }
+  done
+  expect_fail wasm-bindgen-pin-missing tool-pin "$bindgen_tool" $'          tool: wasm-bindgen\n'
+  expect_fail wasm-bindgen-inexact tool-pin "$bindgen_env" "  WASM_BINDGEN_VERSION: 0.2"
+  expect_fail wasm-bindgen-not-lock tool-pin "$bindgen_env" "  WASM_BINDGEN_VERSION: 0.2.1"
+  expect_fail no-fallback tool-pin "$bindgen_tool"$'          fallback: none\n' "$bindgen_tool"
+  expect_fail binaryen-inexact tool-pin "$binaryen_env" "  BINARYEN_VERSION: latest"
+  expect_fail binaryen-hash-missing tool-pin "$hash_env"$'\n' ""
+  expect_fail binaryen-hash-short tool-pin "$hash_env" "${hash_env%?}"
+  expect_fail binaryen-hash-unchecked tool-pin "$hash_check"$'\n' ""
+  # shellcheck disable=SC2016 # the workflow's literal text, not an expansion
+  expect_fail download-unchecked tool-pin 'if grep -F "Installing wasm-bindgen" "$log"; then' 'if false; then'
+  # shellcheck disable=SC2016 # the workflow's literal text, not an expansion
+  expect_fail wasm-opt-unchecked tool-pin 'grep -F "found wasm-opt at \"$WASM_OPT\"" "$log"' 'true'
 
   # actionlint must reject what the text rules cannot see: a broken expression.
   if command -v actionlint >/dev/null 2>&1; then
