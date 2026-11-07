@@ -11,9 +11,10 @@
 //! - every vector file is checked against `conformance/schema.json` itself, with a small checker
 //!   of exactly the JSON Schema 2020-12 keywords the schema uses (any other keyword, or a pattern
 //!   it doesn't know, fails the run), plus the cross-member rules the schema can't state;
-//! - a vector is skipped only when its `features` lists one this build lacks (ADR 0034 §3); the
-//!   surface never offers the deterministic test RNG (ADR 0005), so `fixed-rng` is never enabled,
-//!   and `deflate` is enabled exactly when the core under it has it (probed through the surface);
+//! - a vector is skipped only when its `features` lists one this build lacks (ADR 0034 §3), or
+//!   its `features_absent` one this build has (ADR 0056); the surface never offers the
+//!   deterministic test RNG (ADR 0005), so `fixed-rng` is never enabled, and `deflate` is enabled
+//!   exactly when the core under it has it (probed through the surface);
 //! - an unknown or unmapped operation, a broken vector, a panic, and any failure of a runner
 //!   check (a round trip, a shape) is a `fail`, never an outcome;
 //! - a `SurfaceError` is the library's outcome and is compared by its code (ADR 0030 §5);
@@ -346,7 +347,9 @@ type Outcome = Result<Object, &'static str>;
 /// A vector's status for the results file (ADR 0034 §2).
 enum Status {
     Pass,
-    /// Skipped for these missing features, in the vector's order (ADR 0034 §3).
+    /// Skipped for these features, as the results-file `reason` lists them: the missing
+    /// `features` in the vector's order (ADR 0034 §3), then each enabled `features_absent` one as
+    /// `!<name>` in its order (ADR 0056 §2).
     Skipped(Vec<String>),
     Fail(String),
 }
@@ -401,20 +404,28 @@ fn run_vector(
     if let Err(e) = cross_member_rules(&value) {
         return fail(e);
     }
-    let features: Vec<String> = value
-        .get("features")
-        .and_then(Value::as_array)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect();
-    let missing: Vec<String> = features
+    let names = |member: &str| -> Vec<String> {
+        value
+            .get(member)
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    };
+    let mut skip: Vec<String> = names("features")
         .into_iter()
         .filter(|f| !enabled.contains(&f.as_str()))
         .collect();
-    if !missing.is_empty() {
-        return Status::Skipped(missing);
+    skip.extend(
+        names("features_absent")
+            .into_iter()
+            .filter(|f| enabled.contains(&f.as_str()))
+            .map(|f| format!("!{f}")),
+    );
+    if !skip.is_empty() {
+        return Status::Skipped(skip);
     }
     let outcome = match catch_unwind(AssertUnwindSafe(|| execute(&value))) {
         Err(_) => return fail("panicked while running".to_owned()),
@@ -443,23 +454,39 @@ fn cross_member_rules(vector: &Value) -> Result<(), String> {
         .get("expect")
         .and_then(Value::as_object)
         .expect("validated");
-    let listed = |feature: &str| {
+    let listed_in = |member: &str, feature: &str| {
         vector
-            .get("features")
+            .get(member)
             .and_then(Value::as_array)
             .is_some_and(|items| items.iter().any(|f| f.as_str() == Some(feature)))
     };
+    let listed = |feature: &str| listed_in("features", feature);
+    // ADR 0056 §3: no name both needed and forbidden.
+    let absent = vector
+        .get("features_absent")
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    if let Some(both) = absent.iter().filter_map(Value::as_str).find(|f| listed(f)) {
+        return Err(format!(
+            "schema: /features_absent: \"{both}\" is listed in `features` too"
+        ));
+    }
     if operation == "jwe.encrypt" {
-        for (member, feature) in [
-            ("rng_b64u", "fixed-rng"),
-            ("protected_b64u", "fixed-rng"),
-            ("compress", DEFLATE),
-        ] {
+        for (member, feature) in [("rng_b64u", "fixed-rng"), ("protected_b64u", "fixed-rng")] {
             if input.contains(member) && !listed(feature) {
                 return Err(format!(
                     "schema: /features: `input/{member}` needs \"{feature}\" listed in `features`"
                 ));
             }
+        }
+        // ADR 0056 §4: `deflate` in either list.
+        if input.contains("compress") && !listed(DEFLATE) && !listed_in("features_absent", DEFLATE)
+        {
+            return Err(
+                "schema: /features: `input/compress` needs \"deflate\" listed in `features` or \
+                 `features_absent`"
+                    .to_owned(),
+            );
         }
     }
     if operation == "jwt.issue" {
@@ -630,7 +657,10 @@ fn execute(vector: &Value) -> Result<Outcome, String> {
         "keys.import_der" => keys_import_der(input, &mut out),
         "keys.export_pem" => keys_export_pem(input, &mut out),
         "keys.export_der" => keys_export_der(input, &mut out),
-        "keys.generate_for" => keys_generate_for(input, &mut out),
+        "keys.generate_for" => keys_generate_for(input, expect, &mut out),
+        "keys.generate_oct" | "keys.generate_ec" | "keys.generate_okp" => {
+            keys_generate(operation, input, expect, &mut out)
+        }
         "jwe.encrypt" => jwe_encrypt(input, expect, &mut out),
         "jwe.decrypt" => jwe_decrypt(input, &mut out),
         "jwt.validate" => jwt_validate(input, &mut out),
@@ -839,9 +869,23 @@ fn generated_members(kty: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// [`generated_members`] for a key bound to no algorithm (`jwk_generate_oct`, `_ec`, `_okp`):
+/// the same members without `alg`. Sorted.
+fn unbound_members(kty: &str) -> Option<&'static [&'static str]> {
+    match kty {
+        "EC" => Some(&["crv", "d", "kty", "x", "y"]),
+        "OKP" => Some(&["crv", "d", "kty", "x"]),
+        "oct" => Some(&["k", "kty"]),
+        _ => None,
+    }
+}
+
 /// The shape of a generated key, after the checks a shape can't say (README
 /// `keys.generate_for`): private, exactly the RFC members, and `jwk_parse` gives it back.
-fn generated_shape(generated: &SecretString) -> Step<Object> {
+fn generated_shape(
+    generated: &SecretString,
+    members: fn(&str) -> Option<&'static [&'static str]>,
+) -> Step<Object> {
     let jwk = parse_output(generated.as_str(), "the generated JWK")?;
     let object = jwk.as_object().ok_or(Stop::Harness(
         "the generated JWK is not an object".to_owned(),
@@ -855,7 +899,7 @@ fn generated_shape(generated: &SecretString) -> Step<Object> {
     }
     let mut names: Vec<&str> = object.iter().map(|(name, _)| name).collect();
     names.sort_unstable();
-    if generated_members(kty) != Some(names.as_slice()) {
+    if members(kty) != Some(names.as_slice()) {
         return harness(format!(
             "generate_for returned a JWK with members {names:?}"
         ));
@@ -887,10 +931,101 @@ fn generated_shape(generated: &SecretString) -> Step<Object> {
     Ok(shape)
 }
 
-/// `keys.generate_for` → `jwk_generate_for_alg(alg)` (ADR 0018 §5), `alg` passed as given.
-fn keys_generate_for(input: &Object, out: &mut Object) -> Step<()> {
+/// `keys.generate_for` → `jwk_generate_for_alg(alg)` (ADR 0018 §5), `alg` passed as given; then
+/// the `use_with` round trip when the vector has one.
+fn keys_generate_for(input: &Object, expect: &Object, out: &mut Object) -> Step<()> {
     let generated = keys::jwk_generate_for_alg(str_of(input, "alg"))?;
-    out.insert("shape", generated_shape(&generated)?);
+    out.insert("shape", generated_shape(&generated, generated_members)?);
+    echo_use_with(&generated, expect, out)
+}
+
+/// `keys.generate_oct` → `jwk_generate_oct(len_bytes)`, `keys.generate_ec` →
+/// `jwk_generate_ec(crv)`, `keys.generate_okp` → `jwk_generate_okp(crv)` (ADR 0030 §4; ADR 0018
+/// §5); then the shape (no `alg`) and the `use_with` round trip.
+fn keys_generate(operation: &str, input: &Object, expect: &Object, out: &mut Object) -> Step<()> {
+    let generated = match operation {
+        "keys.generate_oct" => {
+            keys::jwk_generate_oct(count(input, "len_bytes").expect("validated"))?
+        }
+        "keys.generate_ec" => keys::jwk_generate_ec(str_of(input, "crv"))?,
+        _ => keys::jwk_generate_okp(str_of(input, "crv"))?,
+    };
+    out.insert("shape", generated_shape(&generated, unbound_members)?);
+    echo_use_with(&generated, expect, out)
+}
+
+/// Runs the expectation's `use_with` round trip on `generated`, if it has one, and echoes it
+/// back as an output, as `verify_with` is.
+fn echo_use_with(generated: &SecretString, expect: &Object, out: &mut Object) -> Step<()> {
+    if let Some(use_with) = expect.get("use_with").and_then(Value::as_object) {
+        check_use_with(generated, use_with)?;
+        out.insert("use_with", Value::from(use_with.clone()));
+    }
+    Ok(())
+}
+
+/// The payload or plaintext of every `use_with` round trip: `polyjose`.
+const USE_WITH_PAYLOAD: &[u8] = b"polyjose";
+
+/// The `use_with` round trip of a generated key (ADR 0034 §6; README `use_with`): a compact JWS
+/// of [`USE_WITH_PAYLOAD`] under `{"alg": alg}`, verified with the key's public form
+/// (RFC 7515 §5.1–§5.2), or with `enc` a compact JWE to it, decrypted with the key (RFC 7516
+/// §5.1–§5.2). The other side is the key itself for `oct` (RFC 7518 §6.4). Every call here is a
+/// check: a failure fails the vector.
+fn check_use_with(generated: &SecretString, use_with: &Object) -> Step<()> {
+    let alg = str_of(use_with, "alg");
+    let key = generated.as_str();
+    let is_oct = parse_output(key, "the generated JWK")?
+        .get("kty")
+        .and_then(Value::as_str)
+        == Some("oct");
+    let other = if is_oct {
+        key.to_owned()
+    } else {
+        checked(
+            "use_with: the key has no public form",
+            jwk::jwk_to_public(key),
+        )?
+    };
+    match use_with.get("enc").and_then(Value::as_str) {
+        None => {
+            let options = JwsSignOptions {
+                protected_header: Some(format!(r#"{{"alg":{}}}"#, Value::from(alg).to_json())),
+                ..JwsSignOptions::default()
+            };
+            let token = checked(
+                "use_with: the key does not sign",
+                jws::jws_sign_compact(USE_WITH_PAYLOAD, key, &options),
+            )?;
+            let verified = checked(
+                "use_with: the signature does not verify",
+                jws::jws_verify_compact(
+                    &token,
+                    &other,
+                    &JwsVerifyOptions::new(vec![alg.to_owned()]),
+                ),
+            )?;
+            if verified.payload.as_bytes() != USE_WITH_PAYLOAD {
+                return harness("use_with: the verified payload is not the signed one");
+            }
+        }
+        Some(enc) => {
+            let recipient = JweRecipient::new(alg.to_owned(), SecretString::from(other));
+            let options = JweEncryptOptions::new(enc.to_owned(), vec![recipient]);
+            let token = checked(
+                "use_with: encryption to the key fails",
+                jwe::jwe_encrypt_compact(USE_WITH_PAYLOAD, &options),
+            )?;
+            let policy = JweDecryptOptions::new(vec![alg.to_owned()], vec![enc.to_owned()]);
+            let decrypted = checked(
+                "use_with: the key does not decrypt",
+                jwe::jwe_decrypt_compact(&token, key, &policy),
+            )?;
+            if decrypted.plaintext.as_bytes() != USE_WITH_PAYLOAD {
+                return harness("use_with: the decrypted plaintext is not the encrypted one");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1633,6 +1768,85 @@ fn vectors_needing_a_disabled_feature_are_skipped_by_name() {
     assert!(matches!(&status, Status::Skipped(f) if f == &["fixed-rng"]));
     let (status, _) = status_of(&needs, &["deflate", "fixed-rng"]);
     assert!(matches!(status, Status::Pass));
+}
+
+/// A vector that must run without a feature this build has is skipped with `!<name>`, after
+/// the missing `features` names; with every forbidden feature off it runs (ADR 0056 §2).
+#[test]
+fn vectors_forbidding_an_enabled_feature_are_skipped_by_name() {
+    let forbids = vector(
+        "b64url.decode",
+        r#"{"b64u":"AQI"}"#,
+        r#"{"ok":true,"bytes_hex":"0102"}"#,
+        r#","features_absent":["deflate","fixed-rng"]"#,
+    );
+    let (status, trace) = status_of(&forbids, &["deflate", "fixed-rng"]);
+    assert!(matches!(&status, Status::Skipped(f) if f == &["!deflate", "!fixed-rng"]));
+    assert!(trace.actual.is_none());
+    let entry = result_entry("a.json#0".to_owned(), trace, &status);
+    assert_eq!(
+        entry.get("reason").and_then(Value::as_str),
+        Some("feature:!deflate,!fixed-rng")
+    );
+    let (status, _) = status_of(&forbids, &["deflate"]);
+    assert!(matches!(&status, Status::Skipped(f) if f == &["!deflate"]));
+    let (status, _) = status_of(&forbids, &[]);
+    assert!(matches!(status, Status::Pass));
+    // Needed and forbidden at once: the missing names first.
+    let mixed = vector(
+        "b64url.decode",
+        r#"{"b64u":"AQI"}"#,
+        r#"{"ok":true,"bytes_hex":"0102"}"#,
+        r#","features":["fixed-rng"],"features_absent":["deflate"]"#,
+    );
+    let (status, trace) = status_of(&mixed, &["deflate"]);
+    let entry = result_entry("a.json#0".to_owned(), trace, &status);
+    assert_eq!(
+        entry.get("reason").and_then(Value::as_str),
+        Some("feature:fixed-rng,!deflate")
+    );
+}
+
+/// `features_absent` is strict (ADR 0056 §1, §3, §4): known names, each once, at least one,
+/// none also in `features`; `compress` may list `deflate` in either list.
+#[test]
+fn features_absent_is_strict() {
+    let input = r#"{"b64u":"AQI"}"#;
+    let ok = r#"{"ok":true,"bytes_hex":"0102"}"#;
+    for (extra, needle) in [
+        (r#","features_absent":["zip"]"#, "/features_absent/0"),
+        (r#","features_absent":["deflate","deflate"]"#, "repeats"),
+        (r#","features_absent":[]"#, "/features_absent"),
+        (r#","features_absent":"deflate""#, "/features_absent"),
+        (
+            r#","features":["deflate"],"features_absent":["deflate"]"#,
+            "is listed in `features` too",
+        ),
+        (r#","feature_absent":["deflate"]"#, "unknown member"),
+    ] {
+        assert_fails(&vector("b64url.decode", input, ok, extra), needle);
+    }
+    let encrypt = |extra: &str| {
+        vector(
+            "jwe.encrypt",
+            r#"{"serialization":"compact","enc":"A128GCM","plaintext_b64u":"AQI","compress":true,"recipients":[{"alg":"dir","key":{"kty":"oct","k":"AAECAwQFBgcICQoLDA0ODw"}}]}"#,
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+            extra,
+        )
+    };
+    assert_fails(
+        &encrypt(r#","features_absent":["fixed-rng"]"#),
+        "listed in `features` or `features_absent`",
+    );
+    // Without `deflate` in the core under the surface, `compress` is UnsupportedAlgorithm.
+    let pin = encrypt(r#","features_absent":["deflate"]"#);
+    let (status, trace) = status_of(&pin, &enabled_features());
+    if deflate_enabled() {
+        assert!(matches!(&status, Status::Skipped(f) if f == &["!deflate"]));
+    } else {
+        assert!(matches!(status, Status::Pass));
+        assert_eq!(trace.actual, Some(Err("UnsupportedAlgorithm")));
+    }
 }
 
 /// The runner calls the surface only: `polyjose::` appears only for the harness's JSON, and no

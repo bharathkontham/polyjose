@@ -1,0 +1,19 @@
+{
+  "source": "ADR 0018 §5; ADR 0030 §4; ADR 0034 §6",
+  "description": "ADR 0030 jwk_generate_for_alg: ES256 gives a P-256 key bound to alg ES256 (RFC 7517 §4.4, RFC 7518 §3.4); it signs an ES256 compact JWS that its public key verifies",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "ES256"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "EC",
+      "crv": "P-256",
+      "alg": "ES256"
+    },
+    "use_with": {
+      "alg": "ES256"
+    }
+  }
+}

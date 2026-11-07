@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a P-256 key's shape and a sign/verify round trip with its public key",
+  "operation": "keys.generate_ec",
+  "input": {
+    "crv": "P-256"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "EC",
+      "crv": "P-256"
+    },
+    "use_with": {
+      "alg": "ES256"
+    }
+  }
+}
