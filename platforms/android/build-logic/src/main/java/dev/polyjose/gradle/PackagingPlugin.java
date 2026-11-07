@@ -10,6 +10,7 @@ import org.gradle.api.GradleException;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.file.Directory;
+import org.gradle.api.provider.ProviderFactory;
 import org.gradle.api.publish.maven.MavenPom;
 
 /**
@@ -83,6 +84,17 @@ public class PackagingPlugin implements Plugin<Project> {
             throw new GradleException("cannot read " + manifest, e);
         }
         throw new GradleException("no version in [workspace.package] of " + manifest);
+    }
+
+    /**
+     * Whether a signing key is configured for vanniktech's signing (its in-memory key property or
+     * Gradle's signing plugin properties). ADR 0033 §4 signs "when a key is present"; vanniktech
+     * otherwise requires a signature for every non-SNAPSHOT version, which would fail the
+     * build-local publication of feature tasks, which run with no key (Gate 3 publishes).
+     */
+    public static boolean signingKeyPresent(ProviderFactory providers) {
+        return providers.gradleProperty("signingInMemoryKey").isPresent()
+                || providers.gradleProperty("signing.keyId").isPresent();
     }
 
     /**

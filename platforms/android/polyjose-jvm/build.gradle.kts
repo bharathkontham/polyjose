@@ -1,12 +1,18 @@
 // `:polyjose-jvm`, the desktop JVM jar dev.polyjose:polyjose-jvm (ADR 0011, ADR 0033 §1, §4): the
 // UniFFI-generated Kotlin (shared with `:polyjose`) plus the host libraries as JNA resources.
 
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinJvm
+import com.vanniktech.maven.publish.SourcesJar
+import dev.polyjose.gradle.PackagingPlugin
 import dev.polyjose.gradle.ThirdPartyNotices
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
     // Group, workspace version, thirdPartyNotices and the POM (build-logic).
     id("polyjose.packaging")
+    // vanniktech 0.37.0's base plugin; see polyjose/build.gradle.kts.
+    id("com.vanniktech.maven.publish.base")
 }
 
 /** The polyjose repository root (the cargo workspace). */
@@ -207,5 +213,29 @@ tasks.jar {
         )
         val missing = jnaPlatforms.keys - jarPlatforms.toSet()
         if (missing.isNotEmpty()) attributes("Polyjose-Native-Platforms-Missing" to missing.joinToString(","))
+    }
+}
+
+// dev.polyjose:polyjose-jvm, the desktop JVM jar (ADR 0011, ADR 0033 §4), with a sources jar and
+// an empty javadoc jar. Feature tasks publish only to the build-local file repository.
+mavenPublishing {
+    configure(KotlinJvm(JavadocJar.Empty(), SourcesJar.Sources()))
+    coordinates(PackagingPlugin.GROUP, "polyjose-jvm", version.toString())
+    pom {
+        PackagingPlugin.pom(
+            this,
+            "polyjose-jvm",
+            "polyjose for the desktop JVM: JOSE (JWS, JWE, JWK, JWT) in pure Rust, with Kotlin bindings.",
+        )
+    }
+    if (PackagingPlugin.signingKeyPresent(providers)) signAllPublications()
+}
+
+publishing {
+    repositories {
+        maven {
+            name = "buildLocal"
+            url = uri(isolated.rootProject.projectDirectory.dir("build/repo"))
+        }
     }
 }
