@@ -12,6 +12,9 @@
 # changes the copy only (lib.sh). That the real build has this layout is checked by
 # bindings/node/test.sh, which runs this mode on the package it has just built (0007 B01).
 #
+# Without node on PATH the cases that read the declarations still run, with a stub `node` (the
+# mode only tests that node exists), and a note says so.
+#
 # Usage: scripts/tests/check-binding-api/node.sh (under /bin/bash 3.2 and bash 5).
 set -euo pipefail
 export LC_ALL=C
@@ -62,9 +65,12 @@ run_check node
 check_last_line "without bindings/node the node mode is SKIPPED with the reason" 0 'SKIPPED (node: bindings/node missing)'
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "note: node missing; the cases that read the declarations did not run"
-  finish
-  exit
+  mkdir -p "$scratch/bin-stub" || lib_die "could not create $scratch/bin-stub"
+  printf '%s\n' '#!/bin/sh' 'echo "stub node of scripts/tests/check-binding-api/node.sh" >&2' 'exit 1' \
+    >"$scratch/bin-stub/node" || lib_die "could not write the stub node"
+  chmod +x "$scratch/bin-stub/node" || lib_die "could not make the stub node executable"
+  PATH=$scratch/bin-stub:$PATH
+  echo "note: node missing; the cases that read the declarations run with a stub node"
 fi
 
 node_case not-built
