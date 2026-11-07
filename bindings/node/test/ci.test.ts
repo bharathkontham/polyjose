@@ -546,6 +546,109 @@ test("the PE import reader fails closed (exit 2) on anything that is not a well-
   });
 });
 
+// --- The glibc floor check (review-code.md SF-2, feature 0007 F04) ---------------------------------
+
+const glibcCheck = path.join(pkgDir, "scripts", "glibc-floor.sh");
+const glibcFixture = (name: string): string => path.join(pkgDir, "test", "fixtures", "glibc", name);
+
+function glibcFloor(...args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const r = cp.spawnSync("bash", [glibcCheck, ...args], { encoding: "utf8" });
+  assert.equal(r.error, undefined, "bash runs");
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+/** glibc-floor.sh --output <floor> on `text`, a tool output written to a scratch file. */
+function glibcFloorOn(floor: string, text: string): { status: number | null; stdout: string; stderr: string } {
+  let r = { status: null as number | null, stdout: "", stderr: "" };
+  withScratch((dir) => {
+    const file = path.join(dir, "output.txt");
+    fs.writeFileSync(file, text);
+    r = glibcFloor("--output", floor, file);
+  });
+  return r;
+}
+
+test("the glibc floor check passes the 2.28 fixtures and fails the 2.34 ones, readelf and objdump (fixtures: test/fixtures/glibc/regen.sh)", () => {
+  for (const tool of ["readelf", "objdump"]) {
+    const pass = glibcFloor("--output", "2.28", glibcFixture(`floor-2.28-arm64.${tool}.txt`));
+    assert.equal(pass.status, 0, `${tool}: 2.28 at floor 2.28 passes; stderr: ${pass.stderr}`);
+    assert.match(pass.stdout, /highest GLIBC_2\.28 \(floor 2\.28\)/, `${tool}: names the highest version`);
+
+    const fail = glibcFloor("--output", "2.28", glibcFixture(`above-2.34-x64.${tool}.txt`));
+    assert.equal(fail.status, 1, `${tool}: 2.34 at floor 2.28 fails`);
+    assert.match(fail.stderr, /GLIBC_2\.34/, `${tool}: the failure names GLIBC_2.34`);
+    assert.doesNotMatch(fail.stderr, /GLIBC_2\.28\b|GLIBC_2\.2\.5/, `${tool}: and only the versions above the floor`);
+
+    // The floor is the only threshold: the same outputs at other floors.
+    assert.equal(glibcFloor("--output", "2.34", glibcFixture(`above-2.34-x64.${tool}.txt`)).status, 0, `${tool}: 2.34 at floor 2.34`);
+    assert.equal(glibcFloor("--output", "2.27", glibcFixture(`floor-2.28-arm64.${tool}.txt`)).status, 1, `${tool}: 2.28 at floor 2.27`);
+  }
+});
+
+test("the glibc floor check compares versions as integers, not text (no sort -V on macOS bash 3.2)", () => {
+  const out = (...versions: string[]): string =>
+    versions.map((v, i) => `  0x00${i}0:   Name: GLIBC_${v}  Flags: none  Version: ${i + 2}\n`).join("");
+  const cases: [string, string[], number][] = [
+    ["2.28", ["2.9"], 0], // 9 < 28, though "2.9" > "2.28" as text
+    ["2.28", ["2.2.5", "2.3.4", "2.17"], 0], // x86-64's three-component base versions
+    ["2.28", ["2.28"], 0],
+    ["2.28", ["2.29"], 1],
+    ["2.28", ["2.100"], 1], // 100 > 28, though "2.100" < "2.28" as text
+    ["2.28", ["3.0"], 1],
+    ["2.28", ["2.28.1"], 1], // above 2.28 itself
+    ["2.28", ["2.08"], 0], // a leading zero is decimal, not octal
+    ["2.9", ["2.10"], 1],
+    ["2.34", ["2.17", "2.34", "2.28"], 0], // the maximum, in any order
+  ];
+  for (const [floor, versions, status] of cases) {
+    const r = glibcFloorOn(floor, out(...versions));
+    assert.equal(r.status, status, `floor ${floor}, ${versions.join(" ")}: exit ${status}; stderr: ${r.stderr}`);
+  }
+  // Versions of other libraries are not glibc's: libgcc_s's GCC_*, libstdc++'s GLIBCXX_*.
+  assert.equal(glibcFloorOn("2.28", out("2.17") + "  Name: GCC_7.0.0\n  Name: GLIBCXX_3.4.30\n").status, 0);
+});
+
+test("the glibc floor check fails on GLIBC_PRIVATE and any other unnumbered glibc version", () => {
+  const base = fs.readFileSync(glibcFixture("floor-2.28-arm64.readelf.txt"), "utf8");
+  // GLIBC_PRIVATE is glibc's internal ABI, which changes between builds of the same release;
+  // GLIBC_ABI_DT_RELR is written by a link with -z pack-relative-relocs and needs glibc 2.36.
+  for (const name of ["GLIBC_PRIVATE", "GLIBC_ABI_DT_RELR"]) {
+    const r = glibcFloorOn("2.28", `${base}  0x0090:   Name: ${name}  Flags: none  Version: 7\n`);
+    assert.equal(r.status, 1, `${name}: exit 1`);
+    assert.ok(r.stderr.includes(name), `the failure names ${name}`);
+  }
+  const objdump = fs.readFileSync(glibcFixture("floor-2.28-arm64.objdump.txt"), "utf8");
+  const priv = glibcFloorOn("2.28", `${objdump}0000000000000000      DF *UND*\t0000000000000000 (GLIBC_PRIVATE) _dl_x\n`);
+  assert.equal(priv.status, 1, "GLIBC_PRIVATE in objdump -T output");
+});
+
+test("the glibc floor check fails closed (exit 2) when it finds no glibc version or cannot run", () => {
+  withScratch((dir) => {
+    const empty = path.join(dir, "empty.txt");
+    fs.writeFileSync(empty, "");
+    const musl = path.join(dir, "musl.txt");
+    fs.writeFileSync(musl, "\nVersion needs section '.gnu.version_r' contains 1 entries:\n  0x0000: Version: 1  File: libgcc_s.so.1  Cnt: 1\n  0x0010:   Name: GCC_3.0  Flags: none  Version: 2\n");
+    const none = path.join(dir, "none.txt");
+    fs.writeFileSync(none, "\nNo version information found in this file.\n");
+    for (const [what, file] of [["empty output", empty], ["no GLIBC_ version (musl, libgcc_s only)", musl], ["no version information", none]] as const) {
+      const r = glibcFloor("--output", "2.28", file);
+      assert.equal(r.status, 2, `${what}: exit 2, not a pass; stderr: ${r.stderr}`);
+      assert.match(r.stderr, /no GLIBC_ symbol version/, `${what}: says why`);
+    }
+    // The addon mode: a file that is not an ELF object fails, whatever tool reads it.
+    const notElf = path.join(dir, "polyjose.linux-x64-gnu.node");
+    fs.writeFileSync(notElf, "{}\n");
+    assert.notEqual(glibcFloor("2.28", notElf).status, 0, "a file that is not ELF");
+    assert.equal(glibcFloor("2.28", path.join(dir, "missing.node")).status, 2, "a missing addon");
+    assert.equal(glibcFloor("--output", "2.28", path.join(dir, "missing.txt")).status, 2, "a missing output file");
+  });
+  assert.equal(glibcFloor().status, 2, "no arguments");
+  assert.equal(glibcFloor("2.28").status, 2, "no file");
+  for (const floor of ["", "2", "2.28.1", "v2.28", "2.x", "2.1000"]) {
+    assert.equal(glibcFloor("--output", floor, glibcFixture("floor-2.28-arm64.readelf.txt")).status, 2, `floor '${floor}' is rejected`);
+  }
+});
+
 /** The index of the only line of `lines` matching `pattern`. */
 function onlyLine(lines: readonly string[], pattern: RegExp, what: string): number {
   const found = lines.flatMap((line, i) => (pattern.test(line) ? [i] : []));
