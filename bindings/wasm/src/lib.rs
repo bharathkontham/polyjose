@@ -40,6 +40,7 @@ mod error;
 mod read;
 mod write;
 
+pub mod jwe;
 pub mod jwk;
 pub mod jws;
 pub mod keys;

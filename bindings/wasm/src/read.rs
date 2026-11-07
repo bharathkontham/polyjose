@@ -24,7 +24,10 @@
 //!   fails half-way drops what it has read, wiping it.
 
 use js_sys::{Array, Reflect, Uint8Array};
-use polyjose_surface::records::{JwkSelector, JwsSignOptions, JwsSigner, JwsVerifyOptions};
+use polyjose_surface::records::{
+    JweDecryptOptions, JweEncryptOptions, JweRecipient, JwkSelector, JwsSignOptions, JwsSigner,
+    JwsVerifyOptions,
+};
 use polyjose_surface::{SecretBytes, SecretString};
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -135,6 +138,16 @@ impl<'a> Record<'a> {
         self.opt_strings(key)?
             .ok_or_else(|| self.wrong(key, "an array of strings"))
     }
+
+    /// A required array of records, each read with `read`.
+    fn records<T>(&self, key: &str, read: fn(&JsValue) -> Read<T>) -> Read<Vec<T>> {
+        self.need(key, "an array")?
+            .dyn_ref::<Array>()
+            .ok_or_else(|| self.wrong(key, "an array"))?
+            .iter()
+            .map(|item| read(&item))
+            .collect()
+    }
 }
 
 /// `{ kid?, alg?, keyUse? }` (RFC 7517 §4.2, §4.4, §4.5; ADR 0030 §4).
@@ -188,5 +201,50 @@ pub(crate) fn jws_verify_options(value: &JsValue) -> Read<JwsVerifyOptions> {
         detached_payload: r.opt_secret_bytes("detachedPayload")?,
         max_input_len: r.opt_u32("maxInputLen")?,
         max_signatures: r.opt_u32("maxSignatures")?,
+    })
+}
+
+/// `{ alg, key, header?, apu?, apv?, p2c?, p2sLen? }` (RFC 7516 §7.2.1, RFC 7518 §4.6.1.2,
+/// §4.6.1.3, §4.8.1.1, §4.8.1.2). The key is secret (ADR 0030 §7).
+pub(crate) fn jwe_recipient(value: &JsValue) -> Read<JweRecipient> {
+    let r = Record::new(value, "JweRecipient")?;
+    Ok(JweRecipient {
+        alg: r.string("alg")?,
+        key: r.secret_string("key")?,
+        header: r.opt_string("header")?,
+        apu: r.opt_bytes("apu")?,
+        apv: r.opt_bytes("apv")?,
+        p2c: r.opt_u32("p2c")?,
+        p2s_len: r.opt_u32("p2sLen")?,
+    })
+}
+
+/// `{ enc, recipients, protectedHeader?, sharedUnprotectedHeader?, aad?, compress? }`
+/// (RFC 7516 §5.1, §7.2.1). The `aad` is secret (ADR 0050 §4).
+pub(crate) fn jwe_encrypt_options(value: &JsValue) -> Read<JweEncryptOptions> {
+    let r = Record::new(value, "JweEncryptOptions")?;
+    Ok(JweEncryptOptions {
+        enc: r.string("enc")?,
+        recipients: r.records("recipients", jwe_recipient)?,
+        protected_header: r.opt_string("protectedHeader")?,
+        shared_unprotected_header: r.opt_string("sharedUnprotectedHeader")?,
+        aad: r.opt_secret_bytes("aad")?,
+        compress: r.flag("compress")?,
+    })
+}
+
+/// `{ allowedAlgs, allowedEnc, maxPbes2Count?, maxDecompressedLen?, maxInputLen?,
+/// maxRecipients?, understoodCrit? }` (RFC 7516 §5.2, RFC 7515 §4.1.11, RFC 8725 §3.1,
+/// ADR 0023).
+pub(crate) fn jwe_decrypt_options(value: &JsValue) -> Read<JweDecryptOptions> {
+    let r = Record::new(value, "JweDecryptOptions")?;
+    Ok(JweDecryptOptions {
+        allowed_algs: r.strings("allowedAlgs")?,
+        allowed_enc: r.strings("allowedEnc")?,
+        max_pbes2_count: r.opt_u32("maxPbes2Count")?,
+        max_decompressed_len: r.opt_u32("maxDecompressedLen")?,
+        max_input_len: r.opt_u32("maxInputLen")?,
+        max_recipients: r.opt_u32("maxRecipients")?,
+        understood_crit: r.opt_strings("understoodCrit")?,
     })
 }

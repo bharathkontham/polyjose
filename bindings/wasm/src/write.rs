@@ -14,7 +14,7 @@
 //! engine would throw.
 
 use js_sys::{Object, Reflect, Uint8Array};
-use polyjose_surface::records::JwsVerified;
+use polyjose_surface::records::{JweDecrypted, JwsVerified};
 use wasm_bindgen::JsValue;
 
 /// A JS object being filled.
@@ -56,5 +56,25 @@ pub(crate) fn jws_verified(v: JwsVerified) -> Result<Object, JsValue> {
     o.opt_str("protectedHeader", v.protected_header.as_deref())?;
     o.opt_str("unprotectedHeader", v.unprotected_header.as_deref())?;
     o.u32("signatureIndex", v.signature_index)?;
+    Ok(o.0)
+}
+
+/// `{ plaintext, header, protectedHeader?, sharedUnprotectedHeader?, recipientHeader?, aad?,
+/// recipientIndex }` (RFC 7516 §5.2, §7.2.1). The plaintext and the `aad` are secret
+/// (ADR 0030 §7, ADR 0050 §4).
+pub(crate) fn jwe_decrypted(v: JweDecrypted) -> Result<Object, JsValue> {
+    let o = Out::new();
+    o.bytes("plaintext", v.plaintext.as_bytes())?;
+    o.str("header", &v.header)?;
+    o.opt_str("protectedHeader", v.protected_header.as_deref())?;
+    o.opt_str(
+        "sharedUnprotectedHeader",
+        v.shared_unprotected_header.as_deref(),
+    )?;
+    o.opt_str("recipientHeader", v.recipient_header.as_deref())?;
+    if let Some(aad) = &v.aad {
+        o.bytes("aad", aad.as_bytes())?;
+    }
+    o.u32("recipientIndex", v.recipient_index)?;
     Ok(o.0)
 }
