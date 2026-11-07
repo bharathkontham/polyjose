@@ -725,3 +725,46 @@ test("check-rsa-symbols.sh's residual-risk note names the node prebuild targets 
   }
   assert.ok(note.includes("binding-node.yml"), "and where they are checked");
 });
+
+/** The text of every `run:` of a workflow: the value and, for a block scalar, the lines under it. */
+function runBlocks(lines: readonly Line[]): { line: Line; text: string }[] {
+  return lines.flatMap((line, i) => {
+    const kv = keyOf(line.text.replace(/^-\s+/, ""));
+    if (kv?.key !== "run") return [];
+    return [{ line, text: [kv.value, ...blockUnder(lines, i).map((l) => l.text)].join("\n") }];
+  });
+}
+
+test("no run: block of binding-node.yml interpolates an input; inputs reach scripts through env: (review-security.md I6)", () => {
+  // The reader itself: an inputs expression in a block or inline run is found, in env: it is not.
+  const sample = yamlLines(
+    ["steps:", "  - env:", "      MODE: ${{ inputs.mode }}", "    run: |", '      echo "$MODE"', "  - run: echo ${{ inputs.mode }}"].join("\n"),
+  );
+  assert.deepEqual(
+    runBlocks(sample).map((r) => r.text.includes("${{ inputs.")),
+    [false, true],
+  );
+  const { src, lines } = workflow();
+  const runs = runBlocks(lines);
+  assert.ok(runs.length > 5, "binding-node.yml has run steps");
+  for (const r of runs) {
+    assert.ok(!r.text.includes("${{ inputs."), `binding-node.yml:${r.line.no}: an input inside run: (pass it through env:)`);
+  }
+  // The rule is stated where 0012 will add the inputs.
+  const header = src.slice(0, src.indexOf("\nname:"));
+  assert.match(header, /never as `\$\{\{ inputs\.mode \}\}` inside\s+#\s+`run:`/, "the header states the env:-only rule");
+});
+
+test("binding-node.yml pins the Alpine packages, or states the exception and its reason (review-code.md N3)", () => {
+  const { src } = workflow();
+  const apk = [...src.matchAll(/^\s*apk add (.*)$/gm)];
+  assert.equal(apk.length, 1, "one apk add");
+  const packages = (apk[0]?.[1] ?? "").split(/\s+/).filter((p) => p !== "" && !p.startsWith("-"));
+  assert.ok(packages.length > 0);
+  const unpinned = packages.filter((p) => !/^[a-z0-9+._-]+=\S+$/.test(p));
+  if (unpinned.length === 0) return;
+  const header = src.slice(0, src.indexOf("\nname:"));
+  assert.match(header, /# Exception, apk packages \(review-code\.md N3\):/, "the header states the exception");
+  for (const p of unpinned) assert.ok(header.includes(p), `the exception names ${p}`);
+  assert.match(header, /keeps one build of each package per release\s+#\s+branch/, "and why a version pin would not hold");
+});
