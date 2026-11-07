@@ -1319,6 +1319,286 @@ mod tests {
             }
         }
     }
+
+    /// ADR 0054 §6 (Gate 1, owner): `verification_candidates` re-based on
+    /// the one candidate rule yields exactly what today's ADR 0029 §2
+    /// filter yields, on generated sets.
+    mod equivalence {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::jwk::KeyOp;
+
+        /// The ADR 0029 §2 filter exactly as it stood before ADR 0054
+        /// (polyjose 0a7ea3c), kept verbatim as the reference for the
+        /// equivalence property. Test-only; the library never calls it.
+        fn reference_verification_candidate(
+            key: &Jwk,
+            alg: &SigningAlg,
+            kid: Option<&str>,
+        ) -> bool {
+            key.material().serves_signing_alg(alg)
+                && key
+                    .alg()
+                    .is_none_or(|key_alg| matches!(key_alg, KeyAlg::Signing(a) if a == alg))
+                // `use` absent or `sig`, `key_ops` absent or containing `verify`.
+                && key.permits(&KeyOp::Verify)
+                && kid.is_none_or(|kid| key.kid() == Some(kid))
+        }
+
+        /// The reference filter over `set`, as `(key_index, key)` items.
+        fn reference<'a>(
+            set: &'a JwkSet,
+            alg: &SigningAlg,
+            kid: Option<&str>,
+        ) -> Vec<(usize, &'a Jwk)> {
+            set.keys()
+                .iter()
+                .enumerate()
+                .filter(|(_, key)| reference_verification_candidate(key, alg, kid))
+                .collect()
+        }
+
+        /// Items compared by index and by identity: the same member of
+        /// the same set, not merely an equal one.
+        fn same(a: &[(usize, &Jwk)], b: &[(usize, &Jwk)]) -> bool {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|((i, x), (j, y))| i == j && core::ptr::eq(*x, *y))
+        }
+
+        /// Key material for the pool, each with the JWK `alg` values it
+        /// may carry: every family and curve the core imports, an EC key
+        /// with `d`, and the public X25519 key. The `alg`s are mostly ones
+        /// the family serves (JWS, JWE key management, a `dir` `enc`), so
+        /// most members import, plus an unregistered value (kept, RFC 7517
+        /// §4.4) and one the family cannot serve (skipped on import), which
+        /// exercises `key_index` across skipped entries.
+        fn materials() -> Vec<(String, &'static [Option<&'static str>])> {
+            const UNREGISTERED: Option<&str> = Some("x-unregistered");
+            vec![
+                (
+                    OCT.to_owned(),
+                    &[
+                        None,
+                        None,
+                        Some("HS256"),
+                        Some("HS384"),
+                        Some("A128KW"),
+                        Some("dir"),
+                        Some("A256GCM"),
+                        UNREGISTERED,
+                        Some("ES256"),
+                    ],
+                ),
+                (
+                    RSA_2048.to_owned(),
+                    &[
+                        None,
+                        None,
+                        Some("RS256"),
+                        Some("PS256"),
+                        Some("RSA-OAEP-256"),
+                        UNREGISTERED,
+                        Some("HS256"),
+                    ],
+                ),
+                (
+                    EC_P256.to_owned(),
+                    &[
+                        None,
+                        None,
+                        Some("ES256"),
+                        Some("ECDH-ES"),
+                        UNREGISTERED,
+                        Some("ES384"),
+                    ],
+                ),
+                (
+                    with(
+                        EC_P256,
+                        r#""d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE""#,
+                    ),
+                    &[None, Some("ES256"), Some("ECDH-ES+A128KW")],
+                ),
+                (
+                    ec("P-384", 48).to_json().to_string(),
+                    &[None, Some("ES384"), Some("ES256")],
+                ),
+                (
+                    ec("P-521", 66).to_json().to_string(),
+                    &[None, Some("ES512")],
+                ),
+                (
+                    ec("secp256k1", 32).to_json().to_string(),
+                    &[None, Some("ES256K"), Some("ECDH-ES")],
+                ),
+                (
+                    ED25519.to_owned(),
+                    &[None, None, Some("EdDSA"), Some("Ed25519"), UNREGISTERED],
+                ),
+                (X25519.to_owned(), &[None, Some("ECDH-ES"), Some("EdDSA")]),
+            ]
+        }
+
+        const USES: &[Option<&str>] = &[
+            None,
+            None,
+            None,
+            None,
+            Some("sig"),
+            Some("enc"),
+            Some("x-other"),
+        ];
+        const KEY_OPS: &[Option<&str>] = &[
+            None,
+            None,
+            None,
+            None,
+            Some("[]"),
+            Some(r#"["verify"]"#),
+            Some(r#"["sign"]"#),
+            Some(r#"["sign","verify"]"#),
+            Some(r#"["encrypt"]"#),
+            Some(r#"["wrapKey","unwrapKey"]"#),
+            Some(r#"["deriveKey"]"#),
+            Some(r#"["verify","x-op"]"#),
+        ];
+        /// Member `kid`s. The selector's "absent" `kid` is never one.
+        const MEMBER_KIDS: &[Option<&str>] = &[None, Some("a"), Some("b"), Some("A")];
+        const ABSENT_KID: &str = "absent-from-every-set";
+
+        /// One member: indices into the material list, its `alg` list, and
+        /// the `use`, `key_ops` and `kid` lists.
+        type Pick = (
+            prop::sample::Index,
+            prop::sample::Index,
+            prop::sample::Index,
+            prop::sample::Index,
+            prop::sample::Index,
+        );
+
+        fn member(materials: &[(String, &[Option<&str>])], pick: &Pick) -> String {
+            let (material, alg, key_use, key_ops, kid) = pick;
+            let (material, algs) = &materials[material.index(materials.len())];
+            let mut extra = Vec::new();
+            if let Some(alg) = algs[alg.index(algs.len())] {
+                extra.push(format!(r#""alg":"{alg}""#));
+            }
+            if let Some(key_use) = USES[key_use.index(USES.len())] {
+                extra.push(format!(r#""use":"{key_use}""#));
+            }
+            if let Some(key_ops) = KEY_OPS[key_ops.index(KEY_OPS.len())] {
+                extra.push(format!(r#""key_ops":{key_ops}"#));
+            }
+            if let Some(kid) = MEMBER_KIDS[kid.index(MEMBER_KIDS.len())] {
+                extra.push(format!(r#""kid":"{kid}""#));
+            }
+            if extra.is_empty() {
+                material.clone()
+            } else {
+                with(material, &extra.join(","))
+            }
+        }
+
+        /// Every `SigningAlg` polyjose knows, `none` included, plus two
+        /// unknown values (one of them a JWE name).
+        fn any_alg() -> impl Strategy<Value = SigningAlg> {
+            let mut algs: Vec<SigningAlg> = SigningAlg::KNOWN.to_vec();
+            algs.push(SigningAlg::from("HS1"));
+            algs.push(SigningAlg::from("A128KW"));
+            prop::sample::select(algs)
+        }
+
+        /// The header `alg`: any of [`any_alg`], or (more often, so that
+        /// most cases have candidates) one that the family of some member
+        /// of the set serves.
+        #[derive(Clone, Debug)]
+        enum HeaderAlg {
+            Any(SigningAlg),
+            ServedBy(prop::sample::Index, prop::sample::Index),
+        }
+
+        fn header_alg() -> impl Strategy<Value = HeaderAlg> {
+            prop_oneof![
+                1 => any_alg().prop_map(HeaderAlg::Any),
+                3 => any::<(prop::sample::Index, prop::sample::Index)>()
+                    .prop_map(|(key, alg)| HeaderAlg::ServedBy(key, alg)),
+            ]
+        }
+
+        impl HeaderAlg {
+            /// The `alg` for `set`. Only the generator reads the family
+            /// table here; the property compares two filters, not the table.
+            fn resolve(&self, set: &JwkSet) -> SigningAlg {
+                match self {
+                    HeaderAlg::Any(alg) => alg.clone(),
+                    HeaderAlg::ServedBy(key, alg) => {
+                        let served: Vec<&SigningAlg> = if set.is_empty() {
+                            Vec::new()
+                        } else {
+                            let key = &set.keys()[key.index(set.len())];
+                            SigningAlg::KNOWN
+                                .iter()
+                                .filter(|a| key.material().serves_signing_alg(a))
+                                .collect()
+                        };
+                        match served.as_slice() {
+                            // An empty set, or an X25519 key: no JWS alg.
+                            [] => SigningAlg::ES256,
+                            served => served[alg.index(served.len())].clone(),
+                        }
+                    }
+                }
+            }
+        }
+
+        /// The header `kid`: none, one some member of the set carries, or
+        /// one no member carries.
+        #[derive(Clone, Debug)]
+        enum HeaderKid {
+            None,
+            Present(prop::sample::Index),
+            Absent,
+        }
+
+        fn header_kid() -> impl Strategy<Value = HeaderKid> {
+            prop_oneof![
+                3 => Just(HeaderKid::None),
+                2 => any::<prop::sample::Index>().prop_map(HeaderKid::Present),
+                1 => Just(HeaderKid::Absent),
+            ]
+        }
+
+        proptest! {
+            // Pipeline rule 8: at most 1,000 cases per property.
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn verification_candidates_equals_the_reference_filter(
+                picks in prop::collection::vec(any::<Pick>(), 0..=8),
+                alg in header_alg(),
+                kid in header_kid(),
+            ) {
+                let materials = materials();
+                let members: Vec<String> = picks.iter().map(|p| member(&materials, p)).collect();
+                let set = set_from(&members);
+                let alg = alg.resolve(&set);
+                let set_kids: Vec<&str> = set.keys().iter().filter_map(Jwk::kid).collect();
+                let kid: Option<&str> = match &kid {
+                    HeaderKid::None => None,
+                    // A `kid` from the set, or the absent one if no member has one.
+                    HeaderKid::Present(i) if !set_kids.is_empty() => Some(set_kids[i.index(set_kids.len())]),
+                    HeaderKid::Present(_) | HeaderKid::Absent => Some(ABSENT_KID),
+                };
+
+                let expected = reference(&set, &alg, kid);
+                let actual: Vec<(usize, &Jwk)> = set.verification_candidates(&alg, kid).collect();
+                prop_assert!(same(&actual, &expected), "{alg} {kid:?}: {actual:?} vs {expected:?}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
