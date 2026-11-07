@@ -60,14 +60,16 @@ mode_derive() {
   (cd "$src" && find . -type f \( -name '*.js' -o -name '*.d.ts' \) | sort) >"$mode_scratch/facade.src"
   (cd "$pkg/facade" && find . -type f | sort) >"$mode_scratch/facade.pkg"
   [ -s "$mode_scratch/facade.src" ] || mode_fail "no .js or .d.ts in bindings/js/dist/src"
-  comm -23 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
-    echo "error pkg/facade/${name#./} missing (bindings/js/dist/src/${name#./} is not shipped)"
-  done >>"$out"
-  comm -13 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
-    echo "error pkg/facade/${name#./} is not a .js or .d.ts of bindings/js/dist/src"
-  done >>"$out"
-  comm -12 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
-    cmp -s "$src/$name" "$pkg/facade/$name" \
-      || echo "error pkg/facade/${name#./} differs from bindings/js/dist/src/${name#./} (the facade ships unchanged)"
-  done >>"$out"
+  {
+    comm -23 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
+      echo "error pkg/facade/${name#./} missing (bindings/js/dist/src/${name#./} is not shipped)"
+    done
+    comm -13 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
+      echo "error pkg/facade/${name#./} is not a .js or .d.ts of bindings/js/dist/src"
+    done
+    comm -12 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
+      cmp -s "$src/$name" "$pkg/facade/$name" \
+        || echo "error pkg/facade/${name#./} differs from bindings/js/dist/src/${name#./} (the facade ships unchanged)"
+    done
+  } >>"$out"
 }
