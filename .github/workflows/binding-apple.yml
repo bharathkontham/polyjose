@@ -39,9 +39,13 @@
 #
 # The iOS Simulator run needs the iOS 27.2 runtime. When the runner image lacks it, a step tries to
 # download it (`xcodebuild -downloadPlatform`, best effort); if it is still missing,
-# test-simulators.sh prints `SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)`, the results
-# step turns that into a visible warning and the job summary says SKIPPED, and the
-# conformance-swift-ios-sim artifact is not uploaded. Any other missing results file fails.
+# test-simulators.sh prints `SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)` and
+# `SKIPPED (no iOS simulator runtime)`. The iOS Simulator is a required platform (owner,
+# 2026-11-07), so:
+#   - release mode fails the job when either line was printed or swift-ios-sim.json is absent;
+#   - ci mode only accepts the waiver: the results step turns it into a visible warning, the job
+#     summary says SKIPPED, and the conformance-swift-ios-sim artifact is not uploaded.
+# Any other missing results file fails in both modes.
 #
 # It never publishes: top-level `contents: read` only, no secrets, no token, no OIDC, no gh, no
 # release, no registry, and checkout keeps no credentials. release.yml (feature 0012) attaches the
@@ -224,9 +228,26 @@ jobs:
             exit 1
           fi
 
+      # Release mode: the iOS Simulator is a required platform (owner, 2026-11-07), so neither
+      # skip line of test-simulators.sh may appear and its results file must exist.
+      - name: the iOS Simulator ran (release mode)
+        if: inputs.mode == 'release'
+        run: |
+          log="$RUNNER_TEMP/swift-test.log"
+          if grep -qF 'SKIPPED-RUNNER (swift-ios-sim:' "$log" ||
+            grep -qxF 'SKIPPED (no iOS simulator runtime)' "$log"; then
+            echo "::error::release mode requires the iOS Simulator run; test-simulators.sh skipped it (no iOS 27.2 runtime on the runner)"
+            exit 1
+          fi
+          if [ ! -f target/conformance/swift-ios-sim.json ]; then
+            echo "::error::release mode requires target/conformance/swift-ios-sim.json"
+            exit 1
+          fi
+          echo "the iOS Simulator ran: target/conformance/swift-ios-sim.json"
+
       # parity reports an absent runner as SKIPPED without failing, so the files this workflow
-      # promises are required here. swift-ios-sim may be missing only with test-simulators.sh's
-      # waiver (no iOS 27.2 runtime on the runner), and then the run says so.
+      # promises are required here. In ci mode only, swift-ios-sim may be missing with
+      # test-simulators.sh's waiver (no iOS 27.2 runtime on the runner), and then the run says so.
       - name: every results file is present
         id: results
         run: |
@@ -238,12 +259,12 @@ jobs:
           if [ -f target/conformance/swift-ios-sim.json ]; then
             echo "present: target/conformance/swift-ios-sim.json"
             echo "ios_sim=present" >>"$GITHUB_OUTPUT"
-          elif grep -qxF 'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)' "$RUNNER_TEMP/swift-test.log"; then
+          elif [ "$MODE" = ci ] && grep -qxF 'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)' "$RUNNER_TEMP/swift-test.log"; then
             echo "::warning::swift-ios-sim SKIPPED: the runner has no iOS 27.2 simulator runtime, so the iOS Simulator suite did not run"
             echo "swift-ios-sim: SKIPPED (no iOS 27.2 simulator runtime on the runner)" >>"$GITHUB_STEP_SUMMARY"
             echo "ios_sim=skipped" >>"$GITHUB_OUTPUT"
           else
-            echo "::error::missing target/conformance/swift-ios-sim.json, and test-simulators.sh printed no waiver"
+            echo "::error::missing target/conformance/swift-ios-sim.json (and no ci-mode waiver from test-simulators.sh)"
             exit 1
           fi
 

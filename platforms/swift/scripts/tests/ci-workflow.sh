@@ -47,6 +47,11 @@
 #                (feature 0007 review-security.md I6).
 #   xcode        the job sets DEVELOPER_DIR to /Applications/Xcode_<v>.app and XCODE_VERSION to
 #                the same <v>, and a step compares `xcodebuild -version` with it.
+#   ios-sim      the iOS Simulator is required in release mode (owner, 2026-11-07): a step after
+#                test.sh, conditional on release mode, fails on either skip line of
+#                test-simulators.sh (`SKIPPED-RUNNER (swift-ios-sim: ...` and `SKIPPED (no iOS
+#                simulator runtime)`) and on a missing swift-ios-sim.json; the step that accepts
+#                the waiver does so only when "$MODE" is ci.
 #   continue     `continue-on-error` only on the step with `id: ios-runtime` (the best-effort
 #                download of the iOS simulator runtime).
 #   actionlint   `actionlint` accepts the file (it runs shellcheck on the scripts when shellcheck
@@ -459,6 +464,35 @@ else
   ok "xcode: Xcode $xcode_version, selected with DEVELOPER_DIR and checked"
 fi
 
+# --- ios-sim --------------------------------------------------------------------------------
+ios_ok=1
+i_release_sim=0
+i=0
+for s in $steps; do
+  i=$((i + 1))
+  [ "$(step_key "$s" if)" = "inputs.mode == 'release'" ] || continue
+  if run_has "$s" "grep -qF 'SKIPPED-RUNNER (swift-ios-sim:'" &&
+    run_has "$s" "grep -qxF 'SKIPPED (no iOS simulator runtime)'" &&
+    run_has "$s" '[ ! -f target/conformance/swift-ios-sim.json ]' && run_has "$s" 'exit 1'; then
+    i_release_sim=$i
+  fi
+done
+if [ "$i_release_sim" = 0 ]; then
+  ios_ok=0
+  bad "ios-sim" "release mode needs a step that fails on either skip line of test-simulators.sh and on a missing swift-ios-sim.json"
+elif [ "$i_test" != 0 ] && [ "$i_release_sim" -le "$i_test" ]; then
+  ios_ok=0
+  bad "ios-sim" "the release-mode iOS Simulator check must come after the test.sh step"
+fi
+for s in $steps; do
+  # shellcheck disable=SC2016 # literal workflow text
+  if run_has "$s" 'ios_sim=skipped' && ! run_has "$s" '[ "$MODE" = ci ] && grep -qxF'; then
+    ios_ok=0
+    bad "ios-sim" "step '$(step_key "$s" name)' accepts the swift-ios-sim waiver without requiring ci mode"
+  fi
+done
+[ "$ios_ok" = 1 ] && ok "ios-sim: required in release mode (either skip line or a missing file fails); the waiver only in ci mode"
+
 # --- continue-on-error ----------------------------------------------------------------------
 coe_ok=1
 for s in $steps; do
@@ -582,6 +616,16 @@ mutate modes "$cache_pin" "        if: inputs.mode == 'ci'" "        if: always(
 mutate expressions "" "$parity_run" "        run: echo \"\${{ inputs.mode }}\" && scripts/conformance-parity.sh" "an expression in a run script"
 mutate xcode "" "      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer" "      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer" "an unversioned Xcode"
 mutate xcode "" '      XCODE_VERSION: "27.2"' '      XCODE_VERSION: "27.1"' "an XCODE_VERSION that differs from DEVELOPER_DIR"
+ios_step='      - name: the iOS Simulator ran (release mode)'
+mutate ios-sim "$ios_step" "        if: inputs.mode == 'release'" "        if: false" "the release-mode iOS Simulator check dropped (never runs)"
+mutate ios-sim "$ios_step" "        if: inputs.mode == 'release'" "        if: inputs.mode == 'ci'" "the iOS Simulator check applied to ci mode instead"
+# shellcheck disable=SC2016 # literal workflow text
+mutate ios-sim "" '            grep -qxF '"'"'SKIPPED (no iOS simulator runtime)'"'"' "$log"; then' "            false; then" "the release check matching only the SKIPPED-RUNNER line"
+# shellcheck disable=SC2016 # literal workflow text
+mutate ios-sim "" '          if grep -qF '"'"'SKIPPED-RUNNER (swift-ios-sim:'"'"' "$log" ||' "          if false ||" "the release check matching only the SKIPPED line"
+mutate ios-sim "" "          if [ ! -f target/conformance/swift-ios-sim.json ]; then" "          if false; then" "the release check not requiring swift-ios-sim.json"
+# shellcheck disable=SC2016 # literal workflow text
+mutate ios-sim "" '          elif [ "$MODE" = ci ] && grep -qxF '"'"'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)'"'"' "$RUNNER_TEMP/swift-test.log"; then' '          elif grep -qxF '"'"'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)'"'"' "$RUNNER_TEMP/swift-test.log"; then' "the waiver accepted in every mode"
 mutate continue "" "$test_step" "$test_step\n        continue-on-error: true" "continue-on-error on the test.sh step"
 mutate continue "" "$runs_on" "$runs_on\n    continue-on-error: true" "a job-level continue-on-error"
 mutate actionlint "" "$runs_on" "    runs_on: macos-latest" "a misspelled runs-on key"
