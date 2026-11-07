@@ -8,9 +8,8 @@
 #
 # Steps:
 #   1. scripts/build.sh --target <the other darwin target> (cross-compiled), then scripts/build.sh
-#      for the host, so the tree ends in the same state as after test.sh's build. On an
-#      Apple-silicon Mac without Rosetta the x86_64 addon is built but cannot be loaded; the
-#      package test checks its tarball by contents only.
+#      for the host. On an Apple-silicon Mac without Rosetta the x86_64 addon is built but cannot
+#      be loaded; the package test checks its tarball by contents only.
 #   2. Each package is assembled in a temporary staging directory, never in the source tree:
 #      - main: what `npm pack --dry-run` selects in bindings/node (package.json and its `files`),
 #        the repository's LICENSE, and a THIRD-PARTY-NOTICES.txt written here: polyjose's MIT
@@ -28,6 +27,9 @@
 #   4. node --test dist/package.test.js (compiled by build.sh): file lists, contents, notices,
 #      versions, and an offline install of the main and host tarballs into a temporary directory
 #      with a temporary npm cache, which imports the package and round-trips a compact JWS.
+#   5. the cross-built addon is removed (also on failure), and the script checks that the host
+#      addon is the only one left: the tree ends as test.sh's build leaves it, so test.sh passes
+#      right after (feature 0007 F03).
 #
 # Packing only. Publishing is the human-approved release (ADR 0011, Gate 3): this script must not
 # call npm's or napi's publishing commands, and the package test greps it to keep it so.
@@ -41,8 +43,8 @@ RULE=$(printf "%080d" 0 | tr 0 =) # the 80-column rule of scripts/third-party-no
 
 [ "$(uname -s)" = Darwin ] || { echo "pack.sh: builds the darwin packages, so it runs on macOS only" >&2; exit 1; }
 case $(uname -m) in
-  arm64) host=aarch64-apple-darwin other=x86_64-apple-darwin ;;
-  x86_64) host=x86_64-apple-darwin other=aarch64-apple-darwin ;;
+  arm64) host=aarch64-apple-darwin host_addon=polyjose.darwin-arm64.node other=x86_64-apple-darwin other_addon=polyjose.darwin-x64.node ;;
+  x86_64) host=x86_64-apple-darwin host_addon=polyjose.darwin-x64.node other=aarch64-apple-darwin other_addon=polyjose.darwin-arm64.node ;;
   *) echo "pack.sh: unknown macOS architecture $(uname -m)" >&2; exit 1 ;;
 esac
 command -v python3 >/dev/null 2>&1 || { echo "pack.sh: python3 not found on PATH" >&2; exit 1; }
@@ -51,7 +53,11 @@ command -v python3 >/dev/null 2>&1 || { echo "pack.sh: python3 not found on PATH
 platforms="darwin-arm64:aarch64-apple-darwin darwin-x64:x86_64-apple-darwin"
 
 stage=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-node-pack.XXXXXX")
-trap 'rm -rf "$stage"' EXIT
+# The cross-built addon is needed only until the package test has compared its tarball with it.
+# Left next to the host's, it would make the tree differ from test.sh's (one host addon, which
+# test/loader.test.ts requires), so it is removed on every exit, success or failure.
+cleanup() { rm -rf "$stage"; rm -f "$pkg_dir/$other_addon"; }
+trap cleanup EXIT
 
 json_field() { # json_field <file> <key>...: prints the string at that key path
   python3 -I -c 'import json, sys
@@ -146,3 +152,9 @@ echo "==> @polyjose/node pack: dist/npm/"
 
 echo "==> @polyjose/node pack: node --test dist/package.test.js"
 node --test --test-reporter=spec dist/package.test.js
+
+# The tree ends as test.sh's build leaves it: the host addon is the only one.
+cleanup
+left=$(find "$pkg_dir" -maxdepth 1 -name 'polyjose.*.node' -print | sed 's|.*/||' | LC_ALL=C sort | tr '\n' ' ')
+[ "$left" = "$host_addon " ] || { echo "pack.sh: bindings/node holds $left, not only $host_addon" >&2; exit 1; }
+echo "==> @polyjose/node pack: OK (bindings/node holds only $host_addon)"
