@@ -1,0 +1,23 @@
+{
+  "source": "RFC 7518 §3.4; RFC 8725 §3.1; ADR 0026 §2 step 8; ADR 0027 §8; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Issuing ES256 with a P-384 private key: ES256 is bound to P-256: KeyAlgorithmMismatch",
+  "operation": "jwt.issue",
+  "input": {
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1700000600
+    },
+    "alg": "ES256",
+    "key": {
+      "kty": "EC",
+      "crv": "P-384",
+      "x": "YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2",
+      "y": "A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP",
+      "d": "iTx2pk7wW-GqJkHcEkFQb2EFyYcO7RugmaW3mRrQVAOUiPommT0IdnYK2xDlZh-j"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

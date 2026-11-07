@@ -1,0 +1,25 @@
+{
+  "source": "RFC 7519 §4.1.3; ADR 0027 §4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "aud is [] with accepted audiences [\"api\"]: an empty array matches nothing: InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOltdLCJleHAiOjE3MDAwMDA2MDB9.QodDeMCJN_y-3kIXNAU_5GXkwiLNeRx8IeltkiDwl4E",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "audience": [
+        "api"
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}

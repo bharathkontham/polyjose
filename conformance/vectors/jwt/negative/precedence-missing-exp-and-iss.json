@@ -1,0 +1,23 @@
+{
+  "source": "ADR 0027 §9; RFC 7519 §4.1.1, §4.1.4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "No exp under the default policy and iss https://attacker.example against the accepted issuer https://issuer.example: required-claim presence (J4) comes before the iss check (J8); both give InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F0dGFja2VyLmV4YW1wbGUifQ.-ihKLcmNPUGm8QhUensR1nqmZ606kx7rkru1O0LJLvA",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "issuer": "https://issuer.example"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}

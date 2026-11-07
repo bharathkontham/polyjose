@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §7.2 step 10; RFC 8259 §8.1; ADR 0027 §1; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The payload octets are {\"exp\":1700000600,\"name\":\"<0xFF>\"}: the 0xFF octet is not UTF-8, so the Claims Set is not valid JSON text: InvalidJson",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MDAwMDA2MDAsIm5hbWUiOiL_In0.ycSBNPSWG52p5EcDt3UP_sEcx8X8FCGxRiPjTtT0djc",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

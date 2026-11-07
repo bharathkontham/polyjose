@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §4.1.5; ADR 0027 §3; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "nbf 1700000100, now 1700000039 = nbf − 61 with the default leeway 60: nbf > now + leeway: TokenNotYetValid",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MDAwMDA2MDAsIm5iZiI6MTcwMDAwMDEwMH0.zLuP-6vbZ6DSmIcLO0RZykPcT7z8SX_l2foIXuCGFrg",
+    "now": 1700000039,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "TokenNotYetValid"
+  }
+}

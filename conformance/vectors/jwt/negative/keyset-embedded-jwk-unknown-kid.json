@@ -1,0 +1,34 @@
+{
+  "source": "CVE-2018-0114; RFC 8725 §3.10; ADR 0026 §2; ADR 0029 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The header embeds the attacker's public key as jwk, with kid \"attacker\", and is signed by that key; the real set holds kid a and b. Embedded keys never supply keys, and kid attacker selects no member: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImF0dGFja2VyIiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoidWhBZDNYN0MwN2lqdG1BeXhLenRzX2FiTi1aeXl6VHFHREh1SVZBWVpDdyIsInkiOiJRRmxQSkhOOHlZX1JTaGd2SDBRU3NGbDFOZ3hjNVhzTnp5Zm1MaGc3aVN3In19.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ.i_xcfhQk0Ud5Q4lqe69BuDanZDCm5-FNsNjbG1DOdK-hfevyK7jt-kQ_djaTISvUSH0UwPdw7u-Ohd485TL0Sw",
+    "now": 1700000000,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "9k4oxJo3yFhw4XvUDFOFlmhgwqGrC25aBd7xhpkFB6Y",
+          "y": "zE-06UddsK2b0rpGKPXn9gz55y3tneIwQbTHPYn4o_I",
+          "kid": "a"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "kYUQsFzddzDVWQ2zrOHzLvP5Xh0vfUGlmngWR9XMJTw",
+          "y": "8uWP4BrVkuiNMETAGTs-RXFQpR9p5DtW6MzL2D6yXX8",
+          "kid": "b"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

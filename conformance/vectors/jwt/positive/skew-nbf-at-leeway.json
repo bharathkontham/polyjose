@@ -1,0 +1,27 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "nbf N with the default 60 s leeway at now N - 60: rejected iff nbf > now + leeway, so nbf = now + leeway is accepted (RFC 7519 §4.1.5, ADR 0027 §3)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODIzMDAwLCJuYmYiOjEzMDA4MTk0MDB9.UXZiqcA5OIo1KS5WMmRU5EAMGQxtnZljkwaaw2EWiwBu2U4T8VLSKub9W1F3C2QNnlrOuNfLeZQHwouQsmXzvw",
+    "now": 1300819340,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300823000,
+      "nbf": 1300819400
+    },
+    "alg": "ES256"
+  }
+}

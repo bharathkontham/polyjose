@@ -1,0 +1,34 @@
+{
+  "source": "RFC 7516 §5.2 step 11; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Outer JWE ciphertext with the low bit of its last octet flipped: DecryptionFailed (0003 JWE error contract, ADR 0027 §9)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0.pUWTz5omNNb_f7VO1kQaAjU_K2_puC8n.jVhdi4WSZcYbGoLD.y5iHqnZxyE9tQZRUOTgVfOp0I0X9cO4clnvXtGx5nC8nduuzNHUtA60PXRUXWGvr2m53j9QMXWloJnzHW-JrGm6pQTdo1kw62Xu_8kSjf4MWf0_3fRJfuYByrXufgQYIWDK8AKdvWJX_dPO32PI9-0JnVttu4Vqg4Dq0pdFOtIP0LrEjMvQy2Bku_WhBaZik1WYuLzpczJU13VzxgV6_LiXcf14hXbwux3tOhcTU8cntZYeGaQbReydg_rcSBMTBF-dK7y13xbzr_C98lRSwr0FmNNiNAT8VN8PSc5LV9uxzMKn6gUmV.vfboGUssx5LDizMOuWCm5Q",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "DecryptionFailed"
+  }
+}

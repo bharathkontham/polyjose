@@ -19,6 +19,27 @@
 //! might quote input, ever reaches an `Error`. JWE decryption has a single,
 //! detail-free failure, [`Error::DecryptionFailed`] (RFC 7516 §11.5).
 //!
+//! # Codes are for logs, not for clients
+//!
+//! A code says exactly which check failed. That is what logs and
+//! diagnostics need, but don't pass it on to whoever presented the token.
+//! A server should answer every rejected token with one opaque failure,
+//! such as the `invalid_token` error of an OAuth bearer-token response
+//! (RFC 6750 §3.1), and keep the code in its own logs.
+//!
+//! Returning codes to clients lets an unauthenticated token probe the
+//! verifier's configuration. Verifying against a JWK Set, for example
+//! (ADR 0029 §4):
+//!
+//! - [`Error::NoMatchingKey`] says that no member serves the token's
+//!   `kid` and `alg`, while [`Error::InvalidSignature`] says that one does;
+//! - [`Error::InvalidKey`] says that a matching `oct` member without a
+//!   JWK `alg` is shorter than the hash output of the token's `HS*`
+//!   (RFC 7518 §3.2).
+//!
+//! The codes stay deterministic and stable regardless (ADR 0007); only
+//! what reaches the client should be opaque.
+//!
 //! # Adding a variant
 //!
 //! Give it a doc comment citing its RFC section, add its code to
@@ -195,6 +216,17 @@ pub enum Error {
     /// stay [`Error::InvalidBase64`]. The detail names the rule, never the
     /// input.
     InvalidFormat(&'static str),
+
+    /// No key of the caller's JWK Set may verify this JWS (ADR 0029 §4).
+    ///
+    /// Raised by JWT verification against a JWK Set when no member is a
+    /// candidate for the JWS Protected Header's `alg` and `kid`: none has
+    /// a matching key type and curve, JWK `alg`, `use`, `key_ops` and
+    /// `kid` (RFC 7515 §4.1.4, §6; RFC 7517 §4.2–§4.5, §5; RFC 8725 §3.1),
+    /// or more members match than the policy's candidate bound, which is
+    /// checked before any signature is computed (ADR 0029 §4). Neither the
+    /// `kid` nor any key is echoed.
+    NoMatchingKey,
 }
 
 impl Error {
@@ -218,6 +250,7 @@ impl Error {
         "InvalidClaim",
         "RandomnessUnavailable",
         "InvalidFormat",
+        "NoMatchingKey",
     ];
 
     /// The stable, cross-platform code for this error (ADR 0007).
@@ -241,6 +274,7 @@ impl Error {
             Error::InvalidClaim(_) => "InvalidClaim",
             Error::RandomnessUnavailable => "RandomnessUnavailable",
             Error::InvalidFormat(_) => "InvalidFormat",
+            Error::NoMatchingKey => "NoMatchingKey",
         }
     }
 }
@@ -269,6 +303,7 @@ impl core::fmt::Display for Error {
             Error::InvalidClaim(detail) => write!(f, "invalid claim: {detail}"),
             Error::RandomnessUnavailable => f.write_str("randomness unavailable"),
             Error::InvalidFormat(detail) => write!(f, "invalid format: {detail}"),
+            Error::NoMatchingKey => f.write_str("no matching key"),
         }
     }
 }
@@ -307,6 +342,7 @@ mod tests {
             Error::InvalidClaim("aud"),
             Error::RandomnessUnavailable,
             Error::InvalidFormat("compact JWS must have three parts"),
+            Error::NoMatchingKey,
         ]
     }
 
@@ -328,6 +364,7 @@ mod tests {
             Error::InvalidClaim(_) => 12,
             Error::RandomnessUnavailable => 13,
             Error::InvalidFormat(_) => 14,
+            Error::NoMatchingKey => 15,
         }
     }
 
@@ -351,6 +388,7 @@ mod tests {
             "InvalidClaim",
             "RandomnessUnavailable",
             "InvalidFormat",
+            "NoMatchingKey",
         ];
         let actual: Vec<&str> = one_of_each().iter().map(Error::code).collect();
         assert_eq!(actual, expected);
@@ -401,6 +439,7 @@ mod tests {
             "invalid claim: aud",
             "randomness unavailable",
             "invalid format: compact JWS must have three parts",
+            "no matching key",
         ];
         let actual: Vec<String> = one_of_each().iter().map(Error::to_string).collect();
         assert_eq!(actual, expected);

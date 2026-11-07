@@ -1,0 +1,41 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "An EdDSA token with kid \"ed\" against two Ed25519 keys with kid \"ed\", the first with use enc, and max_key_candidates 1: the use filter removes the enc key, so one candidate remains and verifies, key_index 1 (RFC 7517 §4.2, ADR 0029 §2.3, §4)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImVkIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODE5MzgwfQ.LhaxegEfD-ERzEvMkQovfA3dbIuSfyk1NWNkvVqeT9degv0fVcPoljUEvk0MdvO05XqoU1Y2dNG7wuoTjehyDg",
+    "now": 1300819320,
+    "allowed_algs": [
+      "EdDSA"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "ifIV_MkFfyBWonN1tqb5kTP9hXXLx9S7QN-bomVep5I",
+          "use": "enc",
+          "kid": "ed"
+        },
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+          "kid": "ed"
+        }
+      ]
+    },
+    "policy": {
+      "max_key_candidates": 1
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300819380
+    },
+    "alg": "EdDSA",
+    "key_index": 1
+  }
+}

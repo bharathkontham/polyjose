@@ -1,0 +1,38 @@
+{
+  "source": "RFC 7515 §5.2; ADR 0029 §4; ADR 0026 §3; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "A kid-less ES256 token signed by p256-cand-9 and a set of three other kid-less P-256 members: every candidate is tried and fails, ranked: InvalidSignature",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ.TmG2eq2n-uaFB8Jauzzz5olo7M0mHhYnvAkFmQSF-Xv0cyk4mWQeN2QhrU4JBaa7S7UldyK9zv-m155GhnK_lg",
+    "now": 1700000000,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "veFmhYCtqSHviMxLOuvn3KOaC1prHxYfq5GI9sCTgMc",
+          "y": "aVnGcc1rZHjUHOPyuGItVPHbMds_wEoTO9mil0DSgTE"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "jjgFcO4B9fBwnRZ8E1LOCM3ZJzRC-xfUm32gnyEtVew",
+          "y": "C0MPLKegZh95o8tRrtCEI74o_ydt0_jw97NHWK_Oa3Q"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "E85pHKYaeBBNe-CI6UtPtYY5p8WHE3m3-1kCTweJiis",
+          "y": "XeNaod_9kYFUDwhUCOecuRQsdcKYfr3KDmneZRXCkg4"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

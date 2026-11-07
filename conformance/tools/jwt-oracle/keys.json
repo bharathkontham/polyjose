@@ -1,0 +1,266 @@
+{
+  "description": "Fixed test keys of conformance/tools/jwt-oracle, referred to by name from spec files. TEST FIXTURES ONLY: every private key here is public test data, used nowhere else. RSA keys are public only (ADR 0021). See README.md.",
+  "keys": {
+    "oct-16": {
+      "source": "generated once with crypto.generateKeySync('hmac', { length: 128 }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8)",
+      "jwk": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      }
+    },
+    "oct-32": {
+      "source": "generated once with crypto.generateKeySync('hmac', { length: 256 }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8)",
+      "jwk": {
+        "kty": "oct",
+        "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+      }
+    },
+    "oct-48": {
+      "source": "generated once with crypto.generateKeySync('hmac', { length: 384 }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8)",
+      "jwk": {
+        "kty": "oct",
+        "k": "HaXRYPWLBA7toQDZnVni2HLq2-9y_Z2UV7sJDibkvvOrbVCruY-ldC5ETUPV5e0n"
+      }
+    },
+    "oct-64": {
+      "source": "RFC 7515 App. A.1.1 (the HMAC key of RFC 7515 A.1 and RFC 7519 §3.1), copied from conformance/vectors/jws-rfc7515/a1-hs256-compact-sign.json",
+      "jwk": {
+        "kty": "oct",
+        "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+      }
+    },
+    "p256": {
+      "source": "RFC 7515 App. A.3.1 (the ES256 key), copied from conformance/vectors/jws-rfc7515/a3-es256-compact-sign-roundtrip.json",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+        "d": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"
+      }
+    },
+    "p384": {
+      "source": "RFC 7520 §5.4.1 (the P-384 key of peregrin.took@tuckborough.example), copied from conformance/vectors/jwe/ecdh-es/rfc7520-5-4-ecdh-es-a128kw-p384-a128gcm-decrypt.json; its kid and use (enc) are dropped so it can serve as an ES384 test key",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-384",
+        "x": "YU4rRUzdmVqmRtWOs2OpDE_T5fsNIodcG8G5FWPrTPMyxpzsSOGaQLpe2FpxBmu2",
+        "y": "A8-yxCHxkfBz3hKZfI1jUYMjUhsEveZ9THuwFjH2sCNdtksRJU7D5-SkgaFL1ETP",
+        "d": "iTx2pk7wW-GqJkHcEkFQb2EFyYcO7RugmaW3mRrQVAOUiPommT0IdnYK2xDlZh-j"
+      }
+    },
+    "p521": {
+      "source": "RFC 7515 App. A.4.1 (the ES512 key), copied from conformance/vectors/jws-rfc7515/a4-es512-compact-sign-roundtrip.json",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-521",
+        "x": "AekpBQ8ST8a8VcfVOTNl353vSrDCLLJXmPk06wTjxrrjcBpXp5EOnYG_NjFZ6OvLFV1jSfS9tsz4qUxcWceqwQGk",
+        "y": "ADSmRA43Z1DSNx_RvcLI87cdL07l6jQyyBXMoxVg_l2Th-x3S1WDhjDly79ajL4Kkd0AZMaZmh9ubmf63e3kyMj2",
+        "d": "AY5pb7A0UFiB3RELSD64fTLOSV_jazdF7fLYyuTw8lOfRhWg6Y6rUrPAxerEzgdRhajnu0ferB0d53vM9mE15j2C"
+      }
+    },
+    "ed25519": {
+      "source": "RFC 8037 App. A.1 (the Ed25519 key), as in conformance/tools/jws-oracle/gen.mjs",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      }
+    },
+    "ed25519-other": {
+      "source": "generated once with crypto.generateKeyPairSync('ed25519') on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); a second Ed25519 key for key-selection tests",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "ifIV_MkFfyBWonN1tqb5kTP9hXXLx9S7QN-bomVep5I",
+        "d": "tlibPWwbs5Otso6kfL5xOIdEcAHK6NDCdn7CcAQqL5M"
+      }
+    },
+    "p256-kid-a": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid \"a\" for key-selection tests (ADR 0029)",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "9k4oxJo3yFhw4XvUDFOFlmhgwqGrC25aBd7xhpkFB6Y",
+        "y": "zE-06UddsK2b0rpGKPXn9gz55y3tneIwQbTHPYn4o_I",
+        "d": "LCPRTP8np_fQxQvMdfDwaCr30xArOCNFsTMqauaxMF8",
+        "kid": "a"
+      }
+    },
+    "p256-kid-b": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid \"b\" for key-selection tests (ADR 0029)",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "kYUQsFzddzDVWQ2zrOHzLvP5Xh0vfUGlmngWR9XMJTw",
+        "y": "8uWP4BrVkuiNMETAGTs-RXFQpR9p5DtW6MzL2D6yXX8",
+        "d": "77vIcbbx8enORFALjumhmnHnLbvyhFLORpLTTENmDdA",
+        "kid": "b"
+      }
+    },
+    "p256-kid-c": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid \"c\" for key-selection tests (ADR 0029)",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "Tb3zGAzRHxCqmkYrR0PJBzFoP-eeWagnQAwuoQEqBXA",
+        "y": "32fch9uDiHQleNvG6vnJRjtKAYay5rt63qo37QGgzjU",
+        "d": "iHOPbFusnHIn0GPpRrq0xQEgS833Dv78gj_w-sm7jeg",
+        "kid": "c"
+      }
+    },
+    "oct-32-kid-hs-32": {
+      "source": "generated once with crypto.generateKeySync('hmac', { length: 256 }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid \"hs-32\" for key-selection tests (ADR 0029)",
+      "jwk": {
+        "kty": "oct",
+        "k": "LEogBFIZxkmhKksJAqKSeN60dLO4zaahULwqC5j-8pY",
+        "kid": "hs-32"
+      }
+    },
+    "oct-64-kid-hs-64": {
+      "source": "generated once with crypto.generateKeySync('hmac', { length: 512 }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid \"hs-64\" for key-selection tests (ADR 0029)",
+      "jwk": {
+        "kty": "oct",
+        "k": "QFTfZnD22xo54TGYuQq_MJzbjkSQOADa0aR8QXRtym-z92ejZKr_UlEhBkqk39ocvyvlkaIwUJZWjeQah6E1uQ",
+        "kid": "hs-64"
+      }
+    },
+    "p256-cand-1": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 1 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "veFmhYCtqSHviMxLOuvn3KOaC1prHxYfq5GI9sCTgMc",
+        "y": "aVnGcc1rZHjUHOPyuGItVPHbMds_wEoTO9mil0DSgTE",
+        "d": "gGRJxEwTfHm6o1cdxJ5K3HOaQKOuB3pJQ06XXuBfleA"
+      }
+    },
+    "p256-cand-2": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 2 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "jjgFcO4B9fBwnRZ8E1LOCM3ZJzRC-xfUm32gnyEtVew",
+        "y": "C0MPLKegZh95o8tRrtCEI74o_ydt0_jw97NHWK_Oa3Q",
+        "d": "JptMBJVQcY56OG-Ft3PeD14NrHqUZD0BcRKv-aUHnWg"
+      }
+    },
+    "p256-cand-3": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 3 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "E85pHKYaeBBNe-CI6UtPtYY5p8WHE3m3-1kCTweJiis",
+        "y": "XeNaod_9kYFUDwhUCOecuRQsdcKYfr3KDmneZRXCkg4",
+        "d": "CwPnivlhyi-CVp7dDOWXFkg20A3rLd1LeLV9etnpOcs"
+      }
+    },
+    "p256-cand-4": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 4 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "HmvF0dzezyqzawzC3drjzWfPOisH76QN-DxYdbbPkrE",
+        "y": "qCZ9UiVCkI57XUsg-rLPkyR0EsfEPytm3qehouMfuHg",
+        "d": "Ha87kUg-jf12q0L358n8e0g51UdG7kIcl2AqQ94CO1Y"
+      }
+    },
+    "p256-cand-5": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 5 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "2Iqyc6OBkKRDPnEf8HqaVVyDTXLjkmrIPihl13F0Yfc",
+        "y": "gsH5hx7zPcENDKcJuP0gTpX8YBKp9-fXxUJuRy_aklk",
+        "d": "IGwztTvgslvb_jRq-k2mrT523VMuNZRU_dmnIyz1H50"
+      }
+    },
+    "p256-cand-6": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 6 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "qSeAkY4849A6_vAG-PJwlH4zD6DHxrSbE4mdnWyqffU",
+        "y": "HGQCNzl0Z6Dd2-f6Ko521VTxD8qDQR9-ZzPFaQXMfP8",
+        "d": "V83K9XcX0lK-G-IPQKJ8adR1I4WjFsDX_dv4N4NIYfk"
+      }
+    },
+    "p256-cand-7": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 7 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "KZw7nmfbO6w3ZY9OySUJuOJpImDDHnMfAGmOHCab_Sw",
+        "y": "-tfU976-KZMXjg-xavhJJF_tGJzhNnQ7aMitMViMi_U",
+        "d": "q9NxPvAbgnF1lIaLxTftqudVBT36BmSn_7OYA0Sn8bE"
+      }
+    },
+    "p256-cand-8": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 8 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "yKmwJxfz0yt8DcrniKtydCu_TCUW6RaL-Va_EdpgBKk",
+        "y": "_HroA-DHZ_dL11xU5MS5msvGZfnBX_PTs9n7XMlqGJ4",
+        "d": "_pSNbRnALwP0uJxemHp9TVK7Fn07cnzHCJ4I95ByQos"
+      }
+    },
+    "p256-cand-9": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); kid-less candidate 9 of 9 for the ADR 0029 §4 candidate bound",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "SdISjqOXC7XxWNbDV1jw2Tjj6gxWWCnoNJeeyUDJd7U",
+        "y": "pQv8_ydX5IA29x6oEQVb_tfxHeWWpDa70Kbr_DG2ccs",
+        "d": "Nbe__uZ8xHgM6TL8zu2US4Pwhzc18PMGTdmCDOK7n9k"
+      }
+    },
+    "p256-attacker": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); the attacker's key for embedded-jwk header tests (CVE-2018-0114), never a member of a verifying set",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "uhAd3X7C07ijtmAyxKzts_abN-ZyyzTqGDHuIVAYZCw",
+        "y": "QFlPJHN8yY_RShgvH0QSsFl1Ngxc5XsNzyfmLhg7iSw",
+        "d": "VbIeLL_X7qVX9KkkZbWgnSAk0-lVOCVEU1hCnpgiai8"
+      }
+    },
+    "p256-ecdh": {
+      "source": "generated once with crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); the ECDH-ES+A*KW recipient key of nested JWTs (RFC 7518 §4.6)",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "5FxKAdx2QOg6I41sPlVcn19PKg0OcgfyFiKe8ISqRlg",
+        "y": "crIh0z2HqMDizKTzRQPncgE0V6NPoS5vNOP615m_Glc",
+        "d": "bn4q3styftzgYI3NAQiWLyBeTGeYIkEpozs0fK8f6O0"
+      }
+    },
+    "rsa-2048": {
+      "source": "RFC 7520 §3.3 Figure 3 (RSA public key of bilbo.baggins@hobbiton.example), copied from conformance/vectors/third_party/rfc7520/jws/4-1-rs256-compact-verify.json; public only (ADR 0021)",
+      "jwk": {
+        "kty": "RSA",
+        "kid": "bilbo.baggins@hobbiton.example",
+        "use": "sig",
+        "n": "n4EPtAOCc9AlkeQHPzHStgAbgs7bTZLwUBZdR8_KuKPEHLd4rHVTeT-O-XV2jRojdNhxJWTDvNd7nqQ0VEiZQHz_AJmSCpMaJMRBSFKrKb2wqVwGU_NsYOYL-QtiWN2lbzcEe6XC0dApr5ydQLrHqkHHig3RBordaZ6Aj-oBHqFEHYpPe7Tpe-OfVfHd1E6cS6M1FZcD1NNLYD5lFHpPI9bTwJlsde3uhGqC0ZCuEHg8lhzwOHrtIQbS0FVbb9k3-tVTU4fg_3L_vniUFAKwuCLqKnS2BYwdq_mzSnbLY7h_qixoR7jig3__kRhuaxwUkRz5iaiQkqgc5gHdrNP5zw",
+        "e": "AQAB"
+      }
+    },
+    "rsa-2048-rfc7515-a2": {
+      "source": "RFC 7515 App. A.2.1 (the RS256 key), public members n and e only, copied from conformance/vectors/jws-rfc7515/a2-rs256-compact-verify.json; public only (ADR 0021)",
+      "jwk": {
+        "kty": "RSA",
+        "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+        "e": "AQAB"
+      }
+    },
+    "rsa-8200": {
+      "source": "generated once with crypto.generateKeyPairSync('rsa', { modulusLength: 8200, publicExponent: 0x10001 }) on 2026-11-06 (Node v24.21.0, OpenSSL 3.5.8); only the public key was exported, the private key was never written anywhere and is discarded (ADR 0021). Over the 8192-bit import limit, for the ADR 0041 §2 oversized-member vector",
+      "jwk": {
+        "kty": "RSA",
+        "n": "rTphzws3aF2xHUrDRw7j7R0JuF-6mnSdJxusXRTdeVVx0N1gj3iBWnh7TUe3iRCs3swR_c4sfVx-xhm6wrHBWDQkPQnJw6Jtnvd5JgybX_Qbh3LZj4hQrWKCSzXNkjsZ_JpYpWDWwwjut-lVCt1z7uWkTeUVjxcT2fD-JCRa2Fw0lxk4TlSy3EivgtjOBpjKdvq60pF8DZa1q0zQ7pt_Evak4d8221qFZ4GKuifRKojcuzjCtJ7AG-9FCXad0lnjObOYwGdmd3QOC3J_pHiNsGWMT6y0B7PxRu31HTsaXIPuQKyghhthhsA5XIpj9ByUNcepFPQ4D6o0Bi-nb14xAOMhW3zwbC8IkKHVBRYjnP3379DluI8zS7yXup4TIsX-I1U69mHr5TmQGLf6uMTjye8DELEmE2XqywReZGchQN0qhounhXRX1du1_af4vQ_dT81Pf8gzoQe5hL3iSDcMeK9pEN2u4vjU9GdlNLH1kvD3BnO6-gyhdSaXcGFW0vUoxqFQ-0aAVrM31dcy20aJ9V1tttWVlVT9RYvQRiycKan-Ao5lJlM3APL0bLHPXubd0ugZ6gnZ0OJUIA1c8TU6DnOpr35vPo024JG9Y-95TdFR2cwyJs0W7ij3awMzfFKB5IgYmujBRatP7ff8aGjT8634bwCdZNToWWdaxaSDHTW-EgIoLYnb3vc_cKFm48LZuMsLPqoTpXEOxFKsN8s8Yd6sgN2i8_EDUWz2GrUgXS0chIZexXC_O-IsmZyZYsLalcf10Ux7skk08vc2z5lXkIu6lSxhh9Z_GDhBU9oEC3C33VS4nSIqkwJhYlS77yPTXD_rBhxrL0tU9sGfgk9a4Wji4HEz1Hew8qsTazW5_a03fUVoopAvIwiEZF1NfSM-WcN5jPBitK48PaGp03_oPoa7hFcYElUIJo9CLBONZiWmeXDoOvGDbZizpyytRkQ0qf0ApJaPyBOlurmOkSJ2DAa40KWRYTOIETCSWExH2PotJkGsqu5Mer39EAxI6UIzPUSR07OReca9eXmtZmuK438pa1m6KGmlKIUg4pu1bgEfGQZx_CYqH2R_kL4M61CVZ3l00nCC_qupUJwkMEPSj_c_YB2Uc83qMHvAo5GeTFDgc5MAA7ztE5H5pbEs4LI3THcFyoKx2V3zu2k69EWmbtn0wbet1tkJxy5MhmdRVNIckR-teJiGMJ6jerOrewTzncUbF0ywyl7yBwjrBcyGRo-L4QCSfwc_PHPmaMrdkH7dnZp9HMWzGz8uunZwZ-GL3_DNOtSZbgHaq0or9ajPQzjBAelNNzts3_Wl4L8sZsCkxEFtc_bRclaPYGA1zZRH6Qs-LxUVsNVivykD366X04M",
+        "e": "AQAB"
+      }
+    }
+  }
+}

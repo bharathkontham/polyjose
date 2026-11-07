@@ -1,0 +1,2459 @@
+{
+  "about": "feature 0004 T12: the negative jwt.validate and jwt.issue vectors in conformance/vectors/jwt/negative/, one vector per file (ADR 0045). Each entry's \"file\" member names its output file; it is not part of the vector and the split step below removes it.",
+  "regenerate": [
+    "node conformance/tools/jwt-oracle/gen.mjs conformance/tools/jwt-oracle/specs/negative.json \"$TMPDIR/negative-all.json\"",
+    "node -e 'const fs=require(\"fs\");const [src,dir]=process.argv.slice(1);for(const v of JSON.parse(fs.readFileSync(src,\"utf8\")).vectors){const f=v.file;delete v.file;fs.writeFileSync(`${dir}/${f}.json`,JSON.stringify(v,null,2)+\"\\n\")}' \"$TMPDIR/negative-all.json\" conformance/vectors/jwt/negative",
+    "Run both from the polyjose repository root. HS256 and EdDSA entries reproduce byte for byte; ES256 signatures and the JWE are randomized (gen.mjs README), so a rerun rewrites those files with other, equally valid bytes: regenerate only on purpose."
+  ],
+  "vectors": [
+    {
+      "file": "numericdate-exp-string",
+      "source": "RFC 7519 §2, §4.1.4; ADR 0027 §2; CVE-2026-25537",
+      "description": "exp is the string \"1300819380\", not a JSON number, behind a valid HS256 signature. At now 1300819320 a parser that coerced it would accept the token (60 s before exp); a NumericDate MUST be a number: InvalidClaim (the CVE-2026-25537 class)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":\"1300819380\"}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-nbf-string",
+      "source": "RFC 7519 §2, §4.1.5; ADR 0027 §2",
+      "description": "nbf is the string \"0\" (a coerced 0 would pass); exp is valid. A NumericDate MUST be a JSON number: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600,\"nbf\":\"0\"}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-iat-string",
+      "source": "RFC 7519 §2, §4.1.6; ADR 0027 §2, §3",
+      "description": "iat is the string \"0\" and no max_age is set: iat is still type-checked (ADR 0027 §3), so InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600,\"iat\":\"0\"}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-exp-true",
+      "source": "RFC 7519 §2, §4.1.4; ADR 0027 §1, §2",
+      "description": "exp is true, not a JSON number (a registered claim of the wrong type, null included): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":true}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-exp-null",
+      "source": "RFC 7519 §2, §4.1.4; ADR 0027 §1, §2",
+      "description": "exp is null, not a JSON number (a registered claim of the wrong type, null included): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":null}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-exp-array",
+      "source": "RFC 7519 §2, §4.1.4; ADR 0027 §1, §2",
+      "description": "exp is [1], not a JSON number (a registered claim of the wrong type, null included): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":[1]}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-exp-object",
+      "source": "RFC 7519 §2, §4.1.4; ADR 0027 §1, §2",
+      "description": "exp is {}, not a JSON number (a registered claim of the wrong type, null included): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":{}}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-exp-2pow53",
+      "source": "RFC 7519 §2; RFC 7493 §2.2; ADR 0027 §2",
+      "description": "exp is 9007199254740992 (2^53), one past the NumericDate range of ±(2^53 − 1); it would otherwise be far in the future and accepted. Written in the signed payload octets, since vector JSON stays within ±(2^53 − 1): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":9007199254740992}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-exp-1e300",
+      "source": "RFC 7519 §2; RFC 7493 §2.2; ADR 0027 §2",
+      "description": "exp is 1e300, finite but far outside ±(2^53 − 1); written in the signed payload octets: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1e300}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-exp-minus-2pow53",
+      "source": "RFC 7519 §2; RFC 7493 §2.2; ADR 0027 §2",
+      "description": "exp is -9007199254740992 (−2^53), one past the negative end of the range. In range it would be simply expired (TokenExpired); out of range it is InvalidClaim, which this pins",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":-9007199254740992}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "numericdate-exp-1e400",
+      "source": "RFC 7519 §2, §7.2 step 10; RFC 8259 §6; ADR 0027 §2",
+      "description": "exp is 1e400, which overflows to a non-finite double; the JSON parser rejects non-finite numbers before claims are typed: InvalidJson",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidJson"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1e400}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "claims-duplicate-exp",
+      "source": "RFC 7519 §4; RFC 7515 §5.2 step 4 (via RFC 7519 §7.2); ADR 0027 §1",
+      "description": "The Claims Set {\"exp\":1,\"exp\":2} names exp twice; polyjose rejects duplicate claim names (RFC 7519 §4 allows reject or last-wins) before any claim is checked: InvalidJson",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidJson"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1,\"exp\":2}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "claims-duplicate-exp-escaped",
+      "source": "RFC 7519 §4; RFC 8259 §7; ADR 0027 §1, ADR 0041 §1",
+      "description": "The Claims Set {\"exp\":1,\"\\u0065xp\":2}: the second name is exp after unescaping, so it is a duplicate: InvalidJson",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidJson"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1,\"\\u0065xp\":2}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "claims-payload-array",
+      "source": "RFC 7519 §7.2 step 10; ADR 0027 §1",
+      "description": "The payload is the JSON array [], valid JSON but not a JSON object, so not a JWT Claims Set: InvalidJson",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidJson"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "[]",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "claims-payload-not-utf8",
+      "source": "RFC 7519 §7.2 step 10; RFC 8259 §8.1; ADR 0027 §1",
+      "description": "The payload octets are {\"exp\":1700000600,\"name\":\"<0xFF>\"}: the 0xFF octet is not UTF-8, so the Claims Set is not valid JSON text: InvalidJson",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidJson"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload_b64u": "eyJleHAiOjE3MDAwMDA2MDAsIm5hbWUiOiL_In0",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "claims-iss-number",
+      "source": "RFC 7519 §4.1.1; ADR 0027 §1",
+      "description": "iss is the number 5, not a StringOrURI; no issuer is configured, so only the parse-time type check can reject it: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":5,\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "claims-aud-array-with-number",
+      "source": "RFC 7519 §4.1.3; ADR 0027 §4",
+      "description": "aud is [\"a\", 1]: an array element that is not a string. The configured audience [\"a\"] would match the first element, so this pins the parse-time type check: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "audience": [
+            "a"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600,\"aud\":[\"a\",1]}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "claims-aud-object",
+      "source": "RFC 7519 §4.1.3; ADR 0027 §1, §4",
+      "description": "aud is {}, neither a string nor an array of strings (audience [\"a\"] configured): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "audience": [
+            "a"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600,\"aud\":{}}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "time-exp-missing",
+      "source": "RFC 7519 §4.1.4; ADR 0007; ADR 0027 §3",
+      "description": "No exp under the default policy: exp is required (ADR 0007) unless allow_missing_exp is set: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\"}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "time-exp-at-leeway-edge",
+      "source": "RFC 7519 §4.1.4; ADR 0027 §3",
+      "description": "exp 1700000600, now 1700000660 = exp + 60 with the default leeway 60: exp <= now − leeway, so the token is expired (the accepting side, now exp + 59, is a positive vector): TokenExpired",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000660,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "TokenExpired"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "time-exp-leeway-0-at-exp",
+      "source": "RFC 7519 §4.1.4; ADR 0027 §3",
+      "description": "exp 1700000600 with leeway 0 and now exactly exp: the current time MUST be before exp, and it is not: TokenExpired",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000600,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "leeway": 0
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "TokenExpired"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "time-nbf-past-leeway",
+      "source": "RFC 7519 §4.1.5; ADR 0027 §3",
+      "description": "nbf 1700000100, now 1700000039 = nbf − 61 with the default leeway 60: nbf > now + leeway: TokenNotYetValid",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000039,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "TokenNotYetValid"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600,\"nbf\":1700000100}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "time-max-age-iat-future",
+      "source": "RFC 7519 §4.1.6; ADR 0027 §3",
+      "description": "max_age 300, iat 1700000061 = now + 61 with the default leeway 60: issued in the future beyond the leeway: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "max_age": 300
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600,\"iat\":1700000061}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "time-max-age-iat-too-old",
+      "source": "RFC 7519 §4.1.6; ADR 0027 §3",
+      "description": "max_age 300, iat 1699999639 = now − 361: older than now − max_age − leeway (1699999640): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "max_age": 300
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600,\"iat\":1699999639}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "time-max-age-iat-missing",
+      "source": "RFC 7519 §4.1.6; ADR 0027 §3",
+      "description": "max_age 300 makes iat required, and the token has none: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "max_age": 300
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "time-leeway-601-refused",
+      "source": "RFC 7519 §4.1.4; RFC 9068 §4; ADR 0027 §3",
+      "description": "A leeway of 601 s is over the 600 s cap, so the policy is refused when it is built, before the (otherwise valid) token is looked at: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "leeway": 601
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-iss-case",
+      "source": "RFC 7519 §4.1.1, §7.3; RFC 8725 §3.8; ADR 0027 §1, §4",
+      "description": "iss is \"https://A\" and the accepted issuer is \"https://a\": StringOrURI values compare as exact, case-sensitive strings with no URI normalization: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "issuer": "https://a"
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://A\",\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-sub-mismatch",
+      "source": "RFC 7519 §4.1.2; ADR 0027 §4",
+      "description": "sub is \"user-2\" and the expected subject is \"user-1\": InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "subject": "user-1"
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"sub\":\"user-2\",\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-aud-no-match",
+      "source": "RFC 7519 §4.1.3; ADR 0027 §4",
+      "description": "aud is [\"x\"] and the accepted audiences are [\"api\"]: no value matches: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"aud\":[\"x\"],\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-aud-empty-array",
+      "source": "RFC 7519 §4.1.3; ADR 0027 §4",
+      "description": "aud is [] with accepted audiences [\"api\"]: an empty array matches nothing: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"aud\":[],\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-aud-missing",
+      "source": "RFC 7519 §4.1.3; ADR 0027 §4",
+      "description": "Accepted audiences [\"api\"] are configured and the token has no aud: aud is then required: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-aud-unconfigured",
+      "source": "RFC 7519 §4.1.3; RFC 8725 §3.9; ADR 0027 §4",
+      "description": "aud is \"api\" and the policy names no audience (and does not set ignore_audience): the processor does not identify itself with a value in aud, so the JWT MUST be rejected: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"aud\":\"api\",\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-missing",
+      "source": "RFC 9068 §2.2, §4; ADR 0027 §5",
+      "description": "An at+jwt access token with iss, sub, aud, exp, iat and jti but no client_id, under profile access_token (issuer and audience configured and matching): client_id is required: InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\"}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-null",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id null, under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":null}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-number",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id a number (5), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":5}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-bool",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id a boolean (true), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":true}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-array",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id an array ([\"a\"]), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":[\"a\"]}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "identity-access-token-client-id-not-string-object",
+      "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052",
+      "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id an object ({}), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":{}}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "header-alg-none",
+      "source": "RFC 7519 §6.1; RFC 8725 §2.1, §3.2; ADR 0007; ADR 0027 §6",
+      "description": "An Unsecured JWT in the RFC 7519 §6.1 form (header {\"alg\":\"none\"}, empty signature) with valid claims, allow-list [HS256] and an HS256 key: never accepted: AlgorithmNotAllowed",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      },
+      "jws": {
+        "header": {
+          "alg": "none"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}"
+      }
+    },
+    {
+      "file": "header-alg-none-forged-signature",
+      "source": "RFC 8725 §2.1, §3.2; ADR 0007; ADR 0027 §6",
+      "description": "An alg none token carrying a forged signature: the HMAC-SHA256 of its own signing input under the caller's HS256 key (computed with Python's hmac), so a verifier that ignored alg none and used the key's family would accept it. alg none is never accepted: AlgorithmNotAllowed",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      },
+      "jws": {
+        "header": {
+          "alg": "none"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "signature_b64u": "9tORjgG6Q_V12kxxMwB-6dMHvVVERJNCs9D5MRoIVPI"
+      }
+    },
+    {
+      "file": "header-allowed-algs-none",
+      "source": "RFC 8725 §3.1, §3.2; ADR 0007; ADR 0027 §6",
+      "description": "allowed_algs [\"none\"] with an alg none token: none can't be allowed, so the policy is refused: AlgorithmNotAllowed",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "none"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      },
+      "jws": {
+        "header": {
+          "alg": "none"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}"
+      }
+    },
+    {
+      "file": "header-alg-confusion-rs256-only",
+      "source": "RFC 8725 §2.1, §3.1; ADR 0026 §2; ADR 0029 §2",
+      "description": "Algorithm confusion: an HS256 token whose HMAC key is the SPKI PEM text of the RSA public key rsa-2048 (RFC 7520 §3.3), verified against a JWK Set holding that RSA public key with allow-list [RS256]: HS256 is not allowed: AlgorithmNotAllowed",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "RS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "rsa-2048"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": {
+          "$oct_from": "rsa-2048",
+          "encoding": "spki-pem"
+        }
+      }
+    },
+    {
+      "file": "header-alg-confusion-hs256-allowed",
+      "source": "RFC 8725 §2.1, §3.1; ADR 0029 §2, §4",
+      "description": "The same algorithm-confusion token with allow-list [HS256, RS256]: HS256 needs an oct member and the set has only the RSA public key, so the RSA key is never used as an HMAC secret: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256",
+          "RS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "rsa-2048"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": {
+          "$oct_from": "rsa-2048",
+          "encoding": "spki-pem"
+        }
+      }
+    },
+    {
+      "file": "header-typ-at-jwt-default-mode",
+      "source": "RFC 8725 §3.11, §3.12; RFC 9068 §2.1; ADR 0027 §5",
+      "description": "typ at+jwt under the default typing mode (absent or JWT only): an explicitly typed access token is kept out of generic validation: InvalidHeader",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidHeader"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "header-typ-jwt-access-token-profile",
+      "source": "RFC 9068 §2.1, §4; RFC 8725 §3.11; ADR 0027 §5",
+      "description": "typ JWT under profile access_token, with every RFC 9068 §2.2 claim present and matching: the profile requires typ at+jwt: InvalidHeader",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidHeader"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":\"client-1\"}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "header-b64-false",
+      "source": "RFC 7797 §7; ADR 0027 §6",
+      "description": "b64 false with crit [\"b64\"] and a validly signed unencoded payload: JSON Web Tokens MUST NOT use b64 with a false value: InvalidHeader",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidHeader"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "b64": false,
+          "crit": [
+            "b64"
+          ]
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "header-cty-jwt-on-jws",
+      "source": "RFC 7519 §5.2; ADR 0027 §5, §7",
+      "description": "cty JWT on a signed JWT would mean JWS-in-JWS nesting, which is not supported: InvalidHeader",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidHeader"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT",
+          "cty": "JWT"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "header-crit-unknown",
+      "source": "RFC 7515 §4.1.11; RFC 7519 §7.2 step 5 (erratum 8060); ADR 0026 §2",
+      "description": "crit lists the extension urn:example:critical, which polyjose does not understand: UnknownCritical",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "UnknownCritical"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "crit": [
+            "urn:example:critical"
+          ],
+          "urn:example:critical": true
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "header-five-part-jwe",
+      "source": "RFC 7519 §7.2; draft-ietf-oauth-rfc8725bis §3.3; ADR 0027 §7",
+      "description": "A five-part compact JWE (dir, A128GCM, around a valid HS256 JWT) given to signed-JWT validation (no decrypt): the entry points are separate: InvalidFormat",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidFormat"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      },
+      "jwe": {
+        "alg": "dir",
+        "enc": "A128GCM",
+        "key": "oct-16"
+      }
+    },
+    {
+      "file": "header-flattened-json",
+      "source": "RFC 7519 §1, §7.2 step 1; draft-ietf-oauth-rfc8725bis §3.14; ADR 0027 §6",
+      "description": "A valid HS256 JWT rewrapped as a flattened JSON JWS (no unprotected header, signature unchanged): a JWT is compact only: InvalidFormat",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidFormat"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32",
+        "serialization": "flattened"
+      }
+    },
+    {
+      "file": "header-tampered-payload",
+      "source": "RFC 7515 §5.2 step 8; ADR 0027 §9",
+      "description": "The payload is swapped after signing (iss changed to https://attacker.example), keeping the signature: InvalidSignature",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "oct-32",
+        "replace_after_signing": {
+          "payload": "{\"iss\":\"https://attacker.example\",\"exp\":1700000600}"
+        }
+      }
+    },
+    {
+      "file": "header-tampered-header",
+      "source": "RFC 7515 §5.2 step 8; ADR 0027 §9",
+      "description": "The protected header is swapped after signing for {\"typ\":\"JWT\",\"alg\":\"HS256\"}: the same members in another order, so different octets under the signature: InvalidSignature",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "oct-32",
+        "replace_after_signing": {
+          "header_text": "{\"typ\":\"JWT\",\"alg\":\"HS256\"}"
+        }
+      }
+    },
+    {
+      "file": "header-tampered-signature",
+      "source": "RFC 7515 §5.2 step 8; ADR 0027 §9",
+      "description": "The low bit of the last signature octet is flipped: InvalidSignature",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "oct-32",
+        "corrupt_signature": true
+      }
+    },
+    {
+      "file": "keyset-kid-unknown",
+      "source": "RFC 7515 §4.1.4; RFC 7517 §4.5; ADR 0029 §2, §4",
+      "description": "Header kid \"z\" against a set of members with kid a and b (signed by a's key): no member carries kid z: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "z"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-kid-b"
+      }
+    },
+    {
+      "file": "keyset-kid-case",
+      "source": "RFC 7515 §4.1.4; RFC 7517 §4.5; ADR 0029 §2",
+      "description": "Header kid \"B\", signed by the key of member kid \"b\": kid comparison is exact and case-sensitive: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "B"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-kid-b"
+      }
+    },
+    {
+      "file": "keyset-use-enc",
+      "source": "RFC 7517 §4.2; ADR 0029 §2",
+      "description": "The only member with kid a (the signing key) has use enc: not a signature key, so not a candidate: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a",
+              "with": {
+                "use": "enc"
+              }
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "a"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-kid-a"
+      }
+    },
+    {
+      "file": "keyset-key-ops-sign",
+      "source": "RFC 7517 §4.3; ADR 0029 §2",
+      "description": "The only member with kid a (the signing key) has key_ops [\"sign\"], without verify: not a candidate: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a",
+              "with": {
+                "key_ops": [
+                  "sign"
+                ]
+              }
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "a"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-kid-a"
+      }
+    },
+    {
+      "file": "keyset-jwk-alg-ed25519-vs-eddsa",
+      "source": "RFC 7517 §4.4; RFC 8725 §3.1; RFC 9864 §2.2; ADR 0029 §2",
+      "description": "An EdDSA token and a set whose only member (the signing Ed25519 key) has JWK alg Ed25519: the JWK alg must be absent or equal the header alg exactly, and EdDSA ≠ Ed25519: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "EdDSA"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "ed25519",
+              "with": {
+                "alg": "Ed25519"
+              }
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "EdDSA",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "ed25519"
+      }
+    },
+    {
+      "file": "keyset-jwk-alg-hs512-vs-hs256",
+      "source": "RFC 7517 §4.4; RFC 8725 §3.1; ADR 0029 §2",
+      "description": "An HS256 token and a set whose only member (the signing 64-octet oct key) has JWK alg HS512: bound to another algorithm, so not a candidate: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$key": "oct-64",
+              "with": {
+                "alg": "HS512"
+              }
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "oct-64"
+      }
+    },
+    {
+      "file": "keyset-nine-candidates",
+      "source": "RFC 8725 §3.1; ADR 0029 §4",
+      "description": "A kid-less ES256 token and a set of nine kid-less P-256 members (the first is the signing key): nine candidates exceed the default max_key_candidates 8, refused before any signature is computed: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-cand-1"
+            },
+            {
+              "$public": "p256-cand-2"
+            },
+            {
+              "$public": "p256-cand-3"
+            },
+            {
+              "$public": "p256-cand-4"
+            },
+            {
+              "$public": "p256-cand-5"
+            },
+            {
+              "$public": "p256-cand-6"
+            },
+            {
+              "$public": "p256-cand-7"
+            },
+            {
+              "$public": "p256-cand-8"
+            },
+            {
+              "$public": "p256-cand-9"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-cand-1"
+      }
+    },
+    {
+      "file": "keyset-three-candidates-none-verify",
+      "source": "RFC 7515 §5.2; ADR 0029 §4; ADR 0026 §3",
+      "description": "A kid-less ES256 token signed by p256-cand-9 and a set of three other kid-less P-256 members: every candidate is tried and fails, ranked: InvalidSignature",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-cand-1"
+            },
+            {
+              "$public": "p256-cand-2"
+            },
+            {
+              "$public": "p256-cand-3"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-cand-9"
+      }
+    },
+    {
+      "file": "keyset-rsa-private-member",
+      "source": "RFC 7517 App. A.2; RFC 7515 App. A.2; ADR 0021; ADR 0029 §3; ADR 0041 §2",
+      "description": "The RFC 7515 A.2 RS256 token against a set holding the A.2 public key (which verifies it) and then the RFC 7517 A.2 RSA private key (public RFC test data, never used to sign): a set with an RSA private member fails import as a whole: UnsupportedAlgorithm",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw",
+        "now": 1300819320,
+        "allowed_algs": [
+          "RS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "rsa-2048-rfc7515-a2"
+            },
+            {
+              "kty": "RSA",
+              "n": "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+              "e": "AQAB",
+              "d": "X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q",
+              "p": "83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs",
+              "q": "3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk",
+              "dp": "G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0",
+              "dq": "s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk",
+              "qi": "GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU",
+              "alg": "RS256",
+              "kid": "2011-04-29"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "UnsupportedAlgorithm"
+      }
+    },
+    {
+      "file": "keyset-embedded-jwk-unknown-kid",
+      "source": "CVE-2018-0114; RFC 8725 §3.10; ADR 0026 §2; ADR 0029 §2",
+      "description": "The header embeds the attacker's public key as jwk, with kid \"attacker\", and is signed by that key; the real set holds kid a and b. Embedded keys never supply keys, and kid attacker selects no member: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "attacker",
+          "jwk": {
+            "$public": "p256-attacker"
+          }
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-attacker"
+      }
+    },
+    {
+      "file": "keyset-embedded-jwk-real-kid",
+      "source": "CVE-2018-0114; RFC 8725 §3.10; ADR 0026 §2; ADR 0029 §2",
+      "description": "The header embeds the attacker's public key as jwk and copies the real kid \"a\"; it is signed by the attacker's key. Member a is selected and the embedded key ignored: InvalidSignature",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "a",
+          "jwk": {
+            "$public": "p256-attacker"
+          }
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-attacker"
+      }
+    },
+    {
+      "file": "keyset-embedded-jwk-no-kid",
+      "source": "CVE-2018-0114; RFC 8725 §3.10; ADR 0026 §2; ADR 0029 §2, §4",
+      "description": "The header embeds the attacker's public key as jwk with no kid, signed by that key: both real members are candidates and neither verifies; the embedded key is never tried: InvalidSignature",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "jwk": {
+            "$public": "p256-attacker"
+          }
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-attacker"
+      }
+    },
+    {
+      "file": "keyset-rsa-8200-skipped",
+      "source": "RFC 7517 §5; RFC 7515 App. A.2; ADR 0041 §2; ADR 0029 §4",
+      "description": "The RFC 7515 A.2 RS256 token, allow-list [RS256], against a set whose only RS256-capable member is an 8200-bit RSA public key (over the 8192-bit import limit, so skipped at import) next to a P-256 key: no candidate remains: NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw",
+        "now": 1300819320,
+        "allowed_algs": [
+          "RS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "rsa-8200"
+            },
+            {
+              "$public": "p256"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      }
+    },
+    {
+      "file": "rewrap-unprotected-typ-default",
+      "source": "RFC 7519 §1, §7.2 step 1; RFC 7515 §7.2.2; ADR 0027 §6; ADR 0049 §2",
+      "description": "A valid HS256 JWT (protected header {\"alg\":\"HS256\"}) rewrapped as flattened JSON with the attacker unprotected header {\"typ\":\"at+jwt\"}; protected header and signature unchanged, so the signature is valid. A JWT is compact only (ADR 0027 §6), and typing is never read from an unprotected header (ADR 0049 §2): InvalidFormat under the default policy",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidFormat"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "oct-32",
+        "serialization": "flattened",
+        "unprotected": {
+          "typ": "at+jwt"
+        }
+      }
+    },
+    {
+      "file": "rewrap-unprotected-typ-access-token",
+      "source": "RFC 7519 §1, §7.2 step 1; RFC 9068 §4; ADR 0027 §6; ADR 0049 §2",
+      "description": "A valid HS256 JWT with every RFC 9068 §2.2 claim but no protected typ, rewrapped as flattened JSON with the attacker unprotected header {\"typ\":\"at+jwt\"} to pass as an access token; signature unchanged and valid. A JWT is compact only (ADR 0027 §6), and typing is never read from an unprotected header (ADR 0049 §2): InvalidFormat under profile access_token",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "profile": "access_token",
+          "issuer": "https://issuer.example",
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidFormat"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"sub\":\"user-1\",\"aud\":\"api\",\"exp\":1700000600,\"iat\":1699999990,\"jti\":\"jti-1\",\"client_id\":\"client-1\"}",
+        "key": "oct-32",
+        "serialization": "flattened",
+        "unprotected": {
+          "typ": "at+jwt"
+        }
+      }
+    },
+    {
+      "file": "precedence-tampered-and-expired",
+      "source": "ADR 0027 §9; RFC 7515 §5.2",
+      "description": "The payload is swapped after signing and both payloads are expired at now (exp + 3600): claims are parsed only after the signature verifies (step 9 before J5): InvalidSignature",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700004200,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidSignature"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "oct-32",
+        "replace_after_signing": {
+          "payload": "{\"iss\":\"https://attacker.example\",\"exp\":1700000600}"
+        }
+      }
+    },
+    {
+      "file": "precedence-alg-not-allowed-and-typ",
+      "source": "ADR 0027 §9; ADR 0026 §2 step 7; RFC 8725 §3.1",
+      "description": "An HS256 token with typ at+jwt under the default typing mode and allow-list [HS384]: the allow-list (step 7) comes before the JWT header rules (J1): AlgorithmNotAllowed",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS384"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "at+jwt"
+        },
+        "payload": "{\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "precedence-typ-and-unknown-kid",
+      "source": "ADR 0027 §9; RFC 8725 §3.12",
+      "description": "An ES256 token with typ at+jwt (default typing mode) and kid \"z\" unknown to the set: the JWT header rules (J1) come before key selection (J2): InvalidHeader",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidHeader"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "at+jwt",
+          "kid": "z"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-kid-a"
+      }
+    },
+    {
+      "file": "precedence-unknown-kid-and-expired",
+      "source": "ADR 0027 §9; ADR 0029 §4",
+      "description": "An ES256 token with kid \"z\" unknown to the set, expired at now (exp + 3600): key selection (J2) comes before the claims (J5): NoMatchingKey",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700004200,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "NoMatchingKey"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "z"
+        },
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1700000600}",
+        "key": "p256-kid-a"
+      }
+    },
+    {
+      "file": "precedence-expired-and-aud",
+      "source": "ADR 0027 §9; RFC 7519 §4.1.3, §4.1.4",
+      "description": "aud \"other\" against accepted audiences [\"api\"], and expired at now (exp + 3600): exp (J5) comes before aud (J10): TokenExpired",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700004200,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "audience": [
+            "api"
+          ]
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "TokenExpired"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"aud\":\"other\",\"exp\":1700000600}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "precedence-missing-exp-and-iss",
+      "source": "ADR 0027 §9; RFC 7519 §4.1.1, §4.1.4",
+      "description": "No exp under the default policy and iss https://attacker.example against the accepted issuer https://issuer.example: required-claim presence (J4) comes before the iss check (J8); both give InvalidClaim",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1700000000,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "policy": {
+          "issuer": "https://issuer.example"
+        },
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "InvalidClaim"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": "{\"iss\":\"https://attacker.example\"}",
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "issue-rs256-unsupported",
+      "source": "ADR 0021; ADR 0027 §8; RFC 7518 §3.3, §3.5",
+      "description": "Issuing RS256 with the RSA public key rsa-2048 (RFC 7520 §3.3): RSA signing is not supported: UnsupportedAlgorithm",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1700000600
+        },
+        "alg": "RS256",
+        "key": {
+          "$public": "rsa-2048"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "UnsupportedAlgorithm"
+      }
+    },
+    {
+      "file": "issue-ps256-unsupported",
+      "source": "ADR 0021; ADR 0027 §8; RFC 7518 §3.3, §3.5",
+      "description": "Issuing PS256 with the RSA public key rsa-2048 (RFC 7520 §3.3): RSA signing is not supported: UnsupportedAlgorithm",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1700000600
+        },
+        "alg": "PS256",
+        "key": {
+          "$public": "rsa-2048"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "UnsupportedAlgorithm"
+      }
+    },
+    {
+      "file": "issue-none",
+      "source": "RFC 7519 §6; RFC 8725 §3.2; ADR 0027 §8",
+      "description": "Issuing with alg none (an Unsecured JWT) and an oct key: never produced: AlgorithmNotAllowed",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1700000600
+        },
+        "alg": "none",
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "AlgorithmNotAllowed"
+      }
+    },
+    {
+      "file": "issue-es256-p384-key",
+      "source": "RFC 7518 §3.4; RFC 8725 §3.1; ADR 0026 §2 step 8; ADR 0027 §8",
+      "description": "Issuing ES256 with a P-384 private key: ES256 is bound to P-256: KeyAlgorithmMismatch",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1700000600
+        },
+        "alg": "ES256",
+        "key": {
+          "$key": "p384"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "error": "KeyAlgorithmMismatch"
+      }
+    }
+  ]
+}

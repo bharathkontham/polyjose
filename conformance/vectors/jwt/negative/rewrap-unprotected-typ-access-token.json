@@ -1,0 +1,27 @@
+{
+  "source": "RFC 7519 §1, §7.2 step 1; RFC 9068 §4; ADR 0027 §6; ADR 0049 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "A valid HS256 JWT with every RFC 9068 §2.2 claim but no protected typ, rewrapped as flattened JSON with the attacker unprotected header {\"typ\":\"at+jwt\"} to pass as an access token; signature unchanged and valid. A JWT is compact only (ADR 0027 §6), and typing is never read from an unprotected header (ADR 0049 §2): InvalidFormat under profile access_token",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "{\"payload\":\"eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoiYXBpIiwiZXhwIjoxNzAwMDAwNjAwLCJpYXQiOjE2OTk5OTk5OTAsImp0aSI6Imp0aS0xIiwiY2xpZW50X2lkIjoiY2xpZW50LTEifQ\",\"protected\":\"eyJhbGciOiJIUzI1NiJ9\",\"header\":{\"typ\":\"at+jwt\"},\"signature\":\"ZKluHQB_eWIOz3ii6naXkzwvyXqsb3KyLDlVtu8kWIw\"}",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "profile": "access_token",
+      "issuer": "https://issuer.example",
+      "audience": [
+        "api"
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

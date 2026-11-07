@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §5.2; ADR 0027 §5, §7; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "cty JWT on a signed JWT would mean JWS-in-JWS nesting, which is not supported: InvalidHeader",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImN0eSI6IkpXVCJ9.eyJleHAiOjE3MDAwMDA2MDB9.UgQLIQ1GU7SKCW6MJHMpxFlTS3sMDXfqs-wLhxdHRkM",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

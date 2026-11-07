@@ -1,0 +1,23 @@
+{
+  "source": "RFC 7519 §4.1.1, §7.3; RFC 8725 §3.8; ADR 0027 §1, §4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "iss is \"https://A\" and the accepted issuer is \"https://a\": StringOrURI values compare as exact, case-sensitive strings with no URI normalization: InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL0EiLCJleHAiOjE3MDAwMDA2MDB9.UbWwMLftnwk2D1cLlR5jKrYwX1NXwodQGe0D8biMH0Y",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "issuer": "https://a"
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}

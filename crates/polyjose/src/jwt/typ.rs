@@ -1,0 +1,696 @@
+//! Explicit typing of JWTs: the `typ` values polyjose knows, and the RFC
+//! 9068 access-token profile's required claims (RFC 7519 §5.1, RFC 8725
+//! §3.11, RFC 9068 §2.1–§2.2; ADR 0027 §5).
+//!
+//! Use these with [`Policy::expect_typ`](super::Policy::expect_typ) and
+//! [`IssueOptions::typ`](super::IssueOptions::typ). Other explicit types
+//! (`secevent+jwt`, `logout+jwt`, `dpop+jwt`, …) are passed as strings.
+
+use crate::error::{Error, Result};
+use crate::header::Header;
+
+use super::{Policy, TypMode};
+
+/// `JWT`, the `typ` RFC 7519 §5.1 recommends for a generic JWT.
+///
+/// It is not an explicit type in the RFC 8725 §3.11 sense: under the
+/// default [`TypMode`] it is accepted like an absent `typ`
+/// (ADR 0027 §5).
+pub const JWT: &str = "JWT";
+
+/// `at+jwt`, the `typ` of a JWT access token (RFC 9068 §2.1: "SHOULD be
+/// `at+jwt`"). It compares equal to `application/at+jwt` and `at+JWT`
+/// (RFC 7515 §4.1.9).
+pub const AT_JWT: &str = "at+jwt";
+
+/// The claims a JWT access token must carry (RFC 9068 §2.2), in that
+/// section's order: `iss`, `exp`, `aud`, `sub`, `client_id`, `iat`, `jti`.
+/// [`Policy::access_token`](super::Policy::access_token) requires every one
+/// of them; validation reports a missing one in the ADR 0027 §9 J4 order,
+/// not this one.
+pub const ACCESS_TOKEN_REQUIRED_CLAIMS: [&str; 7] =
+    ["iss", "exp", "aud", "sub", "client_id", "iat", "jti"];
+
+/// Which JOSE layer of a JWT a header belongs to (ADR 0027 §5–§7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Layer {
+    /// The JWS of a signed JWT, or the inner JWS of a nested one.
+    Signed,
+    /// The outer JWE of a nested JWT (RFC 7519 §5.2, §7.2 step 8).
+    Outer,
+}
+
+/// The prefix RFC 7515 §4.1.9 lets a producer omit from `typ` and `cty`.
+const APPLICATION: &[u8] = b"application/";
+
+/// Whether `a` and `b` are the same media type as `typ` or `cty` values
+/// (RFC 7515 §4.1.9–§4.1.10; RFC 7519 §7.3 exempts both from exact
+/// comparison; ADR 0027 §5):
+///
+/// - A value with no `/` **anywhere** is read as `application/` + value
+///   (RFC 7515 §4.1.9: "MUST treat it as if "application/" were prepended
+///   to any "typ" value not containing a '/'"). So `example;part="1/2"`
+///   gets no prefix and differs from `application/example;part="1/2"`,
+///   the RFC's own example of a value that can't be shortened.
+/// - The part before the first `;` (type and subtype) compares
+///   ASCII-case-insensitively (RFC 7515 §4.1.9, citing RFC 2045).
+/// - Everything after the first `;` compares **exactly**, byte for byte,
+///   parameter names included (ADR 0027 §5; RFC 7515 §4.1.9: parameter
+///   values are case-sensitive). A trailing `;` is therefore not the same
+///   as no parameters.
+/// - Nothing is trimmed: `at+jwt ` is not `at+jwt`.
+///
+/// Compares in place, without allocating.
+pub(crate) fn media_type_eq(a: &str, b: &str) -> bool {
+    let (a_short, a_type, a_params) = split_media_type(a);
+    let (b_short, b_type, b_params) = split_media_type(b);
+    if a_params != b_params {
+        return false;
+    }
+    match (a_short, b_short) {
+        (true, false) => {
+            without_application(b_type).is_some_and(|b| b.eq_ignore_ascii_case(a_type))
+        }
+        (false, true) => {
+            without_application(a_type).is_some_and(|a| a.eq_ignore_ascii_case(b_type))
+        }
+        _ => a_type.eq_ignore_ascii_case(b_type),
+    }
+}
+
+/// Splits a `typ`/`cty` value into (no `/` anywhere, so `application/` is
+/// implied; the type/subtype before the first `;`; the rest after it).
+fn split_media_type(value: &str) -> (bool, &[u8], Option<&[u8]>) {
+    let short = !value.contains('/');
+    match value.split_once(';') {
+        Some((media_type, params)) => (short, media_type.as_bytes(), Some(params.as_bytes())),
+        None => (short, value.as_bytes(), None),
+    }
+}
+
+/// `media_type` without a leading `application/` (any case), or `None`
+/// when it does not start with one.
+fn without_application(media_type: &[u8]) -> Option<&[u8]> {
+    let (prefix, rest) = media_type.split_at_checked(APPLICATION.len())?;
+    prefix.eq_ignore_ascii_case(APPLICATION).then_some(rest)
+}
+
+/// The JWT header rules of ADR 0027 §9 step J1 (and N1 for a nested
+/// JWT's outer layer), for one JOSE layer.
+///
+/// `protected` is the integrity-protected header (the JWS or JWE
+/// Protected Header). `unprotected` is any header of the same layer that
+/// is not integrity-protected; compact serializations have none. `typ`
+/// and `cty` are read from `protected` only (ADR 0049 §2, ADR 0050 §3).
+///
+/// - [`Layer::Signed`]: `b64: false` → [`Error::InvalidHeader`]
+///   (RFC 7797 §7); `cty` equal to `JWT` (JWS-in-JWS nesting, not
+///   supported) → `InvalidHeader`; then the policy's [`TypMode`]
+///   (RFC 8725 §3.11–§3.12).
+/// - [`Layer::Outer`]: `cty` must equal `JWT` (RFC 7519 §5.2), else
+///   `InvalidHeader`; the outer `typ`, if present, must satisfy the same
+///   `typ` policy (ADR 0027 §7).
+/// - Both layers: an `unprotected` header that sets `typ` or `cty` →
+///   `InvalidHeader`, even when `protected` is valid (ADR 0049 §2,
+///   ADR 0050 §3). Its other members are ignored here.
+///
+/// The unprotected-header rule runs first, then the layer's rules in the
+/// order listed; every failure is `InvalidHeader`, and the detail string
+/// is diagnostic only
+/// (ADR 0027 §9). `b64` is a JWS parameter (RFC 7797 §3) and is not
+/// checked on the outer layer. Comparisons use [`media_type_eq`].
+///
+/// # Errors
+///
+/// [`Error::InvalidHeader`] when any rule above fails.
+pub(crate) fn check_jwt_header(
+    protected: &Header,
+    unprotected: Option<&Header>,
+    p: &Policy<'_>,
+    layer: Layer,
+) -> Result<()> {
+    // ADR 0049 §2 (JWS), ADR 0050 §3 (JWE): an unprotected header is not
+    // integrity-protected, so the type of the token and the nesting marker
+    // must not come from it. Rejecting (rather than ignoring) it keeps an
+    // attacker from presenting a `typ`/`cty` a careless reader might trust.
+    // Its other members are not this check's concern.
+    if let Some(unprotected) = unprotected {
+        if unprotected.typ.is_some() {
+            return Err(Error::InvalidHeader("typ must be in the protected header"));
+        }
+        if unprotected.cty.is_some() {
+            return Err(Error::InvalidHeader("cty must be in the protected header"));
+        }
+    }
+    match layer {
+        Layer::Signed => {
+            // RFC 7797 §7: "JSON Web Tokens MUST NOT use "b64" with a
+            // "false" value", even when `crit` lists it (ADR 0027 §6).
+            if protected.b64 == Some(false) {
+                return Err(Error::InvalidHeader("b64"));
+            }
+            // ADR 0027 §5, §7: `cty: JWT` on a JWS would nest a JWS in a
+            // JWS (RFC 7519 §5.2), which is not supported. Any other `cty`
+            // is ignored.
+            if protected
+                .cty
+                .as_deref()
+                .is_some_and(|cty| media_type_eq(cty, JWT))
+            {
+                return Err(Error::InvalidHeader("cty"));
+            }
+            check_typ(protected.typ.as_deref(), p.typ_mode())
+        }
+        Layer::Outer => {
+            // RFC 7519 §5.2: in a nested JWT, `cty` "MUST be present" and
+            // "MUST be "JWT"" (compared per RFC 7515 §4.1.10, ADR 0027 §7).
+            // Without it the JWE is not a nested JWT; encrypt-only JWTs are
+            // not supported in 0.1.0.
+            if !protected
+                .cty
+                .as_deref()
+                .is_some_and(|cty| media_type_eq(cty, JWT))
+            {
+                return Err(Error::InvalidHeader("cty"));
+            }
+            // ADR 0027 §7: explicit typing is required on the inner JWT
+            // only (RFC 8725 §3.11); the outer `typ`, if present, must
+            // satisfy the same policy.
+            match protected.typ.as_deref() {
+                Some(typ) => check_typ(Some(typ), p.typ_mode()),
+                None => Ok(()),
+            }
+        }
+    }
+}
+
+/// The `typ` policy of ADR 0027 §5 on the `typ` of one layer.
+///
+/// - [`TypMode::Default`]: absent or `JWT` (RFC 7519 §5.1) is accepted;
+///   any other value is an explicit type that must not pass generic
+///   validation (RFC 8725 §3.12) → [`Error::InvalidHeader`].
+/// - [`TypMode::Exact`]: `typ` must be present and equal (RFC 8725 §3.11,
+///   RFC 9068 §4) → else `InvalidHeader`.
+/// - [`TypMode::Any`]: no check.
+///
+/// Equality is [`media_type_eq`] (RFC 7515 §4.1.9).
+fn check_typ(typ: Option<&str>, mode: &TypMode) -> Result<()> {
+    let accepted = match mode {
+        TypMode::Default => typ.is_none_or(|t| media_type_eq(t, JWT)),
+        TypMode::Exact(expected) => typ.is_some_and(|t| media_type_eq(t, expected)),
+        TypMode::Any => true,
+    };
+    if accepted {
+        Ok(())
+    } else {
+        Err(Error::InvalidHeader("typ"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jwa::SigningAlg;
+    use crate::jwt::FixedClock;
+
+    const CLOCK: FixedClock = FixedClock(1_300_819_380);
+    const ES256: &[SigningAlg] = &[SigningAlg::ES256];
+
+    fn default_policy() -> Policy<'static> {
+        Policy::new(&CLOCK, ES256).unwrap()
+    }
+
+    /// A header from JSON; `alg` is added so every value parses as a JWS
+    /// or JWE header would.
+    fn header(members: &str) -> Header {
+        let json = if members.is_empty() {
+            r#"{"alg":"ES256"}"#.to_owned()
+        } else {
+            format!(r#"{{"alg":"ES256",{members}}}"#)
+        };
+        Header::from_json(json.as_bytes()).unwrap()
+    }
+
+    fn with_typ(typ: Option<&str>) -> Header {
+        match typ {
+            Some(t) => header(&format!(r#""typ":"{t}""#)),
+            None => header(""),
+        }
+    }
+
+    fn signed(h: &Header, p: &Policy<'_>) -> Result<()> {
+        check_jwt_header(h, None, p, Layer::Signed)
+    }
+
+    fn is_invalid_header(r: Result<()>) -> bool {
+        matches!(r, Err(Error::InvalidHeader(_)))
+    }
+
+    #[test]
+    fn default_mode_accepts_only_absent_or_jwt() {
+        // ADR 0027 §5 (d2); RFC 8725 §3.12: an explicitly typed token is
+        // kept out of generic validation.
+        let p = default_policy();
+        for ok in [
+            None,
+            Some("JWT"),
+            Some("jwt"),
+            Some("application/jwt"),
+            Some("Application/JWT"),
+        ] {
+            assert_eq!(signed(&with_typ(ok), &p), Ok(()), "{ok:?}");
+        }
+        for bad in [
+            "at+jwt",
+            "secevent+jwt",
+            "JOSE",
+            "JOSE+JSON",
+            "jwt ",
+            "",
+            "text/jwt",
+        ] {
+            assert!(
+                is_invalid_header(signed(&with_typ(Some(bad)), &p)),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_mode_requires_an_equal_typ() {
+        // ADR 0027 §5; RFC 8725 §3.11; RFC 9068 §2.1, §4.
+        let p = default_policy().expect_typ(AT_JWT);
+        for ok in [
+            "at+jwt",
+            "application/at+jwt",
+            "at+JWT",
+            "Application/AT+JWT",
+        ] {
+            assert_eq!(signed(&with_typ(Some(ok)), &p), Ok(()), "{ok:?}");
+        }
+        assert!(is_invalid_header(signed(&with_typ(None), &p)));
+        for bad in ["JWT", "jwt", "secevent+jwt", "at+jwt;v=1", "at+jwt "] {
+            assert!(
+                is_invalid_header(signed(&with_typ(Some(bad)), &p)),
+                "{bad:?}"
+            );
+        }
+        let p = default_policy().expect_typ("application/secevent+jwt");
+        assert_eq!(signed(&with_typ(Some("secevent+jwt")), &p), Ok(()));
+    }
+
+    #[test]
+    fn any_mode_accepts_every_typ() {
+        let p = default_policy().any_typ();
+        for typ in [
+            None,
+            Some("JWT"),
+            Some("at+jwt"),
+            Some("JOSE"),
+            Some(""),
+            Some("x/y;z"),
+        ] {
+            assert_eq!(signed(&with_typ(typ), &p), Ok(()), "{typ:?}");
+        }
+    }
+
+    #[test]
+    fn access_token_policy_expects_at_jwt() {
+        // RFC 9068 §4: the resource server MUST check `typ` is `at+jwt`.
+        let p = Policy::access_token(&CLOCK, ES256, &["https://as"], &["https://rs"]).unwrap();
+        assert_eq!(signed(&with_typ(Some("application/at+jwt")), &p), Ok(()));
+        assert!(is_invalid_header(signed(&with_typ(Some(JWT)), &p)));
+        assert!(is_invalid_header(signed(&with_typ(None), &p)));
+    }
+
+    #[test]
+    fn signed_layer_rejects_unencoded_payloads() {
+        // RFC 7797 §7: JWTs MUST NOT use "b64" with a "false" value.
+        for p in [default_policy(), default_policy().any_typ()] {
+            let h = header(r#""b64":false,"crit":["b64"]"#);
+            assert_eq!(signed(&h, &p), Err(Error::InvalidHeader("b64")));
+            let h = header(r#""b64":true,"crit":["b64"]"#);
+            assert_eq!(signed(&h, &p), Ok(()));
+        }
+    }
+
+    #[test]
+    fn signed_layer_rejects_jws_in_jws_nesting() {
+        // ADR 0027 §5–§7: `cty: JWT` on a JWS means JWS-in-JWS nesting,
+        // which is not supported; other `cty` values are ignored (RFC 7519
+        // §5.2 makes them NOT RECOMMENDED, not forbidden).
+        for p in [default_policy(), default_policy().any_typ()] {
+            for cty in ["JWT", "jwt", "application/jwt", "APPLICATION/Jwt"] {
+                let h = header(&format!(r#""cty":"{cty}""#));
+                assert_eq!(signed(&h, &p), Err(Error::InvalidHeader("cty")), "{cty:?}");
+            }
+            for cty in ["text/plain", "JOSE", "jwt;v=1", "at+jwt"] {
+                let h = header(&format!(r#""cty":"{cty}""#));
+                assert_eq!(signed(&h, &p), Ok(()), "{cty:?}");
+            }
+        }
+    }
+
+    #[track_caller]
+    fn assert_eq_both_ways(a: &str, b: &str) {
+        assert!(media_type_eq(a, b), "{a:?} should equal {b:?}");
+        assert!(media_type_eq(b, a), "{b:?} should equal {a:?}");
+    }
+
+    #[track_caller]
+    fn assert_ne_both_ways(a: &str, b: &str) {
+        assert!(!media_type_eq(a, b), "{a:?} should not equal {b:?}");
+        assert!(!media_type_eq(b, a), "{b:?} should not equal {a:?}");
+    }
+
+    fn outer(h: &Header, p: &Policy<'_>) -> Result<()> {
+        check_jwt_header(h, None, p, Layer::Outer)
+    }
+
+    #[test]
+    fn outer_layer_requires_cty_jwt() {
+        // RFC 7519 §5.2: for nested JWTs "this Header Parameter MUST be
+        // present ... the value MUST be "JWT""; ADR 0027 §7.
+        for p in [default_policy(), default_policy().any_typ()] {
+            assert_eq!(outer(&header(""), &p), Err(Error::InvalidHeader("cty")));
+            for cty in ["JWT", "jwt", "application/jwt", "Application/JWT"] {
+                let h = header(&format!(r#""cty":"{cty}""#));
+                assert_eq!(outer(&h, &p), Ok(()), "{cty:?}");
+            }
+            for cty in ["JOSE", "text/plain", "at+jwt", "jwt;v=1", "jwt ", ""] {
+                let h = header(&format!(r#""cty":"{cty}""#));
+                assert_eq!(outer(&h, &p), Err(Error::InvalidHeader("cty")), "{cty:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn outer_typ_uses_the_inner_mode_when_present() {
+        // ADR 0027 §7: "The outer `typ`, if present, must satisfy the same
+        // `typ` policy"; explicit typing itself is required only on the
+        // inner JWT (RFC 8725 §3.11).
+        let outer_with = |typ: Option<&str>| match typ {
+            Some(t) => header(&format!(r#""cty":"JWT","typ":"{t}""#)),
+            None => header(r#""cty":"JWT""#),
+        };
+        let p = default_policy();
+        for ok in [None, Some("JWT"), Some("application/jwt")] {
+            assert_eq!(outer(&outer_with(ok), &p), Ok(()), "{ok:?}");
+        }
+        for bad in ["at+jwt", "JOSE"] {
+            let r = outer(&outer_with(Some(bad)), &p);
+            assert_eq!(r, Err(Error::InvalidHeader("typ")), "{bad:?}");
+        }
+
+        let p = default_policy().expect_typ(AT_JWT);
+        for ok in [None, Some("at+jwt"), Some("application/AT+JWT")] {
+            assert_eq!(outer(&outer_with(ok), &p), Ok(()), "{ok:?}");
+        }
+        for bad in ["JWT", "secevent+jwt"] {
+            let r = outer(&outer_with(Some(bad)), &p);
+            assert_eq!(r, Err(Error::InvalidHeader("typ")), "{bad:?}");
+        }
+
+        let p = default_policy().any_typ();
+        for typ in [None, Some("JWT"), Some("at+jwt"), Some("JOSE")] {
+            assert_eq!(outer(&outer_with(typ), &p), Ok(()), "{typ:?}");
+        }
+    }
+
+    #[test]
+    fn unprotected_typ_or_cty_is_rejected_on_both_layers() {
+        // ADR 0049 §2 (JWS), ADR 0050 §3 (JWE): an unprotected header is
+        // attacker-controlled, so it must not set `typ` or `cty`, even when
+        // the protected header is valid and even under `any_typ`.
+        let protected = [
+            (Layer::Signed, header(r#""typ":"JWT""#)),
+            (Layer::Outer, header(r#""cty":"JWT""#)),
+        ];
+        let unprotected = [
+            (Header::from_json(br#"{"typ":"JWT"}"#).unwrap(), "typ"),
+            (Header::from_json(br#"{"typ":"at+jwt"}"#).unwrap(), "typ"),
+            (Header::from_json(br#"{"cty":"JWT"}"#).unwrap(), "cty"),
+            (
+                Header::from_json(br#"{"cty":"text/plain"}"#).unwrap(),
+                "cty",
+            ),
+            (
+                Header::from_json(br#"{"kid":"k","typ":""}"#).unwrap(),
+                "typ",
+            ),
+        ];
+        for p in [
+            default_policy(),
+            default_policy().expect_typ(AT_JWT),
+            default_policy().any_typ(),
+        ] {
+            for (layer, prot) in &protected {
+                for (unprot, member) in &unprotected {
+                    let r = check_jwt_header(prot, Some(unprot), &p, *layer);
+                    let detail = if *member == "cty" {
+                        "cty must be in the protected header"
+                    } else {
+                        "typ must be in the protected header"
+                    };
+                    assert_eq!(r, Err(Error::InvalidHeader(detail)), "{layer:?} {unprot:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn outer_cty_only_in_the_unprotected_header_is_not_the_nesting_marker() {
+        // ADR 0050 §3: the nesting marker must be integrity-protected.
+        let p = default_policy();
+        let unprot = Header::from_json(br#"{"cty":"JWT"}"#).unwrap();
+        let r = check_jwt_header(&header(""), Some(&unprot), &p, Layer::Outer);
+        assert!(is_invalid_header(r));
+    }
+
+    #[test]
+    fn other_unprotected_members_are_ignored() {
+        let p = default_policy();
+        let unprot = Header::from_json(br#"{"kid":"k1","x-custom":true}"#).unwrap();
+        let signed_h = header(r#""typ":"JWT""#);
+        let outer_h = header(r#""cty":"JWT""#);
+        assert_eq!(
+            check_jwt_header(&signed_h, Some(&unprot), &p, Layer::Signed),
+            Ok(())
+        );
+        assert_eq!(
+            check_jwt_header(&outer_h, Some(&unprot), &p, Layer::Outer),
+            Ok(())
+        );
+        let empty = Header::new();
+        assert_eq!(
+            check_jwt_header(&signed_h, Some(&empty), &p, Layer::Signed),
+            Ok(())
+        );
+        // The protected rules still apply alongside a harmless unprotected
+        // header.
+        let bad = header(r#""typ":"at+jwt""#);
+        assert!(is_invalid_header(check_jwt_header(
+            &bad,
+            Some(&unprot),
+            &p,
+            Layer::Signed
+        )));
+    }
+
+    #[test]
+    fn short_and_full_forms_are_equal_ignoring_case() {
+        // RFC 7515 §4.1.9 (implicit `application/`, case-insensitive media
+        // types); RFC 9068 §3's `at+JWT` example.
+        let at_jwt = [
+            "at+jwt",
+            "application/at+jwt",
+            "at+JWT",
+            "Application/AT+JWT",
+        ];
+        for a in at_jwt {
+            for b in at_jwt {
+                assert_eq_both_ways(a, b);
+            }
+        }
+        let jwt = ["JWT", "jwt", "application/jwt", "APPLICATION/JWT"];
+        for a in jwt {
+            for b in jwt {
+                assert_eq_both_ways(a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn a_slash_anywhere_suppresses_the_implicit_prefix() {
+        // RFC 7515 §4.1.9: "application/example;part="1/2"" cannot be
+        // shortened, because the short form already contains a '/'.
+        assert_ne_both_ways(r#"example;part="1/2""#, r#"application/example;part="1/2""#);
+        assert_eq_both_ways(r#"example;part="1/2""#, r#"EXAMPLE;part="1/2""#);
+        assert_eq_both_ways(
+            r#"application/example;part="1/2""#,
+            r#"Application/Example;part="1/2""#,
+        );
+    }
+
+    #[test]
+    fn parameters_compare_exactly() {
+        // ADR 0027 §5: only the part before the first `;` ignores case.
+        assert_ne_both_ways("a+jwt;v=1", "a+jwt;v=1X");
+        assert_ne_both_ways("a+jwt;v=x", "a+jwt;v=X");
+        assert_ne_both_ways("a+jwt;v=1", "a+jwt");
+        assert_ne_both_ways("a+jwt;", "a+jwt");
+        assert_eq_both_ways("A+JWT;v=1", "a+jwt;v=1");
+        assert_eq_both_ways("application/A+JWT;v=1", "a+jwt;v=1");
+        assert_eq_both_ways("a+jwt;v=1;w=2", "a+JWT;v=1;w=2");
+        assert_ne_both_ways("a+jwt;v=1;w=2", "a+jwt;w=2;v=1");
+    }
+
+    #[test]
+    fn different_types_and_untrimmed_values_differ() {
+        assert_ne_both_ways("at+jwt", "jwt");
+        assert_ne_both_ways("at+jwt", "at+jwt ");
+        assert_ne_both_ways("at+jwt", " at+jwt");
+        assert_ne_both_ways("JWT", "application/jwt ");
+        assert_ne_both_ways("jwt", "text/jwt");
+        assert_ne_both_ways("jwt", "applicationjwt");
+        assert_ne_both_ways("jwt", "application//jwt");
+        assert_ne_both_ways("JWT", "JOSE");
+        assert_ne_both_ways("JWT", "");
+        // Only ASCII folds (RFC 2045 tokens are ASCII): a non-ASCII value is
+        // equal only to itself.
+        assert_eq_both_ways("jwt\u{e9}", "JWT\u{e9}");
+        assert_ne_both_ways("jwt\u{e9}", "JWT\u{c9}");
+        assert_ne_both_ways("\u{e9}pplication/jwt", "jwt");
+    }
+
+    #[test]
+    fn constants_are_the_rfc_values() {
+        // RFC 7519 §5.1, RFC 9068 §2.1, RFC 9068 §2.2 (in that section's order).
+        assert_eq!(JWT, "JWT");
+        assert_eq!(AT_JWT, "at+jwt");
+        assert_eq!(
+            ACCESS_TOKEN_REQUIRED_CLAIMS,
+            ["iss", "exp", "aud", "sub", "client_id", "iat", "jti"]
+        );
+    }
+
+    #[test]
+    fn media_type_eq_edge_inputs() {
+        // RFC 7515 §4.1.9 prepends `application/` only to a value "not
+        // containing a '/'" anywhere; the RFC's own `example;part="1/2"`
+        // shows a '/' inside the parameters counts.
+        assert_eq_both_ways("", "");
+        assert_eq_both_ways("", "application/");
+        assert_eq_both_ways("", "APPLICATION/");
+        assert_ne_both_ways("application/", "jwt");
+        assert_ne_both_ways("application/", "application//");
+        assert_ne_both_ways("/jwt", "jwt");
+        assert_ne_both_ways("/jwt", "application/jwt");
+        assert_eq_both_ways("/JWT", "/jwt");
+        assert_ne_both_ways("a;b/c", "application/a;b/c");
+        assert_eq_both_ways("a;b/c", "A;b/c");
+        assert_ne_both_ways("a;b/c", "A;B/c");
+        assert_ne_both_ways("jwt;x=a/b", "application/jwt;x=a/b");
+        assert_ne_both_ways("jwt;x=a/b", "jwt");
+        assert_eq_both_ways("JWT;x=a/b", "jwt;x=a/b");
+        assert_eq_both_ways("jwt;x=ab", "application/JWT;x=ab");
+        // Only the first `;` splits; a second `;` stays in the parameters.
+        assert_ne_both_ways("jwt;;", "jwt;");
+        assert_eq_both_ways(";", ";");
+        assert_ne_both_ways(";", "");
+        // Non-ASCII bytes, including a multi-byte char straddling the
+        // `application/` prefix length, must not panic.
+        assert_ne_both_ways("applicatio\u{e9}/jwt", "jwt");
+        assert_ne_both_ways("\u{1F600}\u{1F600}\u{1F600}\u{1F600}", "jwt");
+        assert_ne_both_ways("jwt;\u{e9}", "jwt;\u{c9}");
+        assert_eq_both_ways("\u{e9}/\u{e9}", "\u{e9}/\u{e9}");
+        // Embedded NUL and control bytes are ordinary bytes.
+        assert_ne_both_ways("jwt\0", "jwt");
+        assert_eq_both_ways("JWT\0", "jwt\0");
+    }
+
+    #[test]
+    fn modes_per_layer_and_check_order() {
+        let exact = default_policy().expect_typ(AT_JWT);
+        // Outer + Exact: absent typ is fine (explicit typing is the inner JWT's).
+        assert_eq!(outer(&header(r#""cty":"JWT""#), &exact), Ok(()));
+        // Signed + Exact: absent typ fails.
+        assert_eq!(
+            signed(&header(""), &exact),
+            Err(Error::InvalidHeader("typ"))
+        );
+        // Signed order: b64 first, then cty, then typ.
+        let h = header(r#""b64":false,"crit":["b64"],"cty":"JWT","typ":"at+jwt""#);
+        assert_eq!(
+            signed(&h, &default_policy()),
+            Err(Error::InvalidHeader("b64"))
+        );
+        let h = header(r#""cty":"JWT","typ":"at+jwt""#);
+        assert_eq!(
+            signed(&h, &default_policy()),
+            Err(Error::InvalidHeader("cty"))
+        );
+        // Outer order: cty before typ.
+        let h = header(r#""cty":"JOSE","typ":"at+jwt""#);
+        assert_eq!(
+            outer(&h, &default_policy()),
+            Err(Error::InvalidHeader("cty"))
+        );
+        // Outer ignores b64 (a JWS parameter) entirely.
+        let h = header(r#""b64":false,"crit":["b64"],"cty":"JWT""#);
+        assert_eq!(outer(&h, &default_policy()), Ok(()));
+        // The unprotected rule runs before everything else.
+        let unprot = Header::from_json(br#"{"typ":"JWT"}"#).unwrap();
+        let h = header(r#""b64":false,"crit":["b64"]"#);
+        assert_eq!(
+            check_jwt_header(&h, Some(&unprot), &default_policy(), Layer::Signed),
+            Err(Error::InvalidHeader("typ must be in the protected header"))
+        );
+        // Outer cty in a valid protected header plus unprotected typ is still rejected.
+        assert!(is_invalid_header(check_jwt_header(
+            &header(r#""cty":"JWT""#),
+            Some(&unprot),
+            &default_policy().any_typ(),
+            Layer::Outer
+        )));
+    }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn media_type_eq_never_panics_and_is_reflexive_and_symmetric(
+                a in "\\PC*", b in "\\PC*"
+            ) {
+                prop_assert!(media_type_eq(&a, &a));
+                prop_assert_eq!(media_type_eq(&a, &b), media_type_eq(&b, &a));
+            }
+
+            #[test]
+            fn short_form_equals_full_form_when_no_slash(
+                t in "[a-zA-Z0-9.+-]{0,12}", params in "(;[a-z0-9=]{0,6}){0,2}"
+            ) {
+                let short = format!("{t}{params}");
+                let full = format!("application/{t}{params}");
+                prop_assert!(media_type_eq(&short, &full));
+                let shouted = format!("{}{params}", t.to_ascii_uppercase());
+                prop_assert!(media_type_eq(&shouted, &full));
+            }
+
+            #[test]
+            fn check_jwt_header_never_panics(typ in "\\PC*", cty in "\\PC*") {
+                let mut h = Header::new();
+                h.typ = Some(typ);
+                h.cty = Some(cty);
+                for p in [default_policy(), default_policy().expect_typ(AT_JWT), default_policy().any_typ()] {
+                    let _ = check_jwt_header(&h, None, &p, Layer::Signed);
+                    let _ = check_jwt_header(&h, Some(&h), &p, Layer::Outer);
+                }
+            }
+        }
+    }
+}

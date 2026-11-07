@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §7.2; draft-ietf-oauth-rfc8725bis §3.3; ADR 0027 §7; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "A five-part compact JWE (dir, A128GCM, around a valid HS256 JWT) given to signed-JWT validation (no decrypt): the entry points are separate: InvalidFormat",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0..etH_izJTK0PLeYUj.BH66FabYhQ1J5duT_5f_ItRi7NpzodFeKhoXnijBEq8tetMIW7OAWE4VJtAbNKtFg7Moe_18KN54t5dcgQXtzzFbChbhxBfb2a7deIfARyGDyjFvQD01vhvnqq7BWLMuZYQ489i-oGf-.T7yg37ydddvbRmuz_vsf0A",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

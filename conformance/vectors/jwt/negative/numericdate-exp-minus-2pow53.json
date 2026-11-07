@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §2; RFC 7493 §2.2; ADR 0027 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "exp is -9007199254740992 (−2^53), one past the negative end of the range. In range it would be simply expired (TokenExpired); out of range it is InvalidClaim, which this pins",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOi05MDA3MTk5MjU0NzQwOTkyfQ.yTs2ads8zGa_P9Za5yqKRUvH9j25zb7sLtsCBtgCAzA",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}

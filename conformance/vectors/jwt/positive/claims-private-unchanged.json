@@ -1,0 +1,48 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Private and public claims (a nested object, an array, null, unicode strings written raw and as \\u escapes including a surrogate pair, and a URI-named claim) are returned unchanged, in the exact payload octets' values (RFC 7519 §4.2-§4.3, ADR 0027 §1)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxMzAwODE5MzgwLCJvYmoiOnsiYSI6eyJiIjpbMSwyXX0sImMiOiIifSwiYXJyIjpbMSwidHdvIixudWxsLHRydWUseyJrIjoidiJ9XSwibnVsIjpudWxsLCJ1bmlfZXNjYXBlZCI6ImhcdTAwZTlsbG8gXHU2NWU1XHU2NzJjIFx1ZDgzZFx1ZGUwMCIsInVuaV9yYXciOiJow6lsbG8g5pel5pysIPCfmIAiLCJodHRwczovL2V4YW1wbGUuY29tL2NsYWltcy9yb2xlIjoiYWRtaW4ifQ.2t938JIVW1_6o7zWB5OqVsdeL93GLSUHAsOgr8cHItdXH4IAIvz_F-eGd93y10tE7JfSK4oqgGiYxPJQF-Cv6w",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1300819380,
+      "obj": {
+        "a": {
+          "b": [
+            1,
+            2
+          ]
+        },
+        "c": ""
+      },
+      "arr": [
+        1,
+        "two",
+        null,
+        true,
+        {
+          "k": "v"
+        }
+      ],
+      "nul": null,
+      "uni_escaped": "héllo 日本 😀",
+      "uni_raw": "héllo 日本 😀",
+      "https://example.com/claims/role": "admin"
+    },
+    "alg": "ES256"
+  }
+}

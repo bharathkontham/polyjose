@@ -1,0 +1,52 @@
+{
+  "source": "RFC 9068 §2.1, §4; RFC 8725 §3.11; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Explicit typing on the inner JWT (RFC 8725 §3.11: the typ MUST be in the inner JWT): inner typ at+jwt with every RFC 9068 §2.2 claim, validated with profile access_token, issuer and audience, outer JWE without typ: valid (ADR 0027 §5, §7)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0.9K4tEZ_S7fSF2Tbj-w7RaWfdPfz2mf6p.76C9l22LIuOtEsgZ.c9F3iZXBzZn9Ih2lIys5wAkYGqG0ecNNY-DGB68l-MI40TOPJGQIfW0FTkFos9iddZy-aQsuB9s4IEKWEsw3bT-JWbLEouO6-V6C5iRidCFXbjWDDLubzzWftdL377aN1IRPXpRLelHIG9wmmH_4b6IeHsFyiPKFCDi4iM-lTCCdWgvH7CwXITPBMgmSbOZNw_fcauA9qwCeRqBQpy3O9HixFennmVG3ytawP6S6xoQCMCigsZoFQ5wnoRWVTJRRLf0ekEYMBafOJ5TF4v5FJYsg4imwzyn1-EhHsnpTCBI0nc86_M5S5rtOChwja58ZmTl6BPsXZHDLFlW43Ip993N-Asug55EJ5-hLMIz3dFy_wtESGJ5tNY2AvdpuJZdCru9WovT4TZVX1GfdO-kOKf27suopJa9JwOcfOEbnWsI.OReKYpcKENgxJlpY61TFxg",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "policy": {
+      "profile": "access_token",
+      "issuer": [
+        "https://issuer.example"
+      ],
+      "audience": [
+        "https://api.example"
+      ]
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "alice",
+      "aud": "https://api.example",
+      "exp": 1300819380,
+      "iat": 1300819200,
+      "jti": "at-1",
+      "client_id": "client-1"
+    },
+    "alg": "ES256"
+  }
+}

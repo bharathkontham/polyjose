@@ -1,0 +1,34 @@
+{
+  "source": "RFC 7519 §4.1.4; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Inner exp 1300819200 at now 1300819320: exp ≤ now − 60 s default leeway, TokenExpired (ADR 0027 §3, §9 J5), after the outer layer decrypts and the inner signature verifies",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0.TAOO9_jqUDrKD5MeBld2-hYE28DlkEsF.9P9TNyK0T11glM2m.JUKo5fqt2qILQzzzH2tczW8MonVI5n8nAiiHZXSnXiqqF6G28DJnE9aCDnUfKuPCEJtQQfOSmyXgmB3gUeZpgxx61iUJYoJ1wBzETJZQaTvOnezdqhhHY_pOM7hmwC8b42b2qJDnnnCDaeHa4a3r0gJQk_0dgHjUH7xIvbzsKDbQoEw06Rt5tr2ndrxPL81jAcePqKgmhiaWK9KVdeWBDODOP3Dyp85iCSVkniPj0K8rr44XFeqwyPyHpkriQ7QA7IRPCo4IpHmx6dhzDwLxudnLsv6AXtRdnbJUfuMqAWTt43NnG6RD.jRe1mo8tkxlGTK4qYph9PQ",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "TokenExpired"
+  }
+}

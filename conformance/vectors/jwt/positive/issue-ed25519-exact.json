@@ -1,0 +1,52 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Issues the fully specified Ed25519 alg (RFC 9864 §2.2, deterministic) with the RFC 8037 A.1 key: the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's (ADR 0027 §1, §8)",
+  "operation": "jwt.issue",
+  "input": {
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "user-1",
+      "aud": "api",
+      "exp": 1300819380,
+      "iat": 1300819310,
+      "jti": "id-1",
+      "scope": "read write",
+      "roles": [
+        "admin",
+        "ops"
+      ],
+      "ctx": {
+        "tenant": "t1",
+        "n": 7
+      },
+      "flag": true
+    },
+    "alg": "Ed25519",
+    "key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+      "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+    },
+    "validate": {
+      "now": 1300819320,
+      "allowed_algs": [
+        "Ed25519"
+      ],
+      "key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+      },
+      "policy": {
+        "audience": [
+          "api"
+        ]
+      }
+    }
+  },
+  "expect": {
+    "ok": true,
+    "token": "eyJhbGciOiJFZDI1NTE5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoiYXBpIiwiZXhwIjoxMzAwODE5MzgwLCJpYXQiOjEzMDA4MTkzMTAsImp0aSI6ImlkLTEiLCJzY29wZSI6InJlYWQgd3JpdGUiLCJyb2xlcyI6WyJhZG1pbiIsIm9wcyJdLCJjdHgiOnsidGVuYW50IjoidDEiLCJuIjo3fSwiZmxhZyI6dHJ1ZX0.xLzvbeut715Y0uWQxXJr5FAfjru5x-sne2M9y2CSPfAgcRIxwOsPFn0NHK7_VA4RMMkZ7kQGE2iTdBgXu8wSDw"
+  }
+}

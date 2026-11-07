@@ -1,0 +1,34 @@
+{
+  "source": "RFC 7519 §5.2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "A valid ES256 JWS encrypted without cty: InvalidHeader before the inner token is looked at (ADR 0027 §7, §9 N1)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIn0.gtvncRBBGiTM9YyVQ1_LO19DoT1ykki_.-Cojn-OOa-EIpfc4._aUAGnJbzwN6TkUszKkSLCA893aPRDceJivvYVSWj_M752SSVFb1-9XX6Xz2aZa7WjBMgH2t5LsqxCF_QqMYoGviuVY-ZTb2zNYXKSoCZkRanjy8uv3tX5iQFmQjijVekaIbwpxRkPm5ETYhlFVXzwO2W9-Xdg8-ZypBCO5udgplLZuC4ccQCYgOiidyAi9jPYkYwuPeiBzfdYALm6gA62QcswJEajuUjZobtCQ7rux-N625ZwL4anbWd-MaJ1ccY7kMK9wi76FZboiv9HnAgQat29S51Vw9KKIfgbZSEHtdeO2qPp8O.3cYyDRktEWZb6bdIF4no6g",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

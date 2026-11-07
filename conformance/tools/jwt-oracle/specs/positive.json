@@ -1,0 +1,2256 @@
+{
+  "comment": [
+    "Regeneration (feature 0004 T11). The runner reads one vector per file (ADR 0045), so each entry's 'file' member names its output under conformance/vectors/jwt/positive/; it is not a vector member and is dropped when splitting.",
+    "1. node conformance/tools/jwt-oracle/gen.mjs conformance/tools/jwt-oracle/specs/positive.json <tmp>/positive.json",
+    "2. node -e 'const fs=require(\"fs\");const o=JSON.parse(fs.readFileSync(process.argv[1]));for(const v of o.vectors){const f=v.file;delete v.file;fs.writeFileSync(\"conformance/vectors/jwt/positive/\"+f,JSON.stringify(v,null,2)+\"\\n\")}' <tmp>/positive.json",
+    "HS*, EdDSA and Ed25519 output is deterministic and re-runs byte for byte; ES* signatures are randomized, so a re-run rewrites those files with different, equally valid tokens: regenerate them only on purpose.",
+    "Expected verdicts are written by hand here (the oracle never decides them); jwt.issue round trips and the RFC 7515 A.2 entry build no token and pass through."
+  ],
+  "vectors": [
+    {
+      "file": "claims-aud-string.json",
+      "description": "aud as the string \"api\" with policy audience [\"api\"]: the token's single audience is accepted (RFC 7519 §4.1.3, ADR 0027 §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "audience": [
+            "api"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "aud": "api",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "aud": "api",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "claims-aud-array.json",
+      "description": "aud as the array [\"x\",\"api\"] with policy audience [\"api\"]: one token value equal to one accepted value is enough (RFC 7519 §4.1.3, ADR 0027 §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "audience": [
+            "api"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "aud": [
+            "x",
+            "api"
+          ],
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "aud": [
+            "x",
+            "api"
+          ],
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "claims-aud-one-of-several-accepted.json",
+      "description": "aud [\"web\"] with policy audience [\"api\",\"web\"]: matching any one accepted audience is enough (RFC 7519 §4.1.3, ADR 0027 §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "audience": [
+            "api",
+            "web"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "aud": [
+            "web"
+          ],
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "aud": [
+            "web"
+          ],
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "claims-iss-from-list.json",
+      "description": "iss equal to the second entry of the policy's issuer list is accepted (RFC 7519 §4.1.1, RFC 8725 §3.8, ADR 0027 §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "issuer": [
+            "https://other.example",
+            "https://issuer.example"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "claims-iss-single.json",
+      "description": "iss equal to the policy's single issuer string is accepted (RFC 7519 §4.1.1, RFC 8725 §3.8, ADR 0027 §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "issuer": "https://issuer.example"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "claims-sub-exact.json",
+      "description": "sub equal to the policy's subject is accepted (RFC 7519 §4.1.2, ADR 0027 §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "subject": "user-1"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "claims-private-unchanged.json",
+      "description": "Private and public claims (a nested object, an array, null, unicode strings written raw and as \\u escapes including a surrogate pair, and a URI-named claim) are returned unchanged, in the exact payload octets' values (RFC 7519 §4.2-§4.3, ADR 0027 §1)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "obj": {
+            "a": {
+              "b": [
+                1,
+                2
+              ]
+            },
+            "c": ""
+          },
+          "arr": [
+            1,
+            "two",
+            null,
+            true,
+            {
+              "k": "v"
+            }
+          ],
+          "nul": null,
+          "uni_escaped": "héllo 日本 😀",
+          "uni_raw": "héllo 日本 😀",
+          "https://example.com/claims/role": "admin"
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1300819380,\"obj\":{\"a\":{\"b\":[1,2]},\"c\":\"\"},\"arr\":[1,\"two\",null,true,{\"k\":\"v\"}],\"nul\":null,\"uni_escaped\":\"h\\u00e9llo \\u65e5\\u672c \\ud83d\\ude00\",\"uni_raw\":\"héllo 日本 😀\",\"https://example.com/claims/role\":\"admin\"}"
+      }
+    },
+    {
+      "file": "claims-exp-fractional.json",
+      "description": "exp 1300819380.5 at now 1300819380 with leeway 0: compared exactly, never truncated, so exp > now is accepted (RFC 7519 §2, §4.1.4, ADR 0027 §2-§3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819380,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "leeway": 0
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380.5
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload": "{\"iss\":\"https://issuer.example\",\"exp\":1300819380.5}"
+      }
+    },
+    {
+      "file": "claims-nbf-negative.json",
+      "description": "A negative nbf (-100, before 1970) is a valid NumericDate and long past: accepted (RFC 7519 §2, §4.1.5, ADR 0027 §2)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "nbf": -100
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "nbf": -100
+        }
+      }
+    },
+    {
+      "file": "claims-iat-negative.json",
+      "description": "A negative iat (-100, before 1970) is a valid NumericDate; without max_age it is type-checked only: accepted (RFC 7519 §2, §4.1.6, ADR 0027 §2-§3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "iat": -100
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "iat": -100
+        }
+      }
+    },
+    {
+      "file": "claims-iat-future-without-max-age.json",
+      "description": "iat 3600 s in the future (now + 3600) without max_age is accepted: a future iat is not rejected by default (RFC 7519 §4.1.6, erratum 7720, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300826520,
+          "iat": 1300822920
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300826520,
+          "iat": 1300822920
+        }
+      }
+    },
+    {
+      "file": "claims-max-age-boundary-leeway-0.json",
+      "description": "max_age 300, leeway 0 and iat = now - 300: rejected only iff iat < now - max_age - leeway, so the boundary itself is accepted (RFC 7519 §4.1.6, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "max_age": 300,
+          "leeway": 0
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "iat": 1300819020
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "iat": 1300819020
+        }
+      }
+    },
+    {
+      "file": "claims-max-age-boundary-default-leeway.json",
+      "description": "max_age 300 with the default 60 s leeway and iat = now - 360: the leeway extends the bound, iat < now - max_age - leeway is false, accepted (RFC 7519 §4.1.6, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "max_age": 300
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "iat": 1300818960
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "iat": 1300818960
+        }
+      }
+    },
+    {
+      "file": "claims-require-client-id-number.json",
+      "description": "require [\"client_id\"] with client_id present as a number: a required claim may have any JSON type (RFC 7519 §4, ADR 0027 §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "require": [
+            "client_id"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "client_id": 42
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380,
+          "client_id": 42
+        }
+      }
+    },
+    {
+      "file": "claims-allow-missing-exp.json",
+      "description": "allow_missing_exp true with no exp claim: the explicit opt-out of the required exp is accepted (ADR 0007, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "allow_missing_exp": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example"
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example"
+        }
+      }
+    },
+    {
+      "file": "claims-ignore-audience.json",
+      "description": "ignore_audience true with aud present and no audience configured: the explicit opt-out of RFC 7519 §4.1.3 is accepted (ADR 0027 §4, RFC 8725 §3.9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "ignore_audience": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "aud": "someone-else",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "aud": "someone-else",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "skew-exp-within-leeway-60.json",
+      "description": "exp E with leeway 60 at now E + 59: rejected iff exp <= now - leeway, so one second inside the leeway is accepted (RFC 7519 §4.1.4, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819439,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "leeway": 60
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "skew-nbf-at-leeway.json",
+      "description": "nbf N with the default 60 s leeway at now N - 60: rejected iff nbf > now + leeway, so nbf = now + leeway is accepted (RFC 7519 §4.1.5, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819340,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300823000,
+          "nbf": 1300819400
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300823000,
+          "nbf": 1300819400
+        }
+      }
+    },
+    {
+      "file": "skew-exp-leeway-0-one-second-before.json",
+      "description": "exp E with leeway 0 at now E - 1: the current time is before the expiration time, accepted (RFC 7519 §4.1.4 'MUST be before', ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819379,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "leeway": 0
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "skew-exp-leeway-600-cap.json",
+      "description": "leeway 600 (the cap, accepted when the policy is built) with exp E at now E + 599: accepted (RFC 7519 §4.1.4, ADR 0027 §3)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819979,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "leeway": 600
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-absent-default.json",
+      "description": "typ absent under the default typ mode is accepted: typ is OPTIONAL (RFC 7519 §5.1, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-jwt-default.json",
+      "description": "typ \"JWT\" under the default typ mode is accepted (RFC 7519 §5.1, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-jwt-lowercase-default.json",
+      "description": "typ \"jwt\" under the default typ mode is accepted: media types compare ASCII-case-insensitively (RFC 7515 §4.1.9, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "jwt"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-application-jwt-default.json",
+      "description": "typ \"application/jwt\" under the default typ mode is accepted: the application/ prefix is implicit (RFC 7515 §4.1.9, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "application/jwt"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-at-jwt-access-token-profile.json",
+      "description": "typ \"at+JWT\" (the RFC 9068 §3 spelling) with profile access_token, issuer and audience, and every RFC 9068 §2.2 claim present: accepted (RFC 9068 §2.1, §2.2, §4, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "profile": "access_token",
+          "issuer": [
+            "https://issuer.example"
+          ],
+          "audience": [
+            "https://rs.example"
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "https://rs.example",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "at-1",
+          "client_id": "client-1",
+          "scope": "read"
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "at+JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "https://rs.example",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "at-1",
+          "client_id": "client-1",
+          "scope": "read"
+        }
+      }
+    },
+    {
+      "file": "typ-secevent-exact-with-prefix.json",
+      "description": "typ \"secevent+jwt\" with typ mode exact \"application/secevent+jwt\": equal as media types, accepted (RFC 7515 §4.1.9, RFC 8417 §2.3, ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "typ": {
+            "mode": "exact",
+            "value": "application/secevent+jwt"
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "secevent+jwt"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "typ-any-mode.json",
+      "description": "typ \"dpop+jwt\" with typ mode any: no typ check at all, accepted (ADR 0027 §5)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        },
+        "policy": {
+          "typ": {
+            "mode": "any"
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "dpop+jwt"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "keyset-kid-third.json",
+      "description": "A JWK Set of three P-256 keys (kid a, b, c) and a token with kid \"c\": only the member with the identical kid is a candidate, key_index 2 (RFC 7515 §4.1.4, ADR 0029 §2.5, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            },
+            {
+              "$public": "p256-kid-c"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256",
+        "key_index": 2
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "c"
+        },
+        "key": "p256-kid-c",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "keyset-kid-first.json",
+      "description": "A JWK Set of three P-256 keys (kid a, b, c) and a token with kid \"a\": key_index 0, which a binding must report and not drop as falsy (ADR 0029 §2.5, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            },
+            {
+              "$public": "p256-kid-c"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256",
+        "key_index": 0
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT",
+          "kid": "a"
+        },
+        "key": "p256-kid-a",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "keyset-kidless-third.json",
+      "description": "A kid-less ES256 token signed by the third of three P-256 keys (kid a, b, c): all three are candidates, tried in set order, the first success wins, key_index 2 (ADR 0029 §2.5, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "p256-kid-a"
+            },
+            {
+              "$public": "p256-kid-b"
+            },
+            {
+              "$public": "p256-kid-c"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256",
+        "key_index": 2
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256-kid-c",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "keyset-mixed-family.json",
+      "description": "A set mixing oct, P-384, Ed25519 and P-256 with a kid-less ES256 token: only the P-256 member serves ES256, key_index 3 (ADR 0029 §2.1, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$key": "oct-32"
+            },
+            {
+              "$public": "p384"
+            },
+            {
+              "$public": "ed25519"
+            },
+            {
+              "$public": "p256"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256",
+        "key_index": 3
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "keyset-mixed-family-one-candidate.json",
+      "description": "The oct, P-384, Ed25519, P-256 set with max_key_candidates 1: the family filter leaves one candidate, so the bound is not exceeded, key_index 3 (ADR 0029 §2.1, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$key": "oct-32"
+            },
+            {
+              "$public": "p384"
+            },
+            {
+              "$public": "ed25519"
+            },
+            {
+              "$public": "p256"
+            }
+          ]
+        },
+        "policy": {
+          "max_key_candidates": 1
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256",
+        "key_index": 3
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "keyset-hs256-kid-64.json",
+      "description": "An HS256 token with kid \"hs-64\" against oct keys of 32 (kid hs-32) and 64 octets (kid hs-64): the kid selects the 64-octet key, key_index 1 (RFC 7518 §3.2, ADR 0029 §2.5, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$key": "oct-32-kid-hs-32"
+            },
+            {
+              "$key": "oct-64-kid-hs-64"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "HS256",
+        "key_index": 1
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT",
+          "kid": "hs-64"
+        },
+        "key": "oct-64-kid-hs-64",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "keyset-hs256-kid-32.json",
+      "description": "An HS256 token with kid \"hs-32\" against oct keys of 32 (kid hs-32) and 64 octets (kid hs-64): the first member, key_index 0 next to another member, which a binding must not drop as falsy (ADR 0029 §2.5, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$key": "oct-32-kid-hs-32"
+            },
+            {
+              "$key": "oct-64-kid-hs-64"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "HS256",
+        "key_index": 0
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT",
+          "kid": "hs-32"
+        },
+        "key": "oct-32-kid-hs-32",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "keyset-eddsa-skips-use-enc.json",
+      "description": "An EdDSA token with kid \"ed\" against two Ed25519 keys with kid \"ed\", the first with use enc, and max_key_candidates 1: the use filter removes the enc key, so one candidate remains and verifies, key_index 1 (RFC 7517 §4.2, ADR 0029 §2.3, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "EdDSA"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "ed25519-other",
+              "with": {
+                "use": "enc",
+                "kid": "ed"
+              }
+            },
+            {
+              "$public": "ed25519",
+              "with": {
+                "kid": "ed"
+              }
+            }
+          ]
+        },
+        "policy": {
+          "max_key_candidates": 1
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "EdDSA",
+        "key_index": 1
+      },
+      "jws": {
+        "header": {
+          "alg": "EdDSA",
+          "typ": "JWT",
+          "kid": "ed"
+        },
+        "key": "ed25519",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-hs256.json",
+      "description": "A HS256 JWT (RFC 7518 §3.2) with key oct-32 verifies under an allow-list of [\"HS256\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS256"
+        ],
+        "key": {
+          "$key": "oct-32"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "HS256"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "key": "oct-32",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-hs384.json",
+      "description": "A HS384 JWT (RFC 7518 §3.2) with key oct-48 verifies under an allow-list of [\"HS384\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS384"
+        ],
+        "key": {
+          "$key": "oct-48"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "HS384"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS384",
+          "typ": "JWT"
+        },
+        "key": "oct-48",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-hs512.json",
+      "description": "A HS512 JWT (RFC 7518 §3.2) with key oct-64 verifies under an allow-list of [\"HS512\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "HS512"
+        ],
+        "key": {
+          "$key": "oct-64"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "HS512"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS512",
+          "typ": "JWT"
+        },
+        "key": "oct-64",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-es256.json",
+      "description": "A ES256 JWT (RFC 7518 §3.4) with key p256 verifies under an allow-list of [\"ES256\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES256"
+        ],
+        "key": {
+          "$public": "p256"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES256"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES256",
+          "typ": "JWT"
+        },
+        "key": "p256",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-es384.json",
+      "description": "A ES384 JWT (RFC 7518 §3.4) with key p384 verifies under an allow-list of [\"ES384\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES384"
+        ],
+        "key": {
+          "$public": "p384"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES384"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES384",
+          "typ": "JWT"
+        },
+        "key": "p384",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-es512.json",
+      "description": "A ES512 JWT (RFC 7518 §3.4) with key p521 verifies under an allow-list of [\"ES512\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "ES512"
+        ],
+        "key": {
+          "$public": "p521"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "ES512"
+      },
+      "jws": {
+        "header": {
+          "alg": "ES512",
+          "typ": "JWT"
+        },
+        "key": "p521",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-eddsa.json",
+      "description": "A EdDSA JWT (RFC 8037 §3.1) with key ed25519 verifies under an allow-list of [\"EdDSA\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "EdDSA"
+        ],
+        "key": {
+          "$public": "ed25519"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "EdDSA"
+      },
+      "jws": {
+        "header": {
+          "alg": "EdDSA",
+          "typ": "JWT"
+        },
+        "key": "ed25519",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-ed25519.json",
+      "description": "A Ed25519 JWT (RFC 9864 §2.2) with key ed25519 verifies under an allow-list of [\"Ed25519\"] (RFC 7519 §7.2, ADR 0027 §9)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "$token",
+        "now": 1300819320,
+        "allowed_algs": [
+          "Ed25519"
+        ],
+        "key": {
+          "$public": "ed25519"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        },
+        "alg": "Ed25519"
+      },
+      "jws": {
+        "header": {
+          "alg": "Ed25519",
+          "typ": "JWT"
+        },
+        "key": "ed25519",
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "exp": 1300819380
+        }
+      }
+    },
+    {
+      "file": "alg-rs256-jwks-first-of-mixed.json",
+      "source": "RFC 7515 App. A.2",
+      "description": "The RFC 7515 A.2 RS256 JWT (passed through, not re-signed: no RSA signing, ADR 0021) through a JWK Set whose first member is the A.2 public key, followed by oct, P-256 and Ed25519 members: key_index 0 next to other members (RFC 7519 App. A.2 claims, ADR 0029 §2.1, §4)",
+      "operation": "jwt.validate",
+      "input": {
+        "token": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw",
+        "now": 1300819320,
+        "allowed_algs": [
+          "RS256"
+        ],
+        "jwks": {
+          "keys": [
+            {
+              "$public": "rsa-2048-rfc7515-a2"
+            },
+            {
+              "$key": "oct-64"
+            },
+            {
+              "$public": "p256"
+            },
+            {
+              "$public": "ed25519"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "ok": true,
+        "claims": {
+          "iss": "joe",
+          "exp": 1300819380,
+          "http://example.com/is_root": true
+        },
+        "alg": "RS256",
+        "key_index": 0
+      }
+    },
+    {
+      "file": "issue-hs256-exact.json",
+      "description": "Issues HS256 with typ JWT and the 32-octet key: the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's; the runner also validates it (RFC 7519 §7.1, ADR 0027 §1, §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "HS256",
+        "key": {
+          "$key": "oct-32"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "HS256"
+          ],
+          "key": {
+            "$key": "oct-32"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "issue-hs256-exact-kid.json",
+      "description": "Issues HS256 with a key whose kid is hs-32: kid is copied into the header after typ; the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's (RFC 7515 §4.1.4, ADR 0027 §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "HS256",
+        "key": {
+          "$key": "oct-32-kid-hs-32"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "HS256"
+          ],
+          "key": {
+            "$key": "oct-32-kid-hs-32"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT",
+          "kid": "hs-32"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "oct-32-kid-hs-32"
+      }
+    },
+    {
+      "file": "issue-hs256-exact-no-typ.json",
+      "description": "Issues HS256 with typ null, so the header is alg only (RFC 7519 §5.1 OPTIONAL); the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's (ADR 0027 §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "HS256",
+        "key": {
+          "$key": "oct-32"
+        },
+        "typ": null,
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "HS256"
+          ],
+          "key": {
+            "$key": "oct-32"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "HS256"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "oct-32"
+      }
+    },
+    {
+      "file": "issue-eddsa-exact.json",
+      "description": "Issues EdDSA (RFC 8037 §3.1, deterministic) with the RFC 8037 A.1 key: the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's; the runner also validates it (ADR 0027 §1, §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "EdDSA",
+        "key": {
+          "$key": "ed25519"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "EdDSA"
+          ],
+          "key": {
+            "$public": "ed25519"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "EdDSA",
+          "typ": "JWT"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "ed25519"
+      }
+    },
+    {
+      "file": "issue-ed25519-exact.json",
+      "description": "Issues the fully specified Ed25519 alg (RFC 9864 §2.2, deterministic) with the RFC 8037 A.1 key: the oracle signs the same header octets (alg, typ, then kid; RFC 7519 §5.1, ADR 0027 §8) and the same claims octets (compact JSON, registered claims first in the order iss, sub, aud, exp, nbf, iat, jti, then the others in order; ADR 0027 §1), so the token is byte-equal to node:crypto's (ADR 0027 §1, §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "Ed25519",
+        "key": {
+          "$key": "ed25519"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "Ed25519"
+          ],
+          "key": {
+            "$public": "ed25519"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true,
+        "token": "$token"
+      },
+      "jws": {
+        "header": {
+          "alg": "Ed25519",
+          "typ": "JWT"
+        },
+        "payload_json": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "key": "ed25519"
+      }
+    },
+    {
+      "file": "issue-es256-round-trip.json",
+      "description": "Issues ES256 (RFC 7518 §3.4, randomized, so checked by round trip): the runner validates the token with the P-256 public key and gets alg ES256 and the issued claims back (RFC 7519 §7.1-§7.2, ADR 0027 §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "ES256",
+        "key": {
+          "$key": "p256"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "ES256"
+          ],
+          "key": {
+            "$public": "p256"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "file": "issue-es256k-round-trip.json",
+      "source": "RFC 8812 §3.2",
+      "description": "Issues ES256K (RFC 8812 §3.2, randomized) with the jws-oracle's fixed secp256k1 key (from conformance/vectors/jws-oracle/es256k-compact-sign-roundtrip.json): validated with its public key, alg ES256K and the issued claims back (RFC 7519 §7.1-§7.2, ADR 0027 §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "api",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "id-1",
+          "scope": "read write",
+          "roles": [
+            "admin",
+            "ops"
+          ],
+          "ctx": {
+            "tenant": "t1",
+            "n": 7
+          },
+          "flag": true
+        },
+        "alg": "ES256K",
+        "key": {
+          "kty": "EC",
+          "crv": "secp256k1",
+          "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+          "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g",
+          "d": "EE9oTP04ShCl38a3KQRRUczSgnx0bTgrXNm5oGf9xhk"
+        },
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "ES256K"
+          ],
+          "key": {
+            "kty": "EC",
+            "crv": "secp256k1",
+            "x": "iaRF75M3-cfFwiUEHlB9FebMTJKDr8YEDBIwnOuNsWU",
+            "y": "OxAm4OdyD33a-vsL6NKW26bLSore_lOgDN2AGbLhn1g"
+          },
+          "policy": {
+            "audience": [
+              "api"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "file": "issue-access-token-round-trip.json",
+      "description": "Issues an access token (typ at+jwt, IssueOptions::access_token, RFC 9068 §2.1) with every RFC 9068 §2.2 claim, ES256: it validates under profile access_token with its issuer and audience (RFC 9068 §4, ADR 0027 §5, §8)",
+      "operation": "jwt.issue",
+      "input": {
+        "claims": {
+          "iss": "https://issuer.example",
+          "sub": "user-1",
+          "aud": "https://rs.example",
+          "exp": 1300819380,
+          "iat": 1300819310,
+          "jti": "at-1",
+          "client_id": "client-1",
+          "scope": "read"
+        },
+        "alg": "ES256",
+        "key": {
+          "$key": "p256"
+        },
+        "typ": "at+jwt",
+        "validate": {
+          "now": 1300819320,
+          "allowed_algs": [
+            "ES256"
+          ],
+          "key": {
+            "$public": "p256"
+          },
+          "policy": {
+            "profile": "access_token",
+            "issuer": [
+              "https://issuer.example"
+            ],
+            "audience": [
+              "https://rs.example"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "ok": true
+      }
+    }
+  ]
+}

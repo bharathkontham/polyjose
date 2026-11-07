@@ -1,0 +1,28 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "allow_missing_exp true with no exp claim: the explicit opt-out of the required exp is accepted (ADR 0007, ADR 0027 §3)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIn0.ekkmuuM1thRmwUcdN7llgnSOYGpDCqDB0ic_Fuz8TQbicY4W-cLGD1R5GtMbShZTMqMf3_3erOuTZf2aPvRJWw",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "policy": {
+      "allow_missing_exp": true
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example"
+    },
+    "alg": "ES256"
+  }
+}

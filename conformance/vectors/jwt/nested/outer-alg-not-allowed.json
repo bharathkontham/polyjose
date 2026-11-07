@@ -1,0 +1,34 @@
+{
+  "source": "RFC 8725 §3.1; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Outer alg A128KW with decrypt allowed_algs [A256KW]: AlgorithmNotAllowed (0003 JWE error contract, RFC 8725 §3.1)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0.hyKF5jfUowOcvsWjoj6ojlR3FczShiPE.hJeBVNTjawLQE8kM.PWFbC02KSZLuWNMyYQC9jBU25KBuS7L2sk3CV1wtIdXAinZ12038JHqFz0DyBVRvqTBpgLOLfO2Hd3ajNWnY72UOhj_05kYwbSkQ8UMX0tWtioraTCCcdUVypqOEwljzDf6pwOePYma8xFGO70YQ0eNPSDAW5BRVrO-GRxkYUI5Nda-ToWvcG0aJ8MMJbUx2lOyu2IjTY_HjKM_hrquLpdEqV-RqDS-BLoXwqiU1eduEilQnT_3onnBB3UeUCmLID3gLtSGp2au7L8wsCoGbpEiTu39pxvboGmliePiM-80kbT4sWKdG.Omsh9fgl8Pl-fW5-swsEAw",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A256KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}

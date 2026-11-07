@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7515 §4.1.11; RFC 7519 §7.2 step 5 (erratum 8060); ADR 0026 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "crit lists the extension urn:example:critical, which polyjose does not understand: UnknownCritical",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsImNyaXQiOlsidXJuOmV4YW1wbGU6Y3JpdGljYWwiXSwidXJuOmV4YW1wbGU6Y3JpdGljYWwiOnRydWV9.eyJleHAiOjE3MDAwMDA2MDB9.iSCABDCMgBGKlEfPANqsM1gLyR_Y45ZExYJ0JBcnxJE",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnknownCritical"
+  }
+}

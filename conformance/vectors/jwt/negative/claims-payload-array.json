@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §7.2 step 10; ADR 0027 §1; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The payload is the JSON array [], valid JSON but not a JSON object, so not a JWT Claims Set: InvalidJson",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.W10.Z8_jR5_YteMam1tXekoliF9D4YpFrKo2s6IWugSaxOs",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

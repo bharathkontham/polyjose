@@ -1,0 +1,27 @@
+{
+  "source": "RFC 9068 §2.2, §4; RFC 8693 §4.3; RFC 6749 §2.2; ADR 0052; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "An at+jwt access token with every RFC 9068 §2.2 claim valid but client_id a number (5), under profile access_token (issuer and audience configured and matching), valid HS256 signature: client_id must be a JSON string (ADR 0052): InvalidClaim",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoiYXBpIiwiZXhwIjoxNzAwMDAwNjAwLCJpYXQiOjE2OTk5OTk5OTAsImp0aSI6Imp0aS0xIiwiY2xpZW50X2lkIjo1fQ.RrzqgQr341I_CDFuxD7cya-a2A9vQgGnwBje2AhmgjM",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "policy": {
+      "profile": "access_token",
+      "issuer": "https://issuer.example",
+      "audience": [
+        "api"
+      ]
+    },
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}

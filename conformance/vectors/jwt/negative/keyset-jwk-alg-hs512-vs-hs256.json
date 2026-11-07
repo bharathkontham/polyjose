@@ -1,0 +1,25 @@
+{
+  "source": "RFC 7517 §4.4; RFC 8725 §3.1; ADR 0029 §2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "An HS256 token and a set whose only member (the signing 64-octet oct key) has JWK alg HS512: bound to another algorithm, so not a candidate: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiZXhwIjoxNzAwMDAwNjAwfQ.vxCIOxC_Y6Fier6WxiBV3KnAy6E3Wdcmr_9SNEjqi3M",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
+          "alg": "HS512"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

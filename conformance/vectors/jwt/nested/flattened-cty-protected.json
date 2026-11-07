@@ -1,0 +1,34 @@
+{
+  "source": "RFC 7519 §1, §7.2 step 1; RFC 7516 §7.2.2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The same nested JWT as a flattened JWE JSON serialization with cty JWT in the protected header: still InvalidFormat, so the refusal is the serialization, not the cty location (ADR 0027 §6)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "{\"protected\":\"eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwiY3R5IjoiSldUIn0\",\"encrypted_key\":\"_3PXP7C04zY2eLY_FYolv2td5xvkEAT5\",\"iv\":\"rAAD_VA6lsx1ilKm\",\"ciphertext\":\"lAEAfn7OUJcYRmuWruzxXFsltvzJ9VzlTZw8GhFnqYKEAnS6WcnrKKrLH2KCxrur4TTnlz8RhwNByqwqZN7vUU7iRmGSduUZXbm6cDjweoCt-4QuGDwjwq3JKA21OvhmkSs8HQP7wI24R5_RFUMnAs1K5ebvc89ljWR8kTgAE82CKNj8NEua3cvkNISukLqEncjRs_WyhzIEcQcZP04Ep1P_y7RIcCJrNaeFvgZasq8JlHypKC6oogRIpLDkqSDyNOuI1gUmMhSTFShQ3vM9H99IV4z8LvReQeyvyW6ZRjOlEqnx4Fnf\",\"tag\":\"DnV13y5Pik2scx2Q_Zev0Q\"}",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "decrypt": {
+      "key": {
+        "kty": "oct",
+        "k": "X8EwrK_w_mNZySX8TCh4Bw"
+      },
+      "allowed_algs": [
+        "A128KW"
+      ],
+      "allowed_enc": [
+        "A128GCM"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

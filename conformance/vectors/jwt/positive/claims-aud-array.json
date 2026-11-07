@@ -1,0 +1,35 @@
+{
+  "source": "conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "aud as the array [\"x\",\"api\"] with policy audience [\"api\"]: one token value equal to one accepted value is enough (RFC 7519 §4.1.3, ADR 0027 §4)",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiYXVkIjpbIngiLCJhcGkiXSwiZXhwIjoxMzAwODE5MzgwfQ.G-EqS_MCPkx7xnTlIU5A5Nha5ks7mtBaGIec-J82a0WSYUnDlkBBzqdNbynMJ0RuEnB0CgHPHR4NIaWM_qUVYA",
+    "now": 1300819320,
+    "allowed_algs": [
+      "ES256"
+    ],
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "policy": {
+      "audience": [
+        "api"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "https://issuer.example",
+      "aud": [
+        "x",
+        "api"
+      ],
+      "exp": 1300819380
+    },
+    "alg": "ES256"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "source": "ADR 0027 §9; ADR 0026 §2 step 7; RFC 8725 §3.1; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "An HS256 token with typ at+jwt under the default typing mode and allow-list [HS384]: the allow-list (step 7) comes before the JWT header rules (J1): AlgorithmNotAllowed",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJleHAiOjE3MDAwMDA2MDB9.55ShSerV6SpW5_HBhy8UfhpeRZaPooVRn_bE2L00kFA",
+    "now": 1700000000,
+    "allowed_algs": [
+      "HS384"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}
