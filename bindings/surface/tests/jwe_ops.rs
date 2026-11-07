@@ -7,6 +7,8 @@
 //! budget (ADR 0023, ADR 0050 §2), protected direct modes (ADR 0050 §1) and secret results
 //! (ADR 0030 §7, ADR 0050 §4).
 
+#![allow(clippy::unwrap_used, clippy::panic)] // test code: a panic is a failed assertion
+
 use polyjose_surface::jwe::{
     jwe_decrypt_compact, jwe_decrypt_json, jwe_encrypt_compact, jwe_encrypt_json,
 };
@@ -571,5 +573,241 @@ fn an_unknown_form_is_unsupported_algorithm() {
             jwe_encrypt_json(PLAINTEXT, &options, form),
             "UnsupportedAlgorithm",
         );
+    }
+}
+
+// --- PBES2: the core's count, bound and per-token budget (ADR 0023, ADR 0050 §2) ----------------
+
+fn pbes2(key: &str, p2c: Option<u32>) -> JweRecipient {
+    let mut r = recipient("PBES2-HS256+A128KW", key);
+    r.p2c = p2c;
+    r
+}
+
+fn pbes2_policy() -> JweDecryptOptions {
+    policy(&["PBES2-HS256+A128KW"], &["A128GCM"])
+}
+
+#[test]
+fn p2c_none_is_the_core_default_and_decrypts_under_the_default_bound() {
+    // `p2c: None` sets nothing, so the core writes its default count, 10,000 (ADR 0023), which
+    // is also the most the default decrypt bound accepts.
+    let token = jwe_encrypt_compact(
+        PLAINTEXT,
+        &encrypt_options("A128GCM", vec![pbes2(PASSWORD, None)]),
+    )
+    .unwrap();
+    assert!(compact_protected(&token).contains(r#""p2c":10000"#));
+    let d = jwe_decrypt_compact(&token, PASSWORD, &pbes2_policy()).unwrap();
+    assert_eq!(d.plaintext.as_bytes(), PLAINTEXT);
+}
+
+#[test]
+fn p2c_one_above_the_default_bound_needs_a_raised_max_pbes2_count() {
+    let token = jwe_encrypt_compact(
+        PLAINTEXT,
+        &encrypt_options("A128GCM", vec![pbes2(PASSWORD, Some(10_001))]),
+    )
+    .unwrap();
+    // RFC 7518 §8.8, ADR 0023: refused before any PBKDF2 work, uniformly.
+    assert_code(
+        jwe_decrypt_compact(&token, PASSWORD, &pbes2_policy()),
+        "DecryptionFailed",
+    );
+    let mut raised = pbes2_policy();
+    raised.max_pbes2_count = Some(20_000);
+    let d = jwe_decrypt_compact(&token, PASSWORD, &raised).unwrap();
+    assert_eq!(d.plaintext.as_bytes(), PLAINTEXT);
+}
+
+#[test]
+fn the_pbes2_bound_is_a_budget_for_the_whole_token() {
+    // ADR 0050 §2: two PBES2 recipients without `kid`, 6,000 each, are both candidates for the
+    // key. The first is under another password, so it spends 6,000 and fails; the second needs
+    // 6,000 more than the default 10,000 leaves.
+    let jwe = jwe_encrypt_json(
+        PLAINTEXT,
+        &encrypt_options(
+            "A128GCM",
+            vec![
+                pbes2(OTHER_PASSWORD, Some(6_000)),
+                pbes2(PASSWORD, Some(6_000)),
+            ],
+        ),
+        "general",
+    )
+    .unwrap();
+    assert!(!jwe.contains("kid"), "{jwe}");
+    assert_code(
+        jwe_decrypt_json(&jwe, PASSWORD, &pbes2_policy()),
+        "DecryptionFailed",
+    );
+    let mut raised = pbes2_policy();
+    raised.max_pbes2_count = Some(20_000);
+    let d = jwe_decrypt_json(&jwe, PASSWORD, &raised).unwrap();
+    assert_eq!(d.plaintext.as_bytes(), PLAINTEXT);
+    assert_eq!(d.recipient_index, 1);
+}
+
+#[test]
+fn pbes2_parameters_outside_the_core_encrypt_range_are_invalid_key() {
+    // Recorded core behaviour (ADR 0050 §2, RFC 7518 §4.8.1.1, §4.8.1.2): a `p2c` above the
+    // 1,000,000 ceiling or below 1,000, and a `p2s` length above 256 or below 8, fail with
+    // InvalidKey, before any PBKDF2 work.
+    for p2c in [1_000_001, u32::MAX, 999, 0] {
+        let options = encrypt_options("A128GCM", vec![pbes2(PASSWORD, Some(p2c))]);
+        assert_code(jwe_encrypt_compact(PLAINTEXT, &options), "InvalidKey");
+    }
+    for p2s_len in [257, 7] {
+        let mut r = pbes2(PASSWORD, Some(1000));
+        r.p2s_len = Some(p2s_len);
+        let options = encrypt_options("A128GCM", vec![r]);
+        assert_code(jwe_encrypt_compact(PLAINTEXT, &options), "InvalidKey");
+    }
+}
+
+// --- Direct modes need a protected alg and enc (ADR 0050 §1) --------------------------------------
+
+/// `negative-cross-mode/audit-forged-gcmkw-as-dir.json`: the security audit's forged token, an
+/// A128GCMKW key wrap relabelled as `dir` with `alg` and `enc` unprotected.
+const AUDIT_FORGED_DIR: &str = r#"{"unprotected":{"alg":"dir","enc":"A128GCM"},"iv":"O7z64SOn4nzSXqYX","ciphertext":"MnP1M2KMxJATaL2fiHopzA","tag":"1iuYCU-NaRWTNmU0AQpqYg"}"#;
+/// `negative-cross-mode/dir-no-protected-header.json`: an honest `dir` JWE with no protected
+/// header.
+const DIR_NO_PROTECTED: &str = r#"{"unprotected":{"alg":"dir","enc":"A128GCM"},"iv":"cg4gak1ok5MkDhBf","ciphertext":"kbXXRkfQJoVUOb99YK-Yww","tag":"Zkerl5MxxOenLBmWbJqhRw"}"#;
+/// The key of both.
+const CROSS_MODE_KEY: &str = r#"{"kty":"oct","k":"AAECAwQFBgcICQoLDA0ODw"}"#;
+/// `negative-cross-mode/ecdh-es-p256-alg-shared.json`: ECDH-ES with `enc` protected but `alg` and
+/// `epk` only in the shared unprotected header, and its key.
+const ECDH_ES_ALG_SHARED: &str = r#"{"protected":"eyJlbmMiOiJBMTI4R0NNIn0","unprotected":{"alg":"ECDH-ES","epk":{"kty":"EC","crv":"P-256","x":"IeQwN4R8Ia0KzQMdl2ECtPtqr4uZlLli6c1-a3HxQJ4","y":"9o6N0HCvnnEbmdRm16NlvJaRXAs7yxfsPl1kJBr4TBM"}},"iv":"Hb842gFCnuL39bIE","ciphertext":"iTkAUwjKG8ia-eJCA_6MHbdYlN2CqzhcjdM65T_0zMbW07mFzmnU","tag":"oZb92a-LZdMZQHL7dRxiTg"}"#;
+const ECDH_ES_ALG_SHARED_KEY: &str = r#"{"kty":"EC","crv":"P-256","x":"y7f2mVK84kO3zqFuPaCBtA3WUhkF_kVxoy_XEihK8FA","y":"-4WlU8v2oK3WvAiACn-ORltXvA0H3gDfSyC-eUdeo2s","d":"-_nytyiEI0OyVKkN9Iyyzaqcexr7wpXWDDj2a21zvFM"}"#;
+
+#[test]
+fn a_direct_mode_without_a_protected_alg_and_enc_is_invalid_header() {
+    let cross_mode = policy(&["A128GCMKW", "dir"], &["A128GCM"]);
+    assert_code(
+        jwe_decrypt_json(AUDIT_FORGED_DIR, CROSS_MODE_KEY, &cross_mode),
+        "InvalidHeader",
+    );
+    assert_code(
+        jwe_decrypt_json(DIR_NO_PROTECTED, CROSS_MODE_KEY, &cross_mode),
+        "InvalidHeader",
+    );
+    assert_code(
+        jwe_decrypt_json(
+            ECDH_ES_ALG_SHARED,
+            ECDH_ES_ALG_SHARED_KEY,
+            &policy(&["ECDH-ES"], &["A128GCM"]),
+        ),
+        "InvalidHeader",
+    );
+}
+
+#[test]
+fn general_json_protects_a_direct_mode_and_leaves_an_empty_recipient() {
+    // ADR 0050 §1: `alg`, and for ECDH-ES `epk`, `apu` and `apv`, are in the protected header in
+    // every form; the general form's one recipient entry is empty.
+    let mut ecdh = recipient("ECDH-ES", P256_PUBLIC);
+    ecdh.apu = Some(b"Alice".to_vec());
+    ecdh.apv = Some(b"Bob".to_vec());
+    let cases: [(JweRecipient, &str, &str, &[&str]); 3] = [
+        (recipient("dir", OCT_256), OCT_256, "dir", &[]),
+        (
+            ecdh,
+            P256_PRIVATE,
+            "ECDH-ES",
+            &[
+                r#""epk":{"kty":"EC","crv":"P-256""#,
+                r#""apu":"QWxpY2U","apv":"Qm9i""#,
+            ],
+        ),
+        (
+            recipient("ECDH-ES", X25519_PUBLIC),
+            X25519_PRIVATE,
+            "ECDH-ES",
+            &[r#""epk":{"kty":"OKP","crv":"X25519""#],
+        ),
+    ];
+    for (r, decrypt_key, alg, members) in cases {
+        let jwe =
+            jwe_encrypt_json(PLAINTEXT, &encrypt_options("A256GCM", vec![r]), "general").unwrap();
+        assert!(jwe.contains(r#""recipients":[{}]"#), "{jwe}");
+        let protected = json_protected(&jwe);
+        assert!(
+            protected.starts_with(&format!(r#"{{"alg":"{alg}","enc":"A256GCM""#)),
+            "{protected}"
+        );
+        for member in members {
+            assert!(protected.contains(member), "{protected}");
+        }
+        let d = jwe_decrypt_json(&jwe, decrypt_key, &policy(&[alg], &["A256GCM"])).unwrap();
+        assert_eq!(d.plaintext.as_bytes(), PLAINTEXT);
+        assert_eq!(d.recipient_header, None);
+        assert_eq!(d.protected_header.as_deref(), Some(protected.as_str()));
+    }
+}
+
+// --- One decryption error (ADR 0007, RFC 7516 §11.4–§11.5) --------------------------------------
+
+/// `token` with the first character of its compact part `part` changed to another base64url
+/// character (the first one keeps every bit significant, so the part stays canonical).
+fn tamper(token: &str, part: usize) -> String {
+    let mut parts: Vec<String> = token.split('.').map(str::to_owned).collect();
+    let first = if parts[part].starts_with('A') {
+        "B"
+    } else {
+        "A"
+    };
+    parts[part].replace_range(0..1, first);
+    parts.join(".")
+}
+
+#[test]
+fn every_failure_after_key_management_is_the_same_decryption_failed() {
+    let a3 = policy(&["A128KW"], &["A128CBC-HS256"]);
+    let pbes2_token = jwe_encrypt_compact(
+        PLAINTEXT,
+        &encrypt_options("A128GCM", vec![pbes2(PASSWORD, Some(1000))]),
+    )
+    .unwrap();
+    let mut under_budget = pbes2_policy();
+    under_budget.max_pbes2_count = Some(999);
+    let gcmkw = jwe_encrypt_compact(
+        PLAINTEXT,
+        &encrypt_options("A256GCM", vec![recipient("A256GCMKW", OCT_256)]),
+    )
+    .unwrap();
+    let ecdh = jwe_encrypt_compact(
+        PLAINTEXT,
+        &encrypt_options("A256GCM", vec![recipient("ECDH-ES", P256_PUBLIC)]),
+    )
+    .unwrap();
+
+    let failures = [
+        // Another 128-bit key unwraps nothing (RFC 3394 integrity check).
+        jwe_decrypt_compact(A3_JWE, r#"{"kty":"oct","k":"AAAAAAAAAAAAAAAAAAAAAA"}"#, &a3),
+        jwe_decrypt_compact(&tamper(A3_JWE, 1), A3_KEY, &a3),
+        jwe_decrypt_compact(&tamper(A3_JWE, 2), A3_KEY, &a3),
+        jwe_decrypt_compact(&tamper(A3_JWE, 3), A3_KEY, &a3),
+        jwe_decrypt_compact(&tamper(A3_JWE, 4), A3_KEY, &a3),
+        jwe_decrypt_compact(&pbes2_token, OTHER_PASSWORD, &pbes2_policy()),
+        jwe_decrypt_compact(&pbes2_token, PASSWORD, &under_budget),
+        jwe_decrypt_compact(
+            &tamper(&gcmkw, 4),
+            OCT_256,
+            &policy(&["A256GCMKW"], &["A256GCM"]),
+        ),
+        jwe_decrypt_compact(
+            &ecdh,
+            ECDH_ES_ALG_SHARED_KEY,
+            &policy(&["ECDH-ES"], &["A256GCM"]),
+        ),
+    ];
+    let errors: Vec<SurfaceError> = failures
+        .into_iter()
+        .map(|r| assert_code(r, "DecryptionFailed"))
+        .collect();
+    for e in &errors {
+        assert_eq!(e, &errors[0]);
+        assert_eq!(e.message(), errors[0].message());
     }
 }
