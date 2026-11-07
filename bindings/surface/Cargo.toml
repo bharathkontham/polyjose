@@ -18,3 +18,10 @@ workspace = true
 [dependencies]
 polyjose.workspace = true
 zeroize.workspace = true
+
+# Test-only oracle, never shipped (ADR 0016 §5): the `rust-surface` conformance runner hashes the
+# vector files it reads with the `sha2` crate directly, not through the API under test
+# (ADR 0060 §5). The core already depends on the same pinned crate (ADR 0002), so the normal
+# tree, which ADR 0030 §1 and bindings/deps-allowlist/surface.txt govern, is unchanged.
+[dev-dependencies]
+sha2.workspace = true

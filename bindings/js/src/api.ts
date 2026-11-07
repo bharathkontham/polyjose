@@ -499,7 +499,14 @@ export function createApi(backend: Backend): PolyjoseApi {
       });
     }
     if (!Array.isArray(listed)) throw new Error("polyjose: the backend's errorCodes() did not return an array, so a backend error can't be mapped");
-    codeSet = new Set(listed.filter((c: unknown): c is string => typeof c === "string"));
+    // Own elements only: `filter` would read a hole through a polluted `Array.prototype` and map
+    // a code the backend never listed (0013 F09).
+    const own = new Set<string>();
+    for (let i = 0; i < listed.length; i++) {
+      const c: unknown = Object.hasOwn(listed, i) ? listed[i] : undefined;
+      if (typeof c === "string") own.add(c);
+    }
+    codeSet = own;
     return codeSet;
   };
 
@@ -541,7 +548,10 @@ export function createApi(backend: Backend): PolyjoseApi {
     errorCodes: async () => {
       const raw: unknown = await invoke(() => b.errorCodes());
       if (!Array.isArray(raw)) throw new TypeError("polyjose: the backend returned errorCodes that is not an array");
-      return raw.map((c: unknown, i) => outStr(c, `errorCodes[${i}]`));
+      // Own elements only (0013 F09): a hole is reported, never read through `Array.prototype`.
+      const out: string[] = [];
+      for (let i = 0; i < raw.length; i++) out.push(outStr(Object.hasOwn(raw, i) ? raw[i] : undefined, `errorCodes[${i}]`));
+      return out;
     },
 
     base64urlEncode: (input) =>
