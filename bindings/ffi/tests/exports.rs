@@ -17,8 +17,11 @@ use polyjose_ffi::PolyjoseError;
 use polyjose_ffi::jwk::{
     jwk_parse, jwk_thumbprint, jwk_thumbprint_uri, jwk_to_public, jwks_select,
 };
+use polyjose_ffi::jws::{
+    jws_sign_compact, jws_sign_flattened, jws_sign_general, jws_verify_compact, jws_verify_json,
+};
 use polyjose_ffi::keys;
-use polyjose_ffi::records::JwkSelector;
+use polyjose_ffi::records::{JwkSelector, JwsSignOptions, JwsSigner, JwsVerifyOptions};
 
 /// Asserts that `$result` failed as `PolyjoseError::$variant` and that the exported `code()` is
 /// the variant's name, the stable code (ADR 0030 §5).
@@ -255,5 +258,141 @@ fn jwk_to_der_writes_the_fixture_and_rejects_an_unknown_format() {
     assert_fails!(
         keys::jwk_to_der(s(ED25519_JWK), s("der")),
         UnsupportedAlgorithm
+    );
+}
+
+// --- JWS (RFC 7515) ---------------------------------------------------------------------------
+
+/// RFC 7515 Appendix A.1 (RFC 7517 Appendix A.3): the HMAC key.
+const RFC7515_A1_KEY: &str = r#"{"kty":"oct","k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#;
+
+/// The RFC 7515 Appendix A.1 key with its first octet changed: a valid key that is not the one.
+const OTHER_HMAC_KEY: &str = r#"{"kty":"oct","k":"ByM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#;
+
+/// RFC 7515 Appendix A.1.1: `BASE64URL(UTF8(JWS Protected Header))`, kept verbatim (its CRLF
+/// line breaks are part of the signed octets).
+const RFC7515_A1_PROTECTED_B64U: &str = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9";
+
+/// RFC 7515 Appendix A.1.1: `BASE64URL(JWS Payload)`.
+const RFC7515_A1_PAYLOAD_B64U: &str = "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ";
+
+/// RFC 7515 Appendix A.1.1: the HMAC SHA-256 signature, base64url encoded.
+const RFC7515_A1_SIGNATURE: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
+/// RFC 7515 Appendix A.1.1: the JWS Compact Serialization.
+const RFC7515_A1_JWS: &str = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
+fn a1_payload() -> Vec<u8> {
+    polyjose_ffi::util::base64url_decode(s(RFC7515_A1_PAYLOAD_B64U)).unwrap()
+}
+
+fn a1_signer() -> JwsSigner {
+    JwsSigner {
+        key: s(RFC7515_A1_KEY),
+        protected_header: None,
+        protected_b64u: Some(s(RFC7515_A1_PROTECTED_B64U)),
+        unprotected_header: None,
+    }
+}
+
+fn verify_options(allowed_algs: &[&str]) -> JwsVerifyOptions {
+    JwsVerifyOptions {
+        allowed_algs: allowed_algs.iter().map(|a| s(a)).collect(),
+        detached_payload: None,
+        max_input_len: None,
+        max_signatures: None,
+    }
+}
+
+#[test]
+fn jws_sign_compact_reproduces_rfc7515_a1_and_rejects_both_header_forms() {
+    let options = || JwsSignOptions {
+        protected_header: None,
+        protected_b64u: Some(s(RFC7515_A1_PROTECTED_B64U)),
+        detached: false,
+    };
+    assert_eq!(
+        jws_sign_compact(a1_payload(), s(RFC7515_A1_KEY), options()).unwrap(),
+        RFC7515_A1_JWS
+    );
+    // ADR 0030 §4: exactly one of the two header forms.
+    let both = JwsSignOptions {
+        protected_header: Some(s(r#"{"alg":"HS256"}"#)),
+        ..options()
+    };
+    assert_fails!(
+        jws_sign_compact(a1_payload(), s(RFC7515_A1_KEY), both),
+        InvalidHeader
+    );
+}
+
+#[test]
+fn jws_sign_flattened_signs_the_rfc7515_a1_input_and_rejects_a_signer_without_alg() {
+    // RFC 7515 §7.2.2: the same signing input as A.1, so the same HMAC signature.
+    let jws = jws_sign_flattened(a1_payload(), a1_signer(), false).unwrap();
+    assert_eq!(member(&jws, "signature"), RFC7515_A1_SIGNATURE);
+    assert_eq!(member(&jws, "payload"), RFC7515_A1_PAYLOAD_B64U);
+    // RFC 7515 §4.1.1: `alg` is required, in some header.
+    let no_alg = JwsSigner {
+        protected_b64u: None,
+        ..a1_signer()
+    };
+    assert_fails!(
+        jws_sign_flattened(a1_payload(), no_alg, false),
+        InvalidHeader
+    );
+}
+
+#[test]
+fn jws_sign_general_signs_the_rfc7515_a1_input_and_rejects_no_signers() {
+    // RFC 7515 §7.2.1: one entry in `signatures`.
+    let jws = jws_sign_general(a1_payload(), vec![a1_signer()], false).unwrap();
+    let signatures = value(&jws);
+    let first = &signatures
+        .get("signatures")
+        .and_then(Value::as_array)
+        .expect("signatures array")[0];
+    assert_eq!(
+        first.get("signature").and_then(Value::as_str),
+        Some(RFC7515_A1_SIGNATURE)
+    );
+    // RFC 7515 §7.2.1: `signatures` has at least one member.
+    assert_fails!(jws_sign_general(a1_payload(), vec![], false), InvalidFormat);
+}
+
+#[test]
+fn jws_verify_compact_verifies_rfc7515_a1_and_rejects_an_alg_outside_the_allow_list() {
+    let verified = jws_verify_compact(
+        s(RFC7515_A1_JWS),
+        s(RFC7515_A1_KEY),
+        verify_options(&["HS256"]),
+    )
+    .unwrap();
+    assert_eq!(verified.alg, "HS256");
+    assert_eq!(verified.payload, a1_payload());
+    assert_eq!(verified.signature_index, 0);
+    assert!(verified.protected_header.is_some());
+    // RFC 8725 §3.1, ADR 0007: only the caller's allow-list admits an algorithm.
+    assert_fails!(
+        jws_verify_compact(
+            s(RFC7515_A1_JWS),
+            s(RFC7515_A1_KEY),
+            verify_options(&["ES256"])
+        ),
+        AlgorithmNotAllowed
+    );
+}
+
+#[test]
+fn jws_verify_json_verifies_a_flattened_jws_and_rejects_the_wrong_key() {
+    let jws = jws_sign_flattened(a1_payload(), a1_signer(), false).unwrap();
+    let verified =
+        jws_verify_json(jws.clone(), s(RFC7515_A1_KEY), verify_options(&["HS256"])).unwrap();
+    assert_eq!(verified.payload, a1_payload());
+    assert_eq!(verified.signature_index, 0);
+    // RFC 7515 §5.2 step 8.
+    assert_fails!(
+        jws_verify_json(jws, s(OTHER_HMAC_KEY), verify_options(&["HS256"])),
+        InvalidSignature
     );
 }
