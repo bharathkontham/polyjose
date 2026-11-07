@@ -95,7 +95,7 @@ function allowed_word(w) {
           w ~ /^(always|cancelled|success|failure|contains|startsWith|endsWith|format|join|toJSON|fromJSON)$/ ||
           w ~ /^(true|false|null)$/)
 }
-function check_expressions(s,   i, j, rest, e, k, c, q, w, prev) {
+function check_expressions(s,   i, j, rest, e, k, c, q, w, prev, m) {
   while ((i = index(s, "${{")) > 0) {
     rest = substr(s, i + 3); j = index(rest, "}}")
     if (j == 0) { fail("expressions: unterminated ${{"); return }
@@ -109,6 +109,13 @@ function check_expressions(s,   i, j, rest, e, k, c, q, w, prev) {
         w = c
         while (k < length(e) && substr(e, k + 1, 1) ~ /[A-Za-z0-9_-]/) { k++; w = w substr(e, k, 1) }
         if (prev != "." && !allowed_word(w)) fail("expressions: ${{ }} uses \"" w "\" (only inputs, github, matrix, steps, needs, runner, job, strategy)")
+        # The github context holds github.token, so it is read only as github.<property>: not
+        # whole (${{ github }}, toJSON(github)), not by index (github[...], also a computed
+        # github[format(...)]) and not by the github.* object filter.
+        if (prev != "." && w == "github") {
+          for (m = k + 1; substr(e, m, 1) == " "; m++) ;
+          if (substr(e, m, 1) != "." || substr(e, m + 1, 1) !~ /[A-Za-z_]/) fail("expressions: ${{ }} uses the whole github context (only github.<property>; it holds the token)")
+        }
         prev = "w"; continue
       }
       if (c != " ") prev = c
