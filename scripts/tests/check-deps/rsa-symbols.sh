@@ -20,6 +20,9 @@
 #        release configuration compiles.
 # (An uncalled `#[inline] pub fn` and an uninstantiated generic `pub fn` are never codegened in
 # polyjose, so they have no symbol to find: the text scan's macro rule catches those, rsa-guard.sh.)
+# Must fail closed (exit 2, before any build):
+#  10.   a workspace member with no library target (build tooling, like polyjose-uniffi-bindgen)
+#        whose tree holds a workspace member (here polyjose), which the gate cannot read.
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
 # so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
 # release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
@@ -238,5 +241,30 @@ expect_symbol "look-alikes" "polyjose::cbc::Decryptor<u8>>::decrypt"
 expect_symbol "look-alikes" "polyjose::jws::rsa::traits::Decryptor>::decrypt"
 expect_symbol "look-alikes" "polyjose::jws::rsa::private_key::RsaPrivateKey>::new"
 dump_dir=""
+
+# 10. A library-less member (build tooling such as polyjose-uniffi-bindgen) is skipped only while
+#     its tree holds neither rsa nor a workspace member. One that depends on polyjose could carry
+#     polyjose code the gate never reads, so the gate stops.
+new_case tool-with-core
+append_to tools/rsa-tool/Cargo.toml '[package]
+name = "rsa-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polyjose = { path = "../../crates/polyjose" }'
+append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member rsa-tool has no library target, and its tree contains polyjose' "$scratch/out"; then
+  echo "ok   - library-less member depending on polyjose: $gate_name fails closed"
+else
+  echo "FAIL - library-less member depending on polyjose: exit $rc (expected 2) with the no-library-target error"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
 
 finish
