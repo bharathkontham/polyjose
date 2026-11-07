@@ -63,7 +63,7 @@ use polyjose::header::Header;
 use polyjose::json::{self, Number, Object, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use polyjose::jwe::{self, DecryptPolicy, Encryptor, JsonForm, Recipient};
-use polyjose::jwk::{Jwk, JwkSet};
+use polyjose::jwk::{Jwk, JwkSet, ThumbprintHash};
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
 use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt};
 use polyjose::keys::{JoseAlg, KeyFormat, generate_for};
@@ -328,13 +328,12 @@ const B64URL_DECODE_OK: Shape = Shape {
     members: &[req("bytes_hex", Kind::Hex)],
     rules: &[],
 };
-// RFC 7638 §3 JWK Thumbprint and RFC 9278 §3 JWK Thumbprint URI.
+// RFC 7638 §3 JWK Thumbprint and RFC 9278 §3 JWK Thumbprint URI. `hash`
+// is optional and any string (ADR 0054 §8.2): an unknown name is a vector
+// outcome, not a schema error.
 const JWK_THUMBPRINT_INPUT: Shape = Shape {
     def: "jwk_thumbprint_input",
-    members: &[
-        req("jwk", Kind::Object),
-        req("hash", Kind::Enum(&["sha-256"])),
-    ],
+    members: &[req("jwk", Kind::Object), opt("hash", Kind::String)],
     rules: &[],
 };
 const JWK_THUMBPRINT_OK: Shape = Shape {
@@ -2422,18 +2421,23 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
             Err(e) => return Ok(Err(e)),
         },
         "jwk.thumbprint" => {
-            // `hash` is validated to be "sha-256", the only one implemented.
-            let jwk = input
-                .get("jwk")
-                .and_then(Value::as_object)
-                .expect("validated");
-            match Jwk::from_object(jwk) {
-                Ok(key) => {
-                    out.insert("thumbprint", key.thumbprint_sha256());
-                    out.insert("thumbprint_uri", key.thumbprint_uri_sha256());
-                }
+            // RFC 7638 §3 over the imported key, with the hash named by
+            // `hash` (ADR 0054 §8.2) or, when absent, the core default,
+            // SHA-256 (RFC 9278 §5). The URI carries the IANA hash name
+            // whatever spelling was given (RFC 9278 §3, §4).
+            let key = match Jwk::from_object(input_object(input, "jwk")) {
+                Ok(key) => key,
                 Err(e) => return Ok(Err(e)),
-            }
+            };
+            let hash = match input.get("hash").map(|_| input_str(input, "hash")) {
+                None => ThumbprintHash::default(),
+                Some(name) => match ThumbprintHash::from_name(name) {
+                    Ok(hash) => hash,
+                    Err(e) => return Ok(Err(e)),
+                },
+            };
+            out.insert("thumbprint", key.thumbprint(hash));
+            out.insert("thumbprint_uri", key.thumbprint_uri(hash));
         }
         "jws.sign" => {
             if let Err(e) = run_jws_sign(input, &vector.expect, &mut out)? {
@@ -3224,6 +3228,30 @@ fn valid_vectors_pass() {
             r#"{"hash":"sha-256","jwk":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg=="}}"#,
             r#"{"ok":false,"error":"InvalidBase64"}"#,
         ),
+        // ADR 0054 §8.2: `hash` is optional (the core default, SHA-256,
+        // RFC 9278 §5), any of the nine names, and the URI always carries
+        // the IANA name (RFC 9278 §4).
+        vector(
+            "jwk.thumbprint",
+            r#"{"jwk":{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}}"#,
+            r#"{"ok":true,"thumbprint":"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k","thumbprint_uri":"urn:ietf:params:oauth:jwk-thumbprint:sha-256:kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"}"#,
+        ),
+        vector(
+            "jwk.thumbprint",
+            r#"{"hash":"sha384","jwk":{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}}"#,
+            r#"{"ok":true,"thumbprint":"ePy6LSb6I7JWK2uWQyYJQ4DBrwGE4QoxPl6INUviCtqplTLCwzo6fD9Eaw69Wvtt","thumbprint_uri":"urn:ietf:params:oauth:jwk-thumbprint:sha-384:ePy6LSb6I7JWK2uWQyYJQ4DBrwGE4QoxPl6INUviCtqplTLCwzo6fD9Eaw69Wvtt"}"#,
+        ),
+        vector(
+            "jwk.thumbprint",
+            r#"{"hash":"SHA-512","jwk":{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}}"#,
+            r#"{"ok":true,"thumbprint":"SfSqAgfmPYvpuNzfHCiQXi6Mr51GG78hHopngoabsV9xvLR0hcUfVCoJLfyzi08Dbnds6kmcAt23CpNV-8qLTg","thumbprint_uri":"urn:ietf:params:oauth:jwk-thumbprint:sha-512:SfSqAgfmPYvpuNzfHCiQXi6Mr51GG78hHopngoabsV9xvLR0hcUfVCoJLfyzi08Dbnds6kmcAt23CpNV-8qLTg"}"#,
+        ),
+        // ADR 0022: SHA-1 is a vector outcome now, not a schema error.
+        vector(
+            "jwk.thumbprint",
+            r#"{"hash":"sha-1","jwk":{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}}"#,
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+        ),
         // RFC 8410 §10.1; member order of the expected JWK does not matter.
         vector(
             "keys.import_pem",
@@ -3704,11 +3732,11 @@ fn schema_invalid_vectors_fail() {
             "/input/b64u",
         ),
         (
-            "unsupported thumbprint hash",
+            "thumbprint hash not a string",
             vector(
                 "jwk.thumbprint",
-                r#"{"hash":"sha-1","jwk":{"kty":"oct","k":"AA"}}"#,
-                r#"{"ok":false,"error":"InvalidKey"}"#,
+                r#"{"hash":256,"jwk":{"kty":"oct","k":"AA"}}"#,
+                r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
             ),
             "/input/hash",
         ),
@@ -3839,6 +3867,15 @@ fn failing_vectors_fail_naming_their_source() {
                 r#"{"ok":true,"thumbprint":"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k","thumbprint_uri":"urn:ietf:params:oauth:jwk-thumbprint:sha-512:kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"}"#,
             ),
             "thumbprint_uri",
+        ),
+        (
+            "SHA-384 vector expecting the SHA-256 thumbprint",
+            vector(
+                "jwk.thumbprint",
+                r#"{"hash":"sha-384","jwk":{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}}"#,
+                r#"{"ok":true,"thumbprint":"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k","thumbprint_uri":"urn:ietf:params:oauth:jwk-thumbprint:sha-256:kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"}"#,
+            ),
+            "thumbprint",
         ),
     ];
     for (what, json, needle) in cases {

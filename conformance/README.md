@@ -42,7 +42,7 @@ The five members below are required, `features` is optional, and no others are a
 |---|---|---|---|
 | `b64url.encode` | `bytes_hex` | `b64u` | no |
 | `b64url.decode` | `b64u` (any string) | `bytes_hex` | yes |
-| `jwk.thumbprint` | `jwk` (a JSON object), `hash` (`"sha-256"`) | `thumbprint`, `thumbprint_uri` | yes |
+| `jwk.thumbprint` | `jwk` (a JSON object), and optionally `hash` (any string; ADR 0054 §8.2 names, [below](#jwkthumbprint)) | `thumbprint`, `thumbprint_uri` | yes |
 | `jws.sign` | `serialization`, `payload_b64u`, `detached`, `signers` ([below](#jwssign)) | `jws` (exact), or `verify_with` (round trip) | yes |
 | `jws.verify` | `jws`, `key`, `allowed_algs`, and optionally `detached_payload_b64u`, `max_input_len`, `max_signatures` ([below](#jwsverify)) | `payload_b64u`, `alg`, `signature_index` | yes |
 | `keys.import_pem` | `pem` (any string) ([below](#keysimport_pem)) | `jwk` (a JSON object) | yes |
@@ -65,6 +65,17 @@ A success expectation lists **exactly** the outputs: a runner fails a vector who
 - **`keys.*` operations: PEM text, JWK objects and DER as canonical base64url** (`der_b64u`), never hex. A PEM block is a JSON string with `\n` line endings; JWK members are canonical base64url as RFC 7518 §6 and RFC 8037 §2 define them. A runner decodes `der_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome.
 - **`jwt.*` operations: tokens as text, keys as JWK and JWK Set objects, claims as a JSON object, time as integer seconds.** A token is passed to the library exactly as written (malformed tokens are under test), and claims under test that a JSON vector can't hold (duplicate names, `1e400`, non-UTF-8 octets) live inside the token's base64url payload.
 - **`jws.*` and `jwe.*` operations: canonical base64url** (members ending in `_b64u`). This is deliberate: the codec is no longer under test there (it has its own vectors), and every JWS field is natively base64url (RFC 7515 §2), so the RFC's values are copied as printed. A runner decodes `payload_b64u` and `detached_payload_b64u` to hand octets to the library; a value that doesn't decode canonically fails the vector, it is never an outcome. `protected_b64u` is passed to the library as text, unchanged.
+
+## `jwk.thumbprint`
+
+Imports `jwk` and computes its JWK Thumbprint (RFC 7638 §3) and JWK Thumbprint URI (RFC 9278 §3).
+
+| Input member | Meaning |
+|---|---|
+| `jwk` | The key, as a JSON object. Its members are unconstrained: invalid keys are under test. |
+| `hash` | Optional, any string. Absent means the core default, SHA-256 (RFC 9278 §5); a runner passes no name rather than supplying one. The accepted names are exactly `sha-256`, `SHA-256`, `sha256` and the 384 and 512 forms, case-sensitive (ADR 0054 §8.2). Any other name, the empty string included, is a vector outcome (`UnsupportedAlgorithm`), never a schema error. |
+
+`thumbprint_uri` always carries the IANA Hash Name String (`sha-256`, `sha-384` or `sha-512`, RFC 9278 §4), whatever spelling `hash` uses. The SHA-384, SHA-512 and hash-name vectors (`jwk-thumbprint/sha384-*`, `sha512-*`, `hash-*`) come from [`tools/jwk-oracle/thumbprints.mjs`](tools/jwk-oracle/README.md).
 
 ## `jws.sign`
 
@@ -380,6 +391,7 @@ When a binding's runner lands it implements every family it binds, and the never
 The scripts that generated or check vectors live in [`tools/`](tools/). They read only data (the vendored ietf-jose cookbook and Wycheproof files, the RFC text, committed key files) and use only Node's built-ins (node:crypto, which is OpenSSL) and Python's standard library: no npm or pip packages, and none of them calls polyjose. Paths below are relative to this directory (`conformance/`). The index of the JWE vectors, with the generator of each directory, is [`vectors/jwe/README.md`](vectors/jwe/README.md).
 
 - **`tools/jwe/reproduce.sh <rfc-dir>`** re-runs every JWE generator below into a temporary directory and compares each file it writes with the committed vector, byte for byte; a historical generator is reported as such. `<rfc-dir>` holds `rfc7516.txt` and `rfc7517.txt` from `https://www.rfc-editor.org/rfc/` (the script checks their SHA-256). The Node generators write the Node and OpenSSL versions into `source` or `description`, so they reproduce byte for byte with the versions named in the committed files (Node.js 24.21.0, OpenSSL 3.5.8); another version changes only that text.
+- **`tools/jwk-oracle/thumbprints.mjs <out-dir>`** writes the 25 `jwk-thumbprint/` files named `sha384-*`, `sha512-*` and `hash-*` (feature 0015 T03, ADR 0054 §8): SHA-384 and SHA-512 thumbprints of six RFC keys, the absent-hash default, the accepted aliases and the rejected names. It hand-builds the RFC 7638 §3.3 hash input and hashes it with node:crypto, after checking that it reproduces RFC 7638 §3.1, RFC 8037 A.3 and RFC 9278 §6. A re-run with Node.js 24.21.0 / OpenSSL 3.5.8 reproduces the files byte for byte. Its [README](tools/jwk-oracle/README.md) lists the keys and the panva/jose 6.2.15 cross-check.
 - **`tools/jwt-oracle/gen.mjs <spec.json> <out.json>`** builds `jwt.validate` and `jwt.issue` vectors from a spec: compact and flattened JWSs over raw payload octets (so malformed claims sit behind valid signatures) and nested JWEs, with `node:crypto` only. Its [README](tools/jwt-oracle/README.md) has the spec format and the fixed test keys.
 - **`tools/rsa-oaep-oracle.mjs [vector-dir]`** checks every exact RSA-OAEP-256 `jwe.encrypt` vector in `vectors/jwe/rsa-oaep-256/` against its test-only private key (`keys/*.private.jwk`) with Node's built-in RSA, independently of polyjose, which has no RSA private-key code (ADR 0021).
 - **`tools/jwe/t09-extract-rfc-inputs.py <rfc7516.txt> <cookbook jwe dir> <out.json>`**: *historical.* Extracts the RFC 7516 App. A.1 and A.2 and RFC 7520 §5.1 and §5.2 compact JWEs and RSA public keys used by four `negative-structure/` vectors. The script that wrote `compact/` and `negative-structure/` (0003 T09) was not preserved, so those 60 files have no generator; `reproduce.sh` checks that the four extracted inputs match their vectors.
