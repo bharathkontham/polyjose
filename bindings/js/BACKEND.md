@@ -82,8 +82,9 @@ export type * from "./api.js";
 - It runs vector files through the bound API and returns the ADR 0034 §2 results.
 - It has no Node-only imports, so a browser page or a workerd script can feed it the same files.
 
-`conformance/node-main.ts` exports `main(api, { runner, root })`.
-- It reads `<root>/conformance/vectors/**/*.json`, runs them, and writes `<root>/target/conformance/<runner>.json`.
+`conformance/node-main.ts` exports `main(api, { runner, suffix?, root })`.
+- It reads `<root>/conformance/vectors/**/*.json`, runs them, and writes `<root>/target/conformance/<runner>.json`, or `<runner>-<suffix>.json` for a CI matrix run.
+- `runner` must be one of the ADR 0034 §2 names (`RUNNER_NAMES`). The file's `runner` member is always that bare name.
 - It returns the exit code.
 
 The bindings enable no vector feature, so `fixed-rng` and `deflate` vectors are `skipped` with `reason: "feature:<name>"` (ADR 0034 §3).
