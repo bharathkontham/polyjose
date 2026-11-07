@@ -33,9 +33,10 @@
 #      assignment is `NAME=`, `NAME<<` (GitHub's $GITHUB_ENV), `NAME:` (a YAML env key or a
 #      JavaScript property) or `${NAME:=`. check-test-vectors-off.sh separately checks *RUSTFLAGS
 #      in the environment.
-#      bindings/ is read because the shipped @polyjose/wasm build takes extra Cargo arguments from
-#      bindings/wasm/scripts/build-package.sh (security audit L2 of feature 0006): anything added
-#      there reaches the published .wasm and no other guard. The one exception is ADR 0059's line,
+#      bindings/ is read because the shipped @polyjose/wasm build takes extra Cargo arguments on
+#      its command line (security audit L2 of feature 0006): anything added there reaches the
+#      published .wasm and no other guard. The one exception is ADR 0059's line in
+#      bindings/wasm/scripts/wasm-cargo-args.sh, which build-package.sh and test.sh source,
 #      allowed by path and exact text (`allowed_file`, `allowed_line` below), once; and no other
 #      line under bindings/ may assign `WASM_CARGO_ARGS` (reading `${WASM_CARGO_ARGS[@]}` or
 #      `${#WASM_CARGO_ARGS[@]}` is fine), so that line is all of the build's extra arguments.
@@ -116,7 +117,7 @@ names="$names"'|CARGO_BUILD_(RUSTFLAGS|RUSTDOCFLAGS|RUSTC|RUSTC_WRAPPER|RUSTC_WO
 names="$names"'|CARGO_ENCODED_RUSTFLAGS|CARGO_ENCODED_RUSTDOCFLAGS|RUSTFLAGS|RUSTDOCFLAGS'
 names="$names"'|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|RUSTDOC|RUSTC_BOOTSTRAP|CARGO_UNSTABLE_[A-Za-z0-9_]+|CARGO_HOME'
 # ADR 0059: the one command-line Cargo override of the shipped wasm build, by path and exact text.
-allowed_file=bindings/wasm/scripts/build-package.sh
+allowed_file=bindings/wasm/scripts/wasm-cargo-args.sh
 allowed_line="WASM_CARGO_ARGS=(--config 'profile.release.opt-level=\"z\"')"
 git ls-files -z --cached --others --exclude-standard -- scripts .github bindings >"$work/build-files.z" \
   || die "git ls-files (scripts, .github, bindings) failed"

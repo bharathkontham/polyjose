@@ -18,7 +18,8 @@
 #   3. polyjose-wasm the same way for wasm32-unknown-unknown, its shipping target (polyjose alone
 #      does not build there: getrandom needs the binding's `wasm_js` backend), with the shipped
 #      build's extra Cargo arguments: the words of the one `WASM_CARGO_ARGS=(...)` line of
-#      bindings/wasm/scripts/build-package.sh (ADR 0059; feature 0006 F06, security audit L2), so
+#      bindings/wasm/scripts/wasm-cargo-args.sh, which build-package.sh sources (ADR 0059; feature
+#      0006 F06, security audit L2), so
 #      the code read is the code of the published .wasm (a cfg or a rustflag added there reaches
 #      these builds too). check-no-cargo-config.sh, run first, allows that line only by its exact
 #      text and fails on any other assignment of WASM_CARGO_ARGS under bindings/.
@@ -47,7 +48,7 @@
 # rustc 1.99 emits v0 names, but the check does not depend on it.
 #
 # Fails closed (exit 2), with the reason, when: cargo, rustc, python3, ar or nm is missing;
-# build-package.sh has no WASM_CARGO_ARGS line, more than one, or one whose words are not plain
+# wasm-cargo-args.sh has no WASM_CARGO_ARGS line, more than one, or one whose words are not plain
 # text (quoted or unquoted literals only: no expansion, glob, escape or comment); a
 # workspace member has no library target and its tree holds rsa or another member; a build fails;
 # a build does not report polyjose's (or the binding's) rlib; an rlib holds no object or a member
@@ -264,24 +265,24 @@ tool_hint = ("" if NM.startswith(tool_bin) else
              " (with %s; the toolchain's llvm-nm reads every target: rustup component add llvm-tools)" % NM)
 
 # --- The shipped wasm build's extra Cargo arguments -------------------------------------------------
-# One line of build-package.sh defines them (ADR 0059): `WASM_CARGO_ARGS=(<words>)`. Its words are
+# One line of wasm-cargo-args.sh defines them (ADR 0059): `WASM_CARGO_ARGS=(<words>)`. Its words are
 # read as bash would read them, and only words with one reading are accepted: runs of '...', "..."
 # without $, ` or \, and unquoted characters that bash neither expands nor globs.
-BUILD_PACKAGE = "bindings/wasm/scripts/build-package.sh"
+ARGS_FILE = "bindings/wasm/scripts/wasm-cargo-args.sh"
 WORD_PART = re.compile(r"""'([^']*)'|"([^"$`\\]*)"|([A-Za-z0-9_.,:=+/@%-]+)""")
 
 
 def wasm_cargo_args():
     try:
-        with open(BUILD_PACKAGE, encoding="utf-8") as f:
+        with open(ARGS_FILE, encoding="utf-8") as f:
             lines = f.read().splitlines()
     except (OSError, UnicodeDecodeError) as e:
-        die("cannot read %s: %s" % (BUILD_PACKAGE, e))
+        die("cannot read %s: %s" % (ARGS_FILE, e))
     defs = [l for l in lines if re.match(r"\s*WASM_CARGO_ARGS\b", l)]
     if not defs:
-        die("%s has no WASM_CARGO_ARGS=(...) line (ADR 0059); the wasm32 builds read it" % BUILD_PACKAGE)
+        die("%s has no WASM_CARGO_ARGS=(...) line (ADR 0059); the wasm32 builds read it" % ARGS_FILE)
     if len(defs) > 1:
-        die("%s has %d WASM_CARGO_ARGS lines, expected one: %s" % (BUILD_PACKAGE, len(defs), defs))
+        die("%s has %d WASM_CARGO_ARGS lines, expected one: %s" % (ARGS_FILE, len(defs), defs))
     m = re.fullmatch(r"WASM_CARGO_ARGS=\((.*)\)", defs[0])
     words, i, s = [], 0, m.group(1) if m else None
     while s is not None and i < len(s):
@@ -299,7 +300,7 @@ def wasm_cargo_args():
         else:
             words.append(word)
     if s is None:
-        die("cannot read the WASM_CARGO_ARGS line of %s as plain words: %r" % (BUILD_PACKAGE, defs[0]))
+        die("cannot read the WASM_CARGO_ARGS line of %s as plain words: %r" % (ARGS_FILE, defs[0]))
     return words
 
 
