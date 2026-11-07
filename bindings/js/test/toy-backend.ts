@@ -2,12 +2,15 @@
 // the literal "sig" and ciphertexts are ids into a table. It knows exactly enough to give the
 // fixture vectors under test/fixtures/vectors their expected outcomes, so the runner's mapping,
 // round trips and comparisons are exercised end to end. Nothing here is cryptography.
+// Like the real backends (BACKEND.md), it never keeps or returns the byte arrays it receives:
+// the facade wipes them once the call settles, so it stores and returns copies.
 import { b64uDecode, b64uEncode, coded, fakeBackend, type Fake, type Handler, type Operation } from "./fake-backend.js";
 
 const ascii = (b: Uint8Array): string => String.fromCharCode(...b);
 const bytesOf = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const enc = (s: string): string => b64uEncode(bytesOf(s));
 const dec = (s: string): string => ascii(b64uDecode(s));
+const copy = (b: Uint8Array): Uint8Array => Uint8Array.from(b);
 
 type Obj = Record<string, unknown>;
 
@@ -108,7 +111,7 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
       const alg = (JSON.parse(header) as Obj)["alg"];
       allowed(o.allowedAlgs, alg);
       if (s !== "sig") throw coded("InvalidSignature", "bad signature");
-      return { alg, payload: o.detachedPayload ?? b64uDecode(p), protectedHeader: header, signatureIndex: 0 };
+      return { alg, payload: o.detachedPayload === undefined ? b64uDecode(p) : copy(o.detachedPayload), protectedHeader: header, signatureIndex: 0 };
     }) as Handler,
     jwsVerifyJson: ((text: string, key: string, o: { allowedAlgs: string[]; detachedPayload?: Uint8Array }) => {
       jwkImport(key);
@@ -118,7 +121,7 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
         const s = sigs[i] ?? {};
         const header = typeof s["protected"] === "string" ? (JSON.parse(dec(s["protected"])) as Obj) : ((s["header"] as Obj | undefined) ?? {});
         if (s["signature"] === "sig" && o.allowedAlgs.includes(header["alg"] as string)) {
-          const payload = o.detachedPayload ?? b64uDecode((jws["payload"] as string | undefined) ?? "");
+          const payload = o.detachedPayload === undefined ? b64uDecode((jws["payload"] as string | undefined) ?? "") : copy(o.detachedPayload);
           return { alg: header["alg"], payload, signatureIndex: i };
         }
       }
@@ -129,13 +132,13 @@ export function toyBackend(overrides: Partial<Record<Operation, Handler>> = {}):
       if (o.recipients.length !== 1) throw coded("InvalidFormat", "one recipient");
       jwkImport(o.recipients[0]?.["key"] as string);
       const id = `ct${next++}`;
-      ciphertexts.set(id, p);
+      ciphertexts.set(id, copy(p));
       return `h.k.iv.${id}.tag`;
     }) as Handler,
     jweEncryptJson: ((p: Uint8Array, o: { recipients: Obj[] }, form: string) => {
       for (const r of o.recipients) jwkImport(r["key"] as string);
       const id = `ct${next++}`;
-      ciphertexts.set(id, p);
+      ciphertexts.set(id, copy(p));
       return JSON.stringify(form === "general" ? { recipients: o.recipients.map(() => ({ encrypted_key: "k" })), ciphertext: id } : { encrypted_key: "k", ciphertext: id });
     }) as Handler,
     jweDecryptCompact: ((token: string, key: string, o: { allowedAlgs: string[]; allowedEnc: string[] }) => {
