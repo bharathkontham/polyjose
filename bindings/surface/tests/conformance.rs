@@ -39,6 +39,9 @@ use polyjose_surface::records::{
     JwsVerifyOptions, JwtSignOptions, JwtVerified, JwtVerifyOptions,
 };
 use polyjose_surface::{SecretString, SurfaceError, jwe, jwk, jws, jwt, keys, util};
+// The vector-set digest's SHA-256 (ADR 0060 §5): the `sha2` crate called directly as a test
+// oracle (a dev-dependency), never the API under test.
+use sha2::{Digest, Sha256};
 
 /// This runner's name (ADR 0034 §2; `conformance/schema/results.schema.json`).
 const RUNNER: &str = "rust-surface";
@@ -1462,9 +1465,41 @@ struct Report {
     skipped: Vec<String>,
     failures: Vec<String>,
     results: Vec<Object>,
+    /// One [`digest_line`] per vector file whose bytes were read, in file order (ADR 0060 §2).
+    digest_lines: Vec<Vec<u8>>,
     /// Whether the walk saw every vector file (no unreadable directory, no symbolic link, not
     /// empty); only a complete run writes a results file.
     complete: bool,
+}
+
+impl Report {
+    /// `vectors_digest` (ADR 0060 §3): the lowercase hex SHA-256 of the byte-sorted
+    /// [`digest_line`]s; `None` when no vector file was read (an empty corpus is invalid).
+    fn vectors_digest(&self) -> Option<String> {
+        if self.digest_lines.is_empty() {
+            return None;
+        }
+        let mut hasher = Sha256::new();
+        for line in sorted_digest_lines(&self.digest_lines) {
+            hasher.update(&line);
+        }
+        Some(hex_encode(&hasher.finalize()))
+    }
+}
+
+/// One vector file's line of the vector-set digest (ADR 0060 §2): its id (exactly the results
+/// entry's), a TAB, the lowercase hex SHA-256 of the raw bytes parsed (no line-ending, BOM or
+/// encoding change), and an LF, as UTF-8.
+fn digest_line(id: &str, bytes: &[u8]) -> Vec<u8> {
+    format!("{id}\t{}\n", hex_encode(&Sha256::digest(bytes))).into_bytes()
+}
+
+/// `lines` in ascending order of their UTF-8 bytes (ADR 0060 §2), not of paths by component:
+/// `jws-x/…` (0x2D) sorts before `jws/…` (0x2F).
+fn sorted_digest_lines(lines: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let mut sorted = lines.to_vec();
+    sorted.sort();
+    sorted
 }
 
 fn run_dir(dir: &Path, schema: &Value, enabled: &[&str]) -> Report {
@@ -1482,9 +1517,15 @@ fn run_dir(dir: &Path, schema: &Value, enabled: &[&str]) -> Report {
     for path in files {
         let relative = path.strip_prefix(dir).unwrap_or(&path);
         let name = relative.display().to_string();
+        let id = vector_id(relative);
         let mut trace = Trace::default();
+        // An unreadable file is a `fail` with no digest line (ADR 0060 §2); a file read is hashed
+        // from the very bytes parsed, whatever its result.
         let status = match std::fs::read(&path) {
-            Ok(bytes) => run_vector(&name, &bytes, schema, enabled, &mut trace),
+            Ok(bytes) => {
+                report.digest_lines.push(digest_line(&id, &bytes));
+                run_vector(&name, &bytes, schema, enabled, &mut trace)
+            }
             Err(e) => Status::Fail(format!("{name}: cannot read: {e}")),
         };
         match &status {
@@ -1495,21 +1536,21 @@ fn run_dir(dir: &Path, schema: &Value, enabled: &[&str]) -> Report {
             )),
             Status::Fail(message) => report.failures.push(message.clone()),
         }
-        report
-            .results
-            .push(result_entry(vector_id(relative), trace, &status));
+        report.results.push(result_entry(id, trace, &status));
     }
     report
 }
 
-/// The results file text: the runner, the surface's `version()`, the enabled features, its
-/// `error_codes()` (ADR 0034 §8) and one result per line.
-fn results_document(enabled: &[&str], results: &[Object]) -> String {
+/// The results file text: the runner, the surface's `version()`, the `vectors_digest` of the
+/// files read (ADR 0060 §1), the enabled features, its `error_codes()` (ADR 0034 §8) and one
+/// result per line.
+fn results_document(enabled: &[&str], digest: &str, results: &[Object]) -> String {
     let list =
         |items: &[&str]| Value::from(items.iter().map(|s| Value::from(*s)).collect::<Vec<_>>());
-    let header: [(&str, Value); 4] = [
+    let header: [(&str, Value); 5] = [
         ("runner", Value::from(RUNNER)),
         ("polyjose", Value::from(util::version())),
+        ("vectors_digest", Value::from(digest)),
         ("features", list(enabled)),
         ("error_codes", list(util::error_codes())),
     ];
@@ -1534,22 +1575,29 @@ fn results_document(enabled: &[&str], results: &[Object]) -> String {
     text
 }
 
-/// Writes `rust-surface.json` atomically, or removes a stale one when the walk was incomplete.
+/// Writes `rust-surface.json` atomically, or removes a stale one when the walk was incomplete
+/// or read no vector file (no digest, ADR 0060 §3).
 fn write_results(enabled: &[&str], report: &Report) -> Option<PathBuf> {
     let dir = results_dir();
     let path = dir.join(format!("{RUNNER}.json"));
-    if !report.complete {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => panic!("{}: cannot remove: {e}", path.display()),
+    let digest = match report.vectors_digest() {
+        Some(digest) if report.complete => digest,
+        _ => {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => panic!("{}: cannot remove: {e}", path.display()),
+            }
+            return None;
         }
-        return None;
-    }
+    };
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     let temporary = dir.join(format!(".{RUNNER}.json.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, results_document(enabled, &report.results))
-        .unwrap_or_else(|e| panic!("{}: {e}", temporary.display()));
+    std::fs::write(
+        &temporary,
+        results_document(enabled, &digest, &report.results),
+    )
+    .unwrap_or_else(|e| panic!("{}: {e}", temporary.display()));
     std::fs::rename(&temporary, &path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     Some(path)
 }
@@ -1898,13 +1946,96 @@ fn the_runner_uses_only_the_surface_and_no_clock() {
     }
 }
 
+/// A scratch directory standing in for `conformance/vectors/`, removed on drop.
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(tag: &str) -> TempDir {
+        let path = std::env::temp_dir().join(format!(
+            "polyjose-surface-conformance-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        TempDir(path)
+    }
+
+    fn write(&self, relative: &str, bytes: &[u8]) {
+        let path = self.0.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The worked example of ADR 0060 §4: one line per `*.json` file read (`README.md` is not a
+/// vector), `<id>` TAB `<sha256 of the raw bytes>` LF, sorted by bytes (`jws-x/` before `jws/`),
+/// whatever the vector's result; then the SHA-256 of the lines. The BOM and the LF are hashed as
+/// read.
+#[test]
+fn vectors_digest_follows_the_adr_0060_worked_example() {
+    let dir = TempDir::new("digest-example");
+    dir.write("a.json", b"{}");
+    dir.write("jws/b.json", b"{}\n");
+    dir.write("jws-x/c.json", b"\xef\xbb\xbf{}");
+    dir.write("README.md", b"notes");
+    let report = run_dir(&dir.0, &schema(), &[]);
+    assert!(report.complete);
+    assert_eq!(report.results.len(), 3);
+    let lines: Vec<String> = sorted_digest_lines(&report.digest_lines)
+        .into_iter()
+        .map(|line| String::from_utf8(line).unwrap())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "a.json#0\t44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\n",
+            "jws-x/c.json#0\taa25e978046d680ef8740d837e6de5bc1e2a2dc6089dbda1012544b538d53f65\n",
+            "jws/b.json#0\tca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356\n",
+        ]
+    );
+    let digest = "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1";
+    assert_eq!(report.vectors_digest().as_deref(), Some(digest));
+    let mut reversed = report.digest_lines.clone();
+    reversed.reverse();
+    assert_eq!(
+        sorted_digest_lines(&reversed),
+        sorted_digest_lines(&report.digest_lines)
+    );
+    let text = results_document(&[], digest, &report.results);
+    let doc = json::parse(text.as_bytes()).unwrap();
+    assert_eq!(
+        doc.get("vectors_digest").and_then(Value::as_str),
+        Some(digest)
+    );
+}
+
+/// An empty corpus is invalid (ADR 0060 §3): a run that read no vector file has no digest, so
+/// it writes no results file.
+#[test]
+fn a_run_that_read_no_vector_file_has_no_digest() {
+    let nothing = Report {
+        complete: true,
+        ..Report::default()
+    };
+    assert_eq!(nothing.vectors_digest(), None);
+    let empty = TempDir::new("digest-empty");
+    let report = run_dir(&empty.0, &schema(), &[]);
+    assert!(!report.complete && report.vectors_digest().is_none());
+}
+
 /// The surface's `error_codes()` are what the results file records (ADR 0034 §8), and the
 /// results document has one entry per vector.
 #[test]
 fn results_document_lists_the_surface_codes() {
     let mut entry = Object::new();
     entry.insert("id", "a.json#0");
-    let text = results_document(&[], &[entry]);
+    let text = results_document(&[], &"0".repeat(64), &[entry]);
     let doc = json::parse(text.as_bytes()).unwrap();
     assert_eq!(doc.get("runner").and_then(Value::as_str), Some(RUNNER));
     assert_eq!(
