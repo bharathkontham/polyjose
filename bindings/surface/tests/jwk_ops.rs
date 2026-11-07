@@ -439,23 +439,219 @@ fn the_surface_has_no_hash_name_table_of_its_own() {
 
 // --- jwks_select ------------------------------------------------------------------------------
 
-#[test]
-fn jwks_select_is_unsupported_until_the_core_selects() {
-    // T06 interim rule (lead, 2026-11-07): the core has no general `JwkSet::select` yet
-    // (feature 0015, task T14), so every call fails with `UnsupportedAlgorithm`.
-    let jwks = format!(r#"{{"keys":[{RFC7517_A1_P256_PUBLIC},{RFC8037_A2_ED25519_PUBLIC}]}}"#);
-    let selector = JwkSelector {
-        kid: Some("1".to_owned()),
-        alg: None,
-        key_use: Some("enc".to_owned()),
-    };
+/// RFC 8037 Appendix A.2's Ed25519 public key with `use` `sig` and a `kid` (RFC 7517 §4.2, §4.5).
+const ED25519_SIG: &str = r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","use":"sig","kid":"ed"}"#;
+
+/// RFC 7517 Appendix A.3's AES key wrap key (`alg` `A128KW`).
+const RFC7517_A3_A128KW: &str = r#"{"kty":"oct","alg":"A128KW","k":"GawgguFyGrWKav7AX4VKUg"}"#;
+
+/// A JWK Set of `keys`, in order (RFC 7517 §5).
+fn set(keys: &[&str]) -> String {
+    format!(r#"{{"keys":[{}]}}"#, keys.join(","))
+}
+
+/// A `JwkSelector` from its three optional parts (ADR 0030 §4).
+fn selector(kid: Option<&str>, alg: Option<&str>, key_use: Option<&str>) -> JwkSelector {
+    JwkSelector {
+        kid: kid.map(str::to_owned),
+        alg: alg.map(str::to_owned),
+        key_use: key_use.map(str::to_owned),
+    }
+}
+
+/// The selected member, which must be `expected` in the core's serialization (ADR 0054 §9).
+fn assert_selects(jwks: &str, sel: &JwkSelector, expected: &str) {
+    let selected: SecretString = jwk::jwks_select(jwks, sel).unwrap();
     assert_eq!(
-        code(jwk::jwks_select(&jwks, &selector)),
-        "UnsupportedAlgorithm"
+        selected.as_str(),
+        jwk::jwk_parse(expected).unwrap().as_str(),
+        "{sel:?}"
     );
+}
+
+#[test]
+fn jwks_select_returns_the_one_matching_member() {
+    // ADR 0054 §4: exactly one match is the result, as the core writes it (Jwk::to_json).
+    let jwks = set(&[RFC7517_A1_P256_PUBLIC, ED25519_SIG, RFC7517_A3_OCT]);
+    assert_selects(
+        &jwks,
+        &selector(Some("1"), None, None),
+        RFC7517_A1_P256_PUBLIC,
+    );
+    assert_selects(&jwks, &selector(Some("ed"), None, None), ED25519_SIG);
+    // ADR 0054 §1.3: the empty selector on a one-key set is that key.
+    let one = set(&[RFC7517_A3_OCT]);
+    assert_selects(&one, &JwkSelector::default(), RFC7517_A3_OCT);
+}
+
+#[test]
+fn jwks_select_by_kid_is_exact() {
+    // RFC 7517 §4.5, ADR 0054 §1.2: case-sensitive equality, no member without a kid matches.
+    let jwks = set(&[RFC7517_A1_P256_PUBLIC, RFC8037_A2_ED25519_PUBLIC]);
+    for kid in ["", "01", " 1", "ED"] {
+        assert_eq!(
+            code(jwk::jwks_select(&jwks, &selector(Some(kid), None, None))),
+            "NoMatchingKey",
+            "{kid:?}"
+        );
+    }
+}
+
+#[test]
+fn jwks_select_by_alg_checks_the_family_and_the_use_it_implies() {
+    let jwks = set(&[RFC7517_A1_P256_PUBLIC, ED25519_SIG, RFC7517_A3_OCT]);
+    // ADR 0054 §2.1: only an Ed25519 key serves EdDSA, only an oct key HS256, and ECDH-ES takes
+    // the P-256 key (an Ed25519 key never serves it).
+    assert_selects(&jwks, &selector(None, Some("EdDSA"), None), ED25519_SIG);
+    assert_selects(&jwks, &selector(None, Some("HS256"), None), RFC7517_A3_OCT);
+    assert_selects(
+        &jwks,
+        &selector(None, Some("ECDH-ES"), None),
+        RFC7517_A1_P256_PUBLIC,
+    );
+    // ADR 0054 §2.3: ES256 implies `sig`, and the only P-256 key has `use` `enc`.
+    assert_eq!(
+        code(jwk::jwks_select(
+            &jwks,
+            &selector(None, Some("ES256"), None)
+        )),
+        "NoMatchingKey"
+    );
+}
+
+#[test]
+fn jwks_select_by_key_use() {
+    // RFC 7517 §4.2, ADR 0054 §2.3: a member's `use` must be absent or the selector's.
+    let jwks = set(&[RFC7517_A1_P256_PUBLIC, ED25519_SIG]);
+    assert_selects(
+        &jwks,
+        &selector(None, None, Some("enc")),
+        RFC7517_A1_P256_PUBLIC,
+    );
+    assert_selects(&jwks, &selector(None, None, Some("sig")), ED25519_SIG);
+    // ADR 0054 §2.3: parts that disagree select nothing (EdDSA is `sig`).
+    assert_eq!(
+        code(jwk::jwks_select(
+            &jwks,
+            &selector(None, Some("EdDSA"), Some("enc"))
+        )),
+        "NoMatchingKey"
+    );
+    // All three parts together.
+    assert_selects(
+        &jwks,
+        &selector(Some("ed"), Some("EdDSA"), Some("sig")),
+        ED25519_SIG,
+    );
+}
+
+#[test]
+fn jwks_select_reports_no_match_and_several_matches_with_the_core_codes() {
+    // ADR 0054 §4: none is NoMatchingKey, an empty set included.
+    assert_eq!(
+        code(jwk::jwks_select(r#"{"keys":[]}"#, &JwkSelector::default())),
+        "NoMatchingKey"
+    );
+    let jwks = set(&[RFC7517_A1_P256_PUBLIC, ED25519_SIG, RFC7517_A3_OCT]);
+    assert_eq!(
+        code(jwk::jwks_select(&jwks, &selector(Some("nope"), None, None))),
+        "NoMatchingKey"
+    );
+    // ADR 0054 §4, §5: two or more is MultipleMatchingKeys; RFC 7517 §5.1 gives the set's order
+    // no meaning, so no member is chosen.
     assert_eq!(
         code(jwk::jwks_select(&jwks, &JwkSelector::default())),
+        "MultipleMatchingKeys"
+    );
+    assert_eq!(
+        code(jwk::jwks_select(&jwks, &selector(None, None, Some("sig")))),
+        "MultipleMatchingKeys"
+    );
+    // ADR 0057 §3: no key size in selection, so the RFC 7517 A.3 set's HMAC key (no `alg`)
+    // matches A128KW beside the A128KW key.
+    let a3 = set(&[RFC7517_A3_A128KW, RFC7517_A3_OCT]);
+    assert_eq!(
+        code(jwk::jwks_select(&a3, &selector(None, Some("A128KW"), None))),
+        "MultipleMatchingKeys"
+    );
+    // A kid makes the choice exact.
+    assert_selects(
+        &a3,
+        &selector(
+            Some("HMAC key used in JWS spec Appendix A.1 example"),
+            Some("HS256"),
+            None,
+        ),
+        RFC7517_A3_OCT,
+    );
+}
+
+#[test]
+fn jwks_select_refuses_an_unsupported_alg_or_key_use() {
+    // ADR 0054 §1.1, ADR 0030 §5: names are parsed by the core (KeyAlg::from, KeyUse::from) and
+    // refused by its setters; the surface maps none of them.
+    let jwks = set(&[RFC7517_A1_P256_PUBLIC]);
+    for alg in ["none", "RSA1_5", "RSA-OAEP", "A256GCM", "es256", "", "XYZ"] {
+        assert_eq!(
+            code(jwk::jwks_select(&jwks, &selector(None, Some(alg), None))),
+            "UnsupportedAlgorithm",
+            "{alg:?}"
+        );
+    }
+    for key_use in ["Sig", "ENC", "", "wrap"] {
+        assert_eq!(
+            code(jwk::jwks_select(
+                &jwks,
+                &selector(None, None, Some(key_use))
+            )),
+            "UnsupportedAlgorithm",
+            "{key_use:?}"
+        );
+    }
+}
+
+#[test]
+fn jwks_select_reports_set_errors_first_then_the_selector() {
+    // ADR 0054 §4: set import errors, then selector validation, then the match.
+    let bad_alg = selector(None, Some("none"), None);
+    assert_eq!(code(jwk::jwks_select("{", &bad_alg)), "InvalidJson");
+    // A set without a `keys` array is InvalidKey (RFC 7517 §5).
+    assert_eq!(code(jwk::jwks_select("{}", &bad_alg)), "InvalidKey");
+    // An RSA private member fails the whole set (ADR 0021, ADR 0029 §3), even when the selector
+    // would pick another member.
+    let with_rsa = set(&[RFC7517_A1_P256_PUBLIC, RFC7517_A2_RSA_PRIVATE]);
+    assert_eq!(
+        code(jwk::jwks_select(
+            &with_rsa,
+            &selector(Some("1"), None, None)
+        )),
         "UnsupportedAlgorithm"
+    );
+    // The selector is validated before an empty set gives NoMatchingKey.
+    assert_eq!(
+        code(jwk::jwks_select(r#"{"keys":[]}"#, &bad_alg)),
+        "UnsupportedAlgorithm"
+    );
+    // An invalid member is skipped (ADR 0041 §2), so the valid one is the only match.
+    let skipped = set(&[r#"{"kty":"EC","crv":"P-256"}"#, RFC7517_A1_P256_PUBLIC]);
+    assert_selects(&skipped, &JwkSelector::default(), RFC7517_A1_P256_PUBLIC);
+}
+
+#[test]
+fn jwks_select_returns_a_private_member_as_imported() {
+    // ADR 0054 §3: EC, OKP and oct members come back with their private parts, so the result is
+    // a SecretString (ADR 0030 §7.2); the caller calls jwk_to_public before publishing it.
+    let jwks = set(&[RFC7517_A2_P256_PRIVATE, X25519_BOB_PRIVATE]);
+    assert_selects(
+        &jwks,
+        &selector(Some("1"), None, None),
+        RFC7517_A2_P256_PRIVATE,
+    );
+    let bob = jwk::jwks_select(&jwks, &selector(Some("Bob"), None, None)).unwrap();
+    assert!(bob.as_str().contains(r#""d":"#));
+    assert_eq!(
+        jwk::jwk_to_public(bob.as_str()).unwrap(),
+        jwk::jwk_to_public(X25519_BOB_PRIVATE).unwrap()
     );
 }
 
@@ -1207,6 +1403,27 @@ fn no_failing_path_puts_a_marked_private_member_into_its_error() {
         key_use: Some(MARKER.to_owned()),
     };
     assert_no_marker("jwks_select", jwk::jwks_select(&jwks, &selector));
+    // The marked oct key parses, so the set imports and fails later: no match, several matches,
+    // a refused key_use, and a set failing on its RSA private member.
+    let parsed = format!(r#"{{"keys":[{marked_oct},{marked_oct}]}}"#);
+    for selector in [
+        JwkSelector {
+            kid: Some(MARKER.to_owned()),
+            ..JwkSelector::default()
+        },
+        JwkSelector::default(),
+        JwkSelector {
+            key_use: Some(MARKER.to_owned()),
+            ..JwkSelector::default()
+        },
+    ] {
+        assert_no_marker("jwks_select parsed", jwk::jwks_select(&parsed, &selector));
+    }
+    let with_rsa = format!(r#"{{"keys":[{marked_oct},{marked_rsa}]}}"#);
+    assert_no_marker(
+        "jwks_select rsa",
+        jwk::jwks_select(&with_rsa, &JwkSelector::default()),
+    );
     assert_no_marker(
         "jwks_select",
         jwk::jwks_select(&marked_json, &JwkSelector::default()),
