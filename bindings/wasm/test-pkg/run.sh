@@ -125,6 +125,18 @@ done
 [ ${#tests[@]} -gt 0 ] || die "no compiled tests in ${stage#"$repo"/}/dist"
 if (cd "$stage" && node --test --test-reporter=spec "${tests[@]}"); then record node PASS; else record node FAIL; fi
 
+echo "==> $me: Chrome (headless, --dump-dom)"
+if out=$(cd "$stage" && node dist/chrome.js); then
+  echo "$out"
+  case $out in
+    SKIPPED*) record chrome "$(head -n 1 <<<"$out")" ;;
+    *) record chrome PASS ;;
+  esac
+else
+  echo "$out"
+  record chrome FAIL
+fi
+
 echo
 echo "$me: summary"
 for line in "${summary[@]}"; do echo "  $line"; done
