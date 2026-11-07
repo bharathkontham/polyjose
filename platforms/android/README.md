@@ -61,8 +61,10 @@ date. The modules depend on these tasks; nothing generated is committed.
 
 1. It uses an emulator that `adb devices` lists as `device` and never stops it. With none, it boots
    `polyjose-api36` headless (`-no-window -no-audio -no-snapshot -gpu swiftshader_indirect`, about
-   20 s on this host), waits at most 300 s for `sys.boot_completed`, and afterwards stops only that
-   emulator, by serial (`adb -s <serial> emu kill`), also on an error or Ctrl-C.
+   20 s on this host) and afterwards stops only that emulator, by serial (`adb -s <serial> emu
+   kill`), also on an error or Ctrl-C. Either way it waits, at most 300 s in all, until the device
+   is ready: `sys.boot_completed` is 1, `init.svc.bootanim` is `stopped` (when the image has it) and
+   `pm path android` answers, so a cold boot does not reach Gradle before the package manager.
 2. It runs `./gradlew :polyjose:connectedDebugAndroidTest` on that serial and judges the run by the
    JUnit XML under `polyjose/build/outputs/androidTest-results/connected/` (AGP can exit 0 when the
    instrumentation crashed): a failure, an error, a skipped test or a missing file fails it.
