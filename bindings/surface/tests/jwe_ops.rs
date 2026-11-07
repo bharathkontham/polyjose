@@ -151,6 +151,20 @@ fn decrypt_json_reports_the_recipient_index_and_every_header_part_of_rfc7516_a4(
     );
 }
 
+/// RFC 7520 §5.9's compact JWE (A128KW, A128GCM, `zip: DEF`) under the §5.8 key
+/// (`zip/rfc7520-5-9-a128kw-a128gcm-def-decrypt.json`).
+const R5_9_ZIP_JWE: &str = "eyJhbGciOiJBMTI4S1ciLCJraWQiOiI4MWIyMDk2NS04MzMyLTQzZDktYTQ2OC04MjE2MGFkOTFhYzgiLCJlbmMiOiJBMTI4R0NNIiwiemlwIjoiREVGIn0.5vUT2WOtQxKWcekM_IzVQwkGgzlFDwPi.p9pUq6XHY0jfEZIl.HbDtOsdai1oYziSx25KEeTxmwnh8L8jKMFNc1k3zmMI6VB8hry57tDZ61jXyezSPt0fdLVfe6Jf5y5-JaCap_JQBcb5opbmT60uWGml8blyiMQmOn9J--XhhlYg0m-BHaqfDO5iTOWxPxFMUedx7WCy8mxgDHj0aBMG6152PsM-w5E_o2B3jDbrYBKhpYA7qi3AyijnCJ7BP9rr3U8kxExCpG3mK420TjOw.VILuUwuIxaLVmh5X-T7kmA";
+
+#[test]
+fn a_compressed_jwe_is_unsupported_without_the_deflate_feature() {
+    // The bindings build without `deflate` (ADR 0030 §4, ADR 0034 §3): `zip` is refused among
+    // the support checks, never decrypted without inflating (ADR 0017).
+    assert_code(
+        jwe_decrypt_compact(R5_9_ZIP_JWE, R5_8_KEY, &policy(&["A128KW"], &["A128GCM"])),
+        "UnsupportedAlgorithm",
+    );
+}
+
 // --- Decrypt: allow-lists and limits (ADR 0007, RFC 8725 §3.1) ---------------------------------
 
 #[test]
