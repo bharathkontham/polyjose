@@ -1,5 +1,6 @@
 package dev.polyjose
 
+import dev.polyjose.conformance.Runner
 import dev.polyjose.conformance.VectorBytes
 import dev.polyjose.conformance.VectorInput
 import dev.polyjose.conformance.VectorUnreadable
@@ -8,7 +9,10 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.Paths
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
@@ -18,6 +22,35 @@ import org.junit.jupiter.api.io.TempDir
  * the file system work for the JVM.
  */
 class ConformanceTest {
+    /**
+     * Runs every vector file under `polyjose.vectors` through the generated Kotlin API and writes
+     * the ADR 0034 §2 results file (with the ADR 0060 digest) to `polyjose.conformanceResults`
+     * (`target/conformance/jvm.json`), which scripts/conformance-parity.sh compares with
+     * `rust-core.json`. Any `fail` entry fails the test, after the file is written. A stale file is
+     * removed first, so a run that cannot complete (no vectors, an unusable schema) leaves none.
+     */
+    @Test
+    fun everyVectorRunsOnTheJvm() {
+        val results = pathProperty("polyjose.conformanceResults")
+        Files.deleteIfExists(results)
+        val vectors = pathProperty("polyjose.vectors")
+        val schema = String(Files.readAllBytes(vectors.resolveSibling("schema.json")), Charsets.UTF_8)
+
+        val document = Runner.run("jvm", loadVectorFiles(vectors), schema)
+
+        Files.createDirectories(results.parent)
+        Files.write(results, document.toJson().toByteArray(Charsets.UTF_8))
+        val failures = document.failures
+        println(
+            "conformance (jvm): ${document.passed} passed, ${failures.size} failed, ${document.skipped} skipped " +
+                "of ${document.results.size}; vectors_digest ${document.vectorsDigest}; wrote $results",
+        )
+        assertTrue(failures.isEmpty()) {
+            "${failures.size} vector(s) failed on the JVM:\n" + failures.joinToString("\n") { "  FAIL ${it.id}: ${it.reason}" }
+        }
+        assertFalse(document.vectorsDigest == VectorsDigest.EMPTY, "the digest of no input (ADR 0060 §3)")
+    }
+
     /**
      * ADR 0060 §4, the worked example every implementation checks: three vector files, one
      * `README.md` that is not a vector, sorted by UTF-8 bytes (`-` before `/`), and the digest.
@@ -42,6 +75,10 @@ class ConformanceTest {
         )
         assertEquals("9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1", VectorsDigest.of(files))
     }
+
+    private fun pathProperty(name: String): Path = Paths.get(
+        System.getProperty(name) ?: error("system property $name is not set (platforms/android/polyjose-jvm/build.gradle.kts)"),
+    )
 
     private fun write(dir: Path, path: String, hex: String) {
         val file = dir.resolve(path)
