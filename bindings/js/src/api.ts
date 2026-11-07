@@ -28,6 +28,7 @@ import type {
 import { ERROR_CODES, type ErrorCode } from "./error-codes.js";
 import {
   allowList,
+  bare,
   bool,
   bytes,
   isAbsent,
@@ -112,11 +113,33 @@ export interface PolyjoseApi {
   jwkParse(jwk: Jwk): Promise<JwkObject>;
   /** The public half of a JWK (RFC 7517 §4, RFC 7518 §6.2.1, §6.3.1). */
   jwkToPublic(jwk: Jwk): Promise<JwkObject>;
-  /** The JWK Thumbprint (RFC 7638 §3), base64url. */
-  jwkThumbprint(jwk: Jwk, hash: ThumbprintHash): Promise<string>;
-  /** The JWK Thumbprint URI (RFC 9278 §3). */
-  jwkThumbprintUri(jwk: Jwk, hash: ThumbprintHash): Promise<string>;
-  /** Selects one key of a JWK Set (RFC 7517 §5) by `kid`, `alg` and `use`. */
+  /**
+   * The JWK Thumbprint (RFC 7638 §3, §3.4), base64url: 43, 64 or 86 characters for SHA-256,
+   * SHA-384 or SHA-512. An absent `hash` (or `null`) is the core default, SHA-256 (ADR 0054 §9,
+   * RFC 9278 §5). Any other name fails with `UnsupportedAlgorithm` from the core, after the key's
+   * own import errors (ADR 0057 §2). Never publish the thumbprint of a password or other
+   * low-entropy `oct` key, or use it as a `kid`: it is an unsalted fast hash of the secret
+   * (ADR 0057 §4, RFC 7638 §7).
+   */
+  jwkThumbprint(jwk: Jwk, hash?: ThumbprintHash): Promise<string>;
+  /**
+   * The JWK Thumbprint URI (RFC 9278 §3), `urn:ietf:params:oauth:jwk-thumbprint:<name>:<thumbprint>`,
+   * always with the IANA hash name (`sha-256`, `sha-384`, `sha-512`; RFC 9278 §4). `hash` is as
+   * for `jwkThumbprint`.
+   */
+  jwkThumbprintUri(jwk: Jwk, hash?: ThumbprintHash): Promise<string>;
+  /**
+   * The one key of a JWK Set (RFC 7517 §5) that `selector` picks by `kid`, `alg` and `keyUse`,
+   * under the core rule (`JwkSet::select`, ADR 0054 §2). An absent selector (or `{}`) matches
+   * every member. No match rejects with `NoMatchingKey`, two or more with `MultipleMatchingKeys`
+   * (RFC 7517 §5.1 gives a set's order no meaning); an `alg` or `keyUse` the core refuses with
+   * `UnsupportedAlgorithm`, after the set's own import errors (ADR 0054 §4).
+   *
+   * The key may be private (`d`, `k`): call `jwkToPublic` before publishing it. Selection never
+   * authorizes an algorithm, so pass the key only to an operation with an allow-list, and pair a
+   * `kid` from an untrusted header with `alg` (ADR 0054 §7). A server maps `NoMatchingKey` and
+   * `MultipleMatchingKeys` to one opaque client error, such as `invalid_token` (RFC 6750 §3.1).
+   */
   jwksSelect(jwks: JwkSet, selector?: JwkSelector): Promise<JwkObject>;
   /** A random `oct` key of `lenBytes` octets (RFC 7518 §6.4), from the OS CSPRNG (ADR 0005). */
   jwkGenerateOct(lenBytes: number): Promise<JwkObject>;
@@ -185,11 +208,13 @@ export interface PolyjoseApi {
 }
 
 // --- records: validated, rebuilt with only known, present members -------------------------
+// Each reads the caller's members only from `record`'s own-member copy and returns a `bare`
+// (prototype-less) record, so a polluted `Object.prototype` reaches neither (0013 F04).
 // A record with byte members takes the call's `copies` list: see `bytes` and `run`.
 
 function signOptions(v: unknown, at: string): BackendJwsSignOptions {
   const o = record(v, at, ["protectedHeader", "protectedB64u", "detached"]);
-  const out: BackendJwsSignOptions = {};
+  const out = bare<BackendJwsSignOptions>({});
   put(out, "protectedHeader", optJson(o["protectedHeader"], `${at}.protectedHeader`));
   put(out, "protectedB64u", optStr(o["protectedB64u"], `${at}.protectedB64u`));
   put(out, "detached", optBool(o["detached"], `${at}.detached`));
@@ -198,7 +223,7 @@ function signOptions(v: unknown, at: string): BackendJwsSignOptions {
 
 function signer(v: unknown, at: string): BackendJwsSigner {
   const o = record(v, at, ["key", "protectedHeader", "protectedB64u", "unprotectedHeader"]);
-  const out: BackendJwsSigner = { key: json(o["key"], `${at}.key`) };
+  const out = bare<BackendJwsSigner>({ key: json(o["key"], `${at}.key`) });
   put(out, "protectedHeader", optJson(o["protectedHeader"], `${at}.protectedHeader`));
   put(out, "protectedB64u", optStr(o["protectedB64u"], `${at}.protectedB64u`));
   put(out, "unprotectedHeader", optJson(o["unprotectedHeader"], `${at}.unprotectedHeader`));
@@ -207,7 +232,7 @@ function signer(v: unknown, at: string): BackendJwsSigner {
 
 function jwsVerifyOptions(v: unknown, at: string, copies: Uint8Array[]): BackendJwsVerifyOptions {
   const o = record(v, at, ["allowedAlgs", "detachedPayload", "maxInputLen", "maxSignatures"]);
-  const out: BackendJwsVerifyOptions = { allowedAlgs: allowList(o["allowedAlgs"], `${at}.allowedAlgs`) };
+  const out = bare<BackendJwsVerifyOptions>({ allowedAlgs: allowList(o["allowedAlgs"], `${at}.allowedAlgs`) });
   put(out, "detachedPayload", optBytes(o["detachedPayload"], `${at}.detachedPayload`, copies));
   put(out, "maxInputLen", optU32(o["maxInputLen"], `${at}.maxInputLen`));
   put(out, "maxSignatures", optU32(o["maxSignatures"], `${at}.maxSignatures`));
@@ -216,7 +241,7 @@ function jwsVerifyOptions(v: unknown, at: string, copies: Uint8Array[]): Backend
 
 function recipient(v: unknown, at: string, copies: Uint8Array[]): BackendJweRecipient {
   const o = record(v, at, ["alg", "key", "header", "apu", "apv", "p2c", "p2sLen"]);
-  const out: BackendJweRecipient = { alg: str(o["alg"], `${at}.alg`), key: json(o["key"], `${at}.key`) };
+  const out = bare<BackendJweRecipient>({ alg: str(o["alg"], `${at}.alg`), key: json(o["key"], `${at}.key`) });
   put(out, "header", optJson(o["header"], `${at}.header`));
   put(out, "apu", optBytes(o["apu"], `${at}.apu`, copies));
   put(out, "apv", optBytes(o["apv"], `${at}.apv`, copies));
@@ -227,10 +252,10 @@ function recipient(v: unknown, at: string, copies: Uint8Array[]): BackendJweReci
 
 function encryptOptions(v: unknown, at: string, copies: Uint8Array[]): BackendJweEncryptOptions {
   const o = record(v, at, ["enc", "recipients", "protectedHeader", "sharedUnprotectedHeader", "aad", "compress"]);
-  const out: BackendJweEncryptOptions = {
+  const out = bare<BackendJweEncryptOptions>({
     enc: str(o["enc"], `${at}.enc`),
     recipients: list(o["recipients"], `${at}.recipients`, (r, rat) => recipient(r, rat, copies)),
-  };
+  });
   put(out, "protectedHeader", optJson(o["protectedHeader"], `${at}.protectedHeader`));
   put(out, "sharedUnprotectedHeader", optJson(o["sharedUnprotectedHeader"], `${at}.sharedUnprotectedHeader`));
   put(out, "aad", optBytes(o["aad"], `${at}.aad`, copies));
@@ -248,10 +273,10 @@ function decryptOptions(v: unknown, at: string): BackendJweDecryptOptions {
     "maxRecipients",
     "understoodCrit",
   ]);
-  const out: BackendJweDecryptOptions = {
+  const out = bare<BackendJweDecryptOptions>({
     allowedAlgs: allowList(o["allowedAlgs"], `${at}.allowedAlgs`),
     allowedEnc: allowList(o["allowedEnc"], `${at}.allowedEnc`),
-  };
+  });
   put(out, "maxPbes2Count", optU32(o["maxPbes2Count"], `${at}.maxPbes2Count`));
   put(out, "maxDecompressedLen", optU32(o["maxDecompressedLen"], `${at}.maxDecompressedLen`));
   put(out, "maxInputLen", optU32(o["maxInputLen"], `${at}.maxInputLen`));
@@ -262,7 +287,7 @@ function decryptOptions(v: unknown, at: string): BackendJweDecryptOptions {
 
 function jwtSignOptions(v: unknown, at: string): BackendJwtSignOptions {
   const o = record(v, at, ["alg", "typ", "omitTyp", "accessToken", "header"]);
-  const out: BackendJwtSignOptions = { alg: str(o["alg"], `${at}.alg`) };
+  const out = bare<BackendJwtSignOptions>({ alg: str(o["alg"], `${at}.alg`) });
   put(out, "typ", optStr(o["typ"], `${at}.typ`));
   put(out, "omitTyp", optBool(o["omitTyp"], `${at}.omitTyp`));
   put(out, "accessToken", optBool(o["accessToken"], `${at}.accessToken`));
@@ -294,7 +319,7 @@ function jwtVerifyOptions(v: unknown, at: string): PreparedJwtVerify {
     "maxKeyCandidates",
     "maxInputLen",
   ]);
-  const options: Omit<BackendJwtVerifyOptions, "now"> = { allowedAlgs: allowList(o["allowedAlgs"], `${at}.allowedAlgs`) };
+  const options = bare<Omit<BackendJwtVerifyOptions, "now">>({ allowedAlgs: allowList(o["allowedAlgs"], `${at}.allowedAlgs`) });
   put(options, "issuers", optStrList(o["issuers"], `${at}.issuers`));
   put(options, "audiences", optStrList(o["audiences"], `${at}.audiences`));
   put(options, "subject", optStr(o["subject"], `${at}.subject`));
@@ -318,12 +343,12 @@ function jwtVerifyOptions(v: unknown, at: string): PreparedJwtVerify {
  * `@polyjose/node` and `@polyjose/wasm` behave identically and no Rust code reads time.
  */
 function withNow(prepared: PreparedJwtVerify): BackendJwtVerifyOptions {
-  return { ...prepared.options, now: prepared.now ?? Math.floor(Date.now() / 1000) };
+  return bare<BackendJwtVerifyOptions>({ ...prepared.options, now: prepared.now ?? Math.floor(Date.now() / 1000) });
 }
 
 function selector(v: unknown, at: string): BackendJwkSelector {
   const o = record(v, at, ["kid", "alg", "keyUse"]);
-  const out: BackendJwkSelector = {};
+  const out = bare<BackendJwkSelector>({});
   put(out, "kid", optStr(o["kid"], `${at}.kid`));
   put(out, "alg", optStr(o["alg"], `${at}.alg`));
   put(out, "keyUse", optStr(o["keyUse"], `${at}.keyUse`));
@@ -398,17 +423,25 @@ function field(e: unknown, name: string): unknown {
   return (typeof e === "object" && e !== null) || typeof e === "function" ? (e as Record<string, unknown>)[name] : undefined;
 }
 
+/** One of the generated {@link ERROR_CODES}, the core's `Error::CODES` this facade was built from. */
+function isErrorCode(code: string): code is ErrorCode {
+  return (ERROR_CODES as readonly string[]).includes(code);
+}
+
 /**
- * A backend failure as the facade reports it (ADR 0030 §5, ADR 0031 §1): a `code` the backend's
- * `errorCodes()` lists gives a `PolyjoseError` with the backend's message; anything else (napi's
- * own `InvalidArg`/`StringExpected`, a `TypeError` of the wasm reader) is a host `TypeError`
- * with the original message.
+ * A backend failure as the facade reports it (ADR 0030 §5, ADR 0031 §1): a `code` that is both
+ * in the backend's `errorCodes()` and in the generated {@link ERROR_CODES} gives a
+ * `PolyjoseError` with the backend's message, so `PolyjoseError.code` is always an
+ * {@link ErrorCode} even if the backend and the facade versions drift (0013 F04, review N2).
+ * Anything else (a code only one side knows, napi's own `InvalidArg`/`StringExpected`, a
+ * `TypeError` of the wasm reader) is a host `TypeError` with the original message. `codes`
+ * throws if the backend can't list its codes; that error is reported instead.
  */
 function mapError(e: unknown, codes: () => ReadonlySet<string>): Error {
   const code = field(e, "code");
   const message = field(e, "message");
   const text = typeof message === "string" ? message : describe(e);
-  if (typeof code === "string" && codes().has(code)) return new PolyjoseError(code as ErrorCode, text);
+  if (typeof code === "string" && codes().has(code) && isErrorCode(code)) return new PolyjoseError(code, text);
   return new TypeError(text);
 }
 
@@ -448,14 +481,32 @@ export function createApi(backend: Backend): PolyjoseApi {
     return pending;
   }
 
+  /**
+   * The backend's `errorCodes()`, read once, on the first failure to map (0013 F04, review N2).
+   * If the backend can't list them (it throws, or returns no array), the facade can't tell a core
+   * failure from a host one, so it throws an `Error` naming the cause rather than reporting every
+   * core failure as a `TypeError`; nothing is cached, and the next failure asks again.
+   */
   const codes = (): ReadonlySet<string> => {
-    if (codeSet === undefined) {
-      try {
-        codeSet = new Set(backend.errorCodes());
-      } catch {
-        return new Set();
-      }
+    if (codeSet !== undefined) return codeSet;
+    let listed: unknown;
+    try {
+      listed = backend.errorCodes();
+    } catch (e) {
+      const why = field(e, "message");
+      throw new Error(`polyjose: the backend's errorCodes() failed (${typeof why === "string" ? why : describe(e)}), so a backend error can't be mapped`, {
+        cause: e,
+      });
     }
+    if (!Array.isArray(listed)) throw new Error("polyjose: the backend's errorCodes() did not return an array, so a backend error can't be mapped");
+    // Own elements only: `filter` would read a hole through a polluted `Array.prototype` and map
+    // a code the backend never listed (0013 F09).
+    const own = new Set<string>();
+    for (let i = 0; i < listed.length; i++) {
+      const c: unknown = Object.hasOwn(listed, i) ? listed[i] : undefined;
+      if (typeof c === "string") own.add(c);
+    }
+    codeSet = own;
     return codeSet;
   };
 
@@ -497,7 +548,10 @@ export function createApi(backend: Backend): PolyjoseApi {
     errorCodes: async () => {
       const raw: unknown = await invoke(() => b.errorCodes());
       if (!Array.isArray(raw)) throw new TypeError("polyjose: the backend returned errorCodes that is not an array");
-      return raw.map((c: unknown, i) => outStr(c, `errorCodes[${i}]`));
+      // Own elements only (0013 F09): a hole is reported, never read through `Array.prototype`.
+      const out: string[] = [];
+      for (let i = 0; i < raw.length; i++) out.push(outStr(Object.hasOwn(raw, i) ? raw[i] : undefined, `errorCodes[${i}]`));
+      return out;
     },
 
     base64urlEncode: (input) =>
@@ -533,11 +587,13 @@ export function createApi(backend: Backend): PolyjoseApi {
         },
         (r) => jwk(r, "jwkToPublic"),
       ),
+    // `hash` is optional (ADR 0054 §9): null and undefined reach the backend as undefined, so
+    // the core's default applies; a name is passed as given, for the core to parse (§8.2).
     jwkThumbprint: (key, hash) =>
       run(
         () => {
           const k = json(key, "jwkThumbprint: jwk");
-          const h = str(hash, "jwkThumbprint: hash");
+          const h = optStr(hash, "jwkThumbprint: hash");
           return () => b.jwkThumbprint(k, h);
         },
         (r) => outStr(r, "jwkThumbprint"),
@@ -546,7 +602,7 @@ export function createApi(backend: Backend): PolyjoseApi {
       run(
         () => {
           const k = json(key, "jwkThumbprintUri: jwk");
-          const h = str(hash, "jwkThumbprintUri: hash");
+          const h = optStr(hash, "jwkThumbprintUri: hash");
           return () => b.jwkThumbprintUri(k, h);
         },
         (r) => outStr(r, "jwkThumbprintUri"),

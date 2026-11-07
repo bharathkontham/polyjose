@@ -13,14 +13,20 @@
  * process.exitCode = await main(api, { runner: "node", suffix: "x86_64-unknown-linux-musl", root });
  * ```
  *
- * The results file is `{ runner, polyjose, features, error_codes, results }` (ADR 0034 §2, §8).
- * Its `runner` member is always the bare ADR 0034 §2 name; a CI matrix suffix appears only in the
- * file name (conformance/README.md "Runner names and results files", B01).
+ * The results file is `{ runner, polyjose, vectors_digest, features, error_codes, results }`
+ * (ADR 0034 §2, §8; ADR 0060 §1). Its `runner` member is always the bare ADR 0034 §2 name; a CI
+ * matrix suffix appears only in the file name (conformance/README.md "Runner names and results
+ * files", B01). `vectors_digest` is computed from the bytes of each file read, with `node:crypto`
+ * (ADR 0060 §5): each file is read once as bytes, hashed, and only then decoded as UTF-8 for the
+ * runner.
  */
 
-import { fs, path, process } from "../node/builtins.js";
+import { crypto, fs, path, process } from "../node/builtins.js";
 import type { PolyjoseApi } from "../src/api.js";
-import { runVectors, type VectorFile, type VectorResult } from "./runner.js";
+import { runVectors, vectorsDigest, type DigestInput, type Sha256, type VectorFile, type VectorResult } from "./runner.js";
+
+/** `node:crypto`'s SHA-256, the Node path's digest (ADR 0060 §5); never polyjose. */
+const nodeSha256: Sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest();
 
 /** The runner names of ADR 0034 §2: the `runner` enum of `conformance/schema/results.schema.json`. */
 export const RUNNER_NAMES = [
@@ -80,7 +86,10 @@ function collect(dir: string, base: string, files: string[], links: string[]): v
   }
 }
 
-/** Runs the vectors and writes the results file. Throws when there is nothing to run. */
+/**
+ * Runs the vectors and writes the results file. Throws, writing nothing, when there is nothing to
+ * run or no vector file could be read (an empty corpus has no digest, ADR 0060 §3).
+ */
 export async function runConformance(api: PolyjoseApi, options: ConformanceOptions): Promise<ConformanceSummary> {
   if (!(RUNNER_NAMES as readonly string[]).includes(options.runner)) {
     throw new TypeError(`polyjose: runner must be one of the ADR 0034 §2 names (${RUNNER_NAMES.join(", ")})`);
@@ -96,14 +105,24 @@ export async function runConformance(api: PolyjoseApi, options: ConformanceOptio
   if (names.length + links.length === 0) throw new Error(`${vectorsDir}: no vector files (*.json) found`);
 
   const files: VectorFile[] = [];
+  const read: DigestInput[] = [];
   const unreadable: VectorResult[] = [];
   for (const name of names) {
+    let bytes;
     try {
-      files.push({ path: name, json: fs.readFileSync(path.join(vectorsDir, name), "utf8") });
+      bytes = fs.readFileSync(path.join(vectorsDir, name));
     } catch (e) {
+      // A `fail` with no digest line (ADR 0060 §2).
       unreadable.push({ id: `${name}#0`, op: "unknown", status: "fail", reason: `${name}: cannot read: ${String(e)}` });
+      continue;
     }
+    // The digest is over these very bytes; the runner gets them decoded exactly as
+    // readFileSync(…, "utf8") would decode them.
+    read.push({ id: `${name}#0`, bytes });
+    files.push({ path: name, json: bytes.toString("utf8") });
   }
+  if (read.length === 0) throw new Error(`${vectorsDir}: no vector file could be read`);
+  const digest = await vectorsDigest(read, nodeSha256);
   const features = [...(options.features ?? [])];
   const results = [
     ...(await runVectors(api, files, { schema, features })),
@@ -119,6 +138,7 @@ export async function runConformance(api: PolyjoseApi, options: ConformanceOptio
   const report = {
     runner: options.runner,
     polyjose: await api.version(),
+    vectors_digest: digest,
     features,
     error_codes: await api.errorCodes(),
     results,

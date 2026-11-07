@@ -1,0 +1,44 @@
+{
+  "source": "ADR 0054 §2.1, §2.5; RFC 7517 §4.5, RFC 7518 §3.4",
+  "description": "kid and alg together pick the one P-256 key with that kid, where each alone matches two members; decided by ADR 0054 §2.1 and §2.5 together: kid a alone matches members 0 and 2, ES256 alone matches the P-256 members 0 and 1; only member 0 is P-256 with kid a, and it has no alg, use or key_ops; outcome hand-derived from the ADR 0054 text (conformance/tools/jwk-oracle/specs/select.json), never computed by polyjose",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "9k4oxJo3yFhw4XvUDFOFlmhgwqGrC25aBd7xhpkFB6Y",
+          "y": "zE-06UddsK2b0rpGKPXn9gz55y3tneIwQbTHPYn4o_I",
+          "kid": "a"
+        },
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "kYUQsFzddzDVWQ2zrOHzLvP5Xh0vfUGlmngWR9XMJTw",
+          "y": "8uWP4BrVkuiNMETAGTs-RXFQpR9p5DtW6MzL2D6yXX8",
+          "kid": "b"
+        },
+        {
+          "kty": "oct",
+          "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA",
+          "kid": "a"
+        }
+      ]
+    },
+    "selector": {
+      "kid": "a",
+      "alg": "ES256"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "9k4oxJo3yFhw4XvUDFOFlmhgwqGrC25aBd7xhpkFB6Y",
+      "y": "zE-06UddsK2b0rpGKPXn9gz55y3tneIwQbTHPYn4o_I",
+      "kid": "a"
+    }
+  }
+}

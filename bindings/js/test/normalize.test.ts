@@ -18,6 +18,7 @@ function setup() {
     handlers: {
       jwkParse: () => KEY,
       jwkThumbprint: () => "t",
+      jwkThumbprintUri: () => "u",
       jwksSelect: () => KEY,
       jwkGenerateOct: () => KEY,
       jwkFromDer: () => KEY,
@@ -102,7 +103,33 @@ test("strings are checked", async () => {
   const { fake, fn } = setup();
   for (const bad of [1, null, undefined, {}, new String("x")]) {
     await rejectsType(fake, fn("base64urlDecode")(bad), "base64urlDecode");
+  }
+  // The thumbprint hash is optional (ADR 0054 §9), so only null and undefined may be left out.
+  for (const bad of [1, {}, new String("x"), ["SHA-256"]]) {
     await rejectsType(fake, fn("jwkThumbprint")(KEY, bad), "jwkThumbprint");
+    await rejectsType(fake, fn("jwkThumbprintUri")(KEY, bad), "jwkThumbprintUri");
+  }
+});
+
+test("an absent thumbprint hash (omitted, undefined or null) reaches the backend as undefined", async () => {
+  // ADR 0054 §9: absent is the core default, SHA-256; the facade writes no default of its own.
+  const { fake, fn } = setup();
+  for (const op of ["jwkThumbprint", "jwkThumbprintUri"] as const) {
+    await fn(op)(KEY);
+    await fn(op)(KEY, undefined);
+    await fn(op)(KEY, null);
+    await fn(op)(KEY, "sha256");
+    await fn(op)(KEY, "Sha-256");
+    const passed = fake.of(op).map((c) => c.args);
+    assert.deepEqual(passed, [
+      [KEY, undefined],
+      [KEY, undefined],
+      [KEY, undefined],
+      // A name is passed as given: the core parses it (ADR 0054 §8.2) and rejects what it must.
+      [KEY, "sha256"],
+      [KEY, "Sha-256"],
+    ]);
+    for (const args of passed) assert.equal(args.length, 2, `${op} gets (jwk, hash)`);
   }
 });
 
@@ -118,6 +145,17 @@ test("null is undefined: null options and fields are left out, never passed to t
   assert.deepEqual(fake.of("jwtSign")[0]?.args[2], { alg: "HS256" });
   await fn("jweEncryptCompact")(new Uint8Array(), { enc: "A128GCM", recipients: [{ alg: "dir", key: KEY, header: null, p2c: null }], aad: null });
   assert.deepEqual(fake.of("jweEncryptCompact")[0]?.args[1], { enc: "A128GCM", recipients: [{ alg: "dir", key: KEY }] });
+});
+
+test("profile: any string still reaches the backend unchanged; only the type is literal (review N5)", async () => {
+  // JwtVerifyOptions.profile is typed "access_token", but an untyped caller's other string is
+  // passed on for the core to refuse with UnsupportedAlgorithm (ADR 0030 §4): no facade check.
+  const { fake, fn } = setup();
+  for (const profile of ["access_token", "access-token", "id_token", ""]) {
+    await fn("jwtVerify")("a.b.c", KEY, { allowedAlgs: ["HS256"], profile });
+    assert.equal((fake.of("jwtVerify").at(-1)?.args[2] as Record<string, unknown> | undefined)?.["profile"], profile);
+  }
+  await assert.rejects(fn("jwtVerify")("a.b.c", KEY, { allowedAlgs: ["HS256"], profile: 1 }), TypeError);
 });
 
 test("a missing allowedAlgs or allowedEnc is passed as [] (the core answers AlgorithmNotAllowed)", async () => {

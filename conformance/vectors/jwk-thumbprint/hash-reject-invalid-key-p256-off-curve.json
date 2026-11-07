@@ -1,0 +1,18 @@
+{
+  "source": "ADR 0057 §2",
+  "description": "An invalid key and an invalid hash name together give the JWK import error (ADR 0057 §2: import first, then the hash name): the key is the off-curve P-256 point of reject-p256-off-curve.json (InvalidKey, ADR 0041 §4), checked off-curve with node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jwk-oracle/thumbprints.mjs, and the name \"SHA-1\" alone gives UnsupportedAlgorithm (hash-reject-upper-sha-1.json, ADR 0054 §8.2)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+      "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfQ"
+    },
+    "hash": "SHA-1"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

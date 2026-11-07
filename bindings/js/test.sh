@@ -4,7 +4,8 @@
 #   2. npm ci (typescript 7.0.2, the only dev-dependency, from package-lock.json);
 #   3. generate src/error-codes.ts from the core's Error::CODES, then tsc (strict, declarations);
 #   4. declarations are tsc output only; the test/misuse/ project must FAIL to type-check
-#      against them, each file with its expected diagnostic (a verify without allowedAlgs);
+#      against them, each file with its expected diagnostic (a JWS or JWT verify without
+#      allowedAlgs, a compact or JSON JWE decrypt without allowedEnc);
 #   5. node --test over the compiled tests in dist/ (what ships), never over the sources.
 # Exits non-zero on any failure.
 set -euo pipefail
