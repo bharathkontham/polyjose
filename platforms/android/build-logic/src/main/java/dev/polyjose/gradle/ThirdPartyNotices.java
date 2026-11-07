@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -22,6 +21,7 @@ import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFile;
 import org.gradle.api.tasks.InputFiles;
 import org.gradle.api.tasks.Internal;
+import org.gradle.api.tasks.Optional;
 import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
@@ -33,13 +33,20 @@ import org.gradle.process.ExecOperations;
  * 0033 §4) by running feature 0013's {@code scripts/third-party-notices.sh}, which is called and
  * never changed here.
  *
- * <p>An artifact ships one native library per target, and the notices file is generated for one
- * of them, {@link #getPrimaryTarget()}. The task generates the file for every target in {@link
- * #getTargets()} as well and fails, naming the crates, when the crate set of another target is not
- * a subset of the primary target's: the shipped file must cover every crate compiled into the
- * artifact. It fails closed and never merges files; a union file would be a deliberate change
- * (feature 0008 T04, lead decision 2026-11-07). The crate sets differ today only by subsets:
- * {@code armv7-linux-androideabi} has no {@code cpufeatures}.
+ * <p>An artifact ships one native library per target: the AAR one per Android ABI, the JVM jar
+ * one per JNA platform. Its notices file is the script's union file, written by one run with a
+ * {@code --target} for each of those targets (feature 0013 F14): every crate compiled into any of
+ * the libraries, once, under a {@code Targets:} header (a single target gives the single-target
+ * file, {@code Target:}). The artifact is one binary distribution, so the union is exactly the
+ * crates compiled into it (ADR 0020 §4; feature 0008 F01, option A, orchestrator ruling
+ * 2026-11-07). Nothing is merged or edited here.
+ *
+ * <p>Fail closed: the task then checks the file it ships against the artifact's targets, with the
+ * script run again for each target on its own. It fails, naming them, when the file's header does
+ * not name exactly the targets, when a target compiles a crate the file does not list, or when the
+ * file lists a crate that no target compiles. The crate sets differ today: {@code
+ * armv7-linux-androideabi} has no {@code cpufeatures}; the Linux libraries add {@code
+ * linux-raw-sys}, the Windows one {@code windows-link} and {@code windows-sys} (feature 0008 T05).
  */
 public abstract class ThirdPartyNotices extends DefaultTask {
     /** Where the file lands inside the jar ({@code classes.jar} of the AAR, or the JVM jar). */
@@ -78,11 +85,18 @@ public abstract class ThirdPartyNotices extends DefaultTask {
     @Input
     public abstract Property<String> getPackageName();
 
-    /** The target whose notices file ships. */
+    /**
+     * A target the artifact ships a library for, counted with {@link #getTargets()} (the modules
+     * set the arm64-v8a target and the host's here). Optional; a target listed in both counts once.
+     */
     @Input
+    @Optional
     public abstract Property<String> getPrimaryTarget();
 
-    /** Every target the artifact ships a library for; the primary one may be listed too. */
+    /**
+     * Every target the artifact ships a library for. Order and repeats do not matter (the script
+     * sorts and deduplicates); together with {@link #getPrimaryTarget()} at least one is needed.
+     */
     @Input
     public abstract ListProperty<String> getTargets();
 
@@ -92,47 +106,62 @@ public abstract class ThirdPartyNotices extends DefaultTask {
 
     @TaskAction
     public void generate() throws IOException {
-        String primary = getPrimaryTarget().get();
-        Set<String> targets = new LinkedHashSet<>();
-        targets.add(primary);
-        targets.addAll(getTargets().get());
+        Set<String> targets = new TreeSet<>(getTargets().get());
+        if (getPrimaryTarget().isPresent()) {
+            targets.add(getPrimaryTarget().get());
+        }
+        if (targets.isEmpty()) {
+            throw new GradleException("thirdPartyNotices: no target: the artifact ships no library");
+        }
 
         File work = getTemporaryDir();
-        File primaryFile = run(primary, work);
-        Set<String> covered = crates(primaryFile);
+        File notices = run(targets, new File(work, "THIRD-PARTY-NOTICES.txt"));
+        Set<String> listed = crates(notices);
 
         List<String> problems = new ArrayList<>();
+        List<String> named = targets(notices);
+        if (!named.equals(new ArrayList<>(targets))) {
+            Set<String> missing = new TreeSet<>(targets);
+            named.forEach(missing::remove);
+            Set<String> extra = new TreeSet<>(named);
+            extra.removeAll(targets);
+            problems.add("the file names the targets " + named + ", the artifact's libraries are for "
+                    + targets + (missing.isEmpty() ? "" : "; missing: " + String.join(", ", missing))
+                    + (extra.isEmpty() ? "" : "; extra: " + String.join(", ", extra)));
+        }
+        // Each target on its own, so a crate of one library that the shipped file lacks is named.
+        Set<String> compiled = new TreeSet<>();
         for (String target : targets) {
-            if (target.equals(primary)) {
-                continue;
-            }
-            Set<String> crates = crates(run(target, work));
+            Set<String> crates = targets.size() == 1
+                    ? listed
+                    : crates(run(Set.of(target), new File(work, target + ".txt")));
+            compiled.addAll(crates);
             Set<String> missing = new TreeSet<>(crates);
-            missing.removeAll(covered);
-            Set<String> extra = new TreeSet<>(covered);
-            extra.removeAll(crates);
-            if (!missing.isEmpty()) {
-                problems.add(target + " compiles crates the " + primary + " notices do not list: "
-                        + names(missing));
+            missing.removeAll(listed);
+            if (missing.isEmpty()) {
+                getLogger().lifecycle("thirdPartyNotices: {} ({} third-party crates) is covered",
+                        target, crates.size());
             } else {
-                getLogger().lifecycle("thirdPartyNotices: {} ({} third-party crates) is covered by {}{}",
-                        target, crates.size(), primary,
-                        extra.isEmpty() ? " (identical)" : " (it lacks " + names(extra) + ")");
+                problems.add(target + " compiles crates the notices do not list: " + names(missing));
             }
         }
+        Set<String> unused = new TreeSet<>(listed);
+        unused.removeAll(compiled);
+        if (!unused.isEmpty()) {
+            problems.add("the notices list crates no target compiles: " + names(unused));
+        }
         if (!problems.isEmpty()) {
-            throw new GradleException("thirdPartyNotices: the shipped notices (" + primary
-                    + ") do not cover every library of the artifact (ADR 0020 §4):\n  "
-                    + String.join("\n  ", problems));
+            throw new GradleException("thirdPartyNotices: the notices do not cover exactly the "
+                    + "libraries of the artifact (ADR 0020 §4):\n  " + String.join("\n  ", problems));
         }
 
         File outDir = getOutputDir().get().getAsFile();
         fs.delete(spec -> spec.delete(outDir));
         File out = new File(outDir, NOTICES_PATH);
         Files.createDirectories(out.getParentFile().toPath());
-        Files.copy(primaryFile.toPath(), out.toPath());
+        Files.copy(notices.toPath(), out.toPath());
         getLogger().lifecycle("thirdPartyNotices: {} ({} third-party crates) -> {}",
-                primary, covered.size(), NOTICES_PATH);
+                String.join(", ", targets), listed.size(), NOTICES_PATH);
     }
 
     /** "name version" of each "name version  license" line, for messages. */
@@ -144,14 +173,41 @@ public abstract class ThirdPartyNotices extends DefaultTask {
         return String.join(", ", out);
     }
 
-    private File run(String target, File work) {
-        File out = new File(work, target + ".txt");
+    /** One run of the script with a {@code --target} for each target, writing {@code out}. */
+    private File run(Set<String> targets, File out) {
+        List<String> command = new ArrayList<>(List.of(
+                "bash", getScript().get().getAsFile().getPath(), "-p", getPackageName().get()));
+        for (String target : targets) {
+            command.add("--target");
+            command.add(target);
+        }
+        command.add("-o");
+        command.add(out.getPath());
         exec.exec(spec -> {
             spec.setWorkingDir(getWorkspace().get().getAsFile());
-            spec.commandLine("bash", getScript().get().getAsFile().getPath(),
-                    "-p", getPackageName().get(), "--target", target, "-o", out.getPath());
+            spec.commandLine(command);
         });
         return out;
+    }
+
+    /**
+     * The targets the file names: its {@code Target: <t>} line, or {@code Targets: <t1>, <t2>, ...}
+     * (sorted by the script), the header third-party-notices.sh writes before the first rule.
+     */
+    static List<String> targets(File notices) throws IOException {
+        for (String line : Files.readAllLines(notices.toPath(), StandardCharsets.UTF_8)) {
+            if (line.equals(RULE)) {
+                break;
+            }
+            if (line.startsWith("Target: ")) {
+                return List.of(line.substring("Target: ".length()));
+            }
+            if (line.startsWith("Targets: ")) {
+                return List.of(line.substring("Targets: ".length()).split(", ", -1));
+            }
+        }
+        throw new GradleException("thirdPartyNotices: no \"Target:\" or \"Targets:\" line in " + notices
+                + " (has scripts/third-party-notices.sh changed its format?)");
     }
 
     /**
