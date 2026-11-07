@@ -75,6 +75,97 @@ crate_section() {
     { prev = $0 }' "$1"
 }
 
+# headings <notices file>: the "<name> <version>" heading of every third-party crate section.
+headings() {
+  awk -v rule="$rule" 'prev == rule && $0 ~ /^[A-Za-z0-9_-]+ [0-9][^ ]*$/ { print } { prev = $0 }' "$1" | sort
+}
+
+# tree_crates <package> <target>: "<name> <version>" of every registry crate in the artifact's
+# tree, as cargo prints it; the workspace's own path crates are covered by the polyjose section.
+tree_crates() {
+  (cd "$repo" && cargo tree --locked --offline -p "$1" --target "$2" -e normal,no-proc-macro \
+    --prefix none -f '{p}') |
+    sed 's/ (\*)$//' | grep -v ' (/' | sed 's/^\([^ ]*\) v\([^ ]*\)$/\1 \2/' | sort -u
+}
+
+# --- Fixture workspaces of local path crates ------------------------------------------------
+
+# new_fixture <name>: an empty fixture: a workspace $fx/ws whose one member `app` (MIT, the
+# workspace LICENSE is polyjose's) gets its dependencies from app_dep, and a directory
+# $fx/vendor for its path dependencies, outside the workspace so they are not members.
+new_fixture() {
+  fx="$scratch/fixture-$1"
+  rm -rf "$fx"
+  mkdir -p "$fx/ws/app/src" "$fx/vendor"
+  cp "$repo/LICENSE" "$fx/ws/LICENSE"
+  printf '[workspace]\nresolver = "2"\nmembers = ["app"]\n' >"$fx/ws/Cargo.toml"
+  : >"$fx/ws/app/src/lib.rs"
+  app_license=MIT
+  : >"$fx/deps"; : >"$fx/build-deps"; : >"$fx/dev-deps"; : >"$fx/android-deps"
+}
+
+# vendor_crate <name> <license expression | - (none) | file:<path> (license-file only)>
+#              [proc-macro] [dep...]: a path crate in $fx/vendor depending on other vendor crates.
+vendor_crate() {
+  local name=$1 license=$2 kind="" d dir
+  shift 2
+  if [ "${1:-}" = proc-macro ]; then kind=proc-macro; shift; fi
+  dir="$fx/vendor/$name"
+  mkdir -p "$dir/src"
+  : >"$dir/src/lib.rs"
+  {
+    printf '[package]\nname = "%s"\nversion = "0.1.0"\nedition = "2021"\n' "$name"
+    printf 'repository = "https://example.invalid/%s"\n' "$name"
+    case $license in
+      -) ;;
+      file:*) printf 'license-file = "%s"\n' "${license#file:}" ;;
+      *) printf 'license = "%s"\n' "$license" ;;
+    esac
+    [ "$kind" = proc-macro ] && printf '\n[lib]\nproc-macro = true\n'
+    printf '\n[dependencies]\n'
+    for d in "$@"; do printf '%s = { path = "../%s" }\n' "$d" "$d"; done
+  } >"$dir/Cargo.toml"
+}
+
+# crate_file <crate> <relative path> <text>: a file in that vendor crate's directory.
+crate_file() {
+  mkdir -p "$(dirname "$fx/vendor/$1/$2")"
+  printf '%s\n' "$3" >"$fx/vendor/$1/$2"
+}
+
+# app_dep <deps|build-deps|dev-deps|android-deps> <crate>
+app_dep() { printf '%s = { path = "../../vendor/%s" }\n' "$2" "$2" >>"$fx/$1"; }
+
+# lock_fixture: writes app's manifest and the fixture's Cargo.lock (offline, path crates only).
+lock_fixture() {
+  {
+    printf '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2021"\nlicense = "%s"\n' "$app_license"
+    printf 'repository = "https://example.invalid/app"\n'
+    printf '\n[dependencies]\n'; cat "$fx/deps"
+    printf '\n[build-dependencies]\n'; cat "$fx/build-deps"
+    printf '\n[dev-dependencies]\n'; cat "$fx/dev-deps"
+    printf '\n[target.'\''cfg(target_os = "android")'\''.dependencies]\n'; cat "$fx/android-deps"
+  } >"$fx/ws/app/Cargo.toml"
+  cargo generate-lockfile --offline --manifest-path "$fx/ws/Cargo.toml" >"$scratch/lock.log" 2>&1 \
+    || { cat "$scratch/lock.log" >&2; lib_die "could not lock fixture $fx"; }
+}
+
+# fixture_run <output file> <target>
+fixture_run() { run_notices "$1" -p app --target "$2" --manifest-path "$fx/ws/Cargo.toml"; }
+
+# expect_reject <label> <crate label...>: the last run failed with status 1, its log names every
+# given "<name> <version>", and it wrote no output file ($out).
+expect_reject() {
+  local label=$1 c missing=""
+  shift
+  for c in "$@"; do grep -qF -- "$c" "$scratch/last.log" || missing="$missing [$c]"; done
+  if [ "$rc" -eq 1 ] && [ -z "$missing" ] && [ ! -e "$out" ]; then pass "$label"
+  else
+    fail "$label (exit $rc, crates not named:${missing:- none}, output $([ -e "$out" ] && echo written || echo absent))"
+    show_log
+  fi
+}
+
 finish() {
   echo "$tests_run checks, $tests_failed failed"
   [ "$tests_failed" -eq 0 ]
