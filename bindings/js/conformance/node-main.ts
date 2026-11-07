@@ -9,18 +9,46 @@
  * import * as api from "@polyjose/node";
  * import { main } from "<bindings/js>/dist/conformance/node-main.js";
  * process.exitCode = await main(api, { runner: "node", root: "<repo root>" });
+ * // A CI matrix run: target/conformance/node-x86_64-unknown-linux-musl.json, runner "node".
+ * process.exitCode = await main(api, { runner: "node", suffix: "x86_64-unknown-linux-musl", root });
  * ```
  *
  * The results file is `{ runner, polyjose, features, error_codes, results }` (ADR 0034 §2, §8).
+ * Its `runner` member is always the bare ADR 0034 §2 name; a CI matrix suffix appears only in the
+ * file name (conformance/README.md "Runner names and results files", B01).
  */
 
 import { fs, path, process } from "../node/builtins.js";
 import type { PolyjoseApi } from "../src/api.js";
 import { runVectors, type VectorFile, type VectorResult } from "./runner.js";
 
+/** The runner names of ADR 0034 §2: the `runner` enum of `conformance/schema/results.schema.json`. */
+export const RUNNER_NAMES = [
+  "rust-core",
+  "rust-surface",
+  "wasm-node",
+  "wasm-chrome",
+  "wasm-pkg-node",
+  "wasm-pkg-chrome",
+  "wasm-pkg-workerd",
+  "node",
+  "jvm",
+  "android-emulator",
+  "swift-macos",
+  "swift-ios-sim",
+  "swift-tvos-sim",
+] as const;
+
+export type RunnerName = (typeof RUNNER_NAMES)[number];
+
 export interface ConformanceOptions {
-  /** The runner name of ADR 0034 §2 (`node`, `wasm-pkg-node`, ...), optionally `-<suffix>`. */
-  readonly runner: string;
+  /** The bare runner name of ADR 0034 §2 (`node`, `wasm-pkg-node`, ...); written as the `runner` member. */
+  readonly runner: RunnerName;
+  /**
+   * A CI matrix target (`x86_64-unknown-linux-musl`), appended to the file name only:
+   * `target/conformance/<runner>-<suffix>.json` (ADR 0034 §2).
+   */
+  readonly suffix?: string;
   /** The polyjose repository root: vectors, schema and `target/` are found under it. */
   readonly root: string;
   /** The vector-file feature names this build enables; the bindings enable none (ADR 0034 §3). */
@@ -38,7 +66,8 @@ export interface ConformanceSummary {
   readonly failures: readonly string[];
 }
 
-const RUNNER_NAME = /^[a-z0-9][a-z0-9_.-]*$/;
+/** A file-name suffix: lowercase target-triple characters, never a path. */
+const SUFFIX = /^[a-z0-9][a-z0-9_.-]*$/;
 
 /** Every `*.json` under `dir`, recursively, as paths relative to `dir`; symlinks are reported. */
 function collect(dir: string, base: string, files: string[], links: string[]): void {
@@ -53,7 +82,12 @@ function collect(dir: string, base: string, files: string[], links: string[]): v
 
 /** Runs the vectors and writes the results file. Throws when there is nothing to run. */
 export async function runConformance(api: PolyjoseApi, options: ConformanceOptions): Promise<ConformanceSummary> {
-  if (!RUNNER_NAME.test(options.runner)) throw new TypeError("polyjose: runner must be a plain runner name");
+  if (!(RUNNER_NAMES as readonly string[]).includes(options.runner)) {
+    throw new TypeError(`polyjose: runner must be one of the ADR 0034 §2 names (${RUNNER_NAMES.join(", ")})`);
+  }
+  if (options.suffix !== undefined && !SUFFIX.test(options.suffix)) {
+    throw new TypeError("polyjose: suffix must be a CI target name (lowercase letters, digits, '_', '.', '-')");
+  }
   const vectorsDir = path.join(options.root, "conformance", "vectors");
   const schema: unknown = JSON.parse(fs.readFileSync(path.join(options.root, "conformance", "schema.json"), "utf8"));
   const names: string[] = [];
@@ -81,7 +115,7 @@ export async function runConformance(api: PolyjoseApi, options: ConformanceOptio
 
   const outDir = path.join(options.root, "target", "conformance");
   fs.mkdirSync(outDir, { recursive: true });
-  const file = path.join(outDir, `${options.runner}.json`);
+  const file = path.join(outDir, `${options.runner}${options.suffix === undefined ? "" : `-${options.suffix}`}.json`);
   const report = {
     runner: options.runner,
     polyjose: await api.version(),

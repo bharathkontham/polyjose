@@ -2,7 +2,8 @@
 import { assert, fs, os, path, process, test } from "../node/builtins.js";
 import { createApi } from "../src/api.js";
 import { ERROR_CODES } from "../src/error-codes.js";
-import { main, runConformance } from "../conformance/node-main.js";
+import { main, runConformance, RUNNER_NAMES } from "../conformance/node-main.js";
+import { schemaViolation } from "../conformance/schema.js";
 import { toyBackend } from "./toy-backend.js";
 
 const FIXTURES = path.resolve(process.cwd(), "test/fixtures/vectors");
@@ -89,6 +90,67 @@ test("a symbolic link is a failing result, not a followed or skipped file", asyn
   }
 });
 
-test("a runner name that isn't a plain identifier is refused", async () => {
-  await assert.rejects(runConformance(api(), { runner: "../escape", root: REPO }), TypeError);
+/** The runner names of ADR 0034 §2, copied from the ADR (not from conformance/node-main.ts). */
+const ADR_0034_RUNNERS = [
+  "rust-core",
+  "rust-surface",
+  "wasm-node",
+  "wasm-chrome",
+  "wasm-pkg-node",
+  "wasm-pkg-chrome",
+  "wasm-pkg-workerd",
+  "node",
+  "jvm",
+  "android-emulator",
+  "swift-macos",
+  "swift-ios-sim",
+  "swift-tvos-sim",
+];
+
+test("RUNNER_NAMES is ADR 0034 §2's list", () => {
+  assert.deepEqual([...RUNNER_NAMES], ADR_0034_RUNNERS);
+});
+
+test("a CI matrix suffix goes in the file name only; the runner member stays the bare name (B01)", async () => {
+  const root = scratchRoot((rel) => rel.startsWith("b64url"));
+  try {
+    const summary = await runConformance(api(), { runner: "node", suffix: "x86_64-unknown-linux-musl", root });
+    assert.equal(summary.file, path.join(root, "target/conformance/node-x86_64-unknown-linux-musl.json"));
+    const written = JSON.parse(fs.readFileSync(summary.file, "utf8")) as { runner: string };
+    assert.equal(written.runner, "node");
+    assert.ok(ADR_0034_RUNNERS.includes(written.runner));
+    assert.ok(!fs.existsSync(path.join(root, "target/conformance/node.json")), "no unsuffixed file is written too");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a runner name outside ADR 0034 §2, or a suffixed or path-like name, is refused (B01)", async () => {
+  for (const runner of ["node-x86_64-unknown-linux-musl", "nodejs", "Node", "", "../escape", "rust-core-deflate"]) {
+    await assert.rejects(runConformance(api(), { runner: runner as "node", root: REPO }), TypeError, runner);
+  }
+  for (const suffix of ["", "../x", "a/b", "-lead", "UPPER", "a b"]) {
+    await assert.rejects(runConformance(api(), { runner: "node", suffix, root: REPO }), TypeError, suffix);
+  }
+  assert.equal(await main(api(), { runner: "nodejs" as "node", root: REPO }), 1);
+});
+
+test("the results file validates against conformance/schema/results.schema.json (when present)", async (t) => {
+  // results.schema.json lands with 0013 T02; until that merges into this branch, skip (never pass).
+  const schemaFile = path.join(REPO, "conformance/schema/results.schema.json");
+  if (!fs.existsSync(schemaFile)) {
+    t.skip("conformance/schema/results.schema.json is not in this tree yet (0013 T02)");
+    return;
+  }
+  const schema = JSON.parse(fs.readFileSync(schemaFile, "utf8")) as { properties: { runner: { enum: string[] } } };
+  assert.deepEqual([...RUNNER_NAMES], schema.properties.runner.enum, "node-main's runner list is the schema's enum");
+  const root = scratchRoot();
+  try {
+    for (const options of [{ runner: "node" as const }, { runner: "wasm-pkg-node" as const, suffix: "linux-x64" }]) {
+      const summary = await runConformance(api(), { ...options, root });
+      assert.equal(schemaViolation(schema, JSON.parse(fs.readFileSync(summary.file, "utf8"))), undefined);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -41,6 +41,8 @@ export interface NodeOs {
 
 export interface TestContext {
   readonly name: string;
+  /** Marks the running test skipped, with a reason (reported as skipped, never as a pass). */
+  skip(message?: string): void;
 }
 
 export type TestFn = (t: TestContext) => void | Promise<void>;
