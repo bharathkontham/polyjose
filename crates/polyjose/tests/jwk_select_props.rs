@@ -50,7 +50,7 @@ use polyjose::jwk::{
 use proptest::collection::vec;
 use proptest::option;
 use proptest::prelude::*;
-use proptest::sample::{select, subsequence};
+use proptest::sample::{Index, select, subsequence};
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
 
@@ -946,5 +946,67 @@ proptest! {
         if let Ok((_, key)) = set.select(&selector) {
             assert_family_safe(key, alg)?;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Monotonicity (ADR 0054 §2)
+// ---------------------------------------------------------------------------
+
+/// The indexes `matching` yields for `sel` on `set`.
+fn matched(set: &JwkSet, sel: &Sel) -> Vec<usize> {
+    set.matching(&sel.build()).map(|(i, _)| i).collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// Adding criteria never adds a match: `matching(s + c) ⊆ matching(s)`,
+    /// where `s` is a generated selector with some of its parts dropped and
+    /// `s + c` is the whole selector. Each part only adds a check
+    /// (ADR 0054 §2: "an absent selector part skips its check").
+    #[test]
+    fn adding_a_criterion_never_adds_a_match(
+        members in members(),
+        full in selector(),
+        drop in (any::<bool>(), any::<bool>(), any::<bool>()),
+    ) {
+        let fewer = Sel {
+            alg: if drop.0 { None } else { full.alg },
+            kid: if drop.1 { None } else { full.kid },
+            key_use: if drop.2 { None } else { full.key_use },
+        };
+        let set = import(&members);
+        let narrow = matched(&set, &full);
+        let wide = matched(&set, &fewer);
+        for i in &narrow {
+            prop_assert!(wide.contains(i), "{:?} matched {} but {:?} did not", full, i, fewer);
+        }
+    }
+
+    /// Removing a set member never adds a match for the remaining members:
+    /// each match in the smaller set, mapped back to its original index, is
+    /// a match in the whole set. Because ADR 0054 §2 decides each member on
+    /// its own, the matches are in fact exactly the original ones minus the
+    /// removed member, which is asserted too.
+    #[test]
+    fn removing_a_member_never_adds_a_match(
+        members in vec(member(), 1..=8),
+        removed in any::<Index>(),
+        sel in selector(),
+    ) {
+        let removed = removed.index(members.len());
+        let mut fewer = members.clone();
+        fewer.remove(removed);
+        let whole = matched(&import(&members), &sel);
+        let remaining: Vec<usize> = matched(&import(&fewer), &sel)
+            .into_iter()
+            .map(|i| if i < removed { i } else { i + 1 })
+            .collect();
+        for i in &remaining {
+            prop_assert!(whole.contains(i), "removing member {} added a match at {}", removed, i);
+        }
+        let expected: Vec<usize> = whole.into_iter().filter(|i| *i != removed).collect();
+        prop_assert_eq!(remaining, expected);
     }
 }
