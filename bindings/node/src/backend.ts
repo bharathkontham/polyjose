@@ -11,25 +11,45 @@
  * `createRequire`, so the package stays ESM-only (ADR 0031 §3). Its types come from the generated
  * `binding.d.ts`.
  *
- * **Fail closed (feature 0007 F02, review-code.md SF-4).** The napi-rs CLI 3.10.12 template always
- * emits a WASI fallback, and no `napi build` option omits it: when the native load fails, or when
- * `NAPI_RS_FORCE_WASI` / `NAPI_RS_WASI_FLAVOR` asks for it, the loader goes on to
- * `./polyjose.wasi.cjs` and then the package `@polyjose/node-wasm32-wasi`. polyjose publishes no
- * WASI build (ADR 0031 §2 ships eight native targets; `@polyjose/wasm` is the separate WASM
- * package), so anything that chain could load is not ours. The generated file is never edited;
- * this module wraps it instead:
- *   1. it refuses to load at all while either WASI variable is set, whatever its value;
- *   2. it refuses while any WASI candidate resolves from the loader's directory, resolved exactly
- *      as the loader's own `require.resolve` would (the same directory, `node_modules` walk and
- *      `NODE_PATH`), so the loader's WASI branch can never find anything;
- *   3. after loading, it accepts only the native addon: the loader's own `__napiBindingTarget`
- *      stamp must be `"native"` (a `NAPI_RS_NATIVE_LIBRARY_PATH` module stamped with a WASI flavor
- *      is refused), and `version()` must equal this package's version, which is the workspace
- *      version every release keeps in step (feature 0007 T04). So a mismatched
- *      `@polyjose/node-<platform>` is refused always, not only under
- *      `NAPI_RS_ENFORCE_VERSION_CHECK` (SF-4 item 3).
- * `test/loader.test.ts` pins the loader's load targets, so a CLI bump that adds a candidate fails
- * there before it can be missed here.
+ * **Fail closed (feature 0007 F02; review-code.md SF-4, review-security.md M1).** The generated
+ * loader returns the first module that loads, of any kind:
+ *   - `NAPI_RS_NATIVE_LIBRARY_PATH`, if set;
+ *   - then `./polyjose.<platform>.node` next to it;
+ *   - then `require('@polyjose/node-<platform>')`, which walks every ancestor `node_modules` and
+ *     `NODE_PATH`;
+ *   - then a WASI chain: `./polyjose.wasi.cjs`, then `@polyjose/node-wasm32-wasi`. The napi-rs CLI
+ *     3.10.12 template always emits it; no `napi build` option omits it, and
+ *     `NAPI_RS_FORCE_WASI` / `NAPI_RS_WASI_FLAVOR` can select it.
+ * It stamps a JavaScript module found that way `"native"` too. So a JS file planted in an
+ * ancestor directory or on `NODE_PATH` would become the crypto backend and could "verify" any
+ * token. polyjose publishes only native addons (ADR 0031 §2: eight targets, no WASI build;
+ * `@polyjose/wasm` is a separate package). The generated file is never edited; this module wraps
+ * it and accepts nothing else.
+ *
+ * **Before loading,** nothing runs unless every module the loader could pick is a native addon:
+ *   1. Neither WASI variable is set, whatever its value.
+ *   2. No WASI candidate resolves.
+ *   3. Every native candidate that resolves is a `.node` file: the override path, and for every
+ *      platform the loader probes, `./polyjose.<platform>.node` and `@polyjose/node-<platform>`.
+ *      `@polyjose/node-<platform>/package.json`, which the loader also reads, must be a
+ *      `package.json`.
+ * Resolution is the loader's own: `backend.js` sits next to `binding.cjs`, and `require.resolve`
+ * uses the same directory, `node_modules` walk, `NODE_PATH` and symlink handling as the loader's
+ * `require`, and runs no code. Node loads a `.node` file only as a native addon, never as
+ * JavaScript.
+ *
+ * **After loading,** what the loader returned must be:
+ *   4. the exports of exactly one `.node` module in the CommonJS cache, shared only with a loader
+ *      (`binding.cjs`), so no JavaScript module wraps or re-exports it;
+ *   5. stamped `__napiBindingTarget === "native"`;
+ *   6. at this package's version: `version()` must equal `package.json`'s version. That is the
+ *      workspace version, which every release keeps in step (feature 0007 T04). So an addon from
+ *      another release is refused, whatever `NAPI_RS_ENFORCE_VERSION_CHECK` says (SF-4 item 3).
+ * This doesn't defend against code already running in the process, which can patch anything.
+ * It makes sure the package never selects a substitute.
+ *
+ * `test/loader.test.ts` pins the loader's load targets and checks `LOADER_PLATFORMS` against them.
+ * So a CLI bump that adds a candidate fails there before this module can miss it.
  */
 
 import type { Backend } from "./facade/backend.js";
@@ -40,6 +60,7 @@ import type * as Binding from "./binding.js";
 interface NodeRequire {
   (id: string): unknown;
   resolve(id: string): string;
+  readonly cache: Readonly<Record<string, { readonly exports?: unknown } | undefined>>;
 }
 interface NodeModule {
   createRequire(from: string): NodeRequire;
@@ -63,41 +84,108 @@ const WASI_CANDIDATES = [
   "@polyjose/node-wasm32-wasi/package.json",
 ] as const;
 
+/**
+ * Every platform name the generated loader probes: the eight polyjose publishes (ADR 0031 §2) and
+ * the napi-rs template's others, which are never published. `test/loader.test.ts` checks that this
+ * is exactly the loader's set.
+ */
+export const LOADER_PLATFORMS = [
+  "darwin-x64",
+  "darwin-arm64",
+  "linux-x64-gnu",
+  "linux-arm64-gnu",
+  "linux-x64-musl",
+  "linux-arm64-musl",
+  "win32-x64-msvc",
+  "win32-arm64-msvc",
+  "android-arm64",
+  "android-arm-eabi",
+  "win32-x64-gnu",
+  "win32-ia32-msvc",
+  "darwin-universal",
+  "freebsd-x64",
+  "freebsd-arm64",
+  "freebsd-ppc64",
+  "linux-arm-musleabihf",
+  "linux-arm-gnueabihf",
+  "linux-loong64-musl",
+  "linux-loong64-gnu",
+  "linux-riscv64-musl",
+  "linux-riscv64-gnu",
+  "linux-ppc64-gnu",
+  "linux-s390x-gnu",
+  "openharmony-arm64",
+  "openharmony-x64",
+  "openharmony-arm",
+] as const;
+
 /** A load refusal. It names a variable, a specifier or a version; never a path's contents. */
 function refuse(reason: string): never {
   throw new Error(`@polyjose/node: ${reason}`);
 }
 
 /**
- * Whether `id` resolves from the loader's directory. Only `MODULE_NOT_FOUND` means absent; any
- * other failure (an `exports` restriction, an unreadable directory) counts as present.
+ * Where `id` resolves from the loader's directory: the file, or `null` when it is absent. Only
+ * `MODULE_NOT_FOUND` means absent. Any other failure, such as an `exports` restriction or an
+ * unreadable directory, is a refusal.
  */
-function resolves(req: NodeRequire, id: string): boolean {
+function resolved(req: NodeRequire, id: string): string | null {
   try {
-    req.resolve(id);
-    return true;
+    return req.resolve(id);
   } catch (err) {
-    return (err as { code?: unknown } | null)?.code !== "MODULE_NOT_FOUND";
+    if ((err as { code?: unknown } | null)?.code === "MODULE_NOT_FOUND") return null;
+    return refuse(`${id} cannot be resolved cleanly, so it cannot be checked; refusing to load`);
   }
 }
 
-/** Loads `binding.cjs` only when its WASI chain is unreachable (see the module comment). */
-function loadBinding(host: Host, moduleUrl: string): typeof Binding {
+/** Steps 1-3 of the module comment: every module the loader could pick is a native addon. */
+function checkCandidates(host: Host, req: NodeRequire): void {
   for (const name of WASI_VARIABLES) {
     if (host.env[name] !== undefined) {
       refuse(`${name} is set, but polyjose publishes no WASI build; unset it to load the native addon`);
     }
   }
-  // backend.js and binding.cjs are siblings, so this resolves exactly as the loader does.
-  const req = host.getBuiltinModule("node:module").createRequire(moduleUrl);
   for (const id of WASI_CANDIDATES) {
-    if (resolves(req, id)) {
+    if (resolved(req, id) !== null) {
       refuse(`${id} resolves next to the loader, but polyjose publishes no WASI build; remove it`);
     }
   }
-  const loaded = req("./binding.cjs") as Partial<typeof Binding> | null;
-  if (loaded?.__napiBindingTarget !== "native") {
-    refuse("the loaded binding is not the native addon (__napiBindingTarget is not \"native\")");
+  // The loader tests the override for truthiness, so an empty value means "not set".
+  const override = host.env["NAPI_RS_NATIVE_LIBRARY_PATH"];
+  if (override !== undefined && override !== "") {
+    const file = resolved(req, override);
+    if (file === null || !file.endsWith(".node")) {
+      refuse("NAPI_RS_NATIVE_LIBRARY_PATH does not name a native .node addon; refusing to load");
+    }
+  }
+  for (const platform of LOADER_PLATFORMS) {
+    for (const id of [`./polyjose.${platform}.node`, `@polyjose/node-${platform}`]) {
+      const file = resolved(req, id);
+      if (file !== null && !file.endsWith(".node")) {
+        refuse(`${id} resolves to a file that is not a native .node addon; refusing to load`);
+      }
+    }
+    const manifest = resolved(req, `@polyjose/node-${platform}/package.json`);
+    if (manifest !== null && !/[\\/]package\.json$/.test(manifest)) {
+      refuse(`@polyjose/node-${platform}/package.json resolves to another file; refusing to load`);
+    }
+  }
+}
+
+/** Steps 4-6 of the module comment: the loaded binding is this release's native addon. */
+function checkLoaded(req: NodeRequire, loaded: Partial<typeof Binding> | null): typeof Binding {
+  if (typeof loaded !== "object" || loaded === null) {
+    return refuse("the loader returned no binding object");
+  }
+  const owners = Object.keys(req.cache).filter((file) => req.cache[file]?.exports === loaded);
+  const addons = owners.filter((file) => file.endsWith(".node"));
+  // A second copy of this package (another path, same platform package) has its own binding.cjs.
+  const others = owners.filter((file) => !file.endsWith(".node") && !/[\\/]binding\.cjs$/.test(file));
+  if (addons.length !== 1 || others.length !== 0) {
+    refuse("the loaded binding is not exactly one native .node addon; refusing to load");
+  }
+  if (loaded.__napiBindingTarget !== "native") {
+    refuse('the loaded binding is not the native addon (__napiBindingTarget is not "native")');
   }
   const expected = (req("./package.json") as { version?: unknown }).version;
   const actual = typeof loaded.version === "function" ? loaded.version() : undefined;
@@ -105,6 +193,14 @@ function loadBinding(host: Host, moduleUrl: string): typeof Binding {
     refuse(`the native addon is version ${String(actual)}, but this package is ${String(expected)}; reinstall it`);
   }
   return loaded as typeof Binding;
+}
+
+/** Loads `binding.cjs` only when it can load nothing but the native addon (the module comment). */
+function loadBinding(host: Host, moduleUrl: string): typeof Binding {
+  // backend.js and binding.cjs are siblings, so this resolves exactly as the loader does.
+  const req = host.getBuiltinModule("node:module").createRequire(moduleUrl);
+  checkCandidates(host, req);
+  return checkLoaded(req, req("./binding.cjs") as Partial<typeof Binding> | null);
 }
 
 const binding = loadBinding(
