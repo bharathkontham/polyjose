@@ -23,6 +23,7 @@
 - **Results** may be returned directly or as a Promise (napi `AsyncTask`). An optional result field may be absent, `undefined` or `null`.
   - The facade reads a result's **own** members only (`Object.hasOwn`, 0013 F09), so a member a pollution bug put on `Object.prototype` never stands in for one you left out: an absent `kid` stays absent, and a missing required field is a `TypeError`. Return each field as an own data property of a plain or prototype-less object. napi-rs `#[napi(object)]` and an object built with `js_sys::Reflect::set` do this; a class instance whose fields are getters on its prototype would read as empty.
   - `errorCodes()` is read the same way: by own index, a hole being an error, never an `Array.prototype` element.
+  - What the facade **hands the caller** is built the same way in reverse (0013 F13): each result member is created with `Object.defineProperty` as an own, enumerable, writable, configurable data property, never by assignment, and each array element at its index, never with `push`. Results still inherit from `Object.prototype`. So a setter or a read-only member that a pollution bug put on `Object.prototype` (`aad`, `kid`, a header) or on `Array.prototype[0]` never receives a value and never makes a call fail. The arrays you receive (byte copies, lists, signers and recipients) are built the same way.
 - **Errors.** Throw, or reject with, an object whose `code` is one of `errorCodes()` and whose `message` is the core's text for a core failure (ADR 0030 §5). Set both as **own data properties**: napi-rs (`napi_create_error`) and wasm-bindgen (`Reflect::set`) do. The facade reads `code` and `message` as own data members only, never through a prototype or a getter (0013 F12), and maps what you throw in this order:
 
   | You throw | The caller gets |
@@ -100,6 +101,7 @@ export type * from "./api.js";
 `conformance/runner.ts` exports `runVectors(api, files, { schema, features })`.
 - It runs vector files through the bound API and returns the ADR 0034 §2 results.
 - It has no Node-only imports, so a browser page or a workerd script can feed it the same files.
+- It is a caller of the facade and follows the same rule (0013 F13): every option record, signer, recipient and output record it builds is prototype-less, and every list is filled by index (`conformance/own.ts`), so no inherited setter sees an `aad`, a key or a plaintext.
 
 `conformance/node-main.ts` exports `main(api, { runner, suffix?, root })`.
 - It reads `<root>/conformance/vectors/**/*.json`, runs them, and writes `<root>/target/conformance/<runner>.json`, or `<runner>-<suffix>.json` for a CI matrix run.
