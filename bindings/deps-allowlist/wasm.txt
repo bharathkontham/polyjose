@@ -14,8 +14,9 @@
 
 # wasm-bindgen, the WASM binding's framework (ADR 0030 §1, ADR 0031): the JS glue, its proc-macro
 # (whose syn, quote, proc-macro2 and unicode-ident deps-allowlist.txt already lists) and the
-# macro's arena allocator bumpalo, used at compile time; js-sys, the JS built-ins that getrandom's
-# `wasm_js` backend (crypto.getRandomValues, ADR 0005) calls through wasm-bindgen.
+# macro's arena allocator bumpalo, used at compile time; js-sys, the JS built-ins: the adapter's
+# Error, TypeError, Reflect, Object, Array and Uint8Array (ADR 0031 §3; measured for feature 0006
+# T01, which adds no crate), and getrandom's `wasm_js` backend (crypto.getRandomValues, ADR 0005).
 wasm-bindgen
 wasm-bindgen-macro
 wasm-bindgen-macro-support

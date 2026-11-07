@@ -1,18 +1,61 @@
 [package]
 name = "polyjose-wasm"
+description = "The wasm-bindgen adapter of polyjose (ADR 0030 §1, ADR 0031 §3): one export per surface operation, behind the shared JS facade of @polyjose/wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[lints]
+workspace = true
+
+# ADR 0030 §1: an adapter adds only its framework crates and getrandom on top of the surface. No
+# serde anywhere, including serde-wasm-bindgen and wasm-bindgen's `serde-serialize` (ADR 0016,
+# ADR 0030 §1): records are read with js_sys::Reflect (src/read.rs, ADR 0031 §3). The framework
+# is pinned exactly to the versions feature 0006 measured (0006 research §1).
 [dependencies]
-polyjose.workspace = true
-wasm-bindgen = "0.2.130"
+polyjose-surface = { path = "../surface" }
+# The glue and the `#[wasm_bindgen]` exports. Default features (`std`) only: no `serde-serialize`.
+wasm-bindgen = "=0.2.130"
+# Error, TypeError, Reflect, Object, Array and Uint8Array (ADR 0031 §3). Default features off:
+# `unsafe-eval` exposes the `Function` constructor, which this adapter never calls (Workers and
+# strict CSPs forbid eval), and `std` only adds futures-util's `std`; wasm-bindgen's `std` is on.
+js-sys = { version = "=0.3.107", default-features = false }
+# Secret-bearing inputs are moved into `Zeroizing` in each export's first statement (ADR 0030 §7.1).
+zeroize.workspace = true
 # Selects getrandom's `crypto.getRandomValues` backend for polyjose's OS CSPRNG (ADR 0005). Per the
 # getrandom 0.4.3 docs (https://docs.rs/getrandom/0.4.3/#webassembly-support), `wasm_js` is a crate
 # feature that libraries must not enable; the exception is a crate that already depends on
 # wasm-bindgen unconditionally, which this binding does. Not used directly: it only adds the feature.
 getrandom = { workspace = true, features = ["wasm_js"] }
+
+[features]
+# Test-only: T02's wasm-bindgen-test suite enables `run_in_browser` with it for the Chrome run
+# (without it, the browser run skips every test and exits 0: 0006 research §7, ADR 0031 §3). It
+# changes no library code.
+browser = []
+
+# `wasm-pack build --release` runs wasm-opt with these arguments (ADR 0031 §3: `-Oz` for size).
+# The workspace release profile strips symbols (set once in feature 0013 T01, not edited by a
+# binding feature), which also drops the `target_features` custom section, so wasm-opt cannot see
+# which features the module uses and rejects its `memory.copy`/`memory.fill` (measured with
+# wasm-pack 0.15.1, binaryen version_130). The flags name exactly the features rustc enables by
+# default on wasm32-unknown-unknown (`rustc --print cfg --target wasm32-unknown-unknown`, Rust
+# 1.89 through 1.99): bulk-memory, multivalue, mutable-globals, nontrapping-fptoint,
+# reference-types and sign-ext. No feature beyond those is enabled, so the optimized module runs
+# wherever the unoptimized one does.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = [
+  "-Oz",
+  "--enable-bulk-memory",
+  "--enable-multivalue",
+  "--enable-mutable-globals",
+  "--enable-nontrapping-float-to-int",
+  "--enable-reference-types",
+  "--enable-sign-ext",
+]

@@ -1093,8 +1093,10 @@ name = "polyjose-wasm"
 version = "0.1.0"
 dependencies = [
  "getrandom",
- "polyjose",
+ "js-sys",
+ "polyjose-surface",
  "wasm-bindgen",
+ "zeroize",
 ]
 
 [[package]]
