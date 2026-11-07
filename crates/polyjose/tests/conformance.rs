@@ -74,6 +74,9 @@ use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
 use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt};
 use polyjose::keys::{JoseAlg, KeyFormat, KeySpec, generate, generate_for};
 use polyjose::util::{b64url_decode, b64url_encode};
+// The vector-set digest's SHA-256 (ADR 0060 §5): the `sha2` crate called
+// directly as a test oracle, never polyjose's API under test.
+use sha2::{Digest, Sha256};
 
 /// Top-level members of a vector; all required (schema `required`).
 const TOP_LEVEL: &[&str] = &["source", "description", "operation", "input", "expect"];
@@ -2998,10 +3001,45 @@ struct Report {
     /// One results-file entry per vector file, in file order (ADR 0034
     /// §2; see [`result_entry`]).
     results: Vec<Object>,
+    /// One [`digest_line`] per vector file whose bytes were read, in file
+    /// order (ADR 0060 §2); [`Report::vectors_digest`] sorts them.
+    digest_lines: Vec<Vec<u8>>,
     /// Whether every vector file was found: false when the walk itself
     /// failed (an unreadable directory, a symbolic link) or found nothing,
     /// so the results would not cover every vector.
     complete: bool,
+}
+
+impl Report {
+    /// `vectors_digest` (ADR 0060 §3): the lowercase hex SHA-256 of the
+    /// byte-sorted [`digest_line`]s. `None` when no vector file was read: an
+    /// empty corpus is invalid, so such a run writes no results file.
+    fn vectors_digest(&self) -> Option<String> {
+        if self.digest_lines.is_empty() {
+            return None;
+        }
+        let mut hasher = Sha256::new();
+        for line in sorted_digest_lines(&self.digest_lines) {
+            hasher.update(&line);
+        }
+        Some(hex_encode(&hasher.finalize()))
+    }
+}
+
+/// One vector file's line of the vector-set digest (ADR 0060 §2): its id
+/// (exactly the results entry's), a TAB, the lowercase hex SHA-256 of the
+/// raw bytes the runner parsed (no line-ending, BOM or encoding change),
+/// and an LF, as UTF-8.
+fn digest_line(id: &str, bytes: &[u8]) -> Vec<u8> {
+    format!("{id}\t{}\n", hex_encode(&Sha256::digest(bytes))).into_bytes()
+}
+
+/// `lines` in ascending order of their UTF-8 bytes (ADR 0060 §2), not of
+/// paths by component: `jws-x/…` (0x2D) sorts before `jws/…` (0x2F).
+fn sorted_digest_lines(lines: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let mut sorted = lines.to_vec();
+    sorted.sort();
+    sorted
 }
 
 /// A vector's id (ADR 0034 §1 as amended by ADR 0045 §4): its path under
@@ -3106,13 +3144,18 @@ fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
     for path in files {
         let relative = path.strip_prefix(dir).unwrap_or(&path);
         let name = relative.display().to_string();
+        let id = vector_id(relative);
         let mut trace = Trace::default();
+        // A file that cannot be read gets a `fail` and no digest line
+        // (ADR 0060 §2); one that is read is hashed from the very bytes
+        // parsed, whatever its result.
         let result = std::fs::read(&path)
             .map_err(|e| format!("{name}: cannot read: {e}"))
-            .and_then(|bytes| check_vector_traced(&name, &bytes, enabled, &mut trace));
-        report
-            .results
-            .push(result_entry(vector_id(relative), trace, &result));
+            .and_then(|bytes| {
+                report.digest_lines.push(digest_line(&id, &bytes));
+                check_vector_traced(&name, &bytes, enabled, &mut trace)
+            });
+        report.results.push(result_entry(id, trace, &result));
         match result {
             Ok(Passed::Ran {
                 operation,
@@ -3174,16 +3217,17 @@ fn results_file_name(enabled: &[&str]) -> String {
 }
 
 /// The results file text (`conformance/schema/results.schema.json`): the
-/// runner, the crate version, the enabled `features`, `Error::CODES`
-/// (ADR 0034 §8) and the results, one per line so a file can be searched
-/// by id.
-fn results_document(enabled: &[&str], results: &[Object]) -> String {
+/// runner, the crate version, the `vectors_digest` of the files read
+/// (ADR 0060 §1), the enabled `features`, `Error::CODES` (ADR 0034 §8) and
+/// the results, one per line so a file can be searched by id.
+fn results_document(enabled: &[&str], digest: &str, results: &[Object]) -> String {
     let strings = |items: &[&str]| -> Value {
         Value::from(items.iter().map(|s| Value::from(*s)).collect::<Vec<_>>())
     };
-    let header: [(&str, Value); 4] = [
+    let header: [(&str, Value); 5] = [
         ("runner", Value::from(RUST_CORE)),
         ("polyjose", Value::from(env!("CARGO_PKG_VERSION"))),
+        ("vectors_digest", Value::from(digest)),
         ("features", strings(enabled)),
         ("error_codes", strings(Error::CODES)),
     ];
@@ -3210,10 +3254,11 @@ fn results_document(enabled: &[&str], results: &[Object]) -> String {
 
 /// Writes `report`'s results to `dir/file`, replacing any earlier file
 /// atomically (a temporary file, then a rename), and returns its path. A
-/// report whose walk was incomplete is not written: any earlier file is
-/// removed instead, so a run that could not see every vector leaves no
-/// stale or partial reference behind (the parity check then fails on the
-/// missing file).
+/// report whose walk was incomplete, or that read no vector file (no
+/// digest, ADR 0060 §3), is not written: any earlier file is removed
+/// instead, so a run that could not see every vector leaves no stale or
+/// partial reference behind (the parity check then fails on the missing
+/// file).
 fn write_results(
     dir: &Path,
     file: &str,
@@ -3221,17 +3266,23 @@ fn write_results(
     report: &Report,
 ) -> Result<Option<PathBuf>, String> {
     let path = dir.join(file);
-    if !report.complete {
-        return match std::fs::remove_file(&path) {
-            Ok(()) => Ok(None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(format!("{}: cannot remove: {e}", path.display())),
-        };
-    }
+    let digest = match report.vectors_digest() {
+        Some(digest) if report.complete => digest,
+        _ => {
+            return match std::fs::remove_file(&path) {
+                Ok(()) => Ok(None),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(format!("{}: cannot remove: {e}", path.display())),
+            };
+        }
+    };
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: cannot create: {e}", dir.display()))?;
     let temporary = dir.join(format!(".{file}.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, results_document(enabled, &report.results))
-        .map_err(|e| format!("{}: cannot write: {e}", temporary.display()))?;
+    std::fs::write(
+        &temporary,
+        results_document(enabled, &digest, &report.results),
+    )
+    .map_err(|e| format!("{}: cannot write: {e}", temporary.display()))?;
     std::fs::rename(&temporary, &path)
         .map_err(|e| format!("{}: cannot write: {e}", path.display()))?;
     Ok(Some(path))
@@ -7586,6 +7637,15 @@ const RESULT_ID_PATTERN: &str = "^[^#/\\\\][^#\\\\]*\\.json#0$";
 /// feature names, comma-separated (ADR 0034 §3).
 const SKIP_REASON_PATTERN: &str = "^feature:!?[a-z0-9-]+(,!?[a-z0-9-]+)*$";
 
+/// `properties/vectors_digest/pattern`: a SHA-256 digest as exactly 64
+/// lowercase hex characters, no prefix or separator (ADR 0060 §1).
+const VECTORS_DIGEST_PATTERN: &str = "^[0-9a-f]{64}$";
+
+/// [`VECTORS_DIGEST_PATTERN`], by hand (no regex crate, ADR 0016).
+fn is_vectors_digest(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// [`RESULT_ID_PATTERN`], by hand (no regex crate, ADR 0016).
 fn is_result_id(s: &str) -> bool {
     let Some(path) = s.strip_suffix("#0") else {
@@ -7622,6 +7682,7 @@ fn results_pattern(pattern: &str) -> Option<fn(&str) -> bool> {
     match pattern {
         RESULT_ID_PATTERN => Some(is_result_id),
         SKIP_REASON_PATTERN => Some(is_skip_reason),
+        VECTORS_DIGEST_PATTERN => Some(is_vectors_digest),
         _ => None,
     }
 }
@@ -7846,6 +7907,20 @@ fn results_schema_uses_only_supported_keywords() {
     ] {
         assert_eq!(is_skip_reason(reason), ok, "{reason:?}");
     }
+    let hex64 = "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1";
+    for (digest, ok) in [
+        (hex64.to_owned(), true),
+        ("0".repeat(64), true),
+        (hex64.to_uppercase(), false),
+        (hex64[..63].to_owned(), false),
+        (format!("{hex64}0"), false),
+        (format!("sha256:{}", &hex64[7..]), false),
+        (hex64.replacen('9', "g", 1), false),
+        (format!(" {}", &hex64[1..]), false),
+        (String::new(), false),
+    ] {
+        assert_eq!(is_vectors_digest(&digest), ok, "{digest:?}");
+    }
     // An unknown keyword or pattern is refused, not ignored.
     let unknown: serde_json::Value =
         serde_json::from_str(r#"{"type":"string","maxLength":3}"#).unwrap();
@@ -7876,14 +7951,14 @@ fn results_schema_agrees_with_the_runner() {
 const RUST_CORE: &str = "rust-core";
 
 /// A minimal results file with one result of each status.
-const RESULTS_EXAMPLE: &str = r#"{"runner":"node","polyjose":"0.1.0","features":[],"error_codes":["InvalidBase64","InvalidKey"],"results":[{"id":"a/b.json#0","source":"RFC 4648 §10","op":"b64url.decode","status":"pass","actual":{"ok":false,"error":"InvalidBase64"}},{"id":"a/c.json#0","op":"jwe.encrypt","status":"skipped","reason":"feature:fixed-rng"},{"id":"a/d.json#0","status":"fail","reason":"not JSON"},{"id":"a/e.json#0","op":"jws.verify","status":"fail","actual":{"ok":true},"reason":"expected error InvalidKey"}]}"#;
+const RESULTS_EXAMPLE: &str = r#"{"runner":"node","polyjose":"0.1.0","vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","features":[],"error_codes":["InvalidBase64","InvalidKey"],"results":[{"id":"a/b.json#0","source":"RFC 4648 §10","op":"b64url.decode","status":"pass","actual":{"ok":false,"error":"InvalidBase64"}},{"id":"a/c.json#0","op":"jwe.encrypt","status":"skipped","reason":"feature:fixed-rng"},{"id":"a/d.json#0","status":"fail","reason":"not JSON"},{"id":"a/e.json#0","op":"jws.verify","status":"fail","actual":{"ok":true},"reason":"expected error InvalidKey"}]}"#;
 
 /// The validator accepts a valid results file and refuses each way one can
 /// break the schema (so the check of the reference file is not vacuous).
 #[test]
 fn results_validator_refuses_invalid_files() {
     check_results_text(RESULTS_EXAMPLE.as_bytes()).unwrap();
-    check_results_text(br#"{"runner":"rust-core","polyjose":"0.1.0","features":["deflate","fixed-rng"],"error_codes":["X"],"results":[]}"#).unwrap();
+    check_results_text(br#"{"runner":"rust-core","polyjose":"0.1.0","vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","features":["deflate","fixed-rng"],"error_codes":["X"],"results":[]}"#).unwrap();
     for (old, new, problem) in [
         (
             r#""runner":"node","#,
@@ -7904,6 +7979,26 @@ fn results_validator_refuses_invalid_files() {
         ),
         (r#""InvalidKey"]"#, r#""InvalidBase64"]"#, "uniqueItems"),
         (r#""polyjose":"0.1.0""#, r#""polyjose":"""#, "/polyjose"),
+        (
+            r#""vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","#,
+            "",
+            "missing required member `vectors_digest`",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#""9A06F1EFDD269176088CB0E6BFC6A7E4D4F74AA3D1B1B8FC6C879FDBB82AC7D1""#,
+            "/vectors_digest",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d10""#,
+            "/vectors_digest",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#"7"#,
+            "/vectors_digest",
+        ),
         (
             r#""results":["#,
             r#""extra":1,"results":["#,
@@ -8054,7 +8149,8 @@ fn run_dir_records_one_result_per_vector() {
     assert!(fails[1..].iter().all(|r| !r.contains("actual")));
     // Each entry is schema-valid.
     let document = format!(
-        r#"{{"runner":"rust-core","polyjose":"0.1.0","features":[],"error_codes":["X"],"results":[{}]}}"#,
+        r#"{{"runner":"rust-core","polyjose":"0.1.0","vectors_digest":"{}","features":[],"error_codes":["X"],"results":[{}]}}"#,
+        report.vectors_digest().unwrap(),
         got.join(",")
     );
     check_results_text(document.as_bytes()).unwrap();
@@ -8064,6 +8160,124 @@ fn run_dir_records_one_result_per_vector() {
     let empty = TempDir::new("results-empty");
     let report = run_dir_with(&empty.0, &[]);
     assert!(!report.complete && report.results.is_empty(), "{report:?}");
+}
+
+/// Tester edge corpus for ADR 0060 §2: non-ASCII ids sorted by UTF-8 bytes (U+FF61 is
+/// EF BD A1, U+1F600 is F0 9F 98 80, so U+FF61 first), bytes that are not UTF-8 hashed
+/// as read, a `jws-x/` before `jws/` pair, and a symbolic link that gets no line. The
+/// expected digest is from an independent Python `hashlib` walk and the POSIX shell
+/// reference of the ADR.
+#[test]
+fn vectors_digest_edge_corpus_matches_the_independent_oracle() {
+    let dir = TempDir::new("digest-edge");
+    let files: [(&str, &[u8]); 7] = [
+        ("a.json", b"{}"),
+        ("jws/b.json", b"{}\n"),
+        ("jws-x/c.json", b"\xef\xbb\xbf{}"),
+        ("\u{e9}/d.json", b"{}"),
+        ("\u{ff61}.json", b"1"),
+        ("\u{1f600}.json", b"2"),
+        ("bad.json", b"\xff\xfe{}"),
+    ];
+    for (relative, bytes) in files {
+        let path = dir.0.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+    std::fs::write(dir.0.join("README.md"), "notes").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("a.json", dir.0.join("link.json")).unwrap();
+    let report = run_dir_with(&dir.0, &[]);
+    // The link is a walk failure (the run is incomplete, so no results file), not a digest line.
+    #[cfg(unix)]
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.contains("link.json: symbolic links are not allowed")),
+        "{:?}",
+        report.failures
+    );
+    assert!(!report.complete);
+    assert_eq!(report.digest_lines.len(), 7);
+    assert_eq!(
+        report.vectors_digest().as_deref(),
+        Some("c743cb52d786b61176972303ee0cfa56b8940d655723a9a3debfe691760ead93")
+    );
+}
+
+/// The worked example of ADR 0060 §4: one line per `*.json` file read
+/// (`README.md` is not a vector), `<id>` TAB `<sha256 of the raw bytes>` LF,
+/// sorted by bytes (`jws-x/` before `jws/`, unlike `Path` order), whatever
+/// the vector's own result (none of these is a valid vector); then the
+/// SHA-256 of the lines. The bytes are hashed as read: the BOM and the LF
+/// stay.
+#[test]
+fn vectors_digest_follows_the_adr_0060_worked_example() {
+    let dir = TempDir::new("digest-example");
+    dir.write("a.json", "{}");
+    dir.write("jws/b.json", "{}\n");
+    dir.write("jws-x/c.json", "\u{feff}{}");
+    dir.write("README.md", "notes");
+    let report = run_dir_with(&dir.0, &[]);
+    assert!(report.complete, "{report:?}");
+    assert_eq!(report.results.len(), 3);
+    let lines: Vec<String> = sorted_digest_lines(&report.digest_lines)
+        .into_iter()
+        .map(|line| String::from_utf8(line).unwrap())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "a.json#0\t44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\n",
+            "jws-x/c.json#0\taa25e978046d680ef8740d837e6de5bc1e2a2dc6089dbda1012544b538d53f65\n",
+            "jws/b.json#0\tca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356\n",
+        ]
+    );
+    assert_eq!(
+        report.vectors_digest().as_deref(),
+        Some("9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1")
+    );
+    // The lines are sorted for the digest, so the order files were read in
+    // does not matter.
+    let mut reversed = report.digest_lines.clone();
+    reversed.reverse();
+    assert_eq!(
+        sorted_digest_lines(&reversed),
+        sorted_digest_lines(&report.digest_lines)
+    );
+
+    // The digest is written into the results file.
+    let out = TempDir::new("digest-example-out");
+    let path = write_results(&out.0, "rust-core.json", &[], &report)
+        .unwrap()
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    check_results_text(text.as_bytes()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        value["vectors_digest"],
+        "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1"
+    );
+}
+
+/// An empty corpus is invalid (ADR 0060 §3): a run that read no vector
+/// file has no digest and writes no results file, removing an earlier one,
+/// even when its walk was complete.
+#[test]
+fn a_run_that_read_no_vector_file_writes_no_results() {
+    let nothing = Report {
+        complete: true,
+        ..Report::default()
+    };
+    assert_eq!(nothing.vectors_digest(), None);
+    let out = TempDir::new("digest-empty-out");
+    out.write("rust-core.json", "stale");
+    assert_eq!(
+        write_results(&out.0, "rust-core.json", &[], &nothing).unwrap(),
+        None
+    );
+    assert!(!out.0.join("rust-core.json").exists());
 }
 
 /// The writer names the file by the build's features (ADR 0034 §4: only
