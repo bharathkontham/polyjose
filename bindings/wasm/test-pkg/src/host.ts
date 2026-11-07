@@ -4,9 +4,16 @@
  * would pick, and checks and writes the results document the runtime returns
  * (`target/conformance/<runner>.json`, ADR 0034 §2).
  */
-import type { VectorFile, VectorResult } from "../js/conformance/runner.js";
+import type { VectorResult } from "../js/conformance/runner.js";
 import { fs, path, process } from "./node.js";
-import type { ProbeReport, VectorInput } from "./results.js";
+import type { ProbeReport, VectorBytes, VectorInput } from "./results.js";
+
+/** Standard base64 (RFC 4648 §4) of `bytes`, so the raw file bytes cross JSON unchanged. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
 
 /** Every `*.json` under `dir`, recursively, as `/`-separated paths relative to `base`. */
 function collect(dir: string, base: string, files: string[], links: string[]): void {
@@ -22,7 +29,10 @@ function collect(dir: string, base: string, files: string[], links: string[]): v
 /**
  * `conformance/vectors/**\/*.json` and `conformance/schema.json` under `root`, as node-main reads
  * them (conformance/README.md "Rules for every runner"): an unreadable file or a symbolic link
- * is a `fail`, never skipped. Throws when there is nothing to run.
+ * is a `fail`, never skipped, and gets no digest line (ADR 0060 §2). Each file is read once, as
+ * bytes, and handed to the runtime as those bytes (base64), which it both hashes for
+ * `vectors_digest` and decodes for the runner (`results.ts`; ADR 0060 §2, §5). Throws when there
+ * is nothing to run.
  */
 export function collectVectors(root: string): VectorInput {
   const vectorsDir = path.join(root, "conformance", "vectors");
@@ -32,11 +42,11 @@ export function collectVectors(root: string): VectorInput {
   collect(vectorsDir, vectorsDir, names, links);
   if (names.length + links.length === 0) throw new Error(`${vectorsDir}: no vector files (*.json) found`);
   names.sort();
-  const files: VectorFile[] = [];
+  const files: VectorBytes[] = [];
   const failures: VectorResult[] = [];
   for (const name of names) {
     try {
-      files.push({ path: name, json: fs.readFileSync(path.join(vectorsDir, name), "utf8") });
+      files.push({ path: name, base64: toBase64(fs.readFileSync(path.join(vectorsDir, name))) });
     } catch (e) {
       failures.push({ id: `${name}#0`, op: "unknown", status: "fail", reason: `${name}: cannot read: ${String(e)}` });
     }
@@ -83,13 +93,18 @@ export function reportProbe(runner: string, probe: unknown): boolean {
 }
 
 /**
- * Checks the document a runtime returned, writes `target/conformance/<runner>.json` and prints a
- * summary as node-main does. Returns the exit code: 0 only if every vector passed or was skipped.
+ * Checks the document a runtime returned (its runner, results and ADR 0060 `vectors_digest`),
+ * writes `target/conformance/<runner>.json` and prints a summary as node-main does, with the digest. Returns the exit code: 0 only if every vector passed or was skipped.
  */
 export function writeResults(root: string, runner: string, doc: unknown): number {
-  const d = doc as { runner?: unknown; results?: unknown } | null;
+  const d = doc as { runner?: unknown; vectors_digest?: unknown; results?: unknown } | null;
   if (d === null || typeof d !== "object" || d.runner !== runner || !Array.isArray(d.results) || d.results.length === 0) {
     process.stderr.write(`conformance (${runner}): the runtime returned no results document for ${runner}\n`);
+    return 1;
+  }
+  // ADR 0060 §1: parity rejects a file without it too; failing here names the runtime's run.
+  if (typeof d.vectors_digest !== "string" || !/^[0-9a-f]{64}$/.test(d.vectors_digest)) {
+    process.stderr.write(`conformance (${runner}): the runtime's results document has no valid vectors_digest\n`);
     return 1;
   }
   const results = d.results as VectorResult[];
@@ -102,7 +117,7 @@ export function writeResults(root: string, runner: string, doc: unknown): number
   const passed = results.filter((r) => r.status === "pass").length;
   const skipped = results.filter((r) => r.status === "skipped").length;
   process.stdout.write(
-    `conformance (${runner}): ${passed} passed, ${failures.length} failed, ${skipped} skipped of ${results.length}; wrote ${file}\n`,
+    `conformance (${runner}): ${passed} passed, ${failures.length} failed, ${skipped} skipped of ${results.length}; vectors_digest ${d.vectors_digest}; wrote ${file}\n`,
   );
   return failures.length === 0 && passed + skipped === results.length ? 0 : 1;
 }
