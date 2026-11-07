@@ -1,6 +1,6 @@
-# Crates allowed in the normal dependency tree of polyjose-uniffi-bindgen (bindings/uniffi-bindgen,
-# the UniFFI bindgen CLI) beyond the core's: what
-#   cargo tree -p polyjose-uniffi-bindgen -e normal --target all --prefix none
+# Crates allowed in the normal and build dependency tree of polyjose-uniffi-bindgen
+# (bindings/uniffi-bindgen, the UniFFI bindgen CLI) beyond the core's: what
+#   cargo tree -p polyjose-uniffi-bindgen -e normal,build --target all --prefix none
 # lists (also with --no-default-features and --all-features), other than workspace packages, crates
 # of deps-allowlist.txt and crates of the core's own tree, which check 1 governs. scripts/check-deps.sh
 # (check 13) enforces this file in both directions, like deps-allowlist.txt (ADR 0016 §4): a crate
