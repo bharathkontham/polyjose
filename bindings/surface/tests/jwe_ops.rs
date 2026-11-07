@@ -935,3 +935,241 @@ fn no_failing_path_puts_the_marker_in_the_error() {
         assert_no_marker(what, jwe_decrypt_json(jwe, &marked, options));
     }
 }
+
+// --- Defaults stay in the core (ADR 0030 §3) ----------------------------------------------------
+
+/// The core defaults of ADR 0017 (250,000), ADR 0023 (10,000; the 1,000,000 ceiling) and
+/// ADR 0026 §7 (1 MiB, 16), which no surface code may repeat.
+const CORE_DEFAULTS: [u64; 5] = [10_000, 1_000_000, 250_000, 1_048_576, 16];
+
+/// `source` without comments and without `#[cfg(test)]` items, with braces inside string and
+/// character literals blanked so the item's braces can be matched.
+///
+/// A small lexer, not a Rust parser: it knows line, nested block and doc comments, string, raw
+/// string, byte string and character literals, and lifetimes. Unit tests inside `src`
+/// (`#[cfg(test)] mod tests { … }`) may pin a default on purpose, so they are left out; only the
+/// code the bindings run is checked.
+fn surface_code(source: &str) -> String {
+    let s: Vec<char> = source.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    let push_literal = |out: &mut String, c: char| {
+        out.push(if c == '{' || c == '}' { ' ' } else { c });
+    };
+    while i < s.len() {
+        let c = s[i];
+        let next = s.get(i + 1).copied();
+        if c == '/' && next == Some('/') {
+            while i < s.len() && s[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            let mut depth = 0;
+            while i < s.len() {
+                if s[i] == '/' && s.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if s[i] == '*' && s.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            out.push(' ');
+        } else if c == 'r'
+            && (next == Some('"') || next == Some('#'))
+            && (i == 0 || !(s[i - 1].is_alphanumeric() || s[i - 1] == '_'))
+        {
+            // A raw string r"…", r#"…"#, also after a `b`.
+            let mut j = i + 1;
+            let mut hashes = 0;
+            while s.get(j) == Some(&'#') {
+                hashes += 1;
+                j += 1;
+            }
+            if s.get(j) != Some(&'"') {
+                out.push(c);
+                i += 1;
+                continue;
+            }
+            j += 1;
+            let closing: Vec<char> = core::iter::once('"')
+                .chain(core::iter::repeat_n('#', hashes))
+                .collect();
+            while j < s.len() && !s[j..].starts_with(&closing) {
+                push_literal(&mut out, s[j]);
+                j += 1;
+            }
+            i = j + closing.len();
+            out.push(' ');
+        } else if c == '"' {
+            i += 1;
+            while i < s.len() && s[i] != '"' {
+                if s[i] == '\\' {
+                    i += 1;
+                }
+                if let Some(&ch) = s.get(i) {
+                    push_literal(&mut out, ch);
+                }
+                i += 1;
+            }
+            i += 1;
+            out.push(' ');
+        } else if c == '\'' {
+            // A character literal ('x', '\n', '\''), or a lifetime ('a), which is kept.
+            let len = if next == Some('\\') {
+                s[i + 2..].iter().position(|&ch| ch == '\'').map(|p| p + 3)
+            } else if s.get(i + 2) == Some(&'\'') {
+                Some(3)
+            } else {
+                None
+            };
+            match len {
+                Some(len) => {
+                    out.push(' ');
+                    i += len;
+                }
+                None => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    without_cfg_test_items(&out)
+}
+
+/// `code` (comments and literal braces already gone) without each `#[cfg(test)]` item: from the
+/// attribute to the brace closing the item's first block, or to its `;`.
+fn without_cfg_test_items(code: &str) -> String {
+    let mut out = String::new();
+    let mut rest = code;
+    while let Some(at) = rest.find("#[cfg(test)]") {
+        out.push_str(&rest[..at]);
+        let item = &rest[at..];
+        let end = match (item.find('{'), item.find(';')) {
+            (Some(open), semi) if semi.is_none_or(|semi| open < semi) => {
+                let mut depth = 0usize;
+                let mut end = item.len();
+                for (k, ch) in item[open..].char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = open + k + 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                end
+            }
+            (_, Some(semi)) => semi + 1,
+            _ => item.len(),
+        };
+        rest = &item[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Every integer literal of `code` equal to a core default, plus the spellings `1024 * 1024`
+/// and `1 << 20` of 1 MiB. Hex, octal and binary literals are not decoded; underscores and
+/// type suffixes (`10_000u32`) are.
+fn core_default_literals(code: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    for spelling in ["1024*1024", "1<<20"] {
+        if compact.contains(spelling) {
+            found.push(spelling.to_owned());
+        }
+    }
+    let chars: Vec<char> = code.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let starts = chars[i].is_ascii_digit()
+            && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_'));
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let begin = i;
+        while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+            i += 1;
+        }
+        let token: String = chars[begin..i].iter().collect();
+        if ["0x", "0o", "0b"].iter().any(|p| token.starts_with(p)) {
+            continue;
+        }
+        let digits: String = token
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '_')
+            .filter(char::is_ascii_digit)
+            .collect();
+        if let Ok(value) = digits.parse::<u64>()
+            && CORE_DEFAULTS.contains(&value)
+        {
+            found.push(token);
+        }
+    }
+    found
+}
+
+#[test]
+fn the_defaults_scanner_finds_what_it_must_and_ignores_comments_and_tests() {
+    let flagged = "let a = 10_000; let b = 16usize; let c = 1024 * 1024; let d = 1_000_000u32;\n\
+                   let e = [0u8; 16]; let f = 250000; let g = \"10000\";";
+    assert_eq!(
+        core_default_literals(&surface_code(flagged)),
+        [
+            "1024*1024",
+            "10_000",
+            "16usize",
+            "1_000_000u32",
+            "16",
+            "250000",
+            "10000"
+        ]
+    );
+    let ignored = "// 10000\n/// 16 and 1024 * 1024\n//! 250000\n/* 16 /* 16 */ 16 */\n\
+                   fn f<'a>(x: &'a u16) -> u16 { let c = '1'; let h = 0x10; *x + 1600 + 160 }\n\
+                   const A: &str = \"A128KW P-256 HS512 x16\"; let r = r#\"{\"p\":\"\\\"}\"#;\n\
+                   #[cfg(test)]\nmod tests { fn t() { let _ = (16, \"}\", 10000); } }\n\
+                   #[cfg(test)]\nuse std::num::NonZeroU16;\nfn g() -> u32 { 17 }";
+    let code = surface_code(ignored);
+    assert_eq!(core_default_literals(&code), Vec::<String>::new(), "{code}");
+    assert!(code.contains("fn g() -> u32"), "{code}");
+}
+
+#[test]
+fn no_surface_source_repeats_a_core_default() {
+    let src = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+    let mut files: Vec<_> = std::fs::read_dir(src)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    files.sort();
+    assert!(
+        files.iter().any(|path| path.ends_with("jwe.rs")),
+        "{files:?}"
+    );
+    for path in files {
+        let source = std::fs::read_to_string(&path).unwrap();
+        let found = core_default_literals(&surface_code(&source));
+        assert!(
+            found.is_empty(),
+            "{} repeats core defaults {found:?} (ADR 0030 §3)",
+            path.display()
+        );
+    }
+}
