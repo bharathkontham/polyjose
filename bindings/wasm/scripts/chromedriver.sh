@@ -123,15 +123,14 @@ for d in entry.get("downloads", {}).get("chromedriver", []):
 found=""
 for spec in "latest-patch-versions-per-build-with-downloads.json builds $build" \
   "latest-versions-per-milestone-with-downloads.json milestones $major"; do
-  set -- $spec
-  curl -fsS --proto '=https' --tlsv1.2 --max-time 60 -o "$work/index.json" "$cft/$1" \
-    || die "could not download $cft/$1"
-  found=$(lookup "$work/index.json" "$2" "$3")
+  read -r endpoint section key <<<"$spec"
+  curl -fsS --proto '=https' --tlsv1.2 --max-time 60 -o "$work/index.json" "$cft/$endpoint" \
+    || die "could not download $cft/$endpoint"
+  found=$(lookup "$work/index.json" "$section" "$key")
   [ -n "$found" ] && break
 done
 [ -n "$found" ] || die "Chrome for Testing lists no chromedriver for Chrome $build or milestone $major on $platform"
-set -- $found
-version=$1; url=$2; sha256=$3
+read -r version url sha256 <<<"$found"
 case $version in
   "$major".*) ;;
   *) die "Chrome for Testing offered chromedriver $version for Chrome $chrome_version" ;;
