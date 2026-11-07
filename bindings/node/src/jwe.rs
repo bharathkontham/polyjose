@@ -7,7 +7,7 @@
 //! zeroizing buffers. Decryption takes the caller's `allowedAlgs` and `allowedEnc` and nothing
 //! else (RFC 8725 §3.1, ADR 0007).
 
-use napi::bindgen_prelude::AsyncTask;
+use napi::bindgen_prelude::{AsyncTask, Object, Uint8ArraySlice};
 use napi_derive::napi;
 use polyjose_surface::jwe as op;
 use polyjose_surface::records as surface;
@@ -29,13 +29,14 @@ surface_task! {
 /// (RFC 7516 §5.1, §7.1). Resolves to the token.
 #[napi]
 pub fn jwe_encrypt_compact(
-    plaintext: &[u8],
-    options: JweEncryptOptions<'_>,
-) -> AsyncTask<JweEncryptCompactTask> {
-    AsyncTask::new(JweEncryptCompactTask {
-        plaintext: Zeroizing::new(plaintext.to_vec()),
-        options: options.into(),
-    })
+    plaintext: Uint8ArraySlice<'_>,
+    #[napi(ts_arg_type = "JweEncryptOptions")] options: Object<'_>,
+) -> napi::Result<AsyncTask<JweEncryptCompactTask>> {
+    // review-security.md L1: napi has converted every argument; only reading the record can run
+    // JS, so the byte argument is copied first and the strings are in their owners before it.
+    let plaintext = Zeroizing::new(plaintext.to_vec());
+    let options = JweEncryptOptions::read(&options)?;
+    Ok(AsyncTask::new(JweEncryptCompactTask { plaintext, options }))
 }
 
 surface_task! {
@@ -52,15 +53,19 @@ surface_task! {
 /// (`general`, RFC 7516 §7.2.1, or `flattened`, §7.2.2). Resolves to JSON text.
 #[napi]
 pub fn jwe_encrypt_json(
-    plaintext: &[u8],
-    options: JweEncryptOptions<'_>,
+    plaintext: Uint8ArraySlice<'_>,
+    #[napi(ts_arg_type = "JweEncryptOptions")] options: Object<'_>,
     form: String,
-) -> AsyncTask<JweEncryptJsonTask> {
-    AsyncTask::new(JweEncryptJsonTask {
-        plaintext: Zeroizing::new(plaintext.to_vec()),
-        options: options.into(),
+) -> napi::Result<AsyncTask<JweEncryptJsonTask>> {
+    // review-security.md L1: napi has converted every argument; only reading the record can run
+    // JS, so the byte argument is copied first and the strings are in their owners before it.
+    let plaintext = Zeroizing::new(plaintext.to_vec());
+    let options = JweEncryptOptions::read(&options)?;
+    Ok(AsyncTask::new(JweEncryptJsonTask {
+        plaintext,
+        options,
         form,
-    })
+    }))
 }
 
 surface_task! {

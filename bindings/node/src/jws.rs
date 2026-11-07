@@ -7,7 +7,7 @@
 //! buffer. Verification takes the caller's `allowedAlgs` and nothing else (RFC 8725 §3.1,
 //! ADR 0007).
 
-use napi::bindgen_prelude::AsyncTask;
+use napi::bindgen_prelude::{Array, AsyncTask, Object, Uint8ArraySlice};
 use napi_derive::napi;
 use polyjose_surface::jws as op;
 use polyjose_surface::records as surface;
@@ -30,15 +30,20 @@ surface_task! {
 /// detached on request (RFC 7515 Appendix F). Resolves to the token.
 #[napi]
 pub fn jws_sign_compact(
-    payload: &[u8],
+    payload: Uint8ArraySlice<'_>,
     key: String,
-    options: JwsSignOptions,
-) -> AsyncTask<JwsSignCompactTask> {
-    AsyncTask::new(JwsSignCompactTask {
-        payload: Zeroizing::new(payload.to_vec()),
-        key: Zeroizing::new(key),
-        options: options.into(),
-    })
+    #[napi(ts_arg_type = "JwsSignOptions")] options: Object<'_>,
+) -> napi::Result<AsyncTask<JwsSignCompactTask>> {
+    // review-security.md L1: napi has converted every argument; only reading the record can run
+    // JS, so the byte argument is copied first and the strings are in their owners before it.
+    let payload = Zeroizing::new(payload.to_vec());
+    let key = Zeroizing::new(key);
+    let options = JwsSignOptions::read(&options)?;
+    Ok(AsyncTask::new(JwsSignCompactTask {
+        payload,
+        key,
+        options,
+    }))
 }
 
 surface_task! {
@@ -55,15 +60,19 @@ surface_task! {
 /// Resolves to JSON text.
 #[napi]
 pub fn jws_sign_flattened(
-    payload: &[u8],
-    signer: JwsSigner,
+    payload: Uint8ArraySlice<'_>,
+    #[napi(ts_arg_type = "JwsSigner")] signer: Object<'_>,
     detached: bool,
-) -> AsyncTask<JwsSignFlattenedTask> {
-    AsyncTask::new(JwsSignFlattenedTask {
-        payload: Zeroizing::new(payload.to_vec()),
-        signer: signer.into(),
+) -> napi::Result<AsyncTask<JwsSignFlattenedTask>> {
+    // review-security.md L1: napi has converted every argument; only reading the record can run
+    // JS, so the byte argument is copied first and the strings are in their owners before it.
+    let payload = Zeroizing::new(payload.to_vec());
+    let signer = JwsSigner::read(&signer)?;
+    Ok(AsyncTask::new(JwsSignFlattenedTask {
+        payload,
+        signer,
         detached,
-    })
+    }))
 }
 
 surface_task! {
@@ -80,15 +89,19 @@ surface_task! {
 /// Resolves to JSON text.
 #[napi]
 pub fn jws_sign_general(
-    payload: &[u8],
-    signers: Vec<JwsSigner>,
+    payload: Uint8ArraySlice<'_>,
+    #[napi(ts_arg_type = "Array<JwsSigner>")] signers: Array<'_>,
     detached: bool,
-) -> AsyncTask<JwsSignGeneralTask> {
-    AsyncTask::new(JwsSignGeneralTask {
-        payload: Zeroizing::new(payload.to_vec()),
-        signers: signers.into_iter().map(Into::into).collect(),
+) -> napi::Result<AsyncTask<JwsSignGeneralTask>> {
+    // review-security.md L1: napi has converted every argument; only reading the record can run
+    // JS, so the byte argument is copied first and the strings are in their owners before it.
+    let payload = Zeroizing::new(payload.to_vec());
+    let signers = JwsSigner::read_all(&signers)?;
+    Ok(AsyncTask::new(JwsSignGeneralTask {
+        payload,
+        signers,
         detached,
-    })
+    }))
 }
 
 surface_task! {
@@ -108,13 +121,18 @@ surface_task! {
 pub fn jws_verify_compact(
     token: String,
     key: String,
-    options: JwsVerifyOptions<'_>,
-) -> AsyncTask<JwsVerifyCompactTask> {
-    AsyncTask::new(JwsVerifyCompactTask {
-        token: Zeroizing::new(token),
-        key: Zeroizing::new(key),
-        options: options.into(),
-    })
+    #[napi(ts_arg_type = "JwsVerifyOptions")] options: Object<'_>,
+) -> napi::Result<AsyncTask<JwsVerifyCompactTask>> {
+    // review-security.md L1: napi has converted every argument; only reading the record can run
+    // JS, so the byte argument is copied first and the strings are in their owners before it.
+    let token = Zeroizing::new(token);
+    let key = Zeroizing::new(key);
+    let options = JwsVerifyOptions::read(&options)?;
+    Ok(AsyncTask::new(JwsVerifyCompactTask {
+        token,
+        key,
+        options,
+    }))
 }
 
 surface_task! {
@@ -135,13 +153,14 @@ surface_task! {
 pub fn jws_verify_json(
     jws: String,
     key: String,
-    options: JwsVerifyOptions<'_>,
-) -> AsyncTask<JwsVerifyJsonTask> {
-    AsyncTask::new(JwsVerifyJsonTask {
-        jws: Zeroizing::new(jws),
-        key: Zeroizing::new(key),
-        options: options.into(),
-    })
+    #[napi(ts_arg_type = "JwsVerifyOptions")] options: Object<'_>,
+) -> napi::Result<AsyncTask<JwsVerifyJsonTask>> {
+    // review-security.md L1: napi has converted every argument; only reading the record can run
+    // JS, so the byte argument is copied first and the strings are in their owners before it.
+    let jws = Zeroizing::new(jws);
+    let key = Zeroizing::new(key);
+    let options = JwsVerifyOptions::read(&options)?;
+    Ok(AsyncTask::new(JwsVerifyJsonTask { jws, key, options }))
 }
 
 #[cfg(test)]
