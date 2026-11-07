@@ -404,7 +404,7 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 - **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks or whose `features_absent` it has, reported SKIPPED by name ([Features](#features));
 - **fail** when it finds no vector files, so a wrong path can't pass vacuously;
 - run every vector and report every failure, not only the first, each naming the file and its `source`;
-- write one results file, `target/conformance/<runner>.json`, with an entry for every vector file ([Binding runners](#binding-runners), ADR 0034 §2).
+- write one results file, `target/conformance/<runner>.json`, with an entry for every vector file ([Binding runners](#binding-runners), ADR 0034 §2), and the [vector-set digest](#the-vector-set-digest) of the files it read (ADR 0060).
 
 The Rust runner also checks `schema.json` against its own tables (`schema_and_runner_agree`), so the schema and the runner can't drift apart.
 
@@ -453,7 +453,9 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 ### The results file
 
 ```json
-{ "runner": "node", "polyjose": "0.1.0", "features": [], "error_codes": ["InvalidBase64", "…"],
+{ "runner": "node", "polyjose": "0.1.0",
+  "vectors_digest": "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1",
+  "features": [], "error_codes": ["InvalidBase64", "…"],
   "results": [
     { "id": "jws-rfc7515/a1-hs256-compact-verify.json#0", "source": "RFC 7515 App. A.1", "op": "jws.verify",
       "status": "pass", "actual": { "ok": true } },
@@ -463,7 +465,8 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 | Member | Rule |
 |---|---|
 | `runner` | The runner name above, without any file-name suffix. |
-| `polyjose` | The binding's `version()` (ADR 0030 §4); for the Rust runners, the crate version. |
+| `polyjose` | The binding's `version()` (ADR 0030 §4); for the Rust runners, the crate version. It must equal the reference's. |
+| `vectors_digest` | The [vector-set digest](#the-vector-set-digest) of the files the runner read: 64 lowercase hex characters (ADR 0060 §1). Required. It must equal the reference's. |
 | `features` | The vector feature names (see [Features](#features)) the build enables. `[]` for every binding and for the reference. |
 | `error_codes` | The binding's `error_codes()`, in its order; for the Rust runners, `Error::CODES`. It must equal the reference's list, in the same order (ADR 0034 §8). |
 | `results` | **One entry per `*.json` file** under `vectors/`, including a file that doesn't parse. Ids are unique; order is free. |
@@ -474,6 +477,48 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 | `results[].actual` | The outcome of the operation's calls in the [mapping](#operation-mapping): `{ "ok": true }` when every call returned, or `{ "ok": false, "error": <code> }` with the first call's error code. It's the library's outcome, recorded before any comparison, so a vector whose expectation is wrong still records what happened. Required for `pass`; on a `fail`, present when the operation completed, its runner checks included; never on a skip. The output comparison after the operation decides `pass` or `fail` but never changes `actual`. A runner check *inside* the operation (a shape or round-trip check of `verify_with`, `decrypt_with` or a `jwt.issue` round trip, or an input the runner can't decode) that fails makes the vector a `fail` **without** `actual`, as the Rust reference does. |
 | `results[].reason` | `skipped`: `feature:` and the feature names of [the skip rule](#the-skip-rule). `fail`: a message saying why (the file, the `source`, the problem). |
 
+### The vector-set digest
+
+`vectors_digest` binds a results file to the exact vector files the runner executed, so a copied, templated or stale results file, or an Android or iOS bundle whose copy of the vectors has drifted from the checkout, fails parity even when its ids and outcomes match (ADR 0060). Every runner computes it itself, while it reads the vectors:
+
+1. **One line per vector file read.** These are the `*.json` files under `vectors/` (recursively), exactly the files that get a results entry. `README.md`, `NOTICE.md`, the `.jwk` key files and `generate.mjs` aren't vectors and aren't hashed. A file the runner could not read, or a symbolic link, is a `fail` and gets **no line**.
+2. **The line** is `<id>` TAB `<hash>` LF, encoded as UTF-8. `<id>` is exactly the results entry's `id` (`jws/b.json#0`). `<hash>` is the lowercase hex SHA-256 of the file's **raw bytes as parsed**, with no line-ending, BOM or encoding change, and not taken from a second read, a manifest or a digest computed at build time. A runner with bundled vectors (Android assets, an iOS bundle, `include_bytes!`) hashes the bundled bytes it parsed.
+3. **Sort the encoded lines by their bytes** (unsigned, lexicographic; a shorter prefix first). Don't sort platform strings or paths by component: JS and Kotlin `String` order is UTF-16, Swift's `String <` is neither, and Rust's `Path` order puts `jws/b.json` before `jws-x/c.json`, while byte order puts `-` (0x2D) before `/` (0x2F).
+4. **`vectors_digest`** is the lowercase hex SHA-256 of the concatenated sorted lines.
+
+An empty corpus is invalid: a runner that read no vector file fails its run and writes no results file, and parity refuses the SHA-256 of the empty input, `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`, in any file.
+
+Each runner uses **its platform's own SHA-256, never polyjose's API under test** (ADR 0060 §5):
+
+| Runner(s) | SHA-256 | Where |
+|---|---|---|
+| `rust-core`, `rust-surface`, `wasm-node`, `wasm-chrome` | the `sha2` crate, called directly as a test oracle (a dev-dependency where the crate lacks it, ADR 0016 §5) | `crates/polyjose/tests/conformance.rs`, `bindings/surface/tests/conformance.rs`; 0006 for `wasm-*` |
+| `node`, `wasm-pkg-node` | `node:crypto` `createHash("sha256")`. `node-main.ts` reads each file once as bytes, hashes them, and only then decodes them as UTF-8 for the runner | `bindings/js/conformance/node-main.ts` |
+| `wasm-pkg-chrome`, `wasm-pkg-workerd` | `crypto.subtle.digest("SHA-256", bytes)`: the driver fetches each file as bytes and calls `vectorsDigest(files, subtleSha256)` from `bindings/js/conformance/runner.ts` | 0006 |
+| `jvm`, `android-emulator` | `java.security.MessageDigest.getInstance("SHA-256")` | 0008 |
+| `swift-macos`, `swift-ios-sim`, `swift-tvos-sim` | CryptoKit `SHA256` (or CommonCrypto `CC_SHA256`) | 0009 |
+
+**Every new runner (features 0006 to 0009) computes the digest from its first commit and unit-tests the worked example below.** A runner that can't compute it can't write a valid results file, so it fails parity; it is never skipped.
+
+**Worked example** (ADR 0060 §4). A directory standing in for `vectors/` holds `a.json` = `7b 7d` (`{}`), `jws/b.json` = `7b 7d 0a` (`{}` LF), `jws-x/c.json` = `ef bb bf 7b 7d` (a UTF-8 BOM, then `{}`) and `README.md` = `notes` (not a vector). The sorted lines (`→` is the TAB) are:
+
+```
+a.json#0→44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+jws-x/c.json#0→aa25e978046d680ef8740d837e6de5bc1e2a2dc6089dbda1012544b538d53f65
+jws/b.json#0→ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
+```
+
+and `vectors_digest` is `9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1`. The tests `vectors_digest_follows_the_adr_0060_worked_example` (both Rust runners) and `bindings/js/test/vectors-digest.test.ts` check it.
+
+**Shell reference**, an oracle independent of every runner (it assumes no newline or backslash in a file name, which the corpus never has; on Linux use `sha256sum` for `shasum -a 256`). When two digests differ, compare these per-file lines on both sides to find the file.
+
+```sh
+cd conformance/vectors &&
+find . -type f -name '*.json' | sed 's|^\./||' |
+  while IFS= read -r p; do printf '%s#0\t%s\n' "$p" "$(shasum -a 256 "$p" | cut -d' ' -f1)"; done |
+  LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1
+```
+
 ### The skip rule
 
 A vector is skipped **only** when its `features` lists a feature the runner's build doesn't enable (ADR 0034 §3), or its `features_absent` lists one the build enables (ADR 0056). `reason` is `feature:` followed by the missing `features` names in the vector's order, then each enabled `features_absent` name as `!<name>` in its order, comma-separated: `feature:fixed-rng`, `feature:deflate,fixed-rng`, `feature:!deflate`, `feature:fixed-rng,!deflate`. The vector is still validated against `schema.json` first, and a schema-invalid one is a `fail`.
@@ -482,13 +527,17 @@ The binding configuration for 0.1.0 is the core's default features: never `fixed
 
 ### The parity check
 
-`scripts/conformance-parity.sh [dir]` (default `target/conformance/`) needs `node` and nothing else. It validates every results file against `schema/results.schema.json`, checks that each file's `runner` matches its file name and that no id appears twice, then compares every file with `rust-core.json`. It checks for:
+`scripts/conformance-parity.sh [dir]` (default `target/conformance/`) needs `node` and nothing else. It validates every results file against `schema/results.schema.json` (so a file without a well-formed `vectors_digest` fails, the reference included), checks that each file's `runner` matches its file name, that no id appears twice and that its `vectors_digest` is not the SHA-256 of the empty input, then compares every file with `rust-core.json`. It checks for:
 
+- the same `polyjose` version, printing both on a mismatch, so equal results from another build or release don't pass;
+- the same `vectors_digest`, printing `FAIL: <file>: vectors_digest differs: rust-core <hex> | <runner> <hex>`, so results from another vector corpus don't pass even when every id, status and outcome agrees (ADR 0060 §6);
 - the same set of ids;
 - the same `status` per id, and the same `reason` for a skip;
 - the same `actual` (`ok`, and the error code) per executed id;
 - the same `error_codes` list;
 - no `fail` entry, in any file, the reference included.
+
+All of these are checked together, so a file can fail on several at once. The digest binds a file to a corpus and the version to a release; neither proves that a runner executed what it reports, so each runner's own expected-versus-actual check stays (ADR 0060 §6).
 
 Each difference is printed as a `FAIL:` line with the id and both outcomes, and the exit status is 1. A missing, malformed or feature-built `rust-core.json` also exits 1. A runner without a file is printed as `SKIPPED (no results: <runner>)`, never as passing, and doesn't fail the check. Usage and tool errors (no `node`) exit 2. The script's own tests are in `scripts/tests/conformance-parity/`. `scripts/test-all.sh` runs them with the other negative tests, and 0013 T04 wires the check itself in after the platform suites.
 
