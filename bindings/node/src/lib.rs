@@ -24,6 +24,7 @@
 //!   napi-derive generates.
 
 pub mod error;
+pub mod records;
 mod task;
 pub mod util;
 
