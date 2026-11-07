@@ -2572,8 +2572,40 @@ fn check_vector(name: &str, bytes: &[u8]) -> Result<Passed, String> {
 
 /// [`check_vector`] with `enabled` as the build's features.
 fn check_vector_with(name: &str, bytes: &[u8], enabled: &[&str]) -> Result<Passed, String> {
+    check_vector_traced(name, bytes, enabled, &mut Trace::default())
+}
+
+/// What a results file records of one vector besides its status
+/// (ADR 0034 §2). Filled in as [`check_vector_traced`] goes; recording
+/// never changes how the vector is evaluated.
+#[derive(Debug, Default)]
+struct Trace {
+    /// The vector's `source`, when usable (ADR 0034 §1: reported
+    /// alongside the id).
+    source: Option<String>,
+    /// The vector's `operation`, when the file parses and names one.
+    op: Option<String>,
+    /// The operation's outcome, when it returned one: success, or the
+    /// library's error code.
+    actual: Option<Result<(), &'static str>>,
+}
+
+/// [`check_vector_with`], recording into `trace` the vector's `source`,
+/// `operation` and, once the operation has run, its outcome.
+fn check_vector_traced(
+    name: &str,
+    bytes: &[u8],
+    enabled: &[&str],
+    trace: &mut Trace,
+) -> Result<Passed, String> {
     let value = parse_vector_file(bytes)
         .map_err(|e| format!("{name}: not a valid JSON text ({e}); see conformance/schema.json"))?;
+    trace.source = usable_source(&value);
+    trace.op = value
+        .get("operation")
+        .and_then(Value::as_str)
+        .filter(|op| is_text(op))
+        .map(str::to_owned);
     let source = usable_source(&value).unwrap_or_else(|| "<missing>".to_owned());
     let fail = |problem: String| format!("{name} (source: {source}): {problem}");
     let vector = validate(&value).map_err(fail)?;
@@ -2589,6 +2621,7 @@ fn check_vector_with(name: &str, bytes: &[u8], enabled: &[&str]) -> Result<Passe
     let outcome = catch_unwind(AssertUnwindSafe(|| execute(&vector)))
         .map_err(|_| fail("panicked while running".to_owned()))?
         .map_err(fail)?;
+    trace.actual = Some(outcome.as_ref().map(|_| ()).map_err(Error::code));
     compare(&vector.expect, &outcome).map_err(fail)?;
     Ok(Passed::Ran {
         negative: matches!(vector.expect, Expect::Err(_)),
@@ -2607,6 +2640,64 @@ struct Report {
     /// `SKIPPED (needs feature ...)` lines, one per skipped vector file.
     skipped: Vec<String>,
     failures: Vec<String>,
+    /// One results-file entry per vector file, in file order (ADR 0034
+    /// §2; see [`result_entry`]).
+    results: Vec<Object>,
+    /// Whether every vector file was found: false when the walk itself
+    /// failed (an unreadable directory, a symbolic link) or found nothing,
+    /// so the results would not cover every vector.
+    complete: bool,
+}
+
+/// A vector's id (ADR 0034 §1 as amended by ADR 0045 §4): its path under
+/// the vectors directory, `/`-separated on every platform, then `#0`, as
+/// every file holds one vector.
+fn vector_id(relative: &Path) -> String {
+    let parts: Vec<String> = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    format!("{}#0", parts.join("/"))
+}
+
+/// One results-file entry (`conformance/schema/results.schema.json`):
+/// `id`, then `source` and `op` when known, `status`, `actual` for a vector
+/// that ran, and `reason` for a skip (`feature:` and the missing feature
+/// names, in the vector's order, ADR 0034 §3) or a failure (its message).
+fn result_entry(id: String, trace: Trace, result: &Result<Passed, String>) -> Object {
+    let mut entry = Object::new();
+    entry.insert("id", id);
+    if let Some(source) = trace.source {
+        entry.insert("source", source);
+    }
+    if let Some(op) = trace.op {
+        entry.insert("op", op);
+    }
+    let status = match result {
+        Ok(Passed::Ran { .. }) => "pass",
+        Ok(Passed::Skipped { .. }) => "skipped",
+        Err(_) => "fail",
+    };
+    entry.insert("status", status);
+    // A skipped vector never ran, so it has no outcome.
+    if let Some(actual) = trace.actual {
+        let mut outcome = Object::new();
+        outcome.insert("ok", actual.is_ok());
+        if let Err(code) = actual {
+            outcome.insert("error", code);
+        }
+        entry.insert("actual", outcome);
+    }
+    match result {
+        Ok(Passed::Ran { .. }) => {}
+        Ok(Passed::Skipped { features }) => {
+            entry.insert("reason", format!("feature:{}", features.join(",")));
+        }
+        Err(message) => {
+            entry.insert("reason", message.as_str());
+        }
+    }
+    entry
 }
 
 /// Every `*.json` file under `dir`, recursively, sorted. A symbolic link is
@@ -2656,15 +2747,17 @@ fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
             .failures
             .push(format!("{}: no vector files (*.json) found", dir.display()));
     }
+    report.complete = report.failures.is_empty();
     for path in files {
-        let name = path
-            .strip_prefix(dir)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
+        let relative = path.strip_prefix(dir).unwrap_or(&path);
+        let name = relative.display().to_string();
+        let mut trace = Trace::default();
         let result = std::fs::read(&path)
             .map_err(|e| format!("{name}: cannot read: {e}"))
-            .and_then(|bytes| check_vector_with(&name, &bytes, enabled));
+            .and_then(|bytes| check_vector_traced(&name, &bytes, enabled, &mut trace));
+        report
+            .results
+            .push(result_entry(vector_id(relative), trace, &result));
         match result {
             Ok(Passed::Ran {
                 operation,
@@ -6863,4 +6956,114 @@ fn results_validator_refuses_invalid_files() {
         let err = check_results_text(broken.as_bytes()).expect_err(&broken);
         assert!(err.contains(problem), "{old} -> {new}: {err}");
     }
+}
+
+/// `run_dir` records one result per vector file (ADR 0034 §2): the id is
+/// the path under the directory plus `#0` (ADR 0045 §4); a vector that ran
+/// records its outcome as `actual`, passing or not; a skip names the
+/// missing features in the vector's order; a broken file fails with a
+/// reason, and with `op` when it names one.
+#[test]
+fn run_dir_records_one_result_per_vector() {
+    let dir = TempDir::new("results");
+    let encode = vector(
+        "b64url.encode",
+        r#"{"bytes_hex":"66"}"#,
+        r#"{"ok":true,"b64u":"Zg"}"#,
+    );
+    dir.write("a/ok.json", &encode);
+    dir.write(
+        "a/negative.json",
+        &vector(
+            "b64url.decode",
+            r#"{"b64u":"Zg="}"#,
+            r#"{"ok":false,"error":"InvalidBase64"}"#,
+        ),
+    );
+    dir.write(
+        "b/wrong.json",
+        &vector(
+            "b64url.decode",
+            r#"{"b64u":"Zg="}"#,
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+        ),
+    );
+    dir.write(
+        "b/needs.json",
+        &with_features(
+            &vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            r#"["fixed-rng","deflate"]"#,
+        ),
+    );
+    dir.write("c/invalid.json", &encode.replace(r#""66""#, r#""6""#));
+    dir.write(
+        "c/unknown.json",
+        &vector("jws.frobnicate", "{}", r#"{"ok":true}"#),
+    );
+    dir.write("c/broken.json", "{");
+    dir.write("c/LICENSE", "not a vector");
+    let report = run_dir_with(&dir.0, &[]);
+    assert!(report.complete, "{report:?}");
+    let got: Vec<String> = report.results.iter().map(Object::to_json).collect();
+    let expected = [
+        format!(
+            r#"{{"id":"a/negative.json#0","source":"{SOURCE}","op":"b64url.decode","status":"pass","actual":{{"ok":false,"error":"InvalidBase64"}}}}"#
+        ),
+        format!(
+            r#"{{"id":"a/ok.json#0","source":"{SOURCE}","op":"b64url.encode","status":"pass","actual":{{"ok":true}}}}"#
+        ),
+        format!(
+            r#"{{"id":"b/needs.json#0","source":"{SOURCE}","op":"jwe.decrypt","status":"skipped","reason":"feature:fixed-rng,deflate"}}"#
+        ),
+    ];
+    assert_eq!(got.len(), 7, "{got:#?}");
+    assert_eq!(got[..3], expected, "{got:#?}");
+    let fails: Vec<&Object> = report.results[3..].iter().collect();
+    let ids: Vec<&str> = fails
+        .iter()
+        .map(|r| r.get("id").and_then(Value::as_str).unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "b/wrong.json#0",
+            "c/broken.json#0",
+            "c/invalid.json#0",
+            "c/unknown.json#0"
+        ]
+    );
+    for result in &fails {
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("fail"));
+        let reason = result.get("reason").and_then(Value::as_str).unwrap();
+        assert!(report.failures.iter().any(|f| f == reason), "{reason}");
+    }
+    // The wrong expectation ran: its outcome is recorded.
+    assert_eq!(
+        fails[0].get("actual").map(Value::to_json).as_deref(),
+        Some(r#"{"ok":false,"error":"InvalidBase64"}"#)
+    );
+    // The unparseable file names no op; the others name theirs. None of the
+    // three ran, so none has an outcome.
+    let ops: Vec<Option<&str>> = fails[1..]
+        .iter()
+        .map(|r| r.get("op").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ops, [None, Some("b64url.encode"), Some("jws.frobnicate")]);
+    assert!(fails[1..].iter().all(|r| !r.contains("actual")));
+    // Each entry is schema-valid.
+    let document = format!(
+        r#"{{"runner":"rust-core","polyjose":"0.1.0","features":[],"error_codes":["X"],"results":[{}]}}"#,
+        got.join(",")
+    );
+    check_results_text(document.as_bytes()).unwrap();
+
+    // A walk that finds nothing is incomplete, so no results file is
+    // written from it.
+    let empty = TempDir::new("results-empty");
+    let report = run_dir_with(&empty.0, &[]);
+    assert!(!report.complete && report.results.is_empty(), "{report:?}");
 }
