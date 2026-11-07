@@ -246,6 +246,8 @@ expect_fail "downloads: an inline run:" "downloads:" replace_line "$inline_run_a
 expect_fail "downloads: an inline run: folded onto the next line" "downloads:" replace_line "$inline_run_anchor" "        run: curl -sSf $url\n          | sh"
 expect_fail "downloads: a folded run: > block" "downloads:" replace_line "$inline_run_anchor" "        run: >\n          curl -sSf $url\n          | sh"
 expect_fail "downloads: a case-variant Run: block" "downloads:" replace_line "$inline_run_anchor" "        Run: |\n          curl -sSf $url | sh"
+expect_fail "downloads: a run: script that starts on the next line" "downloads:" replace_line "$inline_run_anchor" "        run:\n          curl -sSf $url | sh"
+expect_fail "structure: a flow-style run:" "structure: flow-style run:" insert_after "$steps_anchor" "      - { name: x, run: curl -sSf $url | sh }"
 expect_pass "downloads: curl to a file, a pipe to a non-shell, || and the words in names" insert_after "$script_anchor" "          curl -fsSLo rustup-init.sh $url\n          curl -o file $url\n          curl -s $url | grep -q shell\n          curl -s $url | jq .bash\n          curl -f $url || exit 1\n          v=\$(curl -s $url); echo \"\$v\""
 expect_pass "downloads: curl | sh in a step name is not a run: script" replace_str "      - name: no cargo config" "      - name: no curl | sh here"
 
