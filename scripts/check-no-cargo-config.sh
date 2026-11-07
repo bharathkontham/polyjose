@@ -26,7 +26,10 @@
 #      `CARGO_TARGET_<triple>_{RUSTFLAGS,RUSTDOCFLAGS,LINKER,RUNNER}`, `CARGO_BUILD_{RUSTFLAGS,
 #      RUSTDOCFLAGS,RUSTC,RUSTC_WRAPPER,RUSTC_WORKSPACE_WRAPPER,RUSTDOC}`, `CARGO_ENCODED_RUSTFLAGS`,
 #      `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`,
-#      `RUSTC_BOOTSTRAP`, `CARGO_UNSTABLE_*` or `CARGO_HOME`. Comment lines (`#`) are skipped. An
+#      `RUSTC_BOOTSTRAP`, `CARGO_UNSTABLE_*` or `CARGO_HOME`. Comment lines are skipped: those
+#      starting with `#`, and in Rust, TypeScript/JavaScript, Kotlin, Java and Swift files (by
+#      extension) those starting with `//` (doc comments such as bindings/wasm/tests/memory.rs's
+#      manual commands; in a shell script a `//` line is a path, and is read). An
 #      assignment is `NAME=`, `NAME<<` (GitHub's $GITHUB_ENV), `NAME:` (a YAML env key or a
 #      JavaScript property) or `${NAME:=`. check-test-vectors-off.sh separately checks *RUSTFLAGS
 #      in the environment.
@@ -122,8 +125,9 @@ while IFS= read -r -d '' file; do
   [ "$file" = "$self" ] && continue
   [ -f "$file" ] || continue # tracked but deleted from the working tree
   case $file in bindings/*) binding=1 ;; *) binding=0 ;; esac
+  case $file in *.rs | *.ts | *.mts | *.cts | *.js | *.mjs | *.cjs | *.kt | *.kts | *.java | *.swift) slashes=1 ;; *) slashes=0 ;; esac
   # The allowed line goes through the environment: awk -v would interpret its backslashes.
-  ALLOWED_LINE=$allowed_line awk -v names="$names" -v file="$file" -v binding="$binding" \
+  ALLOWED_LINE=$allowed_line awk -v names="$names" -v file="$file" -v binding="$binding" -v slashes="$slashes" \
     -v allowed="$([ "$file" = "$allowed_file" ] && echo 1 || echo 0)" '
     BEGIN {
       q = "[\"" sprintf("%c", 39) "]?"
@@ -136,6 +140,7 @@ while IFS= read -r -d '' file; do
       allowed_line = ENVIRON["ALLOWED_LINE"]
     }
     /^[[:space:]]*#/ { next }
+    slashes && /^[[:space:]]*\/\// { next }
     allowed && !seen_allowed && $0 == allowed_line { seen_allowed = 1; next }
     binding { rest = $0; gsub(reads, "", rest) }
     (binding && rest ~ "WASM_CARGO_ARGS") || $0 ~ flag || $0 ~ unstable || $0 ~ eq || $0 ~ colon || $0 ~ brace \
