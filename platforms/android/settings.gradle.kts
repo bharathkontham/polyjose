@@ -9,7 +9,7 @@ pluginManagement {
     includeBuild("build-logic")
     repositories {
         // Google's repository serves only the Android and AndroidX groups; everything else comes
-        // from Maven Central or the plugin portal, so no artifact can be shadowed from a second source.
+        // from Maven Central, so no artifact can be shadowed from a second source.
         google {
             content {
                 includeGroupByRegex("com\\.android(\\..*)?")
@@ -17,8 +17,13 @@ pluginManagement {
                 includeGroupByRegex("androidx(\\..*)?")
             }
         }
+        // No gradlePluginPortal(): Maven Central serves every plugin marker and plugin module of
+        // the build (AGP's from Google above; Kotlin's and vanniktech's from Central), checked with
+        // `--refresh-dependencies` and the portal removed. Its open `m2` namespace would otherwise be
+        // an unfiltered fallback for any module missing from the two (feature 0008 F04, review S2/M2).
+        // A new plugin that only the portal serves gets the portal back with an `exclusiveContent`
+        // filter for exactly its groups, in a reviewed diff with gradle/verification-metadata.xml.
         mavenCentral()
-        gradlePluginPortal()
     }
 }
 

@@ -12,10 +12,17 @@
 # (`./gradlew :sample-minified:connectedReleaseAndroidTest`).
 #
 # Checks:
+#   Gradle   gradle/verification-metadata.xml exists with verify-metadata and verify-signatures on
+#            and gradle/verification-keyring.keys beside it (feature 0008 F04, review S2/M2), and no
+#            tracked file of the repository turns dependency verification off or lenient.
 #   AAR      classes.jar, jni/{arm64-v8a,armeabi-v7a,x86,x86_64}/libpolyjose_ffi.so, proguard.txt
 #            (= consumer-rules.pro); LOAD alignment >= 0x4000 for the 64-bit libraries
 #            (llvm-readelf -l from the NDK; Google Play's 16 KB page-size requirement); the AAR
 #            under 4 MB (4,000,000 bytes; ADR 0033 §1); each .so size and the AAR size printed.
+#            Every class in classes.jar is class-file major version 61, Java 17 (feature 0008
+#            F04, review S7).
+#            The manifest declares android:minSdkVersion="23" and each .so's .note.android.ident
+#            (llvm-readelf -n) names API level 23 (ADR 0033 §2; feature 0008 F04, review N1).
 #   notices  META-INF/polyjose/THIRD-PARTY-NOTICES.txt in the AAR's classes.jar and in the JVM
 #            jar: one file per artifact over the union of its libraries' crate trees (ADR 0020 §4,
 #            ADR 0033 §4; feature 0008 F01). The targets are read from the libraries the artifact
@@ -25,8 +32,10 @@
 #            --target per library, and each library's crate set must be a subset of the file's
 #            (it fails naming the target and the crates).
 #   jar      the classes, the host libraries under their JNA prefixes (each of the right
-#            architecture), and a Polyjose-Native-Platforms manifest attribute listing exactly
-#            the prefixes present; no native library or notices file in the sources jar.
+#            architecture: `file -b` against ci_file_pattern of ci-lib.sh, for any of the five
+#            prefixes; review N4), and a Polyjose-Native-Platforms manifest attribute listing
+#            exactly the prefixes present; no native library or notices file in the sources jar.
+#            Every class of the jar is class-file major version 61, Java 17, as the AAR.
 #   APK      zipalign -c -P 16 4 on the minified sample APK, and R8 has run (mapping.txt).
 #   Maven    both publications in build/repo with POM (name, description, URL, MIT license,
 #            SCM, developer), sources and javadoc jars and Gradle module metadata; the POMs list
@@ -63,13 +72,53 @@ readelf=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf 2>/
 [ -x "$readelf" ] || die "no llvm-readelf in the NDK at $ANDROID_NDK_HOME"
 zipalign=$(ls "$ANDROID_HOME"/build-tools/*/zipalign 2>/dev/null | sort -V | tail -n 1)
 [ -x "$zipalign" ] || die "no zipalign in $ANDROID_HOME/build-tools"
-for tool in unzip python3 cargo; do command -v "$tool" >/dev/null 2>&1 || die "$tool not found"; done
+for tool in unzip python3 cargo file; do command -v "$tool" >/dev/null 2>&1 || die "$tool not found"; done
+# ci_file_pattern and ci_is_prefix (the five JNA prefixes); defines variables and functions only.
+# shellcheck source=ci-lib.sh source-path=SCRIPTDIR
+. "$android/scripts/ci-lib.sh" || die "cannot read scripts/ci-lib.sh"
+
+# The AAR's minSdk and the API level its .so files are built for (ADR 0033 §2: minSdk 23, also
+# cargo-ndk's --platform), as gradle/libs.versions.toml declares it.
+min_sdk=23
 
 version=$(awk '/^\[/{t=($0=="[workspace.package]")} t&&/^version *=/{gsub(/.*= *"|".*/,"");print;exit}' "$repo/Cargo.toml")
 [ -n "$version" ] || die "no [workspace.package] version in $repo/Cargo.toml"
 
 work="$android/build/check-artifacts"
 rm -rf "$work"; mkdir -p "$work" || die "cannot create $work"
+
+# --- Gradle dependency verification (feature 0008 F04, review S2, security M2) -----------------
+# Gradle verifies every downloaded artifact and its metadata against the checksums and the
+# trusted PGP keys of gradle/verification-metadata.xml, in strict mode, whenever the file exists
+# (Gradle user manual, "Verifying dependencies"). Without it the plugins and libraries that build
+# the artifacts below run unverified, so its absence is a failure, not a skip.
+echo "==> Gradle dependency verification"
+metadata="$android/gradle/verification-metadata.xml"
+if [ ! -f "$metadata" ]; then
+  fail "Gradle: no gradle/verification-metadata.xml (dependency verification is off)"
+else
+  for setting in verify-metadata verify-signatures; do
+    if grep -q "<$setting>true</$setting>" "$metadata"; then
+      pass "Gradle: verification-metadata.xml has <$setting>true</$setting>"
+    else
+      fail "Gradle: verification-metadata.xml lacks <$setting>true</$setting>"
+    fi
+  done
+  if [ -s "$android/gradle/verification-keyring.keys" ]; then
+    pass "Gradle: gradle/verification-keyring.keys (the trusted public keys, armored)"
+  else
+    fail "Gradle: no gradle/verification-keyring.keys beside verification-metadata.xml"
+  fi
+fi
+# A command-line flag (--dependency-verification / -F) or the org.gradle.dependency.verification
+# property would switch the check to lenient or off for that build.
+lenient=$(git -C "$repo" grep -nIE -e '(--dependency-verification|[[:space:]]-F)[= ]+(off|lenient)' \
+  -e 'org\.gradle\.dependency\.verification' -- . ":!platforms/android/scripts/check-artifacts.sh" 2>/dev/null)
+if [ -z "$lenient" ]; then
+  pass "Gradle: no tracked file turns dependency verification off or lenient"
+else
+  fail "Gradle: dependency verification is weakened: $lenient"
+fi
 
 if [ "$build" = 1 ]; then
   echo "==> ./gradlew :polyjose:assembleRelease :polyjose-jvm:jar :sample-minified:assembleRelease publishAllPublicationsToBuildLocalRepository"
@@ -139,6 +188,38 @@ check_notices() {
   done
 }
 
+# check_class_version <label> <jar>: every .class entry is class-file major version 61, Java 17
+# (JVMS §4.1: u4 magic 0xCAFEBABE, u2 minor_version, u2 major_version; Java SE 17 is 61). The jar
+# and the AAR both target Java 17 (feature 0008 F04, review S7).
+check_class_version() {
+  local label=$1 jar=$2 out
+  if out=$(python3 -I - "$jar" <<'PY'
+import sys, zipfile
+majors, bad = {}, []
+with zipfile.ZipFile(sys.argv[1]) as z:
+    for name in z.namelist():
+        if not name.endswith(".class"):
+            continue
+        head = z.read(name)[:8]
+        if head[:4] != b"\xca\xfe\xba\xbe":
+            bad.append(name)
+            continue
+        major = int.from_bytes(head[6:8], "big")
+        majors[major] = majors.get(major, 0) + 1
+summary = ", ".join("%d classes major %d" % (n, m) for m, n in sorted(majors.items()))
+if bad:
+    print("not class files: %s" % ", ".join(bad[:5]))
+    sys.exit(1)
+print(summary or "no classes")
+sys.exit(0 if list(majors) == [61] else 1)
+PY
+  ); then
+    pass "$label: class-file major version 61, Java 17 ($out)"
+  else
+    fail "$label: not all classes are class-file major version 61, Java 17 ($out)"
+  fi
+}
+
 # The Rust target of an Android ABI (ADR 0033 §2).
 abi_triple() {
   case $1 in
@@ -167,12 +248,20 @@ else
   else
     fail "AAR: proguard.txt is not consumer-rules.pro"
   fi
+  # The AAR's AndroidManifest.xml is plain XML (AGP compiles it only into the app); minSdk is
+  # ADR 0033 §2's API 23.
+  if grep -q "android:minSdkVersion=\"$min_sdk\"" "$work/aar/AndroidManifest.xml" 2>/dev/null; then
+    pass "AAR: AndroidManifest.xml declares android:minSdkVersion=\"$min_sdk\""
+  else
+    fail "AAR: AndroidManifest.xml does not declare android:minSdkVersion=\"$min_sdk\" ($(grep -o 'android:minSdkVersion="[^"]*"' "$work/aar/AndroidManifest.xml" 2>/dev/null || echo 'none'))"
+  fi
   unzip -Z1 "$work/aar/classes.jar" >"$work/classes.list"
   if grep -qx 'dev/polyjose/UniffiLib.class' "$work/classes.list"; then
     pass "AAR: classes.jar holds the generated Kotlin (dev/polyjose/UniffiLib.class)"
   else
     fail "AAR: classes.jar has no dev/polyjose/UniffiLib.class"
   fi
+  check_class_version "AAR: classes.jar" "$work/aar/classes.jar"
   if unzip -p "$work/aar/classes.jar" "$notices_path" >"$work/aar-notices.txt" 2>/dev/null && [ -s "$work/aar-notices.txt" ]; then
     pass "AAR: classes.jar holds $notices_path"
     # The Rust target of each ABI the AAR carries.
@@ -190,6 +279,26 @@ else
     [ -f "$so" ] || continue
     aligns=$("$readelf" -lW "$so" | awk '$1=="LOAD"{print $NF}' | sort -u | paste -sd, -)
     echo "      jni/$abi/libpolyjose_ffi.so: $(size "$so") bytes, LOAD alignment $aligns"
+    # The NDK's crtbrand note (bionic abi-note): owner "Android", type NT_ANDROID_TYPE_IDENT, and a
+    # description that starts with the API level the library was linked for, an int32 little
+    # endian, then the NDK version and build number. cargo-ndk links with --platform = minSdk.
+    "$readelf" -n "$so" >"$work/notes-$abi.txt" 2>&1
+    # The first four description bytes, most significant first (hex), decoded by the shell.
+    bytes=$(awk '
+      /^Displaying notes found in: / { s = ($NF == ".note.android.ident"); n = 0 }
+      s && $1 == "Android" && /NT_ANDROID_TYPE_IDENT/ { n = 1; next }
+      s && n && /description data:/ {
+        sub(/.*description data: */, ""); split($0, b, " ")
+        if (b[4] ~ /^[0-9a-f][0-9a-f]$/) print b[4] b[3] b[2] b[1]
+        exit
+      }' "$work/notes-$abi.txt")
+    api=""
+    [ -n "$bytes" ] && api=$((16#$bytes))
+    if [ "$api" = "$min_sdk" ]; then
+      pass "AAR: jni/$abi .note.android.ident API level $api"
+    else
+      fail "AAR: jni/$abi .note.android.ident API level is '${api:-none}', not $min_sdk"
+    fi
     case $abi in
       arm64-v8a | x86_64)
         small=$("$readelf" -lW "$so" | awk '$1=="LOAD"{print $NF}' | while read -r a; do
@@ -244,14 +353,22 @@ else
     if grep -qx "$prefix" <<<"$present"; then pass "jar: $prefix/ library"; else fail "jar: no $prefix/ library"; fi
   done
   mkdir -p "$work/jar" && unzip -q -o "$jar" -d "$work/jar"
+  check_class_version jar "$jar"
+  # Each library present, whatever host built it (the CI jar carries all five): `file -b` must
+  # match the prefix's pattern from ci-lib.sh, the one ci-host-natives.sh checks the natives with.
   for prefix in $present; do
     lib=$(ls "$work/jar/$prefix"/* | head -n 1)
     echo "      $prefix/$(basename "$lib"): $(size "$lib") bytes"
-    want=""
-    case $prefix in darwin-aarch64) want=arm64 ;; darwin-x86-64) want=x86_64 ;; esac
-    if [ -n "$want" ] && command -v lipo >/dev/null 2>&1; then
-      got=$(lipo -archs "$lib" 2>/dev/null)
-      if [ "$got" = "$want" ]; then pass "jar: $prefix/ is $want"; else fail "jar: $prefix/ is '$got', not $want"; fi
+    if ! ci_is_prefix "$prefix"; then
+      fail "jar: $prefix/ is not one of the JNA prefixes ($ci_prefixes)"
+      continue
+    fi
+    pattern=$(ci_file_pattern "$prefix")
+    kind=$(file -b "$lib")
+    if grep -qE "$pattern" <<<"$kind"; then
+      pass "jar: $prefix/ is the right architecture ($kind)"
+    else
+      fail "jar: $prefix/ is '$kind', not /$pattern/"
     fi
   done
   # The manifest attribute, with the 72-byte continuation lines of the jar format joined.
