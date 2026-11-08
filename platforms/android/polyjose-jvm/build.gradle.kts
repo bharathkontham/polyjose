@@ -6,6 +6,7 @@ import com.vanniktech.maven.publish.KotlinJvm
 import com.vanniktech.maven.publish.SourcesJar
 import dev.polyjose.gradle.PackagingPlugin
 import dev.polyjose.gradle.ThirdPartyNotices
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -145,8 +146,24 @@ val thirdPartyNotices = tasks.named<ThirdPartyNotices>("thirdPartyNotices") {
     targets.addAll(jarPlatforms.map { jnaPlatforms.getValue(it) })
 }
 
+// Java 17 bytecode (class-file major version 61), like the AAR (polyjose/build.gradle.kts), so the
+// jar loads on Java 17 and newer; the compiler itself runs on the JDK 21 toolchain (ADR 0033 §1).
+// `-Xjdk-release=17` compiles against the Java 17 class library, so no Java 18+ API can be called.
+// Orchestrator decision 2026-11-07 (feature 0008 F04, review S7). check-artifacts.sh asserts 61.
 kotlin {
     jvmToolchain(21)
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+        freeCompilerArgs.add("-Xjdk-release=17")
+    }
+}
+
+java {
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release = 17
 }
 
 sourceSets {
