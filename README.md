@@ -25,6 +25,14 @@
 - **Misuse-resistant.** Verify and decrypt require an explicit algorithm allow-list, `none` is never accepted, and secrets are zeroized.
 - **One behaviour everywhere.** Every binding runs the same conformance vectors ([conformance/](conformance/)).
 
+## Built on
+polyjose writes no cryptographic primitives of its own. It composes pure-Rust primitives into JOSE, with no OpenSSL, `ring` or `aws-lc`:
+- **[RustCrypto](https://github.com/RustCrypto):** `sha2`, `hmac`, `aes`, `aes-gcm`, `aes-kw`, `cbc`, `pbkdf2`, `p256`, `p384`, `p521`, `k256`, `rsa` (public-key operations only) and `zeroize`
+- **[dalek-cryptography](https://github.com/dalek-cryptography):** `ed25519-dalek`, `x25519-dalek` and `subtle`
+- **[rust-random](https://github.com/rust-random):** `getrandom`, the operating system's random number generator
+
+[CREDITS.md](CREDITS.md) credits every crate in the dependency tree, with its version and license. [AUDITS.md](AUDITS.md) records which primitives have a published third-party audit. polyjose itself has not been independently audited.
+
 ## Layout
 ```
 crates/polyjose/   core library (no unsafe)
