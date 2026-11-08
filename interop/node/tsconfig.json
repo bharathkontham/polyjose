@@ -1,0 +1,16 @@
+// Type-checks the interop suite with bindings/js's compiler and options (ADR 0047), emitting
+// nothing: test.sh runs the .ts sources with Node's built-in type stripping. `dom` adds the Web
+// Crypto and TextEncoder types that jose's declarations and this suite use.
+{
+  "extends": "../../bindings/js/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "lib": ["es2022", "dom"],
+    "rootDir": "../.."
+  },
+  "include": ["*.ts"],
+  "exclude": ["node_modules"]
+}
