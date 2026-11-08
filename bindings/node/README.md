@@ -5,8 +5,6 @@ loaded as a Node-API addon. All cryptography comes from the RustCrypto and dalek
 OpenSSL. Verify and decrypt always take an explicit algorithm allow-list, and `none` is never
 accepted (RFC 8725).
 
-> Status: **pre-alpha**. Don't use it in production yet.
-
 ## Install
 
 ```sh
