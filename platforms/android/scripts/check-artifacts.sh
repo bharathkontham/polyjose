@@ -12,6 +12,9 @@
 # (`./gradlew :sample-minified:connectedReleaseAndroidTest`).
 #
 # Checks:
+#   Gradle   gradle/verification-metadata.xml exists with verify-metadata and verify-signatures on
+#            and gradle/verification-keyring.keys beside it (feature 0008 F04, review S2/M2), and no
+#            tracked file of the repository turns dependency verification off or lenient.
 #   AAR      classes.jar, jni/{arm64-v8a,armeabi-v7a,x86,x86_64}/libpolyjose_ffi.so, proguard.txt
 #            (= consumer-rules.pro); LOAD alignment >= 0x4000 for the 64-bit libraries
 #            (llvm-readelf -l from the NDK; Google Play's 16 KB page-size requirement); the AAR
@@ -70,6 +73,39 @@ version=$(awk '/^\[/{t=($0=="[workspace.package]")} t&&/^version *=/{gsub(/.*= *
 
 work="$android/build/check-artifacts"
 rm -rf "$work"; mkdir -p "$work" || die "cannot create $work"
+
+# --- Gradle dependency verification (feature 0008 F04, review S2, security M2) -----------------
+# Gradle verifies every downloaded artifact and its metadata against the checksums and the
+# trusted PGP keys of gradle/verification-metadata.xml, in strict mode, whenever the file exists
+# (Gradle user manual, "Verifying dependencies"). Without it the plugins and libraries that build
+# the artifacts below run unverified, so its absence is a failure, not a skip.
+echo "==> Gradle dependency verification"
+metadata="$android/gradle/verification-metadata.xml"
+if [ ! -f "$metadata" ]; then
+  fail "Gradle: no gradle/verification-metadata.xml (dependency verification is off)"
+else
+  for setting in verify-metadata verify-signatures; do
+    if grep -q "<$setting>true</$setting>" "$metadata"; then
+      pass "Gradle: verification-metadata.xml has <$setting>true</$setting>"
+    else
+      fail "Gradle: verification-metadata.xml lacks <$setting>true</$setting>"
+    fi
+  done
+  if [ -s "$android/gradle/verification-keyring.keys" ]; then
+    pass "Gradle: gradle/verification-keyring.keys (the trusted public keys, armored)"
+  else
+    fail "Gradle: no gradle/verification-keyring.keys beside verification-metadata.xml"
+  fi
+fi
+# A command-line flag (--dependency-verification / -F) or the org.gradle.dependency.verification
+# property would switch the check to lenient or off for that build.
+lenient=$(git -C "$repo" grep -nIE -e '(--dependency-verification|[[:space:]]-F)[= ]+(off|lenient)' \
+  -e 'org\.gradle\.dependency\.verification' -- . ":!platforms/android/scripts/check-artifacts.sh" 2>/dev/null)
+if [ -z "$lenient" ]; then
+  pass "Gradle: no tracked file turns dependency verification off or lenient"
+else
+  fail "Gradle: dependency verification is weakened: $lenient"
+fi
 
 if [ "$build" = 1 ]; then
   echo "==> ./gradlew :polyjose:assembleRelease :polyjose-jvm:jar :sample-minified:assembleRelease publishAllPublicationsToBuildLocalRepository"
