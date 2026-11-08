@@ -20,7 +20,8 @@ final class RedactionTests: XCTestCase {
     private static let keyChars = "<redacted, \(markerKey.count) chars>"
     private static let dataBytes = "<redacted, \(markerBytes.count) bytes>"
 
-    /// The text of each of the five printing paths for one value.
+    /// The text of each of the five printing paths for one value, and of string interpolation,
+    /// the form a log message built with `"\(value)"` shows.
     private func printed<T>(_ value: T) -> [(path: String, text: String)] {
         var print = "", debugPrint = "", dump = ""
         Swift.print(value, to: &print)
@@ -32,6 +33,7 @@ final class RedactionTests: XCTestCase {
             ("print(to:)", print),
             ("debugPrint(to:)", debugPrint),
             ("dump(to:)", dump),
+            ("interpolation", "\(value)"),
         ]
     }
 
@@ -166,6 +168,13 @@ final class RedactionTests: XCTestCase {
         XCTAssertTrue(dumped.contains("- plaintext: \(Self.dataBytes)\n"), dumped)
         XCTAssertTrue(dumped.contains("- aad: \(Self.dataBytes)\n"), dumped)
         XCTAssertTrue(dumped.contains("- recipientIndex: 2\n"), dumped)
+    }
+
+    /// The README's wipe of a returned `Data` (ADR 0030 §7.4) compiles and zeroes the field.
+    func testReadmeWipeZeroesTheField() {
+        var verified = JwsVerified(alg: "HS256", payload: Data(Self.markerBytes), signatureIndex: 0)
+        verified.payload.resetBytes(in: verified.payload.indices)
+        XCTAssertEqual(verified.payload, Data(count: Self.markerBytes.count))
     }
 
     /// JWT claims are not secret-bearing (ADR 0058 decision 2), so `JwtVerified` prints them.
