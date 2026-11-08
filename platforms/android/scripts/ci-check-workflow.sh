@@ -329,11 +329,16 @@ BEGIN {
   if (w ~ /:[ ]*write([ ]|$|,|})|write-all|read-all/) fail("permissions: a write or read-all grant")
   check_expressions(code)
 
-  # A run: with no value on its line: a mapping (defaults.run) when a key follows, else a plain
-  # scalar script that starts on the next line.
+  # The run: of a step with no value on its line: a plain or quoted scalar script that starts on the
+  # next line. A first line that starts with a YAML indicator (a flow collection, tag, anchor,
+  # alias, explicit key, block scalar, ...) is not a script and is checked as YAML (B10).
   if (run_maybe) {
     run_maybe = 0
-    if (indent > run_col && !parse_key(code)) { run_open = 1; run_fold = 1; acc = "" }
+    if (indent > run_col && !parse_key(code)) {
+      t = trim(code)
+      if (t ~ /^[-?:]( |$)/ || index(",[]{}&*!|>%@\140", substr(t, 1, 1))) fail("structure: a run: script that is not a plain or quoted scalar (outside the subset)")
+      else { run_open = 1; run_fold = 1; acc = "" }
+    }
   }
   # Inside a run: script (a block scalar or the rest of a multi-line scalar): shell, not YAML;
   # ${{ }} is forbidden.
@@ -347,6 +352,9 @@ BEGIN {
   if (code ~ /(^|[ {,[])[&*][A-Za-z0-9_]/ || code ~ /<<[ ]*:/) fail("structure: YAML anchor, alias or merge key")
   if (low ~ /[{,][ ]*["\047]?uses["\047]?[ ]*:/) fail("structure: flow-style uses:")
   if ((found = key_syntax(code)) != "") fail("structure: " found " (outside the subset)")
+  # A flow mapping or sequence as a whole line (a value on the line after its key): its keys
+  # would not be read as keys. A flow list item ("- { ... }", the matrix include) is fine.
+  if (code ~ /^ *[{[]/) fail("structure: a flow mapping or sequence on its own line (outside the subset)")
   # A guard that may fail without failing its job, and a container or service image that would
   # run the steps, in any position (security audit L3).
   if (has_key(low, "continue-on-error")) fail("continue-on-error: not allowed (a failing step or job must fail the run)")
@@ -442,7 +450,11 @@ BEGIN {
   }
   # Every shell, also defaults.run.shell (which wraps every step), is plain bash.
   if (key == "shell" && value != "bash") fail("shell: only bash is allowed")
-  if (key == "run") {
+  # The run: of a step is a script; any other run: (defaults.run) is a block of keys, never a script,
+  # so its children always meet the key rules (B10).
+  if (key == "run" && !(item_open && keycol == item_col)) {
+    if (value != "") fail("structure: a run: outside a step must be a block of keys (defaults.run)")
+  } else if (key == "run") {
     run_col = keycol; acc = ""
     if (value ~ /^[|>]/) { run_open = 1; run_fold = (value ~ /^>/) }
     else if (value == "") run_maybe = 1
