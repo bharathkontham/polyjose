@@ -9,5 +9,11 @@ targets = [
   "aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android",
   "aarch64-apple-ios", "aarch64-apple-ios-sim", "x86_64-apple-ios",
   "aarch64-apple-darwin", "x86_64-apple-darwin",
+  "aarch64-apple-tvos", "aarch64-apple-tvos-sim",
+  "aarch64-apple-visionos", "aarch64-apple-visionos-sim",
+  "aarch64-apple-watchos", "aarch64-apple-watchos-sim",
 ]
-# tvOS / watchOS / visionOS are tier 3 and need nightly `-Zbuild-std` (used only for those XCFramework slices).
+# The aarch64 tvOS, visionOS and watchOS targets (device and simulator) are tier 2 with prebuilt std
+# since Rust 1.95.0, so every XCFramework slice builds on this stable toolchain except one:
+# arm64_32-apple-watchos is still tier 3 and is built with the nightly pinned in
+# platforms/swift/nightly-toolchain and `-Zbuild-std` (ADR 0032 §1, amending ADR 0004).
