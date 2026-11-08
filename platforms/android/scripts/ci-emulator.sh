@@ -70,6 +70,7 @@ command -v unzip >/dev/null 2>&1 || ci_die "unzip not found"
 
 created=""
 log=""
+# shellcheck disable=SC2329 # cleanup runs from the EXIT trap
 cleanup() {
   if [ -n "$created" ]; then
     echo "ci-emulator: deleting the AVD this run created ($created)"
@@ -78,7 +79,11 @@ cleanup() {
   fi
   [ -z "$log" ] || rm -f "$log"
 }
-trap cleanup EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; cleanup; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "ci-emulator.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 fail() { echo "ci-emulator: FAILED: $*"; exit 1; }
@@ -146,3 +151,4 @@ done
 echo "ci-emulator: the libraries the device ran, for the AAR:"
 sed 's/^/ci-emulator:   /' "$jni_out/SHA256SUMS"
 echo "ci-emulator: PASS ($abi, AVD $avd); wrote target/conformance/android-emulator-ci.json and android-jnilibs"
+completed=1; exit 0
