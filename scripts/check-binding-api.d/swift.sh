@@ -28,11 +28,15 @@
 #      - an extension's header is read up to its `{`, over several lines if need be, and every
 #        protocol of its conformance list (before any `where`) must be allowed, since a conformance
 #        is public API as well: `Sendable` (SWIFT_GENERATED_CONFORMANCES) only in the generated
-#        Polyjose.swift, and the printing protocols (SWIFT_REDACTION_PROTOCOLS) only in
+#        Polyjose.swift, and the printing protocols of SWIFT_REDACTION_MEMBERS only in
 #        Redaction.swift (SWIFT_REDACTION_FILE), only on the records whose secret fields ADR 0065
-#        redacts (SWIFT_REDACTED_RECORDS). Such an extension may have exactly the public members
-#        `public var description: String`, `public var debugDescription: String` and
-#        `public var customMirror: Mirror`, as written here, with no attribute or modifier;
+#        redacts (SWIFT_REDACTED_RECORDS). Such an extension may have only the public members of
+#        the protocols it declares: `public var description: String` (CustomStringConvertible),
+#        `public var debugDescription: String` (CustomDebugStringConvertible) and
+#        `public var customMirror: Mirror` (CustomReflectable), as written here, with no attribute
+#        or modifier. Each listed record must have each of the three conformances and its member
+#        exactly once there, since ADR 0065 §2 covers every printing path, so a deleted or partial
+#        Redaction.swift fails here too, not only in the Swift tests on an Apple host;
 #      - any other public declaration at depth 0 (class, protocol, enum, typealias, var, let,
 #        extension) fails the mode, so nothing public escapes the comparison.
 # The derived set must equal the inventory exactly (ADR 0030 §8), codes also in order.
@@ -52,8 +56,8 @@ SWIFT_GENERATED_FILE="Polyjose.swift"
 SWIFT_GENERATED_CONFORMANCES="Sendable"
 SWIFT_REDACTION_FILE="Redaction.swift"
 SWIFT_REDACTED_RECORDS="JweDecrypted JweEncryptOptions JweRecipient JwsSigner JwsVerified JwsVerifyOptions"
-SWIFT_REDACTION_PROTOCOLS="CustomStringConvertible CustomDebugStringConvertible CustomReflectable"
-SWIFT_REDACTION_MEMBERS="description:String debugDescription:String customMirror:Mirror"
+# Each printing protocol, with its one member's name and type.
+SWIFT_REDACTION_MEMBERS="CustomStringConvertible:description:String CustomDebugStringConvertible:debugDescription:String CustomReflectable:customMirror:Mirror"
 
 mode_derive() {
   local out=$1 src=$repo/platforms/swift/Sources/Polyjose f
@@ -97,8 +101,11 @@ BEGIN {
   n = split(framework, t, " "); for (i = 1; i <= n; i++) plumbing[t[i]] = 1
   n = split(gen_conformances, t, " "); for (i = 1; i <= n; i++) gen_conf[t[i]] = 1
   n = split(redacted_records, t, " "); for (i = 1; i <= n; i++) redacted[t[i]] = 1
-  n = split(redaction_protocols, t, " "); for (i = 1; i <= n; i++) redaction_proto[t[i]] = 1
-  n = split(redaction_members, t, " "); for (i = 1; i <= n; i++) { split(t[i], kv, ":"); redaction_member[kv[1]] = kv[2] }
+  n = split(redaction_members, t, " ")
+  for (i = 1; i <= n; i++) {
+    split(t[i], kv, ":"); redaction_proto[kv[1]] = kv[2]; member_type[kv[2]] = kv[3]; member_proto[kv[2]] = kv[1]
+    redaction_protocols = redaction_protocols (i > 1 ? " " : "") kv[1]
+  }
 }
 function file() { f = FILENAME; sub(/\.stripped$/, "", f); sub(/.*\//, "", f); return f }
 function where() { return file() ":" FNR }
@@ -175,7 +182,7 @@ function params(text, record,    i, c, d, p, cur, name, list, k) {
 function extension_header(h, at,    t, list, n, i, p) {
   t = h; sub(/^(public[ \t]+)?extension[ \t]+/, "", t); sub(/[ \t]*\{$/, "", t)
   block_kind = "extension"; block_name = t; sub(/[^A-Za-z0-9_].*/, "", block_name)
-  redaction_ext = 0
+  redaction_ext = 0; split("", ext_proto)
   sub(/[ \t]+where([ \t].*)?$/, "", t)
   if (index(t, ":") == 0) return
   n = split(substr(t, index(t, ":") + 1), list, ",")
@@ -183,7 +190,7 @@ function extension_header(h, at,    t, list, n, i, p) {
     p = trim(list[i]); gsub(/[ \t]+/, " ", p)
     if (file() == gen_file && (p in gen_conf)) continue
     if (file() == redaction_file && (block_name in redacted) && (p in redaction_proto)) {
-      conformance[block_name SUBSEP p]++; redaction_ext = 1; continue
+      conformance[block_name SUBSEP p]++; ext_proto[p] = 1; redaction_ext = 1; continue
     }
     print "error " at ": conformance " block_name ": " p " is not allowed (only " gen_conformances " in " gen_file ", and " redaction_protocols " on " redacted_records " in " redaction_file ", ADR 0065)"
   }
@@ -249,7 +256,7 @@ function piece(line) {
     }
     if (block_kind == "extension" && redaction_ext && match(written, /^public var [A-Za-z]+: [A-Za-z]+[ \t]*\{?$/)) {
       m = written; sub(/^public var /, "", m); ty = m; sub(/:.*/, "", m); sub(/^[^:]*: /, "", ty); sub(/[ \t]*\{?$/, "", ty)
-      if ((m in redaction_member) && redaction_member[m] == ty) { member[block_name SUBSEP m]++; text = "" }
+      if ((m in member_type) && member_type[m] == ty && (member_proto[m] in ext_proto)) { member[block_name SUBSEP m]++; text = "" }
     }
     if (block_kind == "extension" && index(block_name, prefix) != 1 && text ~ /^(public|open)[ \t]/) {
       access = text; sub(/[ \t].*/, "", access)
@@ -283,12 +290,18 @@ END {
   for (r in records) if (inits[r] != 1) print "error record " r " has " (inits[r] + 0) " public init(...), not 1"
   for (k in vars) if (!(k in initparam)) print "error public var " k " is not a parameter of its init"
   for (k in initparam) if (!(k in vars)) print "error init parameter " k " is not a public var"
+  # ADR 0065 §2: every printing path of every listed record is redacted.
+  n = split(redacted_records, t, " ")
+  for (i = 1; i <= n; i++) for (p in redaction_proto) {
+    m = redaction_proto[p]; c = conformance[t[i] SUBSEP p] + 0; k = member[t[i] SUBSEP m] + 0
+    if (c != 1 || k != 1) print "error ADR 0065: " t[i] " must conform to " p ", with public var " m ": " member_type[m] ", exactly once in " redaction_file " (conformances " c ", members " k ")"
+  }
 }
 AWK
   awk -v framework="$SWIFT_FRAMEWORK" -v prefix="$SWIFT_FRAMEWORK_PREFIX" -v error_type="$SWIFT_ERROR" \
     -v gen_file="$SWIFT_GENERATED_FILE" -v gen_conformances="$SWIFT_GENERATED_CONFORMANCES" \
     -v redaction_file="$SWIFT_REDACTION_FILE" -v redacted_records="$SWIFT_REDACTED_RECORDS" \
-    -v redaction_protocols="$SWIFT_REDACTION_PROTOCOLS" -v redaction_members="$SWIFT_REDACTION_MEMBERS" \
+    -v redaction_members="$SWIFT_REDACTION_MEMBERS" \
     -f "$mode_scratch/swift.awk" "$mode_scratch"/*.stripped >"$out" || return 1
   grep -q '^op ' "$out" || mode_fail "no public func found in platforms/swift/Sources/Polyjose (has the layout changed?)"
 }
