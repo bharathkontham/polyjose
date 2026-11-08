@@ -43,10 +43,14 @@
 #                no flow-style `uses:`, and only plain keys: no quoted ("uses": / 'uses':),
 #                explicit (? uses) or tagged (!!str uses:) key; a quoted uses key also fails the
 #                actions rule. No flow-style `with:` or `run:`, and no second `uses:` or `with:`
-#                in one step. Keys are matched in lower case, so `Uses:` or `RUN:` meet the same
-#                rules, and a case variant of a workflow keyword (on, permissions, uses, with,
-#                run, shell, defaults, secrets, container, services, continue-on-error,
-#                environment) fails; an env: name equal to one of them in another case (SHELL:)
+#                in one step. No flow mapping or sequence on a line of its own (a flow list item
+#                such as the matrix include is fine). Only the run: of a step is a script: any
+#                other run: (defaults.run) is a block of keys, and a step script that starts on
+#                the next line starts as a plain or quoted scalar, not with a YAML indicator
+#                ({ [ ! & * ? - | > ...). Keys are matched in lower case, so `Uses:` or `RUN:`
+#                meet the same rules, and a case variant of a workflow keyword (on, permissions,
+#                uses, with, run, shell, defaults, secrets, container, services,
+#                continue-on-error, environment) fails; an env: name equal to one of them in another case (SHELL:)
 #                fails too, so rename it.
 #   scripts      the steps call each of ci-host-natives.sh, ci-android-sdk.sh, ci-emulator.sh,
 #                ci-assemble-jar.sh and ci-parity.sh, and every platforms/android/scripts/ci-*.sh
