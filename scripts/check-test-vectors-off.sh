@@ -31,10 +31,19 @@
 #   any scan; scripts/ and .github/ changes go through owner review for that reason. A config
 #   outside the repository (~/.cargo, parent directories) and the caller's environment remain
 #   residual risk (see scripts/check-no-cargo-config.sh).
+# Exit status: 0 clean, 1 a check failed or could not run, 2 a syntax error in this script.
 # Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$(pwd); root_physical=$(pwd -P)
+
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh):
+# with errexit, bash 3.2 runs an EXIT trap with $? = 0 after a parse error. Without a trap it exits
+# 2, but this trap is here so that one added later for a cleanup cannot reopen that hole: an exit
+# before the last line, which sets the sentinel, becomes status 2; a non-zero status is kept.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-test-vectors-off.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # --- 0. No cargo config file in the repository (before any cargo command runs) ---------------------
 no_config_rc=0
@@ -170,4 +179,4 @@ else
   echo "ok: rustc gets no $feature cfg for polyjose on the host"
 fi
 
-exit $status
+completed=1; exit "$status"
