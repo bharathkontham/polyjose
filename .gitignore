@@ -7,3 +7,5 @@ platforms/android/build/
 platforms/android/src/main/jniLibs/
 platforms/swift/*.xcframework
 .build/
+# Packaged release artifacts (dist/npm/ from the JS packages, dist/apple/ from platforms/swift/scripts/package.sh; ADR 0037 §3).
+/dist/

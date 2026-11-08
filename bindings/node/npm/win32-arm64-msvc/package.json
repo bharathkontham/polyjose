@@ -1,0 +1,25 @@
+{
+  "name": "@polyjose/node-win32-arm64-msvc",
+  "version": "0.1.0",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "polyjose.win32-arm64-msvc.node",
+  "files": [
+    "polyjose.win32-arm64-msvc.node",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
+  "description": "polyjose for Node.js: JOSE (JWS, JWE, JWK, JWT) in pure Rust through Node-API, with the shared TypeScript facade (ADR 0031, ADR 0047).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bharathkontham/polyjose.git",
+    "directory": "bindings/node"
+  },
+  "os": [
+    "win32"
+  ]
+}

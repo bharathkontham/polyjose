@@ -59,9 +59,31 @@ no_trap_scripts="conformance-parity.sh"
 # The other scripts with an EXIT trap (paths from the repository root): test scripts that follow the
 # rule as the scripts/*.sh do, and sourced test helpers whose finish sets the sentinel (F11, F14).
 test_trap_scripts="scripts/tests/syntax/guards.sh scripts/tests/check-test-vectors-off/fixed-adapter-unreachable.sh
-  bindings/ffi/tests/generated-names.sh bindings/ffi/tests/generated-names-selftest.sh"
+  bindings/ffi/tests/generated-names.sh bindings/ffi/tests/generated-names-selftest.sh
+  bindings/wasm/scripts/check-workflow.sh
+  bindings/wasm/scripts/chromedriver.sh
+  bindings/wasm/test.sh
+  scripts/tests/check-deps/rsa-symbols.sh
+  scripts/tests/check-no-cargo-config/bindings.sh
+  scripts/tests/deny/cc-wrapper.sh
+  platforms/swift/scripts/build-xcframework.sh
+  platforms/swift/scripts/check-generated.sh
+  platforms/swift/scripts/package.sh
+  platforms/swift/scripts/test-simulator-lib.sh
+  platforms/swift/scripts/test-simulators.sh
+  platforms/swift/scripts/test-xcframework-stale.sh
+  platforms/swift/scripts/tests/ci-workflow.sh
+  bindings/node/scripts/pack.sh
+  bindings/node/scripts/pack-platform.sh
+  bindings/node/test/fixtures/glibc/regen.sh
+  bindings/node/test/fixtures/pe/regen.sh
+  scripts/tests/check-binding-api/node.sh
+  platforms/android/scripts/ci-check-workflow-test.sh
+  platforms/android/scripts/ci-emulator.sh
+  platforms/android/scripts/run-instrumented.sh"
 sourced_helpers="scripts/tests/check-deps/lib.sh scripts/tests/check-binding-api/lib.sh
-  scripts/tests/conformance-parity/lib.sh scripts/tests/test-all/lib.sh scripts/tests/third-party-notices/lib.sh"
+  scripts/tests/conformance-parity/lib.sh scripts/tests/test-all/lib.sh scripts/tests/third-party-notices/lib.sh
+  platforms/swift/scripts/tests/lib.sh"
 
 # --- The rule, read from the real scripts --------------------------------------------------------------
 

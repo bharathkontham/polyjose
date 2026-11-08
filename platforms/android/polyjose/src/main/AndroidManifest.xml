@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- polyjose requests no permissions; the namespace (dev.polyjose) is set in build.gradle.kts. -->
+<manifest />

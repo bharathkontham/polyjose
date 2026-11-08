@@ -420,12 +420,13 @@ Which operation families each platform's runner runs today. A cell that isn't "r
 |---|---|---|---|---|
 | Rust | `crates/polyjose/tests/conformance.rs` | runs | runs | runs |
 | Rust surface | `bindings/surface/tests/conformance.rs` (`polyjose-surface`, ADR 0030) | runs | runs | runs |
-| WASM | none yet (0006, over the 0013 surface) | no runner yet (0006) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0006) |
-| Node | none yet (0007, over the 0013 surface) | no runner yet (0007) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0007) |
-| Kotlin | none yet (0008, over the 0013 surface) | no runner yet (0008) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0008) |
-| Swift | none yet (0009, over the 0013 surface) | no runner yet (0009) | not yet bound (0006–0009) | N/A (no binding JWT surface yet, 0009) |
+| WASM | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/wasm` (0006): `wasm-node`, `wasm-chrome` (wasm-bindgen-test) and `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` (the packed tarball) | runs | runs | runs |
+| Node | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/node` (0007): `node` | runs | runs | runs |
+| Kotlin (JVM) | `platforms/android/shared-test/kotlin` (`dev.polyjose.conformance`), hosted by `polyjose-jvm`'s `ConformanceTest` | runs | runs | runs |
+| Kotlin (Android) | the same runner, hosted by `:polyjose`'s `ConformanceInstrumentedTest` on the emulator (`platforms/android/scripts/run-instrumented.sh`) | runs | runs | runs |
+| Swift (iOS) | `platforms/swift/Tests/PolyjoseTests/ConformanceRunner.swift` (0009): `swift-macos` on the macOS host, `swift-ios-sim` on the iOS 27.2 Simulator | runs | runs | runs |
 
-`jwks.select`, and `jwk.thumbprint`'s optional `hash`, run through the surface (`rust-surface`, 0013 T14), and the shared JS runner implements both, so each binding runs them as soon as its runner lands. Until then, test reports list WASM, Node, Kotlin and Swift as **SKIPPED (no binding runner yet; 0006–0009)** for them, as for the other families.
+`jwks.select`, and `jwk.thumbprint`'s optional `hash`, run through the surface (`rust-surface`, 0013 T14) and in every binding runner above (the shared JS runner, the Kotlin runner and the Swift runner implement both).
 
 When a binding's runner lands it implements every family it binds, and the never-skip rule applies to it from then on. Each binding's feature updates its row. ADR 0034's parity check then compares its results with the Rust reference run.
 
@@ -440,11 +441,11 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 | `wasm-node`, `wasm-chrome` | the wasm-bindgen-test runs of the WASM adapter (`wasm-pack test --node`, `--headless --chrome`) | 0006 |
 | `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` | the packed `@polyjose/wasm` tarball through the shared JS facade and its runner (`bindings/js/conformance/`) | 0006 |
 | `node` | `@polyjose/node` through the shared JS facade and its runner | 0007 |
-| `jvm` | the Kotlin API on the JVM | 0008 |
-| `android-emulator` | the Kotlin API on the Android emulator (AVD `polyjose-api36`) | 0008 |
-| `swift-macos`, `swift-ios-sim`, `swift-tvos-sim` | the Swift API on macOS and the iOS and tvOS simulators | 0009 |
+| `jvm` | the generated Kotlin API on the host JVM through JNA (`./gradlew :polyjose-jvm:test`), over `conformance/vectors/` read from the checkout | 0008 T02 |
+| `android-emulator` | the same Kotlin runner on the Android emulator (AVD `polyjose-api36`, arm64-v8a), over the vectors bundled as test-APK assets (`platforms/android/scripts/run-instrumented.sh`). Host-optional: with no SDK, AVD or booted emulator, `platforms/android/test.sh` waives it with `SKIPPED-RUNNER (android-emulator: host:<token>)` | 0008 T03 |
+| `swift-macos`, `swift-ios-sim` | the Swift API on the macOS host (`swift test`, `platforms/swift/test.sh`) and on a disposable iPhone simulator on the iOS 27.2 runtime (`xcodebuild test`, `platforms/swift/scripts/test-simulators.sh`). `swift-tvos-sim` stays a name in the schema but is not run: the Swift tests run on macOS and the iOS Simulator only (ADR 0046 §2, §4), so parity lists it as `SKIPPED (no results: swift-tvos-sim)` | 0009 |
 
-- **Off-host runs** (a browser page, workerd, the emulator, a simulator) hand their results to the host-side driver, which writes the file on the host.
+- **Off-host runs** (a browser page, workerd, the emulator, a simulator) hand their results to the host-side driver, which writes the file on the host. On the iOS Simulator, the Swift conformance test prints the document as one line starting with `POLYJOSE-CONFORMANCE-RESULTS `. It also writes a copy to the host path that the driver passes as `TEST_RUNNER_POLYJOSE_CONFORMANCE_OUT`. `platforms/swift/scripts/test-simulators.sh` extracts the line and requires it to equal that copy byte for byte. It also requires the line's `vectors_digest` to equal the [shell reference](#the-vector-set-digest) over the checkout, and only then writes `swift-ios-sim.json`.
 - **CI matrix runs** append their target to the file name: `node-x86_64-unknown-linux-musl.json`, `jvm-linux-x86-64.json`. The file's `runner` member stays the bare name (`node`), and the parity check compares the file like `<runner>`.
 - **Rust builds with features** (`cargo test -p polyjose --all-features`, as `scripts/test-all.sh rust` runs) write `rust-core-<features>.json`, the enabled feature names joined by `-` (for example `rust-core-deflate-fixed-rng.json`). They aren't the reference, and the parity check ignores them. Only the default-features build writes `rust-core.json`.
 - **`rust-surface`** never enables `fixed-rng`: the surface has no reproducible encryption (ADR 0005), so those vectors are always skipped with `feature:fixed-rng`, as in every binding. It enables `deflate` exactly when the core under it has it, which it finds out through the surface (a `compress` encryption succeeds, or is `UnsupportedAlgorithm`). Only the binding configuration, no `deflate`, writes `rust-surface.json`. A build in which Cargo turns the core's `deflate` on (`cargo test --workspace --all-features`) still runs and checks every vector but writes no results file, since its skip set is not the bindings' (ADR 0034 §3).
@@ -496,7 +497,7 @@ Each runner uses **its platform's own SHA-256, never polyjose's API under test**
 | `node`, `wasm-pkg-node` | `node:crypto` `createHash("sha256")`. `node-main.ts` reads each file once as bytes, hashes them, and only then decodes them as UTF-8 for the runner | `bindings/js/conformance/node-main.ts` |
 | `wasm-pkg-chrome`, `wasm-pkg-workerd` | `crypto.subtle.digest("SHA-256", bytes)`: the driver fetches each file as bytes and calls `vectorsDigest(files, subtleSha256)` from `bindings/js/conformance/runner.ts` | 0006 |
 | `jvm`, `android-emulator` | `java.security.MessageDigest.getInstance("SHA-256")` | 0008 |
-| `swift-macos`, `swift-ios-sim`, `swift-tvos-sim` | CryptoKit `SHA256` (or CommonCrypto `CC_SHA256`) | 0009 |
+| `swift-macos`, `swift-ios-sim` | CryptoKit `SHA256`, over the bytes bundled in the test bundle (`Bundle.module`), hashed before parsing; `swift-tvos-sim` too if that run is ever brought back (ADR 0046) | `platforms/swift/Tests/PolyjoseTests/VectorCorpus.swift` |
 
 **Every new runner (features 0006 to 0009) computes the digest from its first commit and unit-tests the worked example below.** A runner that can't compute it can't write a valid results file, so it fails parity; it is never skipped.
 
@@ -622,7 +623,7 @@ Points the sections above imply but that are easy to get wrong in a binding runn
   - `generate-*` shapes are the RFC sizes and curves.
   - The RSA modulus-bound keys are built by the generator, which also writes their JWK.
 
-  `source` names the RFC, OpenSSL for a generated key, or `polyjose` for a rule the description cites. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them all (`python3 -I`); edit the script, not the files. **Until features 0006–0009 bind the keys API, test reports list WASM, Node, Kotlin and Swift as `SKIPPED (API not yet bound)` for them (see [Binding runners](#binding-runners)). Each binding's runner implements `keys.*` when it binds the API, and the never-skip rule above then applies.**
+  `source` names the RFC, OpenSSL for a generated key, or `polyjose` for a rule the description cites. `crates/polyjose/tests/data/keys/regen/make-keys-vectors.py` writes them all (`python3 -I`); edit the script, not the files. **Every binding runner (WASM, Node, Kotlin and Swift, 0006–0009) runs `keys.*` (see [Binding runners](#binding-runners)), and the never-skip rule above applies to each.**
 - JWE vectors live under `jwe/`, one directory per task and kind: `jwe/compact/` (RFC 7516 Appendix A, RFC 7520 §5.6 and §5.8, round trips), `jwe/negative-structure/` (the error contract, one vector per rule; `source` "polyjose" or the RFC whose vector is refused), and the per-family and JSON directories of the later JWE tasks. RFC 7520 values are generated from the vendored ietf-jose cookbook (`crates/polyjose/tests/third_party/ietf-jose-cookbook/`), not transcribed.
 - JWS vectors are grouped by origin: `jws-rfc7515/` (RFC 7515 Appendix A and F; `source` "RFC 7515 App. A.x" or "RFC 7515 App. F"), `jws-rfc7797/`, `jws-rfc8037/`, `jws-oracle/` (generated independently of polyjose; `source` names the tool and its versions), `jws-negative/` (`source` names the RFC section, CVE or ADR enforced), `jws-limits/` (the default ADR 0026 §7 limits, at and just over each), and `third_party/rfc7520/jws/` (the RFC 7520 §4 cookbook).
 - Check every expected value against the RFC text yourself. If the RFC doesn't print the value, derive it independently of polyjose (for example with Python's `hashlib` over the hand-built input) and say so in `description`.

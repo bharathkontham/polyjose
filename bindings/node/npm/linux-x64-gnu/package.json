@@ -1,0 +1,28 @@
+{
+  "name": "@polyjose/node-linux-x64-gnu",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "polyjose.linux-x64-gnu.node",
+  "files": [
+    "polyjose.linux-x64-gnu.node",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
+  "description": "polyjose for Node.js: JOSE (JWS, JWE, JWK, JWT) in pure Rust through Node-API, with the shared TypeScript facade (ADR 0031, ADR 0047).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bharathkontham/polyjose.git",
+    "directory": "bindings/node"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}

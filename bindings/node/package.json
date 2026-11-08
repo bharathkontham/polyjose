@@ -1,13 +1,66 @@
 {
   "name": "@polyjose/node",
   "version": "0.1.0",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "description": "polyjose for Node.js: JOSE (JWS, JWE, JWK, JWT) in pure Rust through Node-API, with the shared TypeScript facade (ADR 0031, ADR 0047).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bharathkontham/polyjose.git",
+    "directory": "bindings/node"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "backend.js",
+    "backend.d.ts",
+    "facade/*.js",
+    "facade/*.d.ts",
+    "binding.cjs",
+    "binding.d.ts",
+    "addon-sha256.json",
+    "LICENSE",
+    "README.md",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
   "napi": {
     "binaryName": "polyjose",
-    "targets": ["x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc"
+    ]
   },
-  "scripts": { "build": "napi build --platform --release", "prepublishOnly": "napi prepublish -t npm" },
-  "devDependencies": { "@napi-rs/cli": "^3" },
-  "license": "MIT"
+  "scripts": {
+    "build": "scripts/build.sh",
+    "test": "./test.sh"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.12"
+  },
+  "optionalDependencies": {
+    "@polyjose/node-darwin-arm64": "0.1.0",
+    "@polyjose/node-darwin-x64": "0.1.0",
+    "@polyjose/node-linux-arm64-gnu": "0.1.0",
+    "@polyjose/node-linux-arm64-musl": "0.1.0",
+    "@polyjose/node-linux-x64-gnu": "0.1.0",
+    "@polyjose/node-linux-x64-musl": "0.1.0",
+    "@polyjose/node-win32-arm64-msvc": "0.1.0",
+    "@polyjose/node-win32-x64-msvc": "0.1.0"
+  }
 }

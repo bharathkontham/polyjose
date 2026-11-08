@@ -1,0 +1,3 @@
+# Build output of scripts/build-xcframework.sh: the XCFramework, the generated Swift and its
+# headers (ADR 0032 §1-§2). Never committed; the release attaches the zipped XCFramework.
+/build/

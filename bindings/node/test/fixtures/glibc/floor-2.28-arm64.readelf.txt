@@ -1,0 +1,18 @@
+Version symbols section '.gnu.version' contains 9 entries:
+ Addr: 00000000000002d8  Offset: 0x0002d8  Link: 1 (.dynsym)
+  000:   0 (*local*)       2 (GLIBC_2.17)    2 (GLIBC_2.17)    2 (GLIBC_2.17) 
+  004:   3 (GLIBC_2.28)    4 (GLIBC_2.17)    5 (GLIBC_2.17)    6 (GCC_3.0)    
+  008:   1 (*global*)   
+
+Version needs section '.gnu.version_r' contains 4 entries:
+ Addr: 00000000000002ec  Offset: 0x0002ec  Link: 5 (.dynstr)
+  0x0000: Version: 1  File: libdl.so.2  Cnt: 1
+  0x0040:   Name: GLIBC_2.17  Flags: none  Version: 4
+  0x0010: Version: 1  File: libpthread.so.0  Cnt: 1
+  0x0050:   Name: GLIBC_2.17  Flags: none  Version: 5
+  0x0020: Version: 1  File: libgcc_s.so.1  Cnt: 1
+  0x0060:   Name: GCC_3.0  Flags: none  Version: 6
+  0x0030: Version: 1  File: libc.so.6  Cnt: 2
+  0x0070:   Name: GLIBC_2.17  Flags: none  Version: 2
+  0x0080:   Name: GLIBC_2.28  Flags: none  Version: 3
+

@@ -13,7 +13,7 @@
 |---|---|---|
 | Rust | [`polyjose`](https://crates.io/crates/polyjose) on crates.io | — |
 | Node.js | `@polyjose/node` on npm | napi-rs |
-| Web / edge (WASM) | `@polyjose/wasm` on npm | wasm-bindgen |
+| Web (WASM) | `@polyjose/wasm` on npm | wasm-bindgen |
 | Android, Kotlin, Java | `dev.polyjose:polyjose` on Maven Central | UniFFI + cargo-ndk |
 | Swift (iOS; also iPadOS, macOS, tvOS, watchOS, visionOS) | Swift Package `Polyjose` | UniFFI + XCFramework |
 

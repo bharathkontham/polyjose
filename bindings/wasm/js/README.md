@@ -1,0 +1,124 @@
+# @polyjose/wasm
+
+**polyjose for Web (WASM).** JSON Object Signing and Encryption (JWS, JWE, JWK, JWT) from the pure-Rust [polyjose](https://github.com/bharathkontham/polyjose) core, compiled to WebAssembly. The same package runs in browsers, in Node.js and in Cloudflare Workers.
+
+> Status: **pre-alpha**. Don't use it in production.
+
+- **Pure Rust cryptography** (RustCrypto and dalek crates). There's no OpenSSL, `ring` or `aws-lc`, and the package has no runtime npm dependencies.
+- **Misuse-resistant.** Verify and decrypt need an explicit allow-list of algorithms, and `none` is never accepted (RFC 8725).
+- **The same API as `@polyjose/node`.** Both packages ship one TypeScript facade, so you can switch between them by changing the import.
+
+## Install
+
+```sh
+npm install @polyjose/wasm
+```
+
+ESM only. CommonJS code can `require("@polyjose/wasm")` on Node ≥ 22.12 (`require(esm)`).
+
+## Use
+
+```ts
+import { jwkGenerateForAlg, jwsSignCompact, jwsVerifyCompact, PolyjoseError } from "@polyjose/wasm";
+
+const key = await jwkGenerateForAlg("ES256");
+const token = await jwsSignCompact(new TextEncoder().encode("hello"), key, {
+  protectedHeader: { alg: "ES256" },
+});
+
+try {
+  const { payload } = await jwsVerifyCompact(token, key, { allowedAlgs: ["ES256"] });
+  // `payload` is secret: use it, don't log it (see "Don't log results"), then wipe it.
+  payload.fill(0);
+} catch (e) {
+  if (e instanceof PolyjoseError) console.error(e.code); // e.g. "AlgorithmNotAllowed"
+  else throw e;
+}
+```
+
+Every function returns a Promise. The WebAssembly module loads on the first call, and the package never uses top-level await.
+
+## Runtimes
+
+`package.json` `exports` picks the right entry for your runtime:
+
+| Condition | Entry | Gets the module from |
+|---|---|---|
+| `workerd` | `workerd.mjs` | a static `.wasm` import, which arrives as a compiled `WebAssembly.Module` |
+| `node` | `node.mjs` | `readFileSync`, a SHA-384 check, then `WebAssembly.compile` |
+| `browser`, `import`, `default` | `browser.mjs` | a `fetch` of `new URL("./polyjose_wasm_bg.wasm", import.meta.url)` with Subresource Integrity, then `WebAssembly.compile` |
+
+Every entry then instantiates the module with the glue's asynchronous `init`, awaited inside the first call, never `initSync` and never at import time.
+
+- **Cloudflare Workers** use the `workerd` entry. Wrangler's condition set lists `workerd` first.
+- **Browser Web Workers** use the browser entry, `browser.mjs`, like a page does. The package has no `worker` condition, so any condition set without `workerd` or `node` resolves `browser.mjs`. That includes the sets webpack 5 uses for `target: "webworker"` and for `new Worker(new URL(..., import.meta.url))`.
+- **Node.js** always adds the `node` condition, so it resolves `node.mjs`, also when run with `-C worker`.
+
+- **Tested:** Node.js ≥ 22.12, headless Chrome and Cloudflare Workers (workerd).
+- **Expected to work:** current Firefox and Safari, and bundlers that resolve `new URL(..., import.meta.url)` (webpack 5, Vite, esbuild).
+- **Not tested in 0.1.0:** Deno and Bun. Both resolve the `node`/`default` conditions.
+
+The work runs on the calling thread. To keep a page responsive during heavy operations, such as PBES2 with a high iteration count, call the package from a Web Worker.
+
+## Security notes
+
+### Don't log results
+
+Results and options are plain JavaScript objects, so printing one prints its secrets. `console.log(result)`, `util.inspect(result)` and similar calls show every byte of a `Uint8Array` field and the whole of a key.
+
+- **Never log** a `JwsVerified` or `JweDecrypted` result.
+- **Never log** the option records that carry `aad`, `detachedPayload` or a `key`: `JwsSigner`, `JweRecipient`, `JwsVerifyOptions` and `JweEncryptOptions`.
+- These are the seven secret fields:
+  - `JwsSigner.key` and `JweRecipient.key`;
+  - `JwsVerified.payload` and `JwsVerifyOptions.detachedPayload`;
+  - `JweDecrypted.plaintext` and `JweDecrypted.aad`;
+  - `JweEncryptOptions.aad`.
+- **Log only what you need,** for example `result.alg` or `payload.length`.
+- **Wipe returned bytes:** when you're done with a returned `Uint8Array`, overwrite it with `fill(0)`.
+
+polyjose's Kotlin and Swift bindings redact these fields when a record is printed. This package doesn't, because its results are plain data, so not logging them is the only safeguard (ADR 0065).
+
+### Randomness
+
+Every random byte (generated keys, content-encryption keys, IVs, salts, ephemeral keys, signing nonces) comes from `globalThis.crypto.getRandomValues`, looked up on every call. There is no fallback: if `crypto` or `getRandomValues` is missing or throws, the call rejects with `PolyjoseError` code `RandomnessUnavailable`.
+
+Because the lookup happens at call time, whatever `globalThis.crypto` is at that moment replaces the operating system's random number generator:
+- **A polyfill or test shim** (for example in some React Native or jsdom setups) that fills arrays from a weak source makes every generated key, content-encryption key and IV predictable, silently. ECDSA signatures stay safe, because their nonces are derived from the key and message as well (RFC 6979 with added randomness).
+- **A replaced `getRandomValues` receives a view of the module's whole WebAssembly memory**, not only the bytes it is asked to fill. Code that plants one can read the keys and data held there.
+
+Treat the host's `crypto` as part of what you trust. Use the platform's own `crypto.getRandomValues`, and don't let untrusted code run before or alongside this package in the same realm.
+
+### Serving the module
+
+- **MIME type.** Serve `polyjose_wasm_bg.wasm` as `application/wasm`, the media type registered for WebAssembly modules. Only the browser entry fetches the file: Node reads it from disk, and Cloudflare Workers get it precompiled in the deploy bundle. The browser entry checks the fetched bytes with Subresource Integrity and compiles them with `WebAssembly.compile`, which, unlike `WebAssembly.compileStreaming`, doesn't check the type. So another type doesn't stop the package from loading.
+- **Content Security Policy.** Allow the fetch of the `.wasm` file (`connect-src`) and WebAssembly compilation (`script-src 'wasm-unsafe-eval'`). Without `'wasm-unsafe-eval'`, a page with a CSP can't compile the module, and the first call rejects.
+- **Serve it byte for byte.** A bundler or CDN that rewrites, re-encodes or inlines the `.wasm` will make the first call fail (see [Loader integrity](#loader-integrity)).
+
+### Loader integrity
+
+Each entry loads only the `polyjose_wasm_bg.wasm` shipped next to it, and checks it before first use:
+- **Node:** the bytes read from disk must have the SHA-384 recorded in the package at build time. Otherwise the first call rejects.
+- **Browsers and bundlers:** the module is fetched with Subresource Integrity (`fetch(url, { integrity: "sha384-…" })`). A bundler, CDN or optimiser that changes the file makes the first call reject.
+- **Cloudflare Workers:** the module arrives precompiled in the same deploy bundle as the package's JavaScript, so there are no bytes to hash. The checks below bind it to the package.
+
+In every runtime, the first call also refuses two kinds of module: one that other code initialised first (for example by importing the package's internal files by path), and one whose version differs from the package's. Both refusals are final for that process, worker or page.
+
+### Trust model
+
+Every script in the same JavaScript realm is trusted. Code that can patch `WebAssembly`, `fetch`, `crypto` or `TextEncoder` can subvert any JavaScript library, this one included.
+
+### After a trap
+
+If the module traps (a `WebAssembly.RuntimeError`, for example when it runs out of memory on a very large input), or a call fails with a `RangeError` (as a stack overflow inside the module does), the instance is unusable. That call rejects, and every later call rejects with an error saying to reload. Secrets passed to the trapped call may remain in the module's memory. Restart the process or worker, or reload the page.
+
+### What stays in memory
+
+- **The Rust heap:** inside the WebAssembly module, secret inputs (keys, payloads, plaintexts, passwords) are wiped when a call finishes, and secret outputs are copied out without leaving a copy on the module's heap.
+- **A JSON-serialized JWE carries `aad` in the clear** (RFC 7516 §7.2.1). Don't put secrets in `aad` if you use the JSON serialization.
+- **The stack is not scrubbed.** Short-lived fragments of keys and plaintext can stay in the module's stack memory after a call, until later calls overwrite them.
+- **JWT claims are not treated as secret.** They are returned as plain strings and not wiped. Put secret data in a JWE payload, not in JWT claims.
+- **JavaScript copies are yours.** JavaScript strings, such as JWKs, tokens and claims, are immutable, and the garbage collector frees them, so no library can wipe them. A returned `Uint8Array` (a payload, plaintext or DER key) is yours: overwrite it with `fill(0)` when you're done with it.
+
+## License
+
+MIT. `THIRD-PARTY-NOTICES.txt` lists the Rust crates compiled into `polyjose_wasm_bg.wasm`, with their licenses.

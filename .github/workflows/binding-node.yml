@@ -1,0 +1,375 @@
+# @polyjose/node prebuilds (feature 0007 T05; ADR 0031 §2, ADR 0034 §2 and §5, ADR 0037 §1).
+#
+# Builds, tests and packs the addon for each of the eight napi targets of bindings/node/package.json
+# on a native runner, runs the suite on Node 22, 24 and 26 on linux-x64 and the compiled tests on
+# Node 22.12.0 (the engines floor), then checks conformance parity over every results file. All of
+# the build logic is in bindings/node/scripts/ci-build.sh, so a local run (`scripts/ci-build.sh
+# aarch64-apple-darwin`) and a CI run check the same things.
+#
+# When it runs (ADR 0044; owner, 2026-11-07): never on PRs or pushes. The platform matrix runs once,
+# at the 0.1.0 release candidate, inside the release workflow of feature 0012, which turns this file
+# into a reusable workflow (0012 T03 adds `workflow_call` next to `workflow_dispatch`, and its
+# `mode` input, ADR 0037 §1). Until then the only trigger is a manual dispatch, and nobody dispatches
+# it without the owner. It is shaped for that change:
+#   - no inputs yet; any added later are declared identically under both triggers, and reach a
+#     script only through a step's `env:` (read there as "$MODE"), never as
+#     `${{ inputs.mode }}` inside `run:`, so an input value is data, never shell code
+#     (review-security.md I6). test/ci.test.ts rejects any inputs expression in a run: block;
+#   - nothing reads PR or event context, only `matrix.*`;
+#   - artifact names are fixed: npm-<target> (the platform tarball) and conformance-node-<label>
+#     (target/conformance/node-<label>.json), ADR 0037 §1;
+#   - no workflow-level concurrency group: inside a called workflow, github.workflow is the
+#     caller's name, so a group here could collide with the caller's own.
+#
+# It never uploads to a registry: no release command of any package tool, no registry credentials, no
+# repository credentials beyond the read-only default, no OIDC. bindings/node/test/ci.test.ts
+# checks this file on every test.sh run (trigger set, permissions, forbidden strings, pins, matrix).
+#
+# Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
+# that SHA was resolved from. Bump both together (ci.yml's convention). The Alpine and manylinux
+# images are pinned by digest the same way.
+#
+# The glibc floor of the gnu addons is 2.28 (review-code.md SF-2, feature 0007 F04; README
+# "Supported platforms"): both gnu targets build inside pypa's manylinux_2_28 image (AlmaLinux 8,
+# glibc 2.28) of their architecture, and ci-build.sh fails a gnu addon that requires a GLIBC_
+# symbol version above 2.28. The manylinux images are one repository per architecture, so each
+# gnu matrix entry pins its own digest, resolved 2026-11-07 (builds of 2026-11-06); the
+# node-versions job uses the x86_64 one. Bump a digest deliberately, together with
+# bindings/node/test/ci.test.ts, which pins both.
+#
+# Exception, apk packages (review-code.md N3): inside that image, `apk add` installs bash,
+# build-base, git, python3 and rustup at the versions Alpine's v3.23 repository holds when the
+# job runs, unpinned. Alpine keeps one build of each package per release branch: measured on
+# 2026-11-07, the v3.23 main and community indexes held exactly one version of each of these
+# (and of 27,428 of their 27,433 packages), so a `pkg=version-rN` pin would fail the job as soon
+# as Alpine replaces that build, and there is no dated snapshot to pin to.
+# What stays fixed: the image digest fixes the base system, the repository branch and apk's
+# signing keys, against which apk checks every index and package; the Rust toolchain comes from
+# rust-toolchain.toml's exact channel through rustup, not from apk. What can move between runs
+# is the C toolchain of build-base (gcc, binutils' linker, musl-dev), which links the musl
+# addons, plus bash, git, python3 and rustup itself.
+name: binding-node
+
+on:
+  workflow_dispatch:
+
+# Least privilege: the workflow only reads the repository.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # One job per napi target (ADR 0031 §2), each on a runner of that platform, because the suite
+  # loads the addon it builds. darwin-x64 builds on macos-15-intel (macos-13 is retired, ADR 0037
+  # §1). The Linux targets build inside a container started with `docker run` on the matching
+  # Linux runner: JavaScript actions do not run in Alpine containers on arm64 runners, so the
+  # Linux jobs check out, upload and download on the runner and only build inside the container.
+  # musl builds in Alpine (`image`), gnu in manylinux_2_28 (`manylinux`, the glibc floor, above).
+  prebuild:
+    name: prebuild (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-apple-darwin, platform: darwin-x64, os: macos-15-intel }
+          - { target: aarch64-apple-darwin, platform: darwin-arm64, os: macos-latest }
+          - { target: x86_64-unknown-linux-gnu, platform: linux-x64-gnu, os: ubuntu-latest, manylinux: "quay.io/pypa/manylinux_2_28_x86_64@sha256:ae830e2ecbf4568743f8b760920cd7483538375b6b242a9fb02b5b2ad0245f68" }
+          - { target: aarch64-unknown-linux-gnu, platform: linux-arm64-gnu, os: ubuntu-24.04-arm, manylinux: "quay.io/pypa/manylinux_2_28_aarch64@sha256:6c4f9b6d9453bb47b21b4c1e4f04f3c662584f60f4ed8455f4561a336ff19414" }
+          - { target: x86_64-unknown-linux-musl, platform: linux-x64-musl, os: ubuntu-latest, image: "node:24-alpine3.23@sha256:0efee1e068d21f6edcab7fa8c962fc4ecd50d4e28727bc23963379b63ee318ab" }
+          - { target: aarch64-unknown-linux-musl, platform: linux-arm64-musl, os: ubuntu-24.04-arm, image: "node:24-alpine3.23@sha256:0efee1e068d21f6edcab7fa8c962fc4ecd50d4e28727bc23963379b63ee318ab" }
+          - { target: x86_64-pc-windows-msvc, platform: win32-x64-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, platform: win32-arm64-msvc, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      # Git for Windows checks text files out with CRLF by default, which breaks the bash scripts.
+      - name: LF line endings (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # As in ci.yml: before anything that invokes cargo, so no cargo config file in the
+      # repository can change sources, flags or the compiler for the build below.
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      # Native and gnu jobs: Node and Rust on the runner (the gnu jobs mount both into manylinux,
+      # below). rustup reads rust-toolchain.toml, so the pinned channel is the one local builds
+      # use; the target's standard library is added on top.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ !matrix.image }}
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # scripts/third-party-notices.sh runs `python3`; Windows Python installs only `python`.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.13"
+
+      - name: python3 on PATH (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          shim="$(cygpath -u "$RUNNER_TEMP")/python3-shim"
+          mkdir -p "$shim"
+          printf '#!/bin/sh\nexec python "$@"\n' >"$shim/python3"
+          chmod +x "$shim/python3"
+          "$shim/python3" --version
+          cygpath -w "$shim" >>"$GITHUB_PATH"
+
+      - name: Install toolchain (rust-toolchain.toml)
+        if: ${{ !matrix.image }}
+        run: |
+          rustup toolchain install
+          rustup target add "${{ matrix.target }}"
+          rustup show
+          cargo --version
+
+      - name: ci-build.sh (native)
+        if: ${{ !matrix.image && !matrix.manylinux }}
+        run: bindings/node/scripts/ci-build.sh "${{ matrix.target }}"
+
+      # The RSA symbol guard (ADR 0049 §1) for this job's target (review-security.md L2). The guard
+      # builds for the host, and on these runners the host is the target (ci-build.sh checked
+      # that), so code compiled only for linux, musl or windows is read as object code too, not only
+      # by check-deps.sh's text scan. It needs the toolchain's llvm-nm and llvm-ar (llvm-tools); it
+      # looks for them in the toolchain without an .exe suffix, so on Windows their directory goes
+      # on PATH, where its PATH lookup finds them. The Linux jobs run it inside their container,
+      # below.
+      - name: RSA symbol guard (native)
+        if: ${{ !matrix.image && !matrix.manylinux }}
+        run: |
+          rustup component add llvm-tools
+          if [ "$RUNNER_OS" = Windows ]; then
+            host=$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')
+            PATH="$(cygpath -u "$(rustc --print sysroot)")/lib/rustlib/$host/bin:$PATH"
+          fi
+          scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
+
+      # gnu jobs: the same script inside manylinux_2_28, so the addon links against glibc 2.28 and
+      # ci-build.sh's floor check holds (F04), then the RSA symbol guard there (L2, above). The
+      # image supplies glibc, the C toolchain (gcc-toolset), binutils (readelf, for the check),
+      # git and CPython; only the dynamic links to glibc and libgcc_s reach the addon. Rust and
+      # Node are the runner's own, installed by the steps above and mounted read-only: the
+      # toolchain directory rust-toolchain.toml resolved (`rustc --print sysroot`, with this
+      # target's std and llvm-tools; official rustc and cargo need glibc 2.17) and setup-node's
+      # Node (the official build; its own floor is glibc 2.28). So the gnu jobs build with
+      # exactly the Rust and Node of the native jobs, nothing is downloaded inside the image, and
+      # the image cannot change either toolchain. No rustup runs inside: cargo and rustc come
+      # from the mounted bin/, so rust-toolchain.toml was applied on the runner already. CPython
+      # (scripts/third-party-notices.sh, the RSA guard) is the image's own 3.13.
+      - name: ci-build.sh (manylinux)
+        if: ${{ matrix.manylinux }}
+        env:
+          IMAGE: ${{ matrix.manylinux }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup component add llvm-tools
+          rust=$(rustc --print sysroot)
+          node=$(dirname "$(dirname "$(node -p process.execPath)")")
+          docker run --rm -v "$PWD:/work" -w /work -v "$rust:/opt/rust:ro" -v "$node:/opt/node:ro" \
+            -e TARGET -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL \
+            "$IMAGE" bash -euc '
+              export PATH="/opt/rust/bin:/opt/node/bin:/opt/python/cp313-cp313/bin:$PATH"
+              git config --global --add safe.directory /work
+              ldd --version | head -n 1
+              rustc --version
+              cargo --version
+              node --version
+              python3 --version
+              bindings/node/scripts/ci-build.sh "$TARGET"
+              scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
+            '
+
+      # musl jobs: the same script inside Alpine, then the RSA symbol guard there (L2, above).
+      # rustup comes from Alpine's own package; the container's default target is the runner's
+      # musl target, built dynamically linked (napi build adds -crt-static for musl).
+      - name: ci-build.sh (Alpine)
+        if: ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work -e TARGET -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL \
+            "$IMAGE" sh -euc '
+              apk add --no-cache bash build-base git python3 rustup
+              git config --global --add safe.directory /work
+              rustup-init -y --profile minimal --default-toolchain none
+              . "$HOME/.cargo/env"
+              rustup toolchain install
+              rustup target add "$TARGET"
+              rustup component add llvm-tools
+              rustup show
+              bindings/node/scripts/ci-build.sh "$TARGET"
+              scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
+            '
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-${{ matrix.target }}
+          path: bindings/node/dist/npm/polyjose-node-${{ matrix.platform }}-*.tgz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-node-${{ matrix.target }}
+          path: target/conformance/node-${{ matrix.target }}.json
+          if-no-files-found: error
+
+  # The Node-API floor and the current releases (ADR 0031 §2: engines >= 22.12; Node 22, 24 and 26),
+  # plus the compiled tests on Node 22.12.0 itself on the Node 22 leg. Each run has its own results
+  # label, so parity sees all four. Each leg builds inside the same manylinux_2_28 image as the
+  # linux-x64-gnu prebuild, with its own Node mounted (F04): the suite then runs on the addon
+  # exactly as it ships, at the glibc floor, and ci-build.sh's glibc check holds on every gnu
+  # build, with no way to skip it (a runner build here would need GLIBC_2.34 and fail it).
+  node-versions:
+    name: node ${{ matrix.node }} (x86_64-unknown-linux-gnu)
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+          node --version
+
+      # As the prebuild's manylinux step, with this leg's Node. The Node 22.12.0 step below runs on
+      # the runner and writes its results file into the tree, so the container (root) hands the
+      # tree back to the runner's user at the end.
+      - name: ci-build.sh (manylinux)
+        env:
+          IMAGE: quay.io/pypa/manylinux_2_28_x86_64@sha256:ae830e2ecbf4568743f8b760920cd7483538375b6b242a9fb02b5b2ad0245f68
+          LABEL: x86_64-unknown-linux-gnu-node${{ matrix.node }}
+        run: |
+          rust=$(rustc --print sysroot)
+          node=$(dirname "$(dirname "$(node -p process.execPath)")")
+          docker run --rm -v "$PWD:/work" -w /work -v "$rust:/opt/rust:ro" -v "$node:/opt/node:ro" \
+            -e LABEL -e HOST_IDS="$(id -u):$(id -g)" -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL \
+            "$IMAGE" bash -euc '
+              export PATH="/opt/rust/bin:/opt/node/bin:/opt/python/cp313-cp313/bin:$PATH"
+              git config --global --add safe.directory /work
+              ldd --version | head -n 1
+              rustc --version
+              node --version
+              python3 --version
+              bindings/node/scripts/ci-build.sh x86_64-unknown-linux-gnu "$LABEL"
+              chown -R "$HOST_IDS" /work
+            '
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conformance-node-x86_64-unknown-linux-gnu-node${{ matrix.node }}
+          path: target/conformance/node-x86_64-unknown-linux-gnu-node${{ matrix.node }}.json
+          if-no-files-found: error
+
+      # The engines floor itself, exactly (review-code.md SF-7). The build above needs Node 22.18 or
+      # later (bindings/js's gen-error-codes.ts uses type stripping), so `22` gives the newest 22.x;
+      # this leg then installs 22.12.0 and runs the already compiled tests on it, against the addon
+      # built above: test.sh's list (every dist/*.test.js except package.test.js, which pack.sh
+      # runs), with its own results label. Nothing is built or installed on 22.12.0.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.node == 22
+        with:
+          node-version: 22.12.0
+          package-manager-cache: false
+
+      - name: node --test on Node 22.12.0 (the engines floor)
+        if: matrix.node == 22
+        working-directory: bindings/node
+        env:
+          POLYJOSE_CONFORMANCE_SUFFIX: x86_64-unknown-linux-gnu-node22.12
+        run: |
+          [ "$(node --version)" = v22.12.0 ] || { echo "::error::expected Node v22.12.0, got $(node --version)"; exit 1; }
+          tests=()
+          for f in dist/*.test.js; do
+            [ "$f" = dist/package.test.js ] || tests+=("$f")
+          done
+          [ "${#tests[@]}" -gt 0 ] || { echo "::error::no compiled tests in bindings/node/dist"; exit 1; }
+          node --test --test-reporter=spec "${tests[@]}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.node == 22
+        with:
+          name: conformance-node-x86_64-unknown-linux-gnu-node22.12
+          path: target/conformance/node-x86_64-unknown-linux-gnu-node22.12.json
+          if-no-files-found: error
+
+  # ADR 0034 §5: every results file against a fresh rust-core reference (default features, ADR 0034
+  # §4). The parity script reports a missing runner as SKIPPED without failing, so this job first
+  # requires each file this workflow promises.
+  parity:
+    name: conformance parity
+    needs: [prebuild, node-versions]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - name: rust-core reference
+        run: cargo test --locked -p polyjose --test conformance
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: conformance-node-*
+          path: target/conformance
+          merge-multiple: true
+
+      - name: every results file is present
+        run: |
+          missing=0
+          for label in \
+            x86_64-apple-darwin aarch64-apple-darwin \
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+            x86_64-pc-windows-msvc aarch64-pc-windows-msvc \
+            x86_64-unknown-linux-gnu-node22 x86_64-unknown-linux-gnu-node24 x86_64-unknown-linux-gnu-node26 \
+            x86_64-unknown-linux-gnu-node22.12; do
+            f=target/conformance/node-$label.json
+            if [ -f "$f" ]; then echo "present: $f"; else echo "::error::missing $f"; missing=1; fi
+          done
+          exit "$missing"
+
+      - name: conformance parity
+        run: scripts/conformance-parity.sh

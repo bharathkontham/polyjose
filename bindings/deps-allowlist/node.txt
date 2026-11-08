@@ -18,9 +18,10 @@
 # (with its backend and convert_case/unicode-segmentation for the camelCase names; syn, quote,
 # proc-macro2 and unicode-ident are already in deps-allowlist.txt), napi-sys (the Node-API symbols,
 # loaded through libloading and windows-link on Windows), ctor (module registration at load time),
-# bitflags, nohash-hasher and rustc-hash (napi's internal tables) and the futures crates napi's
-# default features use for its async task machinery (futures-util with memchr, slab and
-# pin-project-lite).
+# bitflags, nohash-hasher and rustc-hash (napi's internal tables) and the futures crates, which
+# napi 3.16.1 depends on unconditionally (futures-util with memchr, slab and pin-project-lite).
+# Measured (feature 0007 T01) with napi's default features off and only `napi8` + `dyn-symbols`
+# on: no tokio and no serde.
 napi
 napi-derive
 napi-derive-backend

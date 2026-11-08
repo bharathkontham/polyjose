@@ -1,0 +1,3 @@
+# Assembled by scripts/build-package.sh (ADR 0031 §3); its staging lives under the workspace
+# target/ directory and the tarball under the repository's dist/npm/.
+/pkg/

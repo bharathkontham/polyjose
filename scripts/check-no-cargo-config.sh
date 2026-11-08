@@ -20,22 +20,42 @@
 #      the untracked/ignored listing; a *tracked* file under target/ still fails). Cargo reads a
 #      config only from its working directory and the directories above it, and no gate, script
 #      or CI step runs cargo inside a build directory.
-#   2. No script under scripts/ and no file under .github/ (except this script) passes `--config`
-#      or writes a `.cargo/config*` or `$CARGO_HOME/config*` file, or assigns an environment
-#      variable that does what a config file would: `CARGO_SOURCE_*`, `CARGO_TARGET_<triple>_
-#      {RUSTFLAGS,RUSTDOCFLAGS,LINKER,RUNNER}`, `CARGO_BUILD_{RUSTFLAGS,RUSTDOCFLAGS,RUSTC,
-#      RUSTC_WRAPPER,RUSTC_WORKSPACE_WRAPPER,RUSTDOC}`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`,
-#      `RUSTDOCFLAGS`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`,
-#      `RUSTC_BOOTSTRAP`, `CARGO_UNSTABLE_*` or `CARGO_HOME`. Comment lines are skipped. An
-#      assignment is `NAME=`, `NAME<<` (GitHub's $GITHUB_ENV), `NAME:` (a YAML env key) or
-#      `${NAME:=`. check-test-vectors-off.sh separately checks *RUSTFLAGS in the environment.
+#   2. No file under scripts/, .github/ or bindings/ (except this script) passes `--config` or
+#      cargo's `-Z` (an unstable flag), writes a `.cargo/config*` or `$CARGO_HOME/config*` file, or
+#      assigns an environment variable that does what a config file would: `CARGO_SOURCE_*`,
+#      `CARGO_TARGET_<triple>_{RUSTFLAGS,RUSTDOCFLAGS,LINKER,RUNNER}`, `CARGO_BUILD_{RUSTFLAGS,
+#      RUSTDOCFLAGS,RUSTC,RUSTC_WRAPPER,RUSTC_WORKSPACE_WRAPPER,RUSTDOC}`, `CARGO_ENCODED_RUSTFLAGS`,
+#      `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`,
+#      `RUSTC_BOOTSTRAP`, `CARGO_UNSTABLE_*` or `CARGO_HOME`. Comment lines are skipped: those
+#      starting with `#`, and in Rust, TypeScript/JavaScript, Kotlin, Java and Swift files (by
+#      extension) those starting with `//` (doc comments such as bindings/wasm/tests/memory.rs's
+#      manual commands; in a shell script a `//` line is a path, and is read). An
+#      assignment is `NAME=`, `NAME+=`, `NAME<<` (GitHub's $GITHUB_ENV), `NAME:` (a YAML env key or a
+#      JavaScript property) or `${NAME:=`. check-test-vectors-off.sh separately checks *RUSTFLAGS
+#      in the environment.
+#      bindings/ is read because the shipped @polyjose/wasm build takes extra Cargo arguments on
+#      its command line (security audit L2 of feature 0006): anything added there reaches the
+#      published .wasm and no other guard. The exceptions (`allowed` below) are allowed by path
+#      and exact text, each at most once in its file (absent is fine):
+#      - ADR 0059's line in bindings/wasm/scripts/wasm-cargo-args.sh, which build-package.sh and
+#        test.sh source; no other line under bindings/ may assign `WASM_CARGO_ARGS` (reading
+#        `${WASM_CARGO_ARGS[@]}` or `${#WASM_CARGO_ARGS[@]}` is fine), so that line is all of the
+#        build's extra arguments. check-rsa-symbols.sh builds the wasm32 configurations with the
+#        same line. Changing it needs an ADR superseding ADR 0059 and the same change here;
+#      - @polyjose/node's static C runtime for the *-pc-windows-msvc prebuilds (0007 review SF-1:
+#        official Node links its CRT statically and ships no VC++ redistributable): the one
+#        RUSTFLAGS line of bindings/node/scripts/ci-build.sh and the regex of
+#        bindings/node/test/ci.test.ts that asserts it (0006 F10; owner decision at Gate 2,
+#        brain decisions.md 2026-11-08). Every other RUSTFLAGS line fails as before.
 #
 # Not covered (residual risk; cargo also reads these, but they are not in the repository): a config
 # in a directory above the checkout (e.g. ~/.cargo/config.toml), $CARGO_HOME/config.toml, CARGO_*
 # and RUST* variables from the caller's environment or the CI runner image, `--config` typed on a
 # command line, and a variable name built at run time (or an env map from a `${{ }}` expression),
-# which no text scan can see. Changes to scripts/, .github/ and rust-toolchain.toml go through
-# owner review for that reason. The script prints a note for configs and variables it finds
+# which no text scan can see; also a `WASM_CARGO_ARGS` change made without assigning the name
+# (`read -a`, `declare`, an array built through a nameref), and a guarded variable set without an
+# assignment (`read RUSTFLAGS`, `printf -v`, then a bare `export`). Changes to scripts/, .github/,
+# bindings/ and rust-toolchain.toml go through owner review for that reason. The script prints a note for configs and variables it finds
 # outside the repository, without failing.
 #
 # Exit status: 0 clean, 1 a config or setting was found, 2 the check could not run (fails closed).
@@ -97,35 +117,66 @@ else
   echo "ok: no .cargo/config or .cargo/config.toml anywhere in the repository (git: tracked, untracked, ignored; filesystem)"
 fi
 
-# --- 2. No script or workflow sets cargo configuration another way ----------------------------------
+# --- 2. No script, workflow or binding sets cargo configuration another way ------------------------
 names='CARGO_SOURCE_[A-Za-z0-9_]+|CARGO_TARGET_[A-Za-z0-9_]+_(RUSTFLAGS|RUSTDOCFLAGS|LINKER|RUNNER)'
 names="$names"'|CARGO_BUILD_(RUSTFLAGS|RUSTDOCFLAGS|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|RUSTDOC)'
 names="$names"'|CARGO_ENCODED_RUSTFLAGS|CARGO_ENCODED_RUSTDOCFLAGS|RUSTFLAGS|RUSTDOCFLAGS'
 names="$names"'|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|RUSTDOC|RUSTC_BOOTSTRAP|CARGO_UNSTABLE_[A-Za-z0-9_]+|CARGO_HOME'
-git ls-files -z --cached --others --exclude-standard -- scripts .github >"$work/build-files.z" \
-  || die "git ls-files (scripts, .github) failed"
+# The exceptions, by path and exact text; each line is allowed at most once in its file.
+# ADR 0059: the one command-line Cargo override of the shipped wasm build.
+allowed_file=bindings/wasm/scripts/wasm-cargo-args.sh
+allowed_line="WASM_CARGO_ARGS=(--config 'profile.release.opt-level=\"z\"')"
+# 0007 review SF-1 (owner decision at Gate 2): the msvc prebuilds link the C runtime statically, as
+# official Node does (no VC++ redistributable), and ci.test.ts asserts that line.
+crt_file=bindings/node/scripts/ci-build.sh
+# shellcheck disable=SC2016 # the exact text of the lines, not expansions
+crt_line='  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static"'
+crt_test_file=bindings/node/test/ci.test.ts
+# shellcheck disable=SC2016 # the exact text of the lines, not expansions
+crt_test_line='    /^\s*export RUSTFLAGS="\$\{RUSTFLAGS:\+\$RUSTFLAGS \}-C target-feature=\+crt-static"$/,'
+# "<path><TAB><line>" per line, for awk.
+allowed=$(printf '%s\t%s\n' "$allowed_file" "$allowed_line" "$crt_file" "$crt_line" "$crt_test_file" "$crt_test_line")
+git ls-files -z --cached --others --exclude-standard -- scripts .github bindings >"$work/build-files.z" \
+  || die "git ls-files (scripts, .github, bindings) failed"
 : >"$work/settings"
 while IFS= read -r -d '' file; do
   [ "$file" = "$self" ] && continue
   [ -f "$file" ] || continue # tracked but deleted from the working tree
-  awk -v names="$names" -v file="$file" '
+  case $file in bindings/*) binding=1 ;; *) binding=0 ;; esac
+  case $file in *.rs | *.ts | *.mts | *.cts | *.js | *.mjs | *.cjs | *.kt | *.kts | *.java | *.swift) slashes=1 ;; *) slashes=0 ;; esac
+  # The allowed lines go through the environment: awk -v would interpret their backslashes.
+  ALLOWED=$allowed awk -v names="$names" -v file="$file" -v binding="$binding" -v slashes="$slashes" '
     BEGIN {
       q = "[\"" sprintf("%c", 39) "]?"
-      eq = "(^|[^A-Za-z0-9_])(" names ")" q "[[:space:]]*(=|<<)"
+      eq = "(^|[^A-Za-z0-9_])(" names ")" q "[[:space:]]*([+]?=|<<)"
       colon = "(^|[^A-Za-z0-9_{])(" names ")" q "[[:space:]]*:"
       brace = "[{](" names "):="
       flag = "(^|[^A-Za-z0-9_-])--config([=[:space:]\"" sprintf("%c", 39) "]|$)"
+      unstable = "(^|[^A-Za-z0-9_-])-Z"
+      reads = "[$][{]#?WASM_CARGO_ARGS[[]@[]][}]"
+      # The allowed lines of this file (the path is everything before the first tab).
+      n = split(ENVIRON["ALLOWED"], entries, "\n"); nallowed = 0
+      for (i = 1; i <= n; i++) {
+        t = index(entries[i], "\t")
+        if (t > 1 && substr(entries[i], 1, t - 1) == file) allowed_line[++nallowed] = substr(entries[i], t + 1)
+      }
     }
     /^[[:space:]]*#/ { next }
-    $0 ~ flag || $0 ~ eq || $0 ~ colon || $0 ~ brace || tolower($0) ~ "([.]cargo|cargo_home[}]?)/config" {
+    slashes && /^[[:space:]]*\/\// { next }
+    nallowed {
+      for (i = 1; i <= nallowed; i++) if (!seen_allowed[i] && $0 == allowed_line[i]) { seen_allowed[i] = 1; next }
+    }
+    binding { rest = $0; gsub(reads, "", rest) }
+    (binding && rest ~ "WASM_CARGO_ARGS") || $0 ~ flag || $0 ~ unstable || $0 ~ eq || $0 ~ colon || $0 ~ brace \
+      || tolower($0) ~ "([.]cargo|cargo_home[}]?)/config" {
       printf "%s:%d: %s\n", file, FNR, $0
     }' "$file" >>"$work/settings" || die "could not scan $file"
 done <"$work/build-files.z"
 if [ -s "$work/settings" ]; then
-  fail "scripts or workflows set cargo configuration outside a config file (--config, a .cargo/config write, or a CARGO_*/RUST* variable):"
+  fail "scripts, workflows or bindings set cargo configuration outside a config file (--config, -Z, a .cargo/config write, a CARGO_*/RUST* variable, or WASM_CARGO_ARGS, other than the allowed lines of ADR 0059 and 0007 SF-1):"
   sed 's/^/  - /' "$work/settings"
 else
-  echo "ok: no script or workflow passes --config, writes a cargo config or sets a cargo config variable"
+  echo "ok: no script, workflow or binding passes --config or -Z, writes a cargo config or sets a cargo config variable (bindings/: only the allowed lines of ADR 0059 and 0007 SF-1)"
 fi
 
 # --- Notes: cargo configuration outside the repository (not checked, never fails) ------------------
