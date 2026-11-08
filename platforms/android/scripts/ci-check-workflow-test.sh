@@ -10,6 +10,7 @@
 # Exit status: 0 every case behaved; 1 a case did not (each printed with FAIL); 2 setup error.
 # The cases hold literal ${{ }} and $VAR text for the workflow, never for this shell.
 # shellcheck disable=SC2016
+# shellcheck disable=SC2329 # the mutations are called by name (expect_fail, expect_pass)
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd -P) || exit 2
 repo=$(cd "$here/../../.." && pwd -P) || exit 2
@@ -19,7 +20,11 @@ base=$repo/.github/workflows/binding-android.yml
 [ -f "$base" ] || { echo "no $base"; exit 2; }
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-check-workflow-test.XXXXXX") || exit 2
-trap 'rm -rf "$tmp"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$tmp"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "ci-check-workflow-test.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 case_file=$tmp/binding-android.yml
 passed=0 failed=0
 ok() { echo "ok    $*"; passed=$((passed + 1)); }
@@ -298,4 +303,4 @@ if [ "$rc" -eq 2 ]; then ok "a missing workflow file is a usage error (2)"; else
 
 echo
 echo "ci-check-workflow-test: $passed passed, $failed failed"
-[ "$failed" -eq 0 ]
+completed=1; exit "$((failed > 0))"
