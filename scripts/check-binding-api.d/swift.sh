@@ -23,7 +23,16 @@
 #        and the enum must have the exported `public func code() -> String` (ADR 0030 §5);
 #      - a `public` member of an extension (depth 1) of any type but UniFFI's converters fails the
 #        mode: the inventory has no form for hand-written members yet, so adding one is a review
-#        decision that extends the inventory and this mode together;
+#        decision that extends the inventory and this mode together. The one exception is the
+#        printing members of the redaction extensions (below);
+#      - an extension's header is read up to its `{`, over several lines if need be, and every
+#        protocol of its conformance list (before any `where`) must be allowed, since a conformance
+#        is public API as well: `Sendable` (SWIFT_GENERATED_CONFORMANCES) only in the generated
+#        Polyjose.swift, and the printing protocols (SWIFT_REDACTION_PROTOCOLS) only in
+#        Redaction.swift (SWIFT_REDACTION_FILE), only on the records whose secret fields ADR 0065
+#        redacts (SWIFT_REDACTED_RECORDS). Such an extension may have exactly the public members
+#        `public var description: String`, `public var debugDescription: String` and
+#        `public var customMirror: Mirror`, as written here, with no attribute or modifier;
 #      - any other public declaration at depth 0 (class, protocol, enum, typealias, var, let,
 #        extension) fails the mode, so nothing public escapes the comparison.
 # The derived set must equal the inventory exactly (ADR 0030 §8), codes also in order.
@@ -38,6 +47,13 @@ MODE_KINDS="op record field code"
 SWIFT_FRAMEWORK_PREFIX="FfiConverter"
 SWIFT_FRAMEWORK="uniffiEnsurePolyjoseFfiInitialized"
 SWIFT_ERROR="PolyjoseError"
+# ADR 0065: the records whose secret fields are redacted when printed, and how (feature 0009 F05).
+SWIFT_GENERATED_FILE="Polyjose.swift"
+SWIFT_GENERATED_CONFORMANCES="Sendable"
+SWIFT_REDACTION_FILE="Redaction.swift"
+SWIFT_REDACTED_RECORDS="JweDecrypted JweEncryptOptions JweRecipient JwsSigner JwsVerified JwsVerifyOptions"
+SWIFT_REDACTION_PROTOCOLS="CustomStringConvertible CustomDebugStringConvertible CustomReflectable"
+SWIFT_REDACTION_MEMBERS="description:String debugDescription:String customMirror:Mirror"
 
 mode_derive() {
   local out=$1 src=$repo/platforms/swift/Sources/Polyjose f
@@ -77,8 +93,15 @@ AWK
 
   # 2. Declarations by brace depth.
   cat >"$mode_scratch/swift.awk" <<'AWK'
-BEGIN { n = split(framework, t, " "); for (i = 1; i <= n; i++) plumbing[t[i]] = 1 }
-function where() { f = FILENAME; sub(/\.stripped$/, "", f); sub(/.*\//, "", f); return f ":" FNR }
+BEGIN {
+  n = split(framework, t, " "); for (i = 1; i <= n; i++) plumbing[t[i]] = 1
+  n = split(gen_conformances, t, " "); for (i = 1; i <= n; i++) gen_conf[t[i]] = 1
+  n = split(redacted_records, t, " "); for (i = 1; i <= n; i++) redacted[t[i]] = 1
+  n = split(redaction_protocols, t, " "); for (i = 1; i <= n; i++) redaction_proto[t[i]] = 1
+  n = split(redaction_members, t, " "); for (i = 1; i <= n; i++) { split(t[i], kv, ":"); redaction_member[kv[1]] = kv[2] }
+}
+function file() { f = FILENAME; sub(/\.stripped$/, "", f); sub(/.*\//, "", f); return f }
+function where() { return file() ":" FNR }
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function count(s, ch,    k, m) { m = 0; for (k = 1; k <= length(s); k++) if (substr(s, k, 1) == ch) m++; return m }
 # A declaration without its leading attributes (`@discardableResult`, `@available(iOS 16, *)`, any
@@ -147,6 +170,24 @@ function params(text, record,    i, c, d, p, cur, name, list, k) {
     print "field " record "." name
   }
 }
+# A whole extension header, `extension <Type>[: <protocols>] [where ...] {`, read from its line
+# (at) on: sets the block and checks each protocol of the conformance list (ADR 0065).
+function extension_header(h, at,    t, list, n, i, p) {
+  t = h; sub(/^(public[ \t]+)?extension[ \t]+/, "", t); sub(/[ \t]*\{$/, "", t)
+  block_kind = "extension"; block_name = t; sub(/[^A-Za-z0-9_].*/, "", block_name)
+  redaction_ext = 0
+  sub(/[ \t]+where([ \t].*)?$/, "", t)
+  if (index(t, ":") == 0) return
+  n = split(substr(t, index(t, ":") + 1), list, ",")
+  for (i = 1; i <= n; i++) {
+    p = trim(list[i]); gsub(/[ \t]+/, " ", p)
+    if (file() == gen_file && (p in gen_conf)) continue
+    if (file() == redaction_file && (block_name in redacted) && (p in redaction_proto)) {
+      conformance[block_name SUBSEP p]++; redaction_ext = 1; continue
+    }
+    print "error " at ": conformance " block_name ": " p " is not allowed (only " gen_conformances " in " gen_file ", and " redaction_protocols " on " redacted_records " in " redaction_file ", ADR 0065)"
+  }
+}
 # One piece of a line: the text up to and including its first `{`, `}` or `;`, or the rest of the
 # line (see the main rule below).
 function piece(line) {
@@ -157,7 +198,15 @@ function piece(line) {
     depth += count(line, "{") - count(line, "}")
     return
   }
+  if (header_open) {
+    header = header " " text
+    if (text ~ /\{$/) { header_open = 0; extension_header(header, header_at) }
+    else if (text ~ /[};]$/) { header_open = 0; print "error " header_at ": extension header without {" }
+    depth += count(line, "{") - count(line, "}")
+    return
+  }
   if (attr_open > 0) text = attr_close(text)
+  written = text
   text = lead(text)
   if (depth == 0 && (text == "public" || text == "open")) { pending = text; return }
   decl = text
@@ -179,10 +228,11 @@ function piece(line) {
     }
   }
   if (depth == 0) {
-    block_kind = ""; block_name = ""
+    block_kind = ""; block_name = ""; redaction_ext = 0
     if (decl ~ /^public[ \t]+struct[ \t]/ || decl ~ /^public[ \t]+enum[ \t]/) { block_kind = "type"; block_name = name }
     if (decl ~ /^(public[ \t]+)?extension[ \t]/) {
-      block_kind = "extension"; block_name = decl; sub(/^(public[ \t]+)?extension[ \t]+/, "", block_name); sub(/[^A-Za-z0-9_].*/, "", block_name)
+      if (decl ~ /\{$/) extension_header(decl, where())
+      else { header_open = 1; header = decl; header_at = where() }
     }
   }
   if (depth == 1 && block_name != "") {
@@ -197,6 +247,10 @@ function piece(line) {
         if (text ~ /\)[ \t]*(throws[ \t]*)?\{/) { params(init, block_name); inits[block_name]++ } else collecting = 1
       }
     }
+    if (block_kind == "extension" && redaction_ext && match(written, /^public var [A-Za-z]+: [A-Za-z]+[ \t]*\{?$/)) {
+      m = written; sub(/^public var /, "", m); ty = m; sub(/:.*/, "", m); sub(/^[^:]*: /, "", ty); sub(/[ \t]*\{?$/, "", ty)
+      if ((m in redaction_member) && redaction_member[m] == ty) { member[block_name SUBSEP m]++; text = "" }
+    }
     if (block_kind == "extension" && index(block_name, prefix) != 1 && text ~ /^(public|open)[ \t]/) {
       access = text; sub(/[ \t].*/, "", access)
       m = text; sub(/^(public|open)[ \t]+((static|class|final|override|mutating|convenience)[ \t]+)*(var|let|func|init|subscript)[ \t]*/, "", m); sub(/[^A-Za-z0-9_].*/, "", m)
@@ -207,7 +261,8 @@ function piece(line) {
   if (depth < 0) { print "error " where() ": unbalanced braces"; depth = 0 }
 }
 function attr_unclosed() { if (attr_open > 0) print "error " attr_at ": attribute argument list never closed" }
-FNR == 1 { attr_unclosed(); depth = 0; pending = ""; collecting = 0; attr_open = 0 }
+function header_unclosed() { if (header_open) print "error " header_at ": extension header without {" }
+FNR == 1 { attr_unclosed(); header_unclosed(); depth = 0; pending = ""; collecting = 0; attr_open = 0; header_open = 0; redaction_ext = 0 }
 # Each line is read in pieces that end after a `{`, `}` or `;`, so a declaration that shares its
 # line with a brace or another declaration (`extension T { public func f() {} }`, `} public func
 # g() {}`, `public func a() {}; public func b() {}`) is read at its own depth like one on a line of
@@ -222,7 +277,7 @@ FNR == 1 { attr_unclosed(); depth = 0; pending = ""; collecting = 0; attr_open =
   } while (rest_of_line != "")
 }
 END {
-  attr_unclosed()
+  attr_unclosed(); header_unclosed()
   if (!seen_error) print "error no public enum " error_type " (ADR 0030 §5)"
   else if (!has_code) print "error " error_type " has no public func code() -> String (ADR 0030 §5)"
   for (r in records) if (inits[r] != 1) print "error record " r " has " (inits[r] + 0) " public init(...), not 1"
@@ -231,6 +286,9 @@ END {
 }
 AWK
   awk -v framework="$SWIFT_FRAMEWORK" -v prefix="$SWIFT_FRAMEWORK_PREFIX" -v error_type="$SWIFT_ERROR" \
+    -v gen_file="$SWIFT_GENERATED_FILE" -v gen_conformances="$SWIFT_GENERATED_CONFORMANCES" \
+    -v redaction_file="$SWIFT_REDACTION_FILE" -v redacted_records="$SWIFT_REDACTED_RECORDS" \
+    -v redaction_protocols="$SWIFT_REDACTION_PROTOCOLS" -v redaction_members="$SWIFT_REDACTION_MEMBERS" \
     -f "$mode_scratch/swift.awk" "$mode_scratch"/*.stripped >"$out" || return 1
   grep -q '^op ' "$out" || mode_fail "no public func found in platforms/swift/Sources/Polyjose (has the layout changed?)"
 }
