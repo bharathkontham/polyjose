@@ -10,6 +10,13 @@
 # shellcheck source=../check-deps/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../check-deps/lib.sh"
 
+# The node platform's interop-jose step (feature 0010 I1) builds @polyjose/node and runs jose: in
+# the base copy it is a passing stub, so the cases stay hermetic and build nothing.
+if [ -f "$base/interop/node/test.sh" ]; then
+  printf '#!/bin/sh\necho "fixture interop-jose ran"\n' >"$base/interop/node/test.sh" \
+    || lib_die "could not stub interop/node/test.sh in the base copy"
+fi
+
 gate_name=test-all.sh
 
 # Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh): the
