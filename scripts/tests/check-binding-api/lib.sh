@@ -24,7 +24,12 @@ command -v python3 >/dev/null 2>&1 || lib_die "python3 not found on PATH"
 [ -x "$repo/scripts/check-binding-api.sh" ] || lib_die "$repo/scripts/check-binding-api.sh is not executable"
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/check-binding-api-test.XXXXXX") || lib_die "mktemp failed"
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh): with
+# errexit, bash 3.2 runs the EXIT trap with $? = 0 after a parse error, in a test or in this file.
+# finish (each test's last statement) sets the sentinel, so a test that stops before it never exits 0.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "${0##*/}: stopped before finish (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # A pristine copy that each case starts from (working-tree files, so uncommitted changes count).
 base="$scratch/base"
@@ -166,7 +171,9 @@ check_last_line() {
   report "$1" "$ok" "exit $rc (expected $2), last line \"$last\" (expected \"$3\")"
 }
 
+# finish: prints the summary, sets the sentinel and fails if any check failed.
 finish() {
   echo "$tests_run checks, $tests_failed failed"
+  completed=1
   [ "$tests_failed" -eq 0 ]
 }

@@ -71,7 +71,8 @@
 #                     one build per case; the gate itself (test-all.sh, CI) always runs every
 #                     configuration, and the result line names a narrowed run.
 # Exit status: 0 clean, 1 an RSA private-key, signing or decryption symbol was found, 2 the check
-# could not run. Runs on macOS /bin/bash 3.2 and Linux bash.
+# could not run (a syntax error in this script too, under bash 3.2 as well: the completion
+# sentinel, F11). Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
@@ -90,6 +91,15 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument: $1 (usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]...)" ;;
   esac
 done
+
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh):
+# with errexit, bash 3.2 runs an EXIT trap with $? = 0 after a parse error. Without a trap it exits
+# 2, but this trap is here so that one added later for a cleanup cannot reopen that hole: an exit
+# before the last line, which sets the sentinel, becomes status 2; a non-zero status (the Python
+# check's 1 or 2) is kept. Installed after the arguments, so --help still exits 0.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-rsa-symbols.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # No cargo config file in the repository, checked before cargo runs at all (as in check-deps.sh):
 # a planted config could swap sources or wrap rustc for the builds below.
@@ -468,3 +478,4 @@ for label, _, _, crates in configs:
 for name in tools:
     print("  skipped %s: no library target, and neither rsa nor a workspace member in its tree" % name)
 PY
+completed=1; exit 0
