@@ -11,6 +11,8 @@
 //   - each notices file is the one scripts/third-party-notices.sh generates for that target, and
 //     names napi and the crypto crates, not wasm-bindgen;
 //   - every package.json version equals the workspace version;
+//   - the main tarball's addon-sha256.json pins exactly the two darwin addons, by the SHA-256 of
+//     the addon in each platform tarball (feature 0007 F07);
 //   - installing the main tarball and the host's platform tarball into a temporary directory,
 //     offline, gives a package that `import`s by name and round-trips jwsSignCompact and
 //     jwsVerifyCompact. The darwin-x64 addon cannot run on an Apple-silicon Mac without Rosetta,
@@ -32,6 +34,9 @@ interface NodeFsBytes {
   readFileSync(path: string): Uint8Array;
   realpathSync(path: string): string;
 }
+interface NodeCrypto {
+  createHash(algorithm: "sha256"): { update(data: Uint8Array): { digest(encoding: "hex"): string } };
+}
 interface NodeModule {
   createRequire(from: string): { resolve(id: string): string; readonly cache: Record<string, unknown> };
 }
@@ -44,6 +49,7 @@ interface Host {
   readonly arch: string;
   readonly env: Record<string, string | undefined>;
   getBuiltinModule(id: "node:child_process"): NodeChildProcess;
+  getBuiltinModule(id: "node:crypto"): NodeCrypto;
   getBuiltinModule(id: "node:fs"): NodeFsBytes;
   getBuiltinModule(id: "node:module"): NodeModule;
   getBuiltinModule(id: "node:url"): NodeUrl;
@@ -310,6 +316,19 @@ test(
 );
 
 test(
+  "the main tarball's addon-sha256.json pins exactly the two darwin addons it is packed with (F07)",
+  withScratch((scratch) => {
+    const pins = readJson(path.join(extract(mainTgz, scratch), "addon-sha256.json"));
+    const want: Record<string, string> = {};
+    for (const p of PLATFORMS) {
+      const addon = fsb.readFileSync(path.join(extract(platformTgz(p.name), scratch), `polyjose.${p.name}.node`));
+      want[p.name] = host.getBuiltinModule("node:crypto").createHash("sha256").update(addon).digest("hex");
+    }
+    assert.deepEqual(pins, want);
+  }),
+);
+
+test(
   "every package.json version, committed and packed, equals the workspace version",
   withScratch((scratch) => {
     assert.equal(pkg["version"], version, "bindings/node/package.json");
@@ -382,10 +401,13 @@ test(
     assert.equal(verified.alg, "ES256");
     assert.ok(bytesEqual(verified.payload, payload), "the payload round-trips");
 
-    // The addon came from the installed platform package, not from the build in bindings/node.
+    // The addon is a private, hash-checked copy (F07; test/loader.test.ts checks where): the only
+    // one loaded, outside the install and the build. Its source can only be the installed
+    // platform package: the installed main package holds no addon of its own.
     const addons = Object.keys(require.cache).filter((k) => k.endsWith(".node"));
-    const platformDir = path.join(dir, "node_modules", "@polyjose", `node-${platform.name}`);
-    const installed = path.join(platformDir, `polyjose.${platform.name}.node`);
-    assert.deepEqual(addons, [installed]);
+    assert.equal(addons.length, 1, `one addon loaded (${addons.join(", ")})`);
+    const copy = addons[0] ?? "";
+    assert.ok(!copy.startsWith(dir + path.sep) && !copy.startsWith(pkgDir + path.sep), `${copy}: a private copy`);
+    assert.match(copy, /[\\/]polyjose-addon-[^\\/]+[\\/]polyjose-[0-9a-f]{32}\.node$/, "the private copy's name");
   }),
 );

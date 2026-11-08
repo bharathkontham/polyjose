@@ -131,6 +131,7 @@ test("package.json is the ADR 0031 ESM package with compiled output only (ADR 00
     "backend.js",
     "binding.cjs",
     "binding.d.ts",
+    "addon-sha256.json",
     "LICENSE",
     "README.md",
     "THIRD-PARTY-NOTICES.txt",

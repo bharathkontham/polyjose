@@ -7,8 +7,11 @@
 #      e.g. `scripts/build.sh --target x86_64-apple-darwin`. Cargo gets `--locked` (after `--`,
 #      which napi build hands to cargo build and to its own cargo metadata), so the addon is built
 #      from the committed Cargo.lock only (review-code.md SF-3);
-#   3. facade/: the compiled facade (.js and the generated .d.ts) copied from bindings/js/dist/src;
-#   4. tsc: src/*.ts to the package root (index.js, backend.js and their .d.ts), then test/*.ts to
+#   3. addon-sha256.json: scripts/addon-hashes.sh over every polyjose.<platform>.node in the tree
+#      (the host's, plus the other darwin addon while scripts/pack.sh runs), the addon hash pin that
+#      backend.js checks before it loads anything (feature 0007 F07);
+#   4. facade/: the compiled facade (.js and the generated .d.ts) copied from bindings/js/dist/src;
+#   5. tsc: src/*.ts to the package root (index.js, backend.js and their .d.ts), then test/*.ts to
 #      dist/.
 # Idempotent: each step deletes and regenerates its own output. Everything it writes is
 # git-ignored. typescript comes from bindings/js (its only dev-dependency, pinned in its lockfile)
@@ -29,6 +32,9 @@ echo "==> @polyjose/node build: the shared facade (bindings/js)"
 
 echo "==> @polyjose/node build: napi build --platform --release $*"
 "$napi" build --platform --release --js binding.cjs --dts binding.d.ts "$@" -- --locked
+
+echo "==> @polyjose/node build: addon-sha256.json (scripts/addon-hashes.sh)"
+scripts/addon-hashes.sh addon-sha256.json polyjose.*.node
 
 echo "==> @polyjose/node build: facade/ (compiled .js and .d.ts of bindings/js/dist/src)"
 rm -rf facade
