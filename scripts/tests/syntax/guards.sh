@@ -77,7 +77,10 @@ test_trap_scripts="scripts/tests/syntax/guards.sh scripts/tests/check-test-vecto
   bindings/node/scripts/pack-platform.sh
   bindings/node/test/fixtures/glibc/regen.sh
   bindings/node/test/fixtures/pe/regen.sh
-  scripts/tests/check-binding-api/node.sh"
+  scripts/tests/check-binding-api/node.sh
+  platforms/android/scripts/ci-check-workflow-test.sh
+  platforms/android/scripts/ci-emulator.sh
+  platforms/android/scripts/run-instrumented.sh"
 sourced_helpers="scripts/tests/check-deps/lib.sh scripts/tests/check-binding-api/lib.sh
   scripts/tests/conformance-parity/lib.sh scripts/tests/test-all/lib.sh scripts/tests/third-party-notices/lib.sh
   platforms/swift/scripts/tests/lib.sh"
