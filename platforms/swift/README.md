@@ -1,15 +1,15 @@
 # Swift (iOS)
 
-The Swift binding of polyjose. iOS is the main target; it also builds for iPadOS, macOS, tvOS, watchOS and visionOS.
+The Swift binding of polyjose. iOS is the main target; it also builds for iPadOS, macOS and watchOS. tvOS and visionOS are not supported (owner decision 2026-11-08).
 
 Swift Package:
-- `scripts/build-xcframework.sh` builds `build/PolyjoseFFI.xcframework` (gitignored), a static XCFramework with 9 libraries: iOS, iOS Simulator (arm64 + x86_64), macOS (arm64 + x86_64), tvOS, tvOS Simulator, visionOS, visionOS Simulator, watchOS (arm64 + arm64_32) and watchOS Simulator (ADR 0032).
-  - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 tvOS, visionOS and watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `-Zbuild-std`. Install it with `rustup toolchain install "$(cat platforms/swift/nightly-toolchain)" --profile minimal --component rust-src`.
+- `scripts/build-xcframework.sh` builds `build/PolyjoseFFI.xcframework` (gitignored), a static XCFramework with 5 libraries: iOS, iOS Simulator (arm64 + x86_64), macOS (arm64 + x86_64), watchOS (arm64 + arm64_32) and watchOS Simulator (ADR 0032).
+  - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `-Zbuild-std`. Install it with `rustup toolchain install "$(cat platforms/swift/nightly-toolchain)" --profile minimal --component rust-src`.
   - Without that nightly the script makes a development build: the watchOS library is arm64 only, `PolyjoseFFI.xcframework/polyjose-build.txt` says `arm64_32: missing`, and the build must not be released. `--release` fails instead.
   - Deployment minimums: see [OS minimums](#os-minimums).
   - The libraries ship without debug info. The script strips every archive with `xcrun strip -S` before it assembles the XCFramework, because the release profile's `strip` does not apply to static libraries and the debug info would triple the download. Symbols are kept, so linking is unaffected, and polyjose frames in your app's crash reports show function names but not file and line.
 - `uniffi-bindgen generate --language swift` writes the Swift sources (the build leaves them in `build/generated/`)
-- Tests: XCTest on the macOS host (`swift test`) and on the iOS Simulator, running the conformance vectors. The tvOS, watchOS and visionOS libraries are built but not separately tested, because the Swift code is the same on every Apple platform.
+- Tests: XCTest on the macOS host (`swift test`) and on the iOS Simulator, running the conformance vectors. The watchOS libraries are built and link-checked (`scripts/test-simulators.sh`) but not separately tested, because the Swift code is the same on every Apple platform.
 - Packaging: `scripts/package.sh` writes `dist/apple/PolyjoseFFI.xcframework.zip` (the XCFramework with `THIRD-PARTY-NOTICES.txt` and `LICENSE` inside it), its `.sha256` and `binaryTarget.swift.txt`, the `binaryTarget(url:checksum:)` stanza for the release (ADR 0032 §6). It refuses a development build (`arm64_32: missing`) or a stale one unless `--allow-dev` is given, and a zip of 25,000,000 bytes or more. It publishes nothing; the release workflow attaches the zip to the GitHub Release. Its tests are `scripts/tests/test-*.sh`, which `test.sh` runs.
 - Publishing: a `Package.swift` at the repo root with a `binaryTarget` (URL + checksum) pointing at the XCFramework zip on the GitHub Release
 
@@ -30,7 +30,7 @@ Swift Package:
 
 The XCFramework holds static libraries (ADR 0032), so polyjose's Rust code, with its own copy of the Rust standard library, is linked into your app's binary. This has two consequences:
 - **Another Rust static library in the same app can clash with it.** Both define `rust_eh_personality` and Rust standard library symbols, so the link can fail with duplicate-symbol errors. A dynamic-framework variant, which avoids this, is in the backlog.
-- **Generic tvOS, watchOS and visionOS Simulator builds need `EXCLUDED_ARCHS`.** Those simulator libraries are arm64 only, but a generic simulator destination (such as `generic/platform=tvOS Simulator`) also builds x86_64, which then fails to link. Either set `EXCLUDED_ARCHS[sdk=*simulator*] = x86_64` in your target's build settings, or build for a concrete simulator (such as `-destination 'platform=tvOS Simulator,name=Apple TV'`). The iOS Simulator library includes x86_64. On an Intel Mac, keep it by limiting the setting to the other simulators: `EXCLUDED_ARCHS[sdk=appletvsimulator*]`, `[sdk=watchsimulator*]` and `[sdk=xrsimulator*]`.
+- **Generic watchOS Simulator builds need `EXCLUDED_ARCHS`.** The watchOS Simulator library is arm64 only, but a generic simulator destination (`generic/platform=watchOS Simulator`) also builds x86_64, which then fails to link. Either set `EXCLUDED_ARCHS[sdk=watchsimulator*] = x86_64` in your target's build settings, or build for a concrete watch simulator (`-destination 'platform=watchOS Simulator,name=<device>'`). Limit the setting to `watchsimulator*`: the iOS Simulator library includes x86_64, which an Intel Mac needs.
 
 ## OS minimums
 
@@ -41,12 +41,8 @@ The deployment targets of the XCFramework and of `Package.swift`'s `platforms:` 
 | iOS and iPadOS | 16.0 | `ios-arm64` |
 | iOS Simulator | 16.0 | `ios-arm64_x86_64-simulator` |
 | macOS | 13.0 | `macos-arm64_x86_64` |
-| tvOS | 16.0 | `tvos-arm64` |
-| tvOS Simulator | 16.0 | `tvos-arm64-simulator` |
 | watchOS | 9.0 (see the note) | `watchos-arm64_arm64_32` |
 | watchOS Simulator | 9.0 | `watchos-arm64-simulator` |
-| visionOS | 1.0 | `xros-arm64` |
-| visionOS Simulator | 1.0 | `xros-arm64-simulator` |
 
 **watchOS:** the device library holds two architectures with different minimums.
 - `arm64_32` starts at watchOS 9.0. Every watch on watchOS 9–25 runs this code, and on watchOS 26 the Series 4–8, SE 1–2 and Ultra 1 still do.
