@@ -2,11 +2,14 @@
 #
 # It never runs on a PR, on a push or on a schedule (ADR 0044; owner rule 2026-11-07): merges gate
 # on local verification only, and the Actions platform matrix runs once, at the 0.1.0 release
-# candidate, when the release workflow (feature 0012 T03) calls this file through workflow_call.
-# workflow_dispatch is there so the owner can start it by hand; agents never dispatch it (pipeline
-# rule 8). Neither trigger takes inputs or credentials, and nothing here publishes: publishing is
-# Gate 3 (ADR 0011, ADR 0037 §2). bindings/wasm/scripts/check-workflow.sh enforces all of this
-# locally, together with actionlint.
+# candidate, when release.yml (feature 0012 H3) calls this file through workflow_call with
+# `mode: release`. workflow_dispatch is there so the owner can start it by hand; agents never
+# dispatch it (pipeline rule 8). Both triggers declare the same one input, `mode` (`ci`, the
+# default, or `release`; the first step rejects any other value, and it reaches the step only
+# through `env:`). Both modes run the same build and tests and upload the same artifacts: the job
+# already builds from a clean state, with no cache. No trigger takes credentials, and nothing here
+# publishes: publishing is Gate 3 (ADR 0011, ADR 0037 §2). bindings/wasm/scripts/check-workflow.sh
+# enforces all of this locally, together with actionlint.
 #
 # One job, the same scripts as a local run (`scripts/test-all.sh wasm`):
 #   1. the rust-core conformance reference (cargo test -p polyjose --test conformance), written to
@@ -27,7 +30,19 @@ name: binding-wasm
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "ci (default) or release; both build and test the same package"
+        type: string
+        required: false
+        default: ci
   workflow_call:
+    inputs:
+      mode:
+        description: "ci (default) or release; both build and test the same package"
+        type: string
+        required: false
+        default: ci
 
 # Least privilege: the job only reads the repository. When called, the caller's permissions cap
 # these further.
@@ -70,7 +85,18 @@ jobs:
     # A fixed image, not ubuntu-latest: the Chrome sandbox step below depends on its AppArmor setup.
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    permissions:
+      contents: read
     steps:
+      - name: mode is ci or release
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          case $MODE in
+            ci | release) echo "mode: $MODE" ;;
+            *) echo "::error::the mode input must be ci or release"; exit 1 ;;
+          esac
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

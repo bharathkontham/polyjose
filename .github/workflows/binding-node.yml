@@ -6,18 +6,24 @@
 # the build logic is in bindings/node/scripts/ci-build.sh, so a local run (`scripts/ci-build.sh
 # aarch64-apple-darwin`) and a CI run check the same things.
 #
-# When it runs (ADR 0044; owner, 2026-11-07): never on PRs or pushes. The platform matrix runs once,
-# at the 0.1.0 release candidate, inside the release workflow of feature 0012, which turns this file
-# into a reusable workflow (0012 T03 adds `workflow_call` next to `workflow_dispatch`, and its
-# `mode` input, ADR 0037 §1). Until then the only trigger is a manual dispatch, and nobody dispatches
-# it without the owner. It is shaped for that change:
-#   - no inputs yet; any added later are declared identically under both triggers, and reach a
-#     script only through a step's `env:` (read there as "$MODE"), never as
+# When it runs (ADR 0044; owner, 2026-11-07): never on PRs, pushes or a schedule. It has two
+# triggers: a manual dispatch, which nobody starts without the owner (pipeline rule 8), and
+# workflow_call, through which release.yml (feature 0012 H3) calls it with `mode: release` (ADR 0037
+# §1, §2):
+#   - one input, `mode`, declared identically under both triggers: `ci` (the default) or
+#     `release`. The mode job rejects any other value. Both modes build, test and pack the same
+#     way; release.yml takes the package tarballs from the npm-* artifacts. The input reaches a script
+#     only through a step's `env:` (read there as "$MODE"), never as
 #     `${{ inputs.mode }}` inside `run:`, so an input value is data, never shell code
 #     (review-security.md I6). test/ci.test.ts rejects any inputs expression in a run: block;
 #   - nothing reads PR or event context, only `matrix.*`;
-#   - artifact names are fixed: npm-<target> (the platform tarball) and conformance-node-<label>
+#   - artifact names are fixed: npm-<target> (the platform tarball), npm-node (the main package,
+#     packed by the pack-main job over all eight platform tarballs, so its addon-sha256.json pins
+#     each shipped addon; feature 0007 F07) and conformance-node-<label>
 #     (target/conformance/node-<label>.json), ADR 0037 §1;
+#   - the smoke job installs the packed main and platform tarballs on linux-x64-gnu and
+#     darwin-arm64 and round-trips a JWS through the installed package;
+#   - every job sets its own least-privilege `permissions` (contents: read, or none);
 #   - no workflow-level concurrency group: inside a called workflow, github.workflow is the
 #     caller's name, so a group here could collide with the caller's own.
 #
@@ -52,6 +58,19 @@ name: binding-node
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "ci (default) or release; both build, test and pack the same artifacts"
+        type: string
+        required: false
+        default: ci
+  workflow_call:
+    inputs:
+      mode:
+        description: "ci (default) or release; both build, test and pack the same artifacts"
+        type: string
+        required: false
+        default: ci
 
 # Least privilege: the workflow only reads the repository.
 permissions:
@@ -66,6 +85,22 @@ defaults:
     shell: bash
 
 jobs:
+  # Fails the run early on an unknown mode.
+  mode:
+    name: mode
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: mode is ci or release
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          case $MODE in
+            ci | release) echo "mode: $MODE" ;;
+            *) echo "::error::the mode input must be ci or release"; exit 1 ;;
+          esac
+
   # One job per napi target (ADR 0031 §2), each on a runner of that platform, because the suite
   # loads the addon it builds. darwin-x64 builds on macos-15-intel (macos-13 is retired, ADR 0037
   # §1). The Linux targets build inside a container started with `docker run` on the matching
@@ -74,6 +109,9 @@ jobs:
   # musl builds in Alpine (`image`), gnu in manylinux_2_28 (`manylinux`, the glibc floor, above).
   prebuild:
     name: prebuild (${{ matrix.target }})
+    needs: [mode]
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -235,6 +273,9 @@ jobs:
   # build, with no way to skip it (a runner build here would need GLIBC_2.34 and fail it).
   node-versions:
     name: node ${{ matrix.node }} (x86_64-unknown-linux-gnu)
+    needs: [mode]
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -327,6 +368,8 @@ jobs:
   parity:
     name: conformance parity
     needs: [prebuild, node-versions]
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -373,3 +416,100 @@ jobs:
 
       - name: conformance parity
         run: scripts/conformance-parity.sh
+
+  # The main package, @polyjose/node, packed once over the eight platform tarballs above
+  # (scripts/pack-main.sh --all-platforms): its addon-sha256.json pins the SHA-256 of the addon in
+  # each platform tarball (feature 0007 F07, decisions.md 2026-11-08), so it loads on every
+  # platform and only with those addons. The JavaScript is built here by scripts/build.sh; the
+  # host addon that build also makes is not packed.
+  pack-main:
+    name: pack @polyjose/node (all eight addons)
+    needs: [prebuild]
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show
+
+      # npm-<target> only (every target has a dash): when release.yml calls this workflow, the
+      # run also holds npm-wasm.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: npm-*-*
+          path: target/ci-npm
+          merge-multiple: true
+
+      - name: scripts/build.sh, then scripts/pack-main.sh over the eight platform tarballs
+        run: |
+          ls -l target/ci-npm
+          bindings/node/scripts/build.sh
+          bindings/node/scripts/pack-main.sh --all-platforms target/ci-npm-main target/ci-npm/polyjose-node-*-*.tgz
+          ls -l target/ci-npm-main
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-node
+          path: target/ci-npm-main/*.tgz
+          if-no-files-found: error
+
+  # The packed tarballs as a user installs them (bindings/node/scripts/smoke-install.sh): the main
+  # package and the host's platform package, offline, then an import by name and a JWS round-trip.
+  smoke:
+    name: smoke install (${{ matrix.platform }})
+    needs: [pack-main]
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, platform: linux-x64-gnu, os: ubuntu-latest }
+          - { target: aarch64-apple-darwin, platform: darwin-arm64, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-node
+          path: target/smoke
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-${{ matrix.target }}
+          path: target/smoke
+
+      - name: smoke-install.sh
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          ls -l target/smoke
+          main=(target/smoke/polyjose-node-[0-9]*.tgz)
+          platform=(target/smoke/polyjose-node-"$PLATFORM"-*.tgz)
+          [ "${#main[@]}" -eq 1 ] && [ -f "${main[0]}" ] || { echo "::error::expected one main tarball"; exit 1; }
+          [ "${#platform[@]}" -eq 1 ] && [ -f "${platform[0]}" ] || { echo "::error::expected one $PLATFORM tarball"; exit 1; }
+          bindings/node/scripts/smoke-install.sh "${main[0]}" "${platform[0]}"

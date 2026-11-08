@@ -244,12 +244,16 @@ test("the YAML line reader finds keys, blocks, flow sequences and flow mappings"
 
 // --- The workflow ----------------------------------------------------------------------------------
 
-test("binding-node.yml is triggered by workflow_dispatch only (ADR 0044; owner, 2026-11-07)", () => {
+test("binding-node.yml is triggered by workflow_dispatch and workflow_call only (ADR 0044; feature 0012 H3)", () => {
   const { lines } = workflow();
   // YAML 1.1 readers turn a bare `on` key into `true`, so both spellings count as the trigger key.
   const on = topLevelBlock(lines, "on", "true");
   const triggers = on.value === "" ? entriesOf(on.block).map((e) => e.key) : flowItems(on.value);
-  assert.deepEqual(triggers, ["workflow_dispatch"], "the trigger set is exactly workflow_dispatch");
+  assert.deepEqual(
+    triggers,
+    ["workflow_dispatch", "workflow_call"],
+    "the trigger set is exactly workflow_dispatch and workflow_call (release.yml calls it)",
+  );
 });
 
 test("binding-node.yml reads the repository only and holds no credentials, registry upload or OIDC", () => {

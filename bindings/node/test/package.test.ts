@@ -190,8 +190,8 @@ function codeLines(file: string): string[] {
     .filter((line) => !line.trim().startsWith("#"));
 }
 
-test("pack.sh and build.sh never publish (npm publish and napi pre-publish are Gate 3)", () => {
-  for (const script of ["pack.sh", "build.sh"]) {
+test("pack.sh, pack-main.sh and build.sh never publish (npm publish and napi pre-publish are Gate 3)", () => {
+  for (const script of ["pack.sh", "pack-main.sh", "build.sh"]) {
     const file = path.join(pkgDir, "scripts", script);
     const code = codeLines(file).join("\n");
     assert.doesNotMatch(code, /publish/i, `${script}: no publish command`);
