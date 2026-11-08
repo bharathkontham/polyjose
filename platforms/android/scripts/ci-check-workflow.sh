@@ -6,8 +6,9 @@
 #   platforms/android/scripts/ci-check-workflow.sh [<workflow>]     (default: binding-android.yml)
 #
 # The rules (comments are ignored, except the pin comments of `uses:` lines):
-#   trigger      exactly one top-level `on:` key, in block form, whose only child is
-#                `workflow_dispatch` (no pull_request, push, schedule, workflow_call or other).
+#   trigger      exactly one top-level `on:` key, in block form, whose children are exactly
+#                `workflow_dispatch` and `workflow_call`, in that order (no pull_request, push,
+#                schedule or other; feature 0012 H3 added workflow_call for release.yml).
 #   permissions  a top-level `permissions:` of exactly `contents: read`; every other
 #                `permissions:` is `{}` or `contents: read`; nothing anywhere grants `write`,
 #                `write-all` or `read-all`.
@@ -476,7 +477,7 @@ END {
   end_permissions()
   if (on_count != 1) fail("trigger: " on_count " top-level on: keys (exactly one is required)")
   t = triggers; sub(/^ /, "", t)
-  if (on_count == 1 && t != "workflow_dispatch") fail("trigger: the triggers are \"" t "\", not exactly workflow_dispatch")
+  if (on_count == 1 && t != "workflow_dispatch workflow_call") fail("trigger: the triggers are \"" t "\", not exactly workflow_dispatch and workflow_call")
   if (top_perm != 1 || !top_perm_ok) fail("permissions: no top-level permissions of exactly contents: read")
 }
 ' "$wf")
@@ -501,7 +502,7 @@ for s in $named; do
 done
 
 if [ "$failures" -eq 0 ]; then
-  echo "ci-check-workflow: ${wf#"$ci_repo/"}: OK (workflow_dispatch only, contents: read, $(printf '%s\n' "$uses" | wc -l | tr -d ' ') pinned uses:, no credentials, publishing or signing)"
+  echo "ci-check-workflow: ${wf#"$ci_repo/"}: OK (workflow_dispatch and workflow_call only, contents: read, $(printf '%s\n' "$uses" | wc -l | tr -d ' ') pinned uses:, no credentials, publishing or signing)"
   exit 0
 fi
 echo "ci-check-workflow: ${wf#"$ci_repo/"}: $failures problem(s)"

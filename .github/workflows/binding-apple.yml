@@ -98,7 +98,7 @@ jobs:
   swift:
     name: Swift (iOS) (${{ inputs.mode }})
     runs-on: macos-latest
-    # The XCFramework (11 Rust targets; in release mode also std for arm64_32 with -Zbuild-std),
+    # The XCFramework (7 Rust targets; in release mode also std for arm64_32 with -Zbuild-std),
     # swift test, the packaging tests, the simulator run and the rust-core reference.
     timeout-minutes: 180
     env:

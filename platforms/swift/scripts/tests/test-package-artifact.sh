@@ -2,7 +2,7 @@
 # The packaged Swift (iOS) artifact (ADR 0032 §4, §6; ADR 0020 §4; ADR 0011), made by
 # platforms/swift/scripts/package.sh from the real platforms/swift/build/PolyjoseFFI.xcframework
 # into a scratch output directory (the checkout's dist/apple/ is not touched). Checks:
-#   - the zip holds one top-level PolyjoseFFI.xcframework/ with the 9 libraries of ADR 0032 §1
+#   - the zip holds one top-level PolyjoseFFI.xcframework/ with the 5 libraries of ADR 0032 §1
 #     (each with its headers and module map), THIRD-PARTY-NOTICES.txt and LICENSE, and no
 #     AppleDouble (`._*`) or `__MACOSX` entries; it is under 25,000,000 bytes;
 #   - the notices are polyjose-ffi's for aarch64-apple-ios: they name uniffi_core and the crypto
@@ -39,7 +39,7 @@ out="$scratch/out"
 run_package $allow --out-dir "$out"
 check "package.sh succeeds on the built XCFramework" "[ $rc -eq 0 ]"
 if [ "$rc" -ne 0 ]; then show_log; finish; exit 1; fi
-check "it checked that every Apple target gives the same crate set" "log_has 'same crate set on all 12 Apple targets'"
+check "it checked that every Apple target gives the same crate set" "log_has 'same crate set on all 8 Apple targets'"
 
 zip="$out/PolyjoseFFI.xcframework.zip"
 check "the output directory holds exactly the zip, its .sha256 and the stanza" \
@@ -55,8 +55,8 @@ for id in $libraries; do
     has_entry "PolyjoseFFI.xcframework/$id/$f" || missing="$missing $id/$f"
   done
 done
-check "unzip lists the 9 libraries, each with its header and module map${missing:+ (missing:$missing)}" "[ -z '$missing' ]"
-check "exactly 9 static libraries" "[ \"\$(grep -c '\\.a\$' '$entries')\" -eq 9 ]"
+check "unzip lists the 5 libraries, each with its header and module map${missing:+ (missing:$missing)}" "[ -z '$missing' ]"
+check "exactly 5 static libraries" "[ \"\$(grep -c '\\.a\$' '$entries')\" -eq 5 ]"
 check "unzip lists THIRD-PARTY-NOTICES.txt" "has_entry PolyjoseFFI.xcframework/THIRD-PARTY-NOTICES.txt"
 check "unzip lists LICENSE" "has_entry PolyjoseFFI.xcframework/LICENSE"
 check "unzip lists Info.plist and polyjose-build.txt" \
@@ -76,7 +76,7 @@ plist_ids=$(i=0; while id=$(plutil -extract "AvailableLibraries.$i.LibraryIdenti
   echo "$id"; i=$((i + 1)); done | sort | tr '\n' ' ')
 # shellcheck disable=SC2086 # a word list
 want_ids=$(printf '%s\n' $libraries | sort | tr '\n' ' ')
-check "Info.plist lists exactly the 9 libraries (in any order)" "[ '$plist_ids' = '$want_ids' ]"
+check "Info.plist lists exactly the 5 libraries (in any order)" "[ '$plist_ids' = '$want_ids' ]"
 check "LICENSE is polyjose's LICENSE" "cmp -s '$u/LICENSE' '$repo/LICENSE'"
 if [ -z "$allow" ]; then
   check "the packaged build is a release build (arm64_32: present)" \

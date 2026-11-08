@@ -3,12 +3,16 @@
 # an x86_64 emulator with KVM, the release AAR and the five-platform JVM jar, and parity of every
 # result with a fresh rust-core run. It builds and checks; it never publishes or signs anything.
 #
-# Dispatched by hand only (owner, 2026-11-07). ADR 0044 keeps PR CI off, and this workflow is not
-# run without the owner. Feature 0012 T03 makes it callable from ci.yml and release.yml (ADR 0037
-# §1) by adding the commented line under `on:` unchanged. For that, every job reads only its
-# inputs and the github, matrix, steps and needs contexts, the token is the default read-only one,
-# and no job has a deployment environment. There is no `concurrency` group, because in a called
-# workflow github.workflow names the caller, so a group here could cancel the caller's run.
+# Never on PRs, pushes or a schedule (ADR 0044; owner, 2026-11-07). Two triggers: a manual dispatch,
+# which nobody starts without the owner, and workflow_call, through which release.yml (feature 0012
+# H3; ADR 0037 §1, §2) calls it with `mode: release`. Both declare the one input `mode`: `ci` (the
+# default) or `release`; the mode job rejects any other value. Release mode builds and checks the
+# same artifacts from the checkout alone: rust-cache runs in ci mode only. The artifacts stay
+# unsigned in both modes; release.yml makes the Maven bundle from the maven-repo artifact. Every
+# job reads only its inputs and the github, matrix, steps and needs contexts, the token is the
+# default read-only one, and no job has a deployment environment. There is no `concurrency` group,
+# because in a called workflow github.workflow names the caller, so a group here could cancel the
+# caller's run.
 #
 # Each step calls a platforms/android/scripts/ci-*.sh script or one of the repository's guards in
 # scripts/, and every script also runs locally. Every job that runs ./gradlew first checks the
@@ -28,8 +32,10 @@ name: binding-android
 on:
   workflow_dispatch:
     inputs:
-      mode: { description: "ci (the only mode until feature 0012 adds release)", type: string, required: false, default: ci }
-  # workflow_call: { inputs: { mode: { description: "ci (the only mode until feature 0012 adds release)", type: string, required: false, default: ci } } }
+      mode: { description: "ci (default) or release; both build and check the same artifacts", type: string, required: false, default: ci }
+  workflow_call:
+    inputs:
+      mode: { description: "ci (default) or release; both build and check the same artifacts", type: string, required: false, default: ci }
 
 permissions:
   contents: read
@@ -43,7 +49,7 @@ defaults:
     shell: bash
 
 jobs:
-  # Fails the run early on a mode this workflow does not implement yet.
+  # Fails the run early on an unknown mode.
   mode:
     name: mode
     runs-on: ubuntu-24.04
@@ -55,8 +61,8 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           case $MODE in
-            ci) echo "mode: ci" ;;
-            *) echo "::error::mode '$MODE' is not implemented (only ci; feature 0012 adds release)"; exit 1 ;;
+            ci | release) echo "mode: $MODE" ;;
+            *) echo "::error::the mode input must be ci or release"; exit 1 ;;
           esac
 
   # The five JVM host libraries (ADR 0033 §4), each built and tested on a native runner, except
@@ -72,6 +78,8 @@ jobs:
           - { os: ubuntu-24.04, prefix: linux-x86-64, cross: "" }
           - { os: ubuntu-24.04-arm, prefix: linux-aarch64, cross: "" }
           - { os: windows-2025, prefix: win32-x86-64, cross: "" }
+    permissions:
+      contents: read
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -97,6 +105,7 @@ jobs:
           rustup show
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ inputs.mode == 'ci' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -165,6 +174,8 @@ jobs:
   guards:
     name: guards (dependencies, RSA symbols for the Android targets)
     needs: [mode]
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -182,6 +193,7 @@ jobs:
           rustup show
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ inputs.mode == 'ci' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -201,6 +213,8 @@ jobs:
   emulator:
     name: emulator (API 36 x86_64)
     needs: [mode]
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -223,6 +237,7 @@ jobs:
           rustup show
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ inputs.mode == 'ci' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -266,6 +281,8 @@ jobs:
   assemble:
     name: assemble (AAR, five-platform jar)
     needs: [host-natives, emulator, guards]
+    permissions:
+      contents: read
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -288,6 +305,7 @@ jobs:
           rustup show
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ inputs.mode == 'ci' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -340,6 +358,8 @@ jobs:
     name: parity
     needs: [host-natives, emulator]
     if: ${{ !cancelled() }}
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -356,12 +376,21 @@ jobs:
           rustup show
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ inputs.mode == 'ci' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # Only this workflow's results: when release.yml calls it, the other platform workflows'
+      # conformance-* artifacts are in the same run.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: conformance-*
+          pattern: conformance-jvm-*
+          path: target/ci-results
+          merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: conformance-android-*
           path: target/ci-results
           merge-multiple: true
 

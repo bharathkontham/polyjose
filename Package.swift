@@ -1,6 +1,6 @@
 // swift-tools-version: 6.0
 // The Swift (iOS) binding of polyjose (ADR 0032 §4, ADR 0046). iOS is the main target; the
-// package also builds for iPadOS, macOS, tvOS, watchOS and visionOS.
+// package also builds for iPadOS, macOS and watchOS.
 //
 // - `PolyjoseFFI`: the static XCFramework of polyjose-ffi (ADR 0032 §1-§2), built by
 //   platforms/swift/scripts/build-xcframework.sh.
@@ -40,9 +40,7 @@ let package = Package(
     platforms: [
         .iOS(.v16),
         .macOS(.v13),
-        .tvOS(.v16),
         .watchOS(.v9),
-        .visionOS(.v1),
     ],
     products: [
         .library(name: "Polyjose", targets: ["Polyjose"])

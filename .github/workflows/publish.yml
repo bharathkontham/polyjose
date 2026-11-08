@@ -1,0 +1,438 @@
+# Publish a release (feature 0012 H3; ADR 0038 §1-§2). Publishes exactly the bytes of the draft
+# GitHub Release that release.yml made, never a rebuild, one registry at a time:
+#   crates.io -> npm (8 platform packages, @polyjose/node, @polyjose/wasm) -> Maven Central (upload
+#   only, USER_MANAGED, polled until VALIDATED; the owner presses Publish in the Portal) -> GitHub
+#   (un-draft the release, which makes the SPM binary target live) -> an SPM resolve and build.
+#
+# Gate 3: every job that publishes, or that can read a publishing secret, runs in environment
+# `publish`, which waits for the owner's approval. That approval is the Gate 3 act; no agent ever
+# approves it (ADR 0038 §1). The environment admits the tags `v*` and `dryrun-*` only, so this
+# workflow is dispatched with "Use workflow from" = the tag, and input `tag` = the same tag; the
+# assets job refuses any other ref.
+#
+# Inputs (reach `run:` only through `env:`; validated by the assets job before anything else):
+#   tag         vX.Y.Z, or dryrun-vX.Y.Z[-N] (a disposable draft for dry runs, ADR 0038 §3 item 5)
+#   registries  a comma list of crates, npm, maven, github (default all four)
+#   dry_run     default TRUE: every check, `cargo publish --dry-run`, `npm publish --dry-run`, the
+#               Maven bundle checked offline, no upload, no un-draft. A dryrun- tag needs it.
+#   bootstrap   default false. The first release only (ADR 0038 §1 option 2a): crates.io and npm
+#               authenticate with CARGO_REGISTRY_BOOTSTRAP_TOKEN and NPM_BOOTSTRAP_TOKEN, because
+#               trusted publishing needs a package that already exists. Otherwise crates.io uses
+#               OIDC (rust-lang/crates-io-auth-action) and npm OIDC trusted publishing, both with
+#               provenance, and no long-lived token.
+#
+# Input check (ADR 0038 §1): the assets job downloads the draft and verifies it
+# (scripts/release/verify-draft.sh: SHA256SUMS.asc by the primary key GPG_FINGERPRINT of the
+# committed public key .github/keys/polyjose-release.asc, and every asset against SHA256SUMS; it
+# fails clearly when that key file is missing). Each publishing job verifies its copy again before
+# it publishes; the github job also checks that the draft on GitHub still holds those bytes.
+#
+# Permissions: top-level none. The assets job has contents: write only because GitHub lists a
+# draft release only to a token with push access; it gets no environment and no secret, and
+# publishes nothing (decisions.md, 2026-11-08, H3). id-token: write only on crates and npm;
+# contents: write on the github job, which un-drafts. Secrets reach steps only through `env:`.
+#
+# Re-running after a partial failure is safe: crates.io and npm skip a version that is already
+# published with the same bytes and fail on one with other bytes. A Maven re-upload makes a second
+# deployment, which the owner drops in the Portal.
+#
+# Every third-party action is pinned to a full commit SHA, the comment naming the release tag it
+# was resolved from (gh api, 2026-11-08).
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "the draft release's tag, vX.Y.Z or dryrun-vX.Y.Z[-N] (the same ref as 'Use workflow from')"
+        type: string
+        required: true
+      registries:
+        description: "comma list of crates, npm, maven, github"
+        type: string
+        required: false
+        default: crates,npm,maven,github
+      dry_run:
+        description: "dry run: check everything, publish nothing (default true)"
+        type: boolean
+        required: false
+        default: true
+      bootstrap:
+        description: "first release only: use the bootstrap tokens for crates.io and npm"
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  # The inputs, the ref and the draft. Publishes nothing and reads no secret.
+  assets:
+    name: draft assets (download and verify)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.inputs.outputs.version }}
+      crates: ${{ steps.inputs.outputs.crates }}
+      npm: ${{ steps.inputs.outputs.npm }}
+      maven: ${{ steps.inputs.outputs.maven }}
+      github: ${{ steps.inputs.outputs.github }}
+    steps:
+      - name: the inputs and the ref
+        id: inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          REGISTRIES: ${{ inputs.registries }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+        run: |
+          if [[ $TAG =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            version=${BASH_REMATCH[1]}
+          elif [[ $TAG =~ ^dryrun-v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9]+)?$ ]]; then
+            version=${BASH_REMATCH[1]}
+            [ "$DRY_RUN" = true ] || { echo "::error::a dryrun- tag is published only with dry_run: true"; exit 1; }
+          else
+            echo "::error::the tag input must be vX.Y.Z or dryrun-vX.Y.Z[-N]"; exit 1
+          fi
+          [ "$GITHUB_REF" = "refs/tags/$TAG" ] || { echo "::error::dispatch from the tag itself ('Use workflow from' = $TAG), not $GITHUB_REF"; exit 1; }
+          [[ $REGISTRIES =~ ^(crates|npm|maven|github)(,(crates|npm|maven|github))*$ ]] ||
+            { echo "::error::registries must be a comma list of crates, npm, maven, github"; exit 1; }
+          for r in crates npm maven github; do
+            case ",$REGISTRIES," in *",$r,"*) echo "$r=true" ;; *) echo "$r=false" ;; esac
+          done >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "publish $TAG ($version) to $REGISTRIES; dry_run: $DRY_RUN; bootstrap: $BOOTSTRAP"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: download the draft and verify it (scripts/release/verify-draft.sh)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
+          ALLOW_UNSIGNED: ${{ inputs.dry_run && startsWith(inputs.tag, 'dryrun-') }}
+        run: |
+          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
+          [ "$draft" = true ] || { echo "::error::the release $TAG is not a draft; nothing is published from it"; exit 1; }
+          dir=$RUNNER_TEMP/draft
+          gh release download "$TAG" --dir "$dir"
+          ls -l "$dir"
+          args=()
+          [ "$ALLOW_UNSIGNED" != true ] || args+=(--allow-unsigned)
+          scripts/release/verify-draft.sh "${args[@]}" "$dir" "$TAG" .github/keys/polyjose-release.asc "$GPG_FINGERPRINT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: draft-assets
+          path: ${{ runner.temp }}/draft/*
+          if-no-files-found: error
+
+  # 1. crates.io: the draft .crate must equal `cargo package` of the tag byte for byte, because
+  # cargo publishes only from source.
+  crates:
+    name: crates.io
+    needs: [assets]
+    if: ${{ needs.assets.outputs.crates == 'true' }}
+    environment: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: draft-assets
+          path: ${{ runner.temp }}/draft
+
+      - name: verify the draft assets
+        env:
+          TAG: ${{ inputs.tag }}
+          GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
+          ALLOW_UNSIGNED: ${{ inputs.dry_run && startsWith(inputs.tag, 'dryrun-') }}
+        run: |
+          args=()
+          [ "$ALLOW_UNSIGNED" != true ] || args+=(--allow-unsigned)
+          scripts/release/verify-draft.sh "${args[@]}" "$RUNNER_TEMP/draft" "$TAG" .github/keys/polyjose-release.asc "$GPG_FINGERPRINT"
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --profile minimal
+          rustup show
+
+      - name: cargo package equals the draft's .crate
+        id: crate
+        env:
+          VERSION: ${{ needs.assets.outputs.version }}
+        run: |
+          # --no-verify: the verify build would run third-party build scripts while this job can mint an
+          # OIDC token (id-token: write) and, on a real publish, holds CARGO_REGISTRY_TOKEN; release.yml's
+          # crate job ran the full verify build of this tag, and the .crate bytes are the same either way.
+          cargo package -p polyjose --locked --no-verify
+          want=$(sha256sum "$RUNNER_TEMP/draft/polyjose-$VERSION.crate" | awk '{ print $1 }')
+          got=$(sha256sum "target/package/polyjose-$VERSION.crate" | awk '{ print $1 }')
+          [ "$got" = "$want" ] || { echo "::error::cargo package (sha256 $got) is not the draft's polyjose-$VERSION.crate ($want)"; exit 1; }
+          echo "cargo package = the draft's polyjose-$VERSION.crate: $got"
+          code=$(curl --proto '=https' --tlsv1.2 -sS -A 'polyjose-release (github.com/bharathkontham/polyjose)' \
+            -o "$RUNNER_TEMP/crate.json" -w '%{http_code}' "https://crates.io/api/v1/crates/polyjose/$VERSION")
+          case $code in
+            404) echo "published=false" >>"$GITHUB_OUTPUT"; echo "polyjose $VERSION is not on crates.io yet" ;;
+            200)
+              have=$(jq -r '.version.checksum' "$RUNNER_TEMP/crate.json")
+              [ "$have" = "$want" ] || { echo "::error::polyjose $VERSION is already on crates.io with other bytes ($have)"; exit 1; }
+              echo "published=true" >>"$GITHUB_OUTPUT"
+              echo "polyjose $VERSION is already on crates.io with these bytes; nothing to publish" ;;
+            *) echo "::error::crates.io answered HTTP $code"; exit 1 ;;
+          esac
+
+      - name: cargo publish --dry-run (dry run)
+        if: ${{ inputs.dry_run }}
+        env:
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+          BOOTSTRAP_TOKEN: ${{ inputs.bootstrap && secrets.CARGO_REGISTRY_BOOTSTRAP_TOKEN || '' }}
+        run: |
+          if [ "$BOOTSTRAP" = true ]; then
+            [ -n "$BOOTSTRAP_TOKEN" ] || { echo "::error::bootstrap: CARGO_REGISTRY_BOOTSTRAP_TOKEN is empty (environment publish)"; exit 1; }
+            echo "bootstrap: CARGO_REGISTRY_BOOTSTRAP_TOKEN is set"
+          fi
+          unset BOOTSTRAP_TOKEN
+          # --no-verify: no third-party build script runs in this job (see the package step).
+          cargo publish -p polyjose --locked --no-verify --dry-run
+
+      - name: crates.io trusted publishing (OIDC)
+        id: auth
+        if: ${{ !inputs.dry_run && !inputs.bootstrap && steps.crate.outputs.published == 'false' }}
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+
+      - name: cargo publish
+        if: ${{ !inputs.dry_run && steps.crate.outputs.published == 'false' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ inputs.bootstrap && secrets.CARGO_REGISTRY_BOOTSTRAP_TOKEN || steps.auth.outputs.token }}
+        run: |
+          [ -n "$CARGO_REGISTRY_TOKEN" ] || { echo "::error::no crates.io token (OIDC or CARGO_REGISTRY_BOOTSTRAP_TOKEN)"; exit 1; }
+          # --no-verify: no third-party build script runs next to the token (see the package step).
+          cargo publish -p polyjose --locked --no-verify
+
+  # 2. npm: the 8 platform packages, then @polyjose/node, then @polyjose/wasm, each the draft's
+  # tarball (scripts/release/npm-publish.sh).
+  npm:
+    name: npm
+    needs: [assets, crates]
+    if: >-
+      ${{ !cancelled() && needs.assets.result == 'success' && needs.assets.outputs.npm == 'true' &&
+      (needs.crates.result == 'success' || needs.crates.result == 'skipped') }}
+    environment: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No registry-url: setup-node would write an .npmrc that reads NODE_AUTH_TOKEN; npm-publish.sh
+      # writes its own, and only with bootstrap.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: draft-assets
+          path: ${{ runner.temp }}/draft
+
+      - name: verify the draft assets
+        env:
+          TAG: ${{ inputs.tag }}
+          GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
+          ALLOW_UNSIGNED: ${{ inputs.dry_run && startsWith(inputs.tag, 'dryrun-') }}
+        run: |
+          args=()
+          [ "$ALLOW_UNSIGNED" != true ] || args+=(--allow-unsigned)
+          scripts/release/verify-draft.sh "${args[@]}" "$RUNNER_TEMP/draft" "$TAG" .github/keys/polyjose-release.asc "$GPG_FINGERPRINT"
+
+      - name: npm publish (scripts/release/npm-publish.sh)
+        env:
+          VERSION: ${{ needs.assets.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+          NODE_AUTH_TOKEN: ${{ inputs.bootstrap && secrets.NPM_BOOTSTRAP_TOKEN || '' }}
+        run: scripts/release/npm-publish.sh "$RUNNER_TEMP/draft" "$VERSION"
+
+  # 3. Maven Central: the draft's signed bundle, uploaded USER_MANAGED and polled until VALIDATED
+  # (scripts/release/maven-central.sh). A dry run checks the bundle offline and uploads nothing.
+  maven:
+    name: Maven Central
+    needs: [assets, npm]
+    if: >-
+      ${{ !cancelled() && needs.assets.result == 'success' && needs.assets.outputs.maven == 'true' &&
+      (needs.npm.result == 'success' || needs.npm.result == 'skipped') }}
+    environment: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: draft-assets
+          path: ${{ runner.temp }}/draft
+
+      - name: verify the draft assets and the Maven bundle
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ needs.assets.outputs.version }}
+          GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
+          ALLOW_UNSIGNED: ${{ inputs.dry_run && startsWith(inputs.tag, 'dryrun-') }}
+        run: |
+          args=()
+          [ "$ALLOW_UNSIGNED" != true ] || args+=(--allow-unsigned)
+          scripts/release/verify-draft.sh "${args[@]}" "$RUNNER_TEMP/draft" "$TAG" .github/keys/polyjose-release.asc "$GPG_FINGERPRINT"
+          scripts/release/maven-central.sh check "${args[@]}" "$RUNNER_TEMP/draft/polyjose-maven-$VERSION.zip" "$VERSION" \
+            .github/keys/polyjose-release.asc "$GPG_FINGERPRINT"
+
+      - name: the Portal token is set (dry run)
+        if: ${{ inputs.dry_run }}
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          [ -n "$MAVEN_CENTRAL_USERNAME" ] && [ -n "$MAVEN_CENTRAL_PASSWORD" ] ||
+            { echo "::error::MAVEN_CENTRAL_USERNAME or MAVEN_CENTRAL_PASSWORD is empty (environment publish)"; exit 1; }
+          echo "dry run: the Portal token is set; no upload"
+
+      - name: upload to the Central Portal (USER_MANAGED) and wait for VALIDATED
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ needs.assets.outputs.version }}
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: scripts/release/maven-central.sh upload "$RUNNER_TEMP/draft/polyjose-maven-$VERSION.zip" "$VERSION"
+
+  # 4. GitHub: the draft still holds the verified bytes, then it is un-drafted, which makes the
+  # XCFramework URL in Package.swift live for SPM.
+  github:
+    name: GitHub release (un-draft)
+    needs: [assets, maven]
+    if: >-
+      ${{ !cancelled() && needs.assets.result == 'success' && needs.assets.outputs.github == 'true' &&
+      (needs.maven.result == 'success' || needs.maven.result == 'skipped') }}
+    environment: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: draft-assets
+          path: ${{ runner.temp }}/draft
+
+      - name: verify the draft assets, the draft on GitHub and Package.swift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
+          ALLOW_UNSIGNED: ${{ inputs.dry_run && startsWith(inputs.tag, 'dryrun-') }}
+        run: |
+          args=()
+          [ "$ALLOW_UNSIGNED" != true ] || args+=(--allow-unsigned)
+          scripts/release/verify-draft.sh "${args[@]}" "$RUNNER_TEMP/draft" "$TAG" .github/keys/polyjose-release.asc "$GPG_FINGERPRINT"
+          [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true ] || { echo "::error::$TAG is no longer a draft"; exit 1; }
+          gh release download "$TAG" --dir "$RUNNER_TEMP/now"
+          (cd "$RUNNER_TEMP/draft" && sha256sum -- * | sort -k 2) >"$RUNNER_TEMP/verified.txt"
+          (cd "$RUNNER_TEMP/now" && sha256sum -- * | sort -k 2) >"$RUNNER_TEMP/now.txt"
+          diff "$RUNNER_TEMP/verified.txt" "$RUNNER_TEMP/now.txt" || { echo "::error::the draft's assets changed since they were verified"; exit 1; }
+          echo "the draft still holds exactly the verified assets"
+          if [[ $TAG == v* ]]; then
+            zip_sum=$(sha256sum "$RUNNER_TEMP/draft/PolyjoseFFI.xcframework.zip" | awk '{ print $1 }')
+            checksum=$(sed -n 's/^ *checksum: "\([0-9a-f]*\)"$/\1/p' Package.swift)
+            [ "$checksum" = "$zip_sum" ] || { echo "::error::Package.swift's checksum ($checksum) is not the draft zip's SHA-256 ($zip_sum)"; exit 1; }
+            echo "Package.swift's checksum is the draft zip's SHA-256: $zip_sum"
+          fi
+
+      - name: un-draft the release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release edit "$TAG" --draft=false --latest
+          [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = false ] || { echo "::error::$TAG is still a draft"; exit 1; }
+          echo "$TAG is published"
+
+      - name: dry run
+        if: ${{ inputs.dry_run }}
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "dry run: $TAG stays a draft"
+
+  # 5. SPM resolves Polyjose at the published tag and builds it (macOS). Reads public data only.
+  spm:
+    name: SPM resolve and build
+    needs: [assets, github]
+    if: ${{ !inputs.dry_run && needs.github.result == 'success' }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: a scratch package depending on polyjose at the tag
+        env:
+          VERSION: ${{ needs.assets.outputs.version }}
+        run: |
+          dir=$RUNNER_TEMP/spm-check
+          mkdir -p "$dir/Sources/Check"
+          cat >"$dir/Package.swift" <<EOF
+          // swift-tools-version: 6.0
+          import PackageDescription
+          let package = Package(
+              name: "spm-check",
+              platforms: [.macOS(.v13)],
+              dependencies: [.package(url: "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git", exact: "$VERSION")],
+              targets: [.executableTarget(name: "Check", dependencies: [.product(name: "Polyjose", package: "polyjose")])]
+          )
+          EOF
+          printf 'import Polyjose\nprint("Polyjose resolved and linked")\n' >"$dir/Sources/Check/main.swift"
+          cd "$dir"
+          swift package resolve
+          swift build
+          swift run Check

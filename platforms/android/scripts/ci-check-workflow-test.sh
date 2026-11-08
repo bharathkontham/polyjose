@@ -85,7 +85,8 @@ expect_fail "trigger: pull_request" "trigger:" insert_after "on:" "  pull_reques
 expect_fail "trigger: pull_request_target" "trigger:" insert_after "on:" "  pull_request_target:"
 expect_fail "trigger: push" "trigger:" insert_after "on:" "  push:\n    branches: [main]"
 expect_fail "trigger: schedule" "trigger:" insert_after "on:" "  schedule:\n    - cron: '0 3 * * *'"
-expect_fail "trigger: workflow_call uncommented" "trigger:" replace_str "  # workflow_call:" "  workflow_call:"
+expect_fail "trigger: workflow_call removed" "not exactly workflow_dispatch and workflow_call" replace_line "  workflow_call:" "  # workflow_call:"
+expect_fail "trigger: workflow_call twice" "trigger:" insert_after "on:" "  workflow_call:"
 expect_fail "trigger: workflow_run" "trigger:" insert_after "on:" "  workflow_run:\n    workflows: [CI]"
 expect_fail "trigger: scalar on:" "trigger: on: must be a block" replace_line "on:" "on: workflow_dispatch"
 expect_fail "trigger: flow list on:" "trigger: on: must be a block" replace_line "on:" "on: [workflow_dispatch, push]"
@@ -142,7 +143,7 @@ expect_fail "credentials: github.token" "credentials: a token" insert_after "$en
 expect_fail "credentials: GITHUB_TOKEN in a script" "credentials: a token" insert_after "$run_anchor" '          curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com'
 expect_fail "credentials: github['token']" "credentials: a token" insert_after "$env_anchor" "          X: \${{ github['token'] }}"
 expect_fail "credentials: github[\"token\"]" "credentials: a token" insert_after "$env_anchor" '          X: ${{ github["token"] }}'
-expect_fail "credentials: a github-token input" "credentials: a token" insert_after "          pattern: conformance-*" "          github-token: x"
+expect_fail "credentials: a github-token input" "credentials: a token" insert_after "          pattern: conformance-jvm-*" "          github-token: x"
 expect_fail "credentials: persist-credentials: true" "credentials: password, username or credential" replace_str "persist-credentials: false" "persist-credentials: true"
 expect_fail "credentials: Sonatype user" "credentials:" insert_after "$env_anchor" "          $central_user: x"
 expect_fail "credentials: Central property" "credentials: Maven Central" insert_after "$env_anchor" "          X: $central_prop"

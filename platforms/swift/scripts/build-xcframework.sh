@@ -10,19 +10,15 @@
 # Runs from any directory. Idempotent and incremental: a second run with no change recompiles no
 # Rust crate (cargo's fingerprints), and only the XCFramework itself is reassembled.
 #
-# The 9 libraries (ADR 0032 §1); two Rust targets are merged with lipo where a library has two:
+# The 5 libraries (ADR 0032 §1, without the tvOS and visionOS libraries: owner decision
+# 2026-11-08, feature 0012); two Rust targets are merged with lipo where a library has two:
 #   macos-arm64_x86_64          aarch64-apple-darwin + x86_64-apple-darwin
 #   ios-arm64                   aarch64-apple-ios
 #   ios-arm64_x86_64-simulator  aarch64-apple-ios-sim + x86_64-apple-ios
-#   tvos-arm64                  aarch64-apple-tvos
-#   tvos-arm64-simulator        aarch64-apple-tvos-sim
-#   xros-arm64                  aarch64-apple-visionos
-#   xros-arm64-simulator        aarch64-apple-visionos-sim
 #   watchos-arm64_arm64_32      aarch64-apple-watchos + arm64_32-apple-watchos
 #   watchos-arm64-simulator     aarch64-apple-watchos-sim
-# Every target is tier 2 on the stable toolchain of rust-toolchain.toml (the aarch64 tvOS,
-# visionOS and watchOS targets since Rust 1.95.0) except arm64_32-apple-watchos, which is tier 3
-# and is built with the nightly named in platforms/swift/nightly-toolchain and
+# Every target is tier 2 on the stable toolchain of rust-toolchain.toml (the aarch64 watchOS
+# targets since Rust 1.95.0) except arm64_32-apple-watchos, which is tier 3 and is built with the nightly named in platforms/swift/nightly-toolchain and
 # `-Zbuild-std=std,panic_abort` (ADR 0032 §1, amending ADR 0004).
 #
 # Development build: when that nightly (with rust-src) is not installed, the watchOS device
@@ -106,9 +102,7 @@ nightly_install="rustup toolchain install $nightly --profile minimal --component
 # invocation (host build scripts included) sees the same values and none is rebuilt for a change.
 export MACOSX_DEPLOYMENT_TARGET=13.0
 export IPHONEOS_DEPLOYMENT_TARGET=16.0
-export TVOS_DEPLOYMENT_TARGET=16.0
 export WATCHOS_DEPLOYMENT_TARGET=9.0
-export XROS_DEPLOYMENT_TARGET=1.0
 
 max_archive_bytes=$((10 * 1024 * 1024))
 
@@ -196,10 +190,6 @@ a_ios_sim_x86_64="$(build_target x86_64-apple-ios stable)"
 core_seconds=$((SECONDS - core_start))
 
 extra_start="$SECONDS"
-a_tvos="$(build_target aarch64-apple-tvos stable)"
-a_tvos_sim="$(build_target aarch64-apple-tvos-sim stable)"
-a_xros="$(build_target aarch64-apple-visionos stable)"
-a_xros_sim="$(build_target aarch64-apple-visionos-sim stable)"
 a_watchos_sim="$(build_target aarch64-apple-watchos-sim stable)"
 a_watchos_arm64="$(build_target aarch64-apple-watchos stable)"
 if [ "$with_arm64_32" = 1 ]; then
@@ -230,10 +220,6 @@ gen_seconds=$((SECONDS - gen_start))
 add_library macos-arm64_x86_64 "$a_macos_arm64" "$a_macos_x86_64"
 add_library ios-arm64 "$a_ios"
 add_library ios-arm64_x86_64-simulator "$a_ios_sim_arm64" "$a_ios_sim_x86_64"
-add_library tvos-arm64 "$a_tvos"
-add_library tvos-arm64-simulator "$a_tvos_sim"
-add_library xros-arm64 "$a_xros"
-add_library xros-arm64-simulator "$a_xros_sim"
 if [ "$with_arm64_32" = 1 ]; then
   add_library watchos-arm64_arm64_32 "$a_watchos_arm64" "$a_watchos_arm64_32"
 else
@@ -274,7 +260,7 @@ done
   echo "commit: $(git -C "$root" rev-parse HEAD 2>/dev/null || echo unknown)$(
     git -C "$root" diff --quiet HEAD 2>/dev/null || echo ' (uncommitted changes)')"
   echo "deployment targets: macOS $MACOSX_DEPLOYMENT_TARGET, iOS $IPHONEOS_DEPLOYMENT_TARGET," \
-    "tvOS $TVOS_DEPLOYMENT_TARGET, watchOS $WATCHOS_DEPLOYMENT_TARGET, visionOS $XROS_DEPLOYMENT_TARGET"
+    "watchOS $WATCHOS_DEPLOYMENT_TARGET"
 } > "$stage/PolyjoseFFI.xcframework/polyjose-build.txt"
 
 # Replace the previous output only once everything above succeeded.
@@ -286,7 +272,7 @@ echo "PolyjoseFFI.xcframework libraries:"
 for id in "${libraries[@]}"; do
   printf '  %-28s %s\n' "$id" "$(mb "$(size_of "$out/$id/libpolyjose_ffi.a")")"
 done
-echo "Rust targets: core (macOS, iOS, iOS Simulator) ${core_seconds} s; others (tvOS, visionOS, watchOS) ${extra_seconds} s; Swift generation ${gen_seconds} s"
+echo "Rust targets: core (macOS, iOS, iOS Simulator) ${core_seconds} s; watchOS ${extra_seconds} s; Swift generation ${gen_seconds} s"
 echo "$out: $(mb $(( $(du -sk "$out" | cut -f1) * 1024 )))"
 echo "Swift sources: $generated/Polyjose.swift"
 if [ "$with_arm64_32" = 0 ]; then
