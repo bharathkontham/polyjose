@@ -31,7 +31,11 @@ addon=polyjose.$name.node
 [ -f "$addon" ] || { echo "pack-platform.sh: $addon was not built" >&2; exit 1; }
 
 dir=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-node-$name.XXXXXX")
-trap 'rm -rf "$dir"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$dir"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "pack-platform.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 cp "npm/$name/package.json" "$addon" "$dir/"
 cp "$repo/LICENSE" "$dir/LICENSE"
@@ -45,3 +49,4 @@ MIT; see \`LICENSE\`. \`THIRD-PARTY-NOTICES.txt\` lists the Rust crates compiled
 EOF
 "$repo/scripts/third-party-notices.sh" -p polyjose-node --target "$triple" -o "$dir/THIRD-PARTY-NOTICES.txt"
 (cd "$dir" && npm pack --ignore-scripts --loglevel=error --pack-destination "$out" >/dev/null)
+completed=1; exit 0
