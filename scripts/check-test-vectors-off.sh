@@ -66,7 +66,7 @@ fail() { echo "FAIL: $*"; status=1; }
 
 # --- Workspace members: every one but polyjose (check 2), and those under bindings/ (check 1) ------
 # One line per member: "<name> v<version> [(proc-macro)] (<path>)"; the path is the last group.
-if ! members=$(cargo tree --locked --workspace -e normal --depth 0 --prefix none 2>&1); then
+if ! members=$(cargo tree --color never --locked --workspace -e normal --depth 0 --prefix none 2>&1); then
   echo "FAIL: cargo tree could not list the workspace members:"; echo "$members"; exit 1
 fi
 pkgs=(); member_dirs=""; checked=(); core_seen=0
@@ -114,7 +114,7 @@ for pkg in "${checked[@]}"; do
   # enable a polyjose feature, so it is skipped, but only when its whole tree (every dependency
   # kind, all features, every target) shows it and no polyjose package. Anything else is checked
   # below, and a probe that fails or shows no tree fails the member (ADR 0005).
-  if ! whole=$(cargo tree --locked -p "$pkg" -e normal,build,dev --all-features --target all \
+  if ! whole=$(cargo tree --color never --locked -p "$pkg" -e normal,build,dev --all-features --target all \
     --prefix none 2>&1); then
     echo "$whole"; fail "cargo tree failed for $pkg (its whole tree)"; continue
   fi
@@ -125,7 +125,7 @@ for pkg in "${checked[@]}"; do
     echo "skipped $pkg: polyjose not in its tree (every dependency kind, all features, every target)"
     continue
   fi
-  if ! tree=$(cargo tree --locked -e features -i polyjose -p "$pkg" --all-features --target all 2>&1); then
+  if ! tree=$(cargo tree --color never --locked -e features -i polyjose -p "$pkg" --all-features --target all 2>&1); then
     echo "$tree"; fail "cargo tree failed for $pkg"; continue
   fi
   # Guard against a vacuous pass: the tree must show polyjose and this binding depending on it.
@@ -140,7 +140,7 @@ for pkg in "${checked[@]}"; do
 done
 
 # --- 3. Workspace-wide: no normal or build edge enables it --------------------------------------------
-if ! tree=$(cargo tree --locked -e features,normal,build -i polyjose --workspace --exclude polyjose \
+if ! tree=$(cargo tree --color never --locked -e features,normal,build -i polyjose --workspace --exclude polyjose \
   --all-features --target all 2>&1); then
   echo "$tree"; fail "cargo tree failed for the workspace"
 elif ! grep -q '^polyjose v' <<<"$tree"; then

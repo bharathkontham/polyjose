@@ -35,7 +35,8 @@ into its own scratch directory, so it needs cargo but not Gradle.
 | Task | Does | Output |
 |---|---|---|
 | `cargoHostBuild` | `cargo build --release --lib -p polyjose-ffi` | `target/release/libpolyjose_ffi.{dylib,so}` / `polyjose_ffi.dll` |
-| `uniffiGenerate` | `cargo run -p polyjose-uniffi-bindgen -- generate <host lib> --language kotlin --no-format`, then `UniffiKotlinPatch` (loader, ADR 0065 redaction) | `build/generated/uniffi/raw` (unpatched), `build/generated/uniffi/kotlin` |
+| `cargoBindgenBuild` | `cargo build --profile bindgen --lib -p polyjose-ffi` (release, unstripped; read by `uniffiGenerate` only, never shipped) | `target/bindgen/libpolyjose_ffi.{dylib,so}` / `polyjose_ffi.dll` |
+| `uniffiGenerate` | `cargo run -p polyjose-uniffi-bindgen -- generate <unstripped host lib> --language kotlin --no-format`, then `UniffiKotlinPatch` (loader, ADR 0065 redaction) | `build/generated/uniffi/raw` (unpatched), `build/generated/uniffi/kotlin` |
 | `cargoNdkBuild` | `cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 --platform 23 build --release --lib -p polyjose-ffi` | `build/jniLibs/<abi>/` |
 | `assembleJvmNatives` | copies the host library into JNA's layout | `build/jvm-natives/<jna-prefix>/` |
 

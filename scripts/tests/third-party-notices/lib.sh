@@ -86,7 +86,7 @@ headings() {
 # tree_crates <package> <target>: "<name> <version>" of every registry crate in the artifact's
 # tree, as cargo prints it; the workspace's own path crates are covered by the polyjose section.
 tree_crates() {
-  (cd "$repo" && cargo tree --locked --offline -p "$1" --target "$2" -e normal,no-proc-macro \
+  (cd "$repo" && cargo tree --color never --locked --offline -p "$1" --target "$2" -e normal,no-proc-macro \
     --prefix none -f '{p}') |
     sed 's/ (\*)$//' | grep -v ' (/' | sed 's/^\([^ ]*\) v\([^ ]*\)$/\1 \2/' | sort -u
 }

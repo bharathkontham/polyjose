@@ -51,8 +51,12 @@
 # release, no registry, and checkout keeps no credentials. release.yml (feature 0012) attaches the
 # zip to the draft release from the apple-xcframework artifact.
 #
-# Xcode 27.2 (build 27B52, the version the suite is measured with) is selected through DEVELOPER_DIR
-# at its runner-image path, and the second step fails if xcodebuild reports another version.
+# Xcode 27.2 is selected through DEVELOPER_DIR at its runner-image path, and the second step fails
+# if xcodebuild reports another version. The check is on the version only, not the build: the suite
+# was measured locally with build 27B52, and the runner is GitHub's public-preview `xcode-27` image
+# (actions/runner-images issue 14404; macos-latest has Xcode 26.x only), whose Xcode_27.2.app is a
+# symlink to Xcode_27.2_Release_Candidate.app, build 27B48. That image lists the iOS 27.2 SDK but
+# installs only the iOS 27.0 and 27.1 simulator runtimes, so the runtime step below downloads 27.2.
 #
 # Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
 # that SHA was resolved from (re-resolved with the GitHub API on 2026-11-07). The pins are the ones
@@ -97,7 +101,9 @@ defaults:
 jobs:
   swift:
     name: Swift (iOS) (${{ inputs.mode }})
-    runs-on: macos-latest
+    # macos-latest has Xcode 26.x only; xcode-27 is the public-preview image with Xcode 27.2 at
+    # /Applications/Xcode_27.2.app (see the header; .github/actionlint.yaml declares the label).
+    runs-on: xcode-27
     # The XCFramework (7 Rust targets; in release mode also std for arm64_32 with -Zbuild-std),
     # swift test, the packaging tests, the simulator run and the rust-core reference.
     timeout-minutes: 180

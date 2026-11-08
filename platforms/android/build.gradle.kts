@@ -4,6 +4,7 @@
 // `builtBy`. Every task declares its inputs and outputs, so a rebuild without changes is up to date.
 //
 //   cargoHostBuild      polyjose-ffi for this host (release profile) -> target/release/<lib>
+//   cargoBindgenBuild   the same library unstripped (profile bindgen) -> target/bindgen/<lib>
 //   uniffiGenerate      the Kotlin sources from that library -> build/generated/uniffi/raw, patched
 //                       (UniffiKotlinPatch: hash-checked loader, ADR 0065 redaction) -> .../kotlin
 //   cargoNdkBuild       the four Android ABIs with cargo-ndk -> build/jniLibs/<abi>/
@@ -89,6 +90,24 @@ val cargoHostBuild = tasks.register<Exec>("cargoHostBuild") {
     commandLine("cargo", "build", "--locked", "--release", "--lib", "-p", "polyjose-ffi")
 }
 
+/**
+ * The library uniffiGenerate reads: polyjose-ffi built with the `bindgen` profile (Cargo.toml: the
+ * release profile with `strip = false`). On ELF the release profile's `strip = "symbols"` removes
+ * the UNIFFI_META_* symbols that library mode reads. It is never packaged; cargoHostBuild's
+ * library is the one that ships.
+ */
+val bindgenLibrary: File = cargoTargetDir.resolve("bindgen/$hostLibraryName")
+
+val cargoBindgenBuild = tasks.register<Exec>("cargoBindgenBuild") {
+    group = "rust"
+    description = "Builds the polyjose-ffi cdylib for this host, unstripped (profile bindgen), for uniffiGenerate only."
+    inputs.files(rustLibraryInputs).withPropertyName("rustSources").withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.file(bindgenLibrary).withPropertyName("bindgenLibrary")
+    workingDir(repoRoot)
+    // The same `-p polyjose-ffi` and `--locked` as cargoHostBuild.
+    commandLine("cargo", "build", "--locked", "--profile", "bindgen", "--lib", "-p", "polyjose-ffi")
+}
+
 val uniffiKotlinDir: File = layout.buildDirectory.dir("generated/uniffi/kotlin").get().asFile
 
 /** What the generator writes, before UniffiKotlinPatch; the JVM tests feed it to the patch. */
@@ -101,7 +120,7 @@ val uniffiGenerate = tasks.register<Exec>("uniffiGenerate") {
     group = "rust"
     description = "Generates the Kotlin sources (package dev.polyjose) from the host library in UniFFI library mode " +
         "(ADR 0033 §1a) and patches them (feature 0008 F05: hash-checked loader, ADR 0065 redaction)."
-    inputs.files(cargoHostBuild).withPropertyName("hostLibrary").withPathSensitivity(PathSensitivity.NONE)
+    inputs.files(cargoBindgenBuild).withPropertyName("bindgenLibrary").withPathSensitivity(PathSensitivity.NONE)
     // The bindgen CLI and the generator settings (bindings/ffi/uniffi.toml, found through cargo
     // metadata: Kotlin package dev.polyjose).
     inputs.files(
@@ -123,7 +142,7 @@ val uniffiGenerate = tasks.register<Exec>("uniffiGenerate") {
     // `--locked`, as cargoHostBuild: the generator is built from the reviewed Cargo.lock only.
     commandLine(
         "cargo", "run", "--locked", "-p", "polyjose-uniffi-bindgen", "--",
-        "generate", hostLibrary.path, "--language", "kotlin", "--no-format", "--out-dir", rawDir.path,
+        "generate", bindgenLibrary.path, "--language", "kotlin", "--no-format", "--out-dir", rawDir.path,
     )
     // Feature 0008 F05 (security audit M1, L1; ADR 0065): the deterministic patch, which fails
     // the build when the generated text is not exactly what it expects (UniffiKotlinPatch). The

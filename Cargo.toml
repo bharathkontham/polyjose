@@ -20,6 +20,14 @@ lto = true
 codegen-units = 1
 strip = "symbols"
 
+# The release profile without stripping, for the one library uniffi-bindgen reads (library mode,
+# platforms/android/build.gradle.kts uniffiGenerate). On ELF, strip = "symbols" removes the symbol
+# table that holds the UNIFFI_META_* symbols, so the generator finds no metadata in the shipped
+# .so (release.yml candidate run 42517846758). Nothing built with this profile ships.
+[profile.bindgen]
+inherits = "release"
+strip = false
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

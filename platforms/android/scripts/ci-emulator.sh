@@ -16,8 +16,9 @@
 #                             the pixel_6 profile asks for 12 GB, more than a runner may have free)
 #
 # 1. KVM (Linux in GitHub Actions only): the udev rule that lets the runner user open /dev/kvm,
-#    as GitHub documents for hardware-accelerated Android emulators. Then /dev/kvm must be
-#    readable and writable. Nothing is changed outside GitHub Actions.
+#    as GitHub documents for hardware-accelerated Android emulators, and `udevadm settle` until
+#    it applies. Then /dev/kvm must be readable and writable. Nothing is changed outside GitHub
+#    Actions.
 # 2. The AVD: an existing AVD of that name is used as it is (never changed or deleted). Otherwise
 #    `avdmanager create avd -n <avd> -k <image> -d pixel_6` with disk.dataPartition.size set in its
 #    config.ini; that AVD, created by this run, is deleted when the script exits.
@@ -94,9 +95,15 @@ if [ "$(uname -s)" = Linux ]; then
     echo "==> ci-emulator: enabling KVM for the runner user (udev rule)"
     echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
       sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null || fail "cannot write the KVM udev rule"
-    { sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm; } || fail "udevadm"
+    # `udevadm trigger` only queues the change event; settle waits until udev has applied the
+    # rule's MODE, so the check below does not race it (run 42517846758 checked 40 ms too early).
+    { sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm &&
+      sudo udevadm settle --timeout=30; } || fail "udevadm"
   fi
-  [ -r /dev/kvm ] && [ -w /dev/kvm ] || fail "/dev/kvm is not readable and writable: no hardware acceleration"
+  if ! { [ -r /dev/kvm ] && [ -w /dev/kvm ]; }; then
+    ls -l /dev/kvm 2>&1 || true
+    fail "/dev/kvm is not readable and writable: no hardware acceleration"
+  fi
   echo "ci-emulator: /dev/kvm is usable"
 else
   echo "ci-emulator: KVM: not applicable on $(uname -s) (the emulator uses the host's hypervisor)"

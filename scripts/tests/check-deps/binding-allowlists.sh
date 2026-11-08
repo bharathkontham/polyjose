@@ -78,11 +78,11 @@ with open(path, "w", encoding="utf-8") as f:
 # check 14 is left to see a serde crate.
 allow_new_crates() {
   (cd "$case_dir" && {
-    cargo tree --locked --offline -p polyjose -e normal,build --all-features --target all --prefix none
+    cargo tree --color never --locked --offline -p polyjose -e normal,build --all-features --target all --prefix none
     grep -v '^[[:space:]]*#' deps-allowlist.txt
     grep -v '^[[:space:]]*#' "bindings/deps-allowlist/$1.txt"
   } | awk 'NF { print $1 }' | tr 'A-Z_' 'a-z-' | sort -u >"$scratch/covered") || lib_die "could not list the covered crates"
-  (cd "$case_dir" && cargo tree --locked --offline -p "$2" -e normal,build --all-features --target all --prefix none) \
+  (cd "$case_dir" && cargo tree --color never --locked --offline -p "$2" -e normal,build --all-features --target all --prefix none) \
     | awk 'NR > 1 { print $1 }' | tr 'A-Z_' 'a-z-' | sort -u | comm -23 - "$scratch/covered" \
     | grep -vx "$2" >>"$case_dir/bindings/deps-allowlist/$1.txt" || lib_die "could not widen $1.txt"
 }
