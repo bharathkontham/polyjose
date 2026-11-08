@@ -1,0 +1,87 @@
+# polyjose fuzz harnesses (feature 0012 H1, ADR 0036 §1). Its own workspace
+# (the `[workspace]` table below) on the pinned nightly in `nightly-toolchain`,
+# and not a member of the root workspace (no root `exclude`, so check 7 of
+# scripts/check-deps.sh stays strict): stable `cargo test --workspace`,
+# `cargo deny check` and scripts/check-deps.sh never see libfuzzer-sys. Run it
+# with scripts/fuzz.sh. Ships nothing.
+[package]
+name = "polyjose-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+polyjose = { path = "../crates/polyjose", features = ["deflate"] }
+libfuzzer-sys = "=0.4.13"
+# The differential oracle of the `inflate` target, the same dev-only oracle as
+# polyjose's own DEFLATE tests (ADR 0017 §4).
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
+
+[lib]
+name = "polyjose_fuzz"
+path = "src/lib.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "json"
+path = "fuzz_targets/json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jose_header"
+path = "fuzz_targets/jose_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jwk"
+path = "fuzz_targets/jwk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "der_pem"
+path = "fuzz_targets/der_pem.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jwt"
+path = "fuzz_targets/jwt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jws"
+path = "fuzz_targets/jws.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jwe"
+path = "fuzz_targets/jwe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "inflate"
+path = "fuzz_targets/inflate.rs"
+test = false
+doc = false
+bench = false

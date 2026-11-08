@@ -49,3 +49,21 @@ mod test_support;
 pub mod util;
 
 pub use error::{Error, Result};
+
+/// Fuzzing-only entry points (feature 0012, ADR 0036 §1–§2). Compiled only
+/// under cargo-fuzz's `--cfg fuzzing`, never in a normal, test, doc or
+/// downstream build, and hidden from the docs: not public API.
+#[cfg(all(fuzzing, feature = "deflate"))]
+#[doc(hidden)]
+pub mod fuzzing {
+    /// The bounded raw DEFLATE inflate behind JWE `zip: DEF` (RFC 1951 §3.2,
+    /// RFC 7516 §4.1.3, ADR 0017 §1), which the public API reaches only
+    /// after a successful AEAD decryption.
+    ///
+    /// # Errors
+    ///
+    /// As the internal `deflate::inflate`: [`crate::Error::InvalidFormat`].
+    pub fn inflate(input: &[u8], max_output: usize) -> crate::Result<zeroize::Zeroizing<Vec<u8>>> {
+        crate::deflate::inflate(input, max_output)
+    }
+}

@@ -1,0 +1,1 @@
+{"alg":"ECDH-ES+A128KW","kid":"peregrin.took@tuckborough.example","epk":{"kty":"EC","crv":"P-384","x":"ISGjSPl0OFWFnElvkdDzn-co_EbkjQB3EwUbIvHAJX_iDdhbId9-Hsgr-LObITii","y":"rnT4DmJXd4-Myp8nm1fSXu6xVZYGQpcvBWfiBFFPCsHrHifbURUFMhGRSWHQlkTI"},"enc":"A128GCM"}

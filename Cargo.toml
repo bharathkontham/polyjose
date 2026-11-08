@@ -26,6 +26,9 @@ missing_docs = "warn"
 # A stale `#[expect(...)]` fails the build on every toolchain (stable and the
 # 1.89 MSRV) instead of warning: expectations must not depend on the compiler.
 unfulfilled_lint_expectations = "deny"
+# `cfg(fuzzing)` is set by cargo-fuzz only; lib.rs gates the fuzz-only inflate
+# entry point on it (ADR 0036 §1).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Key generation refuses \"none\": none has no key (RFC 7518 §3.6).",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "none"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}
