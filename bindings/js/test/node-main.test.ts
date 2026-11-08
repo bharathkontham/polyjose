@@ -42,7 +42,7 @@ test("writes target/conformance/<runner>.json with runner, version, features, er
     const written = JSON.parse(fs.readFileSync(summary.file, "utf8")) as Record<string, unknown>;
     assert.deepEqual(Object.keys(written), ["runner", "polyjose", "vectors_digest", "features", "error_codes", "results"]);
     assert.equal(written["runner"], "node");
-    assert.equal(written["polyjose"], "0.1.0");
+    assert.equal(written["polyjose"], "0.1.1");
     assert.match(String(written["vectors_digest"]), /^[0-9a-f]{64}$/);
     assert.deepEqual(written["features"], []);
     assert.deepEqual(written["error_codes"], [...ERROR_CODES]);

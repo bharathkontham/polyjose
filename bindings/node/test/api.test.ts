@@ -155,7 +155,7 @@ test("require('@polyjose/node/package.json') resolves through exports, for tooli
   const require = host.getBuiltinModule("node:module").createRequire(thisFile);
   const manifest = record(require("@polyjose/node/package.json"), "require('@polyjose/node/package.json')");
   assert.deepEqual(manifest, readJson(path.join(pkgDir, "package.json")), "the package's own manifest");
-  assert.equal(manifest["version"], "0.1.0");
+  assert.equal(manifest["version"], "0.1.1");
 });
 
 /** The napi platform name of a target triple (ADR 0031 §2), e.g. aarch64-unknown-linux-musl -> linux-arm64-musl. */

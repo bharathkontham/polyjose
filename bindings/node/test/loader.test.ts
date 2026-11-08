@@ -295,7 +295,7 @@ function packageCopy(options: CopyOptions): string {
   if (options.packageWasi === true) {
     const p = path.join(dir, "node_modules", "@polyjose", "node-wasm32-wasi");
     fs.mkdirSync(p, { recursive: true });
-    fs.writeFileSync(path.join(p, "package.json"), JSON.stringify({ name: "@polyjose/node-wasm32-wasi", version: "0.1.0", main: "index.js" }));
+    fs.writeFileSync(path.join(p, "package.json"), JSON.stringify({ name: "@polyjose/node-wasm32-wasi", version: "0.1.1", main: "index.js" }));
     fs.writeFileSync(path.join(p, "index.js"), sentinel(PACKAGE_SENTINEL));
   }
   return dir;
@@ -485,7 +485,7 @@ test("NAPI_RS_NATIVE_LIBRARY_PATH: the addon at that path loads; a WASI-stamped 
     fs.writeFileSync(
       fake,
       `require("fs").writeFileSync(${JSON.stringify(marker)}, "x");\n` +
-        'module.exports = { __napiBindingTarget: "wasm32-wasi", version: () => "0.1.0" };\n',
+        'module.exports = { __napiBindingTarget: "wasm32-wasi", version: () => "0.1.1" };\n',
     );
     const outcome = importInChild(dir, { NAPI_RS_NATIVE_LIBRARY_PATH: fake });
     assert.equal(outcome.loaded, false);
@@ -517,7 +517,7 @@ const hostPlatform = hostAddon.replace(/^polyjose\./, "").replace(/\.node$/, "")
 const fakeBackend = (marker: string): string =>
   [
     `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran");`,
-    'const known = { errorCodes: () => ["InvalidSignature"], version: () => "0.1.0" };',
+    'const known = { errorCodes: () => ["InvalidSignature"], version: () => "0.1.1" };',
     "module.exports = new Proxy(known, { get(t, k) {",
     "  if (k in t) return t[k];",
     '  if (k === "jwsVerifyCompact" || k === "jwsVerifyJson")',
@@ -527,11 +527,11 @@ const fakeBackend = (marker: string): string =>
     "",
   ].join("\n");
 
-/** Writes a fake package `name` (version 0.1.0, JS main) under `nodeModules`. */
+/** Writes a fake package `name` (version 0.1.1, JS main) under `nodeModules`. */
 function plantFakePackage(nodeModules: string, name: string, marker: string): void {
   const dir = path.join(nodeModules, ...name.split("/"));
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name, version: "0.1.0", main: "index.js" }));
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name, version: "0.1.1", main: "index.js" }));
   fs.writeFileSync(path.join(dir, "index.js"), fakeBackend(marker));
 }
 
@@ -650,7 +650,7 @@ const fakeEsmBackend = (marker: string): string =>
   [
     'import { writeFileSync } from "node:fs";',
     `writeFileSync(${JSON.stringify(marker)}, "ran");`,
-    'export const version = () => "0.1.0";',
+    'export const version = () => "0.1.1";',
     'export const errorCodes = () => ["InvalidSignature"];',
     'export const jwsVerifyCompact = async () => ({ alg: "HS256", payload: new TextEncoder().encode(\'{"admin":true}\'), signatureIndex: 0, protectedHeader: \'{"alg":"HS256"}\' });',
     "",

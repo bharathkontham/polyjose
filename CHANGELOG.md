@@ -4,9 +4,11 @@ All notable changes to polyjose are documented in this file. The format is based
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and polyjose follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-11-09
+## [0.1.1] - 2026-11-09
 
-The first release: a pure-Rust implementation of JOSE (JWS, JWE, JWK, JWT and JWA) for Rust, Node.js, the web (WebAssembly), Android and the JVM (Kotlin/Java), and Swift. All cryptography comes from RustCrypto and dalek crates, with no OpenSSL, `ring` or `aws-lc`. Every binding is built from the same Rust core and runs the same conformance vectors.
+This is the first published release of polyjose; 0.1.0 was tagged but never published, because its release workflow did not create the draft release.
+
+polyjose is a pure-Rust implementation of JOSE (JWS, JWE, JWK, JWT and JWA) for Rust, Node.js, the web (WebAssembly), Android and the JVM (Kotlin/Java), and Swift. All cryptography comes from RustCrypto and dalek crates, with no OpenSSL, `ring` or `aws-lc`. Every binding is built from the same Rust core and runs the same conformance vectors.
 
 ### Added
 
@@ -37,6 +39,10 @@ The first release: a pure-Rust implementation of JOSE (JWS, JWE, JWK, JWT and JW
 - **Swift:** the Swift package `Polyjose` (SwiftPM, from this repository's `Package.swift`) with a prebuilt XCFramework, for iOS 16, macOS 13 and watchOS 9. Tests run on macOS and the iOS Simulator; for watchOS the package is build- and link-checked only.
 - **One API on every binding:** utilities (`version`, `errorCodes`, `base64urlEncode`, `base64urlDecode`); JWK (`jwkParse`, `jwkToPublic`, `jwkThumbprint`, `jwkThumbprintUri`, `jwksSelect`, `jwkGenerateOct`, `jwkGenerateEc`, `jwkGenerateOkp`, `jwkGenerateForAlg`, `jwkFromPem`, `jwkFromDer`, `jwkToPem`, `jwkToDer`); JWS (`jwsSignCompact`, `jwsSignFlattened`, `jwsSignGeneral`, `jwsVerifyCompact`, `jwsVerifyJson`); JWE (`jweEncryptCompact`, `jweEncryptJson`, `jweDecryptCompact`, `jweDecryptJson`); JWT (`jwtSign`, `jwtVerify`, `jwtVerifyWithJwks`, `jwtEncryptNested`, `jwtDecryptNested`, `jwtDecryptNestedWithJwks`). Names are camelCase in JavaScript, Kotlin and Swift, and snake_case in Rust. Errors carry one of 17 stable codes, such as `InvalidSignature`, `AlgorithmNotAllowed` and `TokenExpired`.
 
+### Fixed
+
+- **Release workflow:** the `attest` and `draft` jobs of `release.yml`, and the `spm` check of `publish.yml`, now run when a job further up their chain was skipped by design (the Apple build is skipped in tag mode). For 0.1.0 both jobs were skipped, so the tag run created no build attestations and no draft release.
+
 ### Security
 
 - **Explicit algorithm allow-lists.** Verify and decrypt always take the allowed algorithms (and, for JWE, the allowed `enc` values); the header's `alg` is never trusted on its own. `alg: none` is never accepted. Keys are bound to their algorithm family (RFC 8725).
@@ -48,7 +54,7 @@ The first release: a pure-Rust implementation of JOSE (JWS, JWE, JWK, JWT and JW
 - **Audits:** polyjose itself has not been independently audited. [AUDITS.md](https://github.com/bharathkontham/polyjose/blob/main/AUDITS.md) lists which of the primitive crates have a published third-party audit, and which version line it covered.
 - **Release integrity:** every release asset is listed in `SHA256SUMS`, signed with the release key in [`.github/keys/`](https://github.com/bharathkontham/polyjose/tree/main/.github/keys), and has a GitHub build attestation. The Maven artifacts are GPG-signed.
 
-### Not supported in 0.1.0
+### Not supported in 0.1.1
 
 - **RSA private-key operations.** There is no RS*/PS* signing, no RSA-OAEP-256 decryption and no RSA key generation, and RSA private keys are rejected on import (JWK, PEM and DER). The `rsa` crate's private-key operations are affected by [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html) (the Marvin timing attack), which has no patched release. RSA private-key support is planned for a later release, once a stable `rsa` 0.10 is marked patched.
 - **`RSA1_5` and `RSA-OAEP` (SHA-1)** key management, and SHA-1 thumbprints.
@@ -57,3 +63,7 @@ The first release: a pure-Rust implementation of JOSE (JWS, JWE, JWK, JWT and JW
 - **Encrypt-only JWTs.** A nested JWT must be signed, then encrypted.
 - **Encrypted PKCS#8** keys and BER encodings in PEM/DER import.
 - **Deno and Bun** are not tested for `@polyjose/wasm`.
+
+## [0.1.0] - 2026-11-09
+
+Tagged but not published (the release workflow created no draft release); superseded by 0.1.1.
