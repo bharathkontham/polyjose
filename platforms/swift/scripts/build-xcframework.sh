@@ -31,7 +31,11 @@
 # watchOS deployment target is below 26 (Apple Watch Series 4-8 run arm64_32), so packaging
 # refuses it (ADR 0032 §1); --release fails here instead.
 #
-# Static archives: `cargo rustc -p polyjose-ffi --release --target <t> --crate-type staticlib`.
+# Every cargo call passes --locked: a cargo (the pinned nightly included) that would rewrite
+# Cargo.lock fails here, instead of building on the rewritten lock and failing later.
+#
+# Static archives: `cargo rustc --locked -p polyjose-ffi --release --target <t> --crate-type
+# staticlib`.
 # Overriding the crate types drops the rlib, so the release profile's fat LTO applies (with `lib`
 # in crate-type the staticlib is not LTO'd: 24 MB instead of about 6.3 MB per target, ADR 0032 §1).
 # `-p polyjose-ffi` alone keeps uniffi's `cli` feature, which only polyjose-uniffi-bindgen
@@ -139,10 +143,10 @@ build_target() {
   local triple="$1" toolchain="$2" start="$SECONDS" archive stripped syms
   log "building $triple ($toolchain)"
   if [ "$toolchain" = nightly ]; then
-    cargo "+$nightly" rustc -Zbuild-std=std,panic_abort -p polyjose-ffi --release \
+    cargo "+$nightly" rustc --locked -Zbuild-std=std,panic_abort -p polyjose-ffi --release \
       --target "$triple" --crate-type staticlib >&2
   else
-    cargo rustc -p polyjose-ffi --release --target "$triple" --crate-type staticlib >&2
+    cargo rustc --locked -p polyjose-ffi --release --target "$triple" --crate-type staticlib >&2
   fi
   archive="$target_dir/$triple/release/libpolyjose_ffi.a"
   [ -f "$archive" ] || die "cargo did not produce $archive"
@@ -204,11 +208,11 @@ extra_seconds=$((SECONDS - extra_start))
 # --no-format keeps the output independent of whether swiftformat is installed.
 gen_start="$SECONDS"
 log "generating the Swift sources"
-cargo rustc -p polyjose-ffi --release --target aarch64-apple-darwin --crate-type cdylib >&2
+cargo rustc --locked -p polyjose-ffi --release --target aarch64-apple-darwin --crate-type cdylib >&2
 dylib="$target_dir/aarch64-apple-darwin/release/libpolyjose_ffi.dylib"
 [ -f "$dylib" ] || die "cargo did not produce $dylib"
 rm -rf "$stage/generated"
-cargo run -p polyjose-uniffi-bindgen -- generate "$dylib" --language swift --no-format \
+cargo run --locked -p polyjose-uniffi-bindgen -- generate "$dylib" --language swift --no-format \
   --out-dir "$stage/generated" >&2
 for f in Polyjose.swift PolyjoseFFI.h PolyjoseFFI.modulemap; do
   [ -f "$stage/generated/$f" ] || die "uniffi-bindgen did not write $f"

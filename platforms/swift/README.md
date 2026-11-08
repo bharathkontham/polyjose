@@ -24,6 +24,13 @@ Swift Package:
 - **Reading a field still gives the secret.** Only the printed form changes, so don't log a field itself.
 - **JWT claims are not redacted** (`JwtVerified.claims`, also inside `JwtNestedVerified`; ADR 0058). Put secrets in a JWE payload, not in claims.
 - **Wipe returned `Data` when you are done with it** (ADR 0030 §7.4). For example, `result.payload.resetBytes(in: result.payload.indices)` on a `var`. `Data` is copy-on-write, so this wipes the bytes only if no other copy shares them; wiping a copy leaves the original. Swift `String`s, such as keys and JWKs, cannot be wiped.
+- **Wiping returned `Data` doesn't remove every copy** (ADR 0058). The generated `Polyjose.swift` copies secret inputs (keys, payloads, plaintexts, `aad`, `detachedPayload`) and secret outputs (`payload`, `plaintext`, `aad`) through temporary Swift arrays, and frees them without wiping them. The Rust side of the call leaves unwiped copies on its own heap too. Your wipe reaches only the `Data` you hold. Reading the freed memory needs access to your app's process (a debugger, a core dump or a jailbroken device).
+
+## Static linking
+
+The XCFramework holds static libraries (ADR 0032), so polyjose's Rust code, with its own copy of the Rust standard library, is linked into your app's binary. This has two consequences:
+- **Another Rust static library in the same app can clash with it.** Both define `rust_eh_personality` and Rust standard library symbols, so the link can fail with duplicate-symbol errors. A dynamic-framework variant, which avoids this, is in the backlog.
+- **Generic tvOS, watchOS and visionOS Simulator builds need `EXCLUDED_ARCHS`.** Those simulator libraries are arm64 only, but a generic simulator destination (such as `generic/platform=tvOS Simulator`) also builds x86_64, which then fails to link. Either set `EXCLUDED_ARCHS[sdk=*simulator*] = x86_64` in your target's build settings, or build for a concrete simulator (such as `-destination 'platform=tvOS Simulator,name=Apple TV'`). The iOS Simulator library includes x86_64. On an Intel Mac, keep it by limiting the setting to the other simulators: `EXCLUDED_ARCHS[sdk=appletvsimulator*]`, `[sdk=watchsimulator*]` and `[sdk=xrsimulator*]`.
 
 ## OS minimums
 

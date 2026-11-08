@@ -6,7 +6,7 @@
 # Usage: platforms/swift/scripts/check-generated.sh
 #
 # Regenerates the Swift sources the way platforms/swift/scripts/build-xcframework.sh does (ADR
-# 0032 §2): the macOS arm64 cdylib (`cargo rustc -p polyjose-ffi --release --target
+# 0032 §2): the macOS arm64 cdylib (`cargo rustc --locked -p polyjose-ffi --release --target
 # aarch64-apple-darwin --crate-type cdylib`, with the same deployment targets, so the two scripts
 # share one cargo build), then `uniffi-bindgen generate --language swift --no-format` in library
 # mode, into a temporary directory. --no-format keeps the output independent of whether
@@ -48,11 +48,11 @@ export XROS_DEPLOYMENT_TARGET=1.0
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/polyjose-check-generated.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
-cargo rustc -p polyjose-ffi --release --target aarch64-apple-darwin --crate-type cdylib >&2 ||
+cargo rustc --locked -p polyjose-ffi --release --target aarch64-apple-darwin --crate-type cdylib >&2 ||
   { echo "$me: error: building the polyjose-ffi cdylib failed"; exit 2; }
 dylib="$target_dir/aarch64-apple-darwin/release/libpolyjose_ffi.dylib"
 [ -f "$dylib" ] || { echo "$me: error: cargo did not produce $dylib"; exit 2; }
-cargo run -p polyjose-uniffi-bindgen -- generate "$dylib" --language swift --no-format \
+cargo run --locked -p polyjose-uniffi-bindgen -- generate "$dylib" --language swift --no-format \
   --out-dir "$scratch/generated" >&2 || { echo "$me: error: uniffi-bindgen failed"; exit 2; }
 for f in Polyjose.swift PolyjoseFFI.h; do
   [ -f "$scratch/generated/$f" ] || { echo "$me: error: uniffi-bindgen did not write $f"; exit 2; }
