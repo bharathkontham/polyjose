@@ -21,6 +21,8 @@
 #            under 4 MB (4,000,000 bytes; ADR 0033 §1); each .so size and the AAR size printed.
 #            Every class in classes.jar is class-file major version 61, Java 17 (feature 0008
 #            F04, review S7).
+#            The manifest declares android:minSdkVersion="23" and each .so's .note.android.ident
+#            (llvm-readelf -n) names API level 23 (ADR 0033 §2; feature 0008 F04, review N1).
 #   notices  META-INF/polyjose/THIRD-PARTY-NOTICES.txt in the AAR's classes.jar and in the JVM
 #            jar: one file per artifact over the union of its libraries' crate trees (ADR 0020 §4,
 #            ADR 0033 §4; feature 0008 F01). The targets are read from the libraries the artifact
@@ -70,6 +72,10 @@ readelf=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf 2>/
 zipalign=$(ls "$ANDROID_HOME"/build-tools/*/zipalign 2>/dev/null | sort -V | tail -n 1)
 [ -x "$zipalign" ] || die "no zipalign in $ANDROID_HOME/build-tools"
 for tool in unzip python3 cargo; do command -v "$tool" >/dev/null 2>&1 || die "$tool not found"; done
+
+# The AAR's minSdk and the API level its .so files are built for (ADR 0033 §2: minSdk 23, also
+# cargo-ndk's --platform), as gradle/libs.versions.toml declares it.
+min_sdk=23
 
 version=$(awk '/^\[/{t=($0=="[workspace.package]")} t&&/^version *=/{gsub(/.*= *"|".*/,"");print;exit}' "$repo/Cargo.toml")
 [ -n "$version" ] || die "no [workspace.package] version in $repo/Cargo.toml"
@@ -238,6 +244,13 @@ else
   else
     fail "AAR: proguard.txt is not consumer-rules.pro"
   fi
+  # The AAR's AndroidManifest.xml is plain XML (AGP compiles it only into the app); minSdk is
+  # ADR 0033 §2's API 23.
+  if grep -q "android:minSdkVersion=\"$min_sdk\"" "$work/aar/AndroidManifest.xml" 2>/dev/null; then
+    pass "AAR: AndroidManifest.xml declares android:minSdkVersion=\"$min_sdk\""
+  else
+    fail "AAR: AndroidManifest.xml does not declare android:minSdkVersion=\"$min_sdk\" ($(grep -o 'android:minSdkVersion="[^"]*"' "$work/aar/AndroidManifest.xml" 2>/dev/null || echo 'none'))"
+  fi
   unzip -Z1 "$work/aar/classes.jar" >"$work/classes.list"
   if grep -qx 'dev/polyjose/UniffiLib.class' "$work/classes.list"; then
     pass "AAR: classes.jar holds the generated Kotlin (dev/polyjose/UniffiLib.class)"
@@ -262,6 +275,26 @@ else
     [ -f "$so" ] || continue
     aligns=$("$readelf" -lW "$so" | awk '$1=="LOAD"{print $NF}' | sort -u | paste -sd, -)
     echo "      jni/$abi/libpolyjose_ffi.so: $(size "$so") bytes, LOAD alignment $aligns"
+    # The NDK's crtbrand note (bionic abi-note): owner "Android", type NT_ANDROID_TYPE_IDENT, and a
+    # description that starts with the API level the library was linked for, an int32 little
+    # endian, then the NDK version and build number. cargo-ndk links with --platform = minSdk.
+    "$readelf" -n "$so" >"$work/notes-$abi.txt" 2>&1
+    # The first four description bytes, most significant first (hex), decoded by the shell.
+    bytes=$(awk '
+      /^Displaying notes found in: / { s = ($NF == ".note.android.ident"); n = 0 }
+      s && $1 == "Android" && /NT_ANDROID_TYPE_IDENT/ { n = 1; next }
+      s && n && /description data:/ {
+        sub(/.*description data: */, ""); split($0, b, " ")
+        if (b[4] ~ /^[0-9a-f][0-9a-f]$/) print b[4] b[3] b[2] b[1]
+        exit
+      }' "$work/notes-$abi.txt")
+    api=""
+    [ -n "$bytes" ] && api=$((16#$bytes))
+    if [ "$api" = "$min_sdk" ]; then
+      pass "AAR: jni/$abi .note.android.ident API level $api"
+    else
+      fail "AAR: jni/$abi .note.android.ident API level is '${api:-none}', not $min_sdk"
+    fi
     case $abi in
       arm64-v8a | x86_64)
         small=$("$readelf" -lW "$so" | awk '$1=="LOAD"{print $NF}' | while read -r a; do
