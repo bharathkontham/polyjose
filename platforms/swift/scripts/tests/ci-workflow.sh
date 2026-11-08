@@ -63,7 +63,12 @@
 #                the waiver does so only when "$MODE" is ci.
 #   quoting      outside run values, no backslash in a double-quoted scalar and no quoted scalar
 #                continued onto the next line (B05): YAML escapes and escaped line breaks could
-#                spell an expression or a context name no other check sees.
+#                spell an expression or a context name no other check sees. A quote opens a
+#                scalar after any white space, a TAB too, and after `[`, `{`, `,` or `:` (B06).
+#   one-line     outside run values every value sits on its key's line (B07): each line is a
+#                `key:` entry or a `- ` item, none continues the value above it (a plain scalar
+#                folds a more-indented line in), no value is a block scalar, and no line is
+#                indented with a TAB. The checks that read a value from its line see all of it.
 #   continue     no `continue-on-error` anywhere.
 #   steps        every run step equals, exactly, one of the canonical steps held in this script,
 #                each once and in order (compared without its name line, trailing whitespace,
@@ -88,9 +93,10 @@
 # lines inserted, in a scratch copy) must fail the check named for it, so that every check is
 # shown to reject what it is there to reject: a pull_request trigger, a write permission, a secret
 # in any spelling, an unpinned action, --allow-dev in release mode, an expression in a run script
-# of any form, a required step turned into a no-op, and so on (including every case of bugs B02,
-# B03 and B04). A list of benign edits (retention-days, a renamed step, comments, a blank line, a
-# longer timeout) must still pass, so that the checks are not simply brittle. About 45 s.
+# of any form, a required step turned into a no-op, a value continued onto the next line, and so
+# on (including every case of bugs B02 to B07). A list of benign edits (retention-days, a renamed
+# step, comments, a blank line, a longer timeout) must still pass, so that the checks are not
+# simply brittle. About a minute.
 #
 # Exit status: 0 every check passed; 1 a check failed; 2 a usage error.
 # Bash 3.2 compatible (macOS /bin/bash). Needs awk, grep, sed and actionlint.
@@ -577,16 +583,20 @@ done <"$work/expr"
 # "steps" compares exactly) a double-quoted scalar may not hold a backslash, and no quoted scalar
 # may continue onto the next line. Free strings are plain or single-quoted on one line (a
 # single-quoted scalar has no escapes, so a backslash in it is literal and allowed).
+# B06: YAML separates a value from `key:`, `-` or `?` with any white space (YAML 1.2 §6.2
+# s-separate-in-line: spaces or TABs), so a quote after a space or a TAB opens a scalar, as does
+# one right after a flow indicator `[`, `{`, `,` or a `:` (a JSON-like flow `{"a":"..."}`, §7.4);
+# a `#` after either kind of white space starts a comment (§6.6).
 awk '
   function indent(l) { match(l, /^ */); return RLENGTH }
   {
     line = $0
-    if (line ~ /^[ ]*$/) next
+    if (line ~ /^[ \t]*$/) next
     i = indent(line); rest = substr(line, i + 1); k = i
     if (substr(rest, 1, 2) == "- ") { k = i + 2; rest = substr(rest, 3) }
     if (inrun && i <= rind) inrun = 0
     if (inrun) next
-    if (rest ~ /^#/) next
+    if (rest ~ /^[ \t]*#/) next
     if (rest ~ /^["\047]?run["\047]?:/) { inrun = 1; rind = k; next }
     q = ""; prev = " "
     for (c = i + 1; c <= length(line); c++) {
@@ -596,9 +606,9 @@ awk '
         if (ch == "\"") q = ""
       } else if (q == "\047") {
         if (ch == "\047") { if (substr(line, c + 1, 1) == "\047") c++; else q = "" }
-      } else if (prev ~ /[ \[{,]/ && (ch == "\"" || ch == "\047")) {
+      } else if (prev ~ /[ \t\[{,:]/ && (ch == "\"" || ch == "\047")) {
         q = ch
-      } else if (ch == "#" && prev == " ") {
+      } else if (ch == "#" && prev ~ /[ \t]/) {
         break
       }
       prev = ch
@@ -612,6 +622,59 @@ if [ -s "$work/quoting" ]; then
   done <"$work/quoting"
 else
   ok "quoting: no backslash in a double-quoted scalar and no quoted scalar over several lines (outside run values)"
+fi
+
+# --- one-line (B07) -------------------------------------------------------------------------
+# The checks read a value from its key's line, but YAML lets a value go on over later lines: a
+# plain scalar continues on every more-indented line that is not a comment, folded in with a space
+# (YAML 1.2 §7.3.3 and §6.5: `name: apple-xcframework` and `  -dev` below it are the name
+# `apple-xcframework -dev`; `if: inputs.mode == 'ci'` and `  && false` never run the step); a
+# block scalar (`|` or `>`, §8.1) holds the lines below its key, even lines that look like
+# comments; a flow collection may span lines (§7.4); and a value may start on the line after its
+# key. So outside the run values ("steps" compares those exactly) every free value sits on its
+# key's line: each non-blank line that is not a comment is a `key:` entry or a `- ` item, indented
+# no deeper than the key (or the `-`) of the value above it; no value is a block scalar; and no line
+# is indented with a TAB (§6.1 forbids it; spaces then a TAB would continue a value unseen).
+awk '
+  function indent(l) { match(l, /^ */); return RLENGTH }
+  BEGIN { pend = -1 }
+  {
+    line = $0
+    if (line ~ /^[ \t]*$/) next
+    i = indent(line); rest = substr(line, i + 1)
+    if (inrun) { if (i > rind) next; inrun = 0 }
+    if (rest ~ /^[ \t]*#/) next
+    if (pend >= 0 && i > pend) { print FNR "\ta continuation of the value on line " pline; next }
+    pend = -1
+    if (rest ~ /^\t/) { print FNR "\ta TAB in the indentation"; next }
+    item = 0
+    while (rest ~ /^-([ \t]|$)/) {
+      item = 1; d = length(line) - length(rest)
+      rest = substr(rest, 2); sub(/^[ \t]+/, "", rest)
+    }
+    k = length(line) - length(rest)
+    if (rest == "") next
+    if (match(rest, /^([A-Za-z0-9_][A-Za-z0-9_.\/-]*|"[^"]*"|\047[^\047]*\047):([ \t]|$)/)) {
+      key = substr(rest, 1, RLENGTH); sub(/:[ \t]*$/, "", key); gsub(/["\047]/, "", key)
+      v = substr(rest, RLENGTH + 1); sub(/^[ \t]+/, "", v)
+      if (v ~ /^#/) v = ""
+      if (key == "run") { inrun = 1; rind = k; next }
+      if (v == "") next
+      if (v ~ /^([!&][^ \t]*[ \t]+)*[|>]/) { print FNR "\ta block scalar (| or >)"; next }
+      pend = k; pline = FNR
+    } else if (item) {
+      pend = d; pline = FNR
+    } else {
+      print FNR "\tneither a key: entry nor a - item (a value on a line of its own)"
+    }
+  }
+' "$workflow" >"$work/oneline"
+if [ -s "$work/oneline" ]; then
+  while IFS="$(printf '\t')" read -r n why; do
+    bad "one-line" "$why (line $n); outside run values every value sits on its key's line"
+  done <"$work/oneline"
+else
+  ok "one-line: every value outside the run values sits on its key's line (no continuation, block scalar or TAB indentation)"
 fi
 
 # --- xcode ----------------------------------------------------------------------------------
@@ -1220,6 +1283,49 @@ mutate quoting "" "      - name: conformance parity" '      - name: "\\u0024{{ g
 benign "" "      - name: conformance parity" "      - name: 'conformance parity (results in target\\\\conformance)'" "a single-quoted step name with a literal backslash"
 # B05 backlog: in a run block, a # line between backslash-continued lines is part of the script.
 mutate steps "" "          curl --proto '=https' --tlsv1.2 -fsSL -o \"\$dir/\$tarball\" \\\\" "          curl --proto '=https' --tlsv1.2 -fsSL -o \"\$dir/\$tarball\" \\\\\n          # a comment line that ends the command here" "a # line inside a backslash-continued command"
+
+# --- B06: any whitespace (a TAB too) separates a value, so a quoted scalar after it is scanned ----
+# (awk turns \t into a TAB, \n into a line break and \\x into \x)
+mutate quoting "" "          node-version: 24" '          node-version:\t"\\x24\\x7b\\x7b \\x73ecrets.X \\x7d\\x7d"' "an escaped expression in node-version after a tab"
+mutate quoting "" "          node-version: 24" '          node-version: \t"\\x73ecrets"' "an escape in node-version after a space and a tab"
+# shellcheck disable=SC2016 # literal workflow text
+mutate quoting "" "          node-version: 24" '          node-version:\t"${\\\n            { sec\\\n            rets.X }}"' "an expression folded over escaped line breaks after a tab"
+mutate quoting "" "          node-version: 24" "          node-version:\t'a\n            b'" "a single-quoted node-version over two lines after a tab"
+mutate quoting "          name: apple-xcframework" "          if-no-files-found: error" '          if-no-files-found: error\n          retention-days:\t"\\x73ecrets"' "an escape in retention-days after a tab"
+mutate quoting "          name: conformance-swift-macos" "          if-no-files-found: error" '          if-no-files-found: error\n          compression-level:\t"\\x73ecrets"' "an escape in compression-level after a tab"
+mutate quoting "" "$checkout_pin" "$checkout_pin"'\n        name:\t"\\x73ecrets"' "an escape in an action step's name after a tab"
+mutate quoting "" "$checkout_pin" '      - name:\t"\\x73ecrets"\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' "an escape in an action step's item name after a tab"
+mutate quoting "" "    name: Swift (iOS) (\${{ inputs.mode }})" '    name:\t"\\x73ecrets"' "an escape in the job name after a tab"
+mutate quoting "" "          node-version: 24" '          node-version: {"a":"\\x73ecrets"}' "an escape in a JSON-like flow mapping (a quote right after a colon)"
+benign "" "          node-version: 24" '          node-version: 24\t# the "parity runner' "a tab before a comment that holds a quote"
+
+# --- B07: every value outside the run bodies sits on its key's line --------------------------------
+mutate one-line "" "          name: apple-xcframework" "          name: apple-xcframework\n            -dev" "the apple-xcframework artifact name continued (apple-xcframework -dev)"
+mutate one-line "" "          name: apple-xcframework" "          name: apple-xcframework\n            - dev" "the apple-xcframework artifact name continued by a list-like line"
+mutate one-line "" "          name: conformance-swift-macos" "          name: conformance-swift-macos\n            more" "the conformance-swift-macos artifact name continued"
+mutate one-line "" "          persist-credentials: false" "          persist-credentials: false\n            x" "persist-credentials continued (false x)"
+mutate one-line "" "          node-version: 24" "          node-version: 24\n            0" "node-version continued"
+mutate one-line "" "          package-manager-cache: false" "          package-manager-cache: false\n            x" "package-manager-cache continued"
+mutate one-line "" "          path: dist/apple/*" "          path: dist/apple/*\n            x" "an upload path continued"
+mutate one-line "          name: conformance-swift-macos" "          if-no-files-found: error" "          if-no-files-found: error\n            x" "if-no-files-found continued"
+mutate one-line "" "          save-if: \${{ github.ref == 'refs/heads/main' }}" "          save-if: \${{ github.ref == 'refs/heads/main' }}\n            x" "save-if continued"
+mutate one-line "" "    timeout-minutes: 180" "    timeout-minutes: 180\n      0" "the job timeout continued"
+mutate one-line "      - name: package.sh (ci mode, a development build allowed)" "        if: inputs.mode == 'ci'" "        if: inputs.mode == 'ci'\n          && false" "a ci-mode step's if: continued with && false"
+mutate one-line "$cache_pin" "        if: inputs.mode == 'ci'" "        if: inputs.mode == 'ci'\n          && false" "rust-cache's if: continued with && false"
+mutate one-line "" "          node-version: 24" "          node-version:\n            24" "node-version on a line of its own"
+# shellcheck disable=SC2016 # literal workflow text
+mutate one-line "" "          node-version: 24" '          node-version: |\n            # ${{ secrets.X }}' "a block-scalar node-version whose line looks like a comment"
+mutate one-line "" "$checkout_pin" "$checkout_pin\n        name: >-\n          # \${{ secrets.X }}" "a block-scalar action step name"
+mutate one-line "" "          node-version: 24" "          node-version: 24\n\t    0" "a continuation line indented with a tab"
+benign "" "      - name: conformance parity" "      - name: conformance parity # ADR 0060" "a comment after a step name"
+
+# --- The ADR 0037 §1 artifact names are whole values ------------------------------------------------
+mutate artifacts "" "          name: apple-xcframework" "          name: apple-xcframework-dev" "the artifact name apple-xcframework-dev"
+mutate artifacts "" "          name: apple-xcframework" "          name: apple-xcframework x" "the artifact name apple-xcframework x"
+mutate artifacts "" "          name: apple-xcframework" "          name: 'apple-xcframework x'" "a single-quoted artifact name with extra text"
+mutate artifacts "" "          name: apple-xcframework" '          name: "apple-xcframework-dev"' "a double-quoted artifact name with extra text"
+mutate artifacts "" "          name: conformance-swift-macos" "          name: conformance-swift-macos-2" "conformance-swift-macos with a suffix"
+mutate artifacts "" "          name: conformance-swift-ios-sim" "          name: conformance-swift-ios-sim x" "conformance-swift-ios-sim with extra text"
 
 # --- Benign: must still PASS ------------------------------------------------------------------
 benign "          name: apple-xcframework" "          if-no-files-found: error" "          if-no-files-found: error\n          retention-days: 30" "retention-days on an upload"
