@@ -435,6 +435,44 @@ run_check swift
 check "another protocol on a listed record fails" 1 \
   'Redaction\.swift:[0-9]+: conformance JwsSigner: Encodable is not allowed'
 
+new_case redaction-extension-allowed
+append $src/Redaction.swift 'extension JwsSigner: CustomStringConvertible, CustomDebugStringConvertible,
+    CustomReflectable
+{
+    public var description: String { "" }
+    public var debugDescription: String { "" }
+    public var customMirror: Mirror { Mirror(self, children: [:]) }
+    private var helper: Int { 0 }
+}'
+run_check swift
+check_last_line "the printing conformances and members on a listed record in Redaction.swift pass" 0 \
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+
+new_case redaction-member-other-type
+append $src/Redaction.swift 'extension JwsSigner: CustomStringConvertible {
+    public var description: Substring { "" }
+}'
+run_check swift
+check "a printing member of another type fails" 1 'public member description in an extension of JwsSigner'
+
+new_case redaction-member-modifier
+append $src/Redaction.swift 'extension JwsSigner: CustomStringConvertible {
+    @inlinable public var description: String { "" }
+    nonisolated public var debugDescription: String { "" }
+}'
+run_check swift
+check "a printing member with an attribute or a modifier fails" 1 \
+  'public member description in an extension of JwsSigner' \
+  'public member debugDescription in an extension of JwsSigner'
+
+new_case redaction-member-without-conformance
+append $src/Redaction.swift 'extension JwsSigner {
+    public var description: String { "" }
+}'
+run_check swift
+check "a printing member in an extension without a printing conformance fails" 1 \
+  'public member description in an extension of JwsSigner'
+
 new_case non-public-conformances
 append $src/Extra.swift 'private struct Plain2: CustomStringConvertible { var description: String { "" } }
 fileprivate enum Plain3: Error { case a }
