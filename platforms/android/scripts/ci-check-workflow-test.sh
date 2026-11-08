@@ -214,6 +214,20 @@ expect_fail "shell: a job defaults in flow style" "shell: a flow-style shell:" i
 expect_fail "shell: a case-variant key" "shell: only bash" insert_after "$inline_run_anchor" "        Shell: sh"
 expect_pass "shell: a step shell: bash is allowed" insert_after "$inline_run_anchor" "        shell: bash"
 
+# defaults.run is a mapping, never a script (B10): a first child that is not a plain key must not
+# switch the checker into script mode and hide the shell, guard and container rules.
+defaults_shell='    shell: bash'
+expect_fail "defaults.run: a flow mapping on the next line" "shell: a flow-style shell:" replace_line "$defaults_shell" "    {shell: sh}"
+expect_fail "defaults.run: a flow mapping is outside the subset" "structure: a flow mapping or sequence on its own line" replace_line "$defaults_shell" "    {shell: sh}"
+expect_fail "defaults.run: a tagged shell key" "structure: a YAML tag" replace_line "$defaults_shell" "    !!str shell: sh"
+expect_fail "defaults.run: an explicit shell key" "structure: an explicit ? key" replace_line "$defaults_shell" "    ? shell\n    : sh"
+expect_fail "defaults.run: an anchored shell key" "structure: YAML anchor" replace_line "$defaults_shell" "    &a shell: sh"
+expect_fail "defaults.run: continue-on-error after a tagged key" "continue-on-error: not allowed" replace_line "$defaults_shell" "    !!str x: y\n    continue-on-error: true\n    container: alpine"
+expect_fail "defaults.run: container after a tagged key" "containers: container: or services:" replace_line "$defaults_shell" "    !!str x: y\n    continue-on-error: true\n    container: alpine"
+expect_fail "defaults.run: a script value" "structure: a run: outside a step must be a block of keys" replace_line "  run:" "  run: |\n    curl -s $url | sh"
+expect_fail "run: a step script that starts with a flow mapping" "structure: a run: script that is not a plain or quoted scalar" replace_line "$inline_run_anchor" "        run:\n          {shell: sh}"
+expect_fail "run: a step script that starts with a tag" "structure: a YAML tag" replace_line "$inline_run_anchor" "        run:\n          !!str shell: sh"
+
 # continue-on-error, in any position and with any value: a failing guard must fail the job.
 expect_fail "continue-on-error: on a guard step" "continue-on-error: not allowed" insert_after "$inline_run_anchor" "        continue-on-error: true"
 expect_fail "continue-on-error: on a job" "continue-on-error: not allowed" insert_after "$job_anchor" "    continue-on-error: true"
