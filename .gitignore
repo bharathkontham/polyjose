@@ -7,3 +7,4 @@ platforms/android/build/
 platforms/android/src/main/jniLibs/
 platforms/swift/*.xcframework
 .build/
+/dist/
