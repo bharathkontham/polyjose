@@ -68,7 +68,10 @@ if ! command -v wasm-pack >/dev/null 2>&1; then
 fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/wasm-test.XXXXXX") || { echo "$me: mktemp failed"; exit 1; }
-trap 'rm -rf "$work"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh): an exit
+# before the last line, with status 0, becomes 2.
+completed=""
+trap 'rc=$?; rm -rf "$work"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "wasm/test.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 failures=()
 fail() { echo "$me: FAIL: $*"; failures+=("$1"); }
@@ -197,12 +200,13 @@ for runner in $ran; do
 done
 
 echo
+status=0
 if [ ${#failures[@]} -gt 0 ]; then
   echo "$me: FAILED: ${failures[*]}"
-  exit 1
-fi
-if [ -n "$chrome_skip" ]; then
+  status=1
+elif [ -n "$chrome_skip" ]; then
   echo "$me: PASS (wasm-node, wasm-pkg-node, wasm-pkg-workerd; wasm-chrome and wasm-pkg-chrome not run, host:no-chrome)"
-  exit 0
+else
+  echo "$me: PASS (wasm-node, wasm-chrome, wasm-pkg-node, wasm-pkg-chrome, wasm-pkg-workerd)"
 fi
-echo "$me: PASS (wasm-node, wasm-chrome, wasm-pkg-node, wasm-pkg-chrome, wasm-pkg-workerd)"
+completed=1; exit "$status"

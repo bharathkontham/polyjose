@@ -71,6 +71,11 @@ shopt -u patsub_replacement 2>/dev/null || true
 me=check-workflow
 repo=$(cd "$(dirname "$0")/../../.." && pwd -P) || exit 2
 default_file=$repo/.github/workflows/binding-wasm.yml
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh): an exit
+# before the last line, with status 0, becomes 2. The trap also removes --self-test's scratch.
+scratch=""
+completed=""
+trap 'rc=$?; [ -z "$scratch" ] || rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-workflow.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 usage() { echo "usage: $0 [--self-test | <workflow file>]" >&2; exit 2; }
 
@@ -222,11 +227,10 @@ check() {
 # --- --self-test ---------------------------------------------------------------------------------
 
 self_test() {
-  local scratch base cases_run=0 cases_failed=0 lint_note=""
+  local base cases_run=0 cases_failed=0 lint_note=""
   [ -f "$default_file" ] || { echo "$me: $default_file not found" >&2; exit 2; }
+  # The top-level EXIT trap removes it.
   scratch=$(mktemp -d "${TMPDIR:-/tmp}/check-workflow-test.XXXXXX") || { echo "$me: mktemp failed" >&2; exit 2; }
-  # shellcheck disable=SC2064 # expand now: the path is fixed
-  trap "rm -rf '$scratch'" EXIT
   base=$(cat "$default_file") || exit 2
 
   # mutate <name> <old> <new>: writes $scratch/<name>.yml, the workflow with the one occurrence of
@@ -370,13 +374,15 @@ self_test() {
   echo "$me: self-test PASS ($cases_run cases)"
 }
 
+status=0
 case $# in
-  0) check "$default_file" ;;
+  0) check "$default_file" || status=$? ;;
   1)
     case $1 in
-      --self-test) self_test ;;
+      --self-test) self_test || status=$? ;;
       -*) usage ;;
-      *) check "$1" ;;
+      *) check "$1" || status=$? ;;
     esac ;;
   *) usage ;;
 esac
+completed=1; exit "$status"

@@ -6,7 +6,9 @@
 # bindings/wasm/scripts/wasm-cargo-args.sh, which build-package.sh and test.sh source, allowed by
 # path and exact text, once; `WASM_CARGO_ARGS` may be read but not assigned anywhere else under
 # bindings/, so that line is the whole of the shipped build's extra Cargo arguments (which
-# scripts/check-rsa-symbols.sh reads too).
+# scripts/check-rsa-symbols.sh reads too). The two others (0006 F10; 0007 review SF-1, pending
+# owner Gate 2) are @polyjose/node's static-CRT RUSTFLAGS line in bindings/node/scripts/ci-build.sh
+# and the regex of bindings/node/test/ci.test.ts that asserts it, by path and exact text, once each.
 #
 # Must pass:
 #   1. the unchanged tree, which holds the ADR 0059 line;
@@ -27,6 +29,11 @@
 #      `RUSTFLAGS:` key in a TypeScript file, and a `.cargo/config.toml` write, under bindings/;
 #  10. `--config` in Rust code (not a comment), and on a shell line that starts with `//` (a path,
 #      not a comment, in a shell script).
+# The 0007 static-CRT lines (present on a tree with bindings/node, added to the copy otherwise):
+#  11. must pass: both lines at their paths;
+#  12. must fail: either line at another path, either one with a changed flag (`+crt-static,-foo`,
+#      another `-C`), either one a second time, and another RUSTFLAGS line in ci-build.sh (an
+#      assignment, and a `+=` one).
 #
 # The planted flags and variable names are assembled from pieces below, because this file is under
 # scripts/, which the gate scans: its own text must hold none of them.
@@ -88,6 +95,30 @@ else
   echo "FAIL - $args_file does not hold the ADR 0059 line exactly once: $adr0059_line"
   tests_failed=$((tests_failed + 1))
 fi
+
+# The 0007 static-CRT lines (F10): each at most once in the tree (absent without bindings/node).
+crt_file=bindings/node/scripts/ci-build.sh
+crt_line="  export $rf=\"\${$rf:+\$$rf }-C target-feature=+crt-static\""
+crt_test_file=bindings/node/test/ci.test.ts
+crt_test_line='    /^\s*export '"$rf"'="\$\{'"$rf"':\+\$'"$rf"' \}-C target-feature=\+crt-static"$/,'
+for pair in "$crt_file:$crt_line" "$crt_test_file:$crt_test_line"; do
+  tests_run=$((tests_run + 1))
+  n=$(grep -cFx -- "${pair#*:}" "$repo/${pair%%:*}" 2>/dev/null || true)
+  if [ "${n:-0}" -le 1 ]; then
+    echo "ok   - ${pair%%:*} holds its static-CRT line at most once (${n:-0})"
+  else
+    echo "FAIL - ${pair%%:*} holds its static-CRT line $n times"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
+
+# ensure_line <path in the copy> <line>: the copy's file holds the line (appended unless it is there
+# once already, as on a tree with bindings/node).
+ensure_line() {
+  [ "$(grep -cFx -- "$2" "$case_dir/$1" 2>/dev/null || true)" = 1 ] || append_to "$1" "$2"
+}
+# crt_case <name>: a new case whose copy holds both static-CRT lines.
+crt_case() { new_case "$1"; ensure_line "$crt_file" "$crt_line"; ensure_line "$crt_test_file" "$crt_test_line"; }
 
 # --- Must pass ------------------------------------------------------------------------------------
 
@@ -191,6 +222,58 @@ expect_fail "$cfg in Rust code" "^  - bindings/wasm/src/f06_spawn\\.rs:1: " "$ru
 new_case slashes-in-shell
 append_to bindings/wasm/test.sh "//usr/bin/env cargo build $cfg 'build.rustc-wrapper=\"/tmp/wrap\"'"
 expect_fail "a shell line starting with // (a path, not a comment)" "^  - bindings/wasm/test\\.sh:[0-9]+: //usr/bin/env cargo build " "$rule2"
+
+# --- The 0007 static-CRT lines (F10) ---------------------------------------------------------------
+
+crt_case crt-lines
+expect_pass "the static-CRT lines at $crt_file and $crt_test_file"
+
+crt_case crt-other-path
+append_to bindings/node/scripts/f10.sh "$crt_line"
+expect_fail "the static-CRT line of $crt_file in another file" \
+  "^  - bindings/node/scripts/f10\\.sh:1:   export $rf=" "$rule2"
+
+crt_case crt-test-other-path
+append_to bindings/node/test/f10.test.ts "$crt_test_line"
+expect_fail "the static-CRT line of $crt_test_file in another file" \
+  "^  - bindings/node/test/f10\\.test\\.ts:1: " "$rule2"
+
+crt_case crt-swapped
+append_to "$crt_file" "$crt_test_line"
+expect_fail "the line of $crt_test_file in $crt_file" "^  - bindings/node/scripts/ci-build\\.sh:[0-9]+:     /" "$rule2"
+
+crt_case crt-extra-feature
+edit_in "$crt_file" "$crt_line" "${crt_line%\"},-foo\""
+expect_fail "the static-CRT line with +crt-static,-foo" \
+  "^  - bindings/node/scripts/ci-build\\.sh:[0-9]+: .*crt-static,-foo\"$" "$rule2"
+
+crt_case crt-other-flag
+edit_in "$crt_file" "$crt_line" "${crt_line%\"} -C link-arg=/f10\""
+expect_fail "the static-CRT line with another -C" \
+  "^  - bindings/node/scripts/ci-build\\.sh:[0-9]+: .*crt-static -C link-arg=/f10\"$" "$rule2"
+
+crt_case crt-test-changed
+edit_in "$crt_test_file" "$crt_test_line" "${crt_test_line/crt-static/crt-static,-foo}"
+expect_fail "the line of $crt_test_file with another flag" \
+  "^  - bindings/node/test/ci\\.test\\.ts:[0-9]+: .*crt-static,-foo" "$rule2"
+
+crt_case crt-twice
+append_to "$crt_file" "$crt_line"
+expect_fail "the static-CRT line a second time in $crt_file" \
+  "^  - bindings/node/scripts/ci-build\\.sh:[0-9]+:   export $rf=" "$rule2"
+
+crt_case crt-test-twice
+append_to "$crt_test_file" "$crt_test_line"
+expect_fail "the line of $crt_test_file a second time" "^  - bindings/node/test/ci\\.test\\.ts:[0-9]+: " "$rule2"
+
+crt_case crt-other-line
+append_to "$crt_file" "export $rf=\"-C target-feature=+crt-static\""
+expect_fail "another $rf line in $crt_file" \
+  "^  - bindings/node/scripts/ci-build\\.sh:[0-9]+: export $rf=\"-C target-feature" "$rule2"
+
+crt_case crt-append-assign
+append_to "$crt_file" "$rf+=\" -C link-arg=/f10\""
+expect_fail "a $rf+= line in $crt_file" "^  - bindings/node/scripts/ci-build\\.sh:[0-9]+: $rf\\+=" "$rule2"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
