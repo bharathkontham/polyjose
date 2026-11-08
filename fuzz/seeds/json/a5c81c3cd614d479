@@ -1,0 +1,25 @@
+{
+  "source": "polyjose",
+  "description": "RFC 8725 \u00a73.1, RFC 7518 \u00a74.3: RSA-OAEP-256 to a P-256 public key (RFC 7515 A.3) is KeyAlgorithmMismatch: the alg needs an RSA public key",
+  "operation": "jwe.encrypt",
+  "input": {
+    "serialization": "compact",
+    "enc": "A128GCM",
+    "plaintext_b64u": "dGVzdA",
+    "recipients": [
+      {
+        "alg": "RSA-OAEP-256",
+        "key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}

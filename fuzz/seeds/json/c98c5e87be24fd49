@@ -1,0 +1,20 @@
+{
+  "source": "ADR 0027 §9; RFC 7515 §5.2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The payload is swapped after signing and both payloads are expired at now (exp + 3600): claims are parsed only after the signature verifies (step 9 before J5): InvalidSignature",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F0dGFja2VyLmV4YW1wbGUiLCJleHAiOjE3MDAwMDA2MDB9.ta1CDO8-jd8x-7506abbLJ41w7Yy0XCRuX-rOPvpIyk",
+    "now": 1700004200,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

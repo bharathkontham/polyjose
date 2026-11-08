@@ -1,0 +1,20 @@
+{
+  "source": "RFC 7519 §6; RFC 8725 §3.2; ADR 0027 §8; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "Issuing with alg none (an Unsecured JWT) and an oct key: never produced: AlgorithmNotAllowed",
+  "operation": "jwt.issue",
+  "input": {
+    "claims": {
+      "iss": "https://issuer.example",
+      "exp": 1700000600
+    },
+    "alg": "none",
+    "key": {
+      "kty": "oct",
+      "k": "2NdU7GIWhcWSb-BBh18Luh6UTRiFSZMrcFs5t9TboHA"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}
