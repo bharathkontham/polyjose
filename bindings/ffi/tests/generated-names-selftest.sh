@@ -15,7 +15,13 @@ here=$(cd "$(dirname "$0")" && pwd -P) || exit 2
 check=$here/generated-names.sh
 inventory=$here/../../api-inventory.txt
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-ffi-generated-names-selftest.XXXXXX") || exit 2
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh): with
+# errexit, bash 3.2 runs an EXIT trap with $? = 0 after a parse error. This script runs without
+# errexit, where bash 3.2 exits 2, and the sentinel keeps it so if errexit is turned on: an exit
+# before the last line, which sets the sentinel, becomes status 2; a non-zero status is kept.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "generated-names-selftest.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 passed=0
 failed=0
 
@@ -69,4 +75,4 @@ expect "missing error code fails" 1 "  code NoMatchingKeyX"
 expect "missing record fails" 1 "  record JwsBogus" "  field JwsBogus.alg"
 
 echo "generated-names-selftest: $passed passed, $failed failed"
-[ "$failed" -eq 0 ]
+completed=1; exit "$((failed > 0))"
