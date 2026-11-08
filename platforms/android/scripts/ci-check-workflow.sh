@@ -19,6 +19,7 @@
 #                which every checkout must have, and a numeric `fetch-depth` (no repository, ref,
 #                path, ssh-key or token: the steps would run another tree's scripts); the other
 #                actions take only the inputs this workflow uses; an action not listed takes none.
+#                Each input is a one-line value (no nested key, block scalar or continuation line).
 #   shell        every `shell:`, also `defaults.run.shell`, is exactly `bash`.
 #   guards       no `continue-on-error` anywhere (a failing step or job fails the run), and no
 #                `container:` or `services:` (an image would run the steps).
@@ -369,6 +370,9 @@ BEGIN {
         wk_n++; wk_key[wk_n] = tolower(key); wk_val[wk_n] = value; wk_line[wk_n] = NR; wk_raw[wk_n] = raw
       } else fail("actions: not a key under with:")
     } else if (indent < with_child) fail("actions: inconsistent indentation under with:")
+    # A deeper line is a nested mapping, a block scalar or a multi-line value, whose content the
+    # allow-list above would not see (fetch-depth: 1 then a deeper repository:).
+    else fail("actions: a with: input must be a one-line value")
   }
 
   # A permissions block in progress: its children.
