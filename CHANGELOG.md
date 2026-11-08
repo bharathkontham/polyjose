@@ -2,8 +2,7 @@
 
 All notable changes to polyjose are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and polyjose follows
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, a breaking change bumps
-the minor version.
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0] - 2026-11-08
 
@@ -46,8 +45,8 @@ The first release: a pure-Rust implementation of JOSE (JWS, JWE, JWK, JWT and JW
 - **Secrets:** key material is zeroized when dropped and is never put into `Debug` output or error messages. Kotlin and Swift records print their secret fields redacted.
 - **Randomness** comes only from the operating system's random number generator.
 - **Testing:** the RFCs' own test vectors (RFC 7515, 7516, 7517, 7518, 7519, the RFC 7520 cookbook, 7638, 7797, 8037, 9278), Wycheproof where it applies, one shared conformance suite run by every binding, two-way interop tests against panva/jose, and fuzzing of the parsers.
-- **Audits:** polyjose itself has not been independently audited. [AUDITS.md](AUDITS.md) lists which of the primitive crates have a published third-party audit, and which version line it covered.
-- **Release integrity:** every release asset is listed in `SHA256SUMS`, signed with the release key in [`.github/keys/`](.github/keys/), and has a GitHub build attestation. The Maven artifacts are GPG-signed.
+- **Audits:** polyjose itself has not been independently audited. [AUDITS.md](https://github.com/bharathkontham/polyjose/blob/main/AUDITS.md) lists which of the primitive crates have a published third-party audit, and which version line it covered.
+- **Release integrity:** every release asset is listed in `SHA256SUMS`, signed with the release key in [`.github/keys/`](https://github.com/bharathkontham/polyjose/tree/main/.github/keys), and has a GitHub build attestation. The Maven artifacts are GPG-signed.
 
 ### Not supported in 0.1.0
 
