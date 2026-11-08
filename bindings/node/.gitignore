@@ -4,6 +4,8 @@
 /binding.cjs
 /binding.d.ts
 /*.node
+# scripts/addon-hashes.sh: the SHA-256 of each built addon (feature 0007 F07).
+/addon-sha256.json
 # tsc output of src/*.ts (the package entry and the backend adapter).
 /index.js
 /index.d.ts

@@ -28,6 +28,7 @@
     "facade/*.d.ts",
     "binding.cjs",
     "binding.d.ts",
+    "addon-sha256.json",
     "LICENSE",
     "README.md",
     "THIRD-PARTY-NOTICES.txt"

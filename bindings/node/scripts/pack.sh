@@ -18,6 +18,10 @@
 #        JS facade has no third-party code. The trailing `//# sourceMappingURL=` line tsc writes
 #        is removed from each staged .js and .d.ts: the maps, and the .ts sources they point at,
 #        are not shipped (ADR 0047, package.json `files`). The build in the tree keeps them.
+#        Its addon-sha256.json (feature 0007 F07) is the one the second build wrote, so it pins the
+#        two darwin addons packed here and no other platform: on linux or Windows this main
+#        tarball refuses to load. The release assembly runs scripts/addon-hashes.sh over all
+#        eight prebuilt addons instead (the 0012 release hook).
 #      - each darwin platform: scripts/pack-platform.sh <platform> <triple> dist/npm/ (shared with
 #        scripts/ci-build.sh): npm/<platform>/package.json, the addon, the repository's LICENSE,
 #        a short README.md, and THIRD-PARTY-NOTICES.txt from
@@ -28,8 +32,8 @@
 #      versions, and an offline install of the main and host tarballs into a temporary directory
 #      with a temporary npm cache, which imports the package and round-trips a compact JWS.
 #   5. the cross-built addon is removed (also on failure), and the script checks that the host
-#      addon is the only one left: the tree ends as test.sh's build leaves it, so test.sh passes
-#      right after (feature 0007 F03).
+#      addon is the only one left and rewrites addon-sha256.json for it alone: the tree ends as
+#      test.sh's build leaves it, so test.sh passes right after (feature 0007 F03, F07).
 #
 # Packing only. Publishing is the human-approved release (ADR 0011, Gate 3): this script must not
 # call npm's or napi's publishing commands, and the package test greps it to keep it so.
@@ -157,4 +161,5 @@ node --test --test-reporter=spec dist/package.test.js
 cleanup
 left=$(find "$pkg_dir" -maxdepth 1 -name 'polyjose.*.node' -print | sed 's|.*/||' | LC_ALL=C sort | tr '\n' ' ')
 [ "$left" = "$host_addon " ] || { echo "pack.sh: bindings/node holds $left, not only $host_addon" >&2; exit 1; }
+scripts/addon-hashes.sh addon-sha256.json "$host_addon"
 echo "==> @polyjose/node pack: OK (bindings/node holds only $host_addon)"
