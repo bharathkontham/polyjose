@@ -19,6 +19,8 @@
 #            (= consumer-rules.pro); LOAD alignment >= 0x4000 for the 64-bit libraries
 #            (llvm-readelf -l from the NDK; Google Play's 16 KB page-size requirement); the AAR
 #            under 4 MB (4,000,000 bytes; ADR 0033 §1); each .so size and the AAR size printed.
+#            Every class in classes.jar is class-file major version 61, Java 17 (feature 0008
+#            F04, review S7).
 #   notices  META-INF/polyjose/THIRD-PARTY-NOTICES.txt in the AAR's classes.jar and in the JVM
 #            jar: one file per artifact over the union of its libraries' crate trees (ADR 0020 §4,
 #            ADR 0033 §4; feature 0008 F01). The targets are read from the libraries the artifact
@@ -30,6 +32,7 @@
 #   jar      the classes, the host libraries under their JNA prefixes (each of the right
 #            architecture), and a Polyjose-Native-Platforms manifest attribute listing exactly
 #            the prefixes present; no native library or notices file in the sources jar.
+#            Every class of the jar is class-file major version 61, Java 17, as the AAR.
 #   APK      zipalign -c -P 16 4 on the minified sample APK, and R8 has run (mapping.txt).
 #   Maven    both publications in build/repo with POM (name, description, URL, MIT license,
 #            SCM, developer), sources and javadoc jars and Gradle module metadata; the POMs list
@@ -175,6 +178,38 @@ check_notices() {
   done
 }
 
+# check_class_version <label> <jar>: every .class entry is class-file major version 61, Java 17
+# (JVMS §4.1: u4 magic 0xCAFEBABE, u2 minor_version, u2 major_version; Java SE 17 is 61). The jar
+# and the AAR both target Java 17 (feature 0008 F04, review S7).
+check_class_version() {
+  local label=$1 jar=$2 out
+  if out=$(python3 -I - "$jar" <<'PY'
+import sys, zipfile
+majors, bad = {}, []
+with zipfile.ZipFile(sys.argv[1]) as z:
+    for name in z.namelist():
+        if not name.endswith(".class"):
+            continue
+        head = z.read(name)[:8]
+        if head[:4] != b"\xca\xfe\xba\xbe":
+            bad.append(name)
+            continue
+        major = int.from_bytes(head[6:8], "big")
+        majors[major] = majors.get(major, 0) + 1
+summary = ", ".join("%d classes major %d" % (n, m) for m, n in sorted(majors.items()))
+if bad:
+    print("not class files: %s" % ", ".join(bad[:5]))
+    sys.exit(1)
+print(summary or "no classes")
+sys.exit(0 if list(majors) == [61] else 1)
+PY
+  ); then
+    pass "$label: class-file major version 61, Java 17 ($out)"
+  else
+    fail "$label: not all classes are class-file major version 61, Java 17 ($out)"
+  fi
+}
+
 # The Rust target of an Android ABI (ADR 0033 §2).
 abi_triple() {
   case $1 in
@@ -209,6 +244,7 @@ else
   else
     fail "AAR: classes.jar has no dev/polyjose/UniffiLib.class"
   fi
+  check_class_version "AAR: classes.jar" "$work/aar/classes.jar"
   if unzip -p "$work/aar/classes.jar" "$notices_path" >"$work/aar-notices.txt" 2>/dev/null && [ -s "$work/aar-notices.txt" ]; then
     pass "AAR: classes.jar holds $notices_path"
     # The Rust target of each ABI the AAR carries.
@@ -280,6 +316,7 @@ else
     if grep -qx "$prefix" <<<"$present"; then pass "jar: $prefix/ library"; else fail "jar: no $prefix/ library"; fi
   done
   mkdir -p "$work/jar" && unzip -q -o "$jar" -d "$work/jar"
+  check_class_version jar "$jar"
   for prefix in $present; do
     lib=$(ls "$work/jar/$prefix"/* | head -n 1)
     echo "      $prefix/$(basename "$lib"): $(size "$lib") bytes"
