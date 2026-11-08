@@ -8,6 +8,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
+import java.security.SecureRandom
 
 /**
  * Where the generated code loads `polyjose_ffi` from: the build patches UniFFI's
@@ -20,8 +21,9 @@ import java.security.MessageDigest
  *   the jar packs (ADR 0033 §3a, §4). The resource is read through this class's own class loader
  *   (not the thread's context loader); when several candidates exist (a jar earlier on the class
  *   path shadowing it), only the one with that hash is used. It is copied into a fresh private
- *   directory (`rwx------` where the file system is POSIX), hashed again from disk, and its
- *   **absolute path** is returned, so JNA opens exactly that file and searches no folder.
+ *   directory (`rwx------` where the file system is POSIX) under a random file name, hashed
+ *   again from disk, and its **absolute path** is returned, so JNA opens exactly that file and
+ *   searches no folder (and dyld's leaf-name lookup in `DYLD_LIBRARY_PATH` finds no match).
  *   - `jna.library.path`, `uniffi.component.polyjose_ffi.libraryOverride`, the working directory,
  *     `DYLD_*`/`LD_LIBRARY_PATH`/`PATH` and the system library folders are never consulted.
  *   - A mismatch, or no matching resource, throws [UnsatisfiedLinkError] naming the resource and
@@ -101,7 +103,10 @@ internal object JvmNativeLibrary {
         } else {
             Files.createTempDirectory("polyjose-")
         }
-        val path = dir.resolve(System.mapLibraryName(PolyjoseNativeLoader.LIBRARY))
+        // A leaf name nobody can predict: macOS dlopen(3) looks a path's leaf name up in
+        // DYLD_LIBRARY_PATH before it opens the path itself, so the copy must not be called
+        // libpolyjose_ffi.dylib (security audit M1 case E). Same idea on every platform.
+        val path = dir.resolve(copyName())
         // Registered before the file: deleteOnExit deletes in reverse order, the file first.
         dir.toFile().deleteOnExit()
         path.toFile().deleteOnExit()
@@ -117,6 +122,14 @@ internal object JvmNativeLibrary {
             throw UnsatisfiedLinkError("polyjose-jvm: the copy at $path has SHA-256 $onDisk, expected $expected; refusing to load it")
         }
         return path.toFile().absoluteFile
+    }
+
+    /** `libpolyjose_ffi-<32 random hex>.<ext>`: the mapped name with a random tag (OS CSPRNG). */
+    private fun copyName(): String {
+        val mapped = System.mapLibraryName(PolyjoseNativeLoader.LIBRARY)
+        val dot = mapped.lastIndexOf('.')
+        val tag = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        return mapped.substring(0, dot) + "-" + tag + mapped.substring(dot)
     }
 
     fun sha256Hex(bytes: ByteArray): String =

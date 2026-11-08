@@ -160,6 +160,14 @@ jobs:
           path: target/ci/conformance-android-emulator/
           if-no-files-found: error
 
+      # The four libpolyjose_ffi.so files the device ran, with SHA256SUMS, for the AAR (feature
+      # 0008 F05, review S4 option (a)).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-jnilibs
+          path: target/ci/android-jnilibs/
+          if-no-files-found: error
+
       # The JUnit XML, also when the suite failed, to read what failed.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
@@ -169,10 +177,11 @@ jobs:
           if-no-files-found: warn
 
   # The release AAR and the five-platform jar (ADR 0033 §4), from the libraries above, checked by
-  # scripts/check-artifacts.sh. Built into build/repo only; nothing leaves the run but artifacts.
+  # scripts/check-artifacts.sh. The AAR packs the emulator job's tested libraries (feature 0008
+  # F05, review S4). Built into build/repo only; nothing leaves the run but artifacts.
   assemble:
     name: assemble (AAR, five-platform jar)
-    needs: [host-natives]
+    needs: [host-natives, emulator]
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -206,8 +215,15 @@ jobs:
           pattern: jvm-natives-*
           path: target/ci-natives
 
+      # The emulator job's SHA256SUMS and <abi>/libpolyjose_ffi.so.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: android-jnilibs
+          path: target/ci-jnilibs
+          merge-multiple: true
+
       - name: Assemble and check the AAR and the jar
-        run: platforms/android/scripts/ci-assemble-jar.sh target/ci-natives --require-all
+        run: platforms/android/scripts/ci-assemble-jar.sh target/ci-natives --require-all --jni-libs target/ci-jnilibs
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
