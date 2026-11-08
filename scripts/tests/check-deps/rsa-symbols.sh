@@ -20,6 +20,35 @@
 #        release configuration compiles.
 # (An uncalled `#[inline] pub fn` and an uninstantiated generic `pub fn` are never codegened in
 # polyjose, so they have no symbol to find: the text scan's macro rule catches those, rsa-guard.sh.)
+# Extra targets (--target, feature 0013 F15):
+#  20.   must fail: the 0008 security audit's L2 plant, `#[cfg(target_os = "android")]` code in
+#        polyjose-ffi naming rsa::RsaPrivateKey, with rsa only under
+#        [target.'cfg(target_os = "android")'.dependencies], under --target aarch64-linux-android,
+#        in the dev and the release configuration; and the same plant in polyjose-surface, which
+#        polyjose-ffi links, in the dev configuration. Documented residual: without --target the
+#        default configurations build no Android target, so the same plant passes (asserted, so a
+#        change of the default list shows up here); the callers that package or regress a target
+#        pass it with --target (0008 F08 passes the four Android triples).
+#  21.   must fail closed (exit 2, before any build): --target nonsense (not a triple rustc
+#        knows), and a known triple whose std is not installed. Case 20 needs the Android std: if
+#        it is missing, the case FAILs (rustup target add), it is never SKIPPED (pipeline rule 9;
+#        `SKIPPED (host:<tool>)` is for host tools, and a rustup target is not on test-all.sh's
+#        owner-accepted list).
+# Must fail closed (exit 2, before any build):
+#  10.   a workspace member with no library target (build tooling, like polyjose-uniffi-bindgen)
+#        whose tree holds a workspace member (here polyjose), which the gate cannot read.
+#  11-13. the same, whose tree holds rsa without polyjose: as a normal, a build- or a
+#        dev-dependency (the tree is read with -e normal,build,dev).
+#  14.   the same, with polyjose or rsa only behind an optional feature (an optional normal
+#        polyjose or rsa, an optional rsa build-dependency), which the default tree does not show
+#        but `--all-features` builds compile (the tree is the union of the default,
+#        --no-default-features and --all-features trees; review S1 of feature 0013).
+#  15.   the feature 0013 security audit's L1 plant, as written: a bin-only tools/evil member with
+#        an optional rsa and polyjose behind a feature, compiling rsa::pkcs1v15::SigningKey (the
+#        text scan fails on it too, rsa-guard.sh).
+#  16.   the audit's I4 plant in its library-less form: a tools/ member whose only polyjose edge is
+#        a dev-dependency enabling its test-RNG feature through a TOML escape (the feature itself
+#        is check-test-vectors-off.sh's; here the dev tree holding polyjose is what stops the gate).
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
 # so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
 # release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
@@ -40,12 +69,31 @@ dump_dir=""
 # symbol check catches it (each configuration is another full polyjose build); the clean tree,
 # the binding case and the look-alikes run every configuration.
 only=""
+# Extra --target triples (cases 20 and 21), space-separated; none by default.
+targets=""
 gate_name=check-rsa-symbols.sh
 run_gate() {
   set -- --target-dir "$symbols_target"
   if [ -n "$dump_dir" ]; then set -- "$@" --dump "$dump_dir"; fi
-  if [ -n "$only" ]; then set -- "$@" --only "$only"; fi
+  for o in $only; do set -- "$@" --only "$o"; done
+  for t in $targets; do set -- "$@" --target "$t"; done
   scripts/check-rsa-symbols.sh "$@"
+}
+
+# expect_closed <description> <ERE>: the copy's gate exits 2 (could not run) with a line matching
+# the pattern.
+expect_closed() {
+  local rc=0
+  tests_run=$((tests_run + 1))
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq -- "$2" "$scratch/out"; then
+    echo "ok   - $1: $gate_name fails closed"
+    grep -E -- "$2" "$scratch/out" | head -1 | sed 's/^/       /'
+  else
+    echo "FAIL - $1: exit $rc (expected 2), wanted output matching /$2/"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
 }
 
 # expect_symbol <description> <fixed string>: the last run's dump (see run_gate) lists a symbol
@@ -79,6 +127,13 @@ pkcs1_sign='rsa::pkcs1v15::signing_key::SigningKey<sha2::Sha256>'
 new_case clean
 dump_dir="$scratch/dump-clean"
 expect_pass "unchanged tree"
+tests_run=$((tests_run + 1))
+if grep -Fqx '  skipped polyjose-uniffi-bindgen: no library target, and neither rsa nor a workspace member in its tree' "$scratch/out"; then
+  echo "ok   - unchanged tree: the library-less polyjose-uniffi-bindgen is skipped, and says so"
+else
+  echo "FAIL - unchanged tree: no line saying polyjose-uniffi-bindgen was skipped"
+  tests_failed=$((tests_failed + 1))
+fi
 expect_symbol "unchanged tree" "rsa::public_key::RsaPublicKey"
 expect_symbol "unchanged tree" "rsa::pkcs1v15::verifying_key::VerifyingKey<sha2::Sha256>"
 expect_symbol "unchanged tree" "rsa::pss::verifying_key::VerifyingKey<sha2::Sha512>"
@@ -238,5 +293,236 @@ expect_symbol "look-alikes" "polyjose::cbc::Decryptor<u8>>::decrypt"
 expect_symbol "look-alikes" "polyjose::jws::rsa::traits::Decryptor>::decrypt"
 expect_symbol "look-alikes" "polyjose::jws::rsa::private_key::RsaPrivateKey>::new"
 dump_dir=""
+
+# 20. The 0008 audit's L2 plant: RSA private-key code that only an Android build compiles, in
+#     polyjose-ffi (the crate the Android .so is built from, ADR 0033) and in polyjose-surface,
+#     which it links. rsa is reached only under a target-specific table, so no host build has it.
+#     RsaPrivateKey::validate is neither generic nor #[inline], so the release profile cannot
+#     inline the call away and its symbol stays in the plant's objects (a clone() would be).
+android=aarch64-linux-android
+android_std=$(cd "$base" && rustc --print target-libdir --target "$android" 2>/dev/null) || android_std=""
+set -- "$android_std"/libstd-*.rlib
+if [ -z "$android_std" ] || [ ! -f "$1" ]; then
+  tests_run=$((tests_run + 1))
+  echo "FAIL - Android-only plant: the $android std is not installed (rustup target add $android; rust-toolchain.toml lists it), so the case cannot run"
+  tests_failed=$((tests_failed + 1))
+else
+  android_rsa='
+[target.'"'"'cfg(target_os = "android")'"'"'.dependencies]
+rsa = { workspace = true }'
+  android_body='/// Test only.
+#[cfg(target_os = "android")]
+#[doc(hidden)]
+pub fn evil(key: &rsa::RsaPrivateKey) -> bool {
+    key.validate().is_ok()
+}
+#[cfg(target_os = "android")]
+#[used]
+static KEEP: fn(&rsa::RsaPrivateKey) -> bool = evil;'
+  for crate_dir in ffi surface; do
+    new_case "android-only-$crate_dir"
+    append_to "bindings/$crate_dir/Cargo.toml" "$android_rsa"
+    append_to "bindings/$crate_dir/src/lib.rs" "$android_body"
+    relock
+    crate=polyjose_$crate_dir
+    targets=$android
+    if [ "$crate_dir" = ffi ]; then configs="polyjose-ffi-$android polyjose-ffi-$android-release"; else configs="polyjose-ffi-$android"; fi
+    for config in $configs; do
+      case $config in *-release) label="polyjose-ffi --release ($android)" ;; *) label="polyjose-ffi ($android)" ;; esac
+      only=$config
+      dump_dir="$scratch/dump-$crate_dir-$config"
+      expect_fail "Android-only RsaPrivateKey in polyjose-$crate_dir, --target $android, $config" \
+        "matches rsa::private_key: RSA private keys" \
+        "$sym_fail in the objects of $crate \\($(printf '%s' "$label" | sed 's/[().]/\\&/g')\\)"
+      # The target's own objects were read: polyjose's dump for the triple has its RSA verification.
+      expect_symbol "Android-only plant in polyjose-$crate_dir, $config" "rsa::public_key::RsaPublicKey"
+      dump_dir=""
+    done
+    targets=""
+    # The documented residual: without --target, no configuration compiles the plant.
+    if [ "$crate_dir" = ffi ]; then
+      only="polyjose-ffi polyjose-ffi-release"
+      expect_pass "Android-only RsaPrivateKey in polyjose-ffi, no --target (documented residual: the caller passes the target)"
+      tests_run=$((tests_run + 1))
+      if grep -Eq '^ok: .* 2 configurations, ' "$scratch/out" && ! grep -q "$android" "$scratch/out"; then
+        echo "ok   - no --target: the host polyjose-ffi configurations ran, and none for $android"
+      else
+        echo "FAIL - no --target: expected the two host polyjose-ffi configurations and no $android one"
+        sed 's/^/       /' "$scratch/out"
+        tests_failed=$((tests_failed + 1))
+      fi
+    fi
+    only=""
+  done
+fi
+
+# 21. A target the check cannot build fails closed before any build: a name rustc does not know,
+#     and a known triple whose std is not installed (the first such one in rustc's list).
+new_case target-unknown
+targets=nonsense
+expect_closed "--target nonsense" '^ERROR: --target: nonsense is not a target rustc knows'
+missing=""
+for t in $(cd "$base" && rustc --print target-list); do
+  dir=$(cd "$base" && rustc --print target-libdir --target "$t" 2>/dev/null) || continue
+  set -- "$dir"/libstd-*.rlib
+  if [ ! -f "$1" ]; then missing=$t; break; fi
+done
+if [ -n "$missing" ]; then
+  targets=$missing
+  expect_closed "--target $missing (std not installed)" "^ERROR: --target: the std of $missing is not installed"
+else
+  tests_run=$((tests_run + 1))
+  echo "FAIL - every target rustc knows has its std installed; no triple to test the missing-std case with"
+  tests_failed=$((tests_failed + 1))
+fi
+targets=""
+
+# 10. A library-less member (build tooling such as polyjose-uniffi-bindgen) is skipped only while
+#     its tree holds neither rsa nor a workspace member. One that depends on polyjose could carry
+#     polyjose code the gate never reads, so the gate stops.
+new_case tool-with-core
+append_to tools/rsa-tool/Cargo.toml '[package]
+name = "rsa-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polyjose = { path = "../../crates/polyjose" }'
+append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member rsa-tool has no library target, and its tree contains polyjose' "$scratch/out"; then
+  echo "ok   - library-less member depending on polyjose: $gate_name fails closed"
+else
+  echo "FAIL - library-less member depending on polyjose: exit $rc (expected 2) with the no-library-target error"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+
+# 11-13. A library-less member whose tree holds rsa (and no workspace member) is not skipped either,
+#        whichever kind of dependency reaches rsa.
+for kind in dependencies build-dependencies dev-dependencies; do
+  new_case "tool-with-rsa-$kind"
+  append_to tools/rsa-tool/Cargo.toml "[package]
+name = \"rsa-tool\"
+version = \"0.0.0\"
+edition = \"2024\"
+publish = false
+
+[$kind]
+rsa = { workspace = true }"
+  append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+  replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+  tests_run=$((tests_run + 1))
+  rc=0
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member rsa-tool has no library target, and its tree contains rsa;' "$scratch/out"; then
+    echo "ok   - library-less member with rsa as a $kind: $gate_name fails closed"
+  else
+    echo "FAIL - library-less member with rsa as a $kind: exit $rc (expected 2) with the no-library-target error"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
+
+# 14. The same when polyjose or rsa is reached only through an optional dependency behind a
+#     feature: the default tree does not show it, but `cargo build --workspace --all-features`
+#     compiles it, so the skip reads every feature set (cargo has no optional dev-dependency).
+for variant in "dependencies polyjose" "dependencies rsa" "build-dependencies rsa"; do
+  kind=${variant% *}; dep=${variant#* }
+  case $dep in
+    polyjose) spec='{ path = "../../crates/polyjose", optional = true }' ;;
+    *) spec='{ workspace = true, optional = true }' ;;
+  esac
+  new_case "tool-with-optional-$dep-$kind"
+  append_to tools/rsa-tool/Cargo.toml "[package]
+name = \"rsa-tool\"
+version = \"0.0.0\"
+edition = \"2024\"
+publish = false
+
+[features]
+x = [\"dep:$dep\"]
+
+[$kind]
+$dep = $spec"
+  append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+  replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+  tests_run=$((tests_run + 1))
+  rc=0
+  (cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -Eq "^ERROR: workspace member rsa-tool has no library target, and its tree contains ${dep}[;,]" "$scratch/out"; then
+    echo "ok   - library-less member with an optional $dep in [$kind] behind a feature: $gate_name fails closed"
+  else
+    echo "FAIL - library-less member with an optional $dep in [$kind] behind a feature: exit $rc (expected 2) with the no-library-target error"
+    sed 's/^/       /' "$scratch/out"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
+
+# 15. The security audit's L1 plant, as written (feature 0013 review-security.md), except that the
+#     member takes rsa from [workspace.dependencies] (the pin of ADR 0055 §4, default features off)
+#     instead of a version written here, which a bump of that pin would make unresolvable.
+new_case tool-audit-l1
+append_to tools/evil/Cargo.toml '[package]
+name = "polyjose-evil-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rsa = { workspace = true, optional = true }
+polyjose = { path = "../../crates/polyjose", optional = true }
+
+[features]
+signer = ["dep:rsa", "dep:polyjose"]
+
+[[bin]]
+name = "evil"
+path = "src/main.rs"'
+append_to tools/evil/src/main.rs '#[cfg(feature = "signer")]
+pub fn sign(k: &rsa::RsaPrivateKey, m: &[u8]) -> Vec<u8> {
+    use rsa::pkcs1v15::SigningKey;
+    let _ = (SigningKey::<rsa::sha2::Sha256>::new_unprefixed(k.clone()), m); Vec::new()
+}
+fn main() {}'
+replace_in Cargo.toml 'members = [' 'members = ["tools/evil", '
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member polyjose-evil-tool has no library target, and its tree contains polyjose, rsa;' "$scratch/out"; then
+  echo "ok   - audit L1 plant (optional rsa and polyjose in a bin-only tools/ member): $gate_name fails closed"
+else
+  echo "FAIL - audit L1 plant (optional rsa and polyjose in a bin-only tools/ member): exit $rc (expected 2) with the no-library-target error"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+
+# 16. The audit's I4 plant, library-less: polyjose only as a dev-dependency, with its test-RNG
+#     feature spelled through a TOML escape (\u0069 is "i").
+new_case tool-audit-i4
+append_to tools/rsa-tool/Cargo.toml '[package]
+name = "rsa-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+polyjose = { path = "../../crates/polyjose", features = ["\u0069nsecure-test-vectors"] }'
+append_to tools/rsa-tool/src/main.rs 'fn main() {}'
+replace_in Cargo.toml 'members = [' 'members = ["tools/rsa-tool", '
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ] && grep -Eq '^ERROR: workspace member rsa-tool has no library target, and its tree contains polyjose[;,]' "$scratch/out"; then
+  echo "ok   - audit I4 plant (escaped test-RNG feature on a polyjose dev-dependency, library-less): $gate_name fails closed"
+else
+  echo "FAIL - audit I4 plant (escaped test-RNG feature on a polyjose dev-dependency, library-less): exit $rc (expected 2) with the no-library-target error"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
 
 finish

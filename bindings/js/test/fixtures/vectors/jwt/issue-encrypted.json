@@ -1,0 +1,27 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a nested JWT to a recipient checked by shape only (five compact parts)",
+  "operation": "jwt.issue",
+  "input": {
+    "claims": {
+      "sub": "x",
+      "exp": 1300819380
+    },
+    "alg": "HS256",
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "encrypt": {
+      "alg": "dir",
+      "enc": "A128GCM",
+      "key": {
+        "kty": "oct",
+        "k": "c2VjcmV0LWtleS1ieXRlcw"
+      }
+    }
+  },
+  "expect": {
+    "ok": true
+  }
+}

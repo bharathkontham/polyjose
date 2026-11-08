@@ -1,0 +1,37 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a general JWS signer with only an unprotected header (ADR 0045 §1, RFC 7515 §7.2.1)",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "general",
+    "payload_b64u": "cGF5bG9hZA",
+    "detached": false,
+    "signers": [
+      {
+        "header": {
+          "alg": "HS256",
+          "kid": "u"
+        },
+        "key": {
+          "kty": "oct",
+          "k": "c2VjcmV0LWtleS1ieXRlcw"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "jws": {
+      "payload": "cGF5bG9hZA",
+      "signatures": [
+        {
+          "header": {
+            "alg": "HS256",
+            "kid": "u"
+          },
+          "signature": "sig"
+        }
+      ]
+    }
+  }
+}

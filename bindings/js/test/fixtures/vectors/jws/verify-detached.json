@@ -1,0 +1,22 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a detached compact JWS verified with the payload supplied",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiJ9..sig",
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "allowed_algs": [
+      "HS256"
+    ],
+    "detached_payload_b64u": "cGF5bG9hZA"
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "cGF5bG9hZA",
+    "alg": "HS256",
+    "signature_index": 0
+  }
+}

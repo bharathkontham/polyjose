@@ -44,8 +44,9 @@
 //! - a success expectation lists exactly the outputs, so an optional one
 //!   (`key_index`) can't be left out unnoticed;
 //! - a vector whose optional top-level `features` names a cargo feature
-//!   this build does not enable is reported **SKIPPED**, with the feature
-//!   names; it is never counted as passing.
+//!   this build does not enable, or whose `features_absent` names one it
+//!   enables (ADR 0056), is reported **SKIPPED**, with the feature names;
+//!   it is never counted as passing.
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
 //! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
@@ -68,18 +69,21 @@ use polyjose::header::Header;
 use polyjose::json::{self, Number, Object, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg, SigningAlg};
 use polyjose::jwe::{self, DecryptPolicy, Encryptor, JsonForm, Recipient};
-use polyjose::jwk::{Jwk, JwkSelector, JwkSet, KeyAlg, KeyUse, ThumbprintHash};
+use polyjose::jwk::{EcCurve, Jwk, JwkSelector, JwkSet, KeyAlg, KeyUse, OkpCurve, ThumbprintHash};
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
 use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt};
-use polyjose::keys::{JoseAlg, KeyFormat, generate_for};
+use polyjose::keys::{JoseAlg, KeyFormat, KeySpec, generate, generate_for};
 use polyjose::util::{b64url_decode, b64url_encode};
+// The vector-set digest's SHA-256 (ADR 0060 §5): the `sha2` crate called
+// directly as a test oracle, never polyjose's API under test.
+use sha2::{Digest, Sha256};
 
 /// Top-level members of a vector; all required (schema `required`).
 const TOP_LEVEL: &[&str] = &["source", "description", "operation", "input", "expect"];
 
 /// The optional top-level members, after [`TOP_LEVEL`] in the schema's
 /// `properties`.
-const TOP_LEVEL_OPTIONAL: &[&str] = &["features"];
+const TOP_LEVEL_OPTIONAL: &[&str] = &["features", "features_absent"];
 
 /// The names a vector's top-level `features` may list, each with the cargo
 /// feature of `polyjose` it stands for. A vector needing one this build
@@ -135,6 +139,9 @@ const OPERATIONS: &[&str] = &[
     "keys.import_der",
     "keys.export_der",
     "keys.generate_for",
+    "keys.generate_oct",
+    "keys.generate_ec",
+    "keys.generate_okp",
     "jwe.encrypt",
     "jwe.decrypt",
     "jwt.validate",
@@ -659,7 +666,61 @@ const KEYS_GENERATED_SHAPE: Shape = Shape {
 /// checks the rest itself (see [`generated_shape`]).
 const KEYS_GENERATE_FOR_OK: Shape = Shape {
     def: "keys_generate_for_ok",
-    members: &[req("shape", Kind::Nested(&KEYS_GENERATED_SHAPE))],
+    members: &[
+        req("shape", Kind::Nested(&KEYS_GENERATED_SHAPE)),
+        opt("use_with", Kind::Nested(&KEYS_USE_WITH)),
+    ],
+    rules: &[],
+};
+/// A use round trip of a generated key (ADR 0034 §6), checked by the
+/// runner (see [`check_use_with`]): a JWS `alg` alone, or a JWE `alg` and
+/// `enc`.
+const KEYS_USE_WITH: Shape = Shape {
+    def: "keys_use_with",
+    members: &[req("alg", Kind::String), opt("enc", Kind::String)],
+    rules: &[],
+};
+// ADR 0018 §5 generation through `keys::generate` (ADR 0030
+// `jwk_generate_oct`, `jwk_generate_ec`, `jwk_generate_okp`): an `oct` key
+// of `len_bytes` octets (RFC 7518 §6.4.1), or a key pair on a curve
+// polyjose generates (RFC 7518 §6.2, RFC 8812 §3.1, RFC 8037 §2).
+const KEYS_GENERATE_OCT_INPUT: Shape = Shape {
+    def: "keys_generate_oct_input",
+    members: &[req("len_bytes", Kind::Count)],
+    rules: &[],
+};
+/// The EC curves of [`EC_CURVES`], by their RFC 7518 §6.2.1.1 names.
+const EC_CURVE_NAMES: &[&str] = &["P-256", "P-384", "P-521", "secp256k1"];
+const KEYS_GENERATE_EC_INPUT: Shape = Shape {
+    def: "keys_generate_ec_input",
+    members: &[req("crv", Kind::Enum(EC_CURVE_NAMES))],
+    rules: &[],
+};
+/// The OKP curves of [`OKP_CURVES`], by their RFC 8037 §2 names.
+const OKP_CURVE_NAMES: &[&str] = &["Ed25519", "X25519"];
+const KEYS_GENERATE_OKP_INPUT: Shape = Shape {
+    def: "keys_generate_okp_input",
+    members: &[req("crv", Kind::Enum(OKP_CURVE_NAMES))],
+    rules: &[],
+};
+/// What a key of `keys::generate` is, without its random material: as
+/// [`KEYS_GENERATED_SHAPE`], without `alg` (such a key is bound to none).
+const KEYS_GENERATED_KEY: Shape = Shape {
+    def: "keys_generated_key",
+    members: &[
+        req("kty", Kind::Enum(&["EC", "OKP", "oct"])),
+        opt("crv", Kind::String),
+        opt("k_octets", Kind::Count),
+    ],
+    rules: &[],
+};
+/// A generated key's shape and its use round trip, both required.
+const KEYS_GENERATE_OK: Shape = Shape {
+    def: "keys_generate_ok",
+    members: &[
+        req("shape", Kind::Nested(&KEYS_GENERATED_KEY)),
+        req("use_with", Kind::Nested(&KEYS_USE_WITH)),
+    ],
     rules: &[],
 };
 
@@ -893,6 +954,24 @@ const SPECS: &[OpSpec] = &[
         can_fail: true,
     },
     OpSpec {
+        name: "keys.generate_oct",
+        input: &KEYS_GENERATE_OCT_INPUT,
+        ok: &[&KEYS_GENERATE_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "keys.generate_ec",
+        input: &KEYS_GENERATE_EC_INPUT,
+        ok: &[&KEYS_GENERATE_OK],
+        can_fail: false,
+    },
+    OpSpec {
+        name: "keys.generate_okp",
+        input: &KEYS_GENERATE_OKP_INPUT,
+        ok: &[&KEYS_GENERATE_OK],
+        can_fail: false,
+    },
+    OpSpec {
         name: "jwt.validate",
         input: &JWT_VALIDATE_INPUT,
         ok: &[&JWT_VALIDATE_OK],
@@ -927,6 +1006,9 @@ struct Vector {
     expect: Expect,
     /// The cargo features it needs (top-level `features`), deduplicated.
     features: Vec<&'static str>,
+    /// The cargo features it must run without (top-level
+    /// `features_absent`, ADR 0056), deduplicated, none in `features`.
+    features_absent: Vec<&'static str>,
 }
 
 /// A schema violation: the JSON pointer and what is wrong there.
@@ -1215,7 +1297,21 @@ fn validate(value: &Value) -> Result<Vector, String> {
             return Err(violation(&format!("/{name}"), "required member is missing"));
         }
     }
-    let features = vector_features(root)?;
+    let features = vector_features(root, "features")?;
+    let features_absent = vector_features(root, "features_absent")?;
+    if root.contains("features_absent") && features_absent.is_empty() {
+        return Err(violation(
+            "/features_absent",
+            "must not be empty (minItems 1)",
+        ));
+    }
+    // ADR 0056 §3: a name can't be both needed and forbidden.
+    if let Some(both) = features.iter().find(|f| features_absent.contains(f)) {
+        return Err(violation(
+            "/features_absent",
+            format!("\"{both}\" is listed in `features` too"),
+        ));
+    }
     for name in ["source", "description"] {
         let text = root.get(name).and_then(Value::as_str);
         if !text.is_some_and(is_text) {
@@ -1278,7 +1374,7 @@ fn validate(value: &Value) -> Result<Vector, String> {
         }
     };
     if operation == "jwe.encrypt" && spec(operation).is_some() {
-        check_jwe_encrypt_features(input, &features)?;
+        check_jwe_encrypt_features(input, &features, &features_absent)?;
     }
     if operation == "jwt.issue" {
         check_jwt_issue(input, &expect)?;
@@ -1288,18 +1384,19 @@ fn validate(value: &Value) -> Result<Vector, String> {
         input: input.clone(),
         expect,
         features,
+        features_absent,
     })
 }
 
-/// The top-level `features`: an array of [`FEATURES`] names, each at most
-/// once (schema: `uniqueItems`).
-fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
-    let Some(value) = root.get("features") else {
+/// The top-level `features` or `features_absent` (`member`): an array of
+/// [`FEATURES`] names, each at most once (schema: `uniqueItems`).
+fn vector_features(root: &Object, member: &str) -> Result<Vec<&'static str>, String> {
+    let Some(value) = root.get(member) else {
         return Ok(Vec::new());
     };
     let items = value
         .as_array()
-        .ok_or_else(|| violation("/features", "must be an array"))?;
+        .ok_or_else(|| violation(&format!("/{member}"), "must be an array"))?;
     let mut features = Vec::with_capacity(items.len());
     for (i, item) in items.iter().enumerate() {
         let feature = item
@@ -1307,13 +1404,13 @@ fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
             .and_then(|s| FEATURES.iter().map(|(name, _)| name).find(|f| **f == s))
             .ok_or_else(|| {
                 violation(
-                    &format!("/features/{i}"),
+                    &format!("/{member}/{i}"),
                     format!("must be one of {:?}", feature_names()),
                 )
             })?;
         if features.contains(feature) {
             return Err(violation(
-                &format!("/features/{i}"),
+                &format!("/{member}/{i}"),
                 "listed twice (uniqueItems)",
             ));
         }
@@ -1327,19 +1424,29 @@ fn vector_features(root: &Object) -> Result<Vec<&'static str>, String> {
 /// `rng_b64u` and `protected_b64u` need `fixed-rng` (cargo feature
 /// `insecure-test-vectors`)
 /// (`Encryptor::encrypt_reproducible`, ADR 0041 §3), `compress` needs
-/// `deflate` (ADR 0017).
-fn check_jwe_encrypt_features(input: &Object, features: &[&str]) -> Result<(), String> {
-    for (member, feature) in [
-        ("rng_b64u", "fixed-rng"),
-        ("protected_b64u", "fixed-rng"),
-        ("compress", "deflate"),
-    ] {
+/// `deflate` (ADR 0017) listed in `features`, or in `features_absent` to
+/// pin `UnsupportedAlgorithm` without it (ADR 0056 §4, ADR 0030 §4).
+fn check_jwe_encrypt_features(
+    input: &Object,
+    features: &[&str],
+    features_absent: &[&str],
+) -> Result<(), String> {
+    for (member, feature) in [("rng_b64u", "fixed-rng"), ("protected_b64u", "fixed-rng")] {
         if input.contains(member) && !features.contains(&feature) {
             return Err(violation(
                 "/features",
                 format!("`input/{member}` needs \"{feature}\" listed in `features`"),
             ));
         }
+    }
+    if input.contains("compress")
+        && !features.contains(&"deflate")
+        && !features_absent.contains(&"deflate")
+    {
+        return Err(violation(
+            "/features",
+            "`input/compress` needs \"deflate\" listed in `features` or `features_absent`",
+        ));
     }
     Ok(())
 }
@@ -1744,17 +1851,12 @@ fn jwe_encrypt_reproducible(
     )
 }
 
-/// `Encryptor::compress` (RFC 7516 §4.1.3, feature `deflate`).
-#[cfg(feature = "deflate")]
+/// `Encryptor::compress` (RFC 7516 §4.1.3). It exists in every build:
+/// without `deflate` the encryption then fails with `UnsupportedAlgorithm`
+/// (ADR 0017 §5, ADR 0030 §4), which a `features_absent: ["deflate"]`
+/// vector pins (ADR 0056).
 fn jwe_compress(encryptor: Encryptor) -> Encryptor {
     encryptor.compress()
-}
-
-/// Never reached: such a vector declares `deflate` and is SKIPPED in this
-/// build.
-#[cfg(not(feature = "deflate"))]
-fn jwe_compress(_encryptor: Encryptor) -> Encryptor {
-    unreachable!("a vector with compress is skipped without deflate")
 }
 
 /// The recipients of a `jwe.encrypt` vector, in order: for each, import
@@ -2066,11 +2168,30 @@ fn generated_members(kty: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// [`generated_members`] for a key bound to no algorithm (`keys::generate`):
+/// the same members without `alg`. Sorted.
+fn unbound_members(kty: &str) -> Option<&'static [&'static str]> {
+    match kty {
+        "EC" => Some(&["crv", "d", "kty", "x", "y"]),
+        "OKP" => Some(&["crv", "d", "kty", "x"]),
+        "oct" => Some(&["k", "kty"]),
+        _ => None,
+    }
+}
+
 /// The shape of a generated key, after checking what a shape cannot say:
 /// the key is private, has exactly the members of
 /// [`generated_members`], and imports back (`Jwk::from_object`) to the
 /// same JWK. Any failure there fails the vector.
 fn generated_shape(key: &Jwk) -> Result<Object, String> {
+    shape_of(key, generated_members)
+}
+
+/// [`generated_shape`] with the member list `members` gives per `kty`.
+fn shape_of(
+    key: &Jwk,
+    members: fn(&str) -> Option<&'static [&'static str]>,
+) -> Result<Object, String> {
     if key.is_public() {
         return Err("generate_for returned a public key".to_owned());
     }
@@ -2078,7 +2199,7 @@ fn generated_shape(key: &Jwk) -> Result<Object, String> {
     let kty = jwk.get("kty").and_then(Value::as_str).unwrap_or_default();
     let mut names: Vec<&str> = jwk.iter().map(|(name, _)| name).collect();
     names.sort_unstable();
-    match generated_members(kty) {
+    match members(kty) {
         Some(expected) if names == expected => {}
         _ => {
             return Err(format!(
@@ -2109,14 +2230,140 @@ fn generated_shape(key: &Jwk) -> Result<Object, String> {
 }
 
 /// `keys.generate_for`: resolve `alg` (see [`jose_alg`]), generate, and
-/// return the key's shape (see [`generated_shape`]).
-fn run_keys_generate_for(input: &Object, out: &mut Object) -> Result<Result<(), Error>, String> {
+/// return the key's shape (see [`generated_shape`]), after its use round
+/// trip when the vector has `use_with` (see [`check_use_with`]).
+fn run_keys_generate_for(
+    input: &Object,
+    expect: &Expect,
+    out: &mut Object,
+) -> Result<Result<(), Error>, String> {
     let key = match generate_for(jose_alg(input_str(input, "alg"))) {
         Ok(key) => key,
         Err(e) => return Ok(Err(e)),
     };
     out.insert("shape", generated_shape(&key)?);
+    echo_use_with(&key, expect, out)?;
     Ok(Ok(()))
+}
+
+/// The curve a validated `crv` names, from the curves the core generates.
+fn input_spec(operation: &str, input: &Object) -> KeySpec {
+    match operation {
+        "keys.generate_oct" => KeySpec::Oct {
+            bytes: input_count(input, "len_bytes").expect("validated"),
+        },
+        "keys.generate_ec" => {
+            let crv = input_str(input, "crv");
+            KeySpec::Ec(
+                EC_CURVES
+                    .into_iter()
+                    .find(|c| c.as_str() == crv)
+                    .expect("validated: one of EC_CURVE_NAMES"),
+            )
+        }
+        _ => {
+            let crv = input_str(input, "crv");
+            KeySpec::Okp(
+                OKP_CURVES
+                    .into_iter()
+                    .find(|c| c.as_str() == crv)
+                    .expect("validated: one of OKP_CURVE_NAMES"),
+            )
+        }
+    }
+}
+
+/// The EC curves `keys::generate` takes (RFC 7518 §6.2.1.1, RFC 8812 §3.1),
+/// in [`EC_CURVE_NAMES`] order.
+const EC_CURVES: [EcCurve; 4] = [
+    EcCurve::P256,
+    EcCurve::P384,
+    EcCurve::P521,
+    EcCurve::Secp256k1,
+];
+/// The OKP curves `keys::generate` takes (RFC 8037 §2), in
+/// [`OKP_CURVE_NAMES`] order.
+const OKP_CURVES: [OkpCurve; 2] = [OkpCurve::Ed25519, OkpCurve::X25519];
+
+/// `keys.generate_oct`, `keys.generate_ec`, `keys.generate_okp` (ADR 0018
+/// §5; ADR 0030 `jwk_generate_oct`/`_ec`/`_okp`): generate with
+/// `keys::generate`, check the key (private, exactly the RFC members, no
+/// `alg`, imports back), return its shape, and run its use round trip.
+fn run_keys_generate(
+    operation: &str,
+    input: &Object,
+    expect: &Expect,
+    out: &mut Object,
+) -> Result<Result<(), Error>, String> {
+    let key = match generate(input_spec(operation, input)) {
+        Ok(key) => key,
+        Err(e) => return Ok(Err(e)),
+    };
+    out.insert("shape", shape_of(&key, unbound_members)?);
+    echo_use_with(&key, expect, out)?;
+    Ok(Ok(()))
+}
+
+/// Runs the expectation's `use_with` round trip on `key`, if it has one,
+/// and echoes it back as an output, as `verify_with` is.
+fn echo_use_with(key: &Jwk, expect: &Expect, out: &mut Object) -> Result<(), String> {
+    if let Expect::Ok(want) = expect
+        && let Some(use_with) = want.get("use_with").and_then(Value::as_object)
+    {
+        check_use_with(key, use_with)?;
+        out.insert("use_with", use_with.clone());
+    }
+    Ok(())
+}
+
+/// The payload or plaintext of every `use_with` round trip: `polyjose`.
+const USE_WITH_PAYLOAD: &[u8] = b"polyjose";
+
+/// The `use_with` round trip of a generated key (ADR 0034 §6), any failure
+/// failing the vector. The other side uses the key's public key, or the
+/// key itself for `oct` (RFC 7518 §6.4).
+///
+/// - Without `enc`: a compact JWS (RFC 7515 §7.1) of [`USE_WITH_PAYLOAD`]
+///   under the protected header `{"alg": alg}`, signed with `key` and
+///   verified with allow-list `[alg]` (RFC 7515 §5.1–§5.2).
+/// - With `enc`: a compact JWE (RFC 7516 §7.1) of it to one recipient with
+///   `alg`, decrypted with `key` and allow-lists `[alg]` and `[enc]`
+///   (RFC 7516 §5.1–§5.2).
+fn check_use_with(key: &Jwk, use_with: &Object) -> Result<(), String> {
+    let alg = input_str(use_with, "alg");
+    let other = key.to_public().unwrap_or_else(|| key.clone());
+    let fail = |what: &str, e: Error| format!("use_with: {what} ({})", e.code());
+    match use_with.get("enc").and_then(Value::as_str) {
+        None => {
+            let header = format!(r#"{{"alg":{}}}"#, Value::from(alg).to_json());
+            let protected = ProtectedHeader::from_encoded(&b64url_encode(header.as_bytes()))
+                .map_err(|e| fail("the protected header is refused", e))?;
+            let token = jws::sign_compact(&protected, USE_WITH_PAYLOAD, key, &SignOptions::new())
+                .map_err(|e| fail("the key does not sign", e))?;
+            let algs = [SigningAlg::from(alg)];
+            let opts =
+                VerifyOptions::new(&algs).map_err(|e| fail("the allow-list is refused", e))?;
+            let verified = jws::verify_compact(&token, &other, &opts)
+                .map_err(|e| fail("the signature does not verify", e))?;
+            if verified.payload.as_slice() != USE_WITH_PAYLOAD {
+                return Err("use_with: the verified payload is not the signed one".to_owned());
+            }
+        }
+        Some(enc) => {
+            let token = Encryptor::new(ContentEncAlg::from(enc))
+                .recipient(Recipient::new(KeyMgmtAlg::from(alg), &other))
+                .encrypt_compact(USE_WITH_PAYLOAD)
+                .map_err(|e| fail("encryption to the key fails", e))?;
+            let policy = DecryptPolicy::new(&[KeyMgmtAlg::from(alg)], &[ContentEncAlg::from(enc)])
+                .map_err(|e| fail("the allow-lists are refused", e))?;
+            let decrypted = jwe::decrypt_compact(&token, key, &policy)
+                .map_err(|e| fail("the key does not decrypt", e))?;
+            if decrypted.plaintext() != USE_WITH_PAYLOAD {
+                return Err("use_with: the decrypted plaintext is not the encrypted one".to_owned());
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2558,7 +2805,12 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
             }
         }
         "keys.generate_for" => {
-            if let Err(e) = run_keys_generate_for(input, &mut out)? {
+            if let Err(e) = run_keys_generate_for(input, &vector.expect, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "keys.generate_oct" | "keys.generate_ec" | "keys.generate_okp" => {
+            if let Err(e) = run_keys_generate(&vector.operation, input, &vector.expect, &mut out)? {
                 return Ok(Err(e));
             }
         }
@@ -2630,9 +2882,27 @@ enum Passed {
         /// Whether it expects a failure (`"ok": false`).
         negative: bool,
     },
-    /// It needs these features, which this build does not enable; it was
-    /// validated but not run, and never counts as passing.
-    Skipped { features: Vec<&'static str> },
+    /// It needs `missing`, which this build does not enable, or must run
+    /// without `present`, which it enables (ADR 0056); it was validated but
+    /// not run, and never counts as passing.
+    Skipped {
+        missing: Vec<&'static str>,
+        present: Vec<&'static str>,
+    },
+}
+
+impl Passed {
+    /// A skip's results-file `reason` (ADR 0034 §3, ADR 0056 §2):
+    /// `feature:`, the missing names in `features` order, then each
+    /// enabled `features_absent` name as `!<name>` in its order.
+    fn skip_reason(missing: &[&str], present: &[&str]) -> String {
+        let names: Vec<String> = missing
+            .iter()
+            .map(|f| (*f).to_owned())
+            .chain(present.iter().map(|f| format!("!{f}")))
+            .collect();
+        format!("feature:{}", names.join(","))
+    }
 }
 
 /// Parses a vector file. Vector files are trusted test data, so they get a
@@ -2654,8 +2924,40 @@ fn check_vector(name: &str, bytes: &[u8]) -> Result<Passed, String> {
 
 /// [`check_vector`] with `enabled` as the build's features.
 fn check_vector_with(name: &str, bytes: &[u8], enabled: &[&str]) -> Result<Passed, String> {
+    check_vector_traced(name, bytes, enabled, &mut Trace::default())
+}
+
+/// What a results file records of one vector besides its status
+/// (ADR 0034 §2). Filled in as [`check_vector_traced`] goes; recording
+/// never changes how the vector is evaluated.
+#[derive(Debug, Default)]
+struct Trace {
+    /// The vector's `source`, when usable (ADR 0034 §1: reported
+    /// alongside the id).
+    source: Option<String>,
+    /// The vector's `operation`, when the file parses and names one.
+    op: Option<String>,
+    /// The operation's outcome, when it returned one: success, or the
+    /// library's error code.
+    actual: Option<Result<(), &'static str>>,
+}
+
+/// [`check_vector_with`], recording into `trace` the vector's `source`,
+/// `operation` and, once the operation has run, its outcome.
+fn check_vector_traced(
+    name: &str,
+    bytes: &[u8],
+    enabled: &[&str],
+    trace: &mut Trace,
+) -> Result<Passed, String> {
     let value = parse_vector_file(bytes)
         .map_err(|e| format!("{name}: not a valid JSON text ({e}); see conformance/schema.json"))?;
+    trace.source = usable_source(&value);
+    trace.op = value
+        .get("operation")
+        .and_then(Value::as_str)
+        .filter(|op| is_text(op))
+        .map(str::to_owned);
     let source = usable_source(&value).unwrap_or_else(|| "<missing>".to_owned());
     let fail = |problem: String| format!("{name} (source: {source}): {problem}");
     let vector = validate(&value).map_err(fail)?;
@@ -2665,12 +2967,19 @@ fn check_vector_with(name: &str, bytes: &[u8], enabled: &[&str]) -> Result<Passe
         .copied()
         .filter(|f| !enabled.contains(f))
         .collect();
-    if !missing.is_empty() {
-        return Ok(Passed::Skipped { features: missing });
+    let present: Vec<&'static str> = vector
+        .features_absent
+        .iter()
+        .copied()
+        .filter(|f| enabled.contains(f))
+        .collect();
+    if !missing.is_empty() || !present.is_empty() {
+        return Ok(Passed::Skipped { missing, present });
     }
     let outcome = catch_unwind(AssertUnwindSafe(|| execute(&vector)))
         .map_err(|_| fail("panicked while running".to_owned()))?
         .map_err(fail)?;
+    trace.actual = Some(outcome.as_ref().map(|_| ()).map_err(Error::code));
     compare(&vector.expect, &outcome).map_err(fail)?;
     Ok(Passed::Ran {
         negative: matches!(vector.expect, Expect::Err(_)),
@@ -2689,6 +2998,99 @@ struct Report {
     /// `SKIPPED (needs feature ...)` lines, one per skipped vector file.
     skipped: Vec<String>,
     failures: Vec<String>,
+    /// One results-file entry per vector file, in file order (ADR 0034
+    /// §2; see [`result_entry`]).
+    results: Vec<Object>,
+    /// One [`digest_line`] per vector file whose bytes were read, in file
+    /// order (ADR 0060 §2); [`Report::vectors_digest`] sorts them.
+    digest_lines: Vec<Vec<u8>>,
+    /// Whether every vector file was found: false when the walk itself
+    /// failed (an unreadable directory, a symbolic link) or found nothing,
+    /// so the results would not cover every vector.
+    complete: bool,
+}
+
+impl Report {
+    /// `vectors_digest` (ADR 0060 §3): the lowercase hex SHA-256 of the
+    /// byte-sorted [`digest_line`]s. `None` when no vector file was read: an
+    /// empty corpus is invalid, so such a run writes no results file.
+    fn vectors_digest(&self) -> Option<String> {
+        if self.digest_lines.is_empty() {
+            return None;
+        }
+        let mut hasher = Sha256::new();
+        for line in sorted_digest_lines(&self.digest_lines) {
+            hasher.update(&line);
+        }
+        Some(hex_encode(&hasher.finalize()))
+    }
+}
+
+/// One vector file's line of the vector-set digest (ADR 0060 §2): its id
+/// (exactly the results entry's), a TAB, the lowercase hex SHA-256 of the
+/// raw bytes the runner parsed (no line-ending, BOM or encoding change),
+/// and an LF, as UTF-8.
+fn digest_line(id: &str, bytes: &[u8]) -> Vec<u8> {
+    format!("{id}\t{}\n", hex_encode(&Sha256::digest(bytes))).into_bytes()
+}
+
+/// `lines` in ascending order of their UTF-8 bytes (ADR 0060 §2), not of
+/// paths by component: `jws-x/…` (0x2D) sorts before `jws/…` (0x2F).
+fn sorted_digest_lines(lines: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let mut sorted = lines.to_vec();
+    sorted.sort();
+    sorted
+}
+
+/// A vector's id (ADR 0034 §1 as amended by ADR 0045 §4): its path under
+/// the vectors directory, `/`-separated on every platform, then `#0`, as
+/// every file holds one vector.
+fn vector_id(relative: &Path) -> String {
+    let parts: Vec<String> = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    format!("{}#0", parts.join("/"))
+}
+
+/// One results-file entry (`conformance/schema/results.schema.json`):
+/// `id`, then `source` and `op` when known, `status`, `actual` for a vector
+/// that ran, and `reason` for a skip (`feature:` and the missing feature
+/// names, in the vector's order, ADR 0034 §3) or a failure (its message).
+fn result_entry(id: String, trace: Trace, result: &Result<Passed, String>) -> Object {
+    let mut entry = Object::new();
+    entry.insert("id", id);
+    if let Some(source) = trace.source {
+        entry.insert("source", source);
+    }
+    if let Some(op) = trace.op {
+        entry.insert("op", op);
+    }
+    let status = match result {
+        Ok(Passed::Ran { .. }) => "pass",
+        Ok(Passed::Skipped { .. }) => "skipped",
+        Err(_) => "fail",
+    };
+    entry.insert("status", status);
+    // A skipped vector never ran, so it has no outcome.
+    if let Some(actual) = trace.actual {
+        let mut outcome = Object::new();
+        outcome.insert("ok", actual.is_ok());
+        if let Err(code) = actual {
+            outcome.insert("error", code);
+        }
+        entry.insert("actual", outcome);
+    }
+    match result {
+        Ok(Passed::Ran { .. }) => {}
+        Ok(Passed::Skipped { missing, present }) => {
+            entry.insert("reason", Passed::skip_reason(missing, present));
+        }
+        Err(message) => {
+            entry.insert("reason", message.as_str());
+        }
+    }
+    entry
 }
 
 /// Every `*.json` file under `dir`, recursively, sorted. A symbolic link is
@@ -2738,15 +3140,22 @@ fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
             .failures
             .push(format!("{}: no vector files (*.json) found", dir.display()));
     }
+    report.complete = report.failures.is_empty();
     for path in files {
-        let name = path
-            .strip_prefix(dir)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
+        let relative = path.strip_prefix(dir).unwrap_or(&path);
+        let name = relative.display().to_string();
+        let id = vector_id(relative);
+        let mut trace = Trace::default();
+        // A file that cannot be read gets a `fail` and no digest line
+        // (ADR 0060 §2); one that is read is hashed from the very bytes
+        // parsed, whatever its result.
         let result = std::fs::read(&path)
             .map_err(|e| format!("{name}: cannot read: {e}"))
-            .and_then(|bytes| check_vector_with(&name, &bytes, enabled));
+            .and_then(|bytes| {
+                report.digest_lines.push(digest_line(&id, &bytes));
+                check_vector_traced(&name, &bytes, enabled, &mut trace)
+            });
+        report.results.push(result_entry(id, trace, &result));
         match result {
             Ok(Passed::Ran {
                 operation,
@@ -2757,14 +3166,25 @@ fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
                 }
                 *report.passed.entry(operation).or_default() += 1;
             }
-            Ok(Passed::Skipped { features }) => report.skipped.push(format!(
-                "{name}: SKIPPED (needs feature {})",
-                features
-                    .iter()
-                    .map(|f| format!("`{}`", cargo_feature(f)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
+            Ok(Passed::Skipped { missing, present }) => {
+                let cargo = |names: &[&str]| {
+                    names
+                        .iter()
+                        .map(|f| format!("`{}`", cargo_feature(f)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let mut why = Vec::new();
+                if !missing.is_empty() {
+                    why.push(format!("needs feature {}", cargo(&missing)));
+                }
+                if !present.is_empty() {
+                    why.push(format!("needs feature {} off", cargo(&present)));
+                }
+                report
+                    .skipped
+                    .push(format!("{name}: SKIPPED ({})", why.join("; ")));
+            }
             Err(msg) => report.failures.push(msg),
         }
     }
@@ -2775,10 +3195,120 @@ fn conformance_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
 }
 
-/// The shared vectors: every file must be schema-valid and pass.
+/// Where every runner writes its results file (ADR 0034 §2):
+/// `target/conformance/` at the repository root, whatever `CARGO_TARGET_DIR`
+/// says, so `scripts/conformance-parity.sh` finds every runner's file in
+/// one place.
+fn results_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/conformance")
+}
+
+/// This build's results file name. Only the default-features build is the
+/// reference run, `rust-core.json` (ADR 0034 §4); a build with features
+/// writes `rust-core-<features>.json` (`rust-core-fixed-rng.json`,
+/// `rust-core-deflate-fixed-rng.json`, ...), which the parity check
+/// ignores.
+fn results_file_name(enabled: &[&str]) -> String {
+    if enabled.is_empty() {
+        format!("{RUST_CORE}.json")
+    } else {
+        format!("{RUST_CORE}-{}.json", enabled.join("-"))
+    }
+}
+
+/// The results file text (`conformance/schema/results.schema.json`): the
+/// runner, the crate version, the `vectors_digest` of the files read
+/// (ADR 0060 §1), the enabled `features`, `Error::CODES` (ADR 0034 §8) and
+/// the results, one per line so a file can be searched by id.
+fn results_document(enabled: &[&str], digest: &str, results: &[Object]) -> String {
+    let strings = |items: &[&str]| -> Value {
+        Value::from(items.iter().map(|s| Value::from(*s)).collect::<Vec<_>>())
+    };
+    let header: [(&str, Value); 5] = [
+        ("runner", Value::from(RUST_CORE)),
+        ("polyjose", Value::from(env!("CARGO_PKG_VERSION"))),
+        ("vectors_digest", Value::from(digest)),
+        ("features", strings(enabled)),
+        ("error_codes", strings(Error::CODES)),
+    ];
+    let mut text = String::from("{\n");
+    for (name, value) in &header {
+        text.push_str(&format!(
+            "  {}: {},\n",
+            Value::from(*name).to_json(),
+            value.to_json()
+        ));
+    }
+    text.push_str("  \"results\": [");
+    for (i, result) in results.iter().enumerate() {
+        text.push_str(if i == 0 { "\n    " } else { ",\n    " });
+        text.push_str(&result.to_json());
+    }
+    text.push_str(if results.is_empty() {
+        "]\n}\n"
+    } else {
+        "\n  ]\n}\n"
+    });
+    text
+}
+
+/// Writes `report`'s results to `dir/file`, replacing any earlier file
+/// atomically (a temporary file, then a rename), and returns its path. A
+/// report whose walk was incomplete, or that read no vector file (no
+/// digest, ADR 0060 §3), is not written: any earlier file is removed
+/// instead, so a run that could not see every vector leaves no stale or
+/// partial reference behind (the parity check then fails on the missing
+/// file).
+fn write_results(
+    dir: &Path,
+    file: &str,
+    enabled: &[&str],
+    report: &Report,
+) -> Result<Option<PathBuf>, String> {
+    let path = dir.join(file);
+    let digest = match report.vectors_digest() {
+        Some(digest) if report.complete => digest,
+        _ => {
+            return match std::fs::remove_file(&path) {
+                Ok(()) => Ok(None),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(format!("{}: cannot remove: {e}", path.display())),
+            };
+        }
+    };
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: cannot create: {e}", dir.display()))?;
+    let temporary = dir.join(format!(".{file}.{}.tmp", std::process::id()));
+    std::fs::write(
+        &temporary,
+        results_document(enabled, &digest, &report.results),
+    )
+    .map_err(|e| format!("{}: cannot write: {e}", temporary.display()))?;
+    std::fs::rename(&temporary, &path)
+        .map_err(|e| format!("{}: cannot write: {e}", path.display()))?;
+    Ok(Some(path))
+}
+
+/// The shared vectors: every file must be schema-valid and pass. The run
+/// also writes this build's results file (ADR 0034 §2, §4; see
+/// [`results_file_name`]), checked against `results.schema.json`, before
+/// any assertion, so a failing run is recorded too.
 #[test]
 fn conformance_vectors() {
     let report = run_dir(&conformance_dir().join("vectors"));
+    let enabled = enabled_features();
+    let written = write_results(
+        &results_dir(),
+        &results_file_name(&enabled),
+        &enabled,
+        &report,
+    )
+    .unwrap_or_else(|e| panic!("results file: {e}"));
+    if let Some(path) = written {
+        let text = std::fs::read(&path).unwrap();
+        if let Err(e) = check_results_text(&text) {
+            panic!("{}: not valid per results.schema.json: {e}", path.display());
+        }
+    }
     assert!(
         report.failures.is_empty(),
         "{} of {} conformance vector file(s) failed:\n  {}",
@@ -3050,8 +3580,18 @@ fn schema_and_runner_agree() {
     expected.insert("items", features);
     assert_eq!(
         annotated(at(&schema, &["properties", "features"])),
-        Value::from(expected),
+        Value::from(expected.clone()),
         "features"
+    );
+    // ADR 0056: the same names, at least one.
+    let mut absent = parse(r#"{"type":"array","minItems":1,"uniqueItems":true}"#)
+        .into_object()
+        .unwrap();
+    absent.insert("items", expected.get("items").unwrap().clone());
+    assert_eq!(
+        annotated(at(&schema, &["properties", "features_absent"])),
+        Value::from(absent),
+        "features_absent"
     );
     for name in ["source", "description"] {
         let property = annotated(at(&schema, &["properties", name]));
@@ -3636,6 +4176,152 @@ fn generate_for_vectors_fail_when_wrong_or_malformed() {
     }
 }
 
+/// The generator operations (ADR 0030 `jwk_generate_oct`/`_ec`/`_okp`) and
+/// `use_with`: each generated key has its RFC shape and survives its use
+/// round trip (ADR 0034 §6); the core's length refusal is the outcome.
+#[test]
+fn generate_vectors_pass() {
+    assert_passes(&[
+        vector(
+            "keys.generate_oct",
+            r#"{"len_bytes":32}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","k_octets":32},"use_with":{"alg":"HS256"}}"#,
+        ),
+        vector(
+            "keys.generate_oct",
+            r#"{"len_bytes":16}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","k_octets":16},"use_with":{"alg":"A128KW","enc":"A128GCM"}}"#,
+        ),
+        vector(
+            "keys.generate_oct",
+            r#"{"len_bytes":15}"#,
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+        ),
+        vector(
+            "keys.generate_ec",
+            r#"{"crv":"P-256"}"#,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-256"},"use_with":{"alg":"ES256"}}"#,
+        ),
+        vector(
+            "keys.generate_ec",
+            r#"{"crv":"P-384"}"#,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-384"},"use_with":{"alg":"ECDH-ES+A192KW","enc":"A192GCM"}}"#,
+        ),
+        vector(
+            "keys.generate_okp",
+            r#"{"crv":"Ed25519"}"#,
+            r#"{"ok":true,"shape":{"kty":"OKP","crv":"Ed25519"},"use_with":{"alg":"EdDSA"}}"#,
+        ),
+        vector(
+            "keys.generate_okp",
+            r#"{"crv":"X25519"}"#,
+            r#"{"ok":true,"shape":{"kty":"OKP","crv":"X25519"},"use_with":{"alg":"ECDH-ES","enc":"A128GCM"}}"#,
+        ),
+        vector(
+            "keys.generate_for",
+            r#"{"alg":"ES256"}"#,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-256","alg":"ES256"},"use_with":{"alg":"ES256"}}"#,
+        ),
+        vector(
+            "keys.generate_for",
+            r#"{"alg":"A256GCM"}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","alg":"A256GCM","k_octets":32},"use_with":{"alg":"dir","enc":"A256GCM"}}"#,
+        ),
+    ]);
+}
+
+/// Generator vectors that are schema-invalid, or whose shape or use round
+/// trip doesn't hold, fail naming their source.
+#[test]
+fn generate_vectors_fail_when_wrong_or_malformed() {
+    let p256 = r#"{"crv":"P-256"}"#;
+    for (name, operation, input, expect, needle) in [
+        (
+            "no-use-with.json",
+            "keys.generate_ec",
+            p256,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-256"}}"#,
+            "/expect/use_with",
+        ),
+        (
+            "alg-in-shape.json",
+            "keys.generate_ec",
+            p256,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-256","alg":"ES256"},"use_with":{"alg":"ES256"}}"#,
+            "/expect/shape/alg",
+        ),
+        (
+            "unknown-curve.json",
+            "keys.generate_ec",
+            r#"{"crv":"P-192"}"#,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-192"},"use_with":{"alg":"ES256"}}"#,
+            "/input/crv",
+        ),
+        (
+            "okp-curve-on-ec.json",
+            "keys.generate_ec",
+            r#"{"crv":"Ed25519"}"#,
+            r#"{"ok":true,"shape":{"kty":"OKP","crv":"Ed25519"},"use_with":{"alg":"EdDSA"}}"#,
+            "/input/crv",
+        ),
+        (
+            "ec-cannot-fail.json",
+            "keys.generate_ec",
+            p256,
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+            "cannot fail",
+        ),
+        (
+            "use-with-member.json",
+            "keys.generate_ec",
+            p256,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-256"},"use_with":{"alg":"ES256","kid":"1"}}"#,
+            "/expect/use_with/kid",
+        ),
+        (
+            "use-with-wrong-alg.json",
+            "keys.generate_ec",
+            p256,
+            r#"{"ok":true,"shape":{"kty":"EC","crv":"P-256"},"use_with":{"alg":"ES384"}}"#,
+            "use_with: the key does not sign",
+        ),
+        (
+            "use-with-wrong-family.json",
+            "keys.generate_okp",
+            r#"{"crv":"X25519"}"#,
+            r#"{"ok":true,"shape":{"kty":"OKP","crv":"X25519"},"use_with":{"alg":"EdDSA"}}"#,
+            "use_with",
+        ),
+        (
+            "wrong-length.json",
+            "keys.generate_oct",
+            r#"{"len_bytes":32}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","k_octets":16},"use_with":{"alg":"HS256"}}"#,
+            "`shape`",
+        ),
+        (
+            "length-not-a-count.json",
+            "keys.generate_oct",
+            r#"{"len_bytes":-1}"#,
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+            "/input/len_bytes",
+        ),
+        (
+            "for-use-with-wrong.json",
+            "keys.generate_for",
+            r#"{"alg":"HS256"}"#,
+            r#"{"ok":true,"shape":{"kty":"oct","alg":"HS256","k_octets":32},"use_with":{"alg":"HS512"}}"#,
+            "use_with",
+        ),
+    ] {
+        fails_naming_source(
+            &format!("generate-{name}"),
+            &vector(operation, input, expect),
+            needle,
+        );
+    }
+}
+
 /// The checks a shape cannot express catch a public key, a member RFC 7518
 /// §6 does not define for a generated key (here `kid`) and a missing `alg`;
 /// a well-formed private key yields its shape.
@@ -3679,6 +4365,7 @@ fn reserved_but_unimplemented_operations_fail() {
         input: Object::new(),
         expect: Expect::Ok(Object::new()),
         features: Vec::new(),
+        features_absent: Vec::new(),
     };
     let problem = execute(&reserved).unwrap_err();
     assert!(problem.contains("not implemented"), "{problem}");
@@ -5620,13 +6307,14 @@ fn vectors_needing_a_disabled_feature_are_skipped_by_name() {
     );
     // Its expectation is wrong, but with the features off it does not run.
     match check_vector_with("needs.json", needs.as_bytes(), &[]) {
-        Ok(Passed::Skipped { features }) => {
-            assert_eq!(features, ["deflate", "fixed-rng"])
+        Ok(Passed::Skipped { missing, present }) => {
+            assert_eq!(missing, ["deflate", "fixed-rng"]);
+            assert!(present.is_empty());
         }
         other => panic!("expected SKIPPED, got {other:?}"),
     }
     match check_vector_with("needs.json", needs.as_bytes(), &["fixed-rng"]) {
-        Ok(Passed::Skipped { features }) => assert_eq!(features, ["deflate"]),
+        Ok(Passed::Skipped { missing, .. }) => assert_eq!(missing, ["deflate"]),
         other => panic!("expected SKIPPED, got {other:?}"),
     }
     // With the features on, it runs, and fails.
@@ -5659,6 +6347,170 @@ fn vectors_needing_a_disabled_feature_are_skipped_by_name() {
         usize::from(cfg!(feature = "deflate"))
             + usize::from(cfg!(feature = "insecure-test-vectors"))
     );
+}
+
+/// `features_absent` (ADR 0056): a vector that must run without a feature
+/// the build enables is SKIPPED with `feature:!<name>`, after the missing
+/// `features` names; it is never counted as passing, and it is still
+/// validated.
+#[test]
+fn vectors_forbidding_an_enabled_feature_are_skipped_by_name() {
+    let forbids = |absent: &str| {
+        vector(
+            "jwe.decrypt",
+            &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+        )
+        .replacen(
+            r#""operation""#,
+            &format!(r#""features_absent":{absent},"operation""#),
+            1,
+        )
+    };
+    let both = forbids(r#"["deflate","fixed-rng"]"#);
+    // Its expectation is wrong, but with the features on it does not run.
+    match check_vector_with("forbids.json", both.as_bytes(), &feature_names()) {
+        Ok(Passed::Skipped { missing, present }) => {
+            assert!(missing.is_empty());
+            assert_eq!(present, ["deflate", "fixed-rng"]);
+        }
+        other => panic!("expected SKIPPED, got {other:?}"),
+    }
+    match check_vector_with("forbids.json", both.as_bytes(), &["fixed-rng"]) {
+        Ok(Passed::Skipped { present, .. }) => assert_eq!(present, ["fixed-rng"]),
+        other => panic!("expected SKIPPED, got {other:?}"),
+    }
+    // With the features off, it runs, and fails.
+    assert!(check_vector_with("forbids.json", both.as_bytes(), &[]).is_err());
+    // A schema-invalid vector fails even when it would be skipped.
+    let invalid = both.replace(r#""allowed_enc""#, r#""allowed_encs""#);
+    assert!(check_vector_with("invalid.json", invalid.as_bytes(), &feature_names()).is_err());
+
+    // Needed and forbidden at once: the missing names first (ADR 0056 §2).
+    let mixed = with_features(&forbids(r#"["deflate"]"#), r#"["fixed-rng"]"#);
+    let dir = TempDir::new("skip-absent");
+    dir.write("a/forbids.json", &forbids(r#"["deflate","fixed-rng"]"#));
+    dir.write("a/mixed.json", &mixed);
+    dir.write(
+        "a/runs.json",
+        &vector(
+            "b64url.encode",
+            r#"{"bytes_hex":"66"}"#,
+            r#"{"ok":true,"b64u":"Zg"}"#,
+        ),
+    );
+    let report = run_dir_with(&dir.0, &["deflate"]);
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(report.passed.values().sum::<usize>(), 1, "{report:?}");
+    assert_eq!(
+        report.skipped,
+        [
+            "a/forbids.json: SKIPPED (needs feature `deflate` off)",
+            "a/mixed.json: SKIPPED (needs feature `insecure-test-vectors`; needs feature `deflate` off)",
+        ]
+    );
+    let reasons: Vec<Option<&str>> = report
+        .results
+        .iter()
+        .map(|entry| entry.get("reason").and_then(Value::as_str))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            Some("feature:!deflate"),
+            Some("feature:fixed-rng,!deflate"),
+            None
+        ]
+    );
+    for entry in &report.results[..2] {
+        assert_eq!(entry.get("status").and_then(Value::as_str), Some("skipped"));
+        assert!(entry.get("actual").is_none(), "{entry:?}");
+    }
+}
+
+/// The schema rules of `features_absent` (ADR 0056 §1, §3, §4): known
+/// names, each once, at least one, none also in `features`; and a
+/// `compress` vector may list `deflate` in either.
+#[test]
+fn features_absent_is_strict() {
+    let input = jwe_decrypt_input(JWE_A3, JWE_A3_KEY, "");
+    let ok = &format!(r#"{{"ok":true,"plaintext_b64u":"{JWE_A3_PLAINTEXT_B64U}","recipient":0}}"#);
+    let absent = |vector: &str, list: &str| {
+        vector.replacen(
+            r#""operation""#,
+            &format!(r#""features_absent":{list},"operation""#),
+            1,
+        )
+    };
+    let decrypt = vector("jwe.decrypt", &input, ok);
+    for (what, json, needle) in [
+        (
+            "an unknown name",
+            absent(&decrypt, r#"["sha1"]"#),
+            "/features_absent/0: must be one of",
+        ),
+        (
+            "a name listed twice",
+            absent(&decrypt, r#"["deflate","deflate"]"#),
+            "/features_absent/1: listed twice",
+        ),
+        (
+            "an empty list",
+            absent(&decrypt, "[]"),
+            "/features_absent: must not be empty",
+        ),
+        (
+            "not an array",
+            absent(&decrypt, r#""deflate""#),
+            "/features_absent: must be an array",
+        ),
+        (
+            "a name in both lists",
+            absent(&with_features(&decrypt, r#"["deflate"]"#), r#"["deflate"]"#),
+            "/features_absent: \"deflate\" is listed in `features` too",
+        ),
+        (
+            "a misspelled member",
+            decrypt.replacen(
+                r#""operation""#,
+                r#""feature_absent":["deflate"],"operation""#,
+                1,
+            ),
+            "/feature_absent: unknown member",
+        ),
+        (
+            "compress with only fixed-rng absent",
+            absent(
+                &vector(
+                    "jwe.encrypt",
+                    &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","compress":true"#),
+                    r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+                ),
+                r#"["fixed-rng"]"#,
+            ),
+            "needs \"deflate\" listed in `features` or `features_absent`",
+        ),
+    ] {
+        fails_naming_source(&format!("schema ({what}).json"), &json, needle);
+    }
+    // `compress` with `deflate` absent: UnsupportedAlgorithm without the
+    // codec (ADR 0017 §5, ADR 0030 §4), skipped where it is built in.
+    let compress = absent(
+        &vector(
+            "jwe.encrypt",
+            &jwe_encrypt_input("compact", &jwe_a3_recipient(), r#","compress":true"#),
+            r#"{"ok":false,"error":"UnsupportedAlgorithm"}"#,
+        ),
+        r#"["deflate"]"#,
+    );
+    match (
+        check_vector("compress.json", compress.as_bytes()),
+        cfg!(feature = "deflate"),
+    ) {
+        (Ok(Passed::Skipped { present, .. }), true) => assert_eq!(present, ["deflate"]),
+        (Ok(Passed::Ran { negative: true, .. }), false) => {}
+        (other, deflate) => panic!("with deflate {deflate}: {other:?}"),
+    }
 }
 
 /// Every JWE vector is binding-ready (see [`binding_ready`]): the bindings
@@ -6739,4 +7591,776 @@ fn jwt_runner_never_reads_the_wall_clock() {
     // valid only because the runner's clock is `now`.
     let valid = vector("jwt.validate", &jwt_hs256(""), &jwt_validated("HS256", ""));
     assert!(check_vector("clock.json", valid.as_bytes()).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Results files (ADR 0034 §2): conformance/schema/results.schema.json and a
+// validator for it.
+// ---------------------------------------------------------------------------
+
+/// `conformance/schema/results.schema.json`, parsed by `serde_json`, the
+/// dev-only JSON oracle (ADR 0016 §5), so a results file is checked by a
+/// parser independent of the writer's.
+fn results_schema() -> serde_json::Value {
+    let bytes = std::fs::read(conformance_dir().join("schema/results.schema.json")).unwrap();
+    serde_json::from_slice(&bytes).expect("results.schema.json is JSON")
+}
+
+/// The JSON Schema keywords [`check_against`] implements. A schema node
+/// with any other keyword fails [`results_schema_keywords`], so the
+/// validator can never skip a rule the schema states.
+const RESULTS_SCHEMA_KEYWORDS: &[&str] = &[
+    "$schema",
+    "title",
+    "description",
+    "$defs",
+    "$ref",
+    "type",
+    "required",
+    "additionalProperties",
+    "properties",
+    "items",
+    "enum",
+    "const",
+    "minLength",
+    "minItems",
+    "uniqueItems",
+    "pattern",
+    "oneOf",
+];
+
+/// `$defs/id/pattern`: a path under `conformance/vectors/` (no leading `/`,
+/// no `\`, no `#`) of a `.json` file, then `#0` (ADR 0045 §4).
+const RESULT_ID_PATTERN: &str = "^[^#/\\\\][^#\\\\]*\\.json#0$";
+
+/// `$defs/skipped/properties/reason/pattern`: `feature:` and the missing
+/// feature names, comma-separated (ADR 0034 §3).
+const SKIP_REASON_PATTERN: &str = "^feature:!?[a-z0-9-]+(,!?[a-z0-9-]+)*$";
+
+/// `properties/vectors_digest/pattern`: a SHA-256 digest as exactly 64
+/// lowercase hex characters, no prefix or separator (ADR 0060 §1).
+const VECTORS_DIGEST_PATTERN: &str = "^[0-9a-f]{64}$";
+
+/// [`VECTORS_DIGEST_PATTERN`], by hand (no regex crate, ADR 0016).
+fn is_vectors_digest(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// [`RESULT_ID_PATTERN`], by hand (no regex crate, ADR 0016).
+fn is_result_id(s: &str) -> bool {
+    let Some(path) = s.strip_suffix("#0") else {
+        return false;
+    };
+    let first_ok = path
+        .chars()
+        .next()
+        .is_some_and(|c| !matches!(c, '#' | '/' | '\\'));
+    first_ok
+        && !path.contains(['#', '\\'])
+        && path
+            .strip_suffix(".json")
+            .is_some_and(|stem| !stem.is_empty())
+}
+
+/// [`SKIP_REASON_PATTERN`], by hand: each name may carry a `!` (a
+/// `features_absent` name the build enables, ADR 0056 §2).
+fn is_skip_reason(s: &str) -> bool {
+    s.strip_prefix("feature:").is_some_and(|names| {
+        names.split(',').all(|name| {
+            let name = name.strip_prefix('!').unwrap_or(name);
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+    })
+}
+
+/// The predicate of a `pattern` the results schema uses; `None` for any
+/// other, which [`check_against`] refuses rather than ignores.
+fn results_pattern(pattern: &str) -> Option<fn(&str) -> bool> {
+    match pattern {
+        RESULT_ID_PATTERN => Some(is_result_id),
+        SKIP_REASON_PATTERN => Some(is_skip_reason),
+        VECTORS_DIGEST_PATTERN => Some(is_vectors_digest),
+        _ => None,
+    }
+}
+
+/// Every keyword of every schema node in `schema` is one
+/// [`RESULTS_SCHEMA_KEYWORDS`] names, and every `pattern` one
+/// [`results_pattern`] knows. `enum` and `const` hold values, not schemas.
+fn results_schema_keywords(schema: &serde_json::Value, pointer: &str) -> Result<(), String> {
+    let node = schema
+        .as_object()
+        .ok_or_else(|| format!("{pointer}: a schema node must be an object"))?;
+    for (keyword, value) in node {
+        if !RESULTS_SCHEMA_KEYWORDS.contains(&keyword.as_str()) {
+            return Err(format!("{pointer}: unsupported keyword `{keyword}`"));
+        }
+        let here = format!("{pointer}/{keyword}");
+        match keyword.as_str() {
+            "properties" | "$defs" => {
+                for (name, sub) in value.as_object().ok_or(format!("{here}: not an object"))? {
+                    results_schema_keywords(sub, &format!("{here}/{name}"))?;
+                }
+            }
+            "items" => results_schema_keywords(value, &here)?,
+            "oneOf" => {
+                for (i, sub) in value
+                    .as_array()
+                    .ok_or(format!("{here}: not an array"))?
+                    .iter()
+                    .enumerate()
+                {
+                    results_schema_keywords(sub, &format!("{here}/{i}"))?;
+                }
+            }
+            "additionalProperties" if value != &serde_json::Value::Bool(false) => {
+                return Err(format!("{here}: only `false` is supported"));
+            }
+            "pattern" => {
+                let pattern = value.as_str().ok_or(format!("{here}: not a string"))?;
+                if results_pattern(pattern).is_none() {
+                    return Err(format!("{here}: no hand-written check for {pattern:?}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The JSON Schema type name of `value` (`integer` for a whole number).
+fn json_type(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => "integer",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// Validates `value` against the schema node `schema` of the schema
+/// document `root` (JSON Schema 2020-12, restricted to
+/// [`RESULTS_SCHEMA_KEYWORDS`]). The error names the JSON pointer of the
+/// first violation.
+fn check_against(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+    pointer: &str,
+) -> Result<(), String> {
+    let at = |problem: String| Err(format!("{pointer}: {problem}"));
+    if let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        let name = reference
+            .strip_prefix("#/$defs/")
+            .ok_or(format!("{pointer}: unsupported $ref {reference}"))?;
+        let target = root
+            .get("$defs")
+            .and_then(|defs| defs.get(name))
+            .ok_or(format!("{pointer}: no $defs/{name}"))?;
+        check_against(root, target, value, pointer)?;
+    }
+    if let Some(kind) = schema.get("type").and_then(serde_json::Value::as_str) {
+        let actual = json_type(value);
+        if actual != kind && !(kind == "number" && actual == "integer") {
+            return at(format!("must be of type {kind}, is {actual}"));
+        }
+    }
+    if let Some(allowed) = schema.get("enum").and_then(serde_json::Value::as_array)
+        && !allowed.contains(value)
+    {
+        return at(format!(
+            "must be one of {}",
+            serde_json::Value::from(allowed.clone())
+        ));
+    }
+    if let Some(constant) = schema.get("const")
+        && value != constant
+    {
+        return at(format!("must be {constant}"));
+    }
+    if let (Some(min), Some(s)) = (
+        schema.get("minLength").and_then(serde_json::Value::as_u64),
+        value.as_str(),
+    ) && (s.chars().count() as u64) < min
+    {
+        return at(format!("must have at least {min} character(s)"));
+    }
+    if let (Some(pattern), Some(s)) = (
+        schema.get("pattern").and_then(serde_json::Value::as_str),
+        value.as_str(),
+    ) {
+        let matches = results_pattern(pattern).ok_or(format!("{pointer}: pattern {pattern:?}"))?;
+        if !matches(s) {
+            return at(format!("{s:?} must match {pattern}"));
+        }
+    }
+    if let Some(items) = value.as_array() {
+        if let Some(min) = schema.get("minItems").and_then(serde_json::Value::as_u64)
+            && (items.len() as u64) < min
+        {
+            return at(format!("must have at least {min} item(s)"));
+        }
+        if schema.get("uniqueItems") == Some(&serde_json::Value::Bool(true)) {
+            for (i, item) in items.iter().enumerate() {
+                if items[..i].contains(item) {
+                    return at(format!("item {i} repeats an earlier one (uniqueItems)"));
+                }
+            }
+        }
+        if let Some(item_schema) = schema.get("items") {
+            for (i, item) in items.iter().enumerate() {
+                check_against(root, item_schema, item, &format!("{pointer}/{i}"))?;
+            }
+        }
+    }
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+            for name in required.iter().filter_map(serde_json::Value::as_str) {
+                if !object.contains_key(name) {
+                    return at(format!("missing required member `{name}`"));
+                }
+            }
+        }
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object);
+        for (name, member) in object {
+            match properties.and_then(|p| p.get(name)) {
+                Some(member_schema) => {
+                    check_against(root, member_schema, member, &format!("{pointer}/{name}"))?;
+                }
+                None if schema.get("additionalProperties")
+                    == Some(&serde_json::Value::Bool(false)) =>
+                {
+                    return at(format!("unknown member `{name}`"));
+                }
+                None => {}
+            }
+        }
+    }
+    if let Some(branches) = schema.get("oneOf").and_then(serde_json::Value::as_array) {
+        let errors: Vec<String> = branches
+            .iter()
+            .filter_map(|branch| check_against(root, branch, value, pointer).err())
+            .collect();
+        let matched = branches.len() - errors.len();
+        if matched != 1 {
+            return at(format!(
+                "must match exactly one oneOf branch, matches {matched} ({})",
+                errors.join("; ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates a results file's text against `results.schema.json`, parsing
+/// it with `serde_json`.
+fn check_results_text(text: &[u8]) -> Result<(), String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(text).map_err(|e| format!("not JSON: {e}"))?;
+    let schema = results_schema();
+    check_against(&schema, &schema, &value, "")
+}
+
+/// The schema uses only what the validator implements, so no rule of it is
+/// silently ignored; and the two hand-written patterns accept and refuse
+/// what their regular expressions do.
+#[test]
+fn results_schema_uses_only_supported_keywords() {
+    results_schema_keywords(&results_schema(), "").unwrap();
+    for (id, ok) in [
+        ("jws-rfc7515/a1.json#0", true),
+        ("a.json#0", true),
+        ("third_party/rfc7520/jws/4-1.json#0", true),
+        ("a.json#1", false),
+        ("a.json", false),
+        (".json#0", false),
+        ("/a.json#0", false),
+        ("a\\b.json#0", false),
+        ("a#b.json#0", false),
+        ("a.jsonx#0", false),
+        ("", false),
+    ] {
+        assert_eq!(is_result_id(id), ok, "{id:?}");
+    }
+    for (reason, ok) in [
+        ("feature:deflate", true),
+        ("feature:deflate,fixed-rng", true),
+        ("feature:!deflate", true),
+        ("feature:fixed-rng,!deflate", true),
+        ("feature:!deflate,!fixed-rng", true),
+        ("feature:!", false),
+        ("feature:!!deflate", false),
+        ("feature:deflate!", false),
+        ("feature:", false),
+        ("feature:deflate,", false),
+        ("feature:Deflate", false),
+        ("feature: deflate", false),
+        ("deflate", false),
+    ] {
+        assert_eq!(is_skip_reason(reason), ok, "{reason:?}");
+    }
+    let hex64 = "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1";
+    for (digest, ok) in [
+        (hex64.to_owned(), true),
+        ("0".repeat(64), true),
+        (hex64.to_uppercase(), false),
+        (hex64[..63].to_owned(), false),
+        (format!("{hex64}0"), false),
+        (format!("sha256:{}", &hex64[7..]), false),
+        (hex64.replacen('9', "g", 1), false),
+        (format!(" {}", &hex64[1..]), false),
+        (String::new(), false),
+    ] {
+        assert_eq!(is_vectors_digest(&digest), ok, "{digest:?}");
+    }
+    // An unknown keyword or pattern is refused, not ignored.
+    let unknown: serde_json::Value =
+        serde_json::from_str(r#"{"type":"string","maxLength":3}"#).unwrap();
+    assert!(results_schema_keywords(&unknown, "").is_err());
+    let pattern: serde_json::Value =
+        serde_json::from_str(r#"{"type":"string","pattern":"^a$"}"#).unwrap();
+    assert!(results_schema_keywords(&pattern, "").is_err());
+}
+
+/// The schema's `features` enum is the runner's [`FEATURES`] table, in
+/// schema order, and its `runner` enum names the reference run first
+/// (ADR 0034 §2, §4).
+#[test]
+fn results_schema_agrees_with_the_runner() {
+    let schema = results_schema();
+    let features: Vec<&str> = schema["properties"]["features"]["items"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(features, feature_names());
+    let runners = schema["properties"]["runner"]["enum"].as_array().unwrap();
+    assert_eq!(runners.first().and_then(|r| r.as_str()), Some(RUST_CORE));
+}
+
+/// The runner name of this file's results (ADR 0034 §2).
+const RUST_CORE: &str = "rust-core";
+
+/// A minimal results file with one result of each status.
+const RESULTS_EXAMPLE: &str = r#"{"runner":"node","polyjose":"0.1.0","vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","features":[],"error_codes":["InvalidBase64","InvalidKey"],"results":[{"id":"a/b.json#0","source":"RFC 4648 §10","op":"b64url.decode","status":"pass","actual":{"ok":false,"error":"InvalidBase64"}},{"id":"a/c.json#0","op":"jwe.encrypt","status":"skipped","reason":"feature:fixed-rng"},{"id":"a/d.json#0","status":"fail","reason":"not JSON"},{"id":"a/e.json#0","op":"jws.verify","status":"fail","actual":{"ok":true},"reason":"expected error InvalidKey"}]}"#;
+
+/// The validator accepts a valid results file and refuses each way one can
+/// break the schema (so the check of the reference file is not vacuous).
+#[test]
+fn results_validator_refuses_invalid_files() {
+    check_results_text(RESULTS_EXAMPLE.as_bytes()).unwrap();
+    check_results_text(br#"{"runner":"rust-core","polyjose":"0.1.0","vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","features":["deflate","fixed-rng"],"error_codes":["X"],"results":[]}"#).unwrap();
+    for (old, new, problem) in [
+        (
+            r#""runner":"node","#,
+            "",
+            "missing required member `runner`",
+        ),
+        (r#""runner":"node""#, r#""runner":"node-x86_64""#, "/runner"),
+        (r#""features":[]"#, r#""features":["zlib"]"#, "/features/0"),
+        (
+            r#""features":[]"#,
+            r#""features":["deflate","deflate"]"#,
+            "uniqueItems",
+        ),
+        (
+            r#""error_codes":["InvalidBase64","InvalidKey"]"#,
+            r#""error_codes":[]"#,
+            "at least 1 item",
+        ),
+        (r#""InvalidKey"]"#, r#""InvalidBase64"]"#, "uniqueItems"),
+        (r#""polyjose":"0.1.0""#, r#""polyjose":"""#, "/polyjose"),
+        (
+            r#""vectors_digest":"9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1","#,
+            "",
+            "missing required member `vectors_digest`",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#""9A06F1EFDD269176088CB0E6BFC6A7E4D4F74AA3D1B1B8FC6C879FDBB82AC7D1""#,
+            "/vectors_digest",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d10""#,
+            "/vectors_digest",
+        ),
+        (
+            r#""9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1""#,
+            r#"7"#,
+            "/vectors_digest",
+        ),
+        (
+            r#""results":["#,
+            r#""extra":1,"results":["#,
+            "unknown member `extra`",
+        ),
+        (r#""a/b.json#0""#, r#""a/b.json""#, "/results/0"),
+        (r#""a/b.json#0""#, r#""a/b.json#1""#, "/results/0"),
+        (r#""status":"pass""#, r#""status":"passed""#, "/results/0"),
+        (
+            r#","actual":{"ok":false,"error":"InvalidBase64"}}"#,
+            "}",
+            "/results/0",
+        ),
+        (
+            r#""actual":{"ok":false,"error":"InvalidBase64"}"#,
+            r#""actual":{"ok":false}"#,
+            "/results/0",
+        ),
+        (
+            r#""actual":{"ok":false,"error":"InvalidBase64"}"#,
+            r#""actual":{"ok":true,"error":"InvalidBase64"}"#,
+            "/results/0",
+        ),
+        (
+            r#""actual":{"ok":false,"error":"InvalidBase64"}"#,
+            r#""actual":{"ok":false,"error":"InvalidBase64"},"reason":"x""#,
+            "/results/0",
+        ),
+        (
+            r#""reason":"feature:fixed-rng""#,
+            r#""reason":"fixed-rng""#,
+            "/results/1",
+        ),
+        (
+            r#""reason":"feature:fixed-rng""#,
+            r#""reason":"feature:fixed-rng","actual":{"ok":true}"#,
+            "/results/1",
+        ),
+        (r#""op":"jwe.encrypt","#, "", "/results/1"),
+        (
+            r#""status":"fail","reason":"not JSON""#,
+            r#""status":"fail""#,
+            "/results/2",
+        ),
+    ] {
+        assert_eq!(RESULTS_EXAMPLE.matches(old).count(), 1, "{old}");
+        let broken = RESULTS_EXAMPLE.replacen(old, new, 1);
+        let err = check_results_text(broken.as_bytes()).expect_err(&broken);
+        assert!(err.contains(problem), "{old} -> {new}: {err}");
+    }
+}
+
+/// `run_dir` records one result per vector file (ADR 0034 §2): the id is
+/// the path under the directory plus `#0` (ADR 0045 §4); a vector that ran
+/// records its outcome as `actual`, passing or not; a skip names the
+/// missing features in the vector's order; a broken file fails with a
+/// reason, and with `op` when it names one.
+#[test]
+fn run_dir_records_one_result_per_vector() {
+    let dir = TempDir::new("results");
+    let encode = vector(
+        "b64url.encode",
+        r#"{"bytes_hex":"66"}"#,
+        r#"{"ok":true,"b64u":"Zg"}"#,
+    );
+    dir.write("a/ok.json", &encode);
+    dir.write(
+        "a/negative.json",
+        &vector(
+            "b64url.decode",
+            r#"{"b64u":"Zg="}"#,
+            r#"{"ok":false,"error":"InvalidBase64"}"#,
+        ),
+    );
+    dir.write(
+        "b/wrong.json",
+        &vector(
+            "b64url.decode",
+            r#"{"b64u":"Zg="}"#,
+            r#"{"ok":false,"error":"InvalidKey"}"#,
+        ),
+    );
+    dir.write(
+        "b/needs.json",
+        &with_features(
+            &vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            r#"["fixed-rng","deflate"]"#,
+        ),
+    );
+    dir.write("c/invalid.json", &encode.replace(r#""66""#, r#""6""#));
+    dir.write(
+        "c/unknown.json",
+        &vector("jws.frobnicate", "{}", r#"{"ok":true}"#),
+    );
+    dir.write("c/broken.json", "{");
+    dir.write("c/LICENSE", "not a vector");
+    let report = run_dir_with(&dir.0, &[]);
+    assert!(report.complete, "{report:?}");
+    let got: Vec<String> = report.results.iter().map(Object::to_json).collect();
+    let expected = [
+        format!(
+            r#"{{"id":"a/negative.json#0","source":"{SOURCE}","op":"b64url.decode","status":"pass","actual":{{"ok":false,"error":"InvalidBase64"}}}}"#
+        ),
+        format!(
+            r#"{{"id":"a/ok.json#0","source":"{SOURCE}","op":"b64url.encode","status":"pass","actual":{{"ok":true}}}}"#
+        ),
+        format!(
+            r#"{{"id":"b/needs.json#0","source":"{SOURCE}","op":"jwe.decrypt","status":"skipped","reason":"feature:fixed-rng,deflate"}}"#
+        ),
+    ];
+    assert_eq!(got.len(), 7, "{got:#?}");
+    assert_eq!(got[..3], expected, "{got:#?}");
+    let fails: Vec<&Object> = report.results[3..].iter().collect();
+    let ids: Vec<&str> = fails
+        .iter()
+        .map(|r| r.get("id").and_then(Value::as_str).unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "b/wrong.json#0",
+            "c/broken.json#0",
+            "c/invalid.json#0",
+            "c/unknown.json#0"
+        ]
+    );
+    for result in &fails {
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("fail"));
+        let reason = result.get("reason").and_then(Value::as_str).unwrap();
+        assert!(report.failures.iter().any(|f| f == reason), "{reason}");
+    }
+    // The wrong expectation ran: its outcome is recorded.
+    assert_eq!(
+        fails[0].get("actual").map(Value::to_json).as_deref(),
+        Some(r#"{"ok":false,"error":"InvalidBase64"}"#)
+    );
+    // The unparseable file names no op; the others name theirs. None of the
+    // three ran, so none has an outcome.
+    let ops: Vec<Option<&str>> = fails[1..]
+        .iter()
+        .map(|r| r.get("op").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ops, [None, Some("b64url.encode"), Some("jws.frobnicate")]);
+    assert!(fails[1..].iter().all(|r| !r.contains("actual")));
+    // Each entry is schema-valid.
+    let document = format!(
+        r#"{{"runner":"rust-core","polyjose":"0.1.0","vectors_digest":"{}","features":[],"error_codes":["X"],"results":[{}]}}"#,
+        report.vectors_digest().unwrap(),
+        got.join(",")
+    );
+    check_results_text(document.as_bytes()).unwrap();
+
+    // A walk that finds nothing is incomplete, so no results file is
+    // written from it.
+    let empty = TempDir::new("results-empty");
+    let report = run_dir_with(&empty.0, &[]);
+    assert!(!report.complete && report.results.is_empty(), "{report:?}");
+}
+
+/// Tester edge corpus for ADR 0060 §2: non-ASCII ids sorted by UTF-8 bytes (U+FF61 is
+/// EF BD A1, U+1F600 is F0 9F 98 80, so U+FF61 first), bytes that are not UTF-8 hashed
+/// as read, a `jws-x/` before `jws/` pair, and a symbolic link that gets no line. The
+/// expected digest is from an independent Python `hashlib` walk and the POSIX shell
+/// reference of the ADR.
+#[test]
+fn vectors_digest_edge_corpus_matches_the_independent_oracle() {
+    let dir = TempDir::new("digest-edge");
+    let files: [(&str, &[u8]); 7] = [
+        ("a.json", b"{}"),
+        ("jws/b.json", b"{}\n"),
+        ("jws-x/c.json", b"\xef\xbb\xbf{}"),
+        ("\u{e9}/d.json", b"{}"),
+        ("\u{ff61}.json", b"1"),
+        ("\u{1f600}.json", b"2"),
+        ("bad.json", b"\xff\xfe{}"),
+    ];
+    for (relative, bytes) in files {
+        let path = dir.0.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+    std::fs::write(dir.0.join("README.md"), "notes").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("a.json", dir.0.join("link.json")).unwrap();
+    let report = run_dir_with(&dir.0, &[]);
+    // The link is a walk failure (the run is incomplete, so no results file), not a digest line.
+    #[cfg(unix)]
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.contains("link.json: symbolic links are not allowed")),
+        "{:?}",
+        report.failures
+    );
+    assert!(!report.complete);
+    assert_eq!(report.digest_lines.len(), 7);
+    assert_eq!(
+        report.vectors_digest().as_deref(),
+        Some("c743cb52d786b61176972303ee0cfa56b8940d655723a9a3debfe691760ead93")
+    );
+}
+
+/// The worked example of ADR 0060 §4: one line per `*.json` file read
+/// (`README.md` is not a vector), `<id>` TAB `<sha256 of the raw bytes>` LF,
+/// sorted by bytes (`jws-x/` before `jws/`, unlike `Path` order), whatever
+/// the vector's own result (none of these is a valid vector); then the
+/// SHA-256 of the lines. The bytes are hashed as read: the BOM and the LF
+/// stay.
+#[test]
+fn vectors_digest_follows_the_adr_0060_worked_example() {
+    let dir = TempDir::new("digest-example");
+    dir.write("a.json", "{}");
+    dir.write("jws/b.json", "{}\n");
+    dir.write("jws-x/c.json", "\u{feff}{}");
+    dir.write("README.md", "notes");
+    let report = run_dir_with(&dir.0, &[]);
+    assert!(report.complete, "{report:?}");
+    assert_eq!(report.results.len(), 3);
+    let lines: Vec<String> = sorted_digest_lines(&report.digest_lines)
+        .into_iter()
+        .map(|line| String::from_utf8(line).unwrap())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "a.json#0\t44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\n",
+            "jws-x/c.json#0\taa25e978046d680ef8740d837e6de5bc1e2a2dc6089dbda1012544b538d53f65\n",
+            "jws/b.json#0\tca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356\n",
+        ]
+    );
+    assert_eq!(
+        report.vectors_digest().as_deref(),
+        Some("9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1")
+    );
+    // The lines are sorted for the digest, so the order files were read in
+    // does not matter.
+    let mut reversed = report.digest_lines.clone();
+    reversed.reverse();
+    assert_eq!(
+        sorted_digest_lines(&reversed),
+        sorted_digest_lines(&report.digest_lines)
+    );
+
+    // The digest is written into the results file.
+    let out = TempDir::new("digest-example-out");
+    let path = write_results(&out.0, "rust-core.json", &[], &report)
+        .unwrap()
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    check_results_text(text.as_bytes()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        value["vectors_digest"],
+        "9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1"
+    );
+}
+
+/// An empty corpus is invalid (ADR 0060 §3): a run that read no vector
+/// file has no digest and writes no results file, removing an earlier one,
+/// even when its walk was complete.
+#[test]
+fn a_run_that_read_no_vector_file_writes_no_results() {
+    let nothing = Report {
+        complete: true,
+        ..Report::default()
+    };
+    assert_eq!(nothing.vectors_digest(), None);
+    let out = TempDir::new("digest-empty-out");
+    out.write("rust-core.json", "stale");
+    assert_eq!(
+        write_results(&out.0, "rust-core.json", &[], &nothing).unwrap(),
+        None
+    );
+    assert!(!out.0.join("rust-core.json").exists());
+}
+
+/// The writer names the file by the build's features (ADR 0034 §4: only
+/// the default build is the `rust-core` reference), writes a file that
+/// validates against `results.schema.json`, one result per line, and
+/// removes an earlier file instead of writing when the walk was incomplete.
+#[test]
+fn results_writer_writes_the_reference_file() {
+    assert_eq!(results_file_name(&[]), "rust-core.json");
+    assert_eq!(
+        results_file_name(&["fixed-rng"]),
+        "rust-core-fixed-rng.json"
+    );
+    assert_eq!(
+        results_file_name(&["deflate", "fixed-rng"]),
+        "rust-core-deflate-fixed-rng.json"
+    );
+
+    let vectors = TempDir::new("writer-vectors");
+    vectors.write(
+        "x/ok.json",
+        &vector(
+            "b64url.encode",
+            r#"{"bytes_hex":"66"}"#,
+            r#"{"ok":true,"b64u":"Zg"}"#,
+        ),
+    );
+    vectors.write(
+        "x/needs.json",
+        &with_features(
+            &vector(
+                "jwe.decrypt",
+                &jwe_decrypt_input(JWE_A3, JWE_A3_KEY, ""),
+                r#"{"ok":false,"error":"InvalidKey"}"#,
+            ),
+            r#"["deflate"]"#,
+        ),
+    );
+    let out = TempDir::new("writer-out");
+    let target = out.0.join("conformance");
+    let report = run_dir_with(&vectors.0, &[]);
+    let path = write_results(&target, "rust-core.json", &[], &report)
+        .unwrap()
+        .expect("a complete report is written");
+    let text = std::fs::read_to_string(&path).unwrap();
+    check_results_text(text.as_bytes()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["runner"], "rust-core");
+    assert_eq!(value["polyjose"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(value["features"], serde_json::json!([]));
+    assert_eq!(value["error_codes"], serde_json::json!(Error::CODES));
+    assert_eq!(value["results"].as_array().unwrap().len(), 2);
+    // Files are sorted by path, so x/needs.json comes first.
+    assert_eq!(value["results"][0]["reason"], "feature:deflate");
+    assert_eq!(value["results"][1]["id"], "x/ok.json#0");
+    assert_eq!(
+        text.lines().filter(|l| l.contains(r#""id":"#)).count(),
+        2,
+        "one result per line: {text}"
+    );
+    assert!(
+        std::fs::read_dir(&target).unwrap().count() == 1,
+        "no temporary file left"
+    );
+
+    // With features, the features are recorded.
+    let path = write_results(&target, "rust-core-deflate.json", &["deflate"], &report)
+        .unwrap()
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    check_results_text(text.as_bytes()).unwrap();
+    assert!(text.contains(r#""features": ["deflate"]"#), "{text}");
+
+    // An incomplete walk removes the earlier file and writes nothing.
+    let incomplete = run_dir_with(&out.0.join("missing"), &[]);
+    assert_eq!(
+        write_results(&target, "rust-core.json", &[], &incomplete).unwrap(),
+        None
+    );
+    assert!(!target.join("rust-core.json").exists());
+    assert_eq!(
+        write_results(&target, "rust-core.json", &[], &incomplete).unwrap(),
+        None,
+        "nothing to remove is fine"
+    );
 }

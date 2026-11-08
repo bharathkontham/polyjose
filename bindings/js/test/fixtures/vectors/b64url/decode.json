@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): b64url.decode to hex",
+  "operation": "b64url.decode",
+  "input": {
+    "b64u": "-w"
+  },
+  "expect": {
+    "ok": true,
+    "bytes_hex": "fb"
+  }
+}

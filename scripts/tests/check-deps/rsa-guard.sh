@@ -4,6 +4,10 @@
 # make check-deps.sh fail with the guard's own message (and no other check's):
 #   - RSA private-key and signing types and an Oaep decryption in crates/polyjose/src, and the
 #     same in a binding (bindings/**);
+#   - the same in a workspace member outside bindings/: the feature 0013 security audit's L1 plant
+#     (a bin-only tools/evil member with an optional rsa and polyjose behind a feature, compiling
+#     rsa::pkcs1v15::SigningKey), and a member whose [[bin]] path is outside its own directory
+#     (the scan reads every member's directory and target directories from cargo metadata);
 #   - the security audit's reproductions of ADR 0049 §1, as far as a text scan can see them: an rsa
 #     alias in a brace use tree (`use {rsa as r};`), `#[path]` (also through cfg_attr) and
 #     `include!` naming a file outside the scanned roots, and an out-of-line child module of
@@ -25,6 +29,21 @@ export LC_ALL=C
 # Every FAIL line of a source case comes from check 9.
 src_fail='^FAIL: RSA private-key or signing use'
 jws=crates/polyjose/src/jws.rs
+
+# The workspace's rsa dependency line (ADR 0055 §4 pins it exactly) and the version locked for it,
+# read from the tree under test instead of written here, so a bump of the pin never breaks a case:
+# the renamed-rsa plants use the same requirement (cargo allows one 0.10 rsa per lock file), and
+# the cases that edit the line find it as it stands.
+[ "$(grep -c '^rsa = ' "$base/Cargo.toml")" -eq 1 ] \
+  || lib_die "expected exactly one 'rsa = ' line ([workspace.dependencies]) in Cargo.toml"
+rsa_line=$(grep '^rsa = ' "$base/Cargo.toml")
+rsa_req=$(printf '%s\n' "$rsa_line" | sed -nE 's/^rsa = \{.*version = "([^"]+)".* \}$/\1/p')
+[ -n "$rsa_req" ] || lib_die "Cargo.toml's rsa line is not an inline table with a version: $rsa_line"
+rsa_locked=$(awk '/^name = "rsa"$/ { getline; if (sub(/^version = "/, "") && sub(/"$/, "")) print }' "$base/Cargo.lock")
+[ -n "$rsa_locked" ] && [ "$(printf '%s\n' "$rsa_locked" | grep -c .)" -eq 1 ] \
+  || lib_die "expected exactly one rsa package in Cargo.lock"
+# shellcheck disable=SC2016 # a sed bracket expression listing ERE metacharacters, not an expansion
+rsa_locked_ere=$(printf '%s\n' "$rsa_locked" | sed 's/[][\.*^$()+?{}|]/\\&/g')
 
 new_case clean
 expect_pass "unchanged tree"
@@ -93,6 +112,50 @@ expect_fail "RsaPrivateKey in a binding" "bindings/wasm/src/lib.rs:[0-9]+: RsaPr
 new_case binding-new-file
 append_to bindings/ffi/src/sign/rsa.rs 'pub fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
 expect_fail "rsa SigningKey in a new binding file" "bindings/ffi/src/sign/rsa.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+# --- Check 9: workspace members outside bindings/ (feature 0013 security audit L1) ----------------
+# The audit's plant, as written: build tooling under tools/, which no shipped library links, still
+# must not compile RSA private-key code (the symbol check fails closed on it too, rsa-symbols.sh).
+# The plant is a workspace member, so it takes rsa from [workspace.dependencies] (the pin of ADR
+# 0055 §4, default features off) instead of a version written here, which a bump of that pin
+# would make unresolvable (cargo allows one 0.10 rsa per lock file).
+evil_manifest='[package]
+name = "polyjose-evil-tool"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rsa = { workspace = true, optional = true }
+polyjose = { path = "../../crates/polyjose", optional = true }
+
+[features]
+signer = ["dep:rsa", "dep:polyjose"]
+'
+evil_main='#[cfg(feature = "signer")]
+pub fn sign(k: &rsa::RsaPrivateKey, m: &[u8]) -> Vec<u8> {
+    use rsa::pkcs1v15::SigningKey;
+    let _ = (SigningKey::<rsa::sha2::Sha256>::new_unprefixed(k.clone()), m); Vec::new()
+}
+fn main() {}'
+
+new_case tool-member
+append_to tools/evil/Cargo.toml "$evil_manifest"'[[bin]]
+name = "evil"
+path = "src/main.rs"'
+append_to tools/evil/src/main.rs "$evil_main"
+replace_in Cargo.toml 'members = [' 'members = ["tools/evil", '
+expect_fail "audit L1: rsa::pkcs1v15::SigningKey in a bin-only tools/ member" \
+  "^  - tools/evil/src/main\\.rs:3: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+new_case tool-member-bin-elsewhere
+append_to tools/evil/Cargo.toml "$evil_manifest"'[[bin]]
+name = "evil"
+path = "../../misc/evil.rs"'
+append_to misc/evil.rs "$evil_main"
+replace_in Cargo.toml 'members = [' 'members = ["tools/evil", '
+expect_fail "a tools/ member whose [[bin]] is outside its directory" \
+  "^  - misc/evil\\.rs:2: RsaPrivateKey" "$src_fail"
 
 # --- Check 9: paths split across lines, by whitespace or by a comment ------------------------------
 # Rust lets whitespace and comments sit between the tokens of a path, so `rsa`, `::` and the item
@@ -442,17 +505,16 @@ expect_fail "sha1 dependency, allowlisted and credited" "^FAIL: sha1 is in the c
 # `foo = { package = "rsa" }` lets code write `foo::pkcs1v15::SigningKey`, which no source rule can
 # tie to rsa, so the rename itself fails, in any workspace member and any dependency table.
 rename_fail='^FAIL: the rsa package is a dependency under another name'
-rsa_pub='rsa_pub = { package = "rsa", version = "=0.10.0-rc.21", default-features = false }'
+rsa_pub='rsa_pub = { package = "rsa", version = "'"$rsa_req"'", default-features = false }'
 
 new_case renamed-binding
-replace_in bindings/wasm/Cargo.toml 'wasm-bindgen = "0.2.130"' $'wasm-bindgen = "0.2.130"\n'"$rsa_pub"
+replace_in bindings/wasm/Cargo.toml $'\n[dependencies]\n' $'\n[dependencies]\n'"$rsa_pub"$'\n'
 append_to bindings/wasm/src/lib.rs 'use rsa_pub::pkcs1v15::SigningKey;'
 expect_fail "package = \"rsa\" renamed in a binding, used as rsa_pub::pkcs1v15::SigningKey" \
   "^  - polyjose-wasm \\(bindings/wasm/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
 
 new_case renamed-workspace-dependency
-replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.21", default-features = false }' \
-  $'rsa = { version = "=0.10.0-rc.21", default-features = false }\n'"$rsa_pub"
+replace_in Cargo.toml "$rsa_line" "$rsa_line"$'\n'"$rsa_pub"
 replace_in bindings/ffi/Cargo.toml 'polyjose.workspace = true' $'polyjose.workspace = true\nrsa_pub.workspace = true'
 expect_fail "package = \"rsa\" renamed in [workspace.dependencies], inherited by a binding" \
   "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
@@ -460,8 +522,7 @@ expect_fail "package = \"rsa\" renamed in [workspace.dependencies], inherited by
 # cargo refuses a second name for a package a crate already depends on, so the core's own rsa
 # dependency is the one renamed (each edit relocks, so the workspace keeps `rsa` too).
 new_case renamed-core-dependency
-replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.21", default-features = false }' \
-  $'rsa = { version = "=0.10.0-rc.21", default-features = false }\n'"$rsa_pub"
+replace_in Cargo.toml "$rsa_line" "$rsa_line"$'\n'"$rsa_pub"
 replace_in crates/polyjose/Cargo.toml $'\nrsa.workspace = true\n' $'\nrsa_pub.workspace = true\n'
 expect_fail "the core's rsa dependency renamed through [workspace.dependencies]" \
   "^  - polyjose \\(crates/polyjose/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
@@ -473,15 +534,14 @@ expect_fail "package = \"rsa\" renamed in a binding's [dev-dependencies]" \
   "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dev-dependencies\\]$" "$rename_fail"
 
 new_case renamed-target-dependency
-append_to bindings/node/Cargo.toml $'\n[target."cfg(unix)".dependencies]\nr = { package = "rsa", version = "=0.10.0-rc.21", default-features = false }'
+append_to bindings/node/Cargo.toml $'\n[target."cfg(unix)".dependencies]\nr = { package = "rsa", version = "'"$rsa_req"'", default-features = false }'
 relock
 expect_fail "package = \"rsa\" renamed in a [target.*.dependencies] table" \
   "^  - polyjose-node \\(bindings/node/Cargo.toml\\): rsa as r in \\[target\\.cfg\\(unix\\)\\.dependencies\\]$" "$rename_fail"
 
 # --- Check 11: rsa features ------------------------------------------------------------------------
 new_case rsa-feature
-replace_in Cargo.toml 'rsa = { version = "=0.10.0-rc.21", default-features = false }' \
-  'rsa = { version = "=0.10.0-rc.21", default-features = false, features = ["hazmat"] }'
-expect_fail "rsa feature" "^  - rsa 0\\.10\\.0-rc\\.21 with features: hazmat$" "^FAIL: rsa must be built with no features"
+replace_in Cargo.toml "$rsa_line" "$(printf '%s\n' "$rsa_line" | sed 's/ }$/, features = ["hazmat"] }/')"
+expect_fail "rsa feature" "^  - rsa $rsa_locked_ere with features: hazmat$" "^FAIL: rsa must be built with no features"
 
 finish

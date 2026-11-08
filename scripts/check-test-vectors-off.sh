@@ -6,9 +6,14 @@
 # output that doesn't look as expected, is a FAIL, never a pass.
 #   1. No bindings/**/Cargo.toml mentions the feature, and each one is a workspace member, so
 #      the cargo checks below see it.
-#   2. Per binding package: the inverted feature tree of polyjose with ALL of the binding's
-#      features on (optional ones too), every dependency kind and every target shows no
-#      `insecure-test-vectors` node.
+#   2. Per workspace member other than polyjose (every binding package, and any other member,
+#      such as build tooling under tools/; feature 0013 security audit I4): the inverted feature
+#      tree of polyjose with ALL of the member's features on (optional ones too), every
+#      dependency kind (dev-dependencies included) and every target shows no
+#      `insecure-test-vectors` node. A member is skipped only when its whole tree (every
+#      dependency kind, all features, every target) holds no polyjose package, as for build
+#      tooling such as polyjose-uniffi-bindgen: it cannot enable a feature of a crate it never
+#      builds. If that tree cannot be read, the member fails.
 #   3. Workspace-wide, with every member's features on: no normal or build edge enables it, so
 #      feature unification in a `--workspace` build can't either. polyjose itself is excluded as
 #      a root, because --all-features would otherwise switch its own feature on.
@@ -26,10 +31,19 @@
 #   any scan; scripts/ and .github/ changes go through owner review for that reason. A config
 #   outside the repository (~/.cargo, parent directories) and the caller's environment remain
 #   residual risk (see scripts/check-no-cargo-config.sh).
+# Exit status: 0 clean, 1 a check failed or could not run, 2 a syntax error in this script.
 # Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$(pwd); root_physical=$(pwd -P)
+
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh):
+# with errexit, bash 3.2 runs an EXIT trap with $? = 0 after a parse error. Without a trap it exits
+# 2, but this trap is here so that one added later for a cleanup cannot reopen that hole: an exit
+# before the last line, which sets the sentinel, becomes status 2; a non-zero status is kept.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-test-vectors-off.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # --- 0. No cargo config file in the repository (before any cargo command runs) ---------------------
 no_config_rc=0
@@ -50,15 +64,20 @@ name_re='insecure[-_]test[-_]vectors'
 status=0
 fail() { echo "FAIL: $*"; status=1; }
 
-# --- Binding packages: workspace members under bindings/ -----------------------------------------
+# --- Workspace members: every one but polyjose (check 2), and those under bindings/ (check 1) ------
 # One line per member: "<name> v<version> [(proc-macro)] (<path>)"; the path is the last group.
 if ! members=$(cargo tree --locked --workspace -e normal --depth 0 --prefix none 2>&1); then
   echo "FAIL: cargo tree could not list the workspace members:"; echo "$members"; exit 1
 fi
-pkgs=(); member_dirs=""
+pkgs=(); member_dirs=""; checked=(); core_seen=0
 while IFS= read -r line; do
   case $line in *" v"*" ("*")") ;; *) continue ;; esac
   name=${line%% *}; path=${line##*(}; path=${path%)}
+  # polyjose itself is not a check 2 root: --all-features would switch its own feature on.
+  case $path in
+    "$root/crates/polyjose" | "$root_physical/crates/polyjose") core_seen=1; continue ;;
+  esac
+  checked+=("$name")
   case $path in
     "$root/bindings/"*) rel=${path#"$root/"} ;;
     "$root_physical/bindings/"*) rel=${path#"$root_physical/"} ;;
@@ -69,6 +88,7 @@ while IFS= read -r line; do
 done <<<"$members"
 # Fail loudly rather than pass vacuously if cargo's output format or the layout changes.
 [ ${#pkgs[@]} -gt 0 ] || { echo "FAIL: found no binding packages under bindings/; check the script"; exit 1; }
+[ "$core_seen" = 1 ] || { echo "FAIL: found no polyjose member at crates/polyjose; check the script"; exit 1; }
 
 # --- 1. Binding manifests -------------------------------------------------------------------------
 # Tracked and untracked (not ignored) manifests, so a new binding is checked before it is committed.
@@ -87,8 +107,24 @@ while IFS= read -r manifest; do
 done <<<"$manifests"
 [ $status -eq 0 ] && echo "ok: no binding manifest mentions $feature, and every one is a workspace member"
 
-# --- 2. Per binding: inverted feature tree, all features, every target -----------------------------
-for pkg in "${pkgs[@]}"; do
+# --- 2. Per member: inverted feature tree, all features, every target ------------------------------
+for pkg in "${checked[@]}"; do
+  # `cargo tree -i polyjose` errors on a member that never builds polyjose (build tooling such as
+  # polyjose-uniffi-bindgen, the UniFFI bindgen CLI of feature 0013 T10). Such a member cannot
+  # enable a polyjose feature, so it is skipped, but only when its whole tree (every dependency
+  # kind, all features, every target) shows it and no polyjose package. Anything else is checked
+  # below, and a probe that fails or shows no tree fails the member (ADR 0005).
+  if ! whole=$(cargo tree --locked -p "$pkg" -e normal,build,dev --all-features --target all \
+    --prefix none 2>&1); then
+    echo "$whole"; fail "cargo tree failed for $pkg (its whole tree)"; continue
+  fi
+  if ! grep -q "^$pkg v" <<<"$whole"; then
+    echo "$whole"; fail "the whole tree of $pkg does not show $pkg; check the script"; continue
+  fi
+  if ! grep -q '^polyjose v' <<<"$whole"; then
+    echo "skipped $pkg: polyjose not in its tree (every dependency kind, all features, every target)"
+    continue
+  fi
   if ! tree=$(cargo tree --locked -e features -i polyjose -p "$pkg" --all-features --target all 2>&1); then
     echo "$tree"; fail "cargo tree failed for $pkg"; continue
   fi
@@ -143,4 +179,4 @@ else
   echo "ok: rustc gets no $feature cfg for polyjose on the host"
 fi
 
-exit $status
+completed=1; exit "$status"

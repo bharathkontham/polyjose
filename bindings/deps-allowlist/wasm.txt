@@ -1,0 +1,30 @@
+# Crates allowed in the normal and build dependency tree of polyjose-wasm (bindings/wasm) beyond the
+# core's: what
+#   cargo tree -p polyjose-wasm -e normal,build --target all --prefix none
+# lists (also with --no-default-features and --all-features), other than workspace packages, crates
+# of deps-allowlist.txt and crates of the core's own tree, which check 1 governs. scripts/check-deps.sh
+# (check 13) enforces this file in both directions, like deps-allowlist.txt (ADR 0016 §4): a crate
+# in that tree that is not listed fails, and so does an entry the tree no longer contains, or one
+# that deps-allowlist.txt already allows. Adding an entry needs an ADR (ADR 0016 §4, ADR 0030 §1).
+#
+# Format: one crate name per line; `#` starts a comment. No serde-family crate may appear in the
+# tree (check 14, ADR 0030 §1: no serde-wasm-bindgen) unless a `# serde-only-below: <crate>...`
+# line, followed by comment lines that explain it, names the crates every path to it must go
+# through. This binding has none.
+
+# wasm-bindgen, the WASM binding's framework (ADR 0030 §1, ADR 0031): the JS glue, its proc-macro
+# (whose syn, quote, proc-macro2 and unicode-ident deps-allowlist.txt already lists) and the
+# macro's arena allocator bumpalo, used at compile time; js-sys, the JS built-ins that getrandom's
+# `wasm_js` backend (crypto.getRandomValues, ADR 0005) calls through wasm-bindgen.
+wasm-bindgen
+wasm-bindgen-macro
+wasm-bindgen-macro-support
+wasm-bindgen-shared
+bumpalo
+js-sys
+
+# wasm-bindgen's build-time crate (ADR 0030 §1: the WASM adapter's framework is wasm-bindgen):
+# rustversion, the proc-macro that wasm-bindgen's build script uses to detect the compiler
+# version (a build-dependency of wasm-bindgen 0.2.130, renamed there to `rustversion-compat`). It
+# runs on the builder's machine only; nothing of it is linked into the module.
+rustversion

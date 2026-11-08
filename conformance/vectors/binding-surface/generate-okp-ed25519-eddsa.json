@@ -1,0 +1,18 @@
+{
+  "source": "ADR 0018 §5; ADR 0030 §4; ADR 0034 §6",
+  "description": "ADR 0030 jwk_generate_okp: an Ed25519 key pair (RFC 8037 §2) with no alg; it signs an EdDSA compact JWS that its public key verifies (RFC 8037 §3.1)",
+  "operation": "keys.generate_okp",
+  "input": {
+    "crv": "Ed25519"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "OKP",
+      "crv": "Ed25519"
+    },
+    "use_with": {
+      "alg": "EdDSA"
+    }
+  }
+}

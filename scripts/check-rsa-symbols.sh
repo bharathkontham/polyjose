@@ -17,6 +17,9 @@
 #      it ships as a cdylib or staticlib), on the host;
 #   3. polyjose-wasm the same way for wasm32-unknown-unknown, its shipping target (polyjose alone
 #      does not build there: getrandom needs the binding's `wasm_js` backend).
+# A workspace member with no library target (build tooling such as polyjose-uniffi-bindgen) is
+# skipped only when its tree, under every feature set (default, --no-default-features and
+# --all-features), holds neither rsa nor another workspace member; otherwise it fails closed.
 # The dev profile inlines no call away, so a reference to an rsa item stays a symbol. The release
 # profile is what ships, and it compiles code the dev profile never does: anything under
 # `cfg(not(debug_assertions))`. It can inline a call away, so it adds to the dev pass and never
@@ -38,27 +41,37 @@
 # (`$LT$` -> `<`, `..` -> `::`, ...), since llvm-nm's Itanium demangler leaves those escapes;
 # rustc 1.99 emits v0 names, but the check does not depend on it.
 #
-# Fails closed (exit 2), with the reason, when: cargo, rustc, python3, ar or nm is missing; a build
-# fails; a build does not report polyjose's (or the binding's) rlib; an rlib holds no object or a
-# member it does not expect; the symbol tool cannot read an object or prints a line it cannot
-# parse; or the symbols are not demangled (each crate must show a `<crate>::` path, and each
-# polyjose rlib rsa::public_key::RsaPublicKey, which RS*/PS* verification always uses).
+# Fails closed (exit 2), with the reason, when: cargo, rustc, python3, ar or nm is missing; a
+# workspace member has no library target and its tree holds rsa or another member; a build fails;
+# a build does not report polyjose's (or the binding's) rlib; an rlib holds no object or a member
+# it does not expect; the symbol tool cannot read an object or prints a line it cannot parse; or
+# the symbols are not demangled (each crate must show a `<crate>::` path, and each polyjose rlib
+# rsa::public_key::RsaPublicKey, which RS*/PS* verification always uses).
 #
 # Tools, first found: the toolchain's own llvm-ar and llvm-nm (the llvm-tools component:
 # `rustup component add llvm-tools`; the only choice that reads wasm32 objects everywhere), then
 # llvm-ar/llvm-nm on PATH, then ar/nm (Xcode's are LLVM's; GNU binutils' nm reads ELF but not
 # wasm). CI installs llvm-tools.
 #
-# Residual risk: code compiled only for a target that is not built here (the Android and Apple
-# targets of rust-toolchain.toml) is seen by the text scan only, until those binding jobs add
-# their target to this check. Code that is never compiled (unreachable private code) ships nothing
-# and has no symbol; the text scan covers it. Public code that polyjose never codegens (an uncalled
-# `#[inline] pub fn`, a generic `pub fn` it never instantiates) has no symbol here either, yet a
-# downstream crate can call it and compile it there: the text scan covers it, its macro rule
-# included, which catches the `k!(rsa)` spelling that hides the path from its other rules (ADR 0049
-# §1).
+# Extra targets (--target TRIPLE, feature 0013 F15, the 0008 security audit's L2): code under a
+# target cfg (`cfg(target_os = "android")`, ...) is compiled only for that target, so each triple
+# given adds polyjose-ffi, the crate the Android and Apple libraries are built from (ADR 0032,
+# ADR 0033), built for it as an rlib in the dev and the release profile like the wasm32
+# configuration; the objects of polyjose, of polyjose-ffi and of each workspace member it depends
+# on (polyjose-surface) are read. A triple rustc does not know, one whose std is not installed or a
+# build that fails exits 2, before any build for the first two.
 #
-# Usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]...
+# Residual risk: code compiled only for a target that is not built here is seen by the text scan
+# only. A run without --target builds the host and wasm32 alone, so the caller that packages or
+# regresses a target must pass it (0008 F08 passes the four Android triples of rust-toolchain.toml;
+# the Apple ones are seen only once their caller passes them). Code that is never compiled
+# (unreachable private code) ships nothing and has no symbol; the text scan covers it. Public code
+# that polyjose never codegens (an uncalled `#[inline] pub fn`, a generic `pub fn` it never
+# instantiates) has no symbol here either, yet a downstream crate can call it and compile it
+# there: the text scan covers it, its macro rule included, which catches the `k!(rsa)` spelling
+# that hides the path from its other rules (ADR 0049 §1).
+#
+# Usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]... [--target TRIPLE]...
 #   --target-dir DIR  cargo's build directory (default: cargo's own, target/)
 #   --dump DIR        also write every scanned symbol, demangled, to DIR/<config>.<crate>.txt
 #   --only CONFIG     build and read only this configuration (repeatable): polyjose-all-features,
@@ -66,8 +79,12 @@
 #                     a -release suffix for its release build. For the negative tests, which need
 #                     one build per case; the gate itself (test-all.sh, CI) always runs every
 #                     configuration, and the result line names a narrowed run.
+#   --target TRIPLE   also build and read polyjose-ffi for this target (repeatable): the
+#                     configurations polyjose-ffi-TRIPLE and polyjose-ffi-TRIPLE-release (see
+#                     "Extra targets" above).
 # Exit status: 0 clean, 1 an RSA private-key, signing or decryption symbol was found, 2 the check
-# could not run. Runs on macOS /bin/bash 3.2 and Linux bash.
+# could not run (a syntax error in this script too, under bash 3.2 as well: the completion
+# sentinel, F11). Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
@@ -77,15 +94,26 @@ die() { echo "ERROR: $*" >&2; exit 2; }
 target_dir=""
 dump_dir=""
 only=""
+targets=""
 while [ $# -gt 0 ]; do
   case $1 in
     --target-dir) [ $# -ge 2 ] || die "--target-dir needs a directory"; target_dir=$2; shift 2 ;;
     --dump) [ $# -ge 2 ] || die "--dump needs a directory"; dump_dir=$2; shift 2 ;;
     --only) [ $# -ge 2 ] || die "--only needs a configuration"; only="$only $2"; shift 2 ;;
+    --target) [ $# -ge 2 ] || die "--target needs a target triple"; targets="$targets $2"; shift 2 ;;
     -h | --help) sed -n '2,/^# Usage/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "unknown argument: $1 (usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]...)" ;;
+    *) die "unknown argument: $1 (usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]... [--target TRIPLE]...)" ;;
   esac
 done
+
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh):
+# with errexit, bash 3.2 runs an EXIT trap with $? = 0 after a parse error. Without a trap it exits
+# 2, but this trap is here so that one added later for a cleanup cannot reopen that hole: an exit
+# before the last line, which sets the sentinel, becomes status 2; a non-zero status (the Python
+# check's 1 or 2) is kept. Installed after the arguments, so --help still exits 0.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-rsa-symbols.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # No cargo config file in the repository, checked before cargo runs at all (as in check-deps.sh):
 # a planted config could swap sources or wrap rustc for the builds below.
@@ -99,6 +127,10 @@ fi
 for tool in cargo rustc python3; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH; cannot build and read polyjose's object code"
 done
+
+# The --target triples reach the program through its environment, always set here (so a caller's
+# value is never read), in a line of their own beside the program's arguments.
+export CHECK_RSA_SYMBOLS_TARGETS="$targets"
 
 # The program is read from stdin (so it may use any quote); the builds it runs get /dev/null.
 python3 -I - "$target_dir" "$dump_dir" "$only" <<'PY'
@@ -262,11 +294,32 @@ LIB_KINDS = {"lib", "rlib", "cdylib", "staticlib", "dylib"}
 names = sorted(p["name"] for p in members)
 if CORE not in names:
     die("the workspace has no %s package" % CORE)
+# A member with no library target is build tooling (polyjose-uniffi-bindgen, the UniFFI bindgen
+# CLI of feature 0013 T10): no shipped library links it. It is skipped only while it cannot hold
+# polyjose or rsa code at all: its whole tree (every dependency kind, every target, and the union
+# of the default, --no-default-features and --all-features trees, as check-deps.sh binding_tree
+# reads a binding, so an optional dependency behind a feature counts) may contain neither rsa nor
+# any other workspace member. Otherwise the check fails closed, as for any member it does not know
+# how to build, and so does a tree that cargo cannot print or that does not start at the member.
+tools = []
 for p in members:
-    if not any(LIB_KINDS & set(t["kind"]) for t in p["targets"]):
-        die("workspace member %s has no library target; scripts/check-rsa-symbols.sh builds every"
-            " member's library, so decide how to check it and update the script" % p["name"])
-bindings = [n for n in names if n != CORE]
+    if any(LIB_KINDS & set(t["kind"]) for t in p["targets"]):
+        continue
+    reached = set()
+    for flags in ([], ["--no-default-features"], ["--all-features"]):
+        argv = ["cargo", "tree", "--locked", "-p", p["name"], "-e", "normal,build,dev", "--target", "all",
+                "--prefix", "none"] + flags
+        tree = run(argv, "cargo tree -p %s%s" % (p["name"], "".join(" " + f for f in flags))).splitlines()
+        if not tree or tree[0].split(" ", 1)[0] != p["name"]:
+            die("%s printed no tree rooted at %s; check the script" % (" ".join(argv), p["name"]))
+        reached |= set(line.split(" ", 1)[0] for line in tree[1:] if line.strip())
+    holds = sorted(reached & (set(names) | {"rsa"}))
+    if holds:
+        die("workspace member %s has no library target, and its tree contains %s; scripts/check-rsa-symbols.sh"
+            " builds every member's library, so decide how to check it and update the script"
+            % (p["name"], ", ".join(holds)))
+    tools.append(p["name"])
+bindings = [n for n in names if n != CORE and n not in tools]
 if WASM_BINDING not in bindings:
     die("the workspace has no %s package, whose %s build this check reads" % (WASM_BINDING, WASM_TARGET))
 
@@ -283,6 +336,44 @@ builds.append((WASM_BINDING, WASM_TARGET, "%s-%s" % (WASM_BINDING, WASM_TARGET),
 configs = [("%s (%s)" % (what, where), file_id, args, crates) for what, where, file_id, args, crates in builds]
 configs += [("%s --release (%s)" % (what, where), file_id + "-release", args + ["--release"], crates)
             for what, where, file_id, args, crates in builds]
+
+# --- Extra targets (--target, see the top of this file) ---------------------------------------------
+# Checked before any build: rustc knows the triple and its std is installed (rustup target add);
+# a build that fails for it still exits 2 through run(). Read with polyjose-ffi: polyjose and every
+# workspace member polyjose-ffi depends on as a normal, non-optional dependency (the code it links
+# for that target); one that the build does not report fails closed below.
+FFI_BINDING = "polyjose-ffi"
+TARGETS = []
+for t in os.environ.get("CHECK_RSA_SYMBOLS_TARGETS", "").split():
+    if t not in TARGETS:
+        TARGETS.append(t)
+if TARGETS:
+    if FFI_BINDING not in bindings:
+        die("--target: the workspace has no %s package, which the --target builds are of" % FFI_BINDING)
+    known_targets = set(run(["rustc", "--print", "target-list"], "rustc --print target-list").split())
+    for t in TARGETS:
+        if t not in known_targets:
+            die("--target: %s is not a target rustc knows (rustc --print target-list)" % t)
+        libdir = run(["rustc", "--print", "target-libdir", "--target", t],
+                     "rustc --print target-libdir --target %s" % t).strip()
+        if not os.path.isdir(libdir) or not any(re.match(r"libstd-[0-9a-f]+\.rlib$", f) for f in os.listdir(libdir)):
+            die("--target: the std of %s is not installed (rustup target add %s); cannot build %s for it"
+                % (t, t, FFI_BINDING))
+    by_name = {p["name"]: p for p in members}
+    linked, todo = [], [FFI_BINDING]
+    while todo:
+        name = todo.pop(0)
+        if name in linked:
+            continue
+        linked.append(name)
+        todo += sorted(d["name"] for d in by_name[name]["dependencies"]
+                       if d["name"] in by_name and d.get("kind") is None and not d.get("optional"))
+    ffi_crates = [CORE] + sorted(n for n in linked if n not in (CORE, FFI_BINDING)) + [FFI_BINDING]
+    for t in TARGETS:
+        args = ["rustc", "-p", FFI_BINDING, "--lib", "--crate-type", "rlib", "--target", t]
+        configs.append(("%s (%s)" % (FFI_BINDING, t), "%s-%s" % (FFI_BINDING, t), args, ffi_crates))
+        configs.append(("%s --release (%s)" % (FFI_BINDING, t), "%s-%s-release" % (FFI_BINDING, t),
+                        args + ["--release"], ffi_crates))
 
 if only:
     known = [c[1] for c in configs]
@@ -325,7 +416,10 @@ def build(label, args):
 
 
 # --- Reading an rlib --------------------------------------------------------------------------------
-NM_LINE = re.compile(r"^\s*(?:[0-9A-Fa-f]+\s+)?([A-Za-z?-])\s+(\S.*)$")
+# The address column is hex for machine code, or a run of dashes for an LLVM bitcode member: the
+# release profile's LTO (Cargo.toml) makes cargo build rlib roots with -C linker-plugin-lto, so
+# their codegen units are bitcode, whose symbol table llvm-nm reads the same way.
+NM_LINE = re.compile(r"^\s*(?:(?:[0-9A-Fa-f]+|-+)\s+)?([A-Za-z?-])\s+(\S.*)$")
 
 
 def nm(path, demangle, what):
@@ -437,4 +531,7 @@ print("ok: no RSA private-key, signing or decryption symbol in the compiled obje
       " (defined and undefined), read with %s%s" % (len(configs), totals[0], totals[1], totals[2], NM, narrowed))
 for label, _, _, crates in configs:
     print("  %s: %s" % (label, ", ".join(c.replace("-", "_") for c in crates)))
+for name in tools:
+    print("  skipped %s: no library target, and neither rsa nor a workspace member in its tree" % name)
 PY
+completed=1; exit 0

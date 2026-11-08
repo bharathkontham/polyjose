@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): b64url.encode of 'foo' (RFC 4648 §10)",
+  "operation": "b64url.encode",
+  "input": {
+    "bytes_hex": "666f6f"
+  },
+  "expect": {
+    "ok": true,
+    "b64u": "Zm9v"
+  }
+}

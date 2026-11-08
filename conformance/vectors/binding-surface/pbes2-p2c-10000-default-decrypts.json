@@ -1,0 +1,23 @@
+{
+  "source": "ADR 0023; ADR 0034 §6",
+  "description": "ADR 0023, RFC 7518 §8.8: a compact PBES2-HS256+A128KW + A128GCM JWE with p2c 10000 (built with Node.js 24.21.0 node:crypto (OpenSSL 3.5.8) from SHA-256-derived bytes) decrypts under the default max_pbes2_count of 10,000, which is inclusive",
+  "operation": "jwe.decrypt",
+  "input": {
+    "jwe": "eyJhbGciOiJQQkVTMi1IUzI1NitBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIiwicDJzIjoidEdDaFBldkZjR09fZzMtdkUxNFFqUSIsInAyYyI6MTAwMDB9.Am0uPqnhtjwbHNT0_m6jDL_qq4zPCL23.FvA_PyrJAs5f6zXy.m8ONKBoAJT-LeT3ebuVJGfoxxYap_LBoiptwuA.X_c3CiSZF8Ig0m1qNI5R3Q",
+    "key": {
+      "kty": "oct",
+      "k": "YmluZGluZyBzdXJmYWNlIHBhc3N3b3Jk"
+    },
+    "allowed_algs": [
+      "PBES2-HS256+A128KW"
+    ],
+    "allowed_enc": [
+      "A128GCM"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "plaintext_b64u": "RGVmYXVsdHMgY29tZSBmcm9tIHRoZSBjb3JlLg",
+    "recipient": 0
+  }
+}

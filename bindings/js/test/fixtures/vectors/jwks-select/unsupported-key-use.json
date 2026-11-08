@@ -1,0 +1,10 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a key_use other than sig or enc is UnsupportedAlgorithm from the library",
+  "operation": "jwks.select",
+  "input": {
+    "jwks": { "keys": [{ "kty": "oct", "k": "c2VjcmV0LWtleS1ieXRlcw", "kid": "a" }] },
+    "selector": { "key_use": "Sig" }
+  },
+  "expect": { "ok": false, "error": "UnsupportedAlgorithm" }
+}

@@ -1,0 +1,35 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): the first JWK Set member verifies: key_index 0, not dropped as falsy; exp written 1300819380.0 in the payload compares as a double",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6ImEifQ.eyJpc3MiOiJqb2UiLCJleHAiOjEzMDA4MTkzODAuMH0.sig",
+    "now": 1300819000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "oct",
+          "k": "c2VjcmV0LWtleS1ieXRlcw",
+          "kid": "a"
+        },
+        {
+          "kty": "oct",
+          "k": "c2VjcmV0LWtleS1ieXRlcw",
+          "kid": "b"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "claims": {
+      "iss": "joe",
+      "exp": 1300819380
+    },
+    "alg": "HS256",
+    "key_index": 0
+  }
+}

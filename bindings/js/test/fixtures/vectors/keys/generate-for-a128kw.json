@@ -1,0 +1,16 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): an A128KW key's shape",
+  "operation": "keys.generate_for",
+  "input": {
+    "alg": "A128KW"
+  },
+  "expect": {
+    "ok": true,
+    "shape": {
+      "kty": "oct",
+      "alg": "A128KW",
+      "k_octets": 16
+    }
+  }
+}

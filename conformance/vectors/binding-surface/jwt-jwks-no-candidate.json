@@ -1,0 +1,26 @@
+{
+  "source": "ADR 0029 §2-§4; ADR 0034 §6",
+  "description": "ADR 0029 §2-§4: the RFC 7519 §3.1 HS256 JWT against a JWK Set holding only the RFC 7515 A.3 P-256 public key: no member can verify HS256, so there is no candidate: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "now": 1300819320,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

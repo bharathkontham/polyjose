@@ -1058,7 +1058,9 @@ name = "polyjose-ffi"
 version = "0.1.0"
 dependencies = [
  "polyjose",
+ "polyjose-surface",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]
@@ -1069,6 +1071,22 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "polyjose",
+]
+
+[[package]]
+name = "polyjose-surface"
+version = "0.1.0"
+dependencies = [
+ "polyjose",
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
+name = "polyjose-uniffi-bindgen"
+version = "0.1.0"
+dependencies = [
+ "uniffi",
 ]
 
 [[package]]

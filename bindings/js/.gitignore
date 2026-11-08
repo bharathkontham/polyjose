@@ -1,0 +1,5 @@
+# tsc output (ADR 0047: the only JavaScript here is generated)
+dist/
+node_modules/
+# Generated from crates/polyjose/src/error.rs (Error::CODES) by tools/gen-error-codes.ts
+src/error-codes.ts

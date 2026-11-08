@@ -1,0 +1,38 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): false booleans and typ default keep the library defaults; the token is expired",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLCJleHAiOjEwMH0.sig",
+    "now": 1300819000,
+    "allowed_algs": [
+      "HS256"
+    ],
+    "key": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "policy": {
+      "issuer": "joe",
+      "audience": [
+        "aud"
+      ],
+      "allow_missing_exp": false,
+      "ignore_audience": false,
+      "typ": {
+        "mode": "default"
+      },
+      "leeway": 30,
+      "require": [
+        "jti"
+      ],
+      "max_age": 60,
+      "subject": "s",
+      "max_key_candidates": 2
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "TokenExpired"
+  }
+}

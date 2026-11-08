@@ -1,0 +1,193 @@
+# polyjose binding API inventory: the 0.1.0 public API of every binding.
+#
+# The machine-readable copy of ADR 0030 §4, in its order: every operation, every record with its
+# fields, and every error code that the bindings expose (Rust surface, JS facade, Node, WASM,
+# Kotlin and Swift). Names are the host form (ADR 0030 §2): operations and fields camelCase,
+# records UpperCamel. The Rust surface uses the same names in snake_case.
+#
+# STABILITY (ADR 0030 §8): these names are the 0.1.0 public API of four platforms. Changing,
+# renaming or removing an entry is a breaking change and is human-gated at Gate 2 ("the public
+# API of a binding", pipeline.md). Adding an operation or an optional field is not breaking, but
+# it is still a public API change: add it here in the same change.
+#
+# scripts/check-binding-api.sh checks each binding's exported names against this file (one mode
+# per binding, scripts/check-binding-api.d/), and the code list against the core's
+# polyjose::Error::CODES (crates/polyjose/src/error.rs), in the same order.
+#
+# Format: one entry per line; blank lines and lines starting with '#' are ignored, and leading
+# whitespace is only layout.
+#   op <name>              an operation
+#   record <Name>          a record (options or a result); the field lines below belong to it
+#   field <name>           a required field
+#   field <name>?          an optional field: absent means the core default (Rust Option)
+#   field <name> = false   a flag: absent means false (Rust bool)
+#   code <Code>            an error code (ADR 0030 §5)
+
+## Utilities (ADR 0030 §4; RFC 4648 §5)
+op version
+op errorCodes
+op base64urlEncode
+op base64urlDecode
+
+## JWK (RFC 7517, RFC 7518 §6, RFC 7638, RFC 9278, RFC 8037)
+op jwkParse
+op jwkToPublic
+# jwkThumbprint/jwkThumbprintUri take (jwk, hash?): hash is optional, absent means the core default
+# SHA-256, and a name is one of ADR 0054 §8.2's nine, parsed by the core (ADR 0054 §9; Rust
+# Option<&str>, UniFFI String? = null, JS hash?). This format lists no operation parameters, so the
+# optional hash is recorded here (bindings/ffi/tests/generated-names.sh checks the UniFFI default).
+# jwksSelect is part of 0.1.0 (owner decision, feature 0013), backed by the core JwkSet::select
+# (ADR 0054 §9), with no signature change.
+op jwkThumbprint
+op jwkThumbprintUri
+op jwksSelect
+op jwkGenerateOct
+op jwkGenerateEc
+op jwkGenerateOkp
+op jwkGenerateForAlg
+op jwkFromPem
+op jwkFromDer
+op jwkToPem
+op jwkToDer
+
+## JWS (RFC 7515, RFC 7797, RFC 8037)
+op jwsSignCompact
+op jwsSignFlattened
+op jwsSignGeneral
+op jwsVerifyCompact
+op jwsVerifyJson
+
+## JWE (RFC 7516, RFC 7518 §4-5)
+op jweEncryptCompact
+op jweEncryptJson
+op jweDecryptCompact
+op jweDecryptJson
+
+## JWT (RFC 7519, RFC 8725, RFC 9068)
+op jwtSign
+op jwtVerify
+op jwtVerifyWithJwks
+op jwtEncryptNested
+op jwtDecryptNested
+op jwtDecryptNestedWithJwks
+
+## Records (ADR 0030 §3, §4)
+record JwkSelector
+  field kid?
+  field alg?
+  field keyUse?
+
+record JwsSignOptions
+  field protectedHeader?
+  field protectedB64u?
+  field detached = false
+
+record JwsSigner
+  field key
+  field protectedHeader?
+  field protectedB64u?
+  field unprotectedHeader?
+
+record JwsVerifyOptions
+  field allowedAlgs
+  field detachedPayload?
+  field maxInputLen?
+  field maxSignatures?
+
+record JwsVerified
+  field alg
+  field payload
+  field protectedHeader?
+  field unprotectedHeader?
+  field signatureIndex
+
+record JweEncryptOptions
+  field enc
+  field recipients
+  field protectedHeader?
+  field sharedUnprotectedHeader?
+  field aad?
+  field compress = false
+
+record JweRecipient
+  field alg
+  field key
+  field header?
+  field apu?
+  field apv?
+  field p2c?
+  field p2sLen?
+
+record JweDecryptOptions
+  field allowedAlgs
+  field allowedEnc
+  field maxPbes2Count?
+  field maxDecompressedLen?
+  field maxInputLen?
+  field maxRecipients?
+  field understoodCrit?
+
+record JweDecrypted
+  field plaintext
+  field header
+  field protectedHeader?
+  field sharedUnprotectedHeader?
+  field recipientHeader?
+  field aad?
+  field recipientIndex
+
+record JwtSignOptions
+  field alg
+  field typ?
+  field omitTyp = false
+  field accessToken = false
+  field header?
+
+record JwtVerifyOptions
+  field allowedAlgs
+  field now?
+  field issuers?
+  field audiences?
+  field subject?
+  field leeway?
+  field maxAge?
+  field requiredClaims?
+  field allowMissingExp = false
+  field ignoreAudience = false
+  field typ?
+  field anyTyp = false
+  field profile?
+  field maxKeyCandidates?
+  field maxInputLen?
+
+record JwtVerified
+  field claims
+  field header
+  field alg
+  field keyIndex?
+  field kid?
+
+record JwtNestedVerified
+  field inner
+  field outerHeader
+  field recipientIndex
+
+## Error codes (ADR 0030 §5): polyjose::Error::CODES, in the core's order: NoMatchingKey
+## (ADR 0029 §4), then MultipleMatchingKeys (ADR 0054 §5), last.
+code InvalidBase64
+code InvalidJson
+code InvalidHeader
+code UnsupportedAlgorithm
+code AlgorithmNotAllowed
+code InvalidKey
+code KeyAlgorithmMismatch
+code InvalidSignature
+code DecryptionFailed
+code UnknownCritical
+code TokenExpired
+code TokenNotYetValid
+code InvalidClaim
+code RandomnessUnavailable
+code InvalidFormat
+code NoMatchingKey
+code MultipleMatchingKeys

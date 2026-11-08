@@ -1,0 +1,32 @@
+// ADR 0047: strict, exactOptionalPropertyTypes, noUncheckedIndexedAccess, nodenext,
+// ES2022, declarations with maps. `lib` is ES2022 only (no DOM, no @types/node), so the
+// facade and the runner use nothing a browser, Node or workerd lacks; Node built-ins reach
+// the tests and node-main only through the typed shim in node/builtins.ts.
+{
+  "compilerOptions": {
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "types": [],
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts", "conformance/**/*.ts", "node/**/*.ts", "tools/**/*.ts", "test/**/*.ts"],
+  "exclude": ["dist", "node_modules", "test/misuse/**"]
+}

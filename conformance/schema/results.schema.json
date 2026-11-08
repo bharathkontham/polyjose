@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "polyjose conformance results file",
+  "description": "The results of one conformance runner's run over every file under conformance/vectors/ (ADR 0034 §2). Each runner writes it to target/conformance/<runner>.json, or target/conformance/<runner>-<suffix>.json for a CI matrix run or a non-reference Rust build; scripts/conformance-parity.sh compares every such file with the rust-core reference run (ADR 0034 §4, §5, §8). conformance/README.md (Binding runners) has the rules. Every object is closed.",
+  "type": "object",
+  "required": ["runner", "polyjose", "vectors_digest", "features", "error_codes", "results"],
+  "additionalProperties": false,
+  "properties": {
+    "runner": {
+      "description": "The runner name of ADR 0034 §2, without any file-name suffix. scripts/conformance-parity.sh takes its list of runners from this enum.",
+      "enum": [
+        "rust-core",
+        "rust-surface",
+        "wasm-node",
+        "wasm-chrome",
+        "wasm-pkg-node",
+        "wasm-pkg-chrome",
+        "wasm-pkg-workerd",
+        "node",
+        "jvm",
+        "android-emulator",
+        "swift-macos",
+        "swift-ios-sim",
+        "swift-tvos-sim"
+      ]
+    },
+    "polyjose": {
+      "description": "The polyjose version the runner tested: the binding's version() (ADR 0030 §4), or the crate version for the Rust runners.",
+      "$ref": "#/$defs/text"
+    },
+    "vectors_digest": {
+      "description": "The vector set the runner read (ADR 0060 §1-§3): the lowercase hex SHA-256 over the byte-sorted lines <id> TAB <lowercase hex SHA-256 of the file's raw bytes> LF, one per vector file whose bytes the runner read and parsed, computed by the runner with its platform's own SHA-256, never polyjose's (ADR 0060 §5). scripts/conformance-parity.sh requires it to equal rust-core.json's and refuses the digest of the empty input (ADR 0060 §6). conformance/README.md (Binding runners) has the definition and a shell reference.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "features": {
+      "description": "The vector feature names (conformance/README.md, Features) this build enables, in the order of conformance/schema.json's features enum. The bindings and the rust-core reference build enable none (ADR 0034 §3, §4).",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["deflate", "fixed-rng"] }
+    },
+    "error_codes": {
+      "description": "The stable error codes the runner's library reports, in order: the binding's error_codes() (ADR 0030 §4), or Error::CODES for the Rust runners (ADR 0034 §8).",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/text" }
+    },
+    "results": {
+      "description": "One entry per vector file found under conformance/vectors/, in any order. Ids are unique.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/result" }
+    }
+  },
+  "$defs": {
+    "text": {
+      "description": "A non-empty string.",
+      "type": "string",
+      "minLength": 1
+    },
+    "id": {
+      "description": "The vector id (ADR 0034 §1, ADR 0045 §4): the file's path under conformance/vectors/, with / separators, then #0, since every file holds one vector.",
+      "type": "string",
+      "pattern": "^[^#/\\\\][^#\\\\]*\\.json#0$"
+    },
+    "source": {
+      "description": "Optional: the vector's source member, reported alongside the id (ADR 0034 §1). Not compared.",
+      "$ref": "#/$defs/text"
+    },
+    "op": {
+      "description": "The vector's operation member, as written.",
+      "$ref": "#/$defs/text"
+    },
+    "actual": {
+      "description": "The observed outcome of the operation: { \"ok\": true }, or { \"ok\": false, \"error\": <code> } with the library's error code.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["ok"],
+          "additionalProperties": false,
+          "properties": { "ok": { "const": true } }
+        },
+        {
+          "type": "object",
+          "required": ["ok", "error"],
+          "additionalProperties": false,
+          "properties": {
+            "ok": { "const": false },
+            "error": { "$ref": "#/$defs/text" }
+          }
+        }
+      ]
+    },
+    "result": {
+      "description": "One vector's result: pass, fail or skipped.",
+      "oneOf": [
+        { "$ref": "#/$defs/pass" },
+        { "$ref": "#/$defs/fail" },
+        { "$ref": "#/$defs/skipped" }
+      ]
+    },
+    "pass": {
+      "description": "The vector ran and met its expectation. actual is required.",
+      "type": "object",
+      "required": ["id", "op", "status", "actual"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "source": { "$ref": "#/$defs/source" },
+        "op": { "$ref": "#/$defs/op" },
+        "status": { "const": "pass" },
+        "actual": { "$ref": "#/$defs/actual" }
+      }
+    },
+    "fail": {
+      "description": "The vector failed: a wrong outcome, a failed round trip, a schema-invalid or unreadable file, an unknown or unmapped operation, or an exception in the harness (ADR 0034 §3). reason says why. op is present when the file named one; actual is present when the operation returned an outcome.",
+      "type": "object",
+      "required": ["id", "status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "source": { "$ref": "#/$defs/source" },
+        "op": { "$ref": "#/$defs/op" },
+        "status": { "const": "fail" },
+        "actual": { "$ref": "#/$defs/actual" },
+        "reason": { "$ref": "#/$defs/text" }
+      }
+    },
+    "skipped": {
+      "description": "The vector lists in features a feature the build does not enable (ADR 0034 §3), or in features_absent one it enables (ADR 0056): reason is feature: and those names, comma-separated, the missing ones first in the vector's features order, then each enabled one as !<name> in its features_absent order. There is no actual.",
+      "type": "object",
+      "required": ["id", "op", "status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "source": { "$ref": "#/$defs/source" },
+        "op": { "$ref": "#/$defs/op" },
+        "status": { "const": "skipped" },
+        "reason": {
+          "type": "string",
+          "pattern": "^feature:!?[a-z0-9-]+(,!?[a-z0-9-]+)*$"
+        }
+      }
+    }
+  }
+}

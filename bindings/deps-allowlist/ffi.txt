@@ -1,0 +1,76 @@
+# Crates allowed in the normal and build dependency tree of polyjose-ffi (bindings/ffi, the UniFFI
+# adapter shared by Kotlin and Swift) beyond the core's: what
+#   cargo tree -p polyjose-ffi -e normal,build --target all --prefix none
+# lists (also with --no-default-features and --all-features), other than workspace packages, crates
+# of deps-allowlist.txt and crates of the core's own tree, which check 1 governs. scripts/check-deps.sh
+# (check 13) enforces this file in both directions, like deps-allowlist.txt (ADR 0016 §4): a crate
+# in that tree that is not listed fails, and so does an entry the tree no longer contains, or one
+# that deps-allowlist.txt already allows. Adding an entry needs an ADR (ADR 0016 §4, ADR 0030 §1).
+#
+# Format: one crate name per line; `#` starts a comment. No serde-family crate may appear in the
+# tree (check 14) unless a `# serde-only-below: <crate>...` line, followed by comment lines that
+# explain it, names the crates every path to it must go through.
+#
+# Measured 2026-11-07 (feature 0013 T10) with uniffi =0.32.2 and default features off: the
+# uniffi-bindgen CLI lives in its own package (bindings/uniffi-bindgen, allowlisted in
+# uniffi-bindgen.txt), so uniffi's `cli` feature (uniffi_bindgen, clap, askama, goblin, ...) and its
+# default `cargo-metadata` feature (cargo_metadata, serde_json) are out of this tree (ADR 0030 §1,
+# ADR 0032 §1, ADR 0033). What is linked into the shipped cdylib/staticlib is
+#   cargo tree -p polyjose-ffi -e normal,no-proc-macro --target all --prefix none
+# which holds no clap, askama, serde, toml or camino: of this file only the runtime group below
+# (and the core's crates). The proc-macro group is compile time only.
+# Build the shipped library with `-p polyjose-ffi` alone: a build that also selects
+# polyjose-uniffi-bindgen (e.g. `cargo build --workspace`) unifies uniffi's `cli` feature into it.
+
+# serde-only-below: uniffi_macros
+# Every path from polyjose-ffi to serde, serde_core, serde_derive or serde_spanned goes through
+# uniffi_macros, the proc-macro behind #[uniffi::export] and #[derive(uniffi::Record)]. It runs
+# inside the compiler (build time only) and parses uniffi.toml with toml and serde, which are
+# non-optional dependencies of uniffi_macros 0.32.2; nothing of it is linked into the library
+# (`cargo tree -p polyjose-ffi -e normal,no-proc-macro` has no serde-family crate).
+
+# UniFFI runtime, the Kotlin/Swift binding's framework (ADR 0030 §1, ADR 0032, ADR 0033), linked:
+# uniffi and uniffi_core, with anyhow, bytes, once_cell and static_assertions, which uniffi_core
+# uses; uniffi_pipeline, a non-optional dependency of uniffi 0.32.2 (the bindgen's IR passes), with
+# heck, indexmap (equivalent, hashbrown) and tempfile (fastrand, rustix, errno, linux-raw-sys,
+# bitflags, windows-sys, windows-link).
+uniffi
+uniffi_core
+anyhow
+bytes
+once_cell
+static_assertions
+uniffi_pipeline
+heck
+indexmap
+equivalent
+hashbrown
+tempfile
+fastrand
+rustix
+errno
+linux-raw-sys
+bitflags
+windows-sys
+windows-link
+
+# UniFFI proc-macros (ADR 0030 §1; compile time only, not linked): uniffi_macros,
+# uniffi_internal_macros and uniffi_meta, which read uniffi.toml (toml with its parser, writer,
+# datetime and serde_spanned, winnow, serde with serde_core and serde_derive, camino and fs-err for
+# the path) and hash metadata with siphasher; syn, quote and proc-macro2 are already in
+# deps-allowlist.txt.
+uniffi_macros
+uniffi_internal_macros
+uniffi_meta
+toml
+toml_datetime
+toml_parser
+toml_writer
+serde_spanned
+winnow
+serde
+serde_core
+serde_derive
+camino
+fs-err
+siphasher

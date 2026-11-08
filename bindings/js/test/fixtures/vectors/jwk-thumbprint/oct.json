@@ -1,0 +1,17 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): thumbprint and URI of an oct key",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "oct",
+      "k": "c2VjcmV0LWtleS1ieXRlcw"
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": true,
+    "thumbprint": "tp-oct",
+    "thumbprint_uri": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:tp-oct"
+  }
+}
