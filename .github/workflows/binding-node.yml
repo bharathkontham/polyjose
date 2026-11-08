@@ -250,10 +250,10 @@ jobs:
               rustup component add llvm-tools
               rustup show
               # The build is native, but napi build (@napi-rs/cli 3.10.12, TARGET_LINKER) presets
-              # the cross linker aarch64-linux-musl-gcc for aarch64-unknown-linux-musl unless this
-              # variable is already set. Alpine has only its native gcc (build-base). The
-              # variable is target-scoped, so the x86_64 musl job is unaffected.
-              export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=gcc
+              # the cross linker aarch64-linux-musl-gcc for aarch64-unknown-linux-musl. Alpine has
+              # only its native gcc (build-base), so that name is linked to it here; no cargo
+              # configuration is set (scripts/check-no-cargo-config.sh).
+              [ "$TARGET" != aarch64-unknown-linux-musl ] || ln -sf "$(command -v gcc)" /usr/local/bin/aarch64-linux-musl-gcc
               bindings/node/scripts/ci-build.sh "$TARGET"
               scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
             '
