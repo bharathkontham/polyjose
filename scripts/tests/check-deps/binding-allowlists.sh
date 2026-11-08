@@ -29,6 +29,9 @@
 # of polyjose-uniffi-bindgen, whose allowlist lists it below the bindgen; uniffi_macros dropped from
 # ffi.txt's line, or the line removed; the line with no explanation, unneeded, or naming a crate
 # outside the tree; and a core dependency on semver, reported by the core's check 5 only.
+# Checks 6 and 7 (delta audit D1 of feature 0013): a path fork named zeroize in polyjose-surface,
+# kept out of the workspace by a root `exclude`, fails both; the same fork outside the repository
+# fails check 6.
 # The unchanged tree must pass. Usage: scripts/tests/check-deps/binding-allowlists.sh
 set -euo pipefail
 export LC_ALL=C
@@ -195,6 +198,33 @@ add_dependency bindings/surface/Cargo.toml 'base64ct = "1"'
 expect_fail "a crate added to polyjose-surface" \
   "FAIL: the tree of polyjose-surface \\(bindings/surface\\) $not_allowed" "$not_allowed"
 expect_also "the offending crate is named" '^  - base64ct$'
+
+# --- Checks 6 and 7: a path fork under an allowlisted name (delta audit D1 of feature 0013) -----------
+# The audit's plant: a non-member path package named zeroize, kept out of the workspace by a root
+# `exclude`, carries RSA signing into polyjose-surface. Check 13 counts it as covered by name, so
+# check 6 (crates.io only, walked from every workspace member) and check 7 (no root exclude) catch it.
+# The same fork outside the repository, with no exclude, is check 6's alone.
+new_case surface-path-fork
+append_to vendor/zeroize/Cargo.toml $'[package]\nname = "zeroize"\nversion = "1.9.99"\nedition = "2021"\nlicense = "MIT"\n\n[dependencies]\nrsa = { version = "=0.10.0-rc.21", default-features = false }\nsha2 = { version = "0.11.1", default-features = false }'
+append_to vendor/zeroize/src/lib.rs $'pub fn wipe(p: &[u8], q: &[u8], m: &[u8]) -> Vec<u8> {\n    let k = rsa::RsaPrivateKey::from_p_q(rsa::BoxedUint::from_be_slice_vartime(p),\n        rsa::BoxedUint::from_be_slice_vartime(q), rsa::BoxedUint::from(65537u64)).unwrap();\n    rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(k).sign(m).to_vec()\n}'
+append_to bindings/surface/src/lib.rs '#[doc(hidden)] pub fn wipe_all(p: &[u8], q: &[u8], m: &[u8]) -> Vec<u8> { zeroize2::wipe(p, q, m) }'
+replace_in Cargo.toml $'resolver = "3"\n' $'resolver = "3"\nexclude = ["vendor"]\n'
+add_dependency bindings/surface/Cargo.toml 'zeroize2 = { package = "zeroize", path = "../../vendor/zeroize" }'
+path_fork='^FAIL: packages that do not come from crates\.io .* and are not workspace members'
+root_exclude='^FAIL: the workspace root Cargo\.toml has a \[workspace\] exclude'
+expect_fail "a path fork named zeroize in polyjose-surface, outside the workspace by a root exclude" \
+  "$path_fork" "$path_fork|$root_exclude"
+expect_also "check 6 names the fork and the member that pulls it in" \
+  '^  - zeroize 1\.9\.99 from path .*/vendor/zeroize, pulled in by (.*, )?polyjose-surface(, .*)?$'
+expect_also "check 7 reports the root exclude" "$root_exclude"
+mkdir "$scratch/outside-fork" || lib_die "could not create $scratch/outside-fork"
+mv "$case_dir/vendor/zeroize" "$scratch/outside-fork/zeroize" || lib_die "could not move the fork out of the copy"
+replace_in bindings/surface/Cargo.toml '"../../vendor/zeroize"' '"../../../outside-fork/zeroize"'
+replace_in Cargo.toml $'exclude = ["vendor"]\n' ''
+expect_fail "the same fork outside the repository, with no exclude" \
+  "$path_fork" "$path_fork"
+expect_also "check 6 names the fork and the member that pulls it in" \
+  '^  - zeroize 1\.9\.99 from path .*/outside-fork/zeroize, pulled in by (.*, )?polyjose-surface(, .*)?$'
 
 # --- Check 13: build-dependencies (security audit L2 of feature 0013) ---------------------------------
 # A build script and its build-dependencies run on every machine that builds the binding, so they
