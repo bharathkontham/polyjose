@@ -32,8 +32,9 @@
 #            --target per library, and each library's crate set must be a subset of the file's
 #            (it fails naming the target and the crates).
 #   jar      the classes, the host libraries under their JNA prefixes (each of the right
-#            architecture), and a Polyjose-Native-Platforms manifest attribute listing exactly
-#            the prefixes present; no native library or notices file in the sources jar.
+#            architecture: `file -b` against ci_file_pattern of ci-lib.sh, for any of the five
+#            prefixes; review N4), and a Polyjose-Native-Platforms manifest attribute listing
+#            exactly the prefixes present; no native library or notices file in the sources jar.
 #            Every class of the jar is class-file major version 61, Java 17, as the AAR.
 #   APK      zipalign -c -P 16 4 on the minified sample APK, and R8 has run (mapping.txt).
 #   Maven    both publications in build/repo with POM (name, description, URL, MIT license,
@@ -71,7 +72,10 @@ readelf=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf 2>/
 [ -x "$readelf" ] || die "no llvm-readelf in the NDK at $ANDROID_NDK_HOME"
 zipalign=$(ls "$ANDROID_HOME"/build-tools/*/zipalign 2>/dev/null | sort -V | tail -n 1)
 [ -x "$zipalign" ] || die "no zipalign in $ANDROID_HOME/build-tools"
-for tool in unzip python3 cargo; do command -v "$tool" >/dev/null 2>&1 || die "$tool not found"; done
+for tool in unzip python3 cargo file; do command -v "$tool" >/dev/null 2>&1 || die "$tool not found"; done
+# ci_file_pattern and ci_is_prefix (the five JNA prefixes); defines variables and functions only.
+# shellcheck source=ci-lib.sh source-path=SCRIPTDIR
+. "$android/scripts/ci-lib.sh" || die "cannot read scripts/ci-lib.sh"
 
 # The AAR's minSdk and the API level its .so files are built for (ADR 0033 §2: minSdk 23, also
 # cargo-ndk's --platform), as gradle/libs.versions.toml declares it.
@@ -350,14 +354,21 @@ else
   done
   mkdir -p "$work/jar" && unzip -q -o "$jar" -d "$work/jar"
   check_class_version jar "$jar"
+  # Each library present, whatever host built it (the CI jar carries all five): `file -b` must
+  # match the prefix's pattern from ci-lib.sh, the one ci-host-natives.sh checks the natives with.
   for prefix in $present; do
     lib=$(ls "$work/jar/$prefix"/* | head -n 1)
     echo "      $prefix/$(basename "$lib"): $(size "$lib") bytes"
-    want=""
-    case $prefix in darwin-aarch64) want=arm64 ;; darwin-x86-64) want=x86_64 ;; esac
-    if [ -n "$want" ] && command -v lipo >/dev/null 2>&1; then
-      got=$(lipo -archs "$lib" 2>/dev/null)
-      if [ "$got" = "$want" ]; then pass "jar: $prefix/ is $want"; else fail "jar: $prefix/ is '$got', not $want"; fi
+    if ! ci_is_prefix "$prefix"; then
+      fail "jar: $prefix/ is not one of the JNA prefixes ($ci_prefixes)"
+      continue
+    fi
+    pattern=$(ci_file_pattern "$prefix")
+    kind=$(file -b "$lib")
+    if grep -qE "$pattern" <<<"$kind"; then
+      pass "jar: $prefix/ is the right architecture ($kind)"
+    else
+      fail "jar: $prefix/ is '$kind', not /$pattern/"
     fi
   done
   # The manifest attribute, with the 72-byte continuation lines of the jar format joined.
