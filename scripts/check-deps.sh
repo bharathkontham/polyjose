@@ -18,10 +18,10 @@
 #      below its required parent crate (a direct dependency of the core on `semver` fails), and
 #      only through its group's edges: the dalek-build and num-traits-build crates must be absent
 #      from `cargo tree -e normal`, and the dalek-proc-macro crates from `-e normal,no-proc-macro`;
-#   6. a package in the core's tree does not come from crates.io: a path package other than
-#      polyjose itself, a git source or another registry (an allowlisted name is not enough when
-#      the code behind it can be swapped);
-#   7. the workspace root Cargo.toml has a [patch] or [replace] section;
+#   6. a package in the normal or build graph of any workspace member does not come from
+#      crates.io: a path package that is not a workspace member, a git source or another registry
+#      (an allowlisted name is not enough when the code behind it can be swapped);
+#   7. the workspace root Cargo.toml has a [patch] or [replace] section, or a [workspace] exclude;
 #   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
 #      build-dependency ([build-dependencies] or [target.*.build-dependencies]); or
 #      bindings/surface or bindings/ffi has a build script (build.rs, a `build` key, or a
@@ -487,11 +487,17 @@ check_group_rules() {
   done <"$work/guard-edge-kinds"
 }
 
-# 6. Every package in the core's tree comes from crates.io. The walk follows normal and build
-#    edges from polyjose through cargo metadata's resolve graph (all features, all targets), the
-#    same set as the tree above. A `[patch]` or `[replace]` in a manifest shows up here as a path
-#    or git source. cargo-deny's [sources] check (deny.toml) covers git and other registries for
-#    the whole workspace, but not path packages.
+# 6. Every package that a workspace member depends on comes from crates.io, or is itself a workspace
+#    member (ADR 0016 §4, ADR 0049 §1). The walk follows normal and build edges from *every*
+#    workspace member, not only polyjose, through cargo metadata's resolve graph (all features, all
+#    targets), the set the core's tree above and each binding's tree (check 13) are built from.
+#    Delta audit D1 of feature 0013: checks 1 and 13 match crates by name, so a path package named
+#    after an allowlisted crate (a `zeroize` fork carrying RSA signing) in a binding's tree passed
+#    them, and as a non-member it escaped check 9's text scan and scripts/check-rsa-symbols.sh. A
+#    path, git or other-registry package that is not a workspace member therefore fails here,
+#    naming the member that pulls it in. A `[patch]` or `[replace]` in a manifest shows up as such a
+#    source too. cargo-deny's [sources] check (deny.toml) covers git and other registries for the
+#    whole workspace, but not path packages.
 #    Neither sees cargo *source replacement*: a cargo config with `[source.crates-io] replace-with`
 #    (e.g. a vendored directory) keeps reporting the crates.io source while compiling other code.
 #    So no cargo config file may exist anywhere in the repository; scripts/check-no-cargo-config.sh
@@ -507,31 +513,36 @@ CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 with open(meta_path, encoding="utf-8") as f:
     meta = json.load(f)
 packages = {p["id"]: p for p in meta["packages"]}
-core = [p["id"] for p in meta["packages"]
-        if p["name"] == pkg_name and os.path.realpath(p["manifest_path"]) == manifest]
+members = sorted(meta["workspace_members"])
+core = [i for i in members
+        if packages[i]["name"] == pkg_name and os.path.realpath(packages[i]["manifest_path"]) == manifest]
 if len(core) != 1:
-    sys.exit("expected exactly one package %s at %s, found %d" % (pkg_name, manifest, len(core)))
+    sys.exit("expected exactly one workspace member %s at %s, found %d" % (pkg_name, manifest, len(core)))
 if meta.get("resolve") is None:
     sys.exit("cargo metadata has no resolve graph")
 nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
-seen, todo = set(core), list(core)
-while todo:
-    for dep in nodes[todo.pop()]["deps"]:
-        if dep["pkg"] in seen:
-            continue
-        # A missing dep_kinds (cargo older than 1.41) is a KeyError: fail closed.
-        if any(k["kind"] in (None, "build") for k in dep["dep_kinds"]):
-            seen.add(dep["pkg"])
-            todo.append(dep["pkg"])
-for pkg_id in sorted(seen - set(core)):
+pulled_by = {}
+for member in members:
+    seen, todo = {member}, [member]
+    while todo:
+        for dep in nodes[todo.pop()]["deps"]:
+            if dep["pkg"] in seen:
+                continue
+            # A missing dep_kinds (cargo older than 1.41) is a KeyError: fail closed.
+            if any(k["kind"] in (None, "build") for k in dep["dep_kinds"]):
+                seen.add(dep["pkg"])
+                todo.append(dep["pkg"])
+    for pkg_id in seen.difference(members):
+        if packages[pkg_id]["source"] != CRATES_IO:
+            pulled_by.setdefault(pkg_id, []).append(packages[member]["name"])
+for pkg_id in sorted(pulled_by):
     p = packages[pkg_id]
-    if p["source"] != CRATES_IO:
-        where = p["source"] or "path " + os.path.dirname(p["manifest_path"])
-        print("%s %s from %s" % (p["name"], p["version"], where))
+    where = p["source"] or "path " + os.path.dirname(p["manifest_path"])
+    print("%s %s from %s, pulled in by %s" % (p["name"], p["version"], where, ", ".join(sorted(pulled_by[pkg_id]))))
 ' "$work/metadata.json" "$core_pkg" "$core_manifest" >"$work/sources" \
-    || die "could not walk $core_pkg's dependency graph in cargo metadata"
+    || die "could not walk the workspace members' dependency graphs in cargo metadata"
   if [ -s "$work/sources" ]; then
-    fail "packages in the core's tree that do not come from crates.io (registry+https://github.com/rust-lang/crates.io-index):"
+    fail "packages that do not come from crates.io (registry+https://github.com/rust-lang/crates.io-index) and are not workspace members (ADR 0016 §4):"
     sed 's/^/  - /' "$work/sources"
     echo "  Depend on the published crates.io release; remove any [patch], [replace] or git/path/registry source."
   fi
@@ -539,6 +550,10 @@ for pkg_id in sorted(seen - set(core)):
 
 # 7. No [patch] or [replace] in the workspace root manifest: it swaps a crates.io crate for other
 #    code under the same name and version. Check 6 also catches the result; this names the cause.
+#    No `exclude` in the root [workspace] either (delta audit D1 of feature 0013, ADR 0016 §4,
+#    ADR 0049 §1): it keeps a package in the repository out of the workspace, so out of every
+#    per-member check (check 9's text scan, check 13, scripts/check-rsa-symbols.sh). There is none
+#    today; one that is needed is added to this check with its reason.
 check_no_patch_or_replace() {
   local ws_root
   ws_root=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["workspace_root"])' \
@@ -548,6 +563,11 @@ check_no_patch_or_replace() {
   if [ -s "$work/patches" ]; then
     fail "the workspace root Cargo.toml must not have [patch] or [replace] sections; depend on crates.io releases:"
     sed 's/^/  - /' "$work/patches"
+  fi
+  python3 -I -c "$toml_keys_py" Cargo.toml workspace.exclude >"$work/excludes" || die "could not read Cargo.toml"
+  if [ -s "$work/excludes" ]; then
+    fail "the workspace root Cargo.toml has a [workspace] exclude: a package kept out of the workspace escapes the per-member checks; an exclude that is needed must be added to check 7 of scripts/check-deps.sh with its reason:"
+    sed 's/^/  - /' "$work/excludes"
   fi
 }
 
