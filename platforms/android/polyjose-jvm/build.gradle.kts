@@ -4,6 +4,7 @@
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinJvm
 import com.vanniktech.maven.publish.SourcesJar
+import dev.polyjose.gradle.NativeHashes
 import dev.polyjose.gradle.PackagingPlugin
 import dev.polyjose.gradle.ThirdPartyNotices
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -136,6 +137,16 @@ val assembleJarNatives = tasks.register<Sync>("assembleJarNatives") {
     into(layout.buildDirectory.dir("jar-natives"))
 }
 
+// dev.polyjose.PolyjoseNativeHashes: the SHA-256 of each library in build/jar-natives, the exact
+// files the jar packs, compiled into the jar's classes; PolyjoseNativeLoader loads a library only
+// when its hash matches (feature 0008 F05, security audit M1). So the classes, and the tests that
+// run them, depend on every library the jar carries (on macOS the cross-built darwin one too).
+val nativeHashes = tasks.register<NativeHashes>("nativeHashes") {
+    description = "Generates PolyjoseNativeHashes from the libraries the jar packs (feature 0008 F05)."
+    natives.from(assembleJarNatives)
+    outputDir = layout.buildDirectory.dir("generated/polyjose/native-hashes")
+}
+
 // META-INF/polyjose/THIRD-PARTY-NOTICES.txt (ADR 0020 §4, ADR 0033 §4): one file over the union of
 // the crate trees of every platform in the jar (header `Targets:`; 75 crates for all five; feature
 // 0008 F01). The task fails closed, naming them, if the header does not name exactly the jar's
@@ -172,6 +183,10 @@ sourceSets {
         // libraries and the notices are added to the jar task, not to the resources, so the
         // sources jar carries sources only.
         kotlin.srcDir(files(sharedBuild.dir("generated/uniffi/kotlin")).builtBy(":uniffiGenerate"))
+        // The hand-written loader and redaction helpers the patched sources call (ADR 0030 §1,
+        // feature 0008 F05), shared with `:polyjose`, and this jar's native hashes.
+        kotlin.srcDir(rootDir.resolve("src/shared/kotlin"))
+        kotlin.srcDir(nativeHashes.flatMap { it.outputDir })
     }
     test {
         // The conformance runner shared with the Android instrumented tests (feature 0008 T02).
@@ -193,6 +208,20 @@ dependencies {
     testImplementation(libs.org.json)
 }
 
+/**
+ * The jar's payload for the forked child JVMs of LoaderPocTest (feature 0008 F05): the same
+ * classes and `<prefix>/<library>` files as [tasks.jar], without the notices and the manifest
+ * attributes. The notices run bash and cargo, which the Windows host-natives runner's
+ * `:polyjose-jvm:test` should not need; the loader reads neither.
+ */
+val loaderTestJar = tasks.register<Jar>("loaderTestJar") {
+    description = "The jar's classes and native libraries, for the loader's child-JVM tests (feature 0008 F05)."
+    archiveFileName = "polyjose-jvm-loader-test.jar"
+    destinationDirectory = layout.buildDirectory.dir("loader-test")
+    from(sourceSets.main.get().output)
+    from(assembleJarNatives)
+}
+
 tasks.test {
     useJUnitPlatform()
 
@@ -212,6 +241,33 @@ tasks.test {
     val results = repoRoot.resolve("target/conformance/jvm.json")
     outputs.file(results).withPropertyName("conformanceResults")
     systemProperty("polyjose.conformanceResults", results.path)
+
+    // Feature 0008 F05: the patch's input and output, build-logic (UniffiKotlinPatch, loaded on
+    // its own by PatchTest), the host library the build produced (LoaderTest), and for the forked
+    // child JVMs of LoaderPocTest: loaderTestJar, the jar's runtime class path (JNA, Kotlin) and
+    // the test classes (LoaderProbe).
+    val uniffiRaw = sharedBuild.file("generated/uniffi/raw/dev/polyjose/polyjose_ffi.kt").asFile
+    val uniffiPatched = sharedBuild.file("generated/uniffi/kotlin/dev/polyjose/polyjose_ffi.kt").asFile
+    val buildLogic = File(dev.polyjose.gradle.UniffiKotlinPatch::class.java.protectionDomain.codeSource.location.toURI())
+    val hostNatives = sharedBuild.dir("jvm-natives").asFile
+    val childClasspath = configurations.runtimeClasspath.get()
+    val testClasses = sourceSets.test.get().output.classesDirs
+    inputs.files(buildLogic).withPropertyName("buildLogic").withPathSensitivity(PathSensitivity.NONE)
+    inputs.files(loaderTestJar).withPropertyName("loaderTestJar").withPathSensitivity(PathSensitivity.NONE)
+    systemProperty("polyjose.uniffiRaw", uniffiRaw.path)
+    systemProperty("polyjose.uniffiPatched", uniffiPatched.path)
+    systemProperty("polyjose.buildLogic", buildLogic.path)
+    systemProperty("polyjose.hostNatives", hostNatives.path)
+    systemProperty("polyjose.mainClasses", sourceSets.main.get().output.classesDirs.asPath)
+    jvmArgumentProviders.add(
+        CommandLineArgumentProvider {
+            listOf(
+                "-Dpolyjose.loaderTestJar=${loaderTestJar.get().archiveFile.get().asFile.path}",
+                "-Dpolyjose.childClasspath=${childClasspath.asPath}",
+                "-Dpolyjose.childTestClasses=${testClasses.asPath}",
+            )
+        },
+    )
 
     testLogging {
         events("passed", "skipped", "failed")

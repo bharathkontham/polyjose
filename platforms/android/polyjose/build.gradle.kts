@@ -6,6 +6,7 @@ import com.android.build.api.variant.DeviceTestBuilder
 import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.SourcesJar
+import dev.polyjose.gradle.NativeHashes
 import dev.polyjose.gradle.PackagingPlugin
 import dev.polyjose.gradle.ThirdPartyNotices
 import javax.inject.Inject
@@ -25,6 +26,28 @@ val repoRoot: File = rootDir.resolve("../..").canonicalFile
 
 /** The root project's build directory, where its Rust tasks write (root build.gradle.kts). */
 val sharedBuild: Directory = isolated.rootProject.projectDirectory.dir("build")
+
+/** The four ABIs of the AAR (ADR 0033 §2), as `jni/<abi>/` folders. */
+val androidAbis: List<String> = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+
+/**
+ * `-Ppolyjose.jniLibsDir=<dir>`: package these `<abi>/libpolyjose_ffi.so` files instead of
+ * building them with cargoNdkBuild (feature 0008 F05, review S4 option (a)). CI's assemble job
+ * passes the emulator job's libraries, the ones its instrumented suite loaded, so the AAR carries
+ * exactly what CI tested (ci-assemble-jar.sh --jni-libs compares them). The folder must hold
+ * exactly the four ABI folders, each with exactly that one file.
+ */
+val ciJniLibsDir: File? = providers.gradleProperty("polyjose.jniLibsDir").orNull?.let { file(it) }?.also { dir ->
+    if (!dir.isDirectory) throw GradleException("polyjose.jniLibsDir: $dir is not a directory")
+    val entries = dir.listFiles().orEmpty().map { it.name }.sorted()
+    if (entries != androidAbis) throw GradleException("polyjose.jniLibsDir: $dir must hold exactly $androidAbis, it holds $entries")
+    for (abi in androidAbis) {
+        val files = dir.resolve(abi).listFiles().orEmpty().map { it.name }
+        if (files != listOf("libpolyjose_ffi.so") || !dir.resolve("$abi/libpolyjose_ffi.so").isFile) {
+            throw GradleException("polyjose.jniLibsDir: $dir/$abi must hold exactly libpolyjose_ffi.so, it holds $files")
+        }
+    }
+}
 
 android {
     namespace = "dev.polyjose"
@@ -51,7 +74,22 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // libpolyjose_ffi.so is packaged as cargo-ndk wrote it (the release profile already strips its
+    // symbols): AGP's own strip pass changed 8 bytes, so the AAR's libraries, the test APK's and
+    // the build's could not be compared byte for byte (feature 0008 F05, review S4). Apps that
+    // use the AAR strip on their own packaging, as before.
+    packaging {
+        jniLibs {
+            keepDebugSymbols += "**/libpolyjose_ffi.so"
+        }
+    }
+
     sourceSets {
+        named("main") {
+            // The hand-written loader and redaction helpers the patched generated sources call
+            // (ADR 0030 §1, ADR 0065; feature 0008 F05), shared with `:polyjose-jvm`.
+            kotlin.directories.add(rootDir.resolve("src/shared/kotlin").path)
+        }
         named("androidTest") {
             // The conformance runner shared with the JVM tests (feature 0008 T02).
             kotlin.directories.add(rootDir.resolve("shared-test/kotlin").path)
@@ -130,6 +168,13 @@ val thirdPartyNotices = tasks.named<ThirdPartyNotices>("thirdPartyNotices") {
     targets.addAll("armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android")
 }
 
+// dev.polyjose.PolyjoseNativeHashes with an empty map: the shared loader returns the bare name on
+// Android, where the libraries load from the APK (security audit I2), and never reads it.
+val nativeHashes = tasks.register<NativeHashes>("nativeHashes") {
+    description = "Generates an empty PolyjoseNativeHashes for the AAR (feature 0008 F05)."
+    outputDir = layout.buildDirectory.dir("generated/polyjose/native-hashes")
+}
+
 androidComponents {
     onVariants { variant ->
         val name = variant.name.replaceFirstChar { it.uppercase() }
@@ -138,9 +183,10 @@ androidComponents {
             source.from(files(sharedBuild.dir("generated/uniffi/kotlin")).builtBy(":uniffiGenerate"))
         }
         variant.sources.kotlin?.addGeneratedSourceDirectory(kotlinSources, SyncFromRootBuild::outputDir)
+        variant.sources.kotlin?.addGeneratedSourceDirectory(nativeHashes, NativeHashes::getOutputDir)
         // jni/<abi>/libpolyjose_ffi.so for arm64-v8a, armeabi-v7a, x86_64 and x86 (ADR 0033 §2).
         val jniLibs = tasks.register<SyncFromRootBuild>("sync${name}JniLibs") {
-            source.from(files(sharedBuild.dir("jniLibs")).builtBy(":cargoNdkBuild"))
+            source.from(ciJniLibsDir ?: files(sharedBuild.dir("jniLibs")).builtBy(":cargoNdkBuild"))
         }
         variant.sources.jniLibs?.addGeneratedSourceDirectory(jniLibs, SyncFromRootBuild::outputDir)
         // Java resources end up in classes.jar.

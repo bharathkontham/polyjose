@@ -32,6 +32,11 @@
 # 5. The results: target/conformance/android-emulator.json is renamed android-emulator-ci.json
 #    (a CI run; parity compares it as runner android-emulator, ADR 0034 §2) and copied to
 #    <out>/conformance-android-emulator/ (ci-lib.sh).
+# 6. The native libraries the device ran (feature 0008 F05, review S4 option (a)): each ABI's
+#    lib/<abi>/libpolyjose_ffi.so from the androidTest APK the suite installed, which must be
+#    byte for byte build/jniLibs/<abi>/ (the packaging changed nothing), copied to
+#    <out>/android-jnilibs/<abi>/ with SHA256SUMS. The assemble job packs exactly these into the
+#    AAR (ci-assemble-jar.sh --jni-libs).
 #
 # Exit status: 0 the suite passed on the expected ABI; 1 anything else; 2 usage or setup error.
 set -uo pipefail
@@ -56,8 +61,11 @@ emulator=$sdk/emulator/emulator
 
 results=$ci_repo/target/conformance
 out=$ci_out/conformance-android-emulator
+jni_out=$ci_out/android-jnilibs
+apk=$ci_android/polyjose/build/outputs/apk/androidTest/debug/polyjose-debug-androidTest.apk
 rm -f "$results/android-emulator.json" "$results/android-emulator-ci.json"
-rm -rf "$out"
+rm -rf "$out" "$jni_out"
+command -v unzip >/dev/null 2>&1 || ci_die "unzip not found"
 
 created=""
 log=""
@@ -125,4 +133,15 @@ esac
 problem=$(ci_check_results "$results/android-emulator.json" android-emulator) || fail "$problem"
 mv "$results/android-emulator.json" "$results/android-emulator-ci.json" || fail "cannot rename the results"
 ci_copy "$results/android-emulator-ci.json" "$out" || fail "cannot copy the results to $out"
-echo "ci-emulator: PASS ($abi, AVD $avd); wrote target/conformance/android-emulator-ci.json"
+# 6. The libraries the device ran.
+[ -f "$apk" ] || fail "no test APK at $apk"
+for a in arm64-v8a armeabi-v7a x86 x86_64; do
+  lib=$jni_out/$a/libpolyjose_ffi.so
+  { mkdir -p "$jni_out/$a" && unzip -p "$apk" "lib/$a/libpolyjose_ffi.so" >"$lib"; } || fail "the test APK has no lib/$a/libpolyjose_ffi.so"
+  cmp -s "$lib" "$ci_android/build/jniLibs/$a/libpolyjose_ffi.so" ||
+    fail "the test APK's lib/$a/libpolyjose_ffi.so is not build/jniLibs/$a/libpolyjose_ffi.so (the packaging changed it)"
+  echo "$(ci_sha256 "$lib")  $a/libpolyjose_ffi.so" >>"$jni_out/SHA256SUMS" || fail "cannot write $jni_out/SHA256SUMS"
+done
+echo "ci-emulator: the libraries the device ran, for the AAR:"
+sed 's/^/ci-emulator:   /' "$jni_out/SHA256SUMS"
+echo "ci-emulator: PASS ($abi, AVD $avd); wrote target/conformance/android-emulator-ci.json and android-jnilibs"

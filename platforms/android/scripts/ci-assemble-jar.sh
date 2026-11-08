@@ -5,7 +5,7 @@
 # Nothing is published or signed: the only repository is the file repository build/repo. Run
 # ci-android-sdk.sh first (NDK, build-tools, cargo-ndk).
 #
-#   platforms/android/scripts/ci-assemble-jar.sh <natives-dir> [--require-all]
+#   platforms/android/scripts/ci-assemble-jar.sh <natives-dir> [--require-all] [--jni-libs <dir>]
 #
 # <natives-dir> holds one jvm-natives-<prefix>/<library> folder per platform, the layout of the
 # downloaded jvm-natives-* artifacts and of ci-host-natives.sh's output (ci-lib.sh); other entries
@@ -30,6 +30,13 @@
 #    this host rebuilt for a prefix CI also built (printing both SHA-256s; a mismatch fails, as
 #    the jar would ship a library the host-natives tests never loaded). With --require-all, all
 #    five platforms and no Polyjose-Native-Platforms-Missing attribute.
+# 3a. The AAR's libraries (feature 0008 F05, review S4 option (a)): with --jni-libs <dir>, the
+#    emulator job's android-jnilibs artifact (ci-emulator.sh step 6): <abi>/libpolyjose_ffi.so for
+#    the four ABIs and a SHA256SUMS of exactly those four, recorded from the test APK the device
+#    ran. Each file must match its SHA256SUMS line before the build; the build packs them through
+#    -Ppolyjose.jniLibsDir (polyjose/build.gradle.kts) instead of building with cargo-ndk; after
+#    it, each jni/<abi>/libpolyjose_ffi.so in the AAR must be byte for byte the tested file.
+#    --require-all (CI) requires --jni-libs. Without it the AAR packs this host's build/jniLibs.
 # 4. Outputs, one folder per artifact (ADR 0037 §1): <out>/android-aar/polyjose-<v>.aar,
 #    <out>/jvm-jar/polyjose-jvm-<v>.jar, <out>/maven-repo/ (a copy of build/repo).
 #
@@ -39,14 +46,29 @@ set -uo pipefail
 . "$(dirname "$0")/ci-lib.sh"
 export LC_ALL=C
 
-usage() { echo "usage: ${0##*/} <natives-dir> [--require-all]" >&2; exit 2; }
+usage() { echo "usage: ${0##*/} <natives-dir> [--require-all] [--jni-libs <dir>]" >&2; exit 2; }
 fail() { echo "ci-assemble-jar: FAILED: $*"; exit 1; }
-[ $# -ge 1 ] && [ $# -le 2 ] || usage
+[ $# -ge 1 ] || usage
 natives=$1
+shift
 require_all=0
-case ${2:-} in "") ;; --require-all) require_all=1 ;; *) usage ;; esac
+jni_libs=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    --require-all) [ "$require_all" = 0 ] || usage; require_all=1; shift ;;
+    --jni-libs) [ $# -ge 2 ] && [ -z "$jni_libs" ] && [ -n "$2" ] || usage; jni_libs=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
 [ -d "$natives" ] || ci_die "$natives is not a directory"
 natives=$(cd "$natives" && pwd -P) || exit 2
+if [ -n "$jni_libs" ]; then
+  [ -d "$jni_libs" ] || ci_die "--jni-libs: $jni_libs is not a directory"
+  jni_libs=$(cd "$jni_libs" && pwd -P) || exit 2
+elif [ "$require_all" = 1 ]; then
+  ci_die "--require-all needs --jni-libs <the emulator job's android-jnilibs> (review S4)"
+fi
+abis="arm64-v8a armeabi-v7a x86 x86_64"
 command -v file >/dev/null 2>&1 || ci_die "file(1) not found"
 command -v unzip >/dev/null 2>&1 || ci_die "unzip not found"
 
@@ -90,9 +112,32 @@ for d in "$natives"/*; do
 done
 [ "$found" -gt 0 ] || fail "no jvm-natives-<prefix> folder in $natives"
 
+# 1a. The AAR's libraries: the tested files, each matching its SHA256SUMS line.
+jni_stage=$ci_android/build/ci-jni-libs
+rm -rf "$jni_stage"
+if [ -n "$jni_libs" ]; then
+  entries=$(find "$jni_libs" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | paste -sd' ' -)
+  [ "$entries" = "SHA256SUMS $abis" ] || fail "--jni-libs: $jni_libs must hold exactly SHA256SUMS $abis, it holds: ${entries:-nothing}"
+  sums=$jni_libs/SHA256SUMS
+  [ "$(wc -l <"$sums" | tr -d ' ')" = 4 ] || fail "--jni-libs: SHA256SUMS must have exactly four lines"
+  for abi in $abis; do
+    src=$jni_libs/$abi/libpolyjose_ffi.so
+    names=$(find "$jni_libs/$abi" -mindepth 1 -maxdepth 1 -exec basename {} \; | paste -sd' ' -)
+    [ "$names" = libpolyjose_ffi.so ] && [ -f "$src" ] && [ ! -L "$src" ] ||
+      fail "--jni-libs: $abi must hold exactly a regular libpolyjose_ffi.so, it holds: ${names:-nothing}"
+    want=$(awk -v f="$abi/libpolyjose_ffi.so" '$2 == f && NF == 2 && $1 ~ /^[0-9a-f]{64}$/ { print $1; n++ } END { if (n != 1) exit 1 }' "$sums") ||
+      fail "--jni-libs: SHA256SUMS has no single line for $abi/libpolyjose_ffi.so"
+    got=$(ci_sha256 "$src")
+    [ "$got" = "$want" ] || fail "--jni-libs: $abi/libpolyjose_ffi.so has sha256 $got, but the emulator job recorded $want"
+    ci_copy "$src" "$jni_stage/$abi" || fail "cannot stage $abi/libpolyjose_ffi.so"
+    echo "ci-assemble-jar: AAR: $abi/libpolyjose_ffi.so from the emulator job (sha256 $got)"
+  done
+fi
+
 # 2. Build and T04's checks.
 property=()
 [ -z "$passed" ] || property=("-Ppolyjose.jvmNativesDir=$stage")
+[ -z "$jni_libs" ] || property+=("-Ppolyjose.jniLibsDir=$jni_stage")
 echo "==> ci-assemble-jar: ./gradlew --no-daemon ${property[*]+${property[*]} }:polyjose:assembleRelease :polyjose-jvm:jar :sample-minified:assembleRelease publishAllPublicationsToBuildLocalRepository"
 if ! (cd "$ci_android" && ./gradlew --no-daemon ${property[@]+"${property[@]}"} :polyjose:assembleRelease :polyjose-jvm:jar \
   :sample-minified:assembleRelease publishAllPublicationsToBuildLocalRepository); then
@@ -122,6 +167,15 @@ for prefix in $rebuilt; do
     || fail "the jar's $prefix/$lib (rebuilt on this host) is not byte for byte the jvm-natives-$prefix library CI tested"
   echo "ci-assemble-jar: jar: $prefix/$lib is the CI library (rebuilt here, byte for byte)"
 done
+if [ -n "$jni_libs" ]; then
+  for abi in $abis; do
+    { rm -f "$work/aar.so" && unzip -p "$aar" "jni/$abi/libpolyjose_ffi.so" >"$work/aar.so"; } || fail "the AAR has no jni/$abi/libpolyjose_ffi.so"
+    cmp -s "$jni_stage/$abi/libpolyjose_ffi.so" "$work/aar.so" ||
+      fail "the AAR's jni/$abi/libpolyjose_ffi.so is not byte for byte the library the emulator job tested"
+    echo "ci-assemble-jar: AAR: jni/$abi/libpolyjose_ffi.so is the tested library"
+  done
+  rm -f "$work/aar.so"
+fi
 present=""
 for prefix in $ci_prefixes; do
   [ -f "$work/$prefix/$(ci_library_of "$prefix")" ] && present="$present $prefix"
