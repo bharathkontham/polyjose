@@ -24,7 +24,11 @@ for tool in llc llvm-ar rust-lld; do
 done
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-pe-fixtures.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$work"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "regen.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 # llvm-ar runs as dlltool when it is invoked under that name.
 ln -s "$bin/llvm-ar" "$work/llvm-dlltool"
 
@@ -70,3 +74,4 @@ lld_link /machine:arm64 "/out:$work/crt-static-arm64.dll" "$work/static.obj" "$w
 
 cp "$work/crt-dynamic-x64.dll" "$work/crt-static-arm64.dll" "$here/"
 echo "regen.sh: wrote $here/crt-dynamic-x64.dll and $here/crt-static-arm64.dll"
+completed=1; exit 0

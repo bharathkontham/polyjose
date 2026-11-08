@@ -72,7 +72,12 @@ test_trap_scripts="scripts/tests/syntax/guards.sh scripts/tests/check-test-vecto
   platforms/swift/scripts/test-simulator-lib.sh
   platforms/swift/scripts/test-simulators.sh
   platforms/swift/scripts/test-xcframework-stale.sh
-  platforms/swift/scripts/tests/ci-workflow.sh"
+  platforms/swift/scripts/tests/ci-workflow.sh
+  bindings/node/scripts/pack.sh
+  bindings/node/scripts/pack-platform.sh
+  bindings/node/test/fixtures/glibc/regen.sh
+  bindings/node/test/fixtures/pe/regen.sh
+  scripts/tests/check-binding-api/node.sh"
 sourced_helpers="scripts/tests/check-deps/lib.sh scripts/tests/check-binding-api/lib.sh
   scripts/tests/conformance-parity/lib.sh scripts/tests/test-all/lib.sh scripts/tests/third-party-notices/lib.sh
   platforms/swift/scripts/tests/lib.sh"

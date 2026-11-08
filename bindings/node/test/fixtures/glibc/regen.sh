@@ -32,7 +32,11 @@ for tool in llc llvm-readobj llvm-objdump rust-lld; do
 done
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-glibc-fixtures.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$work"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "regen.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 # llvm-readobj prints GNU readelf's format when it is invoked under that name.
 ln -s "$bin/llvm-readobj" "$work/llvm-readelf"
 
@@ -101,3 +105,4 @@ addon "$x" x86_64-unknown-linux-gnu polyjose.linux-x64-gnu.node \
 record "$x" polyjose.linux-x64-gnu.node above-2.34-x64
 
 echo "regen.sh: wrote $here/{floor-2.28-arm64,above-2.34-x64}.{readelf,objdump}.txt"
+completed=1; exit 0
