@@ -2,8 +2,6 @@
 
 **polyjose for Web (WASM).** JSON Object Signing and Encryption (JWS, JWE, JWK, JWT) from the pure-Rust [polyjose](https://github.com/bharathkontham/polyjose) core, compiled to WebAssembly. The same package runs in browsers, in Node.js and in Cloudflare Workers.
 
-> Status: **pre-alpha**. Don't use it in production.
-
 - **Pure Rust cryptography** (RustCrypto and dalek crates). There's no OpenSSL, `ring` or `aws-lc`, and the package has no runtime npm dependencies.
 - **Misuse-resistant.** Verify and decrypt need an explicit allow-list of algorithms, and `none` is never accepted (RFC 8725).
 - **The same API as `@polyjose/node`.** Both packages ship one TypeScript facade, so you can switch between them by changing the import.
