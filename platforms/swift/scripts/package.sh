@@ -135,7 +135,11 @@ semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
   || die "polyjose-ffi's version '$version' is not SemVer"
 
 stage=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-package.XXXXXX") || die "mktemp failed"
-trap 'rm -rf "$stage"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$stage"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "package.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # --- One crate set on every Apple target (ADR 0032 §6) ---------------------------------------
 crates() {
@@ -196,3 +200,4 @@ EOF
 log "wrote $zip ($size bytes, $(awk -v b="$size" 'BEGIN { printf "%.2f MB", b / 1000000 }'))"
 log "sha256 $checksum"
 log "wrote $zip.sha256 and $out_dir/binaryTarget.swift.txt"
+completed=1; exit 0

@@ -46,7 +46,11 @@ export WATCHOS_DEPLOYMENT_TARGET=9.0
 export XROS_DEPLOYMENT_TARGET=1.0
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/polyjose-check-generated.XXXXXX")"
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-generated.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 cargo rustc --locked -p polyjose-ffi --release --target aarch64-apple-darwin --crate-type cdylib >&2 ||
   { echo "$me: error: building the polyjose-ffi cdylib failed"; exit 2; }
@@ -82,3 +86,4 @@ fi
 
 [ "$failed" -eq 0 ] || exit 1
 echo "$me: PASS ($committed is up to date)"
+completed=1; exit 0

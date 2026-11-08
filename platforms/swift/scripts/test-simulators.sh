@@ -72,9 +72,11 @@ derived="$work/DerivedData"
 udid=
 
 # On exit: shuts down and deletes the device this script created (by UDID), and nothing else;
-# removes the temporary directory.
+# removes the temporary directory. cleanup <status>: returns the status, or 1 for a 0 when the
+# device could not be deleted.
+# shellcheck disable=SC2329 # cleanup runs from the EXIT trap
 cleanup() {
-  local rc=$?
+  local rc=$1
   trap - EXIT INT TERM
   if [ -n "$udid" ]; then
     xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true # not booted: nothing to shut down
@@ -86,9 +88,14 @@ cleanup() {
     fi
   fi
   rm -rf "$work"
-  exit "$rc"
+  return "$rc"
 }
-trap cleanup EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit 0 before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+# The runtime waiver below therefore ends on that last line too.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; cleanup "$rc" || rc=$?; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-simulators.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -125,38 +132,39 @@ if ! sim_runtime_available "$work/runtimes.json" "$runtime_id"; then
   echo "$me: the iOS 27.2 simulator runtime ($runtime_id) is not installed or not available"
   echo "SKIPPED-RUNNER ($runner: host:no-ios-runtime)"
   echo "SKIPPED (no iOS simulator runtime)"
-  exit 0
+else
+  device_type=$(sim_iphone_type "$work/runtimes.json" "$runtime_id") ||
+    { echo "$me: the runtime $runtime_id supports no iPhone device type"; exit 1; }
+
+  udid=$(xcrun simctl create "polyjose-$runner-$$" "$device_type" "$runtime_id")
+  echo "==> $me: iOS Simulator run on a disposable ${device_type##*.} ($runtime_id), $udid"
+  direct="$work/direct.json"
+  # xcodebuild passes TEST_RUNNER_<name> to the test process as <name> (man xcodebuild).
+  export TEST_RUNNER_POLYJOSE_CONFORMANCE_OUT="$direct"
+  start=$(date +%s)
+  xcb ios-sim test -destination "platform=iOS Simulator,id=$udid" -resultBundlePath "$work/ios-sim.xcresult" \
+    -parallel-testing-enabled NO
+  echo "$me: xcodebuild test passed on the iOS Simulator ($(($(date +%s) - start)) s)"
+  grep -E '^conformance \(' "$logs/ios-sim.log" || true
+
+  extracted="$work/extracted.json"
+  extract_results "$logs/ios-sim.log" "$marker" "$extracted" || exit 1
+  [ -f "$direct" ] || { echo "$me: the simulator wrote no $direct (POLYJOSE_CONFORMANCE_OUT)"; exit 1; }
+  cmp -s "$extracted" "$direct" ||
+    { echo "$me: the extracted results line differs from the document the simulator wrote"; exit 1; }
+  echo "$me: the extracted results line equals the simulator's document ($(wc -c <"$direct" | tr -d ' ') bytes)"
+
+  got_runner=$(plutil -extract runner raw -o - "$extracted")
+  [ "$got_runner" = "$runner" ] || { echo "$me: the results document names runner $got_runner, not $runner"; exit 1; }
+  digest=$(plutil -extract vectors_digest raw -o - "$extracted")
+  reference=$(vectors_digest_reference "$root/conformance/vectors") ||
+    { echo "$me: no vector file under conformance/vectors (ADR 0060 §3)"; exit 1; }
+  [ "$digest" = "$reference" ] || {
+    echo "$me: vectors_digest $digest (the iOS test bundle) differs from $reference (conformance/vectors, ADR 0060 §4)"
+    exit 1
+  }
+  mv "$extracted" "$results"
+  echo "$me: wrote $results (vectors_digest $digest, equal to the checkout's)"
+  echo "$me: PASS"
 fi
-device_type=$(sim_iphone_type "$work/runtimes.json" "$runtime_id") ||
-  { echo "$me: the runtime $runtime_id supports no iPhone device type"; exit 1; }
-
-udid=$(xcrun simctl create "polyjose-$runner-$$" "$device_type" "$runtime_id")
-echo "==> $me: iOS Simulator run on a disposable ${device_type##*.} ($runtime_id), $udid"
-direct="$work/direct.json"
-# xcodebuild passes TEST_RUNNER_<name> to the test process as <name> (man xcodebuild).
-export TEST_RUNNER_POLYJOSE_CONFORMANCE_OUT="$direct"
-start=$(date +%s)
-xcb ios-sim test -destination "platform=iOS Simulator,id=$udid" -resultBundlePath "$work/ios-sim.xcresult" \
-  -parallel-testing-enabled NO
-echo "$me: xcodebuild test passed on the iOS Simulator ($(($(date +%s) - start)) s)"
-grep -E '^conformance \(' "$logs/ios-sim.log" || true
-
-extracted="$work/extracted.json"
-extract_results "$logs/ios-sim.log" "$marker" "$extracted" || exit 1
-[ -f "$direct" ] || { echo "$me: the simulator wrote no $direct (POLYJOSE_CONFORMANCE_OUT)"; exit 1; }
-cmp -s "$extracted" "$direct" ||
-  { echo "$me: the extracted results line differs from the document the simulator wrote"; exit 1; }
-echo "$me: the extracted results line equals the simulator's document ($(wc -c <"$direct" | tr -d ' ') bytes)"
-
-got_runner=$(plutil -extract runner raw -o - "$extracted")
-[ "$got_runner" = "$runner" ] || { echo "$me: the results document names runner $got_runner, not $runner"; exit 1; }
-digest=$(plutil -extract vectors_digest raw -o - "$extracted")
-reference=$(vectors_digest_reference "$root/conformance/vectors") ||
-  { echo "$me: no vector file under conformance/vectors (ADR 0060 §3)"; exit 1; }
-[ "$digest" = "$reference" ] || {
-  echo "$me: vectors_digest $digest (the iOS test bundle) differs from $reference (conformance/vectors, ADR 0060 §4)"
-  exit 1
-}
-mv "$extracted" "$results"
-echo "$me: wrote $results (vectors_digest $digest, equal to the checkout's)"
-echo "$me: PASS"
+completed=1; exit 0

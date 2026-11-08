@@ -14,7 +14,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/simulator-lib.sh"
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/polyjose-simlib-test.XXXXXX")"
-trap 'rm -rf "$tmp"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$tmp"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-simulator-lib.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 pass=0 total=0
 ok() { total=$((total + 1)); pass=$((pass + 1)); echo "ok   $1"; }
 bad() { total=$((total + 1)); echo "FAIL $1"; }
@@ -94,4 +98,4 @@ printf '{"a":"x/y&z\\\\"}\n' >"$tmp/meta.expected"
 check "slashes, ampersands and backslashes are kept" cmp -s "$tmp/meta.json" "$tmp/meta.expected"
 
 echo "test-simulator-lib.sh: $pass/$total passed"
-[ "$pass" -eq "$total" ]
+completed=1; exit "$((pass != total))"
