@@ -72,7 +72,13 @@
 # Residual risk: code compiled only for a target that is not built here is seen by the text scan
 # only. A run without --target builds the host and wasm32 alone, so the caller that packages or
 # regresses a target must pass it (0008 F08 passes the four Android triples of rust-toolchain.toml;
-# the Apple ones are seen only once their caller passes them). Code that is never compiled
+# the Apple ones are seen only once their caller passes them). The @polyjose/node prebuild
+# targets other than this Mac's (aarch64-apple-darwin) -- x86_64-apple-darwin,
+# x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-unknown-linux-musl,
+# aarch64-unknown-linux-musl, x86_64-pc-windows-msvc and aarch64-pc-windows-msvc -- are read only
+# when .github/workflows/binding-node.yml runs this check with `--only polyjose-node --only
+# polyjose-node-release` on each target's own runner: at the release candidate, never on a PR
+# (ADR 0044; 0007 review-security.md L2). Code that is never compiled
 # (unreachable private code) ships nothing and has no symbol; the text scan covers it. Public code
 # that polyjose never codegens (an uncalled `#[inline] pub fn`, a generic `pub fn` it never
 # instantiates) has no symbol here either, yet a downstream crate can call it and compile it

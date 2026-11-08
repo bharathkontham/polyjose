@@ -1125,7 +1125,8 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "polyjose",
+ "polyjose-surface",
+ "zeroize",
 ]
 
 [[package]]

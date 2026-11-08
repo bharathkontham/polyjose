@@ -1,0 +1,15 @@
+// The @polyjose/node tests (ADR 0047): TypeScript, compiled with the package's options into
+// dist/ and run with `node --test` against the compiled output, what ships. dist/ is at the same
+// depth as test/, so a relative import (`../backend.js`, `../../js/dist/...`) means the same file
+// in the source and in the output. The package itself is imported by name ("@polyjose/node"), a
+// self-reference resolved through its `exports` map.
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "rootDirs": ["."],
+    "outDir": "../dist"
+  },
+  "include": ["*.ts"],
+  "exclude": []
+}

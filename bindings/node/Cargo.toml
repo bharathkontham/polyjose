@@ -1,17 +1,45 @@
 [package]
 name = "polyjose-node"
+description = "The napi-rs adapter of @polyjose/node (ADR 0030 §1, ADR 0031 §2): every polyjose-surface operation as a Node-API function"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 publish = false
+
+# The workspace lints minus `unsafe_code = "forbid"`: napi-derive's expansion (module
+# registration through ctor, the Node-API trampolines) is `unsafe`, and a forbid cannot be
+# relaxed for generated code. CLAUDE.md allows a binding crate only what its FFI framework
+# generates; the crate's own `no_hand_written_unsafe` test (src/lib.rs) keeps every source file
+# free of `unsafe`.
+[lints.rust]
+missing_docs = "warn"
+unfulfilled_lint_expectations = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
 
 [lib]
 crate-type = ["cdylib"]
 
+# ADR 0030 §1: the adapter adds only its framework (napi, napi-derive, napi-build) to the surface
+# and zeroize. Exact pins (ADR 0019 §4) on the versions feature 0007 measured (research §1); napi
+# 3.16.1 needs Rust 1.88, under the workspace MSRV.
+# - napi: default features off. `napi8` is the Node-API level every supported Node line has
+#   (ADR 0031 §2; it implies napi4, which AsyncTask needs), and `dyn-symbols` loads the napi_*
+#   symbols from the host process at load time instead of linking them (napi's default). No
+#   `async`/`tokio_rt` (operations are AsyncTasks on the libuv pool, research §3) and no
+#   `serde-json` (ADR 0030 §1, ADR 0016).
+# - zeroize: secret inputs are copied into Zeroizing task fields on the JS thread (ADR 0030 §7.1,
+#   §7.6).
 [dependencies]
-polyjose.workspace = true
-napi = "3.16"
-napi-derive = "3.7"
+polyjose-surface = { path = "../surface" }
+napi = { version = "=3.16.1", default-features = false, features = ["napi8", "dyn-symbols"] }
+napi-derive = "=3.7.0"
+zeroize.workspace = true
 
 [build-dependencies]
-napi-build = "2"
+napi-build = "=2.6.0"
