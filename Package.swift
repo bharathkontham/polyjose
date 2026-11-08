@@ -31,7 +31,7 @@ let ffiTarget: Target =
         name: "PolyjoseFFI",
         // PLACEHOLDER until the first release (see the header).
         url: "https://github.com/bharathkontham/polyjose/releases/download/v0.1.1/PolyjoseFFI.xcframework.zip",
-        checksum: "0000000000000000000000000000000000000000000000000000000000000000"
+        checksum: "13138090c7aeb784807647337605183000e0493d4da0102acb88f87145fedb15"
     )
 
 let package = Package(
