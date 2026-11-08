@@ -100,7 +100,11 @@ done
 
 mkdir -p "$repo/target" || die "could not create $repo/target"
 work=$(mktemp -d "$repo/target/.chromedriver.XXXXXX") || die "mktemp failed"
-trap 'rm -rf "$work"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10; see scripts/test-all.sh): an exit
+# before the last line, with status 0, becomes 2.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$work"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "chromedriver.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # lookup <json file> <section> <key>: prints "<version> <url> <sha256 or ->" for this platform's
 # chromedriver, or nothing. The JSON is downloaded data: read with python3 -I, never executed.
@@ -163,3 +167,4 @@ mv "$binary" "$work/dest/chromedriver"
 rm -rf "$dest"
 mv "$work/dest" "$dest" || die "could not move the driver to $dest"
 echo "$dest/chromedriver"
+completed=1; exit 0
