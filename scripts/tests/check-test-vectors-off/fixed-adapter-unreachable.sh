@@ -21,7 +21,12 @@ command -v git >/dev/null 2>&1 || die "git not found on PATH"
 command -v cargo >/dev/null 2>&1 || die "cargo not found on PATH"
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/fixed-adapter-test.XXXXXX") || die "mktemp failed"
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh): with
+# errexit, bash 3.2 runs an EXIT trap with $? = 0 after a parse error, so an exit before the last
+# line, which sets the sentinel, becomes status 2; a non-zero status is kept.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "fixed-adapter-unreachable.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # A copy of the working tree: tracked and untracked files, not ignored ones (so no target/).
 copy="$scratch/tree"
@@ -80,4 +85,4 @@ for mode in "--all-features" "--profile test"; do
 done
 
 [ "$failed" -eq 0 ] && echo "3/3 cases passed"
-exit "$failed"
+completed=1; exit "$failed"
