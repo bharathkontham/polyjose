@@ -13,6 +13,18 @@ Swift Package:
 - Packaging: `scripts/package.sh` writes `dist/apple/PolyjoseFFI.xcframework.zip` (the XCFramework with `THIRD-PARTY-NOTICES.txt` and `LICENSE` inside it), its `.sha256` and `binaryTarget.swift.txt`, the `binaryTarget(url:checksum:)` stanza for the release (ADR 0032 §6). It refuses a development build (`arm64_32: missing`) or a stale one unless `--allow-dev` is given, and a zip of 25,000,000 bytes or more. It publishes nothing; the release workflow attaches the zip to the GitHub Release. Its tests are `scripts/tests/test-*.sh`, which `test.sh` runs.
 - Publishing: a `Package.swift` at the repo root with a `binaryTarget` (URL + checksum) pointing at the XCFramework zip on the GitHub Release
 
+## Secrets in records
+
+- **Printing redacts secret fields** (ADR 0065). `String(describing:)`, `String(reflecting:)`, string interpolation, `print`, `debugPrint` and `dump` show a secret field's length only: `<redacted, N chars>` for a `String`, `<redacted, N bytes>` for a `Data`, and `nil` when it is absent. The other fields print as usual. The redacted fields are:
+  - `JwsSigner.key` and `JweRecipient.key`
+  - `JwsVerified.payload` and `JwsVerifyOptions.detachedPayload`
+  - `JweDecrypted.plaintext` and `aad`
+  - `JweEncryptOptions.aad`; its `recipients` print redacted too.
+  `Sources/Polyjose/Redaction.swift` does this; the generated `Polyjose.swift` is unchanged.
+- **Reading a field still gives the secret.** Only the printed form changes, so don't log a field itself.
+- **JWT claims are not redacted** (`JwtVerified.claims`, also inside `JwtNestedVerified`; ADR 0058). Put secrets in a JWE payload, not in claims.
+- **Wipe returned `Data` when you are done with it** (ADR 0030 §7.4). For example, `result.payload.resetBytes(in: result.payload.indices)` on a `var`. `Data` is copy-on-write, so this wipes the bytes only if no other copy shares them; wiping a copy leaves the original. Swift `String`s, such as keys and JWKs, cannot be wiped.
+
 ## OS minimums
 
 The deployment targets of the XCFramework and of `Package.swift`'s `platforms:` (ADR 0032 §1):

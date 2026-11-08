@@ -358,4 +358,171 @@ run_check swift
 check_last_line "internal, private and fileprivate declarations, also on one line, do not count" 0 \
   "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
 
+# F05: a protocol conformance is public API too. Only the generated `Sendable` ones and the three
+# printing conformances of Redaction.swift (ADR 0065) are allowed. An extension header may span
+# lines.
+
+new_case header-brace-next-line
+append $src/Extra.swift 'extension JwsVerified
+{
+    public var leak: String { "" }
+}'
+run_check swift
+check "a public member of an extension whose { is on the next line fails" 1 \
+  'public member leak in an extension of JwsVerified'
+
+new_case conformance-other-file
+append $src/Extra.swift 'extension JwtVerified: Error {}'
+run_check swift
+check "a hand-written conformance without members fails" 1 \
+  'Extra\.swift:1: conformance JwtVerified: Error is not allowed'
+
+new_case conformance-sendable-hand-written
+append $src/Extra.swift 'extension JwtVerified: @unchecked Sendable {}'
+run_check swift
+check "a hand-written Sendable conformance fails (only the generated file may declare Sendable)" 1 \
+  'Extra\.swift:1: conformance JwtVerified: @unchecked Sendable is not allowed'
+
+new_case conformance-header-over-lines
+append $src/Extra.swift 'extension JwtVerified:
+    Identifiable
+{
+    var id: String { kid ?? "" }
+}'
+run_check swift
+check "a conformance on the line after its extension fails" 1 \
+  'Extra\.swift:1: conformance JwtVerified: Identifiable is not allowed'
+
+new_case conformance-second-in-list
+append $src/Extra.swift 'extension JwtVerified: Identifiable, Comparable where Self: Equatable {}'
+run_check swift
+check "every conformance of a list is checked, before its where clause" 1 \
+  'conformance JwtVerified: Identifiable is not allowed' \
+  'conformance JwtVerified: Comparable is not allowed'
+
+new_case conformance-composition
+append $src/Extra.swift 'extension JwtVerified: CustomStringConvertible & CustomDebugStringConvertible {}'
+run_check swift
+check "a protocol composition fails" 1 \
+  'conformance JwtVerified: CustomStringConvertible & CustomDebugStringConvertible is not allowed'
+
+new_case conformance-generic-extension
+append $src/Extra.swift 'extension Array: CustomReflectable where Element == JwsSigner {}'
+run_check swift
+check "a conformance of another type fails, also with a where clause" 1 \
+  'conformance Array: CustomReflectable is not allowed'
+
+new_case conformance-printing-other-file
+append $src/Extra.swift 'extension JwsSigner: CustomStringConvertible {
+    public var description: String { "" }
+}'
+run_check swift
+check "a printing conformance outside Redaction.swift fails" 1 \
+  'Extra\.swift:1: conformance JwsSigner: CustomStringConvertible is not allowed'
+
+new_case conformance-unlisted-record
+append $src/Redaction.swift 'extension JwtVerified: CustomStringConvertible {
+    public var description: String { "" }
+}'
+run_check swift
+check "a printing conformance on a record not in the list fails (JWT claims are not redacted, ADR 0058)" 1 \
+  'Redaction\.swift:[0-9]+: conformance JwtVerified: CustomStringConvertible is not allowed' \
+  'public member description in an extension of JwtVerified'
+
+new_case conformance-other-protocol
+append $src/Redaction.swift 'extension JwsSigner: Encodable {}'
+run_check swift
+check "another protocol on a listed record fails" 1 \
+  'Redaction\.swift:[0-9]+: conformance JwsSigner: Encodable is not allowed'
+
+new_case redaction-extension-allowed
+edit $src/Redaction.swift \
+  'extension JwsSigner: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {' \
+  'extension JwsSigner: CustomStringConvertible, CustomDebugStringConvertible,
+    CustomReflectable
+{
+    private var helper: Int { 0 }'
+run_check swift
+check_last_line "the printing conformances and members on a listed record in Redaction.swift pass, also under a header over lines" 0 \
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+
+new_case redaction-member-other-type
+append $src/Redaction.swift 'extension JwsSigner: CustomStringConvertible {
+    public var description: Substring { "" }
+}'
+run_check swift
+check "a printing member of another type fails" 1 'public member description in an extension of JwsSigner'
+
+new_case redaction-member-modifier
+append $src/Redaction.swift 'extension JwsSigner: CustomStringConvertible {
+    @inlinable public var description: String { "" }
+    nonisolated public var debugDescription: String { "" }
+}'
+run_check swift
+check "a printing member with an attribute or a modifier fails" 1 \
+  'public member description in an extension of JwsSigner' \
+  'public member debugDescription in an extension of JwsSigner'
+
+new_case redaction-member-without-conformance
+append $src/Redaction.swift 'extension JwsSigner {
+    public var description: String { "" }
+}'
+run_check swift
+check "a printing member in an extension without a printing conformance fails" 1 \
+  'public member description in an extension of JwsSigner'
+
+new_case redaction-extra-member
+edit $src/Redaction.swift \
+  'extension JwsSigner: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {' \
+  'extension JwsSigner: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    public func leak() -> String { key }'
+run_check swift
+check "another public member in a redaction extension fails" 1 'public member leak in an extension of JwsSigner'
+
+new_case redaction-member-other-protocol
+edit $src/Redaction.swift \
+  'extension JwsSigner: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {' \
+  'extension JwsSigner: CustomReflectable {}
+extension JwsSigner: CustomStringConvertible, CustomDebugStringConvertible {'
+run_check swift
+check "a printing member in an extension without its own protocol fails" 1 \
+  'public member customMirror in an extension of JwsSigner'
+
+new_case redaction-missing-conformance
+edit $src/Redaction.swift \
+  'extension JwsVerifyOptions: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    public var description: String { printed(Self.self, debug: false, printedFields) }
+    public var debugDescription: String { printed(Self.self, debug: true, printedFields) }
+    public var customMirror: Mirror { mirror(self, printedFields) }' \
+  'extension JwsVerifyOptions: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String { printed(Self.self, debug: false, printedFields) }
+    public var debugDescription: String { printed(Self.self, debug: true, printedFields) }'
+run_check swift
+check "a listed record without one printing conformance fails (ADR 0065: every path is covered)" 1 \
+  'JwsVerifyOptions must conform to CustomReflectable, with public var customMirror: Mirror, exactly once in Redaction\.swift \(conformances 0, members 0\)'
+
+new_case redaction-twice
+append $src/Redaction.swift 'extension JwsSigner: CustomStringConvertible {
+    public var description: String { "" }
+}'
+run_check swift
+check "a printing conformance declared twice fails" 1 \
+  'JwsSigner must conform to CustomStringConvertible, with public var description: String, exactly once in Redaction\.swift \(conformances 2, members 2\)'
+
+new_case redaction-file-missing
+rm "$case_dir/$src/Redaction.swift" || lib_die "could not remove Redaction.swift from the copy"
+run_check swift
+check "without Redaction.swift every listed record fails (ADR 0065)" 1 \
+  'JweDecrypted must conform to CustomStringConvertible, with public var description: String, exactly once in Redaction\.swift \(conformances 0, members 0\)' \
+  'JwsVerifyOptions must conform to CustomDebugStringConvertible, with public var debugDescription: String, exactly once' \
+  'JwsSigner must conform to CustomReflectable, with public var customMirror: Mirror, exactly once'
+
+new_case non-public-conformances
+append $src/Extra.swift 'private struct Plain2: CustomStringConvertible { var description: String { "" } }
+fileprivate enum Plain3: Error { case a }
+extension Int { func internalOnly() {} }'
+run_check swift
+check_last_line "conformances of non-public types do not count" 0 \
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+
 finish
