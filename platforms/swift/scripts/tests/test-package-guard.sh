@@ -6,7 +6,7 @@
 #   - a development build (`arm64_32: missing`) is refused unless --allow-dev is given, and an
 #     unreadable or unknown build stamp is refused even with it (ADR 0032 §1);
 #   - a stale build (its stamp names a commit the checkout does not have) is refused;
-#   - an XCFramework without all 9 libraries of ADR 0032 §1 is refused;
+#   - an XCFramework without all 5 libraries of ADR 0032 §1 is refused;
 #   - an Apple target whose crate set differs from aarch64-apple-ios's is refused, in either
 #     direction and on any target, and identical sets pass (ADR 0032 §6, ADR 0020 §4: the notices
 #     are generated for aarch64-apple-ios only); a stand-in cargo from lib.sh makes one set differ;
@@ -97,14 +97,15 @@ run_package --xcframework "$xcf" --out-dir "$out"
 check "a stale build (a commit the checkout lacks) is refused" "[ $rc -eq 1 ] && log_has 'stale'"
 
 # shellcheck disable=SC2086 # a word list
-fake_xcframework "$xcf" "$(printf '%s\n' $release_libraries | grep -v '^xros-arm64$')" "$(stamp_for present)"
+fake_xcframework "$xcf" "$(printf '%s\n' $release_libraries | grep -v '^watchos-arm64-simulator$')" "$(stamp_for present)"
 run_package --allow-dev --xcframework "$xcf" --out-dir "$out"
-check "an XCFramework missing a library (xros-arm64) is refused" "[ $rc -eq 1 ] && log_has 'xros-arm64'"
+check "an XCFramework missing a library (watchos-arm64-simulator) is refused" \
+  "[ $rc -eq 1 ] && log_has 'watchos-arm64-simulator'"
 
 fake_xcframework "$xcf" "$release_libraries" "$(stamp_for present)"
-rm -f "$xcf/tvos-arm64/libpolyjose_ffi.a"
+rm -f "$xcf/macos-arm64_x86_64/libpolyjose_ffi.a"
 run_package --allow-dev --xcframework "$xcf" --out-dir "$out"
-check "a library whose archive is missing is refused" "[ $rc -eq 1 ] && log_has 'tvos-arm64'"
+check "a library whose archive is missing is refused" "[ $rc -eq 1 ] && log_has 'macos-arm64_x86_64'"
 check "the refusals left the output directory as it was" untouched
 
 # --- One crate set on every Apple target (ADR 0032 §6, ADR 0020 §4) ---------------------------
@@ -114,11 +115,11 @@ check "the refusals left the output directory as it was" untouched
 # the stale check out of the way on a checkout with uncommitted Rust inputs; it must not let
 # differing crate sets through.
 fake_xcframework "$xcf" "$release_libraries" "$(stamp_for present)"
-run_package_fake_cargo aarch64-apple-tvos --allow-dev --xcframework "$xcf" --out-dir "$out"
-check "a target with an extra crate (aarch64-apple-tvos) is refused, even with --allow-dev" "[ $rc -eq 1 ]"
-check "the refusal says aarch64-apple-tvos compiles other crates than aarch64-apple-ios" \
-  "log_has 'aarch64-apple-tvos compiles other crates than aarch64-apple-ios'"
-check "the refusal shows the extra crate of aarch64-apple-tvos" "log_has '> $fake_extra_crate'"
+run_package_fake_cargo aarch64-apple-watchos --allow-dev --xcframework "$xcf" --out-dir "$out"
+check "a target with an extra crate (aarch64-apple-watchos) is refused, even with --allow-dev" "[ $rc -eq 1 ]"
+check "the refusal says aarch64-apple-watchos compiles other crates than aarch64-apple-ios" \
+  "log_has 'aarch64-apple-watchos compiles other crates than aarch64-apple-ios'"
+check "the refusal shows the extra crate of aarch64-apple-watchos" "log_has '> $fake_extra_crate'"
 check "the crate-set refusal leaves the output directory as it was" untouched
 [ "$rc" -eq 1 ] || show_log
 
@@ -138,22 +139,21 @@ check "that refusal leaves the output directory as it was, too" untouched
 same_out="$scratch/same-out"
 run_package_fake_cargo x86_64-unknown-linux-gnu --allow-dev --xcframework "$xcf" --out-dir "$same_out"
 check "identical crate sets on all Apple targets do not trip the check" \
-  "[ $rc -eq 0 ] && log_has 'same crate set on all 12 Apple targets'"
+  "[ $rc -eq 0 ] && log_has 'same crate set on all 8 Apple targets'"
 [ "$rc" -eq 0 ] || show_log
 check "identical crate sets are packaged" "[ -s '$same_out/PolyjoseFFI.xcframework.zip' ]"
-# The Rust targets of the 9 libraries (ADR 0032 §1), each of which package.sh must compare.
+# The Rust targets of the 5 libraries (ADR 0032 §1), each of which package.sh must compare.
 missing_targets=""
 for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim \
-  x86_64-apple-ios aarch64-apple-tvos aarch64-apple-tvos-sim aarch64-apple-visionos \
-  aarch64-apple-visionos-sim aarch64-apple-watchos aarch64-apple-watchos-sim arm64_32-apple-watchos; do
+  x86_64-apple-ios aarch64-apple-watchos aarch64-apple-watchos-sim arm64_32-apple-watchos; do
   grep -qxF "tree $t" "$fake_cargo_log" || missing_targets="$missing_targets $t"
 done
-check "package.sh ran cargo tree for each of the 12 Apple targets" "[ -z '$missing_targets' ]"
+check "package.sh ran cargo tree for each of the 8 Apple targets" "[ -z '$missing_targets' ]"
 [ -z "$missing_targets" ] || echo "    | no cargo tree for:$missing_targets"
 
-# 9 incompressible libraries of 2.9 MB each: about 26 MB zipped, over the 25,000,000-byte stop.
+# 5 incompressible libraries of 5.2 MB each: about 26 MB zipped, over the 25,000,000-byte stop.
 # --allow-dev also lets the stale check pass when this checkout has uncommitted Rust inputs.
-fake_xcframework "$xcf" "$release_libraries" "$(stamp_for present)" 2900000
+fake_xcframework "$xcf" "$release_libraries" "$(stamp_for present)" 5200000
 run_package --allow-dev --xcframework "$xcf" --out-dir "$out"
 check "a zip of 25 MB or more is refused" "[ $rc -eq 1 ] && log_has '25000000'"
 check "the oversized zip is not written" untouched

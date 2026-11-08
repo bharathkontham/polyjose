@@ -20,7 +20,7 @@
 #   - a stale build: the Rust inputs differ from the commit it was built from, or it was built
 #     from uncommitted changes (platforms/swift/scripts/xcframework-stale.sh, as test.sh uses it);
 #     --allow-dev lets it through;
-#   - an XCFramework whose Info.plist does not list exactly the 9 libraries of ADR 0032 §1 (with
+#   - an XCFramework whose Info.plist does not list exactly the 5 libraries of ADR 0032 §1 (with
 #     `watchos-arm64` in place of `watchos-arm64_arm64_32` for a development build), or whose
 #     library archive is missing;
 #   - Apple targets whose crate sets differ: the notices are generated once, for
@@ -78,14 +78,12 @@ done
 
 zip_name=PolyjoseFFI.xcframework.zip
 max_zip_bytes=25000000
-# The Rust targets of the 9 libraries (ADR 0032 §1; build-xcframework.sh builds them).
+# The Rust targets of the 5 libraries (ADR 0032 §1; build-xcframework.sh builds them).
 apple_targets="aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
-x86_64-apple-ios aarch64-apple-tvos aarch64-apple-tvos-sim aarch64-apple-visionos
-aarch64-apple-visionos-sim aarch64-apple-watchos aarch64-apple-watchos-sim arm64_32-apple-watchos"
+x86_64-apple-ios aarch64-apple-watchos aarch64-apple-watchos-sim arm64_32-apple-watchos"
 notices_target=aarch64-apple-ios
-release_libraries="ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64 tvos-arm64
-tvos-arm64-simulator watchos-arm64-simulator watchos-arm64_arm64_32 xros-arm64
-xros-arm64-simulator"
+release_libraries="ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64 watchos-arm64-simulator
+watchos-arm64_arm64_32"
 
 # --- The build stamp: refuse a development build (ADR 0032 §1) --------------------------------
 [ -d "$xcf" ] || die "no XCFramework at $xcf; build it with platforms/swift/scripts/build-xcframework.sh --release"
@@ -111,7 +109,7 @@ if reason=$(xcframework_stale "$root" "$xcf"); then
   warn "packaging a stale XCFramework ($reason): this zip must not be released"
 fi
 
-# --- The 9 libraries (ADR 0032 §1) -----------------------------------------------------------
+# --- The 5 libraries (ADR 0032 §1) -----------------------------------------------------------
 listed="" i=0
 while id=$(plutil -extract "AvailableLibraries.$i.LibraryIdentifier" raw -o - "$xcf/Info.plist" 2>/dev/null); do
   path=$(plutil -extract "AvailableLibraries.$i.LibraryPath" raw -o - "$xcf/Info.plist" 2>/dev/null) \

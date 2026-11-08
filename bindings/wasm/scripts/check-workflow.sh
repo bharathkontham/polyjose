@@ -11,7 +11,10 @@
 #   [top-level]   only the keys name, run-name, on, permissions, env, defaults, concurrency and jobs
 #                 at the top, each once (so a quoted "on" or a `true:` key cannot add triggers);
 #   [trigger]     `on:` is a block mapping of exactly `workflow_dispatch` and `workflow_call`, each
-#                 with no configuration at all: no `inputs`, `secrets` or `outputs` (owner rule
+#                 configured with nothing but the one input `mode` (feature 0012 H3, ADR 0037 §1):
+#                 `inputs:` with the single key `mode`, whose keys are only description, type,
+#                 required and default, with type string, required false and default ci, the
+#                 same under both triggers; no other input, no `secrets` or `outputs` (owner rule
 #                 2026-11-07: no pull_request, push or schedule trigger; ADR 0044);
 #   [permissions] the top-level `permissions:` is exactly `contents: read`, and no line anywhere
 #                 grants `write`, `write-all` or `read-all`;
@@ -126,14 +129,20 @@ text_rules() {
         }
       } else if (section == "on") {
         if (trigger_indent < 0) trigger_indent = ind
-        if (ind > trigger_indent) fail("trigger", "configuration under a trigger (inputs, secrets, outputs, branches...) is not allowed")
-        else if (ind < trigger_indent) fail("trigger", "unexpected indentation in on:")
-        else {
-          key = key_of(line); value = value_of(line)
+        key = key_of(line); value = value_of(line)
+        if (ind < trigger_indent) fail("trigger", "unexpected indentation in on:")
+        else if (ind == trigger_indent) {
+          cur = key; level = 0
           if (key != "workflow_dispatch" && key != "workflow_call") fail("trigger", "trigger " key " is not allowed (only workflow_dispatch and workflow_call)")
           else triggers[key]++
-          if (value != "" && value != "{}" && value != "null" && value != "~") fail("trigger", key " must have no configuration, not \"" value "\"")
-        }
+          if (value != "" && value != "{}" && value != "null" && value != "~") fail("trigger", key " must have no configuration but the mode input, not \"" value "\"")
+        } else if (ind == trigger_indent + 2 && level == 0 && key == "inputs" && value == "") {
+          level = 1
+        } else if (ind == trigger_indent + 4 && level == 1 && key == "mode" && value == "" && !mode_seen[cur]++) {
+          level = 2
+        } else if (ind == trigger_indent + 6 && level == 2 && key ~ /^(description|type|required|default)$/ && !((cur, key) in mode_prop)) {
+          mode_prop[cur, key] = value
+        } else fail("trigger", "configuration under a trigger other than the one mode input (inputs, secrets, outputs, branches...) is not allowed")
       } else if (section == "env") {
         if (env_indent < 0) env_indent = ind
         if (ind == env_indent) env[key_of(line)] = value_of(line)
@@ -188,6 +197,12 @@ text_rules() {
       if (!seen["on"]) fail_end("trigger", "no on: key")
       if (seen["on"] && triggers["workflow_dispatch"] != 1) fail_end("trigger", "workflow_dispatch must be listed exactly once")
       if (seen["on"] && triggers["workflow_call"] != 1) fail_end("trigger", "workflow_call must be listed exactly once")
+      for (t in triggers) {
+        if (!mode_seen[t]) fail_end("trigger", t " must declare the mode input")
+        else if (mode_prop[t, "type"] != "string" || mode_prop[t, "required"] != "false" || mode_prop[t, "default"] != "ci")
+          fail_end("trigger", t ": the mode input must be type string, required false, default ci")
+        if (mode_prop[t, "description"] != mode_prop["workflow_dispatch", "description"]) fail_end("trigger", "the mode input differs between the triggers")
+      }
       if (!seen["permissions"]) fail_end("permissions", "no top-level permissions: (it must be contents: read)")
       else if (permissions_lines != 1) fail_end("permissions", "the top-level permissions must be exactly \"contents: read\"")
       if (!seen["jobs"]) fail_end("top-level", "no jobs:")
@@ -289,23 +304,28 @@ self_test() {
     cases_failed=$((cases_failed + 1))
   fi
 
-  local on_block call_line pin_line
-  on_block=$'on:\n  workflow_dispatch:\n  workflow_call:\n'
+  local on_block call_line call_mode top_perms pin_line
+  on_block=$'on:\n  workflow_dispatch:\n'
   call_line=$'  workflow_call:\n'
+  call_mode=$'  workflow_call:\n    inputs:\n      mode:\n'
+  top_perms=$'\npermissions:\n  contents: read\n'
   # The first action pin of the file, whatever it is.
   pin_line=$(grep -m 1 -E '^[[:space:]]*(-[[:space:]]+)?uses: [^.]' "$default_file" | sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses: //')
   [ -n "$pin_line" ] || { echo "$me: self-test error: no uses: line in the workflow" >&2; exit 2; }
   local run_marker=$'    steps:\n'
 
-  expect_fail pull-request trigger "$on_block" $'on:\n  pull_request:\n  workflow_dispatch:\n  workflow_call:\n'
-  expect_fail pull-request-target trigger "$on_block" $'on:\n  pull_request_target:\n  workflow_dispatch:\n  workflow_call:\n'
-  expect_fail push trigger "$on_block" $'on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n  workflow_call:\n'
-  expect_fail schedule trigger "$on_block" $'on:\n  schedule:\n    - cron: \'0 3 * * *\'\n  workflow_dispatch:\n  workflow_call:\n'
-  expect_fail inline-on trigger "$on_block" $'on: [pull_request, workflow_dispatch, workflow_call]\n'
-  expect_fail call-inputs trigger "$call_line" $'  workflow_call:\n    inputs:\n      mode:\n        type: string\n'
+  expect_fail pull-request trigger "$on_block" $'on:\n  pull_request:\n  workflow_dispatch:\n'
+  expect_fail pull-request-target trigger "$on_block" $'on:\n  pull_request_target:\n  workflow_dispatch:\n'
+  expect_fail push trigger "$on_block" $'on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n'
+  expect_fail schedule trigger "$on_block" $'on:\n  schedule:\n    - cron: \'0 3 * * *\'\n  workflow_dispatch:\n'
+  expect_fail inline-on trigger "$on_block" $'on: [pull_request, workflow_dispatch, workflow_call]\n  workflow_dispatch:\n'
+  expect_fail call-extra-input trigger "$call_mode" $'  workflow_call:\n    inputs:\n      other:\n        type: string\n      mode:\n'
+  expect_fail call-no-mode trigger "$call_mode" $'  workflow_call:\n    inputs:\n      mode2:\n'
+  expect_fail mode-default trigger $'        default: ci\n  workflow_call:\n' $'        default: release\n  workflow_call:\n'
+  expect_fail mode-options trigger $'        default: ci\n  workflow_call:\n' $'        default: ci\n        options: [ci, release]\n  workflow_call:\n'
   expect_fail call-outputs trigger "$call_line" $'  workflow_call:\n    outputs:\n      x:\n        value: y\n'
   expect_fail call-secrets trigger,secrets "$call_line" $'  workflow_call:\n    secrets:\n      NPM_KEY:\n        required: true\n'
-  expect_fail quoted-on top-level "$on_block" $'on:\n  workflow_dispatch:\n  workflow_call:\n"on":\n  workflow_dispatch:\n'
+  expect_fail quoted-on top-level "$top_perms" $'\n"on":\n  push:\npermissions:\n  contents: read\n'
   expect_fail npm-publish publish "$run_marker" $'    steps:\n      - name: publish\n        run: npm publish dist/npm/polyjose-wasm-0.1.0.tgz\n'
   expect_fail cargo-publish publish "$run_marker" $'    steps:\n      - name: publish\n        run: cargo publish -p polyjose\n'
   expect_fail wasm-pack-publish publish "$run_marker" $'    steps:\n      - name: publish\n        run: wasm-pack  publish bindings/wasm/pkg\n'

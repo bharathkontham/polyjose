@@ -1,0 +1,1 @@
+{"alg":"A128KW","enc":"A128CBC-HS256","crit":["x-ext"],"x-ext":true}

@@ -1,0 +1,1 @@
+{"alg":"ES256","typ":"JWT","kid":"attacker","jwk":{"kty":"EC","crv":"P-256","x":"uhAd3X7C07ijtmAyxKzts_abN-ZyyzTqGDHuIVAYZCw","y":"QFlPJHN8yY_RShgvH0QSsFl1Ngxc5XsNzyfmLhg7iSw"}}

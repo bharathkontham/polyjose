@@ -102,9 +102,8 @@ log_has() { grep -qF -- "$1" "$scratch/last.log"; }
 
 # The XCFramework library identifiers of ADR 0032 §1. A development build (`arm64_32: missing`,
 # no nightly) has `watchos-arm64` instead of `watchos-arm64_arm64_32`.
-release_libraries="ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64 tvos-arm64
-tvos-arm64-simulator watchos-arm64-simulator watchos-arm64_arm64_32 xros-arm64
-xros-arm64-simulator"
+release_libraries="ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64 watchos-arm64-simulator
+watchos-arm64_arm64_32"
 # shellcheck disable=SC2034,SC2086 # read by the tests; a word list
 dev_libraries=$(printf '%s\n' $release_libraries | sed 's/^watchos-arm64_arm64_32$/watchos-arm64/' | tr '\n' ' ')
 

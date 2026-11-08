@@ -1,0 +1,1 @@
+{"alg":"A128KW","enc":"A128GCM","cty":"JWT","iss":"https://issuer.example"}

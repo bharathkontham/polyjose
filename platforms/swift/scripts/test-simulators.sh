@@ -13,8 +13,8 @@
 #      It links both slices, arm64_32 (minos 9.0) and arm64, whose objects have minos 26.0 (Rust's
 #      default for aarch64-apple-watchos, ADR 0032 §1). An error fails the check; the linker's
 #      warnings are printed. Xcode 27.2's ld (ld-27106.1) gives none (measured 2026-11-07). Not a
-#      per-platform suite (ADR 0046 §2); tvOS and visionOS are checked by the XCFramework build
-#      only (ADR 0046 §3).
+#      per-platform suite (ADR 0046 §2). The XCFramework has no tvOS or visionOS slice (owner
+#      decision 2026-11-08).
 #   3. The iOS Simulator run (ADR 0046 §2): `xcodebuild test -scheme polyjose` on a disposable
 #      iPhone simulator on the iOS 27.2 runtime (com.apple.CoreSimulator.SimRuntime.iOS-27-2), with
 #      POLYJOSE_LOCAL_XCFRAMEWORK=1. The destination is that device's UDID, never a generic one

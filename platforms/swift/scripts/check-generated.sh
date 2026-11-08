@@ -41,9 +41,7 @@ case "$target_dir" in /*) ;; *) target_dir="$root/$target_dir" ;; esac
 # fingerprints instead of rebuilding.
 export MACOSX_DEPLOYMENT_TARGET=13.0
 export IPHONEOS_DEPLOYMENT_TARGET=16.0
-export TVOS_DEPLOYMENT_TARGET=16.0
 export WATCHOS_DEPLOYMENT_TARGET=9.0
-export XROS_DEPLOYMENT_TARGET=1.0
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/polyjose-check-generated.XXXXXX")"
 # Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
