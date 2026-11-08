@@ -3046,11 +3046,18 @@ fn sorted_digest_lines(lines: &[Vec<u8>]) -> Vec<Vec<u8>> {
 /// the vectors directory, `/`-separated on every platform, then `#0`, as
 /// every file holds one vector.
 fn vector_id(relative: &Path) -> String {
+    format!("{}#0", slash_path(relative))
+}
+
+/// A path under the vectors directory as a vector name: its components
+/// joined with `/` on every platform (`Path::display` gives `a\b.json` on
+/// Windows), so names in reports and failures are the same everywhere.
+fn slash_path(relative: &Path) -> String {
     let parts: Vec<String> = relative
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
-    format!("{}#0", parts.join("/"))
+    parts.join("/")
 }
 
 /// One results-file entry (`conformance/schema/results.schema.json`):
@@ -3143,7 +3150,7 @@ fn run_dir_with(dir: &Path, enabled: &[&str]) -> Report {
     report.complete = report.failures.is_empty();
     for path in files {
         let relative = path.strip_prefix(dir).unwrap_or(&path);
-        let name = relative.display().to_string();
+        let name = slash_path(relative);
         let id = vector_id(relative);
         let mut trace = Trace::default();
         // A file that cannot be read gets a `fail` and no digest line
@@ -5779,7 +5786,7 @@ fn jws_and_keys_vectors_are_binding_ready() {
         }
         checked += 1;
         if let Err(problem) = binding_ready(&text) {
-            failures.push(format!("{}: {problem}", relative.display()));
+            failures.push(format!("{}: {problem}", slash_path(relative)));
         }
     }
     assert!(
@@ -6539,7 +6546,7 @@ fn jwe_vectors_are_binding_ready() {
         }
         checked += 1;
         if let Err(problem) = binding_ready(&text) {
-            failures.push(format!("{}: {problem}", relative.display()));
+            failures.push(format!("{}: {problem}", slash_path(relative)));
         }
     }
     assert!(
@@ -7500,7 +7507,7 @@ fn jwt_vectors_are_binding_ready() {
         }
         checked += 1;
         if let Err(problem) = binding_ready_with(&text, Numbers::Safe) {
-            failures.push(format!("{}: {problem}", relative.display()));
+            failures.push(format!("{}: {problem}", slash_path(relative)));
         }
     }
     assert!(
@@ -8198,7 +8205,11 @@ fn vectors_digest_edge_corpus_matches_the_independent_oracle() {
         "{:?}",
         report.failures
     );
+    #[cfg(unix)]
     assert!(!report.complete);
+    // Without the link, nothing else in the corpus fails the walk.
+    #[cfg(not(unix))]
+    assert!(report.complete, "{:?}", report.failures);
     assert_eq!(report.digest_lines.len(), 7);
     assert_eq!(
         report.vectors_digest().as_deref(),

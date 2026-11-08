@@ -49,6 +49,9 @@ public class PackagingPlugin implements Plugin<Project> {
             task.getWorkspace().set(workspace);
             task.getScript().set(workspace.file("scripts/third-party-notices.sh"));
             task.getPackageName().convention("polyjose-ffi");
+            ProviderFactory providers = project.getProviders();
+            task.getBash().convention(providers.gradleProperty("polyjose.bash")
+                    .orElse(providers.environmentVariable("POLYJOSE_BASH")));
             task.getCargoInputs().from(
                     workspace.file("Cargo.toml"),
                     workspace.file("Cargo.lock"),

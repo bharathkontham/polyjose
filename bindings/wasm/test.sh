@@ -54,6 +54,10 @@
 # bindings/js/dist. Runs on macOS /bin/bash 3.2 and Linux bash.
 set -uo pipefail
 export LC_ALL=C
+# tests_ran (below) parses cargo's output, so it must be plain text: CARGO_TERM_COLOR=always (as
+# the workflows set it) wraps "Running" in ANSI escapes and every run would read as having run no
+# test.
+export CARGO_TERM_COLOR=never
 
 me=wasm
 here=$(cd "$(dirname "$0")" && pwd -P) || exit 1
