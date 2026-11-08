@@ -1,0 +1,743 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<verification-metadata xmlns="https://schema.gradle.org/dependency-verification" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://schema.gradle.org/dependency-verification https://schema.gradle.org/dependency-verification/dependency-verification-1.4.xsd">
+   <configuration>
+      <verify-metadata>true</verify-metadata>
+      <verify-signatures>true</verify-signatures>
+      <keyring-format>armored</keyring-format>
+      <ignored-keys>
+         <ignored-key id="012579464D01C06A" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="0DA8A5EC02D11EAD" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="280D66A55F5316C5" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="296CD27F60EED12C" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="5E1F79A7C298661E" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="66B50994442D2D40" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="6A0975F8B1127B83" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="86FDC7E2A11262CB" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="991EFB94DB91127D" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="A6ADFC93EF34893E" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="ABE9F3126BB741C1" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="B0F3710FA64900E7" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="D364ABAA39A47320" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="E93671C7272B7B3F" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="EB095DA7D2F6AC0E" reason="Key couldn't be downloaded from any key server"/>
+         <ignored-key id="EE92349AD86DE446" reason="Key couldn't be downloaded from any key server"/>
+      </ignored-keys>
+      <trusted-keys>
+         <trusted-key id="04543577D6A9CC626239C50C7ECBD740FF06AEB5">
+            <trusting group="org.glassfish.jaxb"/>
+            <trusting group="org.jvnet.staxex"/>
+            <trusting group="^com[.]sun($|([.].*))" regex="true"/>
+         </trusted-key>
+         <trusted-key id="0785B3EFF60B1B1BEA94E0BB7C25280EAE63EBE5" group="org.apache.httpcomponents"/>
+         <trusted-key id="0CC641C3A62453AB390066C4A41F13C999945293" group="commons-logging" name="commons-logging" version="1.2"/>
+         <trusted-key id="0E225917414670F4442C250DFD533C07C264648F">
+            <trusting group="androidx.databinding"/>
+            <trusting group="^com[.]android($|([.].*))" regex="true"/>
+         </trusted-key>
+         <trusted-key id="0F06FF86BEEAF4E71866EE5232EE5355A6BC6E42" group="^androidx[.]test($|([.].*))" regex="true"/>
+         <trusted-key id="19BEAB2D799C020F17C69126B16698A4ADF4D638" group="org.checkerframework" name="checker-qual"/>
+         <trusted-key id="1A55F091AD28C07F831FA44D7905DE25C78AD456" group="com.google.protobuf"/>
+         <trusted-key id="1D0A8B5E77C678A7C724445ABF984B4145EA13F7" group="com.squareup" name="javapoet" version="1.13.0"/>
+         <trusted-key id="1D217F8475EEE9F19AB8DD6B793FD5751A0F0780" group="^com[.]squareup($|([.].*))" regex="true"/>
+         <trusted-key id="2E3A1AFFE42B5F53AF19F780BCF4173966770193" group="org.jetbrains" name="annotations" version="13.0"/>
+         <trusted-key id="31BAE2E51D95E0F8AD9B7BCC40A3C4432BD7308C" group="com.googlecode.juniversalchardet" name="juniversalchardet" version="1.0.3"/>
+         <trusted-key id="33FD4BFD33554634053D73C0C2148900BCD3C2AF" group="org.jetbrains" name="annotations" version="23.0.0"/>
+         <trusted-key id="34441E504A937F43EB0DAEF96A65176A0FB1CD0B" group="org.apache.groovy"/>
+         <trusted-key id="475F3B8E59E6E63AA78067482C7B12F2A511E325" group="org.slf4j"/>
+         <trusted-key id="4F8FEC6785F611D9A712EA2734918B7D3969D2F5" group="com.google.dagger" name="dagger" version="2.28.3"/>
+         <trusted-key id="60200AC4AE761F1614D6C46766D68DAA073BE985" group="org.slf4j"/>
+         <trusted-key id="6DD3B8C64EF75253BEB2C53AD908A43FB7EC07AC" group="jakarta.activation"/>
+         <trusted-key id="7616EB882DAF57A11477AAF559A252FB1199D873" group="com.google.code.findbugs" name="jsr305" version="3.0.2"/>
+         <trusted-key id="7B121B76A7ED6CE6E60AD51784E913A8E3A748C0" group="org.bouncycastle"/>
+         <trusted-key id="7B72C18D9C362314BF8E981B0CAEBC0883C5BB65" group="^com[.]vanniktech($|([.].*))" regex="true"/>
+         <trusted-key id="7F36E793AE3252E5D9E9B98FEE9E7DC9D92FC896" group="com.google.errorprone"/>
+         <trusted-key id="8461EFA0E74ABAE010DE66994EB27DB2A3B88B8B" group="androidx.annotation"/>
+         <trusted-key id="84789D24DF77A32433CE1F079EB80E92EB2135B1" group="org.apache" name="apache"/>
+         <trusted-key id="90EE19787A7BCF6FD37A1E9180C08B1C29100955" group="com.squareup" name="javawriter" version="2.5.0"/>
+         <trusted-key id="A5BD02B93E7A40482EB1D66A5F69AD087600B22C" group="org.ow2.asm"/>
+         <trusted-key id="AA70C7C433D501636392EC02153E7A3C2B4E5118" group="org.eclipse.ee4j" name="project"/>
+         <trusted-key id="BCC135FC7ED8214F823D73E97FE9900F412D622E" group="com.google.flatbuffers" name="flatbuffers-java" version="1.12.0"/>
+         <trusted-key id="BDB5FA4FE719D787FB3D3197F6D4A1D411E9D1AE" group="^com[.]google($|([.].*))" regex="true"/>
+         <trusted-key id="E7DC75FC24FB3C8DFE8086AD3D5839A2262CBBFB" group="org.jetbrains.kotlinx"/>
+         <trusted-key id="FA7929F83AD44C4590F6CC6815C71C0A4E0B8EDD" group="net.java.dev.jna"/>
+         <trusted-key id="FB35C8D02B4724DADA23DE0AFD116C1969FCCFF3" group="org.json" name="json" version="20260814"/>
+         <trusted-key id="FC411CD3CB7DCB0ABC9801058118B3BCDB1A5000" group="jakarta.xml.bind"/>
+         <trusted-key id="FF6E2C001948C5F2F38B0CC385911F425EC61B51">
+            <trusting group="junit"/>
+            <trusting group="org.apiguardian"/>
+            <trusting group="org.junit"/>
+            <trusting group="org.junit.jupiter"/>
+            <trusting group="org.junit.platform"/>
+            <trusting group="org.opentest4j"/>
+         </trusted-key>
+      </trusted-keys>
+   </configuration>
+   <components>
+      <component group="androidx.tracing" name="tracing" version="1.1.0">
+         <artifact name="tracing-1.1.0.aar">
+            <sha256 value="5b78e2c618fc10b3d14decc01df76158f15954ad746aacf0607766721da081f6" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+         <artifact name="tracing-1.1.0.module">
+            <sha256 value="b1fed4309623b6f20bc817d8fbd70e4ea7085e40647694cd399ae58d2f0049e3" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="com.android.tools.build" name="bundletool" version="1.18.3">
+         <artifact name="bundletool-1.18.3.jar">
+            <sha256 value="ccad18514fd97db010856b2bbed40f481f8ba9349368c97ae54d72e3567d0171" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+         <artifact name="bundletool-1.18.3.pom">
+            <sha256 value="fa674b39b96cae98015f3850f366cfeb00fe6c7aea2d90b20c017b90e0996dae" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="com.android.tools.build.jetifier" name="jetifier-core" version="1.0.0-beta10">
+         <artifact name="jetifier-core-1.0.0-beta10.jar">
+            <sha256 value="26abb4a13927d9062169c504c9e94fe80e9ae3a4f7b5ab8875ab007536a91f5e" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+         <artifact name="jetifier-core-1.0.0-beta10.module">
+            <sha256 value="f0917589a42d276163f10040ab5842e91883dcbdb1d48bfd1f1fcaa72c1ca7b7" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="com.android.tools.build.jetifier" name="jetifier-processor" version="1.0.0-beta10">
+         <artifact name="jetifier-processor-1.0.0-beta10.jar">
+            <sha256 value="c5067a7b928237a1271a5e9cb5710e9f80b4973293945bc51e3a4c864ea4bfed" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+         <artifact name="jetifier-processor-1.0.0-beta10.module">
+            <sha256 value="36c25576b19993df360170528cc62b7246c37776d6158154a67cdf8fc2d58e13" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="com.google.auto" name="auto-parent" version="6">
+         <artifact name="auto-parent-6.pom">
+            <sha256 value="05f740c6648165db00cf618dd56c200c4725e358e6d54f5853e0bec15734ea0a" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.auto.value" name="auto-value-annotations" version="1.6.2">
+         <artifact name="auto-value-annotations-1.6.2.jar">
+            <sha256 value="b48b04ddba40e8ac33bf036f06fc43995fc5084bd94bdaace807ce27d3bea3fb" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="auto-value-annotations-1.6.2.pom">
+            <sha256 value="1c76cd462fc96e7aa96dc70ce82f0d54063d6df16db35c9c7d9cc0d1a99d3fff" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.auto.value" name="auto-value-parent" version="1.6.2">
+         <artifact name="auto-value-parent-1.6.2.pom">
+            <sha256 value="27b640c82179f5cff62009c0b72033d9bc60f60e9902a66802274b7fe37fc81c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.code.gson" name="gson" version="2.11.0">
+         <artifact name="gson-2.11.0.jar">
+            <sha256 value="57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="gson-2.11.0.pom">
+            <sha256 value="c0e547bea998888e6e25c5886a90e762272bc88b5275343dd2c05ded6ca2e360" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.code.gson" name="gson-parent" version="2.11.0">
+         <artifact name="gson-parent-2.11.0.pom">
+            <sha256 value="8acb1f3b72a6f026916ac0735bad9aab0293d527edb7b365327def13a9367b7a" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.crypto.tink" name="tink" version="1.7.0">
+         <artifact name="tink-1.7.0.jar">
+            <sha256 value="88970a456a08ba4c66b01b23e5846ca1095cc14e54cb48363e5d2e15a1307308" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="tink-1.7.0.pom">
+            <sha256 value="2aee3523715f8f2cd10b2603c8d19e561ac758310b7e2c9853946d2c5e7b4bf7" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_annotations" version="2.18.0">
+         <artifact name="error_prone_annotations-2.18.0.pom">
+            <sha256 value="920135797dcca5917b5a5c017642a58d340a4cd1bcd12f56f892a5663bd7bddc" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_annotations" version="2.27.0">
+         <artifact name="error_prone_annotations-2.27.0.pom">
+            <sha256 value="4ca5a35d61235e16549ac346d1e34551cdf0fe27e84aa57e03cbeb255ea4e5da" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_annotations" version="2.36.0">
+         <artifact name="error_prone_annotations-2.36.0.jar">
+            <sha256 value="77440e270b0bc9a249903c5a076c36a722c4886ca4f42675f2903a1c53ed61a5" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="error_prone_annotations-2.36.0.pom">
+            <sha256 value="d79cfd37c85f76d6b754c7501ee1dc8447b7b2642c2382d778252166bd331e9c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_parent" version="2.18.0">
+         <artifact name="error_prone_parent-2.18.0.pom">
+            <sha256 value="47f22e99c7bf466391def16f8377985e5d3ba6f5bbcf65853644805513e15fad" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_parent" version="2.27.0">
+         <artifact name="error_prone_parent-2.27.0.pom">
+            <sha256 value="fa81829d049559df6927f9c9a6fd6bbd09f8b50e6d4736ae72c8300b6c3d7654" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_parent" version="2.36.0">
+         <artifact name="error_prone_parent-2.36.0.pom">
+            <sha256 value="3a4cfc8a6bed61eb48e969796fc31ea0d270b63e670599946a61883adb7094dc" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.guava" name="guava-parent" version="26.0-android">
+         <artifact name="guava-parent-26.0-android.pom">
+            <sha256 value="f8698ab46ca996ce889c1afc8ca4f25eb8ac6b034dc898d4583742360016cc04" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.j2objc" name="j2objc-annotations" version="2.8">
+         <artifact name="j2objc-annotations-2.8.pom">
+            <sha256 value="37f87798b18385113c918bfa9e1276fe50735ef8fa849b5800c519d54dbf11f8" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.jimfs" name="jimfs" version="1.1">
+         <artifact name="jimfs-1.1.jar">
+            <sha256 value="c4828e28d7c0a930af9387510b3bada7daa5c04d7c25a75c7b8b081f1c257ddd" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="jimfs-1.1.pom">
+            <sha256 value="efa86e5cd922f17b472fdfcae57234d8d4ac3e148b6250737dfce454af7a7a44" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.google.jimfs" name="jimfs-parent" version="1.1">
+         <artifact name="jimfs-parent-1.1.pom">
+            <sha256 value="c71555751e57e0ef912870e8ac9625ae782502a6a5b9c19ccf83b2a97d8b26bd" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.squareup.moshi" name="moshi" version="1.15.2">
+         <artifact name="moshi-1.15.2.jar">
+            <sha256 value="767f7592c6c61eb693549a26d333c121f5383826bd287b899867aa326dae55e4" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="moshi-1.15.2.module">
+            <sha256 value="d952c6dd91a7b426c3f0a51edc3f7ceb3490ac01ff18301527adfec7a7837dd9" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.squareup.moshi" name="moshi-kotlin" version="1.15.2">
+         <artifact name="moshi-kotlin-1.15.2.jar">
+            <sha256 value="5c39cd77e83b111af9c54708173af96a89fd3b09d15019a11da355e83e97d75a" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="moshi-kotlin-1.15.2.module">
+            <sha256 value="e9d768798203049483cae20ce300cedff21bbb434bef38c7f91ee6aa2f034c31" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.squareup.okio" name="okio" version="3.7.0">
+         <artifact name="okio-3.7.0.module">
+            <sha256 value="f3cae009f0b6c842fbbc52ce77542c19d19d56ee99a5e555647f0bafc9d50cfa" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="com.sun.activation" name="all" version="1.2.1">
+         <artifact name="all-1.2.1.pom">
+            <pgp value="6DD3B8C64EF75253BEB2C53AD908A43FB7EC07AC"/>
+         </artifact>
+      </component>
+      <component group="commons-codec" name="commons-codec" version="1.17.1">
+         <artifact name="commons-codec-1.17.1.jar">
+            <sha256 value="f9f6cb103f2ddc3c99a9d80ada2ae7bf0685111fd6bffccb72033d1da4e6ff23" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="commons-codec-1.17.1.pom">
+            <sha256 value="7fa0db4d8150daf932958b8aea89ee24abb4d18e2316a5de535278fc131512a0" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="commons-io" name="commons-io" version="2.16.1">
+         <artifact name="commons-io-2.16.1.jar">
+            <sha256 value="f41f7baacd716896447ace9758621f62c1c6b0a91d89acee488da26fc477c84f" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="commons-io-2.16.1.pom">
+            <sha256 value="5777d292251c7895c04a4c57015683ec3b353a12486c9b3e7178e9b0b3c38fff" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="javax.inject" name="javax.inject" version="1">
+         <artifact name="javax.inject-1.jar">
+            <sha256 value="91c77044a50c481636c32d916fd89c9118a72195390452c81065080f957de7ff" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+         <artifact name="javax.inject-1.pom">
+            <sha256 value="943e12b100627804638fa285805a0ab788a680266531e650921ebfe4621a8bfa" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="net.sf.jopt-simple" name="jopt-simple" version="4.9">
+         <artifact name="jopt-simple-4.9.jar">
+            <sha256 value="26c5856e954b5f864db76f13b86919b59c6eecf9fd930b96baa8884626baf2f5" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="jopt-simple-4.9.pom">
+            <sha256 value="7af7e2d8b24b4798f04c2b7da24c9fbd1b7557b4e017c2054481565916079092" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="net.sf.kxml" name="kxml2" version="2.3.0">
+         <artifact name="kxml2-2.3.0.jar">
+            <sha256 value="f264dd9f79a1fde10ce5ecc53221eff24be4c9331c830b7d52f2f08a7b633de2" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+         <artifact name="kxml2-2.3.0.pom">
+            <sha256 value="31ce606f4e9518936299bb0d27c978fa61e185fd1de7c9874fe959a53e34a685" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="org.apache" name="apache" version="13">
+         <artifact name="apache-13.pom">
+            <pgp value="F254B35617DC255D9344BCFA873A8E86B4372146"/>
+         </artifact>
+      </component>
+      <component group="org.apache" name="apache" version="18">
+         <artifact name="apache-18.pom">
+            <pgp value="190D5A957FF22273E601F7A7C92C5FEC70161C62"/>
+         </artifact>
+      </component>
+      <component group="org.apache" name="apache" version="21">
+         <artifact name="apache-21.pom">
+            <sha256 value="af10c108da014f17cafac7b52b2b4b5a3a1c18265fa2af97a325d9143537b380" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.apache.commons" name="commons-compress" version="1.27.1">
+         <artifact name="commons-compress-1.27.1.jar">
+            <sha256 value="293d80f54b536b74095dcd7ea3cf0a29bbfc3402519281332495f4420d370d16" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="commons-compress-1.27.1.pom">
+            <sha256 value="df8cc1a8387d4ce842363b7209fdc6d35df9763839fd3fcab558a0f83f9d841c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.apache.commons" name="commons-lang3" version="3.16.0">
+         <artifact name="commons-lang3-3.16.0.jar">
+            <sha256 value="08709dd74d602b705ce4017d26544210056a4ba583d5b20c09373406fe7a00f8" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="commons-lang3-3.16.0.pom">
+            <sha256 value="e280383956c2e72c1deb3a307b3b75f05ee43649b7d43f0215f7b6c7b15eea2c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.apache.commons" name="commons-parent" version="34">
+         <artifact name="commons-parent-34.pom">
+            <pgp value="D6F1BC78607808EC8E9F69437A8860944FAD5F62"/>
+         </artifact>
+      </component>
+      <component group="org.apache.commons" name="commons-parent" version="69">
+         <artifact name="commons-parent-69.pom">
+            <sha256 value="d50da9c39bdca823d618d1b4a03b73f196497fcb8616fd0da727c8623592a9bb" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.apache.commons" name="commons-parent" version="71">
+         <artifact name="commons-parent-71.pom">
+            <sha256 value="95b7be70f316ae4ca22f6fbdd08de2182e87cd874a650de7c3d3386a747a82a3" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.apache.commons" name="commons-parent" version="72">
+         <artifact name="commons-parent-72.pom">
+            <sha256 value="4345debfc767b1aeac68abdd72fc67d18b521d4b390372a11b63ff0c586b2320" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.bitbucket.b_c" name="jose4j" version="0.9.5">
+         <artifact name="jose4j-0.9.5.jar">
+            <sha256 value="808fb3166f3e67dad9811c331029ab1681242fd52b735bc3f33f281167fcc72e" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="jose4j-0.9.5.pom">
+            <sha256 value="bad024180a1b469cbd94e5f2db12841bcac5443d9545607f673cfde677c1d872" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.bouncycastle" name="bc-jdk18on-bom" version="1.80.2">
+         <artifact name="bc-jdk18on-bom-1.80.2.pom">
+            <sha256 value="5f59cc51b21d92ddc08cc93b488983ea43dd211fe8d950335ef31bcdd7b15b47" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="org.hamcrest" name="hamcrest-core" version="1.3">
+         <artifact name="hamcrest-core-1.3.jar">
+            <sha256 value="66fdef91e9739348df7a096aa384a5685f4e875584cce89386a7a47251c4d8e9" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="hamcrest-core-1.3.pom">
+            <sha256 value="fde386a7905173a1b103de6ab820727584b50d0e32282e2797787c20a64ffa93" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.hamcrest" name="hamcrest-parent" version="1.3">
+         <artifact name="hamcrest-parent-1.3.pom">
+            <sha256 value="6d535f94efb663bdb682c9f27a50335394688009642ba7a9677504bc1be4129b" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jdom" name="jdom2" version="2.0.6">
+         <artifact name="jdom2-2.0.6.jar">
+            <sha256 value="1345f11ba606d15603d6740551a8c21947c0215640770ec67271fe78bea97cf5" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="jdom2-2.0.6.pom">
+            <sha256 value="47b23a79fe336b741b82434c6e049d68165256e405e75c10921fd72fa8a65d8d" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="fus-statistics-gradle-plugin" version="2.4.21">
+         <artifact name="fus-statistics-gradle-plugin-2.4.21-gradle96.jar">
+            <sha256 value="44a07b9203eb2c75ceb2d33327f89b991f2d35095a96a0f1c224a012c5465367" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="fus-statistics-gradle-plugin-2.4.21.module">
+            <sha256 value="3090b4e873054cdc29991ae94c92fa45afb4c145d460441d803baf6ef165bbb8" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-build-statistics" version="2.4.21">
+         <artifact name="kotlin-build-statistics-2.4.21.jar">
+            <sha256 value="f917249997fe48d1eb1204906b4cabc8230bf32a1d9fb385e52311acaa6ebc68" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-build-statistics-2.4.21.pom">
+            <sha256 value="4ac9fe3a27069f9ad87dc36ede15fc06335663d4ae46fac09a16bb090e16038c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-build-tools-api" version="2.4.0">
+         <artifact name="kotlin-build-tools-api-2.4.0.jar">
+            <sha256 value="66917335497f9ab75a36c34b3d90bad2bc8dc256c34b2413ecd0c9467fcf597d" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-build-tools-api-2.4.0.pom">
+            <sha256 value="9686fa8f16867b2aba2e5c0e4cfc4a0aeecf59fe6de419f89f7bd838fdde8e74" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-build-tools-api" version="2.4.21">
+         <artifact name="kotlin-build-tools-api-2.4.21.jar">
+            <sha256 value="c5cd6a49bd072b529ae10809111c16a7aa0f92147e95d288354017fd65799461" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-build-tools-api-2.4.21.pom">
+            <sha256 value="4b909e42d55242520278d5397eca1edd58921fe128942eeff95a6da279c2eb27" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-build-tools-compat" version="2.4.21">
+         <artifact name="kotlin-build-tools-compat-2.4.21.jar">
+            <sha256 value="9e71ba89b6d26e46a087d4f8b64bc2f0a774282ea779fc08b26527d0a80d4fe8" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-build-tools-compat-2.4.21.pom">
+            <sha256 value="9d9b4627d5b7bb8631457061275f21524d874b865550addec4f3b029d8265817" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-build-tools-cri-impl" version="2.4.0">
+         <artifact name="kotlin-build-tools-cri-impl-2.4.0.jar">
+            <sha256 value="5168b866945f6ac1ffcb6d4c88cf582497249469c2e4a4eafc0bcd35b5a264a9" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-build-tools-cri-impl-2.4.0.pom">
+            <sha256 value="856d59395489276e93edb4390c99397de83e20d27572c5238c56ed21e43433da" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-build-tools-cri-impl" version="2.4.21">
+         <artifact name="kotlin-build-tools-cri-impl-2.4.21.jar">
+            <sha256 value="d1849f9b98033f5333905409074ca90e6a0e17258cd0eb8befa47d795e695841" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-build-tools-cri-impl-2.4.21.pom">
+            <sha256 value="57f3c430dfec2e575bb1b64055412ace12d4ed5d9a02eb97a85dd47f53701ef1" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-build-tools-impl" version="2.4.0">
+         <artifact name="kotlin-build-tools-impl-2.4.0.jar">
+            <sha256 value="076c0a7f84d303f1e390774410c8678b8b584faa3f642435f93d2e4e81dabe7c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-build-tools-impl-2.4.0.pom">
+            <sha256 value="485ca3d511aa384207db5706e0741dc79ace45d40e0489f9ef29731aafb14f7c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-build-tools-impl" version="2.4.21">
+         <artifact name="kotlin-build-tools-impl-2.4.21.jar">
+            <sha256 value="3152b3e1fbaa4d48f3681734a2c0efc438359a48c8a3c5cac00d874670de1377" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-build-tools-impl-2.4.21.pom">
+            <sha256 value="6ef5cb90e2d8ea75faf9ec668d306b6be7628f11ebd41878a82cae3e17dbedfb" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-compiler-embeddable" version="2.4.0">
+         <artifact name="kotlin-compiler-embeddable-2.4.0.jar">
+            <sha256 value="c2b25e8c1c93ec416ba4327f5e31eaec0f0c8847241b9353e294b8db9dce564f" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-compiler-embeddable-2.4.0.pom">
+            <sha256 value="f5d78540108e7bbc9162253ce52c42507ead2e530945213dd2a3b793b590c53c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-compiler-embeddable" version="2.4.21">
+         <artifact name="kotlin-compiler-embeddable-2.4.21.jar">
+            <sha256 value="ef19419c765e7ac8404465fa026ca8fc4dbb8a822de0fc79aa53c8dce29f1d02" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-compiler-embeddable-2.4.21.pom">
+            <sha256 value="e1620d2b18319cf7495dc67697ab03ba23a7d6d9da685285884a7a8aa08ae891" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-compiler-runner" version="2.4.0">
+         <artifact name="kotlin-compiler-runner-2.4.0.jar">
+            <sha256 value="ad9608152740e92d94a278b4ff2ca82c4bf5ff8ef219220e3c07aeb554638cee" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-compiler-runner-2.4.0.pom">
+            <sha256 value="5e1ed156cb8d38b61e2ccc546dbd8b2bde778367eb298f8875bd820fbfd0b0f2" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-compiler-runner" version="2.4.21">
+         <artifact name="kotlin-compiler-runner-2.4.21.jar">
+            <sha256 value="75cd5956405697559e6925ebc5808449a2e12002d4f017275281ad3d4c0c7985" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-compiler-runner-2.4.21.pom">
+            <sha256 value="619d17c885321949eaa167af0842cad8f7aa83a4a9ca1051e5de04d11a6c0f40" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-daemon-client" version="2.4.0">
+         <artifact name="kotlin-daemon-client-2.4.0.jar">
+            <sha256 value="f546f0b3699c4984f320dd03080de05cad61064208ba8f37df0d3f8f4a7fd14a" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-daemon-client-2.4.0.pom">
+            <sha256 value="143793627382d905eda93e152a28c993f6323fc4b748370a45c7badc99914a13" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-daemon-client" version="2.4.21">
+         <artifact name="kotlin-daemon-client-2.4.21.jar">
+            <sha256 value="095903c4c4713bf91a562d226d7ba0464cf5424e76342d487deec494451ab29b" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-daemon-client-2.4.21.pom">
+            <sha256 value="c2f18065fa18f5e92eff14f34029e4f70052011070655120796adbce7167ad65" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-daemon-embeddable" version="2.4.0">
+         <artifact name="kotlin-daemon-embeddable-2.4.0.jar">
+            <sha256 value="383093af5e078435b60043d19bfa83eb6191be0f4d13a28fb1c8a0f3ab24fe66" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-daemon-embeddable-2.4.0.pom">
+            <sha256 value="cb36e780fcb39ee09aab6e398f9bd5ea27f982bb6e19329742a20eb2ebdc2936" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-daemon-embeddable" version="2.4.21">
+         <artifact name="kotlin-daemon-embeddable-2.4.21.jar">
+            <sha256 value="7b3ef24674e5bcffcadfc4e43202ea314194939ecbcdd90a4770b2f1b04e0d07" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-daemon-embeddable-2.4.21.pom">
+            <sha256 value="95236a3a7e9953545e2ff7c6dc0ea7ffeb27560000f20abe89dc53790fec3c7e" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-gradle-plugin" version="2.4.21">
+         <artifact name="kotlin-gradle-plugin-2.4.21-gradle96.jar">
+            <sha256 value="d0a11912936c8801f1773a47e8fc51835a6ab568d73e4e1d188281955a7f575b" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-gradle-plugin-2.4.21.module">
+            <sha256 value="a412aecabbb40c7ed2fad5311d0114d4ca0e3a9690658ad3c4caed619e400d94" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-gradle-plugin-annotations" version="2.4.21">
+         <artifact name="kotlin-gradle-plugin-annotations-2.4.21.jar">
+            <sha256 value="5c386b0fa287584497b07d62af954e30d05907e6da867221124d0bb936989bbd" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-gradle-plugin-annotations-2.4.21.pom">
+            <sha256 value="b0f6b87a35d4be7ae06e554efdb261ea4bc5d59fa282c23ee28061d30805ddd6" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-gradle-plugin-api" version="2.4.21">
+         <artifact name="kotlin-gradle-plugin-api-2.4.21-gradle96.jar">
+            <sha256 value="43b8c73f3e4f123b1a5e4bc8e62bd9b258dfa84129e6564bebb03c5fada84d23" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-gradle-plugin-api-2.4.21.module">
+            <sha256 value="b8ae1c9ee5976145d4fd7925012e5699e2df5df7fe9613bac41d59404a58e815" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-gradle-plugin-idea" version="2.4.21">
+         <artifact name="kotlin-gradle-plugin-idea-2.4.21.jar">
+            <sha256 value="086734484c7edf19a620ab1a617d097c40e03bc52602e77840ea5ebd6380e514" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-gradle-plugin-idea-2.4.21.module">
+            <sha256 value="ddd2bb8f319a7c468ba2fb5a404b795c69e066bd5ad2d565b47b86fa2a337606" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-gradle-plugin-idea-proto" version="2.4.21">
+         <artifact name="kotlin-gradle-plugin-idea-proto-2.4.21.jar">
+            <sha256 value="4559d92c5c1758a3e1ec5728822b059b2eb4aebef13c701ee86c7688acf164d5" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-gradle-plugin-idea-proto-2.4.21.pom">
+            <sha256 value="3c6eff2166eb46a8474b7bcccaa7d1ca5074260c866cc4bb2ba3678216a7bc15" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-gradle-plugins-bom" version="2.4.21">
+         <artifact name="kotlin-gradle-plugins-bom-2.4.21.module">
+            <sha256 value="04f6a73a2c34217ac31599b8ed5ff24b85ebd410d32242eb27965c7b213f56c3" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-gradle-plugins-bom-2.4.21.pom">
+            <sha256 value="624c0c869b3fcf1665afec9c5c51a807be0a8c983931ebb188548ddcdb055780" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-klib-commonizer-api" version="2.4.21">
+         <artifact name="kotlin-klib-commonizer-api-2.4.21.jar">
+            <sha256 value="62ebe32fcf69600125b28388f0a80781276784d90e14d333bbd5080b4807220c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-klib-commonizer-api-2.4.21.pom">
+            <sha256 value="186a53ce6f218e43472808dc32cab627e19c144df2517398794bdb53d2df14a0" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-klib-commonizer-embeddable" version="2.4.21">
+         <artifact name="kotlin-klib-commonizer-embeddable-2.4.21.jar">
+            <sha256 value="2f8df89c7567b6f732b83e7184af7bb9c039ecd6290c0805fe015d9743bb5cf7" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-klib-commonizer-embeddable-2.4.21.pom">
+            <sha256 value="5f43d7cae54104cf0acc0e0f9dbce0f13f1df0c0138256b0f3299f5ff1e04a07" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-native-utils" version="2.4.21">
+         <artifact name="kotlin-native-utils-2.4.21.jar">
+            <sha256 value="e1858bf1fb5bbb1738c4fa0f9cfb502b911cabf313a5de4cae686d6c50d74814" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-native-utils-2.4.21.pom">
+            <sha256 value="9882156113d96f7911101a721cce2adefe2c8d9acc8844fb6397b8523538db37" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-reflect" version="1.6.10">
+         <artifact name="kotlin-reflect-1.6.10.jar">
+            <sha256 value="3277ac102ae17aad10a55abec75ff5696c8d109790396434b496e75087854203" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-reflect-1.6.10.pom">
+            <sha256 value="57905524274a00ae028aaccc27283f6bc5925a934a046c1cc5d06c8ee4d6d5a9" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-reflect" version="2.2.10">
+         <artifact name="kotlin-reflect-2.2.10.jar">
+            <sha256 value="c48db4f8cd1bfd67f72d59255065fb41bfda43ca2942dac4d9deb897aa126ba4" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-reflect-2.2.10.pom">
+            <sha256 value="ae46614906414404cefc41a467435205d6dee67a2390598328a639ad2bacbd11" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-reflect" version="2.4.10">
+         <artifact name="kotlin-reflect-2.4.10.jar">
+            <sha256 value="25a1aef7454d46548ecaaf51021b0e52e38141a62ed75af124da109b7324c4e5" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-reflect-2.4.10.pom">
+            <sha256 value="4258f0212f4bd72e3047f7daace38e0de2ebff3f7e923e836431fd8f5b19189d" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-script-runtime" version="2.4.0">
+         <artifact name="kotlin-script-runtime-2.4.0.jar">
+            <sha256 value="196e8ecbf63daf477e34e67c2f871ee232ae7bf8b377432d876d1bbf9d273de3" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-script-runtime-2.4.0.pom">
+            <sha256 value="ce705c50e7e0afb22298acff0a983cdb6ea0f7fe2d1b473cee42b38405bc357f" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-script-runtime" version="2.4.21">
+         <artifact name="kotlin-script-runtime-2.4.21.jar">
+            <sha256 value="a658cf5902a1525a06c264a5e42b437e97a6679ddeef8ca641246f270cf6a013" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-script-runtime-2.4.21.pom">
+            <sha256 value="425d1683a903d085a1718122918242ad6ad0246c79283786697395e4d3a8c801" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-scripting-common" version="2.4.21">
+         <artifact name="kotlin-scripting-common-2.4.21.jar">
+            <sha256 value="67817eeee13da1f827f7ab9b961e300c2a6c612c290dfebb12db2eafcf0813b3" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-scripting-common-2.4.21.pom">
+            <sha256 value="5bf1576f1519ef4ee07b35470bf79b921d3b0212b52bce2e2333e88ec54be257" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-scripting-compiler-embeddable" version="2.4.21">
+         <artifact name="kotlin-scripting-compiler-embeddable-2.4.21.jar">
+            <sha256 value="a9a2f4aab2d01ebec3a8ba91c4cc07a4589205867378e98854f2a3d0ecf0f31a" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-scripting-compiler-embeddable-2.4.21.pom">
+            <sha256 value="cf0fd334e23f41d1a58d1c784b61e8abb3c8ff41f348c631967f98c8d6b039d4" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-scripting-compiler-impl-embeddable" version="2.4.21">
+         <artifact name="kotlin-scripting-compiler-impl-embeddable-2.4.21.jar">
+            <sha256 value="5794e84bb83b855540c1105997a5963745d7c15d12654bb07304bb115564a7cb" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-scripting-compiler-impl-embeddable-2.4.21.pom">
+            <sha256 value="58f11ca7ed212eb26bf84416ee39a7714618f04a5dd119c09d3708cbbc3cf771" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-scripting-jvm" version="2.4.21">
+         <artifact name="kotlin-scripting-jvm-2.4.21.jar">
+            <sha256 value="f00bc053865d7c2864e26087ce50b60ee8bdd30f9a252890d21a34e35d398f17" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-scripting-jvm-2.4.21.pom">
+            <sha256 value="f9de68cf49f356252fe4af9185f1dd3a2a5cf6ca236da03452a83513e223dbfc" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-stdlib" version="2.2.10">
+         <artifact name="kotlin-stdlib-2.2.10.jar">
+            <sha256 value="9c67cc79efd6b9215b49d2a4308f5f3433537376c7c88e89bdd6729bd096e61a" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-stdlib-2.2.10.module">
+            <sha256 value="db78df08283591cb67c8b9d2796109eb52b6088d4dfe102b545f20118249713f" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-stdlib" version="2.4.0">
+         <artifact name="kotlin-stdlib-2.4.0.jar">
+            <sha256 value="ccb14ff83fabcb11458b798dbc9824748ccdffeec79c9aba789e6ed1cda86b1c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-stdlib-2.4.0.module">
+            <sha256 value="c24a47dcbd9295d776f443be41d77ac245309601ed053711dee2b0254be02db6" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-stdlib" version="2.4.10">
+         <artifact name="kotlin-stdlib-2.4.10.jar">
+            <sha256 value="4ec0293bc3751423b203f1d8493251c57c42e73eb6377a6b8560d0974ff0a6df" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-stdlib-2.4.10.module">
+            <sha256 value="1c04a98f1200c8705d015df08977211589eecbc87cf1c4c6d28a92682fe8446e" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-stdlib" version="2.4.21">
+         <artifact name="kotlin-stdlib-2.4.21.jar">
+            <sha256 value="bd8250210584cb659847dce9cda660f8e9906e5def7fbebcea93dc6dcb6a88a3" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-stdlib-2.4.21.module">
+            <sha256 value="03b0df67c0cd74a948a45c5b03c4bbcfb31ab9b9879fb380adf7c187b6594b7f" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-stdlib-jdk7" version="2.2.10">
+         <artifact name="kotlin-stdlib-jdk7-2.2.10.jar">
+            <sha256 value="cf95eccc6cc784dff479dee0b8834f3584b93292cc5d91972e82f5d7b9e13e3b" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-stdlib-jdk7-2.2.10.pom">
+            <sha256 value="be494907e0e19c78bb821154afa1776d5ad7a058b4ab30090f74354b0e1338de" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-stdlib-jdk8" version="2.2.10">
+         <artifact name="kotlin-stdlib-jdk8-2.2.10.jar">
+            <sha256 value="8974bfdd08b1d81843fe8d11f0729ab6e5b3c1f88d671ebe0c006358129ce149" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-stdlib-jdk8-2.2.10.pom">
+            <sha256 value="2569cf5a980724f140157501db36dffab919cd0d443d2e14b5a35a2f96f84fac" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-tooling-core" version="2.4.21">
+         <artifact name="kotlin-tooling-core-2.4.21.jar">
+            <sha256 value="5fc5db083803232857408ed5c25bcc307c703b04bdef6cb2c34ebf4db611a622" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-tooling-core-2.4.21.pom">
+            <sha256 value="b26b1cb6480001519d4650586cdc6054ea2d2d486ff332431c543eb8f76f41ce" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-util-io" version="2.4.21">
+         <artifact name="kotlin-util-io-2.4.21.jar">
+            <sha256 value="5821175f24578ca8f1ef405bc982b3668f3f40f1a5dd28bb3283dd5215a922d1" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-util-io-2.4.21.pom">
+            <sha256 value="a16f898aa8c686dc0b83d556ac4adecfcadbb6662ca547fca7802bf536d6d3d3" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-util-klib" version="2.4.21">
+         <artifact name="kotlin-util-klib-2.4.21.jar">
+            <sha256 value="f01f79d54968941dfa83a525ae173be93460bb85b0bf2cc9ff06f6eb0864691e" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-util-klib-2.4.21.pom">
+            <sha256 value="97b59495de92c789c6963e4e70d5545ceccd2f0fab67d7ce72f7c5a87b948030" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-util-klib-metadata" version="2.4.21">
+         <artifact name="kotlin-util-klib-metadata-2.4.21.jar">
+            <sha256 value="a47f883b82fc3b99fe3d666498b22312628afb5cc1b9b26e8188175be2da6060" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="kotlin-util-klib-metadata-2.4.21.pom">
+            <sha256 value="a0f7f315c9f60b53458cc1e034a7c55e17619ce7db51db43efb7d3cdacbb5c6c" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin.jvm" name="org.jetbrains.kotlin.jvm.gradle.plugin" version="2.4.21">
+         <artifact name="org.jetbrains.kotlin.jvm.gradle.plugin-2.4.21.pom">
+            <sha256 value="8e08073d123182e69c07d24c6dca7b98cc53a37707a73a6af7be88e38218b42b" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.ow2" name="ow2" version="1.5.1">
+         <artifact name="ow2-1.5.1.pom">
+            <sha256 value="321ddbb7ee6fe4f53dea6b4cd6db74154d6bfa42391c1f763b361b9f485acf05" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+      <component group="org.sonatype.oss" name="oss-parent" version="7">
+         <artifact name="oss-parent-7.pom">
+            <sha256 value="b51f8867c92b6a722499557fc3a1fdea77bdf9ef574722fe90ce436a29559454" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="org.sonatype.oss" name="oss-parent" version="9">
+         <artifact name="oss-parent-9.pom">
+            <pgp value="44FBDBBC1A00FE414F1C1873586654072EAD6677"/>
+         </artifact>
+      </component>
+      <component group="org.tensorflow" name="tensorflow-lite-metadata" version="0.2.0">
+         <artifact name="tensorflow-lite-metadata-0.2.0.jar">
+            <sha256 value="e9f18b8a41f017e9033cb0ed85c8a2ba2307292cdfe25eae365923e7a31d2a70" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+         <artifact name="tensorflow-lite-metadata-0.2.0.pom">
+            <sha256 value="0fe31326e83b7622cbcd9c75d467b291f01ffe3cc6e3e76651ac05a1c1c7a360" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
+         </artifact>
+      </component>
+   </components>
+</verification-metadata>
