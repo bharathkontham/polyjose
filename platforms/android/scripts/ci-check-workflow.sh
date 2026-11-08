@@ -14,6 +14,20 @@
 #   actions      every `uses:` is `<owner>/<repo>@<40-hex commit> # v<version>` and that exact
 #                action, SHA and version is one of ci.yml's own pins (the same SHAs) or one of the
 #                three first-party pins below; no local, docker or unpinned action.
+#   with:        each step's `with:` is a block whose keys are on its action's allow-list
+#                (with_allow below): actions/checkout takes only `persist-credentials: false`,
+#                which every checkout must have, and a numeric `fetch-depth` (no repository, ref,
+#                path, ssh-key or token: the steps would run another tree's scripts); the other
+#                actions take only the inputs this workflow uses; an action not listed takes none.
+#                Each input is a one-line value (no nested key, block scalar or continuation line).
+#   shell        every `shell:`, also `defaults.run.shell`, is exactly `bash`.
+#   guards       no `continue-on-error` anywhere (a failing step or job fails the run), and no
+#                `container:` or `services:` (an image would run the steps).
+#   downloads    no curl or wget output run as code in a run: script: piped into a shell or an
+#                interpreter (also through sudo, env, a path, a subshell, $VAR, source or
+#                tee >(sh)), or feeding a shell, eval or source through <( ), $( ) or backticks.
+#                Each logical line is checked (joined at a trailing \ or |, folded as YAML folds
+#                a > block or a plain scalar). A download to a file passes.
 #   credentials  no `secrets` context or `secrets:` key, no token (github.token, GITHUB_TOKEN, a
 #                `token`/`github-token` input), no deployment `environment:`, no password,
 #                username or credential, no Maven Central, Sonatype, OSSRH, Nexus or Central
@@ -28,7 +42,16 @@
 #   structure    no YAML anchors, aliases or merge keys, no second document, no tab indentation,
 #                no flow-style `uses:`, and only plain keys: no quoted ("uses": / 'uses':),
 #                explicit (? uses) or tagged (!!str uses:) key; a quoted uses key also fails the
-#                actions rule.
+#                actions rule. No flow-style `with:` or `run:`, and no second `uses:` or `with:`
+#                in one step. No flow mapping or sequence on a line of its own (a flow list item
+#                such as the matrix include is fine). Only the run: of a step is a script: any
+#                other run: (defaults.run) is a block of keys, and a step script that starts on
+#                the next line starts as a plain or quoted scalar, not with a YAML indicator
+#                ({ [ ! & * ? - | > ...). Keys are matched in lower case, so `Uses:` or `RUN:`
+#                meet the same rules, and a case variant of a workflow keyword (on, permissions,
+#                uses, with, run, shell, defaults, secrets, container, services,
+#                continue-on-error, environment) fails; an env: name equal to one of them in another case (SHELL:)
+#                fails too, so rename it.
 #   scripts      the steps call each of ci-host-natives.sh, ci-android-sdk.sh, ci-emulator.sh,
 #                ci-assemble-jar.sh and ci-parity.sh, and every platforms/android/scripts/ci-*.sh
 #                the workflow names exists and is executable.
@@ -60,8 +83,9 @@ pin_re='^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-
 pin_of() { sed -E "s|$pin_re|\\2|" | sed -E 's/[[:space:]]+#[[:space:]]+/ # /'; }
 pins_of() { grep -E "$pin_re" "$1" | pin_of; }
 allowed=$( { pins_of "$ci"; printf '%s\n' "$extra_pins"; } | sort -u)
-# Every uses key, also a quoted one ("uses" or 'uses'), which pin_re then rejects.
-uses=$(grep -nE "^[[:space:]]*(-[[:space:]]+)?(uses|\"uses\"|'uses')[[:space:]]*:" "$wf")
+# Every uses key, also a quoted one ("uses" or 'uses') or one in another case (Uses, USES), which
+# pin_re (lower case only) then rejects.
+uses=$(grep -inE "^[[:space:]]*(-[[:space:]]+)?(uses|\"uses\"|'uses')[[:space:]]*:" "$wf")
 if [ -z "$uses" ]; then fail "actions: no uses: line"; fi
 while IFS= read -r line; do
   [ -n "$line" ] || continue
@@ -91,6 +115,8 @@ function strip(s,   i, c, q, out, prev) {
   sub(/[ \t]+$/, "", out)
   return out
 }
+# A key `name` in block form (after the indent and any "- ") or in flow form (after { or ,).
+function has_key(s, name) { return s ~ ("(^[ ]*(-[ ]+)*|[{,][ ]*)" name "[ ]*:([ ,}]|[]]|$)") }
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 function flat(s) { gsub(/[ \t]/, "", s); return s }
 # The context names and functions an expression may use.
@@ -183,7 +209,107 @@ function end_permissions() {
   }
   perm_open = 0
 }
-BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top_perm_ok = 0; run_open = 0 }
+# curl or wget whose output runs as code (security audit L3): a pipe into a shell or interpreter
+# (also through sudo, env, a path or flags: `curl -fsSL u | sudo -E bash -`), or a shell, eval or
+# source fed by a process or command substitution (`bash <(curl u)`, `sh -c "$(wget -qO- u)"`).
+# s is one logical line of a run: script, in lower case. A download to a file passes.
+function is_runner(t) {
+  gsub(/["\047\\]/, "", t); sub(/.*\//, "", t)
+  return t ~ /^(sh|bash|zsh|dash|ksh|mksh|ash|fish|csh|tcsh|pwsh|powershell|python[0-9.]*|perl|ruby|node|php)$/
+}
+# A pipe segment that runs its input: its command (after assignments, a subshell ( or group {)
+# is a shell, interpreter, `.`, source, eval or an expanded $VAR, or a wrapper (sudo, env, ...)
+# with one of those among its arguments.
+function runs_code(seg,   tok, n, i, t) {
+  n = split(seg, tok, " ")
+  for (i = 1; i <= n; i++) {
+    t = tok[i]; gsub(/["\047]/, "", t); sub(/^[({]+/, "", t)
+    if (t == "" || t ~ /^[a-z_][a-z0-9_]*=/) continue
+    if (is_runner(t) || t ~ /^(\.|source|eval)$/ || t ~ /^\$/) return 1
+    sub(/.*\//, "", t)
+    if (t !~ /^(sudo|doas|env|command|exec|nohup|time|nice|stdbuf|xargs|busybox)$/) return 0
+    for (i++; i <= n; i++) if (is_runner(tok[i])) return 1
+    return 0
+  }
+  return 0
+}
+function check_download(s, n, r,   dl, rest, parts, k, i, seg, before, c2, t, m, tok, j) {
+  dl = "(^|[^a-z0-9_.-])(curl|wget)([^a-z0-9_.-]|$)"
+  if (s !~ dl) return
+  match(s, dl); rest = substr(s, RSTART + RLENGTH - 1)
+  gsub(/\|\|/, " ", rest); gsub(/\|&/, "|", rest)
+  k = split(rest, parts, "|")
+  for (i = 2; i <= k; i++) {
+    seg = parts[i]; sub(/[;&)].*/, "", seg)
+    if (runs_code(seg)) { fail_at(n, r, "downloads: curl or wget piped to a shell (download to a file, check its hash, then run it)"); return }
+  }
+  # An output process substitution after the download: tee >(sh).
+  for (t = rest; (i = index(t, ">(")) > 0; ) {
+    t = substr(t, i + 2); seg = t; sub(/[;&|)].*/, "", seg)
+    if (runs_code(seg)) { fail_at(n, r, "downloads: curl or wget piped to a shell (download to a file, check its hash, then run it)"); return }
+  }
+  for (i = 1; i <= length(s); i++) {
+    c2 = substr(s, i, 2)
+    if (c2 != "<(" && c2 != "$(" && substr(s, i, 1) != "`") continue
+    if (substr(s, i) !~ dl) continue
+    before = substr(s, 1, i - 1); sub(/.*[;&|]/, "", before)
+    m = split(before, tok, " ")
+    for (j = 1; j <= m; j++) {
+      t = tok[j]; gsub(/["\047]/, "", t)
+      if (is_runner(t) || t == "eval" || t == "source" || t == ".") {
+        fail_at(n, r, "downloads: curl or wget piped to a shell (download to a file, check its hash, then run it)"); return
+      }
+    }
+  }
+}
+# A run: script is checked one logical line at a time: lines joined at a trailing \ or | in a
+# literal (|) block, and all lines joined in a folded (>) block or a plain or quoted scalar, as
+# YAML folds them.
+function run_add(s) {
+  s = trim(s)
+  if (acc == "") { acc_line = NR; acc_raw = raw; acc = s } else acc = acc " " s
+  if (run_fold) return
+  if (acc ~ /\\$/) { sub(/\\$/, "", acc); return }
+  if (acc ~ /(^|[^|])\|$/) return
+  run_end()
+}
+function run_end() { if (acc != "") check_download(acc, acc_line, acc_raw); acc = "" }
+function fail_at(n, r, msg) { printf "FAIL: %s: line %d: %s\n", msg, n, r }
+# The end of a list item (a step): its with: keys against the allow-list of its action.
+function end_item(   i, k, v, list, pcf) {
+  if (item_action == "" && item_with) fail_at(with_line, with_raw, "actions: with: without uses: in the same step")
+  if (item_action != "") {
+    list = (item_action in with_allow) ? with_allow[item_action] : ""
+    pcf = 0
+    for (i = 1; i <= wk_n; i++) {
+      k = wk_key[i]; v = wk_val[i]
+      if (index(" " list " ", " " k " ") == 0)
+        fail_at(wk_line[i], wk_raw[i], "actions: with: " k " is not allowed for " item_action (list == "" ? " (it takes no with: keys here)" : " (only " list ")"))
+      else if (item_action == "actions/checkout" && k == "persist-credentials") {
+        if (v == "false") pcf = 1
+        else fail_at(wk_line[i], wk_raw[i], "actions: with: persist-credentials must be false for actions/checkout")
+      } else if (item_action == "actions/checkout" && k == "fetch-depth" && v !~ /^[0-9]+$/)
+        fail_at(wk_line[i], wk_raw[i], "actions: with: fetch-depth must be a number for actions/checkout")
+    }
+    if (item_action == "actions/checkout" && !pcf)
+      fail_at(item_line, item_raw, "actions: actions/checkout without with: persist-credentials: false (it would keep the token)")
+  }
+  item_open = 0; item_action = ""; item_uses = 0; item_with = 0; wk_n = 0; with_open = 0
+}
+BEGIN {
+  on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top_perm_ok = 0; run_open = 0
+  item_open = 0; item_action = ""; item_uses = 0; item_with = 0; wk_n = 0; with_open = 0
+  run_maybe = 0; run_fold = 0; acc = ""
+  # The with: keys each action may take (security audit L3): a checkout only of this repository
+  # at the dispatched commit (no repository, ref, path, ssh-key or token), and no other action
+  # input than the shipped workflow uses. An action not listed takes none. Add a key here only
+  # with a review of what that input can fetch, run or expose.
+  with_allow["actions/checkout"] = "persist-credentials fetch-depth"
+  with_allow["Swatinem/rust-cache"] = "save-if"
+  with_allow["actions/setup-java"] = "distribution java-version"
+  with_allow["actions/upload-artifact"] = "name path if-no-files-found"
+  with_allow["actions/download-artifact"] = "pattern path merge-multiple"
+}
 {
   raw = $0
   if (raw ~ /^\t/ || raw ~ /^ *\t/) fail("structure: tab indentation")
@@ -207,15 +333,59 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
   if (w ~ /:[ ]*write([ ]|$|,|})|write-all|read-all/) fail("permissions: a write or read-all grant")
   check_expressions(code)
 
-  # Inside a run: script (a block scalar): shell, not YAML; ${{ }} is forbidden.
+  # The run: of a step with no value on its line: a plain or quoted scalar script that starts on the
+  # next line. A first line that starts with a YAML indicator (a flow collection, tag, anchor,
+  # alias, explicit key, block scalar, ...) is not a script and is checked as YAML (B10).
+  if (run_maybe) {
+    run_maybe = 0
+    if (indent > run_col && !parse_key(code)) {
+      t = trim(code)
+      if (t ~ /^[-?:]( |$)/ || index(",[]{}&*!|>%@\140", substr(t, 1, 1))) fail("structure: a run: script that is not a plain or quoted scalar (outside the subset)")
+      else { run_open = 1; run_fold = 1; acc = "" }
+    }
+  }
+  # Inside a run: script (a block scalar or the rest of a multi-line scalar): shell, not YAML;
+  # ${{ }} is forbidden.
   if (run_open && indent > run_col) {
     if (index(code, "${{")) fail("expressions: ${{ }} inside a run: script (pass it through env:)")
+    run_add(low)
     next
   }
+  if (run_open) run_end()
   run_open = 0
   if (code ~ /(^|[ {,[])[&*][A-Za-z0-9_]/ || code ~ /<<[ ]*:/) fail("structure: YAML anchor, alias or merge key")
   if (low ~ /[{,][ ]*["\047]?uses["\047]?[ ]*:/) fail("structure: flow-style uses:")
   if ((found = key_syntax(code)) != "") fail("structure: " found " (outside the subset)")
+  # A flow mapping or sequence as a whole line (a value on the line after its key): its keys
+  # would not be read as keys. A flow list item ("- { ... }", the matrix include) is fine.
+  if (code ~ /^ *[{[]/) fail("structure: a flow mapping or sequence on its own line (outside the subset)")
+  # A guard that may fail without failing its job, and a container or service image that would
+  # run the steps, in any position (security audit L3).
+  if (has_key(low, "continue-on-error")) fail("continue-on-error: not allowed (a failing step or job must fail the run)")
+  if (has_key(low, "container") || has_key(low, "services")) fail("containers: container: or services: (an image would run the steps)")
+  if (low ~ /[{,][ ]*shell[ ]*:/) fail("shell: a flow-style shell: (only a block shell: bash)")
+  if (low ~ /[{,][ ]*with[ ]*:/) fail("structure: flow-style with:")
+  if (low ~ /[{,][ ]*run[ ]*:/) fail("structure: flow-style run:")
+
+  # Steps: a list item ends at the next line indented no deeper than its "-". The keys of its
+  # with: block (one indentation level) are collected and checked by end_item.
+  if (with_open && indent <= with_col) with_open = 0
+  if (item_open && indent <= item_dash) end_item()
+  if (!item_open && code ~ /^ *-( |$)/) {
+    item_open = 1; item_dash = indent; item_col = -1
+    if (match(code, /^ *- +[^ ]/)) item_col = RLENGTH - 1
+  }
+  if (with_open) {
+    if (with_child < 0) with_child = indent
+    if (indent == with_child) {
+      if (parse_key(code) && keycol == indent) {
+        wk_n++; wk_key[wk_n] = tolower(key); wk_val[wk_n] = value; wk_line[wk_n] = NR; wk_raw[wk_n] = raw
+      } else fail("actions: not a key under with:")
+    } else if (indent < with_child) fail("actions: inconsistent indentation under with:")
+    # A deeper line is a nested mapping, a block scalar or a multi-line value, whose content the
+    # allow-list above would not see (fetch-depth: 1 then a deeper repository:).
+    else fail("actions: a with: input must be a one-line value")
+  }
 
   # A permissions block in progress: its children.
   if (perm_open) {
@@ -230,6 +400,27 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
   if (!parse_key(code)) {
     if (in_on && indent > 0) fail("trigger: not a key under on:")
     next
+  }
+  # Keys are matched in lower case, so that Uses:, RUN: or Permissions: cannot slip past a rule if
+  # the Actions reader matches keys case-insensitively; a case variant of a workflow keyword fails.
+  rawkey = key; key = tolower(key)
+  if (key != rawkey && key ~ /^(on|true|permissions|uses|with|run|shell|defaults|secrets|container|services|continue-on-error|environment)$/)
+    fail("structure: \"" rawkey "\" is a case variant of " key ": (keys are lower case)")
+
+  # The uses: and with: of a step (the keys of the list item itself).
+  if (item_open && item_col < 0 && indent > item_dash) item_col = keycol
+  if (key == "uses" || key == "with") {
+    if (item_open && keycol == item_col) {
+      if (key == "uses") {
+        if (item_uses++) fail("structure: a second uses: in one step")
+        item_action = value; sub(/@.*/, "", item_action); item_line = NR; item_raw = raw
+      } else {
+        if (item_with++) fail("structure: a second with: in one step")
+        with_line = NR; with_raw = raw
+        if (value != "") fail("actions: with: must be a block of keys")
+        else { with_open = 1; with_col = keycol; with_child = -1 }
+      }
+    } else if (key == "with") fail("actions: with: outside a step")
   }
 
   # Top-level keys.
@@ -261,12 +452,25 @@ BEGIN { on_count = 0; in_on = 0; on_child = -1; perm_open = 0; top_perm = 0; top
     if (value == "") { perm_open = 1; perm_top = 0; perm_col = keycol; perm_children = 0; perm_ok = 1 }
     else if (flat(value) != "{}" && flat(value) != "{contents:read}") fail("permissions: only {} or contents: read is allowed")
   }
-  if (key == "run") {
-    if (value ~ /^[|>]/) { run_open = 1; run_col = keycol }
-    else if (index(value, "${{")) fail("expressions: ${{ }} inside a run: script (pass it through env:)")
+  # Every shell, also defaults.run.shell (which wraps every step), is plain bash.
+  if (key == "shell" && value != "bash") fail("shell: only bash is allowed")
+  # The run: of a step is a script; any other run: (defaults.run) is a block of keys, never a script,
+  # so its children always meet the key rules (B10).
+  if (key == "run" && !(item_open && keycol == item_col)) {
+    if (value != "") fail("structure: a run: outside a step must be a block of keys (defaults.run)")
+  } else if (key == "run") {
+    run_col = keycol; acc = ""
+    if (value ~ /^[|>]/) { run_open = 1; run_fold = (value ~ /^>/) }
+    else if (value == "") run_maybe = 1
+    else {
+      if (index(value, "${{")) fail("expressions: ${{ }} inside a run: script (pass it through env:)")
+      run_open = 1; run_fold = 1; acc = tolower(value); acc_line = NR; acc_raw = raw
+    }
   }
 }
 END {
+  if (run_open) run_end()
+  if (item_open) end_item()
   NR = 0; raw = "(end of file)"
   end_permissions()
   if (on_count != 1) fail("trigger: " on_count " top-level on: keys (exactly one is required)")
