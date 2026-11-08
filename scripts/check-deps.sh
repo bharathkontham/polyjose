@@ -18,12 +18,14 @@
 #      below its required parent crate (a direct dependency of the core on `semver` fails), and
 #      only through its group's edges: the dalek-build and num-traits-build crates must be absent
 #      from `cargo tree -e normal`, and the dalek-proc-macro crates from `-e normal,no-proc-macro`;
-#   6. a package in the core's tree does not come from crates.io: a path package other than
-#      polyjose itself, a git source or another registry (an allowlisted name is not enough when
-#      the code behind it can be swapped);
-#   7. the workspace root Cargo.toml has a [patch] or [replace] section;
+#   6. a package in the normal or build graph of any workspace member does not come from
+#      crates.io: a path package that is not a workspace member, a git source or another registry
+#      (an allowlisted name is not enough when the code behind it can be swapped);
+#   7. the workspace root Cargo.toml has a [patch] or [replace] section, or a [workspace] exclude;
 #   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
-#      build-dependency ([build-dependencies] or [target.*.build-dependencies]);
+#      build-dependency ([build-dependencies] or [target.*.build-dependencies]); or
+#      bindings/surface or bindings/ffi has a build script (build.rs, a `build` key, or a
+#      custom-build target in cargo metadata; security audit L2 of feature 0013);
 #   9. a Rust file of the workspace (crates/polyjose/src, bindings/, and every other workspace
 #      member's directory and target directories, from cargo metadata) names an RSA private-key or
 #      signing type,
@@ -64,7 +66,9 @@
 # Before any of that, scripts/check-no-cargo-config.sh must pass: a cargo config file in the
 # repository could replace sources or wrap rustc for every cargo command below (see check 6).
 #
-# Fails closed: if cargo or python3 is missing, or any command errors, it exits non-zero.
+# Fails closed: if cargo or python3 is missing, or any command errors, it exits non-zero; so does a
+# syntax error in this script, under macOS /bin/bash 3.2 too (the completion sentinel, F11).
+# Exit status: 0 clean, 1 a check failed, 2 the checks could not run.
 # Runs on macOS /bin/bash 3.2 and on Linux bash, so no associative arrays or mapfile.
 set -euo pipefail
 # sort and comm must agree on one byte order whatever the caller's locale is.
@@ -98,7 +102,13 @@ command -v python3 >/dev/null 2>&1 || die "python3 not found on PATH; cannot rea
 [ -f "$core_manifest" ] || die "$core_manifest not found"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/check-deps.XXXXXX") || die "mktemp failed"
-trap 'rm -rf "$work"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh):
+# with errexit, bash 3.2 runs the EXIT trap with $? = 0 after a parse error, so the trap turns an
+# exit before the last line, which sets the sentinel, into status 2. A non-zero status (check
+# failures exit 1, die exits 2) is kept.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$work"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "check-deps.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # Crate names compare case-insensitively with `_` and `-` equivalent, as crates.io treats them.
 normalize() { tr 'A-Z_' 'a-z-'; }
@@ -381,6 +391,7 @@ guarded_group_edges() {
 guarded_paths() {
   cargo tree --locked -p "$core_pkg" -e "$1" --all-features --target all --prefix depth </dev/null \
     >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree -e $1 --prefix depth failed"; }
+  # shellcheck disable=SC2016 # Python source in single quotes, with no shell expansion meant
   python3 -I -c '
 import re, sys
 tree_path, rules_path = sys.argv[1], sys.argv[2]
@@ -476,11 +487,17 @@ check_group_rules() {
   done <"$work/guard-edge-kinds"
 }
 
-# 6. Every package in the core's tree comes from crates.io. The walk follows normal and build
-#    edges from polyjose through cargo metadata's resolve graph (all features, all targets), the
-#    same set as the tree above. A `[patch]` or `[replace]` in a manifest shows up here as a path
-#    or git source. cargo-deny's [sources] check (deny.toml) covers git and other registries for
-#    the whole workspace, but not path packages.
+# 6. Every package that a workspace member depends on comes from crates.io, or is itself a workspace
+#    member (ADR 0016 §4, ADR 0049 §1). The walk follows normal and build edges from *every*
+#    workspace member, not only polyjose, through cargo metadata's resolve graph (all features, all
+#    targets), the set the core's tree above and each binding's tree (check 13) are built from.
+#    Delta audit D1 of feature 0013: checks 1 and 13 match crates by name, so a path package named
+#    after an allowlisted crate (a `zeroize` fork carrying RSA signing) in a binding's tree passed
+#    them, and as a non-member it escaped check 9's text scan and scripts/check-rsa-symbols.sh. A
+#    path, git or other-registry package that is not a workspace member therefore fails here,
+#    naming the member that pulls it in. A `[patch]` or `[replace]` in a manifest shows up as such a
+#    source too. cargo-deny's [sources] check (deny.toml) covers git and other registries for the
+#    whole workspace, but not path packages.
 #    Neither sees cargo *source replacement*: a cargo config with `[source.crates-io] replace-with`
 #    (e.g. a vendored directory) keeps reporting the crates.io source while compiling other code.
 #    So no cargo config file may exist anywhere in the repository; scripts/check-no-cargo-config.sh
@@ -496,31 +513,36 @@ CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 with open(meta_path, encoding="utf-8") as f:
     meta = json.load(f)
 packages = {p["id"]: p for p in meta["packages"]}
-core = [p["id"] for p in meta["packages"]
-        if p["name"] == pkg_name and os.path.realpath(p["manifest_path"]) == manifest]
+members = sorted(meta["workspace_members"])
+core = [i for i in members
+        if packages[i]["name"] == pkg_name and os.path.realpath(packages[i]["manifest_path"]) == manifest]
 if len(core) != 1:
-    sys.exit("expected exactly one package %s at %s, found %d" % (pkg_name, manifest, len(core)))
+    sys.exit("expected exactly one workspace member %s at %s, found %d" % (pkg_name, manifest, len(core)))
 if meta.get("resolve") is None:
     sys.exit("cargo metadata has no resolve graph")
 nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
-seen, todo = set(core), list(core)
-while todo:
-    for dep in nodes[todo.pop()]["deps"]:
-        if dep["pkg"] in seen:
-            continue
-        # A missing dep_kinds (cargo older than 1.41) is a KeyError: fail closed.
-        if any(k["kind"] in (None, "build") for k in dep["dep_kinds"]):
-            seen.add(dep["pkg"])
-            todo.append(dep["pkg"])
-for pkg_id in sorted(seen - set(core)):
+pulled_by = {}
+for member in members:
+    seen, todo = {member}, [member]
+    while todo:
+        for dep in nodes[todo.pop()]["deps"]:
+            if dep["pkg"] in seen:
+                continue
+            # A missing dep_kinds (cargo older than 1.41) is a KeyError: fail closed.
+            if any(k["kind"] in (None, "build") for k in dep["dep_kinds"]):
+                seen.add(dep["pkg"])
+                todo.append(dep["pkg"])
+    for pkg_id in seen.difference(members):
+        if packages[pkg_id]["source"] != CRATES_IO:
+            pulled_by.setdefault(pkg_id, []).append(packages[member]["name"])
+for pkg_id in sorted(pulled_by):
     p = packages[pkg_id]
-    if p["source"] != CRATES_IO:
-        where = p["source"] or "path " + os.path.dirname(p["manifest_path"])
-        print("%s %s from %s" % (p["name"], p["version"], where))
+    where = p["source"] or "path " + os.path.dirname(p["manifest_path"])
+    print("%s %s from %s, pulled in by %s" % (p["name"], p["version"], where, ", ".join(sorted(pulled_by[pkg_id]))))
 ' "$work/metadata.json" "$core_pkg" "$core_manifest" >"$work/sources" \
-    || die "could not walk $core_pkg's dependency graph in cargo metadata"
+    || die "could not walk the workspace members' dependency graphs in cargo metadata"
   if [ -s "$work/sources" ]; then
-    fail "packages in the core's tree that do not come from crates.io (registry+https://github.com/rust-lang/crates.io-index):"
+    fail "packages that do not come from crates.io (registry+https://github.com/rust-lang/crates.io-index) and are not workspace members (ADR 0016 §4):"
     sed 's/^/  - /' "$work/sources"
     echo "  Depend on the published crates.io release; remove any [patch], [replace] or git/path/registry source."
   fi
@@ -528,6 +550,10 @@ for pkg_id in sorted(seen - set(core)):
 
 # 7. No [patch] or [replace] in the workspace root manifest: it swaps a crates.io crate for other
 #    code under the same name and version. Check 6 also catches the result; this names the cause.
+#    No `exclude` in the root [workspace] either (delta audit D1 of feature 0013, ADR 0016 §4,
+#    ADR 0049 §1): it keeps a package in the repository out of the workspace, so out of every
+#    per-member check (check 9's text scan, check 13, scripts/check-rsa-symbols.sh). There is none
+#    today; one that is needed is added to this check with its reason.
 check_no_patch_or_replace() {
   local ws_root
   ws_root=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["workspace_root"])' \
@@ -537,6 +563,11 @@ check_no_patch_or_replace() {
   if [ -s "$work/patches" ]; then
     fail "the workspace root Cargo.toml must not have [patch] or [replace] sections; depend on crates.io releases:"
     sed 's/^/  - /' "$work/patches"
+  fi
+  python3 -I -c "$toml_keys_py" Cargo.toml workspace.exclude >"$work/excludes" || die "could not read Cargo.toml"
+  if [ -s "$work/excludes" ]; then
+    fail "the workspace root Cargo.toml has a [workspace] exclude: a package kept out of the workspace escapes the per-member checks; an exclude that is needed must be added to check 7 of scripts/check-deps.sh with its reason:"
+    sed 's/^/  - /' "$work/excludes"
   fi
 }
 
@@ -576,6 +607,57 @@ for dep in pkgs[0]["dependencies"]:
     fail "$core_manifest must have no build script and no build-dependencies:"
     sed 's/^/  - /' "$work/core-build"
   fi
+}
+
+# 8, the binding part (security audit L2 of feature 0013, second recommendation). A build script
+#    runs arbitrary code on every developer, CI and release machine that builds the crate, and can
+#    change what is compiled. The framework-free surface (ADR 0030 §1) and the UniFFI adapter
+#    (proc-macro scaffolding, ADR 0032, ADR 0033) need none, so either one having a build script
+#    fails, with or without build-dependencies (whose crates check 13 pins). bindings/node keeps
+#    the build.rs that napi-build needs (ADR 0031), its build tree pinned by check 13;
+#    bindings/wasm has no build script today and is not covered here (check 13 pins its build
+#    edges too). A crate named here that is not a workspace package fails: the check cannot vouch
+#    for it, so the list must be updated.
+no_build_script_dirs="bindings/surface bindings/ffi"
+nbs_checked="" # "<package> (<dir>), ...": what the ok line names
+check_bindings_no_build_script() {
+  local dir pkg checked=""
+  for dir in $no_build_script_dirs; do
+    python3 -I -c '
+import json, os, sys
+meta_path, manifest, out = sys.argv[1], os.path.realpath(sys.argv[2]), sys.argv[3]
+with open(meta_path, encoding="utf-8") as f:
+    meta = json.load(f)
+members = set(meta["workspace_members"])
+pkgs = [p for p in meta["packages"]
+        if p["id"] in members and os.path.realpath(p["manifest_path"]) == manifest]
+if len(pkgs) != 1:
+    sys.exit(3)
+with open(out, "w", encoding="utf-8") as f:
+    f.write(pkgs[0]["name"] + "\n")
+    for target in pkgs[0]["targets"]:
+        if "custom-build" in target["kind"]:
+            f.write("build script %s (cargo metadata)\n" % target["src_path"])
+' "$work/metadata.json" "$dir/Cargo.toml" "$work/nbs" 2>"$work/nbs.err" || {
+      if [ "$?" -eq 3 ]; then
+        fail "$dir is not a workspace package, so check 8 cannot hold it to no build script; update no_build_script_dirs in this script"
+        continue
+      fi
+      cat "$work/nbs.err" >&2; die "could not read $dir's targets from cargo metadata"
+    }
+    pkg=$(sed -n 1p "$work/nbs")
+    sed 1d "$work/nbs" >"$work/nbs.found"
+    if [ -e "$dir/build.rs" ] || [ -L "$dir/build.rs" ]; then
+      echo "$dir/build.rs exists" >>"$work/nbs.found"
+    fi
+    python3 -I -c "$toml_keys_py" "$dir/Cargo.toml" package.build >>"$work/nbs.found" || die "could not read $dir/Cargo.toml"
+    if [ -s "$work/nbs.found" ]; then
+      fail "$pkg ($dir) has a build script; polyjose-surface and polyjose-ffi must not have one (security audit L2 of feature 0013, ADR 0030 §1):"
+      sort "$work/nbs.found" | sed 's/^/  - /'
+    fi
+    checked="$checked${checked:+, }$pkg ($dir)"
+  done
+  nbs_checked=$checked
 }
 
 # 9. RSA is used for public-key operations only (ADR 0021 §3): RUSTSEC-2023-0071 (Marvin) is a
@@ -639,6 +721,7 @@ for dep in pkgs[0]["dependencies"]:
 #    the compiled objects of polyjose and the bindings (dev and release profiles), where no
 #    spelling of a path can hide codegened code (ADR 0049 §1).
 check_rsa_public_only() {
+  # shellcheck disable=SC2016 # Python source in single quotes, with no shell expansion meant
   python3 -I -c '
 import bisect, json, os, re, sys
 meta_path, ws_root, core_dir = sys.argv[1], os.path.realpath(sys.argv[2]), sys.argv[3]
@@ -1252,6 +1335,7 @@ check_group_rules
 check_sources_crates_io
 check_no_patch_or_replace
 check_core_no_build_script
+check_bindings_no_build_script
 check_rsa_public_only
 check_no_sha1
 check_rsa_no_features
@@ -1267,5 +1351,6 @@ fi
 echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features and under its own name (ADR 0021, ADR 0022)"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
+echo "ok: no build script in $nbs_checked; bindings/node keeps napi-build's build.rs (ADR 0031)"
 echo "ok: the binding trees match $binding_allowlist_dir ($(awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $2 }' "$work/bal-checked")), with serde-family crates only below each file's serde-only-below crates (ADR 0030 §1)"
-exit 0
+completed=1; exit 0
