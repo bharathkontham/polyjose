@@ -4,7 +4,7 @@ All notable changes to polyjose are documented in this file. The format is based
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and polyjose follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-11-08
+## [0.1.0] - 2026-11-09
 
 The first release: a pure-Rust implementation of JOSE (JWS, JWE, JWK, JWT and JWA) for Rust, Node.js, the web (WebAssembly), Android and the JVM (Kotlin/Java), and Swift. All cryptography comes from RustCrypto and dalek crates, with no OpenSSL, `ring` or `aws-lc`. Every binding is built from the same Rust core and runs the same conformance vectors.
 
