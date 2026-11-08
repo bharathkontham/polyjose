@@ -42,7 +42,7 @@ interface Seen {
 /** A backend that answers `op` with `result` and keeps the arguments it received. */
 function backendFor(op: string, result: unknown, seen: Seen): Backend {
   const b: Record<string, unknown> = {
-    version: () => "0.1.0",
+    version: () => "0.1.1",
     errorCodes: () => [...ERROR_CODES],
   };
   b[op] = (...args: unknown[]) => {

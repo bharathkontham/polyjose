@@ -1,6 +1,6 @@
 {
   "name": "@polyjose/node",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "polyjose for Node.js: JOSE (JWS, JWE, JWK, JWT) in pure Rust through Node-API, with the shared TypeScript facade (ADR 0031, ADR 0047).",
   "license": "MIT",
   "repository": {
@@ -54,13 +54,13 @@
     "@napi-rs/cli": "3.10.12"
   },
   "optionalDependencies": {
-    "@polyjose/node-darwin-arm64": "0.1.0",
-    "@polyjose/node-darwin-x64": "0.1.0",
-    "@polyjose/node-linux-arm64-gnu": "0.1.0",
-    "@polyjose/node-linux-arm64-musl": "0.1.0",
-    "@polyjose/node-linux-x64-gnu": "0.1.0",
-    "@polyjose/node-linux-x64-musl": "0.1.0",
-    "@polyjose/node-win32-arm64-msvc": "0.1.0",
-    "@polyjose/node-win32-x64-msvc": "0.1.0"
+    "@polyjose/node-darwin-arm64": "0.1.1",
+    "@polyjose/node-darwin-x64": "0.1.1",
+    "@polyjose/node-linux-arm64-gnu": "0.1.1",
+    "@polyjose/node-linux-arm64-musl": "0.1.1",
+    "@polyjose/node-linux-x64-gnu": "0.1.1",
+    "@polyjose/node-linux-x64-musl": "0.1.1",
+    "@polyjose/node-win32-arm64-msvc": "0.1.1",
+    "@polyjose/node-win32-x64-msvc": "0.1.1"
   }
 }
