@@ -10,7 +10,11 @@ set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xcframework-stale.sh"
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-xcframework-stale.XXXXXX")
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-xcframework-stale.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 run=0 failed=0
 
 g() { git -C "$repo" -c user.name=test -c user.email=test@invalid -c commit.gpgsign=false "$@"; }
@@ -98,4 +102,4 @@ stamp "commit: $(g rev-parse HEAD) (uncommitted changes)"
 expect "a build from uncommitted changes is stale" stale '^the XCFramework was built from uncommitted changes at '
 
 echo "$run checks, $failed failed"
-[ "$failed" -eq 0 ]
+completed=1; exit "$((failed > 0))"

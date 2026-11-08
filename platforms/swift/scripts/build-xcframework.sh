@@ -134,7 +134,11 @@ fi
 
 mkdir -p "$build_dir"
 stage="$(mktemp -d "$build_dir/.stage.XXXXXX")"
-trap 'rm -rf "$stage"' EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$stage"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "build-xcframework.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # Builds one Rust target's LTO'd static archive, strips its debug info into the staging directory
 # and checks it (see the header).
@@ -288,3 +292,4 @@ echo "Swift sources: $generated/Polyjose.swift"
 if [ "$with_arm64_32" = 0 ]; then
   warn "development build: arm64_32-apple-watchos is missing (install: $nightly_install)"
 fi
+completed=1; exit 0

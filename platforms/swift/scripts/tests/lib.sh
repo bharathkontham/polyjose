@@ -18,7 +18,12 @@ tests_failed=0
 lib_die() { echo "ERROR: $*" >&2; exit 2; }
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-package-test.XXXXXX") || lib_die "mktemp failed"
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed (0013 F10, F11; see scripts/test-all.sh): /bin/bash 3.2 runs the EXIT trap with $? = 0
+# after a syntax error, in a test or in this file. finish (each test's last statement) sets the
+# sentinel, so a test that stops before it never exits 0.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "${0##*/}: stopped before finish (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 # SwiftPM leaves a lock file per package path in $TMPDIR; keep those inside the scratch directory.
 mkdir -p "$scratch/tmp"
 # shellcheck disable=SC2034 # read by the tests
@@ -103,7 +108,9 @@ xros-arm64-simulator"
 # shellcheck disable=SC2034,SC2086 # read by the tests; a word list
 dev_libraries=$(printf '%s\n' $release_libraries | sed 's/^watchos-arm64_arm64_32$/watchos-arm64/' | tr '\n' ' ')
 
+# finish: prints the summary, sets the sentinel and returns non-zero if any case failed.
 finish() {
   echo "$tests_run checks, $tests_failed failed"
+  completed=1
   [ "$tests_failed" -eq 0 ]
 }
