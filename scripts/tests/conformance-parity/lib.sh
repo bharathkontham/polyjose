@@ -20,7 +20,12 @@ command -v node >/dev/null 2>&1 || lib_die "node not found on PATH"
 [ -x "$parity" ] || lib_die "$parity is not executable"
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/conformance-parity-test.XXXXXX") || lib_die "mktemp failed"
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh): with
+# errexit, bash 3.2 runs the EXIT trap with $? = 0 after a parse error, in a test or in this file.
+# finish (each test's last statement) sets the sentinel, so a test that stops before it never exits 0.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "${0##*/}: stopped before finish (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # The digest of the ADR 0060 §4 worked example, standing in for the corpus the fixtures ran on.
 DIGEST=9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1
@@ -112,8 +117,9 @@ expect_fail() {
   fi
 }
 
-# finish: prints the summary and exits non-zero if any case failed.
+# finish: prints the summary, sets the sentinel and exits non-zero if any case failed.
 finish() {
   echo "$((tests_run - tests_failed))/$tests_run cases passed"
+  completed=1
   [ "$tests_failed" -eq 0 ]
 }

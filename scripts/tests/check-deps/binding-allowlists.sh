@@ -15,6 +15,11 @@
 # (security audit L2 of feature 0013): a build.rs with [build-dependencies] anyhow in
 # polyjose-surface, a build-dependency of polyjose-node behind a feature and one of polyjose-wasm on
 # a Windows-only target; and napi-build, the legitimate build crate, dropped from node.txt.
+# Check 8, the binding part (security audit L2 of feature 0013, second recommendation): neither
+# polyjose-surface nor polyjose-ffi may have a build script. Cases: a bare build.rs (no
+# build-dependencies) in bindings/surface and in bindings/ffi, a `build = "<file>"` key in each
+# manifest, and the reproduction above, which check 8 now reports too. bindings/node keeps
+# napi-build's build.rs (ADR 0031): the unchanged tree passes and says so.
 # Check 14: serde, serde_json, serde_derive, serde-wasm-bindgen or any other serde-family crate in the
 # normal tree of a bindings/* package fails, unless every path to it goes through a crate that a
 # `# serde-only-below:` line of the package's allowlist names (ffi.txt: UniFFI's proc-macro;
@@ -24,6 +29,9 @@
 # of polyjose-uniffi-bindgen, whose allowlist lists it below the bindgen; uniffi_macros dropped from
 # ffi.txt's line, or the line removed; the line with no explanation, unneeded, or naming a crate
 # outside the tree; and a core dependency on semver, reported by the core's check 5 only.
+# Checks 6 and 7 (delta audit D1 of feature 0013): a path fork named zeroize in polyjose-surface,
+# kept out of the workspace by a root `exclude`, fails both; the same fork outside the repository
+# fails check 6.
 # The unchanged tree must pass. Usage: scripts/tests/check-deps/binding-allowlists.sh
 set -euo pipefail
 export LC_ALL=C
@@ -33,6 +41,7 @@ export LC_ALL=C
 not_allowed='contains crates that bindings/deps-allowlist/[a-z-]+\.txt does not allow'
 serde='is in the normal tree of polyjose-[a-z-]+ \(bindings/[a-z-]+\)'
 format='^FAIL: bindings/deps-allowlist/[a-z-]+\.txt:[0-9]+: '
+build_script='has a build script; polyjose-surface and polyjose-ffi must not have one'
 
 # expect_also <description> <ERE>: the output of the last expect_pass/expect_fail also matches.
 expect_also() {
@@ -95,6 +104,8 @@ with open(path, "w", encoding="utf-8") as f:
 
 new_case clean
 expect_pass "unchanged tree"
+expect_also "check 8 names the binding crates it holds to no build script, and node's allowed one" \
+  '^ok: no build script in polyjose-surface \(bindings/surface\), polyjose-ffi \(bindings/ffi\); bindings/node keeps napi-build.s build\.rs \(ADR 0031\)'
 if [ ! -d "$repo/bindings/surface" ]; then
   expect_also "surface.txt is skipped while bindings/surface does not exist" \
     '^skip: bindings/deps-allowlist/surface\.txt: bindings/surface does not exist'
@@ -188,6 +199,33 @@ expect_fail "a crate added to polyjose-surface" \
   "FAIL: the tree of polyjose-surface \\(bindings/surface\\) $not_allowed" "$not_allowed"
 expect_also "the offending crate is named" '^  - base64ct$'
 
+# --- Checks 6 and 7: a path fork under an allowlisted name (delta audit D1 of feature 0013) -----------
+# The audit's plant: a non-member path package named zeroize, kept out of the workspace by a root
+# `exclude`, carries RSA signing into polyjose-surface. Check 13 counts it as covered by name, so
+# check 6 (crates.io only, walked from every workspace member) and check 7 (no root exclude) catch it.
+# The same fork outside the repository, with no exclude, is check 6's alone.
+new_case surface-path-fork
+append_to vendor/zeroize/Cargo.toml $'[package]\nname = "zeroize"\nversion = "1.9.99"\nedition = "2021"\nlicense = "MIT"\n\n[dependencies]\nrsa = { version = "=0.10.0-rc.21", default-features = false }\nsha2 = { version = "0.11.1", default-features = false }'
+append_to vendor/zeroize/src/lib.rs $'pub fn wipe(p: &[u8], q: &[u8], m: &[u8]) -> Vec<u8> {\n    let k = rsa::RsaPrivateKey::from_p_q(rsa::BoxedUint::from_be_slice_vartime(p),\n        rsa::BoxedUint::from_be_slice_vartime(q), rsa::BoxedUint::from(65537u64)).unwrap();\n    rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(k).sign(m).to_vec()\n}'
+append_to bindings/surface/src/lib.rs '#[doc(hidden)] pub fn wipe_all(p: &[u8], q: &[u8], m: &[u8]) -> Vec<u8> { zeroize2::wipe(p, q, m) }'
+replace_in Cargo.toml $'resolver = "3"\n' $'resolver = "3"\nexclude = ["vendor"]\n'
+add_dependency bindings/surface/Cargo.toml 'zeroize2 = { package = "zeroize", path = "../../vendor/zeroize" }'
+path_fork='^FAIL: packages that do not come from crates\.io .* and are not workspace members'
+root_exclude='^FAIL: the workspace root Cargo\.toml has a \[workspace\] exclude'
+expect_fail "a path fork named zeroize in polyjose-surface, outside the workspace by a root exclude" \
+  "$path_fork" "$path_fork|$root_exclude"
+expect_also "check 6 names the fork and the member that pulls it in" \
+  '^  - zeroize 1\.9\.99 from path .*/vendor/zeroize, pulled in by (.*, )?polyjose-surface(, .*)?$'
+expect_also "check 7 reports the root exclude" "$root_exclude"
+mkdir "$scratch/outside-fork" || lib_die "could not create $scratch/outside-fork"
+mv "$case_dir/vendor/zeroize" "$scratch/outside-fork/zeroize" || lib_die "could not move the fork out of the copy"
+replace_in bindings/surface/Cargo.toml '"../../vendor/zeroize"' '"../../../outside-fork/zeroize"'
+replace_in Cargo.toml $'exclude = ["vendor"]\n' ''
+expect_fail "the same fork outside the repository, with no exclude" \
+  "$path_fork" "$path_fork"
+expect_also "check 6 names the fork and the member that pulls it in" \
+  '^  - zeroize 1\.9\.99 from path .*/outside-fork/zeroize, pulled in by (.*, )?polyjose-surface(, .*)?$'
+
 # --- Check 13: build-dependencies (security audit L2 of feature 0013) ---------------------------------
 # A build script and its build-dependencies run on every machine that builds the binding, so they
 # are in the tree check 13 pins (`-e normal,build`, ADR 0030 §1), as for the core (check 1).
@@ -198,8 +236,9 @@ append_to bindings/surface/build.rs 'fn main() -> anyhow::Result<()> { Ok(()) }'
 append_to bindings/surface/Cargo.toml $'\n[build-dependencies]\nanyhow = "1"'
 relock
 expect_fail "a build.rs with [build-dependencies] anyhow added to polyjose-surface" \
-  "FAIL: the tree of polyjose-surface \\(bindings/surface\\) $not_allowed" "$not_allowed"
+  "FAIL: the tree of polyjose-surface \\(bindings/surface\\) $not_allowed" "$not_allowed|$build_script"
 expect_also "the build crate is named" '^  - anyhow$'
+expect_also "check 8 reports the build script too" "^FAIL: polyjose-surface \\(bindings/surface\\) $build_script"
 
 new_case node-build-feature
 python3 -I -c '
@@ -230,6 +269,39 @@ replace_in bindings/deps-allowlist/node.txt $'\nnapi-build\n' $'\n'
 expect_fail "napi-build dropped from node.txt" \
   "FAIL: the tree of polyjose-node \\(bindings/node\\) $not_allowed" "$not_allowed"
 expect_also "the missing build crate is named" '^  - napi-build$'
+
+# --- Check 8: no build script in polyjose-surface or polyjose-ffi (security audit L2) ------------------
+# The audit's second recommendation: neither crate needs one, so a build script fails even with no
+# build-dependency (which check 13 would not see).
+
+new_case surface-build-rs
+append_to bindings/surface/build.rs 'fn main() {}'
+expect_fail "a bare build.rs (no build-dependencies) in polyjose-surface" \
+  "^FAIL: polyjose-surface \\(bindings/surface\\) $build_script" "$build_script"
+expect_also "the file is named" '^  - bindings/surface/build\.rs exists$'
+expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/surface/build\.rs \(cargo metadata\)$'
+
+new_case ffi-build-rs
+append_to bindings/ffi/build.rs 'fn main() {}'
+expect_fail "a bare build.rs (no build-dependencies) in polyjose-ffi" \
+  "^FAIL: polyjose-ffi \\(bindings/ffi\\) $build_script" "$build_script"
+expect_also "the file is named" '^  - bindings/ffi/build\.rs exists$'
+
+new_case surface-build-key
+append_to bindings/surface/gen.rs 'fn main() {}'
+replace_in bindings/surface/Cargo.toml $'\npublish = false\n' $'\npublish = false\nbuild = "gen.rs"\n'
+expect_fail "a build = \"gen.rs\" key in polyjose-surface's manifest" \
+  "^FAIL: polyjose-surface \\(bindings/surface\\) $build_script" "$build_script"
+# (package.build? line N: ... from the conservative scan when python3 has no tomllib)
+expect_also "the key is named" '^  - package\.build[? ]'
+expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/surface/gen\.rs \(cargo metadata\)$'
+
+new_case ffi-build-key
+append_to bindings/ffi/tools/gen.rs 'fn main() {}'
+replace_in bindings/ffi/Cargo.toml $'\npublish = false\n' $'\npublish = false\nbuild = "tools/gen.rs"\n'
+expect_fail "a build = \"tools/gen.rs\" key in polyjose-ffi's manifest" \
+  "^FAIL: polyjose-ffi \\(bindings/ffi\\) $build_script" "$build_script"
+expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/ffi/tools/gen\.rs \(cargo metadata\)$'
 
 # --- Check 14: no serde in the bindings -------------------------------------------------------------------
 

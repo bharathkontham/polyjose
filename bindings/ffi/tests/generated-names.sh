@@ -37,7 +37,13 @@ inventory=${1:-$repo/bindings/api-inventory.txt}
 case $inventory in /*) ;; *) inventory=$PWD/$inventory ;; esac
 [ -f "$inventory" ] || { echo "$me: no inventory $inventory"; exit 2; }
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-ffi-generated-names.XXXXXX") || exit 2
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh): with
+# errexit, bash 3.2 runs an EXIT trap with $? = 0 after a parse error. This script runs without
+# errexit, where bash 3.2 exits 2, and the sentinel keeps it so if errexit is turned on: an exit
+# before the last line, which sets the sentinel, becomes status 2; a non-zero status is kept.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "generated-names.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 failed=0
 
 fail() { echo "$me: FAIL: $*"; failed=1; }
@@ -170,3 +176,4 @@ if [ "$failed" -ne 0 ]; then
   exit 1
 fi
 echo "$me: PASS"
+completed=1; exit 0

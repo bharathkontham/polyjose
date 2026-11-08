@@ -22,7 +22,12 @@ command -v cargo >/dev/null 2>&1 || lib_die "cargo not found on PATH"
 command -v python3 >/dev/null 2>&1 || lib_die "python3 not found on PATH"
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/check-deps-test.XXXXXX") || lib_die "mktemp failed"
-trap 'rm -rf "$scratch"' EXIT
+# Fail closed on a syntax error under bash 3.2 (feature 0013 F10, F11; see scripts/test-all.sh): with
+# errexit, bash 3.2 runs the EXIT trap with $? = 0 after a parse error, in a test or in this file.
+# finish (each test's last statement) sets the sentinel, so a test that stops before it never exits 0.
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "${0##*/}: stopped before finish (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 # A pristine copy of the working tree that each case starts from.
 base="$scratch/base"
@@ -111,9 +116,10 @@ expect_fail() {
   fi
 }
 
-# finish: prints the summary and exits non-zero if any case failed.
+# finish: prints the summary, sets the sentinel and exits non-zero if any case failed.
 finish() {
   echo "$((tests_run - tests_failed))/$tests_run cases passed"
+  completed=1
   [ "$tests_failed" -eq 0 ]
 }
 
