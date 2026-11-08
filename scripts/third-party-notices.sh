@@ -122,12 +122,12 @@ printf '%s\n' "$targets" >"$work/targets.txt"
 i=0
 while IFS= read -r t; do
   i=$((i + 1))
-  cargo tree --manifest-path "$manifest" --locked --offline -p "$pkg" --target "$t" \
+  cargo tree --color never --manifest-path "$manifest" --locked --offline -p "$pkg" --target "$t" \
     -e normal,no-proc-macro --prefix none -f '{p}' >"$work/tree.$i.txt" 2>"$work/tree.err" \
     || { cat "$work/tree.err" >&2; die "cargo tree failed for target $t $offline_hint"; }
   set -- "$@" "$t" "$work/tree.$i.txt"
 done <"$work/targets.txt"
-cargo metadata --manifest-path "$manifest" --locked --offline --format-version 1 \
+cargo metadata --color never --manifest-path "$manifest" --locked --offline --format-version 1 \
   >"$work/metadata.json" 2>"$work/metadata.err" \
   || { cat "$work/metadata.err" >&2; die "cargo metadata failed $offline_hint"; }
 

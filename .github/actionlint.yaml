@@ -1,0 +1,7 @@
+# actionlint configuration (https://github.com/rhysd/actionlint/blob/v1.7.12/docs/config.md).
+# binding-apple.yml runs on `xcode-27`, GitHub's public-preview macOS image with Xcode 27.2
+# (actions/runner-images issue 14404). It is a GitHub-hosted label that actionlint 1.7.12 does not
+# know yet, so it is declared here; actionlint rejects every other unknown label as before.
+self-hosted-runner:
+  labels:
+    - xcode-27

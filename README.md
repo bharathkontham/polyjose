@@ -15,9 +15,7 @@
 | Node.js | `@polyjose/node` on npm | napi-rs |
 | Web (WASM) | `@polyjose/wasm` on npm | wasm-bindgen |
 | Android, Kotlin, Java | `dev.polyjose:polyjose` on Maven Central | UniFFI + cargo-ndk |
-| Swift (iOS; also iPadOS, macOS, tvOS, watchOS, visionOS) | Swift Package `Polyjose` | UniFFI + XCFramework |
-
-> Status: **pre-alpha**. Nothing is published yet. Don't use it in production.
+| Swift (iOS; also iPadOS, macOS, watchOS) | Swift Package `Polyjose` | UniFFI + XCFramework |
 
 ## Principles
 - **Pure Rust crypto.** No OpenSSL, `ring` or `aws-lc`; `cargo deny` enforces it ([deny.toml](deny.toml)).

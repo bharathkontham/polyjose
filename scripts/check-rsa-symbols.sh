@@ -363,7 +363,7 @@ for p in members:
         continue
     reached = set()
     for flags in ([], ["--no-default-features"], ["--all-features"]):
-        argv = ["cargo", "tree", "--locked", "-p", p["name"], "-e", "normal,build,dev", "--target", "all",
+        argv = ["cargo", "tree", "--color", "never", "--locked", "-p", p["name"], "-e", "normal,build,dev", "--target", "all",
                 "--prefix", "none"] + flags
         tree = run(argv, "cargo tree -p %s%s" % (p["name"], "".join(" " + f for f in flags))).splitlines()
         if not tree or tree[0].split(" ", 1)[0] != p["name"]:

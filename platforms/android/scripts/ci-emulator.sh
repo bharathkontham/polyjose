@@ -16,8 +16,9 @@
 #                             the pixel_6 profile asks for 12 GB, more than a runner may have free)
 #
 # 1. KVM (Linux in GitHub Actions only): the udev rule that lets the runner user open /dev/kvm,
-#    as GitHub documents for hardware-accelerated Android emulators. Then /dev/kvm must be
-#    readable and writable. Nothing is changed outside GitHub Actions.
+#    as GitHub documents for hardware-accelerated Android emulators, and `udevadm settle` until
+#    it applies. Then /dev/kvm must be readable and writable. Nothing is changed outside GitHub
+#    Actions.
 # 2. The AVD: an existing AVD of that name is used as it is (never changed or deleted). Otherwise
 #    `avdmanager create avd -n <avd> -k <image> -d pixel_6` with disk.dataPartition.size set in its
 #    config.ini; that AVD, created by this run, is deleted when the script exits.
@@ -94,15 +95,25 @@ if [ "$(uname -s)" = Linux ]; then
     echo "==> ci-emulator: enabling KVM for the runner user (udev rule)"
     echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
       sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null || fail "cannot write the KVM udev rule"
-    { sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm; } || fail "udevadm"
+    # `udevadm trigger` only queues the change event; settle waits until udev has applied the
+    # rule's MODE, so the check below does not race it (run 42517846758 checked 40 ms too early).
+    { sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm &&
+      sudo udevadm settle --timeout=30; } || fail "udevadm"
   fi
-  [ -r /dev/kvm ] && [ -w /dev/kvm ] || fail "/dev/kvm is not readable and writable: no hardware acceleration"
+  if ! { [ -r /dev/kvm ] && [ -w /dev/kvm ]; }; then
+    ls -l /dev/kvm 2>&1 || true
+    fail "/dev/kvm is not readable and writable: no hardware acceleration"
+  fi
   echo "ci-emulator: /dev/kvm is usable"
 else
   echo "ci-emulator: KVM: not applicable on $(uname -s) (the emulator uses the host's hypervisor)"
 fi
 
-# 2. The AVD.
+# 2. The AVD. One AVD home for avdmanager, the emulator (run-instrumented.sh) and the config.ini
+# lookup below: with XDG_CONFIG_HOME set (GitHub's Ubuntu runners), avdmanager would otherwise
+# create the AVD under $XDG_CONFIG_HOME/.android/avd, where the lookup does not look.
+export ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-${ANDROID_USER_HOME:-$HOME/.android}/avd}
+mkdir -p "$ANDROID_AVD_HOME" || ci_die "cannot create the AVD home $ANDROID_AVD_HOME"
 if "$emulator" -list-avds 2>/dev/null | tr -d '\r' | grep -qxF "$avd"; then
   echo "ci-emulator: using the existing AVD $avd (left as it is)"
 else
@@ -110,10 +121,9 @@ else
   echo no | "$avdmanager" create avd -n "$avd" -k "$image" -d pixel_6 >/dev/null || fail "avdmanager create avd"
   created=$avd
   # The AVD's folder, from <avd home>/<avd>.ini (avdmanager writes path=<folder>).
-  avd_home=${ANDROID_AVD_HOME:-${ANDROID_USER_HOME:-$HOME/.android}/avd}
-  avd_dir=$(sed -n 's/^path=//p' "$avd_home/$avd.ini" 2>/dev/null | tr -d '\r')
+  avd_dir=$(sed -n 's/^path=//p' "$ANDROID_AVD_HOME/$avd.ini" 2>/dev/null | tr -d '\r')
   config=$avd_dir/config.ini
-  [ -n "$avd_dir" ] && [ -f "$config" ] || fail "no config.ini for the new AVD (looked in $avd_home/$avd.ini)"
+  [ -n "$avd_dir" ] && [ -f "$config" ] || fail "no config.ini for the new AVD (looked in $ANDROID_AVD_HOME/$avd.ini)"
   { grep -v '^disk\.dataPartition\.size=' "$config"; echo "disk.dataPartition.size=$data_partition"; } >"$config.new" ||
     fail "cannot write $config.new"
   mv "$config.new" "$config" || fail "cannot set disk.dataPartition.size in $config"

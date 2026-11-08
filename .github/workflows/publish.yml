@@ -410,7 +410,7 @@ jobs:
     name: SPM resolve and build
     needs: [assets, github]
     if: ${{ !inputs.dry_run && needs.github.result == 'success' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 30
     permissions:
       contents: read

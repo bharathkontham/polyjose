@@ -1,0 +1,3 @@
+# The conformance vectors are hashed byte for byte into vectors_digest (ADR 0060), which every
+# platform's results must match. Never convert their line endings (Windows checkouts use CRLF).
+conformance/vectors/** -text

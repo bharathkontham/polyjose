@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import javax.inject.Inject;
@@ -100,6 +102,14 @@ public abstract class ThirdPartyNotices extends DefaultTask {
     @Input
     public abstract ListProperty<String> getTargets();
 
+    /**
+     * The bash that runs the script: the {@code polyjose.bash} Gradle property or the {@code
+     * POLYJOSE_BASH} environment variable (set by {@link PackagingPlugin}). When unset, see
+     * {@link #bash()}. Internal: which bash runs the script does not change the file it writes.
+     */
+    @Internal
+    public abstract Property<String> getBash();
+
     /** A resource directory that holds {@link #NOTICES_PATH}. */
     @OutputDirectory
     public abstract DirectoryProperty getOutputDir();
@@ -176,18 +186,77 @@ public abstract class ThirdPartyNotices extends DefaultTask {
     /** One run of the script with a {@code --target} for each target, writing {@code out}. */
     private File run(Set<String> targets, File out) {
         List<String> command = new ArrayList<>(List.of(
-                "bash", getScript().get().getAsFile().getPath(), "-p", getPackageName().get()));
+                bash(), scriptPath(getScript().get().getAsFile()), "-p", getPackageName().get()));
         for (String target : targets) {
             command.add("--target");
             command.add(target);
         }
         command.add("-o");
-        command.add(out.getPath());
+        command.add(scriptPath(out));
         exec.exec(spec -> {
             spec.setWorkingDir(getWorkspace().get().getAsFile());
             spec.commandLine(command);
         });
         return out;
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").startsWith("Windows");
+    }
+
+    /**
+     * A path as the script is given it. On Windows, with {@code /} separators: Git Bash opens
+     * {@code D:/a/b.sh} like {@code D:\a\b.sh}, but the script's own {@code dirname "$0"} and
+     * {@code dirname "$out"} see no directory in a path that has only {@code \}.
+     */
+    private static String scriptPath(File file) {
+        return isWindows() ? file.getPath().replace('\\', '/') : file.getPath();
+    }
+
+    /**
+     * The bash to run: {@link #getBash()} when set; else {@code bash} from PATH, except on
+     * Windows. There, CreateProcess searches System32 before PATH, so a bare {@code bash} is
+     * {@code C:\Windows\System32\bash.exe}, the WSL launcher, which fails on a host with no WSL
+     * distribution (the GitHub Windows runners). So on Windows the first {@code bash.exe} on PATH
+     * outside the Windows directory and the {@code WindowsApps} aliases (another WSL launcher) is
+     * used, else Git for Windows' {@code bin\bash.exe} under Program Files; with none, the task
+     * fails and says how to name one.
+     */
+    String bash() {
+        if (getBash().isPresent() && !getBash().get().isBlank()) {
+            return getBash().get();
+        }
+        if (!isWindows()) {
+            return "bash";
+        }
+        // System.getenv(String) ignores case on Windows ("Path", "SystemRoot").
+        String systemRoot = Objects.requireNonNullElse(System.getenv("SystemRoot"), "C:\\Windows");
+        String rootPrefix = systemRoot.toLowerCase(Locale.ROOT).replaceAll("[\\\\/]+$", "") + "\\";
+        String path = Objects.requireNonNullElse(System.getenv("PATH"), "");
+        for (String dir : path.split(File.pathSeparator)) {
+            if (dir.isBlank()) {
+                continue;
+            }
+            String lower = new File(dir).getAbsolutePath().toLowerCase(Locale.ROOT) + "\\";
+            if (lower.startsWith(rootPrefix) || lower.contains("\\windowsapps\\")) {
+                continue;
+            }
+            File candidate = new File(dir, "bash.exe");
+            if (candidate.isFile()) {
+                return candidate.getPath();
+            }
+        }
+        for (String programFiles : new String[] {System.getenv("ProgramFiles"), "C:\\Program Files"}) {
+            if (programFiles != null) {
+                File candidate = new File(programFiles, "Git\\bin\\bash.exe");
+                if (candidate.isFile()) {
+                    return candidate.getPath();
+                }
+            }
+        }
+        throw new GradleException("thirdPartyNotices: no bash.exe outside " + systemRoot
+                + " (its bash.exe is the WSL launcher) on PATH or in Git for Windows' bin folder; "
+                + "set the polyjose.bash Gradle property or POLYJOSE_BASH to a bash executable");
     }
 
     /**

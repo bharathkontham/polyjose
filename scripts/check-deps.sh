@@ -159,7 +159,7 @@ awk -v file="$credits" '
 sort "$work/credited.unsorted" >"$work/credited"
 
 # The core's tree -> "$work/tree" (sorted, unique names, without polyjose itself).
-tree_cmd=(cargo tree --locked -p "$core_pkg" -e "normal,build" --all-features --target all --prefix none)
+tree_cmd=(cargo tree --color never --locked -p "$core_pkg" -e "normal,build" --all-features --target all --prefix none)
 "${tree_cmd[@]}" >"$work/tree.raw" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "'${tree_cmd[*]}' failed"; }
 # The first line is the root package from this checkout; every other line is "<name> v<version> ...".
 awk -v want="$core_pkg" -v dir="$root/crates/polyjose" -v pdir="$root_physical/crates/polyjose" '
@@ -389,7 +389,7 @@ guarded_group_edges() {
 # level up. cargo prints a repeated subtree only once (marked "(*)"), but every package's own
 # dependencies appear at its first occurrence, so the edges are complete.
 guarded_paths() {
-  cargo tree --locked -p "$core_pkg" -e "$1" --all-features --target all --prefix depth </dev/null \
+  cargo tree --color never --locked -p "$core_pkg" -e "$1" --all-features --target all --prefix depth </dev/null \
     >"$work/tree.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree -e $1 --prefix depth failed"; }
   # shellcheck disable=SC2016 # Python source in single quotes, with no shell expansion meant
   python3 -I -c '
@@ -1165,7 +1165,7 @@ binding_tree() {
   local flags
   : >"$work/bt.names"
   for flags in --features= --no-default-features --all-features; do
-    cargo tree --locked -p "$1" -e normal,build --target all --prefix none "$flags" </dev/null >"$work/bt.raw" 2>"$work/bt.err" \
+    cargo tree --color never --locked -p "$1" -e normal,build --target all --prefix none "$flags" </dev/null >"$work/bt.raw" 2>"$work/bt.err" \
       || { cat "$work/bt.err" >&2; die "'cargo tree --locked -p $1 -e normal,build --target all --prefix none $flags' failed"; }
     awk -v want="$1" '
       function err(msg) { print msg | "cat 1>&2"; bad = 1 }
@@ -1254,7 +1254,7 @@ check_no_serde_in_bindings() {
     # A malformed allowlist is reported by check 13 and not used here.
     if [ -e "$work/bal/$name.bad" ]; then continue; fi
     [ -f "$below" ] || : >"$below"
-    cargo tree --locked -p "$pkg" -e normal --all-features --target all --prefix depth </dev/null \
+    cargo tree --color never --locked -p "$pkg" -e normal --all-features --target all --prefix depth </dev/null \
       >"$work/serde.depth" 2>"$work/tree.err" || { cat "$work/tree.err" >&2; die "cargo tree -p $pkg --prefix depth failed"; }
     python3 -I -c '
 import re, sys

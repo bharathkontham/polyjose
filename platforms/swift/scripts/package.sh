@@ -141,7 +141,7 @@ trap 'rc=$?; rm -rf "$stage"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { ec
 
 # --- One crate set on every Apple target (ADR 0032 §6) ---------------------------------------
 crates() {
-  (cd "$root" && cargo tree --locked --offline -p polyjose-ffi --target "$1" -e normal,no-proc-macro \
+  (cd "$root" && cargo tree --color never --locked --offline -p polyjose-ffi --target "$1" -e normal,no-proc-macro \
     --prefix none -f '{p}') | sed 's/ (\*)$//' | sort -u
 }
 crates "$notices_target" >"$stage/crates-$notices_target.txt" || die "cargo tree failed for $notices_target"

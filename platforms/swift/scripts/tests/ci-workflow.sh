@@ -37,8 +37,9 @@
 #                `#!`; a sourced library need not be), and the steps call
 #                test.sh, build-xcframework.sh, package.sh, check-no-cargo-config.sh and
 #                conformance-parity.sh.
-#   one job      a single job on a macOS runner with a timeout, so the rust-core reference, the
-#                Swift results and the parity check share one checkout (ADR 0060).
+#   one job      a single job on a macOS runner (`macos-<image>` or the `xcode-<n>` preview image)
+#                with a timeout, so the rust-core reference, the Swift results and the parity
+#                check share one checkout (ADR 0060).
 #   order        test.sh, then the rust-core reference (`cargo test --locked -p polyjose --test
 #                conformance`), then parity, none of them conditional. The test.sh step first
 #                empties target/conformance/, so that parity sees only this job's results, and
@@ -86,8 +87,9 @@
 #                exactly MODE, XCODE_VERSION and DEVELOPER_DIR (no BASH_ENV or other variable).
 #   structure    top-level keys name, on, permissions, env, defaults, jobs; job keys name, runs-on,
 #                timeout-minutes, env, steps (no concurrency, container, services, strategy...).
-#   actionlint   `actionlint` accepts the file (it runs shellcheck on the scripts when shellcheck
-#                is installed). A missing actionlint fails the check.
+#   actionlint   `actionlint` accepts the file with the repository's .github/actionlint.yaml (it
+#                runs shellcheck on the scripts when shellcheck is installed). A missing
+#                actionlint or config file fails the check.
 #
 # Self-test: once the workflow passes, each of a list of mutations of it (one line replaced or
 # lines inserted, in a scratch copy) must fail the check named for it, so that every check is
@@ -435,7 +437,7 @@ jobs=$(block "jobs:" 0 | keys 2 | tr '\n' ' ' | sed 's/ $//')
 job_block=$(block "jobs:" 0)
 if [ "$(echo "$jobs" | wc -w | tr -d ' ')" != 1 ]; then
   bad "one job" "expected exactly one job, got: $jobs"
-elif ! printf '%s\n' "$job_block" | grep -qE '^    runs-on: macos-'; then
+elif ! printf '%s\n' "$job_block" | grep -qE '^    runs-on: (macos-[0-9a-z.-]+|xcode-[0-9]+)$'; then
   bad "one job" "the job must run on a macOS runner"
 elif ! printf '%s\n' "$job_block" | grep -qE '^    timeout-minutes: [0-9]+$'; then
   bad "one job" "the job needs a timeout-minutes"
@@ -1072,7 +1074,7 @@ fi
 # --- actionlint -----------------------------------------------------------------------------
 if ! command -v actionlint >/dev/null 2>&1; then
   bad "actionlint" "actionlint is not on PATH (brew install actionlint; the workflow fetches it)"
-elif actionlint -no-color "$workflow" >"$work/actionlint.log" 2>&1; then
+elif actionlint -no-color -config-file "$root/.github/actionlint.yaml" "$workflow" >"$work/actionlint.log" 2>&1; then
   ok "actionlint: $(actionlint -version 2>/dev/null | head -n 1)"
 else
   bad "actionlint" "it reports:"
@@ -1132,7 +1134,7 @@ else
   test_step='      - name: platforms/swift/test.sh (macOS host and the iOS Simulator)'
   # shellcheck disable=SC2016 # literal workflow text
   mode_env='      MODE: ${{ inputs.mode }}'
-  runs_on='    runs-on: macos-latest'
+  runs_on='    runs-on: xcode-27'
   parity_run='        run: scripts/conformance-parity.sh'
   core_run='        run: cargo test --locked -p polyjose --test conformance'
   release_package='        run: platforms/swift/scripts/package.sh'
@@ -1195,7 +1197,7 @@ else
   mutate ios-sim "" '          elif [ "$MODE" = ci ] && grep -qxF '"'"'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)'"'"' "$RUNNER_TEMP/swift-test.log"; then' '          elif grep -qxF '"'"'SKIPPED-RUNNER (swift-ios-sim: host:no-ios-runtime)'"'"' "$RUNNER_TEMP/swift-test.log"; then' "the waiver accepted in every mode"
   mutate continue "" "$test_step" "$test_step\n        continue-on-error: true" "continue-on-error on the test.sh step"
   mutate continue "" "$runs_on" "$runs_on\n    continue-on-error: true" "a job-level continue-on-error"
-  mutate actionlint "" "$runs_on" "    runs_on: macos-latest" "a misspelled runs-on key"
+  mutate actionlint "" "$runs_on" "    runs_on: xcode-27" "a misspelled runs-on key"
   mutate actionlint "" "    timeout-minutes: 180" "    timeout-minutes: three hours" "a timeout that is not a number"
 
   # --- B02: secrets, the token and publishing in any spelling --------------------------------------
