@@ -53,16 +53,25 @@
 # llvm-ar/llvm-nm on PATH, then ar/nm (Xcode's are LLVM's; GNU binutils' nm reads ELF but not
 # wasm). CI installs llvm-tools.
 #
-# Residual risk: code compiled only for a target that is not built here (the Android and Apple
-# targets of rust-toolchain.toml) is seen by the text scan only, until those binding jobs add
-# their target to this check. Code that is never compiled (unreachable private code) ships nothing
-# and has no symbol; the text scan covers it. Public code that polyjose never codegens (an uncalled
-# `#[inline] pub fn`, a generic `pub fn` it never instantiates) has no symbol here either, yet a
-# downstream crate can call it and compile it there: the text scan covers it, its macro rule
-# included, which catches the `k!(rsa)` spelling that hides the path from its other rules (ADR 0049
-# §1).
+# Extra targets (--target TRIPLE, feature 0013 F15, the 0008 security audit's L2): code under a
+# target cfg (`cfg(target_os = "android")`, ...) is compiled only for that target, so each triple
+# given adds polyjose-ffi, the crate the Android and Apple libraries are built from (ADR 0032,
+# ADR 0033), built for it as an rlib in the dev and the release profile like the wasm32
+# configuration; the objects of polyjose, of polyjose-ffi and of each workspace member it depends
+# on (polyjose-surface) are read. A triple rustc does not know, one whose std is not installed or a
+# build that fails exits 2, before any build for the first two.
 #
-# Usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]...
+# Residual risk: code compiled only for a target that is not built here is seen by the text scan
+# only. A run without --target builds the host and wasm32 alone, so the caller that packages or
+# regresses a target must pass it (0008 F08 passes the four Android triples of rust-toolchain.toml;
+# the Apple ones are seen only once their caller passes them). Code that is never compiled
+# (unreachable private code) ships nothing and has no symbol; the text scan covers it. Public code
+# that polyjose never codegens (an uncalled `#[inline] pub fn`, a generic `pub fn` it never
+# instantiates) has no symbol here either, yet a downstream crate can call it and compile it
+# there: the text scan covers it, its macro rule included, which catches the `k!(rsa)` spelling
+# that hides the path from its other rules (ADR 0049 §1).
+#
+# Usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]... [--target TRIPLE]...
 #   --target-dir DIR  cargo's build directory (default: cargo's own, target/)
 #   --dump DIR        also write every scanned symbol, demangled, to DIR/<config>.<crate>.txt
 #   --only CONFIG     build and read only this configuration (repeatable): polyjose-all-features,
@@ -70,6 +79,9 @@
 #                     a -release suffix for its release build. For the negative tests, which need
 #                     one build per case; the gate itself (test-all.sh, CI) always runs every
 #                     configuration, and the result line names a narrowed run.
+#   --target TRIPLE   also build and read polyjose-ffi for this target (repeatable): the
+#                     configurations polyjose-ffi-TRIPLE and polyjose-ffi-TRIPLE-release (see
+#                     "Extra targets" above).
 # Exit status: 0 clean, 1 an RSA private-key, signing or decryption symbol was found, 2 the check
 # could not run (a syntax error in this script too, under bash 3.2 as well: the completion
 # sentinel, F11). Runs on macOS /bin/bash 3.2 and Linux bash.
@@ -82,13 +94,15 @@ die() { echo "ERROR: $*" >&2; exit 2; }
 target_dir=""
 dump_dir=""
 only=""
+targets=""
 while [ $# -gt 0 ]; do
   case $1 in
     --target-dir) [ $# -ge 2 ] || die "--target-dir needs a directory"; target_dir=$2; shift 2 ;;
     --dump) [ $# -ge 2 ] || die "--dump needs a directory"; dump_dir=$2; shift 2 ;;
     --only) [ $# -ge 2 ] || die "--only needs a configuration"; only="$only $2"; shift 2 ;;
+    --target) [ $# -ge 2 ] || die "--target needs a target triple"; targets="$targets $2"; shift 2 ;;
     -h | --help) sed -n '2,/^# Usage/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "unknown argument: $1 (usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]...)" ;;
+    *) die "unknown argument: $1 (usage: scripts/check-rsa-symbols.sh [--target-dir DIR] [--dump DIR] [--only CONFIG]... [--target TRIPLE]...)" ;;
   esac
 done
 
@@ -113,6 +127,10 @@ fi
 for tool in cargo rustc python3; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH; cannot build and read polyjose's object code"
 done
+
+# The --target triples reach the program through its environment, always set here (so a caller's
+# value is never read), in a line of their own beside the program's arguments.
+export CHECK_RSA_SYMBOLS_TARGETS="$targets"
 
 # The program is read from stdin (so it may use any quote); the builds it runs get /dev/null.
 python3 -I - "$target_dir" "$dump_dir" "$only" <<'PY'
@@ -318,6 +336,44 @@ builds.append((WASM_BINDING, WASM_TARGET, "%s-%s" % (WASM_BINDING, WASM_TARGET),
 configs = [("%s (%s)" % (what, where), file_id, args, crates) for what, where, file_id, args, crates in builds]
 configs += [("%s --release (%s)" % (what, where), file_id + "-release", args + ["--release"], crates)
             for what, where, file_id, args, crates in builds]
+
+# --- Extra targets (--target, see the top of this file) ---------------------------------------------
+# Checked before any build: rustc knows the triple and its std is installed (rustup target add);
+# a build that fails for it still exits 2 through run(). Read with polyjose-ffi: polyjose and every
+# workspace member polyjose-ffi depends on as a normal, non-optional dependency (the code it links
+# for that target); one that the build does not report fails closed below.
+FFI_BINDING = "polyjose-ffi"
+TARGETS = []
+for t in os.environ.get("CHECK_RSA_SYMBOLS_TARGETS", "").split():
+    if t not in TARGETS:
+        TARGETS.append(t)
+if TARGETS:
+    if FFI_BINDING not in bindings:
+        die("--target: the workspace has no %s package, which the --target builds are of" % FFI_BINDING)
+    known_targets = set(run(["rustc", "--print", "target-list"], "rustc --print target-list").split())
+    for t in TARGETS:
+        if t not in known_targets:
+            die("--target: %s is not a target rustc knows (rustc --print target-list)" % t)
+        libdir = run(["rustc", "--print", "target-libdir", "--target", t],
+                     "rustc --print target-libdir --target %s" % t).strip()
+        if not os.path.isdir(libdir) or not any(re.match(r"libstd-[0-9a-f]+\.rlib$", f) for f in os.listdir(libdir)):
+            die("--target: the std of %s is not installed (rustup target add %s); cannot build %s for it"
+                % (t, t, FFI_BINDING))
+    by_name = {p["name"]: p for p in members}
+    linked, todo = [], [FFI_BINDING]
+    while todo:
+        name = todo.pop(0)
+        if name in linked:
+            continue
+        linked.append(name)
+        todo += sorted(d["name"] for d in by_name[name]["dependencies"]
+                       if d["name"] in by_name and d.get("kind") is None and not d.get("optional"))
+    ffi_crates = [CORE] + sorted(n for n in linked if n not in (CORE, FFI_BINDING)) + [FFI_BINDING]
+    for t in TARGETS:
+        args = ["rustc", "-p", FFI_BINDING, "--lib", "--crate-type", "rlib", "--target", t]
+        configs.append(("%s (%s)" % (FFI_BINDING, t), "%s-%s" % (FFI_BINDING, t), args, ffi_crates))
+        configs.append(("%s --release (%s)" % (FFI_BINDING, t), "%s-%s-release" % (FFI_BINDING, t),
+                        args + ["--release"], ffi_crates))
 
 if only:
     known = [c[1] for c in configs]
