@@ -28,7 +28,8 @@ const token = await jwsSignCompact(new TextEncoder().encode("hello"), key, {
 
 try {
   const { payload } = await jwsVerifyCompact(token, key, { allowedAlgs: ["ES256"] });
-  console.log(new TextDecoder().decode(payload));
+  // `payload` is secret: use it, don't log it (see "Don't log results"), then wipe it.
+  payload.fill(0);
 } catch (e) {
   if (e instanceof PolyjoseError) console.error(e.code); // e.g. "AlgorithmNotAllowed"
   else throw e;
@@ -60,6 +61,22 @@ Every entry then instantiates the module with the glue's asynchronous `init`, aw
 The work runs on the calling thread. To keep a page responsive during heavy operations, such as PBES2 with a high iteration count, call the package from a Web Worker.
 
 ## Security notes
+
+### Don't log results
+
+Results and options are plain JavaScript objects, so printing one prints its secrets. `console.log(result)`, `util.inspect(result)` and similar calls show every byte of a `Uint8Array` field and the whole of a key.
+
+- **Never log** a `JwsVerified` or `JweDecrypted` result.
+- **Never log** the option records that carry `aad`, `detachedPayload` or a `key`: `JwsSigner`, `JweRecipient`, `JwsVerifyOptions` and `JweEncryptOptions`.
+- These are the seven secret fields:
+  - `JwsSigner.key` and `JweRecipient.key`;
+  - `JwsVerified.payload` and `JwsVerifyOptions.detachedPayload`;
+  - `JweDecrypted.plaintext` and `JweDecrypted.aad`;
+  - `JweEncryptOptions.aad`.
+- **Log only what you need,** for example `result.alg` or `payload.length`.
+- **Wipe returned bytes:** when you're done with a returned `Uint8Array`, overwrite it with `fill(0)`.
+
+polyjose's Kotlin and Swift bindings redact these fields when a record is printed. This package doesn't, because its results are plain data, so not logging them is the only safeguard (ADR 0065).
 
 ### Randomness
 
