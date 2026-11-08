@@ -1,0 +1,17 @@
+{
+  "name": "polyjose-interop-node",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Two-way interop of @polyjose/node (built from this tree) with panva/jose 6.x (feature 0010 I1).",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "./test.sh"
+  },
+  "devDependencies": {
+    "jose": "6.2.16"
+  }
+}

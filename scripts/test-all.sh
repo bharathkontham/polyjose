@@ -97,10 +97,17 @@ runners_of() {
 # A SKIPPED-RUNNER line (header) is not a platform SKIPPED line; the parity step reads it from the
 # saved output ($scratch/<platform>.out).
 dispatch() {
-  local name=$1 script out last rc
-  script=$(platform_script "$name") || return 1
+  local script
+  script=$(platform_script "$1") || return 1
   [ -e "$script" ] || [ -L "$script" ] || return 1
+  run_script "$1" "$script"
+}
+# run_script <step> <script>: dispatch's run and verdict for one script, also used for the steps
+# that are not a platform's own suite (interop-jose); a missing script FAILs.
+run_script() {
+  local name=$1 script=$2 out last rc
   echo "==> $name ($script)"
+  if [ ! -e "$script" ] && [ ! -L "$script" ]; then echo "$script not found"; record "$name" FAIL; return 0; fi
   if [ ! -f "$script" ] || [ ! -x "$script" ]; then
     echo "$script exists but is not an executable file (chmod +x $script)"; record "$name" FAIL; return 0
   fi
@@ -223,7 +230,7 @@ run_ffi_generated_names() {
 # error fails the gate here even where the broken script itself would exit 0 (macOS /bin/bash 3.2
 # runs an EXIT trap with $? = 0 after one). Under -n, bash 3.2 does not parse inside $(...),
 # which bash 5 and the shellcheck run of each change do.
-syntax_globs='scripts/*.sh scripts/check-binding-api.d/*.sh bindings/*/test.sh bindings/*/tests/*.sh bindings/*/scripts/*.sh platforms/*/test.sh'
+syntax_globs='scripts/*.sh scripts/check-binding-api.d/*.sh bindings/*/test.sh bindings/*/tests/*.sh bindings/*/scripts/*.sh platforms/*/test.sh interop/*/test.sh'
 run_syntax() {
   local g f n=0 bad=0 list="$scratch/syntax.list"
   echo "==> syntax"
@@ -316,7 +323,10 @@ for p in "${platforms[@]}"; do
       elif ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"
       elif [ ! -f bindings/node/package-lock.json ]; then record node "SKIPPED (no node test suite yet: bindings/node/package-lock.json missing)"
       elif [ "$(cd bindings/node && npm pkg get scripts.test 2>/dev/null)" = "{}" ]; then record node "SKIPPED (no node test suite yet: no test script in bindings/node/package.json)"
-      else run node bash -c 'cd bindings/node && npm ci && npm run build && npm test'; fi ;;
+      else run node bash -c 'cd bindings/node && npm ci && npm run build && npm test'; fi
+      # Two-way interop with panva/jose 6.x (feature 0010 I1): its own step, after the node suite,
+      # whose build of @polyjose/node it reuses; SKIPPED (<reason>) without node, npm or cargo.
+      run_script interop-jose interop/node/test.sh ;;
     android)
       if dispatch android; then :
       elif have cargo-ndk && [ -x platforms/android/gradlew ]; then run android bash -c 'cd platforms/android && ./gradlew test'
