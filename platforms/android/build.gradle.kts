@@ -4,7 +4,8 @@
 // `builtBy`. Every task declares its inputs and outputs, so a rebuild without changes is up to date.
 //
 //   cargoHostBuild      polyjose-ffi for this host (release profile) -> target/release/<lib>
-//   uniffiGenerate      the Kotlin sources from that library -> build/generated/uniffi/kotlin
+//   uniffiGenerate      the Kotlin sources from that library -> build/generated/uniffi/raw, patched
+//                       (UniffiKotlinPatch: hash-checked loader, ADR 0065 redaction) -> .../kotlin
 //   cargoNdkBuild       the four Android ABIs with cargo-ndk -> build/jniLibs/<abi>/
 //   assembleJvmNatives  the host library in JNA's resource layout -> build/jvm-natives/<prefix>/
 
@@ -12,6 +13,8 @@ plugins {
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.maven.publish) apply false
+    // build-logic on this script's class path, for UniffiKotlinPatch in uniffiGenerate.
+    id("polyjose.packaging") apply false
 }
 
 /** The cargo workspace: the polyjose repository root, two levels above this project. */
@@ -88,9 +91,16 @@ val cargoHostBuild = tasks.register<Exec>("cargoHostBuild") {
 
 val uniffiKotlinDir: File = layout.buildDirectory.dir("generated/uniffi/kotlin").get().asFile
 
+/** What the generator writes, before UniffiKotlinPatch; the JVM tests feed it to the patch. */
+val uniffiRawDir: File = layout.buildDirectory.dir("generated/uniffi/raw").get().asFile
+
+/** build-logic's jar, which holds UniffiKotlinPatch: a change to the patch regenerates. */
+val buildLogicJar: File = File(dev.polyjose.gradle.UniffiKotlinPatch::class.java.protectionDomain.codeSource.location.toURI())
+
 val uniffiGenerate = tasks.register<Exec>("uniffiGenerate") {
     group = "rust"
-    description = "Generates the Kotlin sources (package dev.polyjose) from the host library in UniFFI library mode (ADR 0033 §1a)."
+    description = "Generates the Kotlin sources (package dev.polyjose) from the host library in UniFFI library mode " +
+        "(ADR 0033 §1a) and patches them (feature 0008 F05: hash-checked loader, ADR 0065 redaction)."
     inputs.files(cargoHostBuild).withPropertyName("hostLibrary").withPathSensitivity(PathSensitivity.NONE)
     // The bindgen CLI and the generator settings (bindings/ffi/uniffi.toml, found through cargo
     // metadata: Kotlin package dev.polyjose).
@@ -98,17 +108,38 @@ val uniffiGenerate = tasks.register<Exec>("uniffiGenerate") {
         repoRoot.resolve("bindings/ffi/uniffi.toml"),
         fileTree(repoRoot.resolve("bindings/uniffi-bindgen")) { include("Cargo.toml", "src/**") },
     ).withPropertyName("bindgen").withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(buildLogicJar).withPropertyName("patch").withPathSensitivity(PathSensitivity.NONE)
+    outputs.dir(uniffiRawDir).withPropertyName("rawKotlinSources")
     outputs.dir(uniffiKotlinDir).withPropertyName("kotlinSources")
+    val rawDir = uniffiRawDir
     val outDir = uniffiKotlinDir
     // A file the generator no longer writes must not stay behind and compile.
-    doFirst { outDir.deleteRecursively() }
+    doFirst {
+        rawDir.deleteRecursively()
+        outDir.deleteRecursively()
+    }
     workingDir(repoRoot)
     // `--no-format`: no ktlint (0008 research §1). Library mode is automatic in uniffi 0.32.
     // `--locked`, as cargoHostBuild: the generator is built from the reviewed Cargo.lock only.
     commandLine(
         "cargo", "run", "--locked", "-p", "polyjose-uniffi-bindgen", "--",
-        "generate", hostLibrary.path, "--language", "kotlin", "--no-format", "--out-dir", outDir.path,
+        "generate", hostLibrary.path, "--language", "kotlin", "--no-format", "--out-dir", rawDir.path,
     )
+    // Feature 0008 F05 (security audit M1, L1; ADR 0065): the deterministic patch, which fails
+    // the build when the generated text is not exactly what it expects (UniffiKotlinPatch). The
+    // generator must write exactly the one file the patch was written for.
+    doLast {
+        val written = rawDir.walkTopDown().filter { it.isFile }.map { it.relativeTo(rawDir).invariantSeparatorsPath }.toList()
+        if (written != listOf("dev/polyjose/polyjose_ffi.kt")) {
+            throw GradleException("uniffiGenerate: expected only dev/polyjose/polyjose_ffi.kt from the generator, got $written")
+        }
+        val patched = try {
+            dev.polyjose.gradle.UniffiKotlinPatch.patch(rawDir.resolve(written.single()).readText())
+        } catch (e: IllegalStateException) {
+            throw GradleException(e.message ?: "uniffi Kotlin patch failed", e)
+        }
+        outDir.resolve(written.single()).apply { parentFile.mkdirs() }.writeText(patched)
+    }
 }
 
 val jniLibsDir: File = layout.buildDirectory.dir("jniLibs").get().asFile
