@@ -54,7 +54,8 @@
 #                fails too, so rename it.
 #   scripts      the steps call each of ci-host-natives.sh, ci-android-sdk.sh, ci-emulator.sh,
 #                ci-assemble-jar.sh and ci-parity.sh, and every platforms/android/scripts/ci-*.sh
-#                the workflow names exists and is executable.
+#                the workflow names is a regular file (no symlink) and executable, except
+#                ci-lib.sh, which the steps source and which is not.
 #
 # Its negative tests are ci-check-workflow-test.sh (mutated copies of the workflow in a temp dir).
 # Exit status: 0 every rule holds; 1 a rule is broken (each one printed as FAIL); 2 usage.
@@ -489,8 +490,14 @@ named=$(grep -v '^[[:space:]]*#' "$wf" | grep -oE 'platforms/android/scripts/ci-
 for s in ci-host-natives.sh ci-android-sdk.sh ci-emulator.sh ci-assemble-jar.sh ci-parity.sh; do
   printf '%s\n' "$named" | grep -qx "platforms/android/scripts/$s" || fail "scripts: no step calls platforms/android/scripts/$s"
 done
+# ci-lib.sh is sourced, never run (the Gradle wrapper hash steps, feature 0008 F09), so it is the
+# one that must be a regular file but not executable.
 for s in $named; do
-  [ -f "$ci_repo/$s" ] && [ ! -L "$ci_repo/$s" ] && [ -x "$ci_repo/$s" ] || fail "scripts: $s is not an executable regular file"
+  if [ "$s" = platforms/android/scripts/ci-lib.sh ]; then
+    [ -f "$ci_repo/$s" ] && [ ! -L "$ci_repo/$s" ] || fail "scripts: $s is not a regular file"
+  else
+    [ -f "$ci_repo/$s" ] && [ ! -L "$ci_repo/$s" ] && [ -x "$ci_repo/$s" ] || fail "scripts: $s is not an executable regular file"
+  fi
 done
 
 if [ "$failures" -eq 0 ]; then

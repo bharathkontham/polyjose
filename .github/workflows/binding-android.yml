@@ -10,7 +10,13 @@
 # and no job has a deployment environment. There is no `concurrency` group, because in a called
 # workflow github.workflow names the caller, so a group here could cancel the caller's run.
 #
-# Each step calls a platforms/android/scripts/ci-*.sh script, and every script also runs locally.
+# Each step calls a platforms/android/scripts/ci-*.sh script or one of the repository's guards in
+# scripts/, and every script also runs locally. Every job that runs ./gradlew first checks the
+# Gradle wrapper jar against its pinned SHA-256 (ci_check_gradle_wrapper of ci-lib.sh; feature 0008
+# F06, F09, audit M2). The RSA symbol guard (ADR 0021, ADR 0049 §1) reads every library this
+# workflow ships: the four Android triples in the guards job, and the host polyjose-ffi on the
+# linux-x86-64, linux-aarch64 and win32-x86-64 runners (darwin-aarch64's is ci.yml's macOS run;
+# feature 0008 F09, audit L2).
 # platforms/android/scripts/ci-check-workflow.sh checks this file (the triggers, the permissions,
 # the pinned actions and the absence of credentials, publishing and signing).
 #
@@ -77,14 +83,45 @@ jobs:
       - name: no cargo config
         run: scripts/check-no-cargo-config.sh
 
+      # Before anything that runs ./gradlew (audit M2).
+      - name: Gradle wrapper hash
+        run: |
+          . platforms/android/scripts/ci-lib.sh
+          ci_check_gradle_wrapper
+
+      # llvm-tools: the toolchain's llvm-nm and llvm-ar, for scripts/check-rsa-symbols.sh (as in ci.yml).
       - name: Install toolchain (rust-toolchain.toml)
         run: |
           rustup toolchain install
+          rustup component add llvm-tools
           rustup show
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The library this runner builds for the jar is polyjose-ffi for this host (ADR 0033 §4), so
+      # its two configurations are read here (audit L2). darwin-aarch64 is skipped: ci.yml runs
+      # the full check on arm64 macOS. The darwin-x86-64 library cross-built beside it is not read
+      # (an Apple target: check-rsa-symbols.sh's documented residual until a caller passes it). The
+      # toolchain's llvm-tools folder goes first on PATH (on Windows the script's own lookup, which
+      # does not add .exe, misses it), and where python3 does not run but python does (Windows),
+      # a python3 in a temporary folder runs python.
+      - name: RSA public-key only (compiled symbols of this host's polyjose-ffi)
+        if: ${{ matrix.prefix != 'darwin-aarch64' }}
+        run: |
+          tools=$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin
+          if command -v cygpath >/dev/null 2>&1; then tools=$(cygpath -u "$tools"); fi
+          PATH=$tools:$PATH
+          if ! python3 -c '' >/dev/null 2>&1; then
+            python -c '' || { echo "::error::neither python3 nor python runs"; exit 1; }
+            shim=$(mktemp -d)
+            printf '#!/usr/bin/env bash\nexec python "$@"\n' >"$shim/python3"
+            chmod +x "$shim/python3"
+            PATH=$shim:$PATH
+          fi
+          export PATH
+          scripts/check-rsa-symbols.sh --only polyjose-ffi --only polyjose-ffi-release
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
@@ -119,6 +156,46 @@ jobs:
           path: target/ci/conformance-jvm-${{ matrix.prefix }}/
           if-no-files-found: error
 
+  # The repository's dependency guard and the RSA symbol guard for the four Android triples of
+  # rust-toolchain.toml (feature 0008 F09, audit L2): code under cfg(target_os = "android") is
+  # compiled only for those targets, so a host run never sees it. --target adds polyjose-ffi, the
+  # crate the AAR's libraries are built from, for each triple, in the dev and the release profile,
+  # beside every configuration of the full check (feature 0013 F15). Rlibs only: nothing is linked,
+  # so no NDK is needed.
+  guards:
+    name: guards (dependencies, RSA symbols for the Android targets)
+    needs: [mode]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup component add llvm-tools
+          rustup show
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: dependency allowlist
+        run: scripts/check-deps.sh
+
+      - name: RSA public-key only (compiled symbols, with the four Android targets)
+        run: |
+          scripts/check-rsa-symbols.sh \
+            --target aarch64-linux-android \
+            --target armv7-linux-androideabi \
+            --target x86_64-linux-android \
+            --target i686-linux-android
+
   # The instrumented suite (ADR 0033 §5) on API 36 x86_64 with KVM. A waiver (no emulator) fails
   # this job.
   emulator:
@@ -133,6 +210,12 @@ jobs:
 
       - name: no cargo config
         run: scripts/check-no-cargo-config.sh
+
+      # Before anything that runs ./gradlew (audit M2).
+      - name: Gradle wrapper hash
+        run: |
+          . platforms/android/scripts/ci-lib.sh
+          ci_check_gradle_wrapper
 
       - name: Install toolchain (rust-toolchain.toml)
         run: |
@@ -178,10 +261,11 @@ jobs:
 
   # The release AAR and the five-platform jar (ADR 0033 §4), from the libraries above, checked by
   # scripts/check-artifacts.sh. The AAR packs the emulator job's tested libraries (feature 0008
-  # F05, review S4). Built into build/repo only; nothing leaves the run but artifacts.
+  # F05, review S4). Built into build/repo only; nothing leaves the run but artifacts. It waits for
+  # the guards too, so no AAR or jar is assembled from a tree they reject.
   assemble:
     name: assemble (AAR, five-platform jar)
-    needs: [host-natives, emulator]
+    needs: [host-natives, emulator, guards]
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -191,6 +275,12 @@ jobs:
 
       - name: no cargo config
         run: scripts/check-no-cargo-config.sh
+
+      # Before anything that runs ./gradlew (audit M2).
+      - name: Gradle wrapper hash
+        run: |
+          . platforms/android/scripts/ci-lib.sh
+          ci_check_gradle_wrapper
 
       - name: Install toolchain (rust-toolchain.toml)
         run: |

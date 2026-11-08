@@ -22,7 +22,8 @@
 #    `avdmanager create avd -n <avd> -k <image> -d pixel_6` with disk.dataPartition.size set in its
 #    config.ini; that AVD, created by this run, is deleted when the script exits.
 # 3. `POLYJOSE_AVD=<avd> scripts/run-instrumented.sh`, which boots the AVD headless, runs
-#    :polyjose:connectedDebugAndroidTest, judges it by the JUnit XML and writes
+#    :polyjose:connectedDebugAndroidTest and :sample-minified:connectedReleaseAndroidTest (the R8
+#    consumer-rules proof, feature 0008 F06, review S5), judges both by their JUnit XML, writes
 #    target/conformance/android-emulator.json, and stops only the emulator it started. A running
 #    emulator is used instead of booting one (that is run-instrumented.sh's rule; the ABI check
 #    below still applies).
