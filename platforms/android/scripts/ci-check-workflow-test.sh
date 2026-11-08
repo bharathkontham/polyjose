@@ -199,6 +199,9 @@ expect_fail "with: setup-java server-id" "actions: with: server-id is not allowe
 expect_fail "with: without uses:" "actions: with: without uses: in the same step" insert_after "$steps_anchor" "      - name: x\n        with:\n          a: b\n        run: \"true\""
 expect_fail "with: outside a step" "actions: with: outside a step" insert_after "$job_anchor" "    with:\n      a: b"
 expect_fail "with: two uses: in one step" "structure: a second uses: in one step" insert_after "$steps_anchor" "      - uses: $checkout\n        uses: $setup_java\n        with:\n          persist-credentials: false"
+expect_fail "with: a key nested under an allowed input" "actions: a with: input must be a one-line value" insert_after "$checkout_with" "          fetch-depth: 1\n            repository: attacker/polyjose-fork"
+expect_fail "with: a mapping under an allowed input" "actions: a with: input must be a one-line value" insert_after "$checkout_with" "          fetch-depth:\n            repository: attacker/polyjose-fork"
+expect_fail "with: a block scalar input" "actions: a with: input must be a one-line value" replace_line "          path: target/ci-natives" "          path: |\n            target/ci-natives\n            repository: attacker/x"
 expect_pass "with: a checkout fetch-depth is allowed" insert_after "$checkout_with" "          fetch-depth: 0"
 
 # shell: only bash, anywhere (defaults.run.shell runs before every step).
