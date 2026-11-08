@@ -358,9 +358,13 @@ jobs:
           if-no-files-found: error
 
   # Build provenance for every asset (ADR 0037 §2; `gh attestation verify <file> --repo <repo>`).
+  # Every job below sums needs a status function: apple or apple-candidate is skipped by design in
+  # each mode, and a bare (implicit success()) condition skips on any skipped ancestor (v0.1.0 made
+  # no draft for this reason).
   attest:
     name: attest
     needs: [sums]
+    if: ${{ !cancelled() && needs.sums.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -383,7 +387,9 @@ jobs:
   draft:
     name: draft release
     needs: [verify, sums, attest]
-    if: inputs.mode == 'tag'
+    if: >-
+      ${{ !cancelled() && inputs.mode == 'tag' && needs.verify.result == 'success' &&
+      needs.sums.result == 'success' && needs.attest.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
