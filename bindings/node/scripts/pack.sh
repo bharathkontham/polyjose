@@ -61,7 +61,11 @@ stage=$(mktemp -d "${TMPDIR:-/tmp}/polyjose-node-pack.XXXXXX")
 # Left next to the host's, it would make the tree differ from test.sh's (one host addon, which
 # test/loader.test.ts requires), so it is removed on every exit, success or failure.
 cleanup() { rm -rf "$stage"; rm -f "$pkg_dir/$other_addon"; }
-trap cleanup EXIT
+# Fail closed (0013 F10): /bin/bash 3.2 runs an EXIT trap with $? = 0 after a syntax error, so an
+# exit before the last line, which sets the sentinel, becomes status 2 (see scripts/test-all.sh).
+completed=""
+# shellcheck disable=SC2154 # rc is assigned by the trap itself (rc=$?)
+trap 'rc=$?; cleanup; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "pack.sh: stopped before its last statement (a syntax error?); failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 
 json_field() { # json_field <file> <key>...: prints the string at that key path
   python3 -I -c 'import json, sys
@@ -163,3 +167,4 @@ left=$(find "$pkg_dir" -maxdepth 1 -name 'polyjose.*.node' -print | sed 's|.*/||
 [ "$left" = "$host_addon " ] || { echo "pack.sh: bindings/node holds $left, not only $host_addon" >&2; exit 1; }
 scripts/addon-hashes.sh addon-sha256.json "$host_addon"
 echo "==> @polyjose/node pack: OK (bindings/node holds only $host_addon)"
+completed=1; exit 0
