@@ -43,6 +43,7 @@ interface NodeFs {
 }
 interface NodeUrl {
   fileURLToPath(url: string): string;
+  pathToFileURL(path: string): { readonly href: string };
 }
 interface NodeOs {
   tmpdir(): string;
@@ -70,7 +71,8 @@ const cp = host.getBuiltinModule("node:child_process");
 const fs = host.getBuiltinModule("node:fs");
 const os = host.getBuiltinModule("node:os");
 const sha256 = (bytes: Uint8Array): string => host.getBuiltinModule("node:crypto").createHash("sha256").update(bytes).digest("hex");
-const thisFile = host.getBuiltinModule("node:url").fileURLToPath((import.meta as unknown as { url: string }).url);
+const url = host.getBuiltinModule("node:url");
+const thisFile = url.fileURLToPath((import.meta as unknown as { url: string }).url);
 /** bindings/node: this file is bindings/node/dist/loader.test.js. */
 const pkgDir = path.resolve(path.dirname(thisFile), "..");
 
@@ -332,7 +334,8 @@ const FORGED_TOKEN = "eyJhbGciOiJIUzI1NiJ9.e30.AAAA";
 /**
  * Imports the copy's index.js in a fresh `node`, from a neutral working directory, then (if the
  * import succeeded) tries to verify FORGED_TOKEN through the public jwsVerifyCompact. `preload` is
- * an ES module run first (`--import`), e.g. one that fakes `process.platform`.
+ * the path of an ES module run first (`--import`, as a file URL: Windows paths are not URLs), e.g.
+ * one that fakes `process.platform`.
  */
 function importInChild(dir: string, env: Record<string, string> = {}, preload?: string): ImportOutcome {
   const script = [
@@ -352,7 +355,7 @@ function importInChild(dir: string, env: Record<string, string> = {}, preload?: 
     'out.addons = Object.keys(createRequire(join(dir, "probe.cjs")).cache).filter((k) => k.endsWith(".node")).sort();',
     "process.stdout.write(JSON.stringify(out));",
   ].join("\n");
-  const args = [...(preload === undefined ? [] : ["--import", preload]), "--input-type=module", "-e", script, dir];
+  const args = [...(preload === undefined ? [] : ["--import", url.pathToFileURL(preload).href]), "--input-type=module", "-e", script, dir];
   const r = cp.spawnSync(host.execPath, args, { env: childEnv(env), encoding: "utf8", cwd: os.tmpdir() });
   assert.equal(r.error, undefined, "spawn node");
   assert.equal(r.status, 0, `the probe exits 0 (stderr: ${r.stderr})`);
