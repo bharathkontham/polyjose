@@ -343,10 +343,10 @@ test(
   }),
 );
 
-test("the README states the module format, the Node floor, the docs and the loader override", () => {
+test("the README states the module format, the Node floor and the docs (the loader override is on the docs page)", () => {
   const readme = fs.readFileSync(path.join(pkgDir, "README.md"), "utf8");
   assert.ok(readme.startsWith("# @polyjose/node\n"), "title");
-  const needles = ["ESM", "require(esm)", "22.12", "https://polyjose.dev", "NAPI_RS_NATIVE_LIBRARY_PATH"];
+  const needles = ["ESM", "require(esm)", "22.12", "https://polyjose.dev/start/node/", "https://polyjose.dev/reference/node/"];
   for (const needle of [...needles, "LICENSE", "THIRD-PARTY-NOTICES.txt"]) {
     assert.ok(readme.includes(needle), `README mentions ${needle}`);
   }

@@ -1,7 +1,109 @@
-# Android / Kotlin / JVM
+# polyjose for Android, Kotlin and the JVM
 
-The Gradle build of polyjose's Kotlin binding (ADR 0033). One UniFFI-generated Kotlin source set
-(package `dev.polyjose`) is compiled into two artifacts:
+polyjose's Kotlin library: JOSE (JWS, JWE, JWK and JWT; RFC 7515 to 7519) from the pure-Rust
+polyjose core, in the package `dev.polyjose`. Verify and decrypt always take an explicit algorithm
+allow-list, and `none` is never accepted (RFC 8725).
+
+## Install
+
+```kotlin
+dependencies {
+    implementation("dev.polyjose:polyjose:0.1.1")      // Android AAR, minSdk 23
+    // or, for the desktop and server JVM:
+    implementation("dev.polyjose:polyjose-jvm:0.1.1")  // jar with macOS, Linux and Windows natives
+}
+```
+
+Both are on Maven Central, which shows the latest version:
+[dev.polyjose:polyjose](https://central.sonatype.com/artifact/dev.polyjose/polyjose) and
+[dev.polyjose:polyjose-jvm](https://central.sonatype.com/artifact/dev.polyjose/polyjose-jvm).
+They need a Kotlin 2.4 compiler or newer, and bring in JNA.
+
+## Import
+
+```kotlin
+import dev.polyjose.*
+```
+
+Calls are synchronous and throw `PolyjoseException`. On Android, call them off the main thread.
+Java can call them too, as static methods of `dev.polyjose.Polyjose_ffiKt`, but Kotlin is the
+supported language.
+
+## Quick start
+
+Sign a JWT, then verify it with an explicit algorithm allow-list and the issuer and audience you
+expect. `exp` is required and checked, with 60 seconds of leeway (RFC 8725 §3.8 to §3.10).
+
+```kotlin
+import dev.polyjose.*
+import java.time.Instant
+
+// An ES256 key pair. The verifier needs only the public half.
+val privateKey = jwkGenerateForAlg("ES256")
+val publicKey = jwkToPublic(privateKey)
+
+val now = Instant.now().epochSecond
+val token = jwtSign(
+    claims = """{"iss":"https://issuer.example","sub":"user-123","aud":"https://api.example","exp":${now + 300}}""",
+    key = privateKey,
+    options = JwtSignOptions(alg = "ES256"),
+)
+
+try {
+    val verified = jwtVerify(
+        token = token,
+        key = publicKey,
+        options = JwtVerifyOptions(
+            allowedAlgs = listOf("ES256"), // never trust the token's own `alg` (RFC 8725 §3.1)
+            issuers = listOf("https://issuer.example"),
+            audiences = listOf("https://api.example"),
+        ),
+    )
+    println(verified.claims) // the claims as JSON text, with "sub":"user-123"
+} catch (e: PolyjoseException) {
+    println(e.code()) // e.g. "TokenExpired"
+}
+```
+
+Encrypt to a recipient's public key, then decrypt, naming the algorithms you accept:
+
+```kotlin
+val recipient = jwkGenerateEc("P-256")
+val jwe = jweEncryptCompact(
+    plaintext = "top secret".toByteArray(),
+    options = JweEncryptOptions(
+        enc = "A256GCM",
+        recipients = listOf(JweRecipient(alg = "ECDH-ES+A256KW", key = jwkToPublic(recipient))),
+    ),
+)
+val decrypted = jweDecryptCompact(
+    jwe,
+    recipient,
+    JweDecryptOptions(allowedAlgs = listOf("ECDH-ES+A256KW"), allowedEnc = listOf("A256GCM")),
+)
+try {
+    println(decrypted.plaintext.decodeToString()) // "top secret"
+} finally {
+    decrypted.plaintext.fill(0) // wipe secret bytes when you are done with them
+}
+```
+
+Printing a result redacts its secret fields, but reading a field gives the secret: never log
+`verified.payload`, `decrypted.plaintext` or a key.
+
+## Documentation
+
+- Getting started on Android and the JVM: <https://polyjose.dev/start/android/>
+- Secrets in memory and how the desktop JVM loads its native library:
+  <https://polyjose.dev/reference/android/>
+- Guides (sign and verify, encrypt and decrypt, validate a JWT, keys): <https://polyjose.dev>
+- Error codes: <https://polyjose.dev/concepts/errors/>
+- Source and issues: <https://github.com/bharathkontham/polyjose>
+
+## Building from source
+
+This directory is the Gradle build of the Kotlin binding (ADR 0033). One UniFFI-generated Kotlin
+source set (package `dev.polyjose`) is compiled into two artifacts:
 
 | Module | Artifact | Natives |
 |---|---|---|
@@ -11,13 +113,13 @@ The Gradle build of polyjose's Kotlin binding (ADR 0033). One UniFFI-generated K
 The UniFFI adapter itself (`bindings/ffi`, its `uniffi.toml` and the `polyjose-uniffi-bindgen`
 package) belongs to feature 0013; nothing here edits it.
 
-## Requirements
+### Requirements
 
 JDK 21, the Rust toolchain of `rust-toolchain.toml`, and for the AAR the Android SDK (36), NDK
 28.2 and `cargo-ndk`. The Gradle wrapper is committed, so no Gradle install is needed. In this
 workspace: `source /Users/bharath/bharathwork/joserust/.toolchain-env.sh`.
 
-## Commands (from this directory)
+### Commands (from this directory)
 
 ```sh
 ./gradlew :polyjose-jvm:test        # JVM tests through JNA and the host library
@@ -30,7 +132,7 @@ From the repository root, `scripts/check-binding-api.sh kotlin` checks the gener
 public names against `bindings/api-inventory.txt` (ADR 0030 §2, 0013 T13); it generates the Kotlin
 into its own scratch directory, so it needs cargo but not Gradle.
 
-## Rust tasks (root project)
+### Rust tasks (root project)
 
 | Task | Does | Output |
 |---|---|---|
@@ -44,7 +146,7 @@ Each task declares its inputs (the Rust sources and manifests of `polyjose`, `po
 `polyjose-ffi`, the lock file, the toolchain pin) and outputs, so a rebuild without changes is up to
 date. The modules depend on these tasks; nothing generated is committed.
 
-## Tests
+### Tests
 
 - `:polyjose-jvm:test` (JUnit 5) gets absolute paths as system properties: `polyjose.vectors`
   (`conformance/vectors`), `polyjose.apiInventory` (`bindings/api-inventory.txt`),
@@ -62,7 +164,7 @@ date. The modules depend on these tasks; nothing generated is committed.
   `vectors_digest` (ADR 0060), so a bundle that differs from the checkout fails parity.
 - Both test source sets include `shared-test/kotlin`, the conformance runner they share.
 
-### The instrumented run (`scripts/run-instrumented.sh`)
+#### The instrumented run (`scripts/run-instrumented.sh`)
 
 1. It uses an emulator that `adb devices` lists as `device` and never stops it. With none, it boots
    `polyjose-api36` headless (`-no-window -no-audio -no-snapshot -gpu swiftshader_indirect`, about
@@ -87,112 +189,6 @@ Only arm64-v8a runs (an Apple Silicon host has no x86_64 system image), so x86_6
 AVD has 4 KB pages, so 16 KB page-size runtime testing is SKIPPED with that reason; the 16 KB
 alignment of the `.so` files is checked statically (`scripts/check-artifacts.sh`).
 
-## Secrets
+## License
 
-polyjose wipes the secrets it owns in Rust. Some copies are outside its reach: those UniFFI 0.32.2
-leaves on the Rust heap, and those on the JVM heap. This section says which ones remain and what
-the caller should do. The rules come from ADR 0030 §3 and §7, ADR 0033 §6 and ADR 0058. The module
-docs in `bindings/ffi/src/` and the generated KDoc give the same counts per function.
-
-### What the caller should do
-
-- **Wipe the `ByteArray`s you receive** once you are done with them (ADR 0030 §7.4). The secret
-  byte outputs are `JwsVerified.payload`, `JweDecrypted.plaintext`, `JweDecrypted.aad` and the
-  result of `jwkToDer`. The same applies to `base64urlDecode` when the decoded bytes are secret.
-  Wipe the array in place:
-
-  ```kotlin
-  val verified = jwsVerifyCompact(token, publicJwk, JwsVerifyOptions(allowedAlgs = listOf("ES256")))
-  try {
-      process(verified.payload)
-  } finally {
-      verified.payload.fill(0)
-  }
-  ```
-
-  Do the same for the secret `ByteArray`s you pass in (the payload to sign, the plaintext to
-  encrypt, the DER to import) after the call returns.
-- **Printed records redact their secrets (ADR 0065).** The build patches the generated `toString()`
-  (feature 0008 F05), so these fields print as `<redacted, N bytes>` (N is the byte length, UTF-8
-  for a JWK string) on the JVM and on Android: `JwsSigner.key`, `JweRecipient.key`,
-  `JwsVerified.payload`, `JweDecrypted.plaintext`, `JweDecrypted.aad`, `JweEncryptOptions.aad` and
-  `JwsVerifyOptions.detachedPayload`. Every other field prints as before. This covers `toString`,
-  string templates, `println` and messages built from the records. It does not cover reading a
-  field yourself: never log `signer.key`, `verified.payload` and the like, or the JWK strings and
-  `ByteArray`s you pass in.
-- **Do not put secrets in JWT claims.** `JwtVerified.claims` and the inner claims of
-  `JwtNestedVerified` are plain `String` results, outside ADR 0030 §7's secret handling, even when
-  they were decrypted from a nested JWT (ADR 0058, owner decision 2), and they print in full
-  (ADR 0065 decision 3). Claims are usually not secret. Carry secrets in a JWE payload instead.
-
-### Copies on the JVM heap (ADR 0030 §7.4, ADR 0033 §6)
-
-JVM `String`s are immutable and garbage-collected, so neither polyjose nor the caller can wipe
-them. The generated code also makes copies of its own that it does not wipe:
-
-- every `String` argument, and every `String` field of a record argument such as
-  `JwsSigner.key`, is encoded into a JVM-heap `ByteBuffer` (`FfiConverterString.toUtf8`) before it
-  is copied into Rust memory;
-- every `String` result, and every `String` field of a record result, is read into a temporary
-  `ByteArray` (`FfiConverterString.lift`/`read`) and then decoded into the `String`.
-
-`ByteArray` arguments are written straight into the Rust-allocated buffer, and `ByteArray` results
-are the arrays you receive, which you can wipe. These host-side copies come on top of the Rust-heap
-counts below.
-
-### Copies left on the Rust heap (ADR 0058)
-
-UniFFI 0.32.2 copies values in and out of a `RustBuffer` and frees it without wiping. The adapter
-cannot reach those copies without `unsafe` (ADR 0058, "Why the adapter cannot fix it"). ADR 0058
-measured them:
-
-| Value | Unwiped Rust-heap copies |
-|---|---|
-| A `String` result (generated, imported, parsed and exported keys, PEM) | exactly 1: the buffer the host frees |
-| A `ByteArray` result or secret `ByteArray` record field (`jwkToDer`, `payload`, `plaintext`, `aad`) | at least 2 full copies (the adapter's vector and the buffer the host frees), plus growth copies (below) |
-| A secret `ByteArray` argument, or a secret field of a record argument (`JwsSigner.key`, `JweRecipient.key`, `detachedPayload`, `aad`) | 1 each |
-| A bare `String` argument (for example a key or a JWK Set) | none |
-
-For byte outputs UniFFI writes into a buffer that grows by doubling. Each move of that buffer after
-the secret is fully written adds a full copy, and each move while it is being written adds a
-partial copy that holds a prefix of the secret. There are at most log2(C/8) growth steps, where C
-is the next power of two at or above the lowered length. Whether a step moves the buffer depends on
-the allocator. On macOS arm64 ADR 0058 measured 2 to 5 full copies, depending on the output and
-its size. Android's scudo allocator and glibc were not measured, so their counts may differ within
-that rule. polyjose does not rely on the allocator scrubbing freed memory.
-
-These copies are freed memory that the process reuses. Reading them takes a memory disclosure in
-the host process, such as a core dump, a heap read or swap. The output figure "one per returned
-value" in ADR 0030 §7.3, which ADR 0033 §6 restates, is corrected by ADR 0058; the counts above
-apply. The planned fix is opaque key handles and caller-provided output buffers in 0.2.0 (ADR 0058,
-owner decision 1). A zeroizing global allocator stays in the backlog (owner decision 3).
-
-### Which native library the desktop JVM loads
-
-The build patches the generated Kotlin (`uniffiGenerate`, build-logic `UniffiKotlinPatch`; feature
-0008 F05, security audit M1): `findLibraryName` calls the hand-written `PolyjoseNativeLoader` in
-`src/shared/kotlin`. The patch fails the build when UniFFI's generated text is not exactly what it
-was written against, so a UniFFI upgrade cannot silently drop it.
-
-On the desktop JVM the loader:
-
-1. reads the resource `/<JNA prefix>/<mapped name>` (for example
-   `darwin-aarch64/libpolyjose_ffi.dylib`) through its own class's class loader;
-2. compares its SHA-256 with the hash compiled into the jar's classes at build time
-   (`PolyjoseNativeHashes`, generated from the exact files the jar packs). When a jar earlier on the
-   class path carries the same resource, only a copy with the expected hash is used;
-3. copies it to a fresh private directory (`rwx------` on POSIX file systems, under
-   `java.io.tmpdir`) with a random file name, checks the hash again on disk, and passes JNA the
-   copy's **absolute path**. The copy is deleted when the JVM exits (on Windows a loaded DLL stays
-   behind, as with JNA's own extraction);
-4. throws `UnsatisfiedLinkError`, naming the resource and both hashes, when no copy matches. It
-   never falls back to the bare name.
-
-These are **ignored**: `jna.library.path`, `uniffi.component.polyjose_ffi.libraryOverride`, the
-working directory, `LD_LIBRARY_PATH`, the `DYLD_*` variables (the random file name defeats dyld's
-leaf-name lookup), `PATH` and the system library directories. A library planted in any of them is
-not loaded (`LoaderPocTest` runs each case in a child JVM). If `java.io.tmpdir` is mounted `noexec`,
-point `-Djava.io.tmpdir` at an executable private directory.
-
-Android is unchanged: the loader returns the bare name `polyjose_ffi`, and the app loads
-`libpolyjose_ffi.so` from its own read-only native library directory (audit I2).
+MIT; see [LICENSE](https://github.com/bharathkontham/polyjose/blob/main/LICENSE).
