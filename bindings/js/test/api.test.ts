@@ -19,7 +19,7 @@ test("every operation is async: it returns a Promise, even version and errorCode
   const c = api.errorCodes();
   assert.ok(v instanceof Promise);
   assert.ok(c instanceof Promise);
-  assert.equal(await v, "0.1.1");
+  assert.equal(await v, "0.1.2");
   assert.deepEqual(await c, [...ERROR_CODES]);
   // An operation whose arguments are wrong rejects rather than throwing synchronously.
   const bad = (api.base64urlEncode as (x: unknown) => Promise<string>)(42);
@@ -405,7 +405,7 @@ test("ready() is awaited before the first call, and only once", async () => {
 });
 
 test("a backend without ready() works", async () => {
-  assert.equal(await createApi(fakeBackend().backend).version(), "0.1.1");
+  assert.equal(await createApi(fakeBackend().backend).version(), "0.1.2");
 });
 
 test("a failed ready() rejects the call unchanged, and the next call tries again", async () => {
@@ -419,6 +419,6 @@ test("a failed ready() rejects the call unchanged, and the next call tries again
   });
   const api = createApi(fake.backend);
   await assert.rejects(api.version(), (e: unknown) => e === failure);
-  assert.equal(await api.version(), "0.1.1");
+  assert.equal(await api.version(), "0.1.2");
   assert.equal(attempts, 2);
 });

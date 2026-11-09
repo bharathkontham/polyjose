@@ -8,9 +8,9 @@ allow-list, and `none` is never accepted (RFC 8725).
 
 ```kotlin
 dependencies {
-    implementation("dev.polyjose:polyjose:0.1.1")      // Android AAR, minSdk 23
+    implementation("dev.polyjose:polyjose:0.1.2")      // Android AAR, minSdk 23
     // or, for the desktop and server JVM:
-    implementation("dev.polyjose:polyjose-jvm:0.1.1")  // jar with macOS, Linux and Windows natives
+    implementation("dev.polyjose:polyjose-jvm:0.1.2")  // jar with macOS, Linux and Windows natives
 }
 ```
 

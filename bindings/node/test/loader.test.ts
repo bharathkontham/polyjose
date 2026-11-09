@@ -410,7 +410,7 @@ interface Site {
 const fakeBackend = (marker: string): string =>
   [
     `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran");`,
-    'const known = { errorCodes: () => ["InvalidSignature"], version: () => "0.1.1" };',
+    'const known = { errorCodes: () => ["InvalidSignature"], version: () => "0.1.2" };',
     "module.exports = new Proxy(known, { get(t, k) {",
     "  if (k in t) return t[k];",
     '  if (k === "jwsVerifyCompact" || k === "jwsVerifyJson")',
@@ -424,7 +424,7 @@ const fakeBackend = (marker: string): string =>
 function plantFakePackage(nodeModules: string, name: string, marker: string): void {
   const dir = path.join(nodeModules, ...name.split("/"));
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name, version: "0.1.1", main: "index.js" }));
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name, version: "0.1.2", main: "index.js" }));
   fs.writeFileSync(path.join(dir, "index.js"), fakeBackend(marker));
 }
 
@@ -441,7 +441,7 @@ const fakeBytes = (): Uint8Array => {
 function plantPlatformPackage(nodeModules: string, addon: Uint8Array): string {
   const p = path.join(nodeModules, "@polyjose", `node-${hostPlatform}`);
   fs.mkdirSync(p, { recursive: true });
-  fs.writeFileSync(path.join(p, "package.json"), JSON.stringify({ name: `@polyjose/node-${hostPlatform}`, version: "0.1.1", main: hostAddon }));
+  fs.writeFileSync(path.join(p, "package.json"), JSON.stringify({ name: `@polyjose/node-${hostPlatform}`, version: "0.1.2", main: hostAddon }));
   fs.writeFileSync(path.join(p, hostAddon), addon);
   return path.join(p, hostAddon);
 }
