@@ -8,7 +8,7 @@ test("an entry that destructures createApi exports every operation, PolyjoseErro
   assert.deepEqual(Object.keys(entry).sort(), [...OPERATIONS, "ERROR_CODES", "PolyjoseError"].sort());
   assert.equal(entry.PolyjoseError, PolyjoseError);
   assert.equal(entry.ERROR_CODES, ERROR_CODES);
-  assert.equal(await entry.version(), "0.1.1");
+  assert.equal(await entry.version(), "0.1.2");
   assert.equal(entry.jwsVerifyCompact.name, "jwsVerifyCompact");
 });
 

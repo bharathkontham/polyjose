@@ -12,7 +12,7 @@ Add the package with Swift Package Manager, in `Package.swift` or in Xcode under
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/bharathkontham/polyjose", from: "0.1.1"),
+    .package(url: "https://github.com/bharathkontham/polyjose", from: "0.1.2"),
 ],
 targets: [
     .target(

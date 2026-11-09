@@ -4,6 +4,37 @@ All notable changes to polyjose are documented in this file. The format is based
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and polyjose follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-11-10
+
+A packaging and documentation release. The public API of every binding is unchanged from 0.1.1.
+
+### Added
+
+- **Rust:** the crate has its own crates.io README, with install, import and a quick start. Its examples are compiled and run as doctests, so they stay in step with the API.
+
+### Changed
+
+- **Node.js: `@polyjose/node` is now one package that contains the prebuilt addons for all 8 targets** (macOS arm64 and x64, Linux glibc and musl arm64 and x64, Windows arm64 and x64). It no longer has `optionalDependencies`, and the 8 `@polyjose/node-<platform>` packages are no longer published; they are deprecated on npm. The install now works with `--omit=optional` and in bundles built on one platform for another. The download is larger, about 23 MB unpacked instead of about 3 MB.
+- **Node.js: the addon is loaded only from the package's own directory.** The loader resolves no module name and reads no environment variable. It loads `polyjose.<platform>.node` from its own package, checks the addon's SHA-256 against the pinned value, and refuses anything else with `ERR_POLYJOSE_ADDON_REFUSED`. `NODE_PATH`, ancestor `node_modules` directories and the `@polyjose/node-<platform>` packages no longer affect what loads.
+- **Node.js, behaviour change: the `NAPI_RS_*` environment variables are ignored.** `NAPI_RS_NATIVE_LIBRARY_PATH` used to be accepted when it named the pinned addon, and `NAPI_RS_FORCE_WASI` and `NAPI_RS_WASI_FLAVOR` used to make the import throw. Now none of them has any effect, and the import never throws because of one.
+  - **Migration:** remove `NAPI_RS_NATIVE_LIBRARY_PATH` from your environment; the bundled addon for your platform is always used. If you depended on `@polyjose/node-<platform>` directly, depend on `@polyjose/node` 0.1.2 instead. If you set `NAPI_RS_FORCE_WASI` to get a WebAssembly build, use `@polyjose/wasm`, which has the same API. Platforms outside the 8 targets are still refused, with a message that points at `@polyjose/wasm`.
+- **Node.js on Windows embedders:** a host that napi-rs mapped to `win32-x64-gnu` (for example `node_target_type: shared_library`), which polyjose never shipped, now gets the `win32-x64-msvc` addon.
+- **Docs:** every package README (crates.io, npm, Maven, Swift) is cut to install, import and a quick start, and links the full guide for its platform on polyjose.dev. The repository README links each platform's docs.
+- **Swift:** `Package.swift` points at the 0.1.2 XCFramework, and its header no longer calls the binary target a placeholder.
+
+### Security
+
+- **Smaller Node.js loader surface.** The add-on loader no longer probes other packages, `NODE_PATH` or environment overrides, so nothing outside the installed `@polyjose/node` directory can influence which native code is loaded.
+- **Publishing:** crates.io and npm packages are published by trusted publishing (GitHub OIDC) with provenance. No long-lived registry token is used.
+
+### API by platform
+
+- **Rust (`polyjose`):** no change.
+- **Node.js (`@polyjose/node`):** no change to `index.d.ts` or the `exports` map. The internal `binding.cjs` backend, which was never a supported API, is no longer shipped.
+- **Web (`@polyjose/wasm`):** no change.
+- **Android and the JVM (`dev.polyjose:polyjose`, `polyjose-jvm`):** no change.
+- **Swift (`Polyjose`):** no change.
+
 ## [0.1.1] - 2026-11-09
 
 This is the first published release of polyjose; 0.1.0 was tagged but never published, because its release workflow did not create the draft release.

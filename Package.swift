@@ -13,10 +13,10 @@
 //   platforms/swift/build/PolyjoseFFI.xcframework is used:
 //     platforms/swift/scripts/build-xcframework.sh
 //     POLYJOSE_LOCAL_XCFRAMEWORK=1 swift test
-// - Otherwise the XCFramework zip of the GitHub Release. Until the first release this is a
-//   PLACEHOLDER: the asset does not exist yet and the checksum is all zeros, so resolving fails
-//   and the package must be built locally as above. The release agent writes the real url and
-//   checksum in the release PR (ADR 0032 §6; Gate 3 publishes).
+// - Otherwise the XCFramework zip attached to the GitHub Release of this version, checked against
+//   `checksum` (its SHA-256). Each release PR sets the url to its tag and the checksum to the
+//   candidate build's zip, recorded in platforms/swift/release-candidate.json (RELEASING.md step 2,
+//   ADR 0032 §6). On an unreleased commit the asset may not exist yet; build locally as above.
 import PackageDescription
 
 let useLocalXCFramework = Context.environment["POLYJOSE_LOCAL_XCFRAMEWORK"] == "1"
@@ -29,8 +29,8 @@ let ffiTarget: Target =
     )
     : .binaryTarget(
         name: "PolyjoseFFI",
-        // PLACEHOLDER until the first release (see the header).
-        url: "https://github.com/bharathkontham/polyjose/releases/download/v0.1.1/PolyjoseFFI.xcframework.zip",
+        // Set by each release PR (see the header).
+        url: "https://github.com/bharathkontham/polyjose/releases/download/v0.1.2/PolyjoseFFI.xcframework.zip",
         checksum: "13138090c7aeb784807647337605183000e0493d4da0102acb88f87145fedb15"
     )
 
