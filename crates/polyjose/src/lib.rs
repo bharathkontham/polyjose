@@ -50,6 +50,13 @@ pub mod util;
 
 pub use error::{Error, Result};
 
+/// The crate README's examples (`README.md`, the crates.io page), compiled
+/// and run as doctests so they can't drift from the API. Exists only under
+/// `cfg(doctest)`: never in a normal or downstream build, and not public API.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 /// Fuzzing-only entry points (feature 0012, ADR 0036 §1–§2). Compiled only
 /// under cargo-fuzz's `--cfg fuzzing`, never in a normal, test, doc or
 /// downstream build, and hidden from the docs: not public API.

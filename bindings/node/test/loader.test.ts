@@ -3,7 +3,7 @@
 //   - the load surface: the exact set of `require(...)` targets and environment variables of the
 //     built binding.cjs (napi-rs CLI 3.10.12) is pinned, and none is absolute or CWD-derived, so a
 //     CLI bump that changes what the loader can load fails here instead of passing review unseen;
-//   - the loader side effects the README documents (N7) are still the loader's;
+//   - the loader side effects the docs (polyjose.dev/reference/node/) document (N7) are still the loader's;
 //   - fail closed: polyjose publishes no WASI build, so the package refuses the napi-rs WASI
 //     variables and never reaches the loader's WASI chain when the native load fails. Each case
 //     runs in a child process on a temporary copy of the package, with a planted WASI sentinel
@@ -137,7 +137,7 @@ const BUILTIN_TARGETS = ["require:'fs'", "require:'child_process'"];
 /** The override: the native library at this path is loaded instead of the bundled addon. */
 const OVERRIDE_TARGETS = ["require:process.env.NAPI_RS_NATIVE_LIBRARY_PATH"];
 
-/** Every environment variable the loader reads (README, "Loading the addon"). */
+/** Every environment variable the loader reads (docs: polyjose.dev/reference/node/, "Environment variables"). */
 const LOADER_ENV = [
   "NAPI_RS_ENFORCE_VERSION_CHECK",
   "NAPI_RS_FORCE_WASI",
@@ -218,7 +218,7 @@ test("the loader reads exactly the pinned environment variables", () => {
   assert.ok(!/process\.env\[/.test(loaderCode), "binding.cjs indexes process.env dynamically");
 });
 
-test("the loader side effects the README documents are still the loader's (N7)", () => {
+test("the loader side effects the docs document are still the loader's (N7)", () => {
   // isMuslFromReport sets this process-wide before calling process.report.getReport().
   assert.ok(loaderCode.includes("process.report.excludeNetwork = true"), "the musl report probe");
   // Windows x64 embedders (node_target_type 'shared_library') are sent to win32-x64-gnu only.
