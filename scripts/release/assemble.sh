@@ -7,14 +7,14 @@
 #
 # <in-dir> holds what release.yml downloads:
 #   crate/polyjose-<v>.crate        `cargo package -p polyjose --locked`
-#   npm/*.tgz                       the 8 @polyjose/node-<platform> tarballs, @polyjose/node and
-#                                   @polyjose/wasm (binding-node.yml, binding-wasm.yml)
+#   npm/*.tgz                       @polyjose/node, with the 8 addons inside, and @polyjose/wasm
+#                                   (binding-node.yml, binding-wasm.yml; feature 0017)
 #   maven-repo/                     the Gradle build-local repository (binding-android.yml)
 #   apple/                          PolyjoseFFI.xcframework.zip and .zip.sha256 (binding-apple.yml,
 #                                   or in tag mode the verified candidate zip)
 # <out-dir> must not exist or be empty. It receives exactly the assets of ADR 0037 §3:
 #   polyjose-<v>.crate
-#   polyjose-node-<v>.tgz, polyjose-node-<platform>-<v>.tgz x 8, polyjose-wasm-<v>.tgz
+#   polyjose-node-<v>.tgz, polyjose-wasm-<v>.tgz
 #   polyjose-<v>.aar, polyjose-<v>.pom, polyjose-jvm-<v>.jar, polyjose-jvm-<v>.pom
 #     (and with --sign their .asc), polyjose-maven-<v>.zip
 #   PolyjoseFFI.xcframework.zip, PolyjoseFFI.xcframework.zip.sha256
@@ -27,8 +27,9 @@
 #     (META-INF/polyjose/THIRD-PARTY-NOTICES.txt) and the XCFramework zip
 #     (PolyjoseFFI.xcframework/THIRD-PARTY-NOTICES.txt). The .crate is source only, with no
 #     third-party code in it, so it carries none (ADR 0020 §4 covers binary packages);
-#   - @polyjose/node's addon-sha256.json pins exactly the 8 platforms, each to the SHA-256 of the
-#     addon inside that platform's tarball (feature 0007 F07: the main package loads only those);
+#   - @polyjose/node holds exactly the 8 addons package.json `files` lists (package/polyjose.<platform>.node),
+#     and its addon-sha256.json pins exactly those 8 platforms, each to the SHA-256 of the addon it
+#     holds (feature 0007 F07: the package loads only those);
 #   - the XCFramework's .sha256 file is the zip's SHA-256 (the SPM checksum is SHA-256 of the zip);
 #   - the Maven repository holds exactly dev/polyjose/polyjose/<v>/ and
 #     dev/polyjose/polyjose-jvm/<v>/ (plus Gradle's maven-metadata.xml files, left out of the
@@ -87,10 +88,14 @@ tar -tzf "$out/polyjose-$v.crate" | grep -xF "polyjose-$v/Cargo.toml" >/dev/null
 
 # --- npm ----------------------------------------------------------------------------------------------
 echo "==> $me: npm tarballs"
-platforms=$(cd "$repo/bindings/node/npm" && for d in */; do echo "${d%/}"; done)
-[ "$(printf '%s\n' "$platforms" | grep -c .)" -eq 8 ] || rel_die "bindings/node/npm/ does not hold 8 platform packages"
-want_npm=$( { echo "polyjose-node-$v.tgz"; echo "polyjose-wasm-$v.tgz"
-  for p in $platforms; do echo "polyjose-node-$p-$v.tgz"; done; } | sort)
+# The shipped platforms: the polyjose.<platform>.node entries of bindings/node/package.json files.
+platforms=$(python3 -I -c 'import json, re, sys
+for f in json.load(open(sys.argv[1], encoding="utf-8"))["files"]:
+    m = re.fullmatch(r"polyjose\.([a-z0-9-]+)\.node", f)
+    if m:
+        print(m.group(1))' "$repo/bindings/node/package.json" | sort)
+[ "$(printf '%s\n' "$platforms" | grep -c .)" -eq 8 ] || rel_die "bindings/node/package.json files does not list 8 addons"
+want_npm=$(printf '%s\n' "polyjose-node-$v.tgz" "polyjose-wasm-$v.tgz" | sort)
 have_npm=$(names "$in/npm")
 [ "$have_npm" = "$want_npm" ] || rel_die "npm/ holds:
 $have_npm
@@ -107,29 +112,34 @@ for f in $want_npm; do
   case $f in
     polyjose-node-"$v".tgz) want=@polyjose/node ;;
     polyjose-wasm-"$v".tgz) want=@polyjose/wasm ;;
-    *) p=${f#polyjose-node-}; want=@polyjose/node-${p%-"$v".tgz} ;;
+    *) rel_die "unexpected npm tarball $f" ;;
   esac
   [ "$(npm_name "$in/npm/$f")" = "$want" ] || rel_die "$f: package.json name is not $want"
   tar -tzf "$in/npm/$f" | grep -xF package/THIRD-PARTY-NOTICES.txt >/dev/null || rel_die "$f has no package/THIRD-PARTY-NOTICES.txt"
   cp "$in/npm/$f" "$out/"
   echo "  ok   $f ($want $v, THIRD-PARTY-NOTICES.txt)"
 done
-# addon-sha256.json pins every platform's shipped addon (feature 0007 F07).
+# @polyjose/node holds the 8 addons, and addon-sha256.json pins each by its SHA-256 (feature 0007
+# F07, feature 0017).
+want_addons=$(for p in $platforms; do echo "package/polyjose.$p.node"; done | sort)
+have_addons=$(tar -tzf "$out/polyjose-node-$v.tgz" | grep -E '^package/[^/]*\.node$' | sort || true)
+[ "$have_addons" = "$want_addons" ] || rel_die "polyjose-node-$v.tgz holds the addons:
+$have_addons
+expected exactly:
+$want_addons"
 mkdir -p "$work/main"
-tar -xzf "$out/polyjose-node-$v.tgz" -C "$work/main" package/addon-sha256.json ||
+# shellcheck disable=SC2086 # one tar member per addon
+tar -xzf "$out/polyjose-node-$v.tgz" -C "$work/main" package/addon-sha256.json $want_addons ||
   rel_die "polyjose-node-$v.tgz has no package/addon-sha256.json"
 for p in $platforms; do
-  mkdir -p "$work/addon-$p"
-  tar -xzf "$out/polyjose-node-$p-$v.tgz" -C "$work/addon-$p" "package/polyjose.$p.node" ||
-    rel_die "polyjose-node-$p-$v.tgz has no package/polyjose.$p.node"
-  printf '%s %s\n' "$p" "$(rel_sha256 "$work/addon-$p/package/polyjose.$p.node")"
+  printf '%s %s\n' "$p" "$(rel_sha256 "$work/main/package/polyjose.$p.node")"
 done | sort >"$work/addons.txt"
 python3 -I -c 'import json, sys
 pins = json.load(open(sys.argv[1], encoding="utf-8"))
 print("\n".join(f"{k} {pins[k]}" for k in sorted(pins)))' "$work/main/package/addon-sha256.json" >"$work/pins.txt"
-cmp -s "$work/addons.txt" "$work/pins.txt" || rel_die "@polyjose/node's addon-sha256.json does not pin exactly the 8 shipped addons:
+cmp -s "$work/addons.txt" "$work/pins.txt" || rel_die "@polyjose/node's addon-sha256.json does not pin exactly the 8 addons it holds:
 $(diff "$work/pins.txt" "$work/addons.txt" || true)"
-echo "  ok   addon-sha256.json pins the 8 platform addons by their SHA-256"
+echo "  ok   polyjose-node-$v.tgz holds the 8 addons; addon-sha256.json pins each by its SHA-256"
 
 # --- Apple --------------------------------------------------------------------------------------------
 echo "==> $me: XCFramework"

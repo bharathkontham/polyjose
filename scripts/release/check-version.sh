@@ -13,8 +13,8 @@
 #   - [workspace.package] version of Cargo.toml, and the version of every workspace member
 #     (`cargo metadata --no-deps --locked`); the Gradle build reads the same field
 #     (platforms/android/build-logic PackagingPlugin), so the AAR and the jar follow it;
-#   - bindings/node/package.json: version and every @polyjose/node-* optionalDependencies pin;
-#   - bindings/node/npm/*/package.json (the 8 platform packages): version;
+#   - bindings/node/package.json: version (the one Node package; it has no optionalDependencies
+#     since 0.1.2, feature 0017);
 #   - bindings/js/package.json: version (the shared facade, not published);
 #   - bindings/wasm/package.template.json keeps its "@VERSION@" placeholder (build-package.sh
 #     fills it from Cargo.toml);
@@ -69,15 +69,6 @@ for p in json.load(sys.stdin)["packages"]:
     print(p["name"], p["version"])')
 
 check "bindings/node/package.json version" "$(json bindings/node/package.json 'd["version"]')"
-while IFS=' ' read -r name ver; do
-  check "bindings/node/package.json optionalDependencies $name" "$ver"
-done < <(json bindings/node/package.json '[k + " " + v for k, v in sorted(d.get("optionalDependencies", {}).items())]')
-platforms=0
-for f in bindings/node/npm/*/package.json; do
-  platforms=$((platforms + 1))
-  check "$f version" "$(json "$f" 'd["version"]')"
-done
-[ "$platforms" -eq 8 ] || { echo "  FAIL bindings/node/npm/: $platforms platform packages, expected 8"; bad=1; }
 check "bindings/js/package.json version" "$(json bindings/js/package.json 'd["version"]')"
 if [ "$(json bindings/wasm/package.template.json 'd["version"]')" = "@VERSION@" ]; then
   echo "  ok   bindings/wasm/package.template.json: @VERSION@ (filled from Cargo.toml)"

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# The npm step of publish.yml (feature 0012 H3; ADR 0038 §1 step 2): publishes the draft's 10 npm
-# tarballs as they are, never a fresh pack, in this order: the 8 @polyjose/node-<platform> packages
-# (bindings/node/npm/*/), then @polyjose/node (whose optional dependencies they are), then
-# @polyjose/wasm. ADR 0038 says 11 packages; the repository has 10 (decisions.md, 2026-11-08, H3).
+# The npm step of publish.yml (feature 0012 H3; ADR 0038 §1 step 2): publishes the draft's 2 npm
+# tarballs as they are, never a fresh pack, in this order: @polyjose/node (which ships the 8
+# native addons inside it since 0.1.2, feature 0017, ADR 0066), then @polyjose/wasm. Until 0.1.1
+# there were 10 packages (the 8 @polyjose/node-<platform> ones too; decisions.md, 2026-11-08, H3);
+# they are no longer published, and the owner deprecates them by hand (RELEASING.md).
 #
 #   scripts/release/npm-publish.sh <dir> <version>
 #
@@ -70,12 +71,8 @@ if [ "$BOOTSTRAP" = true ]; then
   echo "  npm whoami: $(npm whoami)"
 fi
 
-platforms=$(cd "$repo/bindings/node/npm" && for d in */; do echo "${d%/}"; done | sort)
-[ "$(printf '%s\n' "$platforms" | grep -c .)" -eq 8 ] || rel_die "bindings/node/npm/ does not hold 8 platform packages"
-order=()
-for p in $platforms; do order+=("polyjose-node-$p-$v.tgz:@polyjose/node-$p"); done
-order+=("polyjose-node-$v.tgz:@polyjose/node" "polyjose-wasm-$v.tgz:@polyjose/wasm")
-[ "${#order[@]}" -eq 10 ] || rel_die "expected 10 npm packages, have ${#order[@]}"
+order=("polyjose-node-$v.tgz:@polyjose/node" "polyjose-wasm-$v.tgz:@polyjose/wasm")
+[ "${#order[@]}" -eq 2 ] || rel_die "expected 2 npm packages, have ${#order[@]}"
 
 integrity() { # integrity <file>: the npm dist.integrity of a tarball (sha512, base64)
   python3 -I -c 'import base64, hashlib, sys

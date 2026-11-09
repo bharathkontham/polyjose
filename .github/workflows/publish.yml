@@ -1,6 +1,6 @@
 # Publish a release (feature 0012 H3; ADR 0038 §1-§2). Publishes exactly the bytes of the draft
 # GitHub Release that release.yml made, never a rebuild, one registry at a time:
-#   crates.io -> npm (8 platform packages, @polyjose/node, @polyjose/wasm) -> Maven Central (upload
+#   crates.io -> npm (@polyjose/node, @polyjose/wasm) -> Maven Central (upload
 #   only, USER_MANAGED, polled until VALIDATED; the owner presses Publish in the Portal) -> GitHub
 #   (un-draft the release, which makes the SPM binary target live) -> an SPM resolve and build.
 #
@@ -237,8 +237,8 @@ jobs:
           # --no-verify: no third-party build script runs next to the token (see the package step).
           cargo publish -p polyjose --locked --no-verify
 
-  # 2. npm: the 8 platform packages, then @polyjose/node, then @polyjose/wasm, each the draft's
-  # tarball (scripts/release/npm-publish.sh).
+  # 2. npm: @polyjose/node (the 8 addons inside it, feature 0017), then @polyjose/wasm, each the
+  # draft's tarball (scripts/release/npm-publish.sh).
   npm:
     name: npm
     needs: [assets, crates]

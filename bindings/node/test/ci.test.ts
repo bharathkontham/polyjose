@@ -8,9 +8,10 @@
 //   - every action is pinned to a full commit SHA with its release tag (ci.yml's convention,
 //     ADR 0037 §1);
 //   - its prebuild matrix is exactly the eight napi targets of package.json (ADR 0031 §2), each
-//     built by scripts/ci-build.sh and uploaded with a stable artifact name, plus the Node 22, 24
+//     built by scripts/ci-build.sh and its addon uploaded with a stable artifact name (packed into
+//     the one @polyjose/node tarball by scripts/pack-main.sh, feature 0017), plus the Node 22, 24
 //     and 26 runs and the parity job (ADR 0034 §5);
-//   - scripts/ci-build.sh and scripts/pack-platform.sh never publish (Gate 3, ADR 0011);
+//   - scripts/ci-build.sh and scripts/pack-main.sh never publish (Gate 3, ADR 0011);
 //   - the build is reproducible from the committed lockfiles (review-code.md SF-3, N2): ci-build.sh
 //     first checks Cargo.lock with `cargo metadata --locked`, every cargo and napi build or test
 //     the scripts run passes `--locked`, and every `npm ci` passes `--ignore-scripts`.
@@ -49,7 +50,8 @@ const pkgDir = path.resolve(path.dirname(thisFile), "..");
 const repo = path.resolve(pkgDir, "..", "..");
 const workflowFile = path.join(repo, ".github", "workflows", "binding-node.yml");
 const ciBuildFile = path.join(pkgDir, "scripts", "ci-build.sh");
-const packPlatformFile = path.join(pkgDir, "scripts", "pack-platform.sh");
+const packMainFile = path.join(pkgDir, "scripts", "pack-main.sh");
+const backendFile = path.join(pkgDir, "src", "backend.ts");
 const buildFile = path.join(pkgDir, "scripts", "build.sh");
 const testShFile = path.join(pkgDir, "test.sh");
 
@@ -339,7 +341,9 @@ test("binding-node.yml builds the eight napi targets with ci-build.sh and upload
   }
   const text = prebuild.map((l) => l.text).join("\n");
   assert.match(text, /bindings\/node\/scripts\/ci-build\.sh "?\$\{\{ matrix\.target \}\}"?/, "each target runs ci-build.sh <target>");
-  assert.match(text, /name: npm-\$\{\{ matrix\.target \}\}/, "platform tarball artifact npm-<target>");
+  assert.match(text, /name: addon-\$\{\{ matrix\.target \}\}/, "addon artifact addon-<target> (feature 0017)");
+  assert.match(text, /path: bindings\/node\/polyjose\.\$\{\{ matrix\.platform \}\}\.node$/m, "the tested addon itself");
+  assert.doesNotMatch(text, /name: npm-/, "no per-target npm package (feature 0017; release.yml collects npm-*)");
   assert.match(text, /name: conformance-node-\$\{\{ matrix\.target \}\}/, "results artifact conformance-node-<target>");
   assert.match(text, /target\/conformance\/node-\$\{\{ matrix\.target \}\}\.json/, "uploads node-<target>.json (ADR 0034 §2)");
   assert.match(src, /if-no-files-found: error/, "a missing artifact fails the job");
@@ -387,25 +391,28 @@ function ciBuildTable(): Map<string, string> {
   return table;
 }
 
-test("ci-build.sh maps each napi target to its npm/<platform> package", () => {
+/** pack-main.sh's `<platform>) echo <triple> ;;` table (triple_of). */
+function packMainTable(): Map<string, string> {
+  const table = new Map<string, string>();
+  for (const line of codeLines(packMainFile)) {
+    const m = /^\s*([a-z0-9]+(?:-[a-z0-9]+)+)\)\s*echo ([a-z0-9_]+(?:-[a-z0-9_]+)+)\s*;;/.exec(line);
+    if (m !== null) table.set(m[2] ?? "", m[1] ?? "");
+  }
+  return table;
+}
+
+test("ci-build.sh and pack-main.sh map each napi target to the addon package.json ships", () => {
   const table = ciBuildTable();
   assert.deepEqual([...table.keys()].sort(), napiTargets(), "ci-build.sh knows exactly the napi targets");
-  const dirs = fs
-    .readdirSync(path.join(pkgDir, "npm"), { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name)
-    .sort();
-  assert.deepEqual([...table.values()].sort(), dirs, "one npm/<platform> directory per target");
-  for (const [triple, platform] of table) {
-    const pkg: unknown = JSON.parse(read(path.join(pkgDir, "npm", platform, "package.json")));
-    assert.ok(isRecord(pkg), `npm/${platform}/package.json is an object`);
-    assert.equal(pkg["name"], `@polyjose/node-${platform}`, `${triple}: package name`);
-    assert.equal(pkg["main"], `polyjose.${platform}.node`, `${triple}: the addon napi build --platform writes`);
-  }
+  assert.deepEqual([...packMainTable()].sort(), [...table].sort(), "pack-main.sh's table is ci-build.sh's");
+  const pkg: unknown = JSON.parse(read(path.join(pkgDir, "package.json")));
+  assert.ok(isRecord(pkg) && Array.isArray(pkg["files"]));
+  const addons = (pkg["files"] as unknown[]).filter((f) => typeof f === "string" && f.endsWith(".node")).sort();
+  assert.deepEqual(addons, [...table.values()].map((p) => `polyjose.${p}.node`).sort(), "package.json files lists each addon");
 });
 
-test("ci-build.sh and pack-platform.sh never publish (npm publish and napi pre-publish are Gate 3)", () => {
-  for (const file of [ciBuildFile, packPlatformFile]) {
+test("ci-build.sh and pack-main.sh never publish (npm publish and napi pre-publish are Gate 3)", () => {
+  for (const file of [ciBuildFile, packMainFile]) {
     const name = path.relative(pkgDir, file);
     const code = codeLines(file).join("\n");
     assert.doesNotMatch(code, /publish/i, `${name}: no publish command`);
@@ -421,8 +428,8 @@ test("ci-build.sh and pack-platform.sh never publish (npm publish and napi pre-p
 
 // --- Lockfiles (review-code.md SF-3, N2) ------------------------------------------------------------
 
-/** Every script ci-build.sh runs, directly or through test.sh and build.sh. */
-const buildScripts = (): string[] => [ciBuildFile, testShFile, buildFile, packPlatformFile];
+/** Every script ci-build.sh runs, directly or through test.sh and build.sh, and the CI pack (pack-main.sh). */
+const buildScripts = (): string[] => [ciBuildFile, testShFile, buildFile, packMainFile];
 
 /** The code lines of a script with quoted text emptied, so a message that names a command is not a run of it. */
 const commands = (file: string): string[] =>
@@ -715,10 +722,10 @@ test("ci-build.sh links the msvc addons' C runtime statically and checks they im
     /^\s*python3 -I scripts\/pe-imports\.py --deny-crt "polyjose\.\$platform\.node"$/,
     "the import check on the built addon",
   );
-  const pack = onlyLine(raw, /^\s*scripts\/pack-platform\.sh /, "the platform pack");
+  const pack = onlyLine(raw, /^addon=polyjose\.\$platform\.node$/, "the check of the addon the job uploads");
   assert.ok(insideIf(raw, flags, gate), "the flag is set only when crt_static is true");
   assert.ok(insideIf(raw, check, gate), "the check runs only when crt_static is true");
-  assert.ok(flags < build && build < check && check < pack, "flag, then build, then the check, then the pack");
+  assert.ok(flags < build && build < check && check < pack, "flag, then build, then the check, then the upload check");
 });
 
 test("ci-build.sh checks the gnu addons' glibc floor after the build, and only on the gnu targets", () => {
@@ -731,11 +738,11 @@ test("ci-build.sh checks the gnu addons' glibc floor after the build, and only o
   const check = onlyLine(
     raw,
     /^\s*scripts\/glibc-floor\.sh "\$glibc_floor" "polyjose\.\$platform\.node"$/,
-    "the check on the built addon, the file pack-platform.sh packs",
+    "the check on the built addon, the file the job uploads",
   );
-  const pack = onlyLine(raw, /^\s*scripts\/pack-platform\.sh /, "the platform pack");
+  const pack = onlyLine(raw, /^addon=polyjose\.\$platform\.node$/, "the check of the addon the job uploads");
   assert.ok(insideIf(raw, check, gate), "the check runs only when glibc_check is true");
-  assert.ok(build < check && check < pack, "build, then the check, then the pack");
+  assert.ok(build < check && check < pack, "build, then the check, then the upload check");
   assert.ok(!raw.some((l) => /glibc_check=true/.test(l) && !/-unknown-linux-gnu\)/.test(l)), "nothing else turns it on");
   assert.deepEqual(
     napiTargets().filter((t) => t.endsWith("-unknown-linux-gnu")),
@@ -754,9 +761,9 @@ test("the README points to the docs page that states the glibc floor (F04)", () 
   assert.ok(!readme.includes("Linux glibc floor"), "the floor table is on the docs site, not here");
 });
 
-/** The text of `const <name> = ...` in `src` up to its closing `\n}\n`. */
+/** The text of `function <name>(...` in `src` up to its closing `\n}\n`. */
 function definition(src: string, name: string): string {
-  const start = src.indexOf(`const ${name} = `);
+  const start = src.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `${name} is defined`);
   const end = src.indexOf("\n}\n", start);
   assert.ok(end > start, `${name} ends`);
@@ -775,19 +782,23 @@ function inOrder(src: string, markers: readonly string[], where: string): void {
   }
 }
 
-test("ci-build.sh tells glibc from musl as the loader does: /usr/bin/ldd, the process report, ldd --version", () => {
-  // The generated loader (binding.cjs, built before the tests run): isMusl() tries its three
-  // probes in this order, each returning null to pass on (review-code.md N4).
-  const loader = read(path.join(pkgDir, "binding.cjs"));
-  inOrder(definition(loader, "isMusl"), ["isMuslFromFilesystem()", "isMuslFromReport()", "isMuslFromChildProcess()"], "binding.cjs isMusl");
-  assert.match(definition(loader, "isMuslFromFilesystem"), /readFileSync\('\/usr\/bin\/ldd', 'utf-8'\)\.includes\('musl'\)/);
-  const report = definition(loader, "isMuslFromReport");
-  assert.match(report, /process\.report\.excludeNetwork = true\s+report = process\.report\.getReport\(\)/);
-  assert.match(report, /glibcVersionRuntime\)\s*\{\s*return false/);
-  assert.match(definition(loader, "isFileMusl"), /f\.includes\('libc\.musl-'\) \|\| f\.includes\('ld-musl-'\)/);
-  assert.match(definition(loader, "isMuslFromChildProcess"), /execSync\('ldd --version', \{ encoding: 'utf8' \}\)\.includes\('musl'\)/);
+test("ci-build.sh tells glibc from musl as the loader does: /usr/bin/ldd, then the process report", () => {
+  // src/backend.ts isMusl (napi-rs's order, review-code.md N4): the two probes, in this order.
+  const isMusl = definition(read(backendFile), "isMusl");
+  inOrder(
+    isMusl,
+    [
+      'readFileSync("/usr/bin/ldd", "utf8").includes("musl")',
+      "report.excludeNetwork = true;",
+      "report.getReport()",
+      "glibcVersionRuntime",
+      'f.includes("libc.musl-") || f.includes("ld-musl-")',
+    ],
+    "backend.ts isMusl",
+  );
+  assert.ok(!isMusl.includes("ldd --version"), "backend.ts runs no child process");
 
-  // ci-build.sh's host check makes the same three probes, in the same order, with the same tests.
+  // ci-build.sh's host check makes the same probes, in the same order, with the same tests.
   const script = codeLines(ciBuildFile).join("\n");
   inOrder(
     script,
@@ -797,10 +808,10 @@ test("ci-build.sh tells glibc from musl as the loader does: /usr/bin/ldd, the pr
       "process.report.getReport()",
       "report.header.glibcVersionRuntime",
       'f.includes("libc.musl-") || f.includes("ld-musl-")',
-      'execSync("ldd --version", { encoding: "utf8" }).includes("musl")',
     ],
     "ci-build.sh",
   );
+  assert.ok(!script.includes("ldd --version"), "ci-build.sh does not guess from ldd --version either");
   assert.match(script, /name \+= isMusl\(\) \? "-musl" : "-gnu"/, "the libc suffix comes from that order alone");
 });
 
@@ -1004,9 +1015,10 @@ test("no run: block of binding-node.yml interpolates an input; inputs reach scri
 
 test("binding-node.yml pins the Alpine packages, or states the exception and its reason (review-code.md N3)", () => {
   const { src } = workflow();
+  // Two: the musl prebuild's toolchain, and bash for the musl smoke legs (feature 0017).
   const apk = [...src.matchAll(/^\s*apk add (.*)$/gm)];
-  assert.equal(apk.length, 1, "one apk add");
-  const packages = (apk[0]?.[1] ?? "").split(/\s+/).filter((p) => p !== "" && !p.startsWith("-"));
+  assert.equal(apk.length, 2, "two apk add lines: the musl prebuild and the musl smoke install");
+  const packages = apk.flatMap((m) => (m[1] ?? "").split(/\s+/).filter((p) => p !== "" && !p.startsWith("-")));
   assert.ok(packages.length > 0);
   const unpinned = packages.filter((p) => !/^[a-z0-9+._-]+=\S+$/.test(p));
   if (unpinned.length === 0) return;

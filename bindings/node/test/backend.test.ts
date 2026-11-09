@@ -1,4 +1,4 @@
-// The raw napi backend of @polyjose/node, below the facade (`backend.js`, the typed `binding.cjs`;
+// The raw napi backend of @polyjose/node, below the facade (`backend.js`, the typed addon;
 // bindings/js/BACKEND.md), run with `node --test` against the compiled package (ADR 0047). The
 // facade copies every byte input and builds fresh plain records before the backend is reached
 // (0013 B06), so the public-API tests cannot see what the adapter itself does. These can:

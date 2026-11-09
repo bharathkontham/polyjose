@@ -1,10 +1,12 @@
-# @polyjose/node prebuilds (feature 0007 T05; ADR 0031 §2, ADR 0034 §2 and §5, ADR 0037 §1).
+# @polyjose/node prebuilds and package (feature 0007 T05, feature 0017; ADR 0031 §2 as superseded
+# by ADR 0066, ADR 0034 §2 and §5, ADR 0037 §1).
 #
-# Builds, tests and packs the addon for each of the eight napi targets of bindings/node/package.json
-# on a native runner, runs the suite on Node 22, 24 and 26 on linux-x64 and the compiled tests on
-# Node 22.12.0 (the engines floor), then checks conformance parity over every results file. All of
-# the build logic is in bindings/node/scripts/ci-build.sh, so a local run (`scripts/ci-build.sh
-# aarch64-apple-darwin`) and a CI run check the same things.
+# Builds and tests the addon for each of the eight napi targets of bindings/node/package.json on a
+# native runner, runs the suite on Node 22, 24 and 26 on linux-x64 and the compiled tests on Node
+# 22.12.0 (the engines floor), checks conformance parity over every results file, packs the one
+# @polyjose/node tarball with all eight addons inside, and smoke-installs that tarball on each of
+# the eight targets. All of the build logic is in bindings/node/scripts/ci-build.sh, so a local run
+# (`scripts/ci-build.sh aarch64-apple-darwin`) and a CI run check the same things.
 #
 # When it runs (ADR 0044; owner, 2026-11-07): never on PRs, pushes or a schedule. It has two
 # triggers: a manual dispatch, which nobody starts without the owner (pipeline rule 8), and
@@ -12,17 +14,18 @@
 # §1, §2):
 #   - one input, `mode`, declared identically under both triggers: `ci` (the default) or
 #     `release`. The mode job rejects any other value. Both modes build, test and pack the same
-#     way; release.yml takes the package tarballs from the npm-* artifacts. The input reaches a script
+#     way; release.yml takes the package tarball from the npm-* artifacts. The input reaches a script
 #     only through a step's `env:` (read there as "$MODE"), never as
 #     `${{ inputs.mode }}` inside `run:`, so an input value is data, never shell code
 #     (review-security.md I6). test/ci.test.ts rejects any inputs expression in a run: block;
 #   - nothing reads PR or event context, only `matrix.*`;
-#   - artifact names are fixed: npm-<target> (the platform tarball), npm-node (the main package,
-#     packed by the pack-main job over all eight platform tarballs, so its addon-sha256.json pins
-#     each shipped addon; feature 0007 F07) and conformance-node-<label>
-#     (target/conformance/node-<label>.json), ADR 0037 §1;
-#   - the smoke job installs the packed main and platform tarballs on linux-x64-gnu and
-#     darwin-arm64 and round-trips a JWS through the installed package;
+#   - artifact names are fixed: addon-<target> (the tested addon, polyjose.<platform>.node),
+#     npm-node (the one package, packed by the pack-main job with all eight addons inside, so its
+#     addon-sha256.json pins each shipped addon; feature 0007 F07, feature 0017) and
+#     conformance-node-<label> (target/conformance/node-<label>.json), ADR 0037 §1. Only npm-node
+#     matches release.yml's npm-* pattern;
+#   - the smoke job installs that one tarball on each of the eight targets, checks the platform the
+#     loader detects there, and round-trips a JWS through the installed package (ESM and CJS);
 #   - every job sets its own least-privilege `permissions` (contents: read, or none);
 #   - no workflow-level concurrency group: inside a called workflow, github.workflow is the
 #     caller's name, so a group here could collide with the caller's own.
@@ -44,8 +47,8 @@
 # bindings/node/test/ci.test.ts, which pins both.
 #
 # Exception, apk packages (review-code.md N3): inside that image, `apk add` installs bash,
-# build-base, git, python3 and rustup at the versions Alpine's v3.23 repository holds when the
-# job runs, unpinned. Alpine keeps one build of each package per release branch: measured on
+# build-base, git, python3 and rustup (the smoke job's musl legs: bash only) at the versions
+# Alpine's v3.23 repository holds when the job runs, unpinned. Alpine keeps one build of each package per release branch: measured on
 # 2026-11-07, the v3.23 main and community indexes held exactly one version of each of these
 # (and of 27,428 of their 27,433 packages), so a `pkg=version-rN` pin would fail the job as soon
 # as Alpine replaces that build, and there is no dated snapshot to pin to.
@@ -258,10 +261,12 @@ jobs:
               scripts/check-rsa-symbols.sh --only polyjose-node --only polyjose-node-release
             '
 
+      # The addon the suite above loaded and ci-build.sh checked against its pin (feature 0017): the
+      # pack-main job packs the eight of them into the one package.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: npm-${{ matrix.target }}
-          path: bindings/node/dist/npm/polyjose-node-${{ matrix.platform }}-*.tgz
+          name: addon-${{ matrix.target }}
+          path: bindings/node/polyjose.${{ matrix.platform }}.node
           if-no-files-found: error
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -422,11 +427,11 @@ jobs:
       - name: conformance parity
         run: scripts/conformance-parity.sh
 
-  # The main package, @polyjose/node, packed once over the eight platform tarballs above
-  # (scripts/pack-main.sh --all-platforms): its addon-sha256.json pins the SHA-256 of the addon in
-  # each platform tarball (feature 0007 F07, decisions.md 2026-11-08), so it loads on every
-  # platform and only with those addons. The JavaScript is built here by scripts/build.sh; the
-  # host addon that build also makes is not packed.
+  # The one package, @polyjose/node, packed once with the eight addons above inside it
+  # (scripts/pack-main.sh --all-platforms): its addon-sha256.json pins the SHA-256 of each addon it
+  # holds (feature 0007 F07, feature 0017), so it loads on every target and only with those addons,
+  # and its THIRD-PARTY-NOTICES.txt covers the crates of all eight targets. The JavaScript is built
+  # here by scripts/build.sh; the host addon that build also makes is not packed.
   pack-main:
     name: pack @polyjose/node (all eight addons)
     needs: [prebuild]
@@ -452,21 +457,20 @@ jobs:
           rustup toolchain install
           rustup show
 
-      # npm-<target> only (every target has a dash): when release.yml calls this workflow, the
-      # run also holds npm-wasm.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: npm-*-*
-          path: target/ci-npm
+          pattern: addon-*
+          path: target/ci-addons
           merge-multiple: true
 
-      - name: scripts/build.sh, then scripts/pack-main.sh over the eight platform tarballs
+      - name: scripts/build.sh, then scripts/pack-main.sh over the eight addons
         run: |
-          ls -l target/ci-npm
+          ls -l target/ci-addons
           bindings/node/scripts/build.sh
           # pack-main.sh changes into bindings/node first, so it gets absolute paths.
-          bindings/node/scripts/pack-main.sh --all-platforms "$PWD/target/ci-npm-main" "$PWD"/target/ci-npm/polyjose-node-*-*.tgz
+          bindings/node/scripts/pack-main.sh --all-platforms "$PWD/target/ci-npm-main" "$PWD"/target/ci-addons/polyjose.*.node
           ls -l target/ci-npm-main
+          tar -tzvf target/ci-npm-main/*.tgz
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -474,8 +478,10 @@ jobs:
           path: target/ci-npm-main/*.tgz
           if-no-files-found: error
 
-  # The packed tarballs as a user installs them (bindings/node/scripts/smoke-install.sh): the main
-  # package and the host's platform package, offline, then an import by name and a JWS round-trip.
+  # The packed tarball as a user installs it (bindings/node/scripts/smoke-install.sh), on each of
+  # the eight targets: the one tarball, offline, then the platform the loader detects (it must be
+  # the matrix's), an import and a require by name, and a JWS round-trip each. The musl targets run
+  # inside the prebuild's Alpine image (bash added; Node, with its npm, comes with the image).
   smoke:
     name: smoke install (${{ matrix.platform }})
     needs: [pack-main]
@@ -485,16 +491,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: x86_64-unknown-linux-gnu, platform: linux-x64-gnu, os: ubuntu-latest }
-          - { target: aarch64-apple-darwin, platform: darwin-arm64, os: macos-latest }
+          - { platform: darwin-x64, os: macos-15-intel }
+          - { platform: darwin-arm64, os: macos-latest }
+          - { platform: linux-x64-gnu, os: ubuntu-latest }
+          - { platform: linux-arm64-gnu, os: ubuntu-24.04-arm }
+          - { platform: linux-x64-musl, os: ubuntu-latest, image: "node:24-alpine3.23@sha256:0efee1e068d21f6edcab7fa8c962fc4ecd50d4e28727bc23963379b63ee318ab" }
+          - { platform: linux-arm64-musl, os: ubuntu-24.04-arm, image: "node:24-alpine3.23@sha256:0efee1e068d21f6edcab7fa8c962fc4ecd50d4e28727bc23963379b63ee318ab" }
+          - { platform: win32-x64-msvc, os: windows-latest }
+          - { platform: win32-arm64-msvc, os: windows-11-arm }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
+      # Git for Windows checks text files out with CRLF by default, which breaks the bash scripts.
+      - name: LF line endings (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ !matrix.image }}
         with:
           node-version: 24
           package-manager-cache: false
@@ -504,18 +522,27 @@ jobs:
           name: npm-node
           path: target/smoke
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: npm-${{ matrix.target }}
-          path: target/smoke
-
       - name: smoke-install.sh
+        if: ${{ !matrix.image }}
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
           ls -l target/smoke
           main=(target/smoke/polyjose-node-[0-9]*.tgz)
-          platform=(target/smoke/polyjose-node-"$PLATFORM"-*.tgz)
-          [ "${#main[@]}" -eq 1 ] && [ -f "${main[0]}" ] || { echo "::error::expected one main tarball"; exit 1; }
-          [ "${#platform[@]}" -eq 1 ] && [ -f "${platform[0]}" ] || { echo "::error::expected one $PLATFORM tarball"; exit 1; }
-          bindings/node/scripts/smoke-install.sh "${main[0]}" "${platform[0]}"
+          [ "${#main[@]}" -eq 1 ] && [ -f "${main[0]}" ] || { echo "::error::expected one @polyjose/node tarball"; exit 1; }
+          bindings/node/scripts/smoke-install.sh "${main[0]}" "$PLATFORM"
+
+      - name: smoke-install.sh (Alpine)
+        if: ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          ls -l target/smoke
+          main=(target/smoke/polyjose-node-[0-9]*.tgz)
+          [ "${#main[@]}" -eq 1 ] && [ -f "${main[0]}" ] || { echo "::error::expected one @polyjose/node tarball"; exit 1; }
+          docker run --rm -v "$PWD:/work" -w /work -e PLATFORM -e MAIN="${main[0]}" "$IMAGE" sh -euc '
+            apk add --no-cache bash
+            node --version
+            bindings/node/scripts/smoke-install.sh "$MAIN" "$PLATFORM"
+          '

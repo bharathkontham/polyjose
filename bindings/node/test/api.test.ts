@@ -129,8 +129,6 @@ test("package.json is the ADR 0031 ESM package with compiled output only (ADR 00
     "index.js",
     "index.d.ts",
     "backend.js",
-    "binding.cjs",
-    "binding.d.ts",
     "addon-sha256.json",
     "LICENSE",
     "README.md",
@@ -138,16 +136,20 @@ test("package.json is the ADR 0031 ESM package with compiled output only (ADR 00
   ]) {
     assert.ok(files.includes(required), `files lists ${required}`);
   }
+  // Feature 0017: the eight addons ship in this package, each named in the allow-list.
+  const addons = platformDirs(pkg).map((dir) => `polyjose.${dir}.node`);
+  for (const addon of addons) assert.ok(files.includes(addon), `files lists ${addon}`);
   for (const entry of files) {
     assert.equal(typeof entry, "string");
-    assert.doesNotMatch(entry as string, /(?<!\.d)\.[cm]?ts$|\.map$|\.node$/, `files never ships ${String(entry)}`);
+    assert.doesNotMatch(entry as string, /(?<!\.d)\.[cm]?ts$|\.map$|\.cjs$/, `files never ships ${String(entry)}`);
+    if ((entry as string).endsWith(".node")) assert.ok(addons.includes(entry as string), `${String(entry)} is a shipped addon`);
   }
   const napi = record(pkg["napi"], "napi");
   assert.equal(napi["binaryName"], "polyjose");
   assert.deepEqual(record(pkg["devDependencies"], "devDependencies"), { "@napi-rs/cli": "3.10.12" });
   assert.equal(pkg["dependencies"], undefined, "no runtime dependencies");
   const scripts = record(pkg["scripts"], "scripts");
-  assert.deepEqual(Object.keys(scripts).sort(), ["build", "test"], "no publish hooks (Gate 3)");
+  assert.deepEqual(Object.keys(scripts).sort(), ["build", "test"], "no publish or install hooks (Gate 3, feature 0017)");
 });
 
 test("require('@polyjose/node/package.json') resolves through exports, for tooling and version probes", () => {
@@ -169,7 +171,7 @@ function platformOf(triple: string): { dir: string; os: string; cpu: string; lib
   return { dir: `linux-${cpu}-${libc}`, os: "linux", cpu, libc: libc === "gnu" ? "glibc" : "musl" };
 }
 
-test("npm/<platform>/ holds exactly one package per napi.targets entry, each shipping its notices", () => {
+test("napi.targets are the eight targets of ADR 0031 §2", () => {
   const pkg = record(readJson(path.join(pkgDir, "package.json")), "package.json");
   const targets = record(pkg["napi"], "napi")["targets"];
   assert.ok(Array.isArray(targets));
@@ -187,74 +189,27 @@ test("npm/<platform>/ holds exactly one package per napi.targets entry, each shi
     ],
     "the eight targets of ADR 0031 §2",
   );
-  const platforms = targets.map((t) => platformOf(t as string));
-  const dirs = fs
-    .readdirSync(path.join(pkgDir, "npm"), { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name)
-    .sort();
-  assert.deepEqual(dirs, platforms.map((p) => p.dir).sort(), "npm/ directories equal napi.targets");
-  for (const p of platforms) {
-    const sub = record(readJson(path.join(pkgDir, "npm", p.dir, "package.json")), `npm/${p.dir}/package.json`);
-    const binary = `polyjose.${p.dir}.node`;
-    assert.equal(sub["name"], `@polyjose/node-${p.dir}`);
-    assert.equal(sub["version"], pkg["version"], `${p.dir}: version`);
-    assert.equal(sub["license"], pkg["license"], `${p.dir}: license`);
-    assert.deepEqual(sub["engines"], pkg["engines"], `${p.dir}: engines`);
-    assert.deepEqual(sub["os"], [p.os], `${p.dir}: os`);
-    assert.deepEqual(sub["cpu"], [p.cpu], `${p.dir}: cpu`);
-    assert.deepEqual(sub["libc"], p.libc === undefined ? undefined : [p.libc], `${p.dir}: libc`);
-    assert.equal(sub["main"], binary, `${p.dir}: main`);
-    assert.deepEqual(sub["files"], [binary, "THIRD-PARTY-NOTICES.txt"], `${p.dir}: files`);
-  }
 });
 
-/** The npm/<platform> directories of package.json `napi.targets`, sorted. */
+/** The napi-rs platform names (e.g. linux-arm64-musl) of package.json `napi.targets`, sorted. */
 function platformDirs(pkg: Record<string, unknown>): string[] {
   const targets = record(pkg["napi"], "napi")["targets"];
   assert.ok(Array.isArray(targets));
   return targets.map((t) => platformOf(t as string).dir).sort();
 }
 
-test("optionalDependencies are the eight platform packages at exactly this version (review-code.md SF-8)", () => {
-  // What npm installs from the registry: the main package's optional dependency on each
-  // platform package, at its own version, so npm fetches the one addon matching the platform
-  // (by each platform package's os, cpu and libc) and the loader's version check passes.
+test("no optionalDependencies and no platform packages: one package ships every addon (feature 0017)", () => {
+  // Until 0.1.1 each addon was an optional dependency, @polyjose/node-<platform>, that npm fetched
+  // by os, cpu and libc. From 0.1.2 the addons are inside this package, so npm fetches nothing else
+  // (and `--omit=optional` can't drop the addon).
   const pkg = record(readJson(path.join(pkgDir, "package.json")), "package.json");
-  const version = pkg["version"];
-  assert.equal(typeof version, "string");
-  assert.deepEqual(
-    record(pkg["optionalDependencies"], "optionalDependencies"),
-    Object.fromEntries(platformDirs(pkg).map((dir) => [`@polyjose/node-${dir}`, version])),
-    "one exact-version entry per napi.targets entry, nothing else",
-  );
-});
-
-test("package-lock.json links the platform packages to npm/<platform>, so npm ci never fetches them", () => {
-  // The platform packages are not published until Gate 3, and a lockfile that names them only as
-  // root optionalDependencies (what `npm install` writes when the registry has none) fails
-  // `npm ci` as out of sync (npm 10.9 and 11.19, measured, feature 0007 F03). So the lock records
-  // each as a link to its committed npm/<platform>/ directory, which satisfies the exact version:
-  // `npm ci` then fetches nothing for them (online or offline; it links the host's manifest-only
-  // directory), and `npm install` keeps the links. To regenerate them: set each optional
-  // dependency to `file:npm/<platform>` and run `npm install --package-lock-only --offline
-  // --ignore-scripts`, then set them back to the version and run it again.
-  const pkg = record(readJson(path.join(pkgDir, "package.json")), "package.json");
+  for (const field of ["optionalDependencies", "dependencies", "peerDependencies", "bundleDependencies", "bundledDependencies", "os", "cpu", "libc"]) {
+    assert.equal(pkg[field], undefined, `package.json has no ${field}`);
+  }
+  assert.ok(!fs.existsSync(path.join(pkgDir, "npm")), "no npm/<platform>/ packages");
   const lock = record(readJson(path.join(pkgDir, "package-lock.json")), "package-lock.json");
   const packages = record(lock["packages"], "packages");
-  assert.deepEqual(record(packages[""], "the lock's root")["optionalDependencies"], pkg["optionalDependencies"]);
-  for (const dir of platformDirs(pkg)) {
-    assert.deepEqual(packages[`node_modules/@polyjose/node-${dir}`], { resolved: `npm/${dir}`, link: true }, `${dir}: a link`);
-    const linked = record(packages[`npm/${dir}`], `npm/${dir} in the lock`);
-    const manifest = record(readJson(path.join(pkgDir, "npm", dir, "package.json")), `npm/${dir}/package.json`);
-    assert.equal(linked["name"], manifest["name"]);
-    assert.equal(linked["version"], pkg["version"]);
-    assert.equal(linked["optional"], true, `${dir}: optional, so a platform mismatch skips it`);
-    for (const field of ["os", "cpu", "libc"]) assert.deepEqual(linked[field], manifest[field], `${dir}: ${field}`);
-  }
-  const polyjose = Object.entries(packages).filter(([key]) => key.includes("@polyjose/") || key.startsWith("npm/"));
-  assert.equal(polyjose.length, 16, "the 8 links and their 8 directories, nothing else of ours");
-  for (const [key, entry] of polyjose) {
-    assert.doesNotMatch(String(record(entry, key)["resolved"] ?? ""), /^https?:/, `${key} never resolves from a registry`);
-  }
+  assert.equal(record(packages[""], "the lock's root")["optionalDependencies"], undefined, "the lock's root has none");
+  const ours = Object.keys(packages).filter((key) => key.includes("@polyjose/") || key.startsWith("npm/"));
+  assert.deepEqual(ours, [], "the lock names no @polyjose package");
 });

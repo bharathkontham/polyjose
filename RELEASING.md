@@ -25,7 +25,7 @@ The guide also sets a variable `GPG_SIGNING_KEY_ID`, which no workflow reads. Be
 ### Owner to-dos after the first publish (0.1.1; 0.1.0 was tagged but never published)
 
 - [ ] Revoke both bootstrap tokens on crates.io and npm, then `gh secret delete CARGO_REGISTRY_BOOTSTRAP_TOKEN --env publish` and `gh secret delete NPM_BOOTSTRAP_TOKEN --env publish`.
-- [ ] Check that the crate `polyjose` and all 10 npm packages (`@polyjose/node`, `@polyjose/wasm`, the 8 `@polyjose/node-*`) show the trusted publisher `bharathkontham/polyjose`, `publish.yml`, environment `publish`. Then turn on npm's "Require two-factor authentication and disallow tokens" for each package.
+- [ ] Check that the crate `polyjose` and the npm packages `@polyjose/node` and `@polyjose/wasm` show the trusted publisher `bharathkontham/polyjose`, `publish.yml`, environment `publish`. Then turn on npm's "Require two-factor authentication and disallow tokens" for each package. (0.1.1 also published the 8 `@polyjose/node-<platform>` packages; from 0.1.2 they are no longer published, see the 0.1.2 step below.)
 - [ ] From 0.1.2 on, dispatch `publish.yml` with `bootstrap: false`, which is the default. crates.io and npm then authenticate by OIDC, with provenance.
 
 ## 2. Release public key
@@ -74,7 +74,14 @@ Before the tag (items 1–6) and before Gate 3 (item 7):
    ```
    [`verify-draft.sh`](scripts/release/verify-draft.sh) checks `SHA256SUMS.asc` against the committed key and every asset against `SHA256SUMS`.
 6. **Dry run** (owner's go-ahead) on the real draft, from the tag ref: `gh workflow run publish.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=true -f bootstrap=true`. Use `bootstrap=true` only for the first published release, 0.1.1 (0.1.0 was never published). Even a dry run waits in `publish`, so the owner approves each job. Every job must be green. If the dry run exposes a workflow bug, the fix ships under the next patch tag (section 5).
-7. **Gate 3** (owner only): the same dispatch with `-f dry_run=false`, approving each `publish` job in turn: `crates` → `npm` (8 platform packages, `@polyjose/node`, `@polyjose/wasm`) → `maven` (upload, polled until `VALIDATED`; its log prints the deployment id) → `github` (un-drafts the release, which makes SPM live). The `spm` job then resolves and builds the package at the tag.
+7. **Gate 3** (owner only): the same dispatch with `-f dry_run=false`, approving each `publish` job in turn: `crates` → `npm` (`@polyjose/node`, which holds the native addons of all 8 targets, then `@polyjose/wasm`) → `maven` (upload, polled until `VALIDATED`; its log prints the deployment id) → `github` (un-drafts the release, which makes SPM live). The `spm` job then resolves and builds the package at the tag.
+   - **0.1.2 only, after the `npm` job is green** (owner, by hand; nothing in CI does this): deprecate the 8 platform packages that 0.1.1 published, since `@polyjose/node` >= 0.1.2 no longer depends on them (ADR 0066):
+     ```sh
+     for p in darwin-x64 darwin-arm64 linux-x64-gnu linux-arm64-gnu linux-x64-musl linux-arm64-musl win32-x64-msvc win32-arm64-msvc; do
+       npm deprecate "@polyjose/node-$p@*" "Merged into @polyjose/node >= 0.1.2"
+     done
+     ```
+     Then check one: `npm view @polyjose/node-linux-x64-gnu deprecated`.
 8. **Maven Central Portal** (owner): Deployments → the printed deployment id → check it → **Publish**.
 9. **Docs**: the release agent opens a `polyjose-docs` PR (version, changelog, install snippets) for git-ops, and writes the session summary in the brain.
 

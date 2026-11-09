@@ -1,6 +1,6 @@
 # The JS backend contract
 
-`bindings/js` is the one TypeScript facade that `@polyjose/node` and `@polyjose/wasm` both ship unchanged (ADR 0031 §1, ADR 0047). It's written against a small **backend**: the functions each native layer exports. The napi-rs loader (`binding.cjs`) and the wasm-bindgen glue each implement it. The typed form is `Backend` in [`src/backend.ts`](src/backend.ts); this page is its prose.
+`bindings/js` is the one TypeScript facade that `@polyjose/node` and `@polyjose/wasm` both ship unchanged (ADR 0031 §1, ADR 0047). It's written against a small **backend**: the functions each native layer exports. The napi-rs addon (`polyjose.<platform>.node`, which `@polyjose/node`'s `backend.js` hash-checks and loads from its own package folder; no napi-rs loader is generated, feature 0017, ADR 0066) and the wasm-bindgen glue each implement it. The typed form is `Backend` in [`src/backend.ts`](src/backend.ts); this page is its prose.
 
 ## Rules
 
@@ -83,7 +83,7 @@ Each package binds the facade to its backend once and re-exports the bound funct
 
 ```ts
 import { createApi } from "./api.js"; // the compiled bindings/js facade
-import { backend } from "./backend.js"; // this package's adapter over binding.cjs or the wasm glue
+import { backend } from "./backend.js"; // this package's adapter over the napi addon or the wasm glue
 
 export const {
   version, errorCodes, base64urlEncode, base64urlDecode,
