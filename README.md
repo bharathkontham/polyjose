@@ -11,17 +11,19 @@
 
 | Platform | Package | Built with |
 |---|---|---|
-| Rust | [`polyjose`](https://crates.io/crates/polyjose) on crates.io | — |
-| Node.js | `@polyjose/node` on npm | napi-rs |
-| Web (WASM) | `@polyjose/wasm` on npm | wasm-bindgen |
-| Android, Kotlin, Java | `dev.polyjose:polyjose` on Maven Central | UniFFI + cargo-ndk |
-| Swift (iOS; also iPadOS, macOS, watchOS) | Swift Package `Polyjose` | UniFFI + XCFramework |
+| [Rust](https://polyjose.dev/start/rust/) | [`polyjose`](https://crates.io/crates/polyjose) on crates.io | — |
+| [Node.js](https://polyjose.dev/start/node/) | [`@polyjose/node`](https://www.npmjs.com/package/@polyjose/node) on npm | napi-rs |
+| [Web (WASM)](https://polyjose.dev/start/web/) | [`@polyjose/wasm`](https://www.npmjs.com/package/@polyjose/wasm) on npm | wasm-bindgen |
+| [Android, Kotlin, Java](https://polyjose.dev/start/android/) | [`dev.polyjose:polyjose`](https://central.sonatype.com/artifact/dev.polyjose/polyjose) and [`dev.polyjose:polyjose-jvm`](https://central.sonatype.com/artifact/dev.polyjose/polyjose-jvm) on Maven Central | UniFFI + cargo-ndk |
+| [Swift](https://polyjose.dev/start/swift/) (iOS; also iPadOS, macOS, watchOS) | Swift Package `Polyjose`, XCFramework on [GitHub releases](https://github.com/bharathkontham/polyjose/releases/latest) | UniFFI + XCFramework |
+
+Each platform name links to its get-started page on [polyjose.dev](https://polyjose.dev), with install and usage.
 
 ## Principles
-- **Pure Rust crypto.** No OpenSSL, `ring` or `aws-lc`; `cargo deny` enforces it ([deny.toml](deny.toml)).
+- **Pure Rust crypto.** No OpenSSL, `ring` or `aws-lc`; `cargo deny` enforces it ([deny.toml](https://github.com/bharathkontham/polyjose/blob/main/deny.toml)).
 - **RFC-compliant.** Covers RFCs 7515–7520, 7638, 7797, 8037, 8725, 8812 and 9864, tested against the RFCs' own test vectors.
 - **Misuse-resistant.** Verify and decrypt require an explicit algorithm allow-list, `none` is never accepted, and secrets are zeroized.
-- **One behaviour everywhere.** Every binding runs the same conformance vectors ([conformance/](conformance/)).
+- **One behaviour everywhere.** Every binding runs the same conformance vectors ([conformance/](https://github.com/bharathkontham/polyjose/tree/main/conformance)).
 
 ## Built on
 polyjose writes no cryptographic primitives of its own. It composes pure-Rust primitives into JOSE, with no OpenSSL, `ring` or `aws-lc`:
@@ -29,7 +31,7 @@ polyjose writes no cryptographic primitives of its own. It composes pure-Rust pr
 - **[dalek-cryptography](https://github.com/dalek-cryptography):** `ed25519-dalek`, `x25519-dalek` and `subtle`
 - **[rust-random](https://github.com/rust-random):** `getrandom`, the operating system's random number generator
 
-[CREDITS.md](CREDITS.md) credits every crate in the dependency tree, with its version and license. [AUDITS.md](AUDITS.md) records which primitives have a published third-party audit. polyjose itself has not been independently audited.
+[CREDITS.md](https://github.com/bharathkontham/polyjose/blob/main/CREDITS.md) credits every crate in the dependency tree, with its version and license. [AUDITS.md](https://github.com/bharathkontham/polyjose/blob/main/AUDITS.md) records which primitives have a published third-party audit. polyjose itself has not been independently audited.
 
 ## Layout
 ```
@@ -50,4 +52,4 @@ scripts/test-all.sh rust node  # only some platforms
 ```
 
 ## License
-Licensed under the [MIT license](LICENSE). Contributions are accepted under the same license.
+Licensed under the [MIT license](https://github.com/bharathkontham/polyjose/blob/main/LICENSE). Contributions are accepted under the same license.

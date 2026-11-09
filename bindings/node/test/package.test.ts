@@ -311,10 +311,10 @@ test(
   }),
 );
 
-test("the README states the module format, the Node floor and the docs", () => {
+test("the README states the module format, the Node floor and the docs links", () => {
   const readme = fs.readFileSync(path.join(pkgDir, "README.md"), "utf8");
   assert.ok(readme.startsWith("# @polyjose/node\n"), "title");
-  const needles = ["ESM", "require(esm)", "22.12", "https://polyjose.dev"];
+  const needles = ["ESM", "require(esm)", "22.12", "https://polyjose.dev/start/node/", "https://polyjose.dev/reference/node/"];
   for (const needle of [...needles, "LICENSE", "THIRD-PARTY-NOTICES.txt"]) {
     assert.ok(readme.includes(needle), `README mentions ${needle}`);
   }
