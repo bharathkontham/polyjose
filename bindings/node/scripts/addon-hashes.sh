@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# Writes addon-sha256.json, the map of the main package's addon hash pin (feature 0007 F07;
-# bindings security audit N-M1; src/backend.ts steps a-d): one SHA-256 (FIPS 180-4, lowercase hex)
+# Writes addon-sha256.json, the map of @polyjose/node's addon hash pin (feature 0007 F07;
+# bindings security audit N-M1; src/backend.ts steps 2-4): one SHA-256 (FIPS 180-4, lowercase hex)
 # per platform, `{ "<platform>": "<hash>" }`, keys sorted. backend.js loads an addon only when its
 # SHA-256 is the one this map pins for the host, so the map is generated here and never edited.
 #
 # Usage: scripts/addon-hashes.sh <out.json> <addon>...
-#   each <addon> is a `polyjose.<platform>.node` file, <platform> one of npm/*/ (the eight
-#   published platforms); each platform at most once.
+#   each <addon> is a `polyjose.<platform>.node` file that package.json `files` lists (the eight
+#   shipped addons, feature 0017); each platform at most once.
 #
-# Run by scripts/build.sh for the addons of a local build, and by scripts/pack.sh through it. The
-# release assembly of the main package runs it once over all eight prebuilt addons (the 0012
-# release hook; until then a main package without a map, or without this host, refuses to load).
+# Run by scripts/build.sh for the addons of a local build, and by scripts/pack-main.sh over exactly
+# the addons it packs (all eight in binding-node.yml's pack-main job, the release package).
 # Hashing and JSON are Node's (node:crypto, node:fs), the same on macOS, Linux and Git Bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,7 +21,9 @@ const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const [out, ...addons] = process.argv.slice(1);
-const published = fs.readdirSync("npm", { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+const published = JSON.parse(fs.readFileSync("package.json", "utf8")).files
+  .map((f) => /^polyjose\.([a-z0-9-]+)\.node$/.exec(f)?.[1])
+  .filter((p) => p !== undefined);
 const pins = {};
 for (const file of addons) {
   const m = /^polyjose\.([a-z0-9-]+)\.node$/.exec(path.basename(file));

@@ -21,7 +21,8 @@
 //! # The facade is the safety boundary
 //!
 //! `@polyjose/node`'s public API is the shared facade (`index.js`, ADR 0031 §1). This backend,
-//! `binding.cjs`, ships in the package because the facade loads it, but it is **not a supported
+//! the addon `polyjose.<platform>.node`, ships in the package because the facade calls it through
+//! `backend.js`, which loads it (feature 0017), but it is **not a supported
 //! API**: it checks only what napi's conversions check, and trusts the facade for the rest
 //! (`bindings/js/BACKEND.md`). Called directly, it:
 //! - **wraps integers** (review-code.md N8): napi converts every `u32` and `i64` field with

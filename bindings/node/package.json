@@ -26,8 +26,14 @@
     "backend.d.ts",
     "facade/*.js",
     "facade/*.d.ts",
-    "binding.cjs",
-    "binding.d.ts",
+    "polyjose.darwin-x64.node",
+    "polyjose.darwin-arm64.node",
+    "polyjose.linux-x64-gnu.node",
+    "polyjose.linux-arm64-gnu.node",
+    "polyjose.linux-x64-musl.node",
+    "polyjose.linux-arm64-musl.node",
+    "polyjose.win32-x64-msvc.node",
+    "polyjose.win32-arm64-msvc.node",
     "addon-sha256.json",
     "LICENSE",
     "README.md",
@@ -52,15 +58,5 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "3.10.12"
-  },
-  "optionalDependencies": {
-    "@polyjose/node-darwin-arm64": "0.1.1",
-    "@polyjose/node-darwin-x64": "0.1.1",
-    "@polyjose/node-linux-arm64-gnu": "0.1.1",
-    "@polyjose/node-linux-arm64-musl": "0.1.1",
-    "@polyjose/node-linux-x64-gnu": "0.1.1",
-    "@polyjose/node-linux-x64-musl": "0.1.1",
-    "@polyjose/node-win32-arm64-msvc": "0.1.1",
-    "@polyjose/node-win32-x64-msvc": "0.1.1"
   }
 }

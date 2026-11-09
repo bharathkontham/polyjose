@@ -1,22 +1,21 @@
-// The packed @polyjose/node tarballs (feature 0007 T04; ADR 0031 §4, ADR 0020 §4, ADR 0011), run
-// with `node --test` by scripts/pack.sh right after it writes them to dist/npm/. test.sh does not
-// run this file: packing builds the darwin-x64 addon too, which the host suite does not need.
+// The packed @polyjose/node tarball (feature 0007 T04, feature 0017; ADR 0031 §4, ADR 0020 §4,
+// ADR 0011), run with `node --test` by scripts/pack.sh right after it writes it to dist/npm/.
+// test.sh does not run this file: packing builds the darwin-x64 addon too, which the host suite
+// does not need.
 //
-// It checks what would be published, read back from the tarballs themselves (`tar`):
-//   - pack.sh (and build.sh) never publish: no `npm publish`, `napi pre-publish`/`prepublish`;
-//   - the main tarball holds exactly package.json plus the `files` of package.json, compiled
-//     output only, with the sourceMappingURL comments removed (the maps are not shipped);
-//   - each darwin platform tarball holds its addon (a Mach-O for its CPU), package.json, LICENSE,
-//     README.md and THIRD-PARTY-NOTICES.txt;
-//   - each notices file is the one scripts/third-party-notices.sh generates for that target, and
-//     names napi and the crypto crates, not wasm-bindgen;
+// It checks what would be published, read back from the tarball itself (`tar`):
+//   - pack.sh, pack-main.sh and build.sh never publish: no `npm publish`, `napi pre-publish`;
+//   - the tarball holds exactly package.json plus the `files` of package.json that the Mac build
+//     has (the two darwin addons of the eight), compiled output only, with the sourceMappingURL
+//     comments removed (the maps are not shipped);
+//   - each addon is a Mach-O for its CPU, byte-equal to the build's;
+//   - THIRD-PARTY-NOTICES.txt is the one scripts/third-party-notices.sh generates for the two
+//     darwin targets together, and names napi and the crypto crates, not wasm-bindgen;
 //   - every package.json version equals the workspace version;
-//   - the main tarball's addon-sha256.json pins exactly the two darwin addons, by the SHA-256 of
-//     the addon in each platform tarball (feature 0007 F07);
-//   - installing the main tarball and the host's platform tarball into a temporary directory,
-//     offline, gives a package that `import`s by name and round-trips jwsSignCompact and
-//     jwsVerifyCompact. The darwin-x64 addon cannot run on an Apple-silicon Mac without Rosetta,
-//     so on such a host its tarball is checked by contents only.
+//   - addon-sha256.json pins exactly the two addons in the tarball, by their SHA-256 (F07);
+//   - installing the tarball alone into a temporary directory, offline, gives a package that
+//     `import`s by name and round-trips jwsSignCompact and jwsVerifyCompact. The darwin-x64 addon
+//     cannot run on an Apple-silicon Mac without Rosetta, so it is checked by contents only.
 import { assert, fs, os, path, test } from "../../js/dist/node/builtins.js";
 import type * as Api from "@polyjose/node";
 
@@ -65,7 +64,7 @@ const pkgDir = path.resolve(path.dirname(thisFile), "..");
 const repo = path.resolve(pkgDir, "..", "..");
 const outDir = path.join(pkgDir, "dist", "npm");
 
-/** The darwin platform packages pack.sh builds on this Mac, with their Rust target and Mach-O CPU. */
+/** The darwin addons pack.sh builds on this Mac, with their Rust target and Mach-O CPU. */
 const PLATFORMS = [
   { name: "darwin-arm64", triple: "aarch64-apple-darwin", arch: "arm64", cputype: 0x0100000c },
   { name: "darwin-x64", triple: "x86_64-apple-darwin", arch: "x64", cputype: 0x01000007 },
@@ -100,7 +99,6 @@ const version = workspaceVersion();
 /** npm pack's file name for a scoped package: `@polyjose/node-x` 0.1.0 -> polyjose-node-x-0.1.0.tgz. */
 const tarballName = (name: string): string => `${name.replace(/^@/, "").replace("/", "-")}-${version}.tgz`;
 const mainTgz = path.join(outDir, tarballName("@polyjose/node"));
-const platformTgz = (p: string): string => path.join(outDir, tarballName(`@polyjose/node-${p}`));
 
 /** The entries of a tarball, without npm's `package/` prefix, sorted. */
 function tarList(tgz: string): string[] {
@@ -135,15 +133,17 @@ function withScratch(fn: (scratch: string[]) => void | Promise<void>): () => Pro
 
 /**
  * The files of package.json `files`, expanded against the built package: a literal name stays
- * as it is (LICENSE, README.md and THIRD-PARTY-NOTICES.txt are added at pack time), `dir/*.ext`
- * names every file of dir/ ending in .ext. npm always adds package.json.
+ * as it is (LICENSE, README.md and THIRD-PARTY-NOTICES.txt are added at pack time), except the
+ * addons, of which a Mac packs the two darwin ones only; `dir/*.ext` names every file of dir/
+ * ending in .ext. npm always adds package.json.
  */
 function expectedMainFiles(): string[] {
   const out = ["package.json"];
   for (const pattern of strings(pkg["files"], "package.json files")) {
     const star = pattern.indexOf("*");
     if (star === -1) {
-      out.push(pattern);
+      const addon = /^polyjose\.([a-z0-9-]+)\.node$/.exec(pattern)?.[1];
+      if (addon === undefined || PLATFORMS.some((p) => p.name === addon)) out.push(pattern);
       continue;
     }
     const m = /^([a-z]+)\/\*(\.[a-z.]+)$/.exec(pattern);
@@ -159,7 +159,7 @@ function expectedMainFiles(): string[] {
   return [...new Set(out)].sort();
 }
 
-/** Crates every darwin addon's notices must name: the napi runtime and the ADR 0002 primitives. */
+/** Crates the notices must name: the napi runtime and the ADR 0002 primitives. */
 const NAMED_CRATES = [
   "napi",
   "napi-sys",
@@ -204,23 +204,27 @@ test("pack.sh, pack-main.sh and build.sh never publish (npm publish and napi pre
   }
 });
 
-test("dist/npm holds exactly the main tarball and the two darwin tarballs", () => {
+test("dist/npm holds exactly the one @polyjose/node tarball", () => {
   const found = fs
     .readdirSync(outDir, { withFileTypes: true })
     .map((d) => d.name)
     .sort();
-  const want = [mainTgz, ...PLATFORMS.map((p) => platformTgz(p.name))].map((f) => path.relative(outDir, f)).sort();
-  assert.deepEqual(found, want);
+  assert.deepEqual(found, [path.relative(outDir, mainTgz)]);
 });
 
-test("the main tarball holds exactly package.json and the files list: compiled output, no maps", () => {
+test("the tarball holds exactly package.json and the files list: compiled output, the addons, no maps", () => {
   const list = tarList(mainTgz);
   assert.deepEqual(list, expectedMainFiles());
   for (const f of list) {
     assert.ok(!f.endsWith(".map"), `${f}: no source maps`);
-    assert.ok(!f.endsWith(".node"), `${f}: the addon ships in the platform packages`);
+    assert.ok(!f.endsWith(".cjs"), `${f}: no napi-rs loader (feature 0017)`);
     assert.ok(!f.endsWith(".ts") || f.endsWith(".d.ts"), `${f}: no TypeScript sources (ADR 0047)`);
   }
+  assert.deepEqual(
+    list.filter((f) => f.endsWith(".node")),
+    PLATFORMS.map((p) => `polyjose.${p.name}.node`).sort(),
+    "the two darwin addons",
+  );
 });
 
 test(
@@ -242,22 +246,11 @@ test(
 );
 
 test(
-  "each darwin tarball holds its addon, package.json, LICENSE, README.md and THIRD-PARTY-NOTICES.txt",
+  "each addon in the tarball is a Mach-O dylib for its CPU, byte-equal to the build's",
   withScratch((scratch) => {
+    const dir = extract(mainTgz, scratch);
     for (const p of PLATFORMS) {
-      const tgz = platformTgz(p.name);
       const addon = `polyjose.${p.name}.node`;
-      const want = [addon, "LICENSE", "README.md", "THIRD-PARTY-NOTICES.txt", "package.json"].sort();
-      assert.deepEqual(tarList(tgz), want, p.name);
-      const dir = extract(tgz, scratch);
-      const committed = readJson(path.join(pkgDir, "npm", p.name, "package.json"));
-      assert.deepEqual(readJson(path.join(dir, "package.json")), committed, `${p.name}: package.json as committed`);
-      assert.ok(sameLicense(path.join(dir, "LICENSE")), `${p.name}: LICENSE is the repository's`);
-      const readme = fs.readFileSync(path.join(dir, "README.md"), "utf8");
-      assert.match(readme, new RegExp(`^# @polyjose/node-${p.name}\\n`), `${p.name} README title`);
-      assert.ok(readme.includes(p.triple), `${p.name} README names its target`);
-      assert.ok(readme.includes("`@polyjose/node`"), `${p.name} README points at the main package`);
-      // The addon: a 64-bit Mach-O dylib for the package's CPU, byte-equal to the build's.
       const bin = fsb.readFileSync(path.join(dir, addon));
       const view = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
       assert.equal(view.getUint32(0, true), 0xfeedfacf, `${addon}: MH_MAGIC_64`);
@@ -269,59 +262,40 @@ test(
 );
 
 test(
-  "each platform's notices are generated for its target: napi and the crypto crates, no wasm-bindgen",
-  withScratch((scratch) => {
-    const regen = fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-node-notices-"));
-    scratch.push(regen);
-    for (const p of PLATFORMS) {
-      const dir = extract(platformTgz(p.name), scratch);
-      const notices = fs.readFileSync(path.join(dir, "THIRD-PARTY-NOTICES.txt"), "utf8");
-      const fresh = path.join(regen, `${p.name}.txt`);
-      cp.execFileSync(
-        path.join(repo, "scripts", "third-party-notices.sh"),
-        ["-p", "polyjose-node", "--target", p.triple, "-o", fresh],
-        { stdio: ["ignore", "ignore", "inherit"] },
-      );
-      assert.equal(notices, fs.readFileSync(fresh, "utf8"), `${p.name}: generated, not edited`);
-      assert.ok(notices.startsWith("THIRD-PARTY NOTICES\n\nArtifact: polyjose-node "), `${p.name}: header`);
-      assert.ok(notices.includes(`\nTarget: ${p.triple}\n`), `${p.name}: its target`);
-      // The crate list: "<name> <version>  <license>" lines between the "Third-party crates" rules.
-      const crates = notices
-        .split("\n")
-        .map((line) => /^([a-z0-9_-]+) \d+\.\d+\.\d+\S*  \S/.exec(line)?.[1])
-        .filter((name): name is string => name !== undefined);
-      for (const name of NAMED_CRATES) assert.ok(crates.includes(name), `${p.name}: names ${name}`);
-      assert.ok(!notices.includes("wasm-bindgen"), `${p.name}: no wasm-bindgen (that is @polyjose/wasm)`);
-    }
-  }),
-);
-
-test(
-  "the main tarball's notices: polyjose's own license, the napi loader's, and a pointer to the platform packages",
+  "the notices are generated for the addons' targets: napi and the crypto crates, no wasm-bindgen",
   withScratch((scratch) => {
     const notices = fs.readFileSync(path.join(extract(mainTgz, scratch), "THIRD-PARTY-NOTICES.txt"), "utf8");
-    const text = (file: string): string => fs.readFileSync(file, "utf8").trimEnd();
-    assert.ok(notices.startsWith(`THIRD-PARTY NOTICES\n\nArtifact: @polyjose/node ${version}\n`), "header");
-    assert.ok(notices.includes(text(path.join(repo, "LICENSE"))), "polyjose's LICENSE text");
-    const napiCliLicense = path.join(pkgDir, "node_modules", "@napi-rs", "cli", "LICENSE");
-    assert.ok(notices.includes(text(napiCliLicense)), "@napi-rs/cli's LICENSE (the generated binding.cjs)");
-    const napiTargets = strings(isRecord(pkg["napi"]) ? pkg["napi"]["targets"] : undefined, "napi.targets");
-    const dirs = fs.readdirSync(path.join(pkgDir, "npm"), { withFileTypes: true }).filter((d) => d.isDirectory());
-    assert.equal(dirs.length, napiTargets.length, "one npm/ directory per napi target");
-    for (const d of dirs) {
-      assert.ok(notices.includes(`@polyjose/node-${d.name}\n`), `points at @polyjose/node-${d.name}`);
-    }
-    assert.ok(!notices.includes("wasm-bindgen"), "no wasm-bindgen");
+    const regen = fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-node-notices-"));
+    scratch.push(regen);
+    const fresh = path.join(regen, "notices.txt");
+    cp.execFileSync(
+      path.join(repo, "scripts", "third-party-notices.sh"),
+      ["-p", "polyjose-node", ...PLATFORMS.flatMap((p) => ["--target", p.triple]), "-o", fresh],
+      { stdio: ["ignore", "ignore", "inherit"] },
+    );
+    assert.equal(notices, fs.readFileSync(fresh, "utf8"), "generated, not edited");
+    assert.ok(notices.startsWith("THIRD-PARTY NOTICES\n\nArtifact: polyjose-node "), "header");
+    const triples = PLATFORMS.map((p) => p.triple).sort();
+    assert.ok(notices.includes(`\nTargets: ${triples.join(", ")}\n`), "both darwin targets");
+    // The crate list: "<name> <version>  <license>" lines between the "Third-party crates" rules.
+    const crates = notices
+      .split("\n")
+      .map((line) => /^([a-z0-9_-]+) \d+\.\d+\.\d+\S*  \S/.exec(line)?.[1])
+      .filter((name): name is string => name !== undefined);
+    for (const name of NAMED_CRATES) assert.ok(crates.includes(name), `names ${name}`);
+    assert.ok(!notices.includes("wasm-bindgen"), "no wasm-bindgen (that is @polyjose/wasm)");
+    assert.ok(notices.includes(fs.readFileSync(path.join(repo, "LICENSE"), "utf8").trimEnd()), "polyjose's LICENSE text");
   }),
 );
 
 test(
-  "the main tarball's addon-sha256.json pins exactly the two darwin addons it is packed with (F07)",
+  "the tarball's addon-sha256.json pins exactly the two darwin addons it holds (F07)",
   withScratch((scratch) => {
-    const pins = readJson(path.join(extract(mainTgz, scratch), "addon-sha256.json"));
+    const dir = extract(mainTgz, scratch);
+    const pins = readJson(path.join(dir, "addon-sha256.json"));
     const want: Record<string, string> = {};
     for (const p of PLATFORMS) {
-      const addon = fsb.readFileSync(path.join(extract(platformTgz(p.name), scratch), `polyjose.${p.name}.node`));
+      const addon = fsb.readFileSync(path.join(dir, `polyjose.${p.name}.node`));
       want[p.name] = host.getBuiltinModule("node:crypto").createHash("sha256").update(addon).digest("hex");
     }
     assert.deepEqual(pins, want);
@@ -332,28 +306,22 @@ test(
   "every package.json version, committed and packed, equals the workspace version",
   withScratch((scratch) => {
     assert.equal(pkg["version"], version, "bindings/node/package.json");
-    const dirs = fs.readdirSync(path.join(pkgDir, "npm"), { withFileTypes: true }).filter((e) => e.isDirectory());
-    for (const d of dirs) {
-      assert.equal(readJson(path.join(pkgDir, "npm", d.name, "package.json"))["version"], version, `npm/${d.name}`);
-    }
-    for (const tgz of [mainTgz, ...PLATFORMS.map((p) => platformTgz(p.name))]) {
-      const packed = readJson(path.join(extract(tgz, scratch), "package.json"));
-      assert.equal(packed["version"], version, path.relative(outDir, tgz));
-    }
+    const packed = readJson(path.join(extract(mainTgz, scratch), "package.json"));
+    assert.equal(packed["version"], version, path.relative(outDir, mainTgz));
   }),
 );
 
-test("the README states the module format, the Node floor, the docs and the loader override", () => {
+test("the README states the module format, the Node floor and the docs", () => {
   const readme = fs.readFileSync(path.join(pkgDir, "README.md"), "utf8");
   assert.ok(readme.startsWith("# @polyjose/node\n"), "title");
-  const needles = ["ESM", "require(esm)", "22.12", "https://polyjose.dev", "NAPI_RS_NATIVE_LIBRARY_PATH"];
+  const needles = ["ESM", "require(esm)", "22.12", "https://polyjose.dev"];
   for (const needle of [...needles, "LICENSE", "THIRD-PARTY-NOTICES.txt"]) {
     assert.ok(readme.includes(needle), `README mentions ${needle}`);
   }
 });
 
 test(
-  "installed offline from the tarballs, the package imports by name and round-trips a compact JWS",
+  "installed offline from the tarball alone, the package imports by name and round-trips a compact JWS",
   withScratch(async (scratch) => {
     const platform = PLATFORMS.find((p) => host.platform === "darwin" && host.arch === p.arch);
     const hostName = `${host.platform}-${host.arch}`;
@@ -381,7 +349,7 @@ test(
       npm_config_ignore_scripts: "true",
       npm_config_package_lock: "false",
     });
-    cp.execFileSync("npm", ["install", "--offline", "--no-audit", "--no-fund", mainTgz, platformTgz(platform.name)], {
+    cp.execFileSync("npm", ["install", "--offline", "--no-audit", "--no-fund", mainTgz], {
       cwd: dir,
       env,
       stdio: ["ignore", "ignore", "inherit"],
@@ -402,8 +370,9 @@ test(
     assert.ok(bytesEqual(verified.payload, payload), "the payload round-trips");
 
     // The addon is a private, hash-checked copy (F07; test/loader.test.ts checks where): the only
-    // one loaded, outside the install and the build. Its source can only be the installed
-    // platform package: the installed main package holds no addon of its own.
+    // one loaded, outside the install and the build. Its source is the installed package's own
+    // polyjose.<host>.node (feature 0017): the install holds no other package.
+    assert.deepEqual(fs.readdirSync(path.join(dir, "node_modules", "@polyjose"), { withFileTypes: true }).map((d) => d.name), ["node"], "only @polyjose/node is installed");
     const addons = Object.keys(require.cache).filter((k) => k.endsWith(".node"));
     assert.equal(addons.length, 1, `one addon loaded (${addons.join(", ")})`);
     const copy = addons[0] ?? "";
