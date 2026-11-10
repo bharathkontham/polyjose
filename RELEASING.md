@@ -53,7 +53,7 @@ Before the tag (items 1–6) and before Gate 3 (item 7):
 4. [ ] The rsa 0.10 advisory re-check (ADR 0055): is there a stable `rsa` 0.10.x that RUSTSEC-2023-0071 marks as patched, with no other advisory? If so, note it for an adoption feature. It is never part of the current release.
 5. [ ] An orchestrator short check of `publish.yml` (secrets, pins, gating, inputs, permissions). **0.1.0: done** on 2026-11-08 against 4e2808d. It found two fixes, `--no-verify` on the cargo steps and `--ignore-scripts` on `npm publish`; both landed and were rechecked. For later releases, re-check whenever `publish.yml` or `scripts/release/` changed since the last release.
 6. [ ] Version and changelog: `scripts/release/check-version.sh X.Y.Z --notes "$(mktemp)"` passes.
-7. [ ] The draft is verified (step 5 below).
+7. [ ] The tag run is green and the draft holds every asset (step 5 below).
 
 ## 4. Release steps
 
@@ -64,16 +64,21 @@ Before the tag (items 1–6) and before Gate 3 (item 7):
    - write `platforms/swift/release-candidate.json` with exactly `{"run_id": <run-id>, "commit": "<the run's 40-hex head sha>", "sha256": "<zip sha256>"}`
    - commit only those two files, then run the checklist (items 1–6).
 3. **Merge** the release PR (owner review, then git-ops). Nothing else may land on `main` between the candidate commit and the tag (section 5).
-4. **Tag** (release agent): `git tag -a vX.Y.Z -m "polyjose X.Y.Z"` on the merged commit, then `git push origin vX.Y.Z`. Then, with the owner's go-ahead, run the tag-mode dispatch **from the tag ref**: `gh workflow run release.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f mode=tag -f tag=vX.Y.Z`. It reuses the candidate's Apple zip ([`apple-candidate.sh`](scripts/release/apple-candidate.sh)), rebuilds everything else from the tag, signs in `release-signing`, attests, and creates the draft.
-5. **Verify the draft**, in a fresh directory (listing a draft needs push access):
+4. **Tag** (release agent): `git tag -a vX.Y.Z -m "polyjose X.Y.Z"` on the merged commit, then `git push origin vX.Y.Z`. Then, with the owner's go-ahead, run the tag-mode dispatch **from the tag ref**: `gh workflow run release.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f mode=tag -f tag=vX.Y.Z`. It builds and tests nothing again (ADR 0068 §1). Its `candidate` job takes every artifact (the crate, `@polyjose/node`, `@polyjose/wasm`, the Maven repository and the Apple zip) from the candidate run recorded in `platforms/swift/release-candidate.json`. [`candidate.sh`](scripts/release/candidate.sh) first checks that the run is a successful `workflow_dispatch` of `release.yml` in this repository at the recorded commit, and that the tag differs from that commit only by the tree rule (section 5). Only the `.crate` is re-packaged at the tag, without a compile, and it must equal the candidate's except `.cargo_vcs_info.json`. Then the run signs in `release-signing`, attests the reused bytes, and creates the draft.
+5. **Check the draft** (release agent): the tag run is green, and `gh release view vX.Y.Z --repo bharathkontham/polyjose --json isDraft,assets` shows a draft with every asset. The draft is verified once, by `publish.yml`'s `assets` job, which every publish job needs (ADR 0068 §3). It runs [`verify-draft.sh`](scripts/release/verify-draft.sh), which checks `SHA256SUMS.asc` against the committed key and every asset against `SHA256SUMS`. A local verification is no longer part of the routine. It stays available as a manual tool, in a fresh directory (listing a draft needs push access):
    ```sh
    d=$(mktemp -d)
    gh release download vX.Y.Z --repo bharathkontham/polyjose --dir "$d"
    scripts/release/verify-draft.sh "$d" vX.Y.Z .github/keys/polyjose-release.asc D41352A0F5B7FA339E036C6B097272B7A3B1FFE6
    for f in "$d"/*; do gh attestation verify "$f" --repo bharathkontham/polyjose; done
    ```
-   [`verify-draft.sh`](scripts/release/verify-draft.sh) checks `SHA256SUMS.asc` against the committed key and every asset against `SHA256SUMS`.
-6. **Dry run** (owner's go-ahead) on the real draft, from the tag ref: `gh workflow run publish.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=true -f bootstrap=true`. Use `bootstrap=true` only for the first published release, 0.1.1 (0.1.0 was never published). Even a dry run waits in `publish`, so the owner approves each job. Every job must be green. If the dry run exposes a workflow bug, the fix ships under the next patch tag (section 5).
+6. **Dry run, only if the publish path changed** (ADR 0068 §3). The last tag that published successfully is the latest non-draft release, because the `github` job un-drafts only after every registry job is green:
+   ```sh
+   last=$(gh release list --repo bharathkontham/polyjose --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+   git diff --quiet "$last" vX.Y.Z -- .github/workflows/publish.yml scripts/release/ && echo "skip the dry run" || echo "run the dry run"
+   ```
+   - **Skipped** when that `git diff --quiet` holds: neither `publish.yml` nor `scripts/release/` changed. Go straight to Gate 3. Its per-job approvals let the owner stop after the first failure, and a fix ships as the next patch (section 5).
+   - **Otherwise, run it once** (owner's go-ahead), on the real draft, from the tag ref: `gh workflow run publish.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=true`. (`-f bootstrap=true` was for the first published release, 0.1.1, only.) Even a dry run waits in `publish`, so the owner approves each job. Every job must be green. If the dry run exposes a workflow bug, the fix ships under the next patch tag (section 5).
 7. **Gate 3** (owner only): the same dispatch with `-f dry_run=false`, approving each `publish` job in turn: `crates` → `npm` (`@polyjose/node`, which holds the native addons of all 8 targets, then `@polyjose/wasm`) → `maven` (upload, polled until `VALIDATED`; its log prints the deployment id) → `github` (un-drafts the release, which makes SPM live). The `spm` job then resolves and builds the package at the tag.
    - **0.1.2 only, after the `npm` job is green** (owner, by hand; nothing in CI does this): deprecate the 8 platform packages that 0.1.1 published, since `@polyjose/node` >= 0.1.2 no longer depends on them (ADR 0066):
      ```sh
@@ -90,6 +95,6 @@ Optional: `publish.yml` also accepts a disposable `dryrun-vX.Y.Z[-N]` draft, wit
 ## 5. Rules the workflows enforce
 
 - **A `v*` tag is never moved, deleted or re-pushed,** and `release.yml` refuses to re-release a tag. If a tag run, the dry run or a publish job fails because of a bug, the fix ships as the next patch version.
-- `platforms/swift/release-candidate.json` has exactly the keys `run_id`, `commit` and `sha256`. Between the candidate commit and the tag, only `Package.swift`'s `url:`/`checksum:` lines and that file may change. Otherwise, re-run the candidate and re-record both files.
-- Candidate artifacts expire after about 90 days (GitHub's default retention; the workflows set none). If the candidate is older, re-run it before tagging.
+- `platforms/swift/release-candidate.json` has exactly the keys `run_id`, `commit` and `sha256`. Between the candidate commit and the tag, only `Package.swift`'s `url:`/`checksum:` lines and that file may change (the tree rule), since the tag run reuses every candidate artifact. Otherwise, re-run the candidate and re-record both files.
+- Candidate artifacts expire after about 90 days (GitHub's default retention; the workflows set none), and the tag run needs all of them. If the candidate is older, re-run it before tagging.
 - `publish.yml` re-runs are idempotent on crates.io and npm: a version already published with the same bytes is skipped, and one with other bytes fails. A Maven re-upload creates a second deployment, which the owner drops in the Portal.

@@ -5,13 +5,15 @@
 #
 #   scripts/release/assemble.sh [--sign] <in-dir> <out-dir> <version>
 #
-# <in-dir> holds what release.yml downloads:
-#   crate/polyjose-<v>.crate        `cargo package -p polyjose --locked`
+# <in-dir> holds what release.yml downloads (in tag mode, every input is the candidate run's,
+# checked by scripts/release/candidate.sh; ADR 0068 §1):
+#   crate/polyjose-<v>.crate        `cargo package -p polyjose --locked` (in tag mode packaged at
+#                                   the tag with --no-verify, equal to the candidate's except
+#                                   .cargo_vcs_info.json)
 #   npm/*.tgz                       @polyjose/node, with the 8 addons inside, and @polyjose/wasm
 #                                   (binding-node.yml, binding-wasm.yml; feature 0017)
 #   maven-repo/                     the Gradle build-local repository (binding-android.yml)
-#   apple/                          PolyjoseFFI.xcframework.zip and .zip.sha256 (binding-apple.yml,
-#                                   or in tag mode the verified candidate zip)
+#   apple/                          PolyjoseFFI.xcframework.zip and .zip.sha256 (binding-apple.yml)
 # <out-dir> must not exist or be empty. It receives exactly the assets of ADR 0037 §3:
 #   polyjose-<v>.crate
 #   polyjose-node-<v>.tgz, polyjose-wasm-<v>.tgz
