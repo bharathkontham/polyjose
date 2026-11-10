@@ -88,7 +88,7 @@ impl DecryptPolicy {
     /// decrypts: a JWE using it fails with
     /// [`Error::UnsupportedAlgorithm`] before the allow-list is consulted
     /// (the support check comes first; RFC 7516 §5.2, ADR 0007). That
-    /// includes `RSA-OAEP-256`, which polyjose only encrypts to (ADR 0021).
+    /// includes `RSA-OAEP` (SHA-1, ADR 0022) and `RSA1_5` (ADR 0067 §3).
     ///
     /// # Errors
     ///

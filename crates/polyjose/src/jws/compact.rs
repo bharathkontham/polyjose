@@ -81,8 +81,7 @@ use super::{ProtectedHeader, SignOptions, Verified, VerifyOptions};
 /// - [`Error::InvalidHeader`]: `alg` missing, `crit` malformed, or `b64`
 ///   not listed in `crit` (RFC 7515 §4.1.11; RFC 7797 §3, §6).
 /// - [`Error::UnknownCritical`]: `crit` lists a name other than `b64`.
-/// - [`Error::UnsupportedAlgorithm`]: `alg` unknown, or RS*/PS* (no RSA
-///   signing, ADR 0021).
+/// - [`Error::UnsupportedAlgorithm`]: `alg` unknown.
 /// - [`Error::AlgorithmNotAllowed`]: `alg` is `none` (RFC 8725 §3.2).
 /// - [`Error::KeyAlgorithmMismatch`] / [`Error::InvalidKey`]: key binding
 ///   (ADR 0026 §2 step 8), including a public-only key.
@@ -969,10 +968,11 @@ mod tests {
             sign_code(r#"{"alg":"none"}"#, b"x", false),
             "AlgorithmNotAllowed"
         );
-        // ADR 0021: no RSA signing.
+        // RFC 8725 §3.1: the HMAC key does not serve RS256 (RSA signing
+        // itself is supported since ADR 0067).
         assert_eq!(
             sign_code(r#"{"alg":"RS256"}"#, b"x", false),
-            "UnsupportedAlgorithm"
+            "KeyAlgorithmMismatch"
         );
         assert_eq!(sign_code(r#"{"alg":"HS512"}"#, b"x", false), "InvalidKey");
         let opts = SignOptions::new();
@@ -1461,6 +1461,17 @@ mod tests {
             sign_compact(&protected(r#"{"alg":"none"}"#), b"x", &hs_key(), &sign_opts),
             Err(Error::AlgorithmNotAllowed)
         );
+        // ADR 0067: RS256 signs with an RSA private key; a public one is
+        // KeyAlgorithmMismatch (RFC 7518 §3).
+        assert!(
+            sign_compact(
+                &protected(r#"{"alg":"RS256"}"#),
+                b"x",
+                &keys::rsa_private(""),
+                &sign_opts
+            )
+            .is_ok()
+        );
         assert_eq!(
             sign_compact(
                 &protected(r#"{"alg":"RS256"}"#),
@@ -1468,7 +1479,7 @@ mod tests {
                 &keys::rsa(2048),
                 &sign_opts
             ),
-            Err(Error::UnsupportedAlgorithm)
+            Err(Error::KeyAlgorithmMismatch)
         );
         assert_eq!(
             sign_compact(&protected(HS256_B64_FALSE), b"$.02", &hs_key(), &sign_opts)

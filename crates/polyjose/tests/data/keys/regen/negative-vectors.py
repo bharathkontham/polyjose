@@ -10,9 +10,11 @@ code) and cite (the rule broken).
 Error-code rule (ADR 0018):
 - InvalidKey: malformed, non-canonical or inconsistent input (bad DER, bad
   PEM, wrong lengths, off-curve points, mismatched public key, weak key).
-- UnsupportedAlgorithm: well-formed, but a key type or format polyjose 0.1.0
-  doesn't support (encrypted PKCS#8, RSA private keys per ADR 0021, Ed448,
-  RSA-PSS OID, unsupported curves, certificates, unknown labels).
+- UnsupportedAlgorithm: well-formed, but a key type or format polyjose
+  doesn't support (encrypted PKCS#8, multi-prime RSA private keys per
+  ADR 0067, Ed448, RSA-PSS OID, unsupported curves, certificates, unknown
+  labels). Two-prime RSA private keys import since ADR 0067, so an
+  RSAPrivateKey in the wrong structure or label is InvalidKey.
 
 Run: python3 -I negative-vectors.py   (after rfc-golden.py). It also rewrites
 ../negative/SHA256SUMS, in the order `shasum -a 256 *.der *.pem manifest.json`
@@ -172,17 +174,18 @@ def main():
         "rsaEncryption AlgorithmIdentifier with an EC point as the key", IK, "RFC 3279 §2.3.1 (key MUST be an RSAPublicKey)")
     der("N67", "rsa-private-pkcs8-minimal", R,
         seq(b"\x02\x01\x00", ralg, tlv(0x04, seq(b"\x02\x01\x00", tlv(0x02, b"\x00" + nb), b"\x02\x03\x01\x00\x01"))),
-        "PKCS#8 with rsaEncryption (any RSA private key)", UA, "ADR 0021: RSA private keys are not supported in 0.1.0")
+        "PKCS#8 with rsaEncryption whose RSAPrivateKey holds only version, n and e", IK,
+        "RFC 8017 App. A.1.2 (RSAPrivateKey has nine INTEGERs); ADR 0067 §2 (malformed RSA private key: InvalidKey)")
     # N68/N69: the PKCS#1 RSAPrivateKey unchanged, to be read as PKCS#8 / SEC1 (the format each name states).
     K = "reject-rsa2048-private-pkcs1.der"
     rsapriv = read_openssl(K)
     assert rsapriv[:1] == b"\x30"
     der("N68", "rsa-private-pkcs1-as-pkcs8", K, rsapriv,
-        "the PKCS#1 RSAPrivateKey bytes unchanged, read as PKCS#8", UA,
-        "ADR 0018 §3 (RSA private, any format: UnsupportedAlgorithm); ADR 0021; RFC 8017 App. A.1.2")
+        "the PKCS#1 RSAPrivateKey bytes unchanged, read as PKCS#8", IK,
+        "RFC 5958 §2 (PKCS#8 is a OneAsymmetricKey); ADR 0067 §2 (wrong structure for the format: InvalidKey); RFC 8017 App. A.1.2")
     der("N69", "rsa-private-pkcs1-as-sec1", K, rsapriv,
-        "the PKCS#1 RSAPrivateKey bytes unchanged, read as SEC1", UA,
-        "ADR 0018 §3 (RSA private, any format: UnsupportedAlgorithm); ADR 0021; RFC 8017 App. A.1.2")
+        "the PKCS#1 RSAPrivateKey bytes unchanged, read as SEC1", IK,
+        "RFC 5915 §3 (SEC1 is an ECPrivateKey); ADR 0067 §2 (wrong structure for the format: InvalidKey); RFC 8017 App. A.1.2")
 
     # ---- PEM (RFC 7468) ----
     edpem = open(os.path.join(RFC, "rfc8037-a1-ed25519-pkcs8.pem")).read()
@@ -212,10 +215,10 @@ def main():
     bumped = alpha[alpha.index(last) + 1]           # sets the lowest (unused) bit
     txt("P15", "noncanonical-pad-bits", EP, ecpem.replace(last + "==", bumped + "=="), "last base64 char before == changed so an unused bit is 1", IK, "RFC 4648 §3.5 (canonical encoding); ADR 0018")
     txt("P16", "trailing-der-garbage", G, pem("PRIVATE KEY", ed + b"\x00"), "valid PEM armor around DER with a trailing 0x00", IK, "RFC 5958 §2; X.690 §8.1.1")
-    txt("P17", "label-private-key-body-rsa-pkcs1", K, pem("PRIVATE KEY", rsapriv), "PRIVATE KEY label around a PKCS#1 RSAPrivateKey body", UA,
-        "ADR 0018 §3 (RSA private, any format); ADR 0021; RFC 7468 §10 names PKCS#8, RFC 8017 App. A.1.2")
-    txt("P18", "label-ec-private-key-body-rsa-pkcs1", K, pem("EC PRIVATE KEY", rsapriv), "EC PRIVATE KEY label around a PKCS#1 RSAPrivateKey body", UA,
-        "ADR 0018 §3 (RSA private, any format); ADR 0021; RFC 5915 §4 names SEC1, RFC 8017 App. A.1.2")
+    txt("P17", "label-private-key-body-rsa-pkcs1", K, pem("PRIVATE KEY", rsapriv), "PRIVATE KEY label around a PKCS#1 RSAPrivateKey body", IK,
+        "RFC 7468 §10 names PKCS#8; ADR 0067 §2 (wrong structure for the label: InvalidKey); RFC 8017 App. A.1.2")
+    txt("P18", "label-ec-private-key-body-rsa-pkcs1", K, pem("EC PRIVATE KEY", rsapriv), "EC PRIVATE KEY label around a PKCS#1 RSAPrivateKey body", IK,
+        "RFC 5915 §4 names SEC1; ADR 0067 §2 (wrong structure for the label: InvalidKey); RFC 8017 App. A.1.2")
 
     # ---- PEM positives that MUST be accepted (strict but not hostile) ----
     acc = [("A01", "crlf", edpem.replace("\n", "\r\n"), "CRLF line endings", "RFC 7468 §3 (eol may be CRLF, CR or LF)"),

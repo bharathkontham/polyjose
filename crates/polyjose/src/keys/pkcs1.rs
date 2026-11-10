@@ -1,18 +1,46 @@
-//! The PKCS#1 RSAPublicKey structure (RFC 8017 App. A.1.1), standalone as
-//! OpenSSL's `RSA PUBLIC KEY` and inside the SPKI subjectPublicKey: a
-//! positive, minimal modulus and public exponent (X.690 §8.3).
+//! The PKCS#1 RSA key structures (RFC 8017 App. A.1): the RSAPublicKey
+//! (App. A.1.1), standalone as OpenSSL's `RSA PUBLIC KEY` and inside the
+//! SPKI subjectPublicKey, and the two-prime RSAPrivateKey (App. A.1.2),
+//! standalone as OpenSSL's `RSA PRIVATE KEY` and inside the PKCS#8
+//! privateKey of rsaEncryption (ADR 0067 §2). Every INTEGER is positive and
+//! minimal (X.690 §8.3).
 //!
 //! ```text
 //! RSAPublicKey ::= SEQUENCE {
 //!     modulus           INTEGER,  -- n
 //!     publicExponent    INTEGER   -- e
 //! }
+//!
+//! RSAPrivateKey ::= SEQUENCE {
+//!     version           Version,  -- two-prime(0) or multi(1)
+//!     modulus           INTEGER,  -- n
+//!     publicExponent    INTEGER,  -- e
+//!     privateExponent   INTEGER,  -- d
+//!     prime1            INTEGER,  -- p
+//!     prime2            INTEGER,  -- q
+//!     exponent1         INTEGER,  -- d mod (p-1)
+//!     exponent2         INTEGER,  -- d mod (q-1)
+//!     coefficient       INTEGER,  -- (inverse of q) mod p
+//!     otherPrimeInfos   OtherPrimeInfos OPTIONAL
+//! }
 //! ```
 //!
-//! Only the encoding is checked here. What makes `n` and `e` a usable key
-//! (at least 2048 bits, odd `n`, odd `e` with 3 ≤ e < n; RFC 7518 §3.3,
-//! §4.2, RFC 8017 §3.1, ADR 0007) is checked once, by `Jwk::from_object`,
-//! when `rsa.rs` builds the JWK.
+//! Only the encoding is checked here. What makes the INTEGERs a usable key
+//! (at least 2048 bits, odd `n`, odd `e` with 3 ≤ e < n, and a private key
+//! consistent with its public part; RFC 7518 §3.3, §4.2, RFC 8017 §3.1,
+//! §3.2, ADR 0007, ADR 0043) is checked once, by `Jwk::from_object`, when
+//! `rsa.rs` builds the JWK.
+//!
+//! # Secrets
+//!
+//! An RSAPrivateKey's INTEGERs are borrowed from the caller's DER buffer,
+//! which must be a zeroizing one, and [`encode_private`] writes into a
+//! zeroizing buffer. Their minimal-encoding check (`der::Reader::
+//! unsigned_integer`) looks at the first two contents octets only; nothing
+//! else about a secret INTEGER is branched on here, and no error carries its
+//! octets (ADR 0007).
+
+use core::fmt;
 
 use zeroize::Zeroizing;
 
@@ -31,15 +59,60 @@ pub(crate) struct RsaPublicParts<'a> {
     pub(crate) e: &'a [u8],
 }
 
+/// The eight INTEGERs of a two-prime RSAPrivateKey (RFC 8017 App. A.1.2) as
+/// unsigned big-endian magnitudes in the fewest octets, the form of the
+/// JWK's Base64urlUInt members (RFC 7518 §2, §6.3.1, §6.3.2). They borrow
+/// from a zeroizing DER buffer. `Debug` shows `n` and `e` only.
+#[derive(Clone, Copy)]
+pub(crate) struct RsaPrivateFields<'a> {
+    /// `modulus`, n (JWK `n`, RFC 7518 §6.3.1.1).
+    pub(crate) n: &'a [u8],
+    /// `publicExponent`, e (JWK `e`, RFC 7518 §6.3.1.2).
+    pub(crate) e: &'a [u8],
+    /// `privateExponent`, d (JWK `d`, RFC 7518 §6.3.2.1). Secret.
+    pub(crate) d: &'a [u8],
+    /// `prime1`, p (JWK `p`, RFC 7518 §6.3.2.2). Secret.
+    pub(crate) p: &'a [u8],
+    /// `prime2`, q (JWK `q`, RFC 7518 §6.3.2.3). Secret.
+    pub(crate) q: &'a [u8],
+    /// `exponent1`, d mod (p − 1) (JWK `dp`, RFC 7518 §6.3.2.4). Secret.
+    pub(crate) dp: &'a [u8],
+    /// `exponent2`, d mod (q − 1) (JWK `dq`, RFC 7518 §6.3.2.5). Secret.
+    pub(crate) dq: &'a [u8],
+    /// `coefficient`, q⁻¹ mod p (JWK `qi`, RFC 7518 §6.3.2.6). Secret.
+    pub(crate) qi: &'a [u8],
+}
+
+impl fmt::Debug for RsaPrivateFields<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RsaPrivateFields")
+            .field("n_len", &self.n.len())
+            .field("e_len", &self.e.len())
+            .field("private", &"<redacted>")
+            .finish()
+    }
+}
+
+/// A standalone PKCS#1 key (`KeyFormat::Pkcs1`): either structure of
+/// RFC 8017 App. A.1.
+pub(crate) enum Pkcs1Key<'a> {
+    /// An RSAPublicKey (App. A.1.1).
+    Public(RsaPublicParts<'a>),
+    /// A two-prime RSAPrivateKey (App. A.1.2).
+    Private(RsaPrivateFields<'a>),
+}
+
 /// Decodes a DER RSAPublicKey (RFC 8017 App. A.1.1), as found in the
 /// subjectPublicKey of an rsaEncryption SPKI (RFC 3279 §2.3.1: the key
-/// "MUST" be an RSAPublicKey): one SEQUENCE of exactly two non-negative,
-/// minimal INTEGERs (X.690 §8.3.2), with no data after it (§8.1.1).
+/// "MUST" be an RSAPublicKey) and under OpenSSL's `RSA PUBLIC KEY` label:
+/// one SEQUENCE of exactly two non-negative, minimal INTEGERs (X.690
+/// §8.3.2), with no data after it (§8.1.1).
 ///
 /// # Errors
 ///
 /// [`Error::InvalidKey`] for anything else: a negative or non-minimal
-/// INTEGER, a missing or extra field, trailing data.
+/// INTEGER, a missing or extra field (an RSAPrivateKey among them),
+/// trailing data.
 pub(crate) fn decode_public(der: &[u8]) -> Result<RsaPublicParts<'_>> {
     let mut outer = Reader::new(der)?;
     let fields = outer.sequence()?;
@@ -47,82 +120,50 @@ pub(crate) fn decode_public(der: &[u8]) -> Result<RsaPublicParts<'_>> {
     read_public(fields)
 }
 
+/// Decodes a DER RSAPrivateKey (RFC 8017 App. A.1.2): the body of OpenSSL's
+/// `RSA PRIVATE KEY` label and the privateKey of a PKCS#8 rsaEncryption key
+/// (RFC 8017 App. A.1.2: "the RSA private key SHALL have ASN.1 type
+/// RSAPrivateKey"). See [`read_private`].
+///
+/// # Errors
+///
+/// As [`read_private`]; an RSAPublicKey or any other shape is
+/// [`Error::InvalidKey`].
+pub(crate) fn decode_private(der: &[u8]) -> Result<RsaPrivateFields<'_>> {
+    let mut outer = Reader::new(der)?;
+    let fields = outer.sequence()?;
+    outer.finish()?;
+    if !has_private_key_shape(fields) {
+        return Err(Error::InvalidKey("PKCS#1 key is not an RSAPrivateKey"));
+    }
+    read_private(fields)
+}
+
 /// Decodes standalone PKCS#1 DER, the `KeyFormat::Pkcs1` input: an
-/// RSAPublicKey (RFC 8017 App. A.1.1) is returned, an RSAPrivateKey
-/// (App. A.1.2) is refused as unsupported (ADR 0021).
+/// RSAPublicKey (RFC 8017 App. A.1.1) or an RSAPrivateKey (App. A.1.2).
 ///
 /// The two structures share an outer SEQUENCE of INTEGERs, so they are told
 /// apart by shape:
 ///
 /// - Exactly two INTEGERs: RSAPublicKey, checked as in [`decode_public`].
 /// - A first INTEGER of 0 (`two-prime`) or 1 (`multi`), the `Version` of
-///   App. A.1.2, followed by eight or more INTEGERs (modulus,
-///   publicExponent, privateExponent, prime1, prime2, exponent1, exponent2,
-///   coefficient, then `otherPrimeInfos` for `multi`): RSAPrivateKey,
-///   [`Error::UnsupportedAlgorithm`]. An RSAPublicKey can never look like
-///   this: it has two INTEGERs, and its first is a modulus of at least 2048
-///   bits.
+///   App. A.1.2, followed by eight or more INTEGERs: RSAPrivateKey, checked
+///   as in [`decode_private`]. An RSAPublicKey can never look like this: it
+///   has two INTEGERs, and its first is a modulus of at least 2048 bits.
 /// - Anything else: [`Error::InvalidKey`].
 ///
-/// # No private INTEGER is parsed
+/// # Errors
 ///
-/// For an RSAPrivateKey, only the version's contents are looked at. The
-/// eight INTEGERs after it are counted from their identifier and length
-/// octets alone ([`Reader::element`]): their contents, the private
-/// exponent and primes among them, are never interpreted (not even
-/// checked for minimal encoding), never copied and never reach an error.
-/// Whatever follows the eighth (`otherPrimeInfos`) is not read at all.
-pub(crate) fn decode(der: &[u8]) -> Result<RsaPublicParts<'_>> {
+/// [`Error::UnsupportedAlgorithm`] for a multi-prime RSAPrivateKey
+/// (ADR 0067 §3); [`Error::InvalidKey`] for everything malformed.
+pub(crate) fn decode(der: &[u8]) -> Result<Pkcs1Key<'_>> {
     let mut outer = Reader::new(der)?;
     let fields = outer.sequence()?;
     outer.finish()?;
-    if is_rsa_private_key(fields) {
-        return Err(Error::UnsupportedAlgorithm);
+    if has_private_key_shape(fields) {
+        return read_private(fields).map(Pkcs1Key::Private);
     }
-    read_public(fields)
-}
-
-/// Whether `der` is exactly one SEQUENCE (X.690 §8.1.1, nothing after it)
-/// whose contents have the RSAPrivateKey shape of RFC 8017 App. A.1.2
-/// (see [`is_rsa_private_key`]).
-///
-/// This is the framing-only check the PKCS#8 and SEC1 decoders run after
-/// their own parse has failed, so that an RSAPrivateKey under a `PRIVATE
-/// KEY` or `EC PRIVATE KEY` label (or [`KeyFormat::Pkcs8`] /
-/// [`KeyFormat::Sec1`]) is refused as an RSA private key (ADR 0018 §3, §4;
-/// ADR 0021) and not as malformed input. As in [`decode`], only the
-/// version's contents and the identifier and length octets of the next
-/// eight elements are read: no private INTEGER's contents are parsed,
-/// copied or reported.
-///
-/// [`KeyFormat::Pkcs8`]: super::KeyFormat::Pkcs8
-/// [`KeyFormat::Sec1`]: super::KeyFormat::Sec1
-pub(crate) fn is_rsa_private_key_der(der: &[u8]) -> bool {
-    let Ok(mut outer) = Reader::new(der) else {
-        return false;
-    };
-    let Ok(fields) = outer.sequence() else {
-        return false;
-    };
-    outer.finish().is_ok() && is_rsa_private_key(fields)
-}
-
-/// The error a PKCS#8 or SEC1 decoder returns for `der` once its own parse
-/// failed with `error`: [`Error::UnsupportedAlgorithm`] when `error` is
-/// [`Error::InvalidKey`] and `der` has the RSAPrivateKey shape
-/// ([`is_rsa_private_key_der`]; ADR 0018 §3 "RSA private, any format",
-/// ADR 0021), otherwise `error` unchanged.
-///
-/// Neither PKCS#8 (whose second field is an AlgorithmIdentifier SEQUENCE,
-/// RFC 5958 §2) nor SEC1 (an OCTET STRING, RFC 5915 §3) can have that
-/// shape (eight INTEGERs after the version), so a key that parses as
-/// either is never re-labelled, and every other malformed input keeps its
-/// `InvalidKey` detail.
-pub(crate) fn relabel_rsa_private_key(der: &[u8], error: Error) -> Error {
-    match error {
-        Error::InvalidKey(_) if is_rsa_private_key_der(der) => Error::UnsupportedAlgorithm,
-        other => other,
-    }
+    read_public(fields).map(Pkcs1Key::Public)
 }
 
 /// How many INTEGERs follow `version` in every RSAPrivateKey (RFC 8017
@@ -133,9 +174,9 @@ const PRIVATE_KEY_INTEGERS: usize = 8;
 /// Whether the SEQUENCE contents `fields` have the shape of an RSAPrivateKey
 /// (RFC 8017 App. A.1.2): a version INTEGER whose contents are exactly 0x00
 /// (two-prime) or 0x01 (multi), then at least [`PRIVATE_KEY_INTEGERS`]
-/// elements tagged INTEGER. Those are read by framing only and their
-/// contents are never looked at; see [`decode`].
-fn is_rsa_private_key(mut fields: Reader<'_>) -> bool {
+/// elements tagged INTEGER. This reads framing only; [`read_private`]
+/// parses the fields.
+fn has_private_key_shape(mut fields: Reader<'_>) -> bool {
     let Ok(version) = fields.expect(der::INTEGER) else {
         return false;
     };
@@ -147,6 +188,44 @@ fn is_rsa_private_key(mut fields: Reader<'_>) -> bool {
             .element()
             .is_ok_and(|element| element.tag == der::INTEGER)
     })
+}
+
+/// Reads the fields of an RSAPrivateKey SEQUENCE (RFC 8017 App. A.1.2).
+///
+/// - `version` two-prime(0): eight non-negative minimal INTEGERs
+///   ([`Reader::unsigned_integer`], X.690 §8.3) and nothing after them.
+/// - `version` multi(1), which App. A.1.2 requires when otherPrimeInfos is
+///   present (a key of more than two primes): [`Error::UnsupportedAlgorithm`]
+///   (ADR 0067 §3, as the JWK `oth`), before any INTEGER after the version
+///   is parsed.
+///
+/// # Errors
+///
+/// [`Error::UnsupportedAlgorithm`] for version multi; [`Error::InvalidKey`]
+/// for any other version, a malformed or negative INTEGER, or data after
+/// the eighth.
+fn read_private(mut fields: Reader<'_>) -> Result<RsaPrivateFields<'_>> {
+    match fields.small_unsigned()? {
+        0 => {}
+        1 => return Err(Error::UnsupportedAlgorithm),
+        _ => return Err(Error::InvalidKey("RSAPrivateKey version is not two-prime")),
+    }
+    let key = RsaPrivateFields {
+        n: fields.unsigned_integer()?,
+        e: fields.unsigned_integer()?,
+        d: fields.unsigned_integer()?,
+        p: fields.unsigned_integer()?,
+        q: fields.unsigned_integer()?,
+        dp: fields.unsigned_integer()?,
+        dq: fields.unsigned_integer()?,
+        qi: fields.unsigned_integer()?,
+    };
+    if !fields.is_empty() {
+        return Err(Error::InvalidKey(
+            "two-prime RSAPrivateKey holds more than its eight INTEGERs",
+        ));
+    }
+    Ok(key)
 }
 
 /// Reads the fields of an RSAPublicKey SEQUENCE: `modulus` and
@@ -174,6 +253,26 @@ pub(crate) fn encode_public(n: &[u8], e: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     writer.header(der::SEQUENCE, body)?;
     writer.unsigned_integer(n)?;
     writer.unsigned_integer(e)?;
+    writer.finish()
+}
+
+/// Encodes a two-prime RSAPrivateKey (RFC 8017 App. A.1.2) in DER: version
+/// two-prime(0), then the eight INTEGERs of `key`, each minimal with a sign
+/// octet where needed (X.690 §8.3.2, §8.3.3), the layout OpenSSL 4 emits
+/// (ADR 0018 §3). The output is zeroized on drop.
+pub(crate) fn encode_private(key: &RsaPrivateFields<'_>) -> Result<Zeroizing<Vec<u8>>> {
+    let ints = [key.n, key.e, key.d, key.p, key.q, key.dp, key.dq, key.qi];
+    let body = der::unsigned_integer_len(&[0])
+        + ints
+            .iter()
+            .map(|int| der::unsigned_integer_len(int))
+            .sum::<usize>();
+    let mut writer = Writer::new(der::encoded_len(body))?;
+    writer.header(der::SEQUENCE, body)?;
+    writer.unsigned_integer(&[0])?;
+    for int in ints {
+        writer.unsigned_integer(int)?;
+    }
     writer.finish()
 }
 
@@ -340,32 +439,32 @@ mod tests {
     fn two_integers_are_an_rsa_public_key() {
         for (dir, file) in public_fixtures() {
             let der = fixtures::load(dir, &file);
-            let classified = decode(&der).unwrap_or_else(|e| panic!("{file}: {e:?}"));
+            let Ok(Pkcs1Key::Public(classified)) = decode(&der) else {
+                panic!("{file}: not an RSAPublicKey");
+            };
             let public = decode_public(&der).unwrap();
             assert_eq!(classified.n, public.n, "{file}");
             assert_eq!(classified.e, public.e, "{file}");
+            assert!(is_invalid(&decode_private(&der)), "{file}");
         }
         // Shape alone decides: two INTEGERs are an RSAPublicKey even when
         // the first is 0 or 1. Such a key is then refused by the JWK
         // validation in rsa.rs (RFC 8017 §3.1), not here.
         for first in [TWO_PRIME, MULTI] {
             let der = sequence(&[first, SMALL]);
-            let key = decode(&der).unwrap();
+            let Ok(Pkcs1Key::Public(key)) = decode(&der) else {
+                panic!("not an RSAPublicKey");
+            };
             assert_eq!(key.e, &[0x05]);
         }
     }
 
-    #[test]
-    fn rsa_private_key_fixtures_are_unsupported() {
-        // ADR 0021: every RSAPrivateKey (RFC 8017 App. A.1.2), two-prime
-        // (version 0) or three-prime (version 1, with otherPrimeInfos),
-        // including the RFC 9500 §2.1 test keys. The PEM files are turned
-        // into DER by the test oracle here; pem::decode refuses their
-        // `RSA PRIVATE KEY` label before this (rsa.rs tests).
+    /// The two-prime RSAPrivateKey fixtures (RFC 8017 App. A.1.2): OpenSSL's
+    /// 2048-bit key (DER and PEM) and the RFC 9500 §2.1 test keys.
+    fn two_prime_fixtures() -> Vec<(&'static str, String)> {
         let mut files: Vec<(&str, String)> = [
             "reject-rsa2048-private-pkcs1.der",
             "reject-rsa2048-private-pkcs1.pem",
-            "reject-rsa2048-3prime-private-pkcs1.pem",
         ]
         .map(|file| ("openssl", file.to_owned()))
         .into();
@@ -375,9 +474,28 @@ mod tests {
                 format!("reject-rfc9500-testRSA{bits}-private-pkcs1.pem"),
             ));
         }
-        for (dir, file) in files {
+        files
+    }
+
+    #[test]
+    fn two_prime_rsa_private_keys_decode_and_re_encode_to_their_bytes() {
+        // RFC 8017 App. A.1.2, version two-prime(0); ADR 0018 §3: the
+        // export is byte-identical. (The `reject-` names predate ADR 0067;
+        // the 1024-bit key is refused later, by the JWK validation.)
+        for (dir, file) in two_prime_fixtures() {
             let der = fixtures::load(dir, &file);
-            assert!(is_unsupported(&decode(&der)), "{file}");
+            let Ok(Pkcs1Key::Private(key)) = decode(&der) else {
+                panic!("{file}: not an RSAPrivateKey");
+            };
+            let direct = decode_private(&der).unwrap();
+            assert_eq!(key.n, direct.n, "{file}");
+            assert_eq!(key.qi, direct.qi, "{file}");
+            assert_eq!(&encode_private(&key).unwrap()[..], &der[..], "{file}");
+            // e = 65537, and no field keeps a sign octet (X.690 §8.3.3).
+            assert_eq!(key.e, &[0x01, 0x00, 0x01], "{file}");
+            for field in [key.n, key.d, key.p, key.q, key.dp, key.dq, key.qi] {
+                assert_ne!(field.first(), Some(&0), "{file}");
+            }
             // As the SPKI contents, it is not an RSAPublicKey (RFC 3279
             // §2.3.1) and is simply malformed.
             assert!(is_invalid(&decode_public(&der)), "{file}");
@@ -385,42 +503,45 @@ mod tests {
     }
 
     #[test]
-    fn rsa_private_key_shapes_are_unsupported() {
-        // RFC 8017 App. A.1.2: Version two-prime(0) or multi(1), then the
-        // eight INTEGERs, then (multi) otherPrimeInfos.
+    fn a_multi_prime_rsa_private_key_is_unsupported() {
+        // ADR 0067 §3: version multi(1) (RFC 8017 App. A.1.2), whatever
+        // follows, before any INTEGER after the version is parsed.
+        let der = fixtures::load("openssl", "reject-rsa2048-3prime-private-pkcs1.pem");
+        assert!(is_unsupported(&decode(&der)));
+        assert!(is_unsupported(&decode_private(&der)));
         let other_prime_infos = sequence(&[&sequence(&[SMALL, SMALL, SMALL])]);
+        let empty: &[u8] = &[0x02, 0x00];
         for (what, der) in [
-            ("two-prime", version_then(TWO_PRIME, SMALL, 8)),
             ("multi", version_then(MULTI, SMALL, 8)),
-            ("nine INTEGERs", version_then(TWO_PRIME, SMALL, 9)),
             ("multi with otherPrimeInfos", {
                 let mut parts = vec![MULTI];
                 parts.extend(std::iter::repeat_n(SMALL, 8));
                 parts.push(&other_prime_infos);
                 sequence(&parts)
             }),
+            ("multi with empty INTEGERs", version_then(MULTI, empty, 8)),
         ] {
             assert!(is_unsupported(&decode(&der)), "{what}");
+            assert!(is_unsupported(&decode_private(&der)), "{what}");
         }
     }
 
     #[test]
-    fn the_private_integers_are_never_parsed() {
-        // The classification looks at the version's contents only. Each of
-        // these would fail INTEGER parsing (X.690 §8.3.1 empty, §8.3.2 not
-        // minimal) or element framing after the eighth field, so the
-        // UnsupportedAlgorithm result shows that none of the private
-        // INTEGERs' contents was parsed and nothing after them was read.
+    fn two_prime_private_integers_are_strict_der() {
+        // X.690 §8.3.1 (empty), §8.3.2 (not minimal), a negative value, and
+        // a ninth element (RFC 8017 App. A.1.2: otherPrimeInfos only with
+        // version multi): all malformed, InvalidKey.
         let empty: &[u8] = &[0x02, 0x00];
         let non_minimal: &[u8] = &[0x02, 0x02, 0x00, 0x01];
-        let negative_padding: &[u8] = &[0x02, 0x02, 0xFF, 0x80];
+        let negative: &[u8] = &[0x02, 0x01, 0x80];
         for (what, der) in [
             ("empty INTEGERs", version_then(TWO_PRIME, empty, 8)),
-            ("non-minimal INTEGERs", version_then(MULTI, non_minimal, 8)),
             (
-                "redundant 0xFF",
-                version_then(TWO_PRIME, negative_padding, 8),
+                "non-minimal INTEGERs",
+                version_then(TWO_PRIME, non_minimal, 8),
             ),
+            ("negative INTEGERs", version_then(TWO_PRIME, negative, 8)),
+            ("nine INTEGERs", version_then(TWO_PRIME, SMALL, 9)),
             ("high-tag-number garbage after the eighth", {
                 let mut parts = vec![TWO_PRIME];
                 parts.extend(std::iter::repeat_n(SMALL, 8));
@@ -428,8 +549,22 @@ mod tests {
                 sequence(&parts)
             }),
         ] {
-            assert!(is_unsupported(&decode(&der)), "{what}");
+            assert!(is_invalid(&decode(&der)), "{what}");
+            assert!(is_invalid(&decode_private(&der)), "{what}");
         }
+        // Eight small INTEGERs are a well-formed RSAPrivateKey; whether they
+        // are a key is the JWK validation's question (rsa.rs).
+        let der = version_then(TWO_PRIME, SMALL, 8);
+        let Ok(Pkcs1Key::Private(key)) = decode(&der) else {
+            panic!("not an RSAPrivateKey");
+        };
+        assert_eq!(key.qi, &[0x05]);
+        // Debug shows lengths only.
+        let debug = format!("{key:?}");
+        assert_eq!(
+            debug,
+            r#"RsaPrivateFields { n_len: 1, e_len: 1, private: "<redacted>" }"#
+        );
     }
 
     #[test]
@@ -476,66 +611,10 @@ mod tests {
         assert!(is_invalid(&decode(&fixtures::negative("N65"))));
     }
 
-    #[test]
-    fn the_der_check_agrees_with_decode_on_every_shape() {
-        // `is_rsa_private_key_der` is true exactly where `decode` refuses
-        // the input as an RSAPrivateKey (RFC 8017 App. A.1.2, ADR 0021).
-        let octets: &[u8] = &[0x04, 0x01, 0x00];
-        let empty: &[u8] = &[0x02, 0x00];
-        let private = [
-            fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der"),
-            fixtures::load("openssl", "reject-rsa2048-3prime-private-pkcs1.pem"),
-            version_then(TWO_PRIME, SMALL, 8),
-            version_then(MULTI, SMALL, 9),
-            version_then(TWO_PRIME, empty, 8),
-        ];
-        let mut trailing = version_then(TWO_PRIME, SMALL, 8);
-        trailing.push(0x00);
-        let other = [
-            fixtures::load("rfc", "rfc7517-a1-rsa-pkcs1-pub.der"),
-            fixtures::load("openssl", "reject-rsa2048-private-pkcs8.der"),
-            fixtures::load("rfc", "rfc7517-a2-ec-p256-sec1.der"),
-            fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der"),
-            vec![],
-            sequence(&[]),
-            sequence(&[TWO_PRIME]),
-            version_then(TWO_PRIME, SMALL, 7),
-            version_then(&[0x02, 0x01, 0x02], SMALL, 8),
-            version_then(octets, SMALL, 8),
-            trailing,
-        ];
-        for der in &private {
-            assert!(is_rsa_private_key_der(der));
-            assert!(is_unsupported(&decode(der)));
-        }
-        for der in &other {
-            assert!(!is_rsa_private_key_der(der));
-            assert!(!is_unsupported(&decode(der)));
-        }
-    }
-
-    #[test]
-    fn relabel_turns_only_an_invalid_rsa_private_key_into_unsupported() {
-        let private = fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der");
-        let ed25519 = fixtures::load("rfc", "rfc8037-a1-ed25519-pkcs8.der");
-        let invalid = Error::InvalidKey("detail");
-        assert_eq!(
-            relabel_rsa_private_key(&private, invalid.clone()),
-            Error::UnsupportedAlgorithm
-        );
-        // Other inputs keep their InvalidKey detail (ADR 0018 §4), and
-        // codes other than InvalidKey are never changed.
-        assert_eq!(relabel_rsa_private_key(&ed25519, invalid.clone()), invalid);
-        assert_eq!(
-            relabel_rsa_private_key(&private, Error::InvalidBase64),
-            Error::InvalidBase64
-        );
-    }
-
     mod properties {
         use proptest::prelude::*;
 
-        use super::{decode, decode_public, encode_public};
+        use super::{Pkcs1Key, decode, decode_public, encode_private, encode_public};
 
         /// Never panics, and canonical: whatever decodes as an RSAPublicKey
         /// re-encodes to exactly the input (X.690 §10), through both entry
@@ -544,8 +623,14 @@ mod tests {
             if let Ok(key) = decode_public(input) {
                 prop_assert_eq!(&encode_public(key.n, key.e).unwrap()[..], input);
             }
-            if let Ok(key) = decode(input) {
-                prop_assert_eq!(&encode_public(key.n, key.e).unwrap()[..], input);
+            match decode(input) {
+                Ok(Pkcs1Key::Public(key)) => {
+                    prop_assert_eq!(&encode_public(key.n, key.e).unwrap()[..], input);
+                }
+                Ok(Pkcs1Key::Private(key)) => {
+                    prop_assert_eq!(&encode_private(&key).unwrap()[..], input);
+                }
+                Err(_) => {}
             }
             Ok(())
         }
@@ -577,7 +662,9 @@ mod tests {
             ) {
                 // Leading zero octets are not significant (X.690 §8.3.2).
                 let der = encode_public(&n, &e).unwrap();
-                let key = decode(&der).unwrap();
+                let Pkcs1Key::Public(key) = decode(&der).unwrap() else {
+                    return Err(TestCaseError::fail("not an RSAPublicKey"));
+                };
                 let strip = |v: &[u8]| -> Vec<u8> {
                     let start = v.iter().position(|&b| b != 0).unwrap_or(v.len() - 1);
                     v[start..].to_vec()
@@ -588,12 +675,13 @@ mod tests {
             }
 
             #[test]
-            fn private_key_shapes_are_always_unsupported(
+            fn private_key_shapes_are_unsupported_or_canonical(
                 multi in any::<bool>(),
                 fields in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..20), 8..12),
             ) {
-                // RFC 8017 App. A.1.2 / ADR 0021: version 0 or 1 and eight or
-                // more INTEGER elements, whatever their contents octets.
+                // RFC 8017 App. A.1.2 / ADR 0067 §3: version multi(1) is
+                // always unsupported, whatever follows; version two-prime(0)
+                // decodes only when canonical, and then re-encodes exactly.
                 let version: &[u8] = if multi { &[0x02, 0x01, 0x01] } else { &[0x02, 0x01, 0x00] };
                 let mut body = version.to_vec();
                 for contents in &fields {
@@ -604,7 +692,12 @@ mod tests {
                 let mut der = vec![0x30];
                 der.extend_from_slice(&length(body.len()));
                 der.extend_from_slice(&body);
-                prop_assert_eq!(decode(&der).err(), Some(crate::Error::UnsupportedAlgorithm));
+                if multi {
+                    prop_assert_eq!(decode(&der).err(), Some(crate::Error::UnsupportedAlgorithm));
+                } else {
+                    prop_assert!(!matches!(decode(&der), Err(crate::Error::UnsupportedAlgorithm)));
+                    canonical(&der)?;
+                }
             }
         }
     }

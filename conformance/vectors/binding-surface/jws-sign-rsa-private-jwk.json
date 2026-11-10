@@ -1,6 +1,6 @@
 {
-  "source": "ADR 0021; ADR 0034 §6",
-  "description": "ADR 0021: signing the RFC 7515 App. A.2 payload with its RSA private JWK fails at JWK import with UnsupportedAlgorithm: RSA private keys are not supported on any platform",
+  "source": "ADR 0067; ADR 0034 §6",
+  "description": "ADR 0067 §2: RS256 signing of the RFC 7515 App. A.2 payload with its RSA private JWK reproduces the A.2 JWS exactly (RSASSA-PKCS1-v1_5 is deterministic, RFC 8017 §8.2), on every platform; the expected JWS is the RFC's, as in jws-rfc7515/a2-rs256-compact-sign.json",
   "operation": "jws.sign",
   "input": {
     "serialization": "compact",
@@ -24,7 +24,7 @@
     ]
   },
   "expect": {
-    "ok": false,
-    "error": "UnsupportedAlgorithm"
+    "ok": true,
+    "jws": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw"
   }
 }

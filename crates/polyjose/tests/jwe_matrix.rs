@@ -17,10 +17,11 @@
 //!   its `alg`/`enc`. A flip in the encoded text may also break the
 //!   base64url (RFC 7515 §2) or the serialization itself. Nothing ever
 //!   decrypts.
-//! - **RSA-OAEP-256** is encrypt-only (ADR 0021): its cells are checked by
-//!   structure (a k-octet encrypted key, RFC 8017 §7.1.1; the IV and tag
-//!   lengths of `enc`), and decrypting is `UnsupportedAlgorithm`. Its
-//!   decryption is checked by the Node oracle (`scripts/test-all.sh node`).
+//! - **RSA-OAEP-256** round-trips like every other cell since ADR 0067: it
+//!   encrypts to the public half of the RFC 7520 §5.1.1 RSA key and
+//!   decrypts with the whole private key, and its structure is checked too
+//!   (a k-octet encrypted key, RFC 8017 §7.1.1). A flipped encrypted key is
+//!   `DecryptionFailed` like any other (RFC 7516 §11.5).
 //!
 //! A deterministic sweep covers all 486 cells once with a flip in every
 //! segment; a property test (≤ 1,000 cases, pipeline rule 8) adds random
@@ -63,7 +64,7 @@ enum Kind {
     Ec(EcCurve),
     /// An X25519 key pair (RFC 8037 §2).
     X25519,
-    /// An RSA public key (RFC 7518 §6.3): encrypt only.
+    /// An RSA key pair (RFC 7518 §6.3; private operations, ADR 0067).
     Rsa,
 }
 
@@ -138,16 +139,17 @@ fn generated(spec: KeySpec) -> Jwk {
     generate(spec).unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// The cookbook's RFC 7520 §5.1 RSA key (2048 bits), public members only:
-/// polyjose imports no RSA private key (ADR 0021).
-fn rsa_public() -> Jwk {
+/// The cookbook's RFC 7520 §5.1.1 RSA private key (2048 bits, `use: enc`),
+/// all of `d`, `p`, `q`, `dp`, `dq` and `qi` (RFC 7518 §6.3.2, ADR 0067).
+fn rsa_private() -> Jwk {
     let cookbook: Value = serde_json::from_str(include_str!(
         "third_party/ietf-jose-cookbook/jwe/5_1.key_encryption_using_rsa_v15_and_aes-hmac-sha2.json"
     ))
     .unwrap_or_else(|e| panic!("{e}"));
     let key = &cookbook["input"]["key"];
-    let public = serde_json::json!({ "kty": "RSA", "n": key["n"], "e": key["e"] });
-    Jwk::from_json(public.to_string().as_bytes()).unwrap_or_else(|e| panic!("{e}"))
+    let private = Jwk::from_json(key.to_string().as_bytes()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!private.is_public(), "the cookbook key is private");
+    private
 }
 
 /// The keys of one cell: the one the sender encrypts to, the one the
@@ -176,13 +178,7 @@ fn keys(kind: Kind, enc: &ContentEncAlg) -> Keys {
         Kind::Password => symmetric(24),
         Kind::Ec(curve) => pair(generated(KeySpec::Ec(curve))),
         Kind::X25519 => pair(generated(KeySpec::Okp(OkpCurve::X25519))),
-        Kind::Rsa => {
-            let key = rsa_public();
-            Keys {
-                encrypt: key.clone(),
-                decrypt: key,
-            }
-        }
+        Kind::Rsa => pair(rsa_private()),
     }
 }
 
@@ -465,9 +461,13 @@ fn run_cell(
     check_structure(cell, enc, form, &text);
     let opened = decrypt(form, &text, &keys.decrypt);
     if matches!(cell.kind, Kind::Rsa) {
-        // ADR 0021: RSA-OAEP-256 never decrypts, not even our own output.
-        assert_eq!(opened.err(), Some(Error::UnsupportedAlgorithm), "{what}");
-        return;
+        // ADR 0067: the public half encrypts, only the private key opens
+        // (RFC 8725 §3.1: the public key is no decryption candidate).
+        assert_eq!(
+            decrypt(form, &text, &keys.encrypt).err(),
+            Some(Error::KeyAlgorithmMismatch),
+            "{what}"
+        );
     }
     assert_eq!(
         opened.as_deref().ok(),

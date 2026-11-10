@@ -117,8 +117,9 @@ mod a4 {
     /// A.3's A128KW key (A.3.3). A.4 gives it the `kid` "7".
     pub const KEY: &str = r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#;
     pub const KEY_KID_7: &str = r#"{"kty":"oct","kid":"7","k":"GawgguFyGrWKav7AX4VKUg"}"#;
-    /// A.2's RSA public key (A.2.3; the private members are not imported,
-    /// ADR 0021).
+    /// A.2's RSA public key (A.2.3). Its recipient is RSA1_5, which no RSA
+    /// key decrypts (ADR 0021, kept by ADR 0067), so the public members
+    /// suffice.
     pub const RSA: &str = r#"{"kty":"RSA","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4Dy1WlUzewbgBHod5pcM9H95GQRV3JDXboIRROSBigeC5yjU1hGzHHyXss8UDprecbAYxknTcQkhslANGRUZmdTOQ5qTRsLAt6BTYuyvVRdhS8exSZEy_c4gs_7svlJJQ4H9_NxsiIoLwAEk7-Q3UXERGYw_75IDrGA84-lA_-Ct4eTlXHBIY2EaV7t7LjJaynVJCpkv4LKjTTAumiGUIuQhrNhZLuF_RJLqHpM2kgWFLU7-VTdL1VbC2tejvcI2BlMkEpk1BzBZI0KQB0GaDWFLN-aEAw3vRw","e":"AQAB"}"#;
     pub const PLAINTEXT: &[u8] = b"Live long and prosper.";
     pub const JKU: &str = "https://server.example.com/keys.jwks";
@@ -761,6 +762,59 @@ fn one_cek_is_wrapped_for_every_recipient() {
     }
 }
 
+/// A test-only 2048-bit RSA private JWK (RFC 7518 §6.3.2), committed for the
+/// RSA-OAEP-256 vectors (ADR 0067).
+fn rsa_private() -> Jwk {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../conformance/vectors/jwe/rsa-oaep-256/keys/rsa-2048.private.jwk");
+    jwk(&std::fs::read_to_string(&path).unwrap())
+}
+
+#[test]
+fn an_rsa_oaep_256_recipient_among_others_decrypts_with_the_private_key() {
+    // ADR 0067: RSA-OAEP-256 (RFC 7518 §4.3) decrypts in the general JSON
+    // serialization next to A*KW recipients (RFC 7516 §5.2 step 6). The
+    // private key serves only the RSA recipient; its public half is no
+    // candidate at all (RFC 8725 §3.1), so KeyAlgorithmMismatch.
+    let private = rsa_private();
+    let public = private.to_public().unwrap();
+    let jwe = Encryptor::new(E::A256GCM)
+        .recipient(Recipient::new(A::A128KW, &oct(&K128)))
+        .recipient(Recipient::new(A::RsaOaep256, &public))
+        .recipient(Recipient::new(A::A256KW, &oct(&K256)))
+        .encrypt_json(b"to an RSA key and two oct keys", JsonForm::General)
+        .unwrap();
+    let p = policy(&[A::A128KW, A::A256KW, A::RsaOaep256], &[E::A256GCM]);
+    let d = decrypt(&jwe, &private, &p);
+    assert_eq!(d.plaintext(), b"to an RSA key and two oct keys");
+    assert_eq!(d.recipient(), 1);
+    assert_eq!(d.header().alg.as_deref(), Some("RSA-OAEP-256"));
+    for (index, key) in [&K128[..], &K256].into_iter().enumerate() {
+        assert_eq!(decrypt(&jwe, &oct(key), &p).recipient(), index * 2);
+    }
+    assert_eq!(
+        code(decrypt_json(&jwe, &public, &p)),
+        "KeyAlgorithmMismatch"
+    );
+    // Without RSA-OAEP-256 on the allow-list its recipient is not allowed,
+    // which outranks the A*KW recipients' mismatch (plan.md ranking).
+    let kw = policy(&[A::A128KW, A::A256KW], &[E::A256GCM]);
+    assert_eq!(
+        code(decrypt_json(&jwe, &private, &kw)),
+        "AlgorithmNotAllowed"
+    );
+    // A swapped RSA encrypted key fails uniformly (RFC 7516 §11.5).
+    let swapped = edit(&jwe, |top| {
+        edit_recipient(top, 1, |r| {
+            r.insert("encrypted_key", b64url_encode(&[0x5a; 256]));
+        });
+    });
+    assert_eq!(
+        code(decrypt_json(&swapped, &private, &p)),
+        "DecryptionFailed"
+    );
+}
+
 #[test]
 fn shared_and_per_recipient_headers_and_aad_round_trip() {
     let jwe = Encryptor::new(E::A128GCM)
@@ -997,13 +1051,20 @@ fn with_no_candidate_the_best_error_wins() {
     ] {
         assert_eq!(with(algs), "AlgorithmNotAllowed", "{algs:?}");
     }
+    // RSA-OAEP (SHA-1) stays unsupported (ADRs 0022, 0067).
     for algs in [
         [unsupported, mismatch, mismatch],
         [mismatch, "x", mismatch],
-        [mismatch, mismatch, "RSA-OAEP-256"],
+        [mismatch, mismatch, "RSA-OAEP"],
     ] {
         assert_eq!(with(algs), "UnsupportedAlgorithm", "{algs:?}");
     }
+    // ADR 0067: RSA-OAEP-256 is implemented, so outside this policy it is
+    // AlgorithmNotAllowed, which ranks first.
+    assert_eq!(
+        with([mismatch, mismatch, "RSA-OAEP-256"]),
+        "AlgorithmNotAllowed"
+    );
     assert_eq!(with([mismatch; 3]), "KeyAlgorithmMismatch");
     // One candidate among them is enough.
     assert_eq!(with([not_allowed, unsupported, "A128KW"]), "ok");

@@ -1,20 +1,20 @@
 # RFC 7520 §6 and RFC 7519 Appendix A nested JWTs (feature 0004 T13)
 
-One vector per file (ADR 0045, id `<path>#0`). These are the RFC's own nested-JWT examples, and they record exactly what polyjose can and cannot process under ADRs 0021 and 0022. Every refusal here is **out of scope by an ADR, not a failure**.
+One vector per file (ADR 0045, id `<path>#0`). These are the RFC's own nested-JWT examples, and they record exactly what polyjose can and cannot process under ADRs 0022 and 0067. Every refusal here is **out of scope by an ADR, not a failure**.
 
 | File | RFC | Expect | Rule |
 |---|---|---|---|
-| `6-3-fig228-ps256-valid.json` | 7520 §6.3, Figs. 222, 224, 228 | ok, the Fig. 222 claims | PS256 verify is supported (ADR 0021) |
+| `6-3-fig228-ps256-valid.json` | 7520 §6.3, Figs. 222, 224, 228 | ok, the Fig. 222 claims | PS256 verify is supported |
 | `6-3-fig228-ps256-expired.json` | 7520 §6.3 | `TokenExpired` (now 1300819440) | RFC 7519 §4.1.4, ADR 0027 §3 |
-| `6-8-fig236-fig84-private-key-unsupported.json` | 7520 §6.8, Figs. 84, 236 | `UnsupportedAlgorithm` | no RSA private JWK (ADR 0021); its `alg` is RSA-OAEP (ADR 0022) |
-| `6-8-fig236-fig84-private-key-no-alg-unsupported.json` | 7520 §6.8, Figs. 84, 236 | `UnsupportedAlgorithm` | the same key without `alg`: ADR 0021 alone |
+| `6-8-fig236-fig84-private-key-unsupported.json` | 7520 §6.8, Figs. 84, 236 | `UnsupportedAlgorithm` | its `alg` is RSA-OAEP (ADR 0022) |
+| `6-8-fig236-fig84-private-key-no-alg-unsupported.json` | 7520 §6.8, Figs. 84, 236 | `UnsupportedAlgorithm` | the same key without `alg` imports (ADR 0067); the token's RSA-OAEP is refused (ADR 0022) |
 | `6-8-fig236-a128kw-key-rsa-oaep-unsupported.json` | 7520 §6.8, Fig. 236 | `UnsupportedAlgorithm` | RSA-OAEP (SHA-1) is not implemented (ADR 0022) |
 | `6-8-fig237-general-json-invalid-format.json` | 7520 §6.8, Fig. 237 | `InvalidFormat` | JWTs are compact only (ADR 0027 §6) |
 | `6-8-fig238-flattened-json-invalid-format.json` | 7520 §6.8, Fig. 238 | `InvalidFormat` | as above |
-| `rfc7519-a1-rsa1-5-private-key-unsupported.json` | 7519 App. A.1, 7516 A.2.3 | `UnsupportedAlgorithm` | no RSA private JWK, no RSA1_5 (ADR 0021, RFC 8725 §3.2) |
+| `rfc7519-a1-rsa1-5-private-key-unsupported.json` | 7519 App. A.1, 7516 A.2.3 | `UnsupportedAlgorithm` | the key imports; RSA1_5 is refused (ADR 0022, ADR 0067 §3, RFC 8725 §3.2) |
 | `rfc7519-a2-rsa1-5-private-key-unsupported.json` | 7519 App. A.2, 7516 A.2.3 | `UnsupportedAlgorithm` | as above. The inner token is validated by `../rfc7519/a2-rs256-key.json` |
 
-Fully decrypting RFC 7520 §6.8 would need RSA-OAEP (SHA-1) and RSA private-key decryption, which ADRs 0022 and 0021 rule out. Its inner JWS (Fig. 228) is still checked byte for byte (feature 0004 research.md §2).
+Fully decrypting RFC 7520 §6.8 would need RSA-OAEP (SHA-1), which ADR 0022 rules out. Its inner JWS (Fig. 228) is still checked byte for byte (feature 0004 research.md §2).
 
 ## Where the values come from
 
@@ -26,7 +26,7 @@ None of the values was typed in by hand, and polyjose was not involved.
 - **The RFC 7516 A.2.3 RSA key** (used by both App. A tokens, RFC 7519 A.1: "including the keys used"): from `https://www.rfc-editor.org/rfc/rfc7516.txt` (SHA-256 `722cfcddc15f58e746891ba4b846853d3711153a774e4dd55ad6db100474a21f`, the same text `tools/jwe/reproduce.sh` checks).
 - **The other keys:** the 128-bit `oct` decrypt key is the jwt-oracle's `oct-16`, and the RS256 public key of the App. A vectors is its `rsa-2048-rfc7515-a2` (`tools/jwt-oracle/keys.json`).
 
-The RSA private keys in these files are public RFC test data. polyjose refuses them at import (`UnsupportedAlgorithm`, ADR 0021), so it never signs or decrypts with them.
+The RSA private keys in these files are public RFC test data. polyjose imports them (ADR 0067), but never decrypts with them here: their tokens use RSA-OAEP (SHA-1) or RSA1_5, which stay unsupported (ADR 0022, ADR 0067 §3).
 
 ## Cross-checks run before writing (node:crypto, Node v24.21.0, OpenSSL 3.5.8)
 
@@ -226,7 +226,7 @@ const ps256 = (now) => ({ token: fig[228], now, allowed_algs: ["PS256"], key: pu
 const out = {
   "6-3-fig228-ps256-valid.json": {
     source: "RFC 7520 §6.3, Figs. 222, 224, 228",
-    description: "The RFC 7520 §6.3 inner JWS (Fig. 228, PS256, typ JWT) validated as a signed JWT with the public members of the Fig. 224 key, allow-list [PS256] and issuer hobbiton.example, at now 1300819320 (60 s before exp): valid, with the Fig. 222 claims. RSA is verify-only (ADR 0021); the PS256 signature was also checked with node:crypto (RSASSA-PSS, SHA-256, 32-octet salt)",
+    description: "The RFC 7520 §6.3 inner JWS (Fig. 228, PS256, typ JWT) validated as a signed JWT with the public members of the Fig. 224 key, allow-list [PS256] and issuer hobbiton.example, at now 1300819320 (60 s before exp): valid, with the Fig. 222 claims. The PS256 signature was also checked with node:crypto (RSASSA-PSS, SHA-256, 32-octet salt)",
     operation: "jwt.validate",
     input: ps256(1300819320),
     expect: { ok: true, claims: claims222, alg: "PS256" },
@@ -240,14 +240,14 @@ const out = {
   },
   "6-8-fig236-fig84-private-key-unsupported.json": {
     source: "RFC 7520 §6.8, Figs. 84, 224, 236",
-    description: "The RFC 7520 §6.8 nested JWT (Fig. 236, RSA-OAEP + A128GCM around Fig. 228) with decrypt.key the Fig. 84 RSA private key as printed (taken from the vendored ietf-jose cookbook §5.2 file): UnsupportedAlgorithm at key import, because polyjose parses no RSA private JWK (ADR 0021) and the key's alg is RSA-OAEP (ADR 0022). Out of scope by those ADRs, not a failure; the key is never used. The token's integrity was checked with node:crypto (Fig. 84 unwraps Fig. 231 to Fig. 229, which opens Fig. 234 to Fig. 228)",
+    description: "The RFC 7520 §6.8 nested JWT (Fig. 236, RSA-OAEP + A128GCM around Fig. 228) with decrypt.key the Fig. 84 RSA private key as printed (taken from the vendored ietf-jose cookbook §5.2 file): UnsupportedAlgorithm at key import, because the key's alg is RSA-OAEP (SHA-1 OAEP, ADR 0022); its RSA private members alone would import (ADR 0067). Out of scope by ADR 0022, not a failure; the key is never used. The token's integrity was checked with node:crypto (Fig. 84 unwraps Fig. 231 to Fig. 229, which opens Fig. 234 to Fig. 228)",
     operation: "jwt.validate",
     input: { token: fig[236], now: 1300819320, allowed_algs: ["PS256"], key: pub224, policy: issuer, decrypt: { key: fig84, allowed_algs: ["RSA-OAEP"], allowed_enc: ["A128GCM"] } },
     expect: { ok: false, error: "UnsupportedAlgorithm" },
   },
   "6-8-fig236-fig84-private-key-no-alg-unsupported.json": {
     source: "RFC 7520 §6.8, Figs. 84, 224, 236",
-    description: "As 6-8-fig236-fig84-private-key-unsupported, with the Fig. 84 key's alg member removed so that only its RSA private members remain: still UnsupportedAlgorithm at key import (ADR 0021: RSA private JWKs are not parsed). Out of scope by ADR 0021, not a failure",
+    description: "As 6-8-fig236-fig84-private-key-unsupported, with the Fig. 84 key's alg member removed so that only its RSA private members remain: the key then imports (ADR 0067), and the token's own alg RSA-OAEP (SHA-1 OAEP) is UnsupportedAlgorithm (ADR 0022). Out of scope by ADR 0022, not a failure",
     operation: "jwt.validate",
     input: { token: fig[236], now: 1300819320, allowed_algs: ["PS256"], key: pub224, policy: issuer, decrypt: { key: Object.fromEntries(Object.entries(fig84).filter(([m]) => m !== "alg")), allowed_algs: ["RSA-OAEP"], allowed_enc: ["A128GCM"] } },
     expect: { ok: false, error: "UnsupportedAlgorithm" },
@@ -275,14 +275,14 @@ const out = {
   },
   "rfc7519-a1-rsa1-5-private-key-unsupported.json": {
     source: "RFC 7519 App. A.1; RFC 7516 App. A.2.3",
-    description: "The RFC 7519 A.1 encrypted JWT (RSA1_5 + A128CBC-HS256, the §3.1 claims as plaintext) with decrypt.key the RFC 7516 A.2.3 RSA private key: UnsupportedAlgorithm at key import (ADR 0021: no RSA private JWK, no RSA1_5, which RFC 8725 §3.2 discourages). Out of scope by ADR 0021 / RFC 8725 §3.2, not a failure; it is also an encrypt-only JWT, which ADR 0027 §7 rejects. The key is never used. key/allowed_algs (the RFC 7515 A.2 RS256 public key) only complete the input",
+    description: "The RFC 7519 A.1 encrypted JWT (RSA1_5 + A128CBC-HS256, the §3.1 claims as plaintext) with decrypt.key the RFC 7516 A.2.3 RSA private key: the key imports (ADR 0067), but the token's RSA1_5, which RFC 8725 §3.2 discourages, is UnsupportedAlgorithm (ADR 0022, ADR 0067 §3). Out of scope by ADR 0067 §3 / RFC 8725 §3.2, not a failure; it is also an encrypt-only JWT, which ADR 0027 §7 rejects. The key is never used. key/allowed_algs (the RFC 7515 A.2 RS256 public key) only complete the input",
     operation: "jwt.validate",
     input: { token: a1, now: 1300819320, allowed_algs: ["RS256"], key: a2pub, decrypt: { key: jwk16, allowed_algs: ["RSA1_5"], allowed_enc: ["A128CBC-HS256"] } },
     expect: { ok: false, error: "UnsupportedAlgorithm" },
   },
   "rfc7519-a2-rsa1-5-private-key-unsupported.json": {
     source: "RFC 7519 App. A.2; RFC 7516 App. A.2.3",
-    description: "The RFC 7519 A.2 nested JWT (RSA1_5 + A128CBC-HS256, cty JWT, around the RFC 7515 A.2 RS256 JWT) with decrypt.key the RFC 7516 A.2.3 RSA private key: UnsupportedAlgorithm at key import (ADR 0021; RFC 8725 §3.2 discourages RSA1_5). Out of scope by ADR 0021 / RFC 8725 §3.2, not a failure; the key is never used. The inner token is validated positively by jwt/rfc7519/a2-rs256-key.json",
+    description: "The RFC 7519 A.2 nested JWT (RSA1_5 + A128CBC-HS256, cty JWT, around the RFC 7515 A.2 RS256 JWT) with decrypt.key the RFC 7516 A.2.3 RSA private key: the key imports (ADR 0067), but the token's RSA1_5 is UnsupportedAlgorithm (ADR 0022, ADR 0067 §3; RFC 8725 §3.2 discourages it). Out of scope by ADR 0067 §3 / RFC 8725 §3.2, not a failure; the key is never used. The inner token is validated positively by jwt/rfc7519/a2-rs256-key.json",
     operation: "jwt.validate",
     input: { token: a2, now: 1300819320, allowed_algs: ["RS256"], key: a2pub, decrypt: { key: jwk16, allowed_algs: ["RSA1_5"], allowed_enc: ["A128CBC-HS256"] } },
     expect: { ok: false, error: "UnsupportedAlgorithm" },

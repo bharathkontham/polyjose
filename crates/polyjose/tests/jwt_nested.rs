@@ -3,7 +3,8 @@
 //! ADR 0027 §7, §9), through the public API only (ADR 0008 layer 2).
 //!
 //! - Decrypt-then-verify across the JWE key management modes, with an
-//!   ES256 or EdDSA inner JWS; RSA-OAEP-256 never decrypts (ADR 0021).
+//!   ES256 or EdDSA inner JWS, and RSA-OAEP-256 around an RS256 or EdDSA
+//!   inner JWS with the RFC 7515 A.2 RSA private key (ADR 0067).
 //! - Both layers validated with the caller's keys and algorithms
 //!   (RFC 8725 §3.3).
 //! - The shape and typing rules (ADR 0027 §6–§7): outer `cty`, depth 1,
@@ -16,8 +17,8 @@
 //!
 //! Time comes only from `FixedClock`; no test reads the wall clock
 //! (pipeline rule 8). PBES2 tokens use a small `p2c`, inside the default
-//! decrypt budget (ADR 0023, ADR 0050 §2). RSA keys appear as public JWK
-//! JSON only (ADR 0021).
+//! decrypt budget (ADR 0023, ADR 0050 §2). The RSA private key is the
+//! RFC 7515 A.2 fixture under `tests/data/keys/rfc/` (ADR 0067).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
@@ -49,8 +50,7 @@ const P256: &str = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV
 const KEK: &str = r#"{"kty":"oct","k":"GZy6sIZ6wl9NJOKB-jnmVQ"}"#;
 /// RFC 7520 §5.3.1: the PBES2 password.
 const PASSWORD: &[u8] = b"entrap_o\xe2\x80\x93peter_long\xe2\x80\x93credit_tun";
-/// RFC 7515 Appendix A.2.1's 2048-bit RSA key, public members only
-/// (ADR 0021: RSA keys appear as public JSON test data only).
+/// RFC 7515 Appendix A.2.1's 2048-bit RSA key, public members only.
 const RSA_PUBLIC: &str = r#"{"kty":"RSA","n":"ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ","e":"AQAB"}"#;
 
 /// The inner tokens' `exp` and the fixed time, one minute before it.
@@ -281,12 +281,26 @@ fn every_outer_mode_decrypts_then_verifies() {
     }
 }
 
-/// ADR 0021: an EdDSA inner JWT nested by `encrypt_nested` for an
-/// RSA-OAEP-256 recipient (a public-key operation) is produced, but never
-/// decrypted: there is no RSA private-key operation, so the JWE layer
-/// answers `UnsupportedAlgorithm` even when the policy allows the `alg`.
+/// The RFC 7515 A.2 RSA private key (RFC 7518 §6.3.2), whose public half
+/// is [`RSA_PUBLIC`].
+fn rsa_private() -> Jwk {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/keys/rfc/rfc7515-a2-rsa-private.jwk.json");
+    let key = Jwk::from_json(&std::fs::read(path).unwrap()).unwrap();
+    assert!(!key.is_public());
+    assert_eq!(
+        key.to_public().unwrap().to_json().as_str(),
+        jwk(RSA_PUBLIC).to_json().as_str()
+    );
+    key
+}
+
+/// ADR 0067: an EdDSA inner JWT nested by `encrypt_nested` for an
+/// RSA-OAEP-256 recipient decrypts with the RSA private key and verifies
+/// (RFC 7519 §7.2). The public key is no decryption candidate (RFC 8725
+/// §3.1): `KeyAlgorithmMismatch`.
 #[test]
-fn rsa_oaep_256_encrypts_but_never_decrypts() {
+fn rsa_oaep_256_nested_jwt_decrypts_with_the_private_key_only() {
     let rsa = jwk(RSA_PUBLIC);
     let inner = signed(&claims(), SigningAlg::EdDSA, &ed25519_key());
     let e = Encryptor::new(E::A256GCM).recipient(Recipient::new(A::RsaOaep256, &rsa));
@@ -305,7 +319,49 @@ fn rsa_oaep_256_encrypts_but_never_decrypts() {
         Keys::One(&verifier),
         &policy,
     );
-    assert_eq!(r, Err(Error::UnsupportedAlgorithm));
+    assert_eq!(r.map(|_| ()), Err(Error::KeyAlgorithmMismatch));
+    let v = jwt::decrypt_nested(
+        &token,
+        &rsa_private(),
+        &decrypt_policy(),
+        Keys::One(&verifier),
+        &policy,
+    )
+    .unwrap();
+    assert_eq!(v.inner.claims, claims());
+    assert_eq!(v.inner.alg, SigningAlg::EdDSA);
+    assert_eq!(v.outer_header.alg.as_deref(), Some("RSA-OAEP-256"));
+    assert_eq!(v.recipient, 0);
+}
+
+/// ADR 0067: one RSA key pair both ways. The inner JWT is RS256-signed
+/// with the RFC 7515 A.2 private key (RFC 7518 §3.3), encrypted to its
+/// public half with RSA-OAEP-256, then decrypted with the private key and
+/// verified with the public key.
+#[test]
+fn rs256_inner_jwt_under_rsa_oaep_256_round_trips() {
+    let private = rsa_private();
+    let rsa = jwk(RSA_PUBLIC);
+    let inner = signed(&claims(), SigningAlg::RS256, &private);
+    let e = Encryptor::new(E::A128CbcHs256).recipient(Recipient::new(A::RsaOaep256, &rsa));
+    let token = jwt::encrypt_nested(&inner, &e).unwrap();
+    let clock = FixedClock(NOW);
+    let policy = Policy::new(&clock, &[SigningAlg::RS256]).unwrap();
+    let v = jwt::decrypt_nested(
+        &token,
+        &private,
+        &decrypt_policy(),
+        Keys::One(&rsa),
+        &policy,
+    )
+    .unwrap();
+    assert_eq!(v.inner.claims, claims());
+    assert_eq!(v.inner.alg, SigningAlg::RS256);
+    // Signing with the public key is a key mismatch (ADR 0067).
+    assert_eq!(
+        jwt::sign(&claims(), &IssueOptions::new(SigningAlg::RS256), &rsa).map(|_| ()),
+        Err(Error::KeyAlgorithmMismatch)
+    );
 }
 
 /// The EdDSA inner JWT itself verifies under a non-RSA outer layer.

@@ -2,8 +2,9 @@
 
 - Upstream: https://github.com/C2SP/wycheproof
 - Commit: `d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9` (2026-10-23, "go.mod: bump go directive to 1.27.3")
-- Vendored: 42 files from `testvectors_v1/` plus the repository `LICENSE`, byte for byte, on 2026-11-06
-  (25 for JWS in feature 0002, 17 for JWE in feature 0003),
+- Vendored: 49 files from `testvectors_v1/` plus the repository `LICENSE`, byte for byte, on 2026-11-06
+  (25 for JWS in feature 0002, 17 for JWE in feature 0003) and 2026-11-10 (7 for RSA signing and
+  RSA-OAEP-256 decryption in feature 0020),
   from `https://raw.githubusercontent.com/C2SP/wycheproof/<commit>/testvectors_v1/<file>`.
 - License: Apache-2.0. See `LICENSE` in this directory. The files are unmodified.
 
@@ -47,6 +48,13 @@ lists the `tcId` in its deviation list with an RFC or ADR reason.
 | `pbkdf2_hmacsha256_test.json` | 27868 | `1bf37af2cefe40c829ee9ecebb3505bb6424be8824bc97aa3e1c2076e860d192` |
 | `pbkdf2_hmacsha384_test.json` | 26845 | `892613e78d38f1b81df77f1321a59a9fbf6d5c5d1c702126b9f709d7fd242483` |
 | `pbkdf2_hmacsha512_test.json` | 26845 | `6a764a448b7a283478340d58f5dc20455524e8589a935fb0d66fb851e997b1c8` |
+| `rsa_oaep_2048_sha256_mgf1sha256_test.json` | 41082 | `83dce701e3d8640ac56e6d7bf37a5a8f9bd6a336e1e932a1e9bfe4ba9c5ea3a9` |
+| `rsa_oaep_3072_sha256_mgf1sha256_test.json` | 55686 | `c8122302f522bfd539650c71c4aa966bd1f89acb50c6f4c190030fdb9b2684a4` |
+| `rsa_oaep_4096_sha256_mgf1sha256_test.json` | 70341 | `e0eb85bcd6d66a85941ee3d98e44f7d1ffb0cf870ba6550e1ed3bec4174c60a9` |
+| `rsa_oaep_misc_test.json` | 1819052 | `a989f2f0fb3151fe45ba93c629beb620fc949a0ba0ff1f694e451a6885449c79` |
+| `rsa_pkcs1_2048_sig_gen_test.json` | 105318 | `587b3d27d3429f2118cb02818da4d08eb3f36f50c747939eb550fae4337ccbf0` |
+| `rsa_pkcs1_3072_sig_gen_test.json` | 95388 | `45153219d486fd135d35aa968a957a0c015c7829e8dc59bea5f87e6c30912677` |
+| `rsa_pkcs1_4096_sig_gen_test.json` | 84212 | `f13eadbec6c45291cb33e6b2fa0a0c2b862d0bd2eaec29f930d3b78067cd48c7` |
 | `rsa_pss_2048_sha256_mgf1_32_test.json` | 85280 | `7f6efafc160f4816b96cbf1c12188a31051d7e3f001e27505d9edb5f2a0e325c` |
 | `rsa_pss_2048_sha384_mgf1_48_test.json` | 110184 | `66d464778b0b2f683a1d1a20e94f77e9472b8cc393b45f423fa08a48e677063c` |
 | `rsa_pss_3072_sha256_mgf1_32_test.json` | 113786 | `cca48433e6d1accb57f65b3396c4f4dd93c776467101c3f0948e74c283fd4749` |

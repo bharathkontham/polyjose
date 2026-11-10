@@ -1459,9 +1459,9 @@ fn check_jwe_encrypt_features(
 ///   `token` to expect;
 /// - `{"ok": true}` without `token` is checked by validating the issued
 ///   token with `validate`, which it therefore needs. Only with `encrypt`
-///   may `validate` be left out, for a recipient whose key polyjose cannot
-///   decrypt with (RSA-OAEP-256, ADR 0021); then only the token's compact
-///   shape is checked;
+///   may `validate` be left out, for a recipient whose private key the
+///   vector does not hold; then only the token's compact shape is
+///   checked;
 /// - `validate` is used only on success, so a failure vector has none.
 fn check_jwt_issue(input: &Object, expect: &Expect) -> Result<(), String> {
     let encrypt = input.contains("encrypt");
@@ -2403,7 +2403,8 @@ struct JwtValidation {
 /// the outer layer first: `decrypt.key` (RFC 7517), then `decrypt`'s
 /// allow-lists and bound, then `key` or `jwks` (RFC 7517 §4, §5). The first
 /// error is the vector's outcome, so a JWK or JWK Set import error is its
-/// result (for example ADR 0021's RSA private key, `UnsupportedAlgorithm`).
+/// result (for example a multi-prime RSA key, `UnsupportedAlgorithm`,
+/// ADR 0067 §3).
 fn jwt_validation(object: &Object) -> Result<JwtValidation, Error> {
     let decrypt = match object.get("decrypt").and_then(Value::as_object) {
         Some(decrypt) => {
@@ -2696,7 +2697,7 @@ fn check_jwt_issue_round_trip(
 /// is the ADR 0054 §4 precedence:
 ///
 /// 1. import `jwks` with [`JwkSet::from_object`] (RFC 7517 §5; ADR 0041 §2
-///    skips, ADR 0021 and ADR 0029 §3 fail);
+///    skips; an RSA private member imports, ADR 0067 §4);
 /// 2. build the selector from [`JwkSelector::new`] with `kid`, then `alg`
 ///    (`KeyAlg::from`), then `key_use` (`KeyUse::from`), each through its
 ///    setter, which validates it (ADR 0054 §1.1);
@@ -4775,8 +4776,9 @@ const A3_SIGNATURE: &str =
     "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q";
 /// RFC 7515 A.5 unsecured JWS.
 const A5_JWS: &str = "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.";
-/// An RSA private JWK, which JWK import refuses (ADR 0021).
-const RSA_PRIVATE: &str = r#"{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB"}"#;
+/// A multi-prime RSA JWK (`oth`, RFC 7518 §6.3.2.7), which JWK import
+/// refuses before reading anything else (ADR 0067 §3).
+const RSA_MULTI_PRIME: &str = r#"{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB","oth":[]}"#;
 
 fn a1_compact() -> String {
     format!("{A1_PROTECTED}.{PAYLOAD}.{A1_SIGNATURE}")
@@ -4942,7 +4944,7 @@ fn jws_verify_vectors_pass() {
         // A JWK import error is the vector's outcome.
         vector(
             "jws.verify",
-            &verify_input(&a1, RSA_PRIVATE, r#"["RS256"]"#, ""),
+            &verify_input(&a1, RSA_MULTI_PRIME, r#"["RS256"]"#, ""),
             &fails("UnsupportedAlgorithm"),
         ),
         vector(
@@ -5282,13 +5284,13 @@ fn jws_sign_vectors_pass() {
             ),
             &round_trip(A1_KEY, r#"["HS256"]"#),
         ),
-        // A JWK import error is the vector's outcome (ADR 0021).
+        // A JWK import error is the vector's outcome (ADR 0067 §3).
         vector(
             "jws.sign",
             &sign_input(
                 "compact",
                 false,
-                &[signer(Some(A1_PROTECTED), None, RSA_PRIVATE)],
+                &[signer(Some(A1_PROTECTED), None, RSA_MULTI_PRIME)],
             ),
             &fails("UnsupportedAlgorithm"),
         ),
@@ -5552,7 +5554,11 @@ fn jws_sign_mismatches_fail() {
         ),
         (
             "round trip with a key that does not import",
-            vector("jws.sign", &es256, &round_trip(RSA_PRIVATE, r#"["ES256"]"#)),
+            vector(
+                "jws.sign",
+                &es256,
+                &round_trip(RSA_MULTI_PRIME, r#"["ES256"]"#),
+            ),
             "verify_with",
         ),
         (

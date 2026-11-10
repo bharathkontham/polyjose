@@ -167,8 +167,8 @@ mod tests {
         haystack.windows(needle.len()).any(|w| w == needle)
     }
 
-    /// The OpenSSL fixtures of each supported algorithm: an SPKI and, except
-    /// for RSA (ADR 0021: public keys only), a PKCS#8 key.
+    /// The OpenSSL fixtures of each supported algorithm: an SPKI and a
+    /// PKCS#8 key (for RSA, PKCS#8 is tested in `rsa.rs`).
     const FIXTURES: [(AlgId, &str, Option<&str>); 7] = [
         (
             AlgId::Ec(EcCurve::P256),

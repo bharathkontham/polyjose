@@ -101,14 +101,43 @@ fn private_equals_public_for_every_private_form() {
     }
 }
 
-/// RSA has a private form too, but ADR 0021 rejects it until feature 0002:
-/// the private thumbprint cannot be taken, and nothing leaks a path around it.
+/// RFC 7517 Appendix A.2: the private members of the RFC 7638 §3.1 key
+/// (same `n` and `e`), RFC 7518 §6.3.2.
+const RSA_A2_PRIVATE: &str = r#","d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q","p":"83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs","q":"3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk","dp":"G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0","dq":"s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk","qi":"GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU""#;
+
+/// RFC 7638 §3.2: the thumbprint of a private key is that of its required
+/// public members (`e`, `kty`, `n` for RSA). Since ADR 0067 an RSA private
+/// JWK imports, so its thumbprint is the RFC 7638 §3.1 value; an incomplete
+/// one never imports, so it is never hashed.
 #[test]
-fn rsa_private_form_is_rejected_not_hashed() {
+fn rsa_private_form_hashes_only_its_public_members() {
+    let private = jwk(&format!(
+        r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB"{RSA_A2_PRIVATE},"alg":"RS256","kid":"2011-04-29"}}"#
+    ));
+    assert!(!private.is_public());
+    assert_eq!(private.thumbprint_sha256(), RSA_TP);
+    assert_eq!(
+        private.thumbprint_uri_sha256(),
+        format!("{URI_PREFIX}{RSA_TP}")
+    );
+    let public = private.to_public().unwrap();
+    for hash in [
+        ThumbprintHash::Sha256,
+        ThumbprintHash::Sha384,
+        ThumbprintHash::Sha512,
+    ] {
+        assert_eq!(
+            private.thumbprint(hash),
+            public.thumbprint(hash),
+            "{hash:?}"
+        );
+    }
     let json = format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","d":"AQAB"}}"#);
     assert_eq!(
         Jwk::from_json(json.as_bytes()).err(),
-        Some(Error::UnsupportedAlgorithm)
+        Some(Error::InvalidKey(
+            "RSA private key must have d, p, q, dp, dq and qi"
+        ))
     );
 }
 

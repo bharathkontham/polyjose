@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects a 2048-bit three-prime RSA private key as PKCS#8 (RFC 5958 §2, RFC 8017 App. A.1.2), made by OpenSSL 4.1.0: multi-prime RSA keys are not supported (ADR 0067 §3).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMIIE8wIBADANBgkqhkiG9w0BAQEFAASCBN0wggTZAgEBAoIBAQCXySYsOaf7aU5Z\nXNgeCUSilmPu3v922TrKK+ULZgkoI5zVC8+zD8XclgOQoTNpeKtVQkVIyd5MJ37i\n7PSuHEn3rkigLGdE6nEtSeW8my1rY+CWrwL8dJ+dwskx8Nr7o+slxHERCclTMFGw\nf3p9ED3i9cX8qoau0JI9D+ZQ/NBTjZuAw16peDEOsH1+5VZTyc5hbZbuiXjusjGl\nmsuQszwzD7VfVnvcRMOB6FR8UdcwYzCAE+ypWha3njjy9TWzKwcuT7+3hX16Ds5x\nB37BX1C1NiWkC3fm+m4YrA7gSVbxMowBUBOKF+ckIUIa3ZNiJugr6D8XS3tWuQsM\nA3t8rxtbAgMBAAECggEAVYkhXeLP6zoY0PslPyfx6b3eawp35D3eh3fdB2Nk3Z3U\nD6ssTLgixIA1Whe9pT4/Lzi9WpuIDlpjgvYNnOCMPmuUuc7ME2YaiW8PbA32toH+\nWmwdvns1/A/ILeN3ANgYMbQh3Qdl3lJVTnoyyMK5TjaM8CxOifOeBmwYwh3E5EGM\nAuECkls6roPuegM2xcns+zDou2tFjaq0mu0t/roYOKkOfGAiQuEIUl3FKBKnp579\n05IfZsvLH5TosweGIM4WDbqXHl4ZJiJpbWf4C78Jqdgg5E2V+l6O+PUlxDrmh5x+\nqRT5nM6m7pc7aC71JcvrB8WyiPWbtLlyuPgWmPLJAQJWB0RYoqdMerfZ4MLtPRat\nwa5nOtQsjytNRun8Pax1zo5wrcxNSXxlhLiz8EvBFzFXQzT0OT10PC0Ew5iXbCh0\ntpaXEJRQg9tbjNk2NPqP8l0WShV95GkCVgaS+tIcIRVGKGRL3/7EI2PFlcpO869v\nyVkCY3nRZy8DNK2RtJmhMpqYCZiL53SDsNxjBwey427I2sGj9/RK6g+1J7HqdA52\n+cERd8DzWmwNb/J/9pxtAlYEVJDw0/q6AgaebenLBlGiYZf4MWkgI3CYOmRqJ/PH\nk4/HsT+485zXGu122t2EQY27abnCxkEWfskg+TP6ap0qFNCOO6NC/5stcl5f8ZOH\nnDrlCKuNSQJWA4v2T7anTo/sKLgan5r3sNMfTecsZwC7Mw8r1cPYlC95kw6hzaR+\n5ZKS0r7f3ydRGoU+fLPRKaqpAoFQu3ZTMqg8QytG86rScYvX/LwNk2/obn8E8D0C\nVgbQnKZeW29YmzlUNNEhMpFbC6IMuS0fETZ/smJXC5AxyD7v1pFoWiQM2GUS6v22\nDByCxkm10LdX/H+b0YlZVWDm0eLX3gbaX0baxj1Z+3H5X4IPBWtrMIIBDDCCAQgC\nVgMtWfHjsGgfFiXgr+4trV2O0skeDL9gTIc8yCSPkkT4t03ZFYZ/B40EfaUp3DVQ\nGt/HsI/3qm+H9R3WLs+gytNwqaEFTxmVlsb7LRz3Sc3jwRdsThHPAlYBG55it/f6\nxuRNPwV6M5lhp30fPohJb8Yf3nUYMqxZurUIw2s7JC644NkDcA5m1NEaOaL7AO0A\nyVMTHW3jXvl7M60jBhvoGv6h0lKP6DdnQUVC6rRqhwJWAfq9/YH+6CX2Z1cBBBLu\nQjflAscXjhCqW0Hh1K6yrqEFkJsORMcbUoA9XUlChlILOUBiZmPVo5WTz9A3OuVo\n9OaNGgx2pXR4Uwushnk/rGrYVFlJ7sg=\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

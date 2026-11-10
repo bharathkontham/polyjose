@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Independent oracle for the RSA-OAEP-256 conformance vectors (feature 0003 T11; ADR 0021).
+// Independent oracle for the RSA-OAEP-256 conformance vectors (feature 0003 T11).
 //
-// polyjose only encrypts with RSA-OAEP-256: it has no RSA private-key code (ADR 0021), so its own
-// tests cannot decrypt what it produced. This script checks every committed
+// The exact encrypt vectors must not depend on polyjose's own decryption (ADR 0067 added it), so
+// this script checks every committed
 // `conformance/vectors/jwe/rsa-oaep-256/*.json` vector of operation `jwe.encrypt` that expects an
 // exact compact JWE, with Node's built-in crypto only (no npm packages), against the vector's
 // test-only private key (`keys/rsa-<bits>.private.jwk`, data only, matched by the modulus `n`):

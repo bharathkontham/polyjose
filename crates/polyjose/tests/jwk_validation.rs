@@ -1,5 +1,5 @@
 //! Structural JWK validation (RFC 7517 §4, RFC 7518 §2 and §6,
-//! RFC 8037 §2, RFC 8812 §3.1, ADR 0021): every rejection and its stable
+//! RFC 8037 §2, RFC 8812 §3.1, ADRs 0021 and 0067): every rejection and its stable
 //! error code, through the public API with raw JSON input.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
@@ -12,6 +12,50 @@ use polyjose::util::b64url_encode;
 
 /// The 2048-bit modulus of RFC 7517 Appendix A.1.
 const RSA_N: &str = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw";
+
+/// RFC 7517 Appendix A.2: the six private members of the `RSA_N` key
+/// (RFC 7518 §6.3.2), in RFC order.
+const RSA_A2_PRIVATE: [(&str, &str); 6] = [
+    (
+        "d",
+        "X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q",
+    ),
+    (
+        "p",
+        "83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs",
+    ),
+    (
+        "q",
+        "3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk",
+    ),
+    (
+        "dp",
+        "G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0",
+    ),
+    (
+        "dq",
+        "s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk",
+    ),
+    (
+        "qi",
+        "GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU",
+    ),
+];
+
+/// The RFC 7517 A.2 RSA private JWK, with `f` applied to its private
+/// members (name, base64url value) first.
+fn rsa_private_with(f: impl FnOnce(&mut Vec<(String, String)>)) -> String {
+    let mut members: Vec<(String, String)> = RSA_A2_PRIVATE
+        .iter()
+        .map(|&(n, v)| (n.to_owned(), format!(r#""{v}""#)))
+        .collect();
+    f(&mut members);
+    let tail: String = members
+        .iter()
+        .map(|(n, v)| format!(r#","{n}":{v}"#))
+        .collect();
+    format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB"{tail}}}"#)
+}
 
 fn err(json: &str) -> Option<Error> {
     Jwk::from_json(json.as_bytes()).err()
@@ -392,8 +436,14 @@ fn rsa_requires_string_n_and_e() {
 }
 
 #[test]
-fn rsa_with_any_private_member_is_unsupported() {
-    // ADR 0021: whatever the value, and before n and e are looked at.
+fn rsa_oth_is_unsupported_and_a_lone_private_member_is_incomplete() {
+    // ADR 0067 §3: `oth` (RFC 7518 §6.3.2.7, multi-prime) is unsupported
+    // whatever its value and before n and e are looked at. Any other one
+    // private member alone, whatever its value, is an incomplete private
+    // key (RFC 7518 §6.3.2: all six or none), after the n/e checks.
+    let incomplete = Some(Error::InvalidKey(
+        "RSA private key must have d, p, q, dp, dq and qi",
+    ));
     for member in ["d", "p", "q", "dp", "dq", "qi", "oth"] {
         for value in [
             r#""AQAB""#,
@@ -404,19 +454,99 @@ fn rsa_with_any_private_member_is_unsupported() {
         ] {
             let with_valid =
                 format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","{member}":{value}}}"#);
-            assert_eq!(
-                err(&with_valid),
-                Some(Error::UnsupportedAlgorithm),
-                "{with_valid}"
-            );
             let without_n = format!(r#"{{"kty":"RSA","{member}":{value}}}"#);
-            assert_eq!(
-                err(&without_n),
-                Some(Error::UnsupportedAlgorithm),
-                "{without_n}"
-            );
+            if member == "oth" {
+                assert_eq!(
+                    err(&with_valid),
+                    Some(Error::UnsupportedAlgorithm),
+                    "{with_valid}"
+                );
+                assert_eq!(
+                    err(&without_n),
+                    Some(Error::UnsupportedAlgorithm),
+                    "{without_n}"
+                );
+            } else {
+                assert_eq!(err(&with_valid), incomplete, "{with_valid}");
+                assert_eq!(
+                    err(&without_n),
+                    Some(Error::InvalidKey("n is missing")),
+                    "{without_n}"
+                );
+            }
         }
     }
+}
+
+#[test]
+fn rsa_private_key_validation() {
+    // ADR 0067, RFC 7518 §6.3.2: the RFC 7517 A.2 key imports; any five of
+    // its six private members do not; `oth` makes it unsupported.
+    let full = ok(&rsa_private_with(|_| ()));
+    assert!(!full.is_public());
+    let KeyMaterial::Rsa(rsa) = full.material() else {
+        panic!("not RSA")
+    };
+    assert!(rsa.is_private());
+    let incomplete = Some(Error::InvalidKey(
+        "RSA private key must have d, p, q, dp, dq and qi",
+    ));
+    for (i, (name, _)) in RSA_A2_PRIVATE.iter().enumerate() {
+        let json = rsa_private_with(|m| {
+            m.remove(i);
+        });
+        assert_eq!(err(&json), incomplete, "without {name}");
+    }
+    let multi = rsa_private_with(|m| m.push(("oth".to_owned(), "[]".to_owned())));
+    assert_eq!(err(&multi), Some(Error::UnsupportedAlgorithm));
+    // A leading zero octet makes a member non-minimal (RFC 7518 §2,
+    // Base64urlUInt), named in the error (the name, never the value).
+    for (i, (name, value)) in RSA_A2_PRIVATE.iter().enumerate() {
+        let mut octets = polyjose::util::b64url_decode(value).unwrap();
+        octets.insert(0, 0);
+        let padded = format!(r#""{}""#, b64url_encode(&octets));
+        let json = rsa_private_with(|m| m[i].1 = padded);
+        let got = err(&json).unwrap_or_else(|| panic!("{name} with a leading zero imported"));
+        let want = format!("{name} is not a minimal Base64urlUInt");
+        assert!(
+            matches!(got, Error::InvalidKey(detail) if detail == want),
+            "{name}: {got:?}"
+        );
+        assert!(!got.to_string().contains(&value[..8]), "{name}: {got}");
+    }
+    // Members that do not belong together (ADR 0067): another d, or p and
+    // q swapped (so dp, dq and qi no longer fit).
+    let other_d = rsa_private_with(|m| {
+        let mut d = polyjose::util::b64url_decode(&m[0].1[1..m[0].1.len() - 1]).unwrap();
+        let last = d.len() - 1;
+        d[last] ^= 0x02;
+        m[0].1 = format!(r#""{}""#, b64url_encode(&d));
+    });
+    assert_eq!(
+        err(&other_d),
+        Some(Error::InvalidKey("RSA private key does not match n and e"))
+    );
+    let swapped = rsa_private_with(|m| {
+        let p = m[1].1.clone();
+        m[1].1 = m[2].1.clone();
+        m[2].1 = p;
+    });
+    let mismatch = [
+        Error::InvalidKey("RSA private key does not match n and e"),
+        Error::InvalidKey("RSA private key dp, dq or qi does not match d, p and q"),
+    ];
+    let got = err(&swapped).unwrap_or_else(|| panic!("p and q swapped imported"));
+    assert!(mismatch.contains(&got), "{got:?}");
+    let other_qi = rsa_private_with(|m| m[5].1 = r#""AQAB""#.to_owned());
+    assert_eq!(err(&other_qi), Some(mismatch[1].clone()));
+    // A private member that is not a base64url string.
+    let numeric = rsa_private_with(|m| m[3].1 = "7".to_owned());
+    assert!(
+        matches!(err(&numeric), Some(Error::InvalidKey(_))),
+        "{numeric}"
+    );
+    let padded = rsa_private_with(|m| m[4].1 = r#""AQAB=""#.to_owned());
+    assert_eq!(err(&padded), Some(Error::InvalidBase64));
 }
 
 #[test]

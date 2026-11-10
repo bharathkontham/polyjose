@@ -210,6 +210,15 @@ pub(crate) enum Schema {
     /// objects (RFC 7516), tests with [`Input::Jwe`] and groups with
     /// [`Group::jwe_keys`].
     JsonWebEncryption,
+    /// `rsassa_pkcs1_generate_schema_v1.json` (`RsassaPkcs1Generate`):
+    /// RSASSA-PKCS1-v1_5 signature generation (RFC 8017 §8.2.1), which is
+    /// deterministic. Groups carry the RSA private key
+    /// ([`Group::private_key_jwk`]); tests [`Input::Signature`].
+    RsassaPkcs1Generate,
+    /// `rsaes_oaep_decrypt_schema_v1.json` (`RsaesOaepDecrypt`): RSAES-OAEP
+    /// decryption (RFC 8017 §7.1.2). Groups carry the RSA private key, `sha`
+    /// and `mgfSha`; tests [`Input::Oaep`].
+    RsaesOaepDecrypt,
 }
 
 impl Schema {
@@ -230,6 +239,8 @@ impl Schema {
             Schema::EcdhWebcrypto => "EcdhWebcryptoTest",
             Schema::Pbkdf => "PbkdfTest",
             Schema::JsonWebEncryption => "JsonWebEncryption",
+            Schema::RsassaPkcs1Generate => "RsassaPkcs1Generate",
+            Schema::RsaesOaepDecrypt => "RsaesOaepDecrypt",
         }
     }
 
@@ -250,6 +261,8 @@ impl Schema {
             Schema::EcdhWebcrypto => "ecdh_webcrypto_test_schema_v1.json",
             Schema::Pbkdf => "pbkdf_test_schema.json",
             Schema::JsonWebEncryption => "json_web_encryption_schema_v1.json",
+            Schema::RsassaPkcs1Generate => "rsassa_pkcs1_generate_schema_v1.json",
+            Schema::RsaesOaepDecrypt => "rsaes_oaep_decrypt_schema_v1.json",
         }
     }
 }
@@ -405,7 +418,40 @@ const SUITES: &[(&str, Schema, Option<&str>)] = &[
         Some("PBKDF2-HMACSHA512"),
     ),
     ("json_web_encryption", Schema::JsonWebEncryption, None),
+    // RSA private-key operations (feature 0020, ADR 0067).
+    (
+        "rsa_pkcs1_2048_sig_gen",
+        Schema::RsassaPkcs1Generate,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_pkcs1_3072_sig_gen",
+        Schema::RsassaPkcs1Generate,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_pkcs1_4096_sig_gen",
+        Schema::RsassaPkcs1Generate,
+        Some(PKCS1),
+    ),
+    (
+        "rsa_oaep_2048_sha256_mgf1sha256",
+        Schema::RsaesOaepDecrypt,
+        Some(OAEP),
+    ),
+    (
+        "rsa_oaep_3072_sha256_mgf1sha256",
+        Schema::RsaesOaepDecrypt,
+        Some(OAEP),
+    ),
+    (
+        "rsa_oaep_4096_sha256_mgf1sha256",
+        Schema::RsaesOaepDecrypt,
+        Some(OAEP),
+    ),
+    ("rsa_oaep_misc", Schema::RsaesOaepDecrypt, Some(OAEP)),
 ];
+const OAEP: &str = "RSAES-OAEP";
 const PKCS1: &str = "RSASSA-PKCS1-v1_5";
 /// Flags that a test uses but its file's `notes` does not define, at the
 /// pinned commit: `(suite, flag)`. [`load`] accepts exactly these, and the
@@ -495,6 +541,12 @@ pub(crate) struct Group {
     pub(crate) key_jwk: Option<String>,
     /// The raw public key (`publicKey`), for the signature schemas.
     pub(crate) public_key: Option<PublicKey>,
+    /// The RSA private key as a JWK, as JSON text (`RsassaPkcs1Generate`,
+    /// `RsaesOaepDecrypt`): the file's `privateKeyJwk`, or else one built
+    /// from its raw `privateKey` when that has every CRT member (RFC 7518
+    /// §6.3.2). `None` when neither exists (some groups of keys polyjose
+    /// does not serve).
+    pub(crate) private_key_jwk: Option<String>,
     /// The `private` and `public` JWKs (`JsonWebSignature`).
     pub(crate) jws_keys: Option<JwsKeys>,
     /// The `private` (decryption) JWK and, for asymmetric keys, the
@@ -691,6 +743,13 @@ pub(crate) enum Input {
     Pbkdf(PbkdfInput),
     /// `JsonWebEncryption`: one JWE.
     Jwe(JweInput),
+    /// `RsaesOaepDecrypt`: the plaintext `msg`, the ciphertext `ct` and the
+    /// OAEP `label` (RFC 8017 §7.1).
+    Oaep {
+        msg: Vec<u8>,
+        ct: Vec<u8>,
+        label: Vec<u8>,
+    },
 }
 
 /// The inputs of an `Aead` test (hex-decoded).
@@ -740,6 +799,15 @@ impl Test {
         match &self.input {
             Input::Signature { msg, sig } => (msg, sig),
             _ => panic!("tcId {} is not a signature test", self.tc_id),
+        }
+    }
+
+    /// `(msg, ct, label)` of an `RsaesOaepDecrypt` test. Panics on another
+    /// schema.
+    pub(crate) fn oaep(&self) -> (&[u8], &[u8], &[u8]) {
+        match &self.input {
+            Input::Oaep { msg, ct, label } => (msg, ct, label),
+            _ => panic!("tcId {} is not an OAEP test", self.tc_id),
         }
     }
 
@@ -1156,7 +1224,69 @@ struct RawGroup {
     public_key_jwk: Option<serde_json::Value>,
     private: Option<serde_json::Value>,
     public: Option<serde_json::Value>,
+    // The RSA private-key schemas: the raw key, its JWK, and encodings that
+    // repeat it (ignored).
+    private_key: Option<RawPrivateKey>,
+    private_key_jwk: Option<serde_json::Value>,
+    #[serde(rename = "privateKeyPem")]
+    _private_key_pem: Option<IgnoredAny>,
+    #[serde(rename = "privateKeyPkcs8")]
+    _private_key_pkcs8: Option<IgnoredAny>,
+    #[serde(rename = "keyAsn")]
+    _key_asn: Option<IgnoredAny>,
+    #[serde(rename = "keyDer")]
+    _key_der: Option<IgnoredAny>,
+    #[serde(rename = "keyPem")]
+    _key_pem: Option<IgnoredAny>,
     tests: Vec<RawTest>,
+}
+
+/// The raw RSA private key of the RSA private-key schemas (hex integers,
+/// RFC 8017 §3.2).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawPrivateKey {
+    modulus: String,
+    public_exponent: String,
+    private_exponent: String,
+    prime1: Option<String>,
+    prime2: Option<String>,
+    exponent1: Option<String>,
+    exponent2: Option<String>,
+    coefficient: Option<String>,
+}
+
+impl RawPrivateKey {
+    /// The key as an RSA private JWK (RFC 7518 §6.3.1, §6.3.2), as JSON
+    /// text, or `None` without every CRT member.
+    fn to_jwk(&self) -> Result<Option<String>, String> {
+        let (Some(p), Some(q), Some(dp), Some(dq), Some(qi)) = (
+            &self.prime1,
+            &self.prime2,
+            &self.exponent1,
+            &self.exponent2,
+            &self.coefficient,
+        ) else {
+            return Ok(None);
+        };
+        let b64 = |text: &str| -> Result<String, String> {
+            Ok(Base64UrlUnpadded::encode_string(strip_leading_zeros(&hex(
+                text,
+            )?)))
+        };
+        let jwk = serde_json::json!({
+            "kty": "RSA",
+            "n": b64(&self.modulus)?,
+            "e": b64(&self.public_exponent)?,
+            "d": b64(&self.private_exponent)?,
+            "p": b64(p)?,
+            "q": b64(q)?,
+            "dp": b64(dp)?,
+            "dq": b64(dq)?,
+            "qi": b64(qi)?,
+        });
+        json_text(&jwk).map(Some)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1202,6 +1332,7 @@ struct RawTest {
     jwe: Option<String>,
     pt: Option<String>,
     enc: Option<String>,
+    label: Option<String>,
 }
 
 /// Decodes hex (either case, even length).
@@ -1394,6 +1525,30 @@ fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
         Schema::JsonWebSignature => {
             jws_keys.is_some() && public_key.is_none() && key_jwk.is_none() && no_jwe_params
         }
+        Schema::RsassaPkcs1Generate => {
+            raw.key_size.is_some()
+                && raw.sha.is_some()
+                && raw.private_key.is_some()
+                && public_key.is_none()
+                && jws_keys.is_none()
+                && no_jwe_params
+        }
+        Schema::RsaesOaepDecrypt => {
+            raw.key_size.is_some()
+                && raw.sha.is_some()
+                && raw.mgf.as_deref() == Some("MGF1")
+                && raw.mgf_sha.is_some()
+                && raw.private_key.is_some()
+                && public_key.is_none()
+                && key_jwk.is_none()
+                && jws_keys.is_none()
+                && no_jwe_params
+        }
+    };
+    let private_key_jwk = match (&raw.private_key_jwk, &raw.private_key) {
+        (Some(jwk), _) => Some(json_text(jwk)?),
+        (None, Some(key)) => key.to_jwk()?,
+        (None, None) => None,
     };
     if !shape_ok {
         return Err(format!(
@@ -1415,6 +1570,7 @@ fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
         salt_len: raw.s_len,
         key_jwk,
         public_key,
+        private_key_jwk,
         jws_keys,
         jwe_keys,
         iv_size: raw.iv_size,
@@ -1477,7 +1633,9 @@ impl Schema {
             Schema::RsassaPkcs1Verify
             | Schema::RsassaPssVerify
             | Schema::EcdsaP1363Verify
-            | Schema::EddsaVerify => (&["msg", "sig"], &[]),
+            | Schema::EddsaVerify
+            | Schema::RsassaPkcs1Generate => (&["msg", "sig"], &[]),
+            Schema::RsaesOaepDecrypt => (&["msg", "ct", "label"], &[]),
             Schema::JsonWebSignature => (&["jws"], &[]),
             Schema::Aead => (&["key", "iv", "aad", "msg", "ct", "tag"], &[]),
             Schema::Keywrap => (&["key", "msg", "ct"], &[]),
@@ -1534,6 +1692,7 @@ fn parse_test(schema: Schema, raw: RawTest) -> Result<Test, String> {
         jwe,
         pt,
         enc,
+        label,
     } = raw;
     let present = [
         ("key", key.is_some()),
@@ -1555,6 +1714,7 @@ fn parse_test(schema: Schema, raw: RawTest) -> Result<Test, String> {
         ("jwe", jwe.is_some()),
         ("pt", pt.is_some()),
         ("enc", enc.is_some()),
+        ("label", label.is_some()),
     ];
     let (required, optional) = schema.test_fields();
     for (name, is_present) in present {
@@ -1578,7 +1738,8 @@ fn parse_test(schema: Schema, raw: RawTest) -> Result<Test, String> {
         Schema::RsassaPkcs1Verify
         | Schema::RsassaPssVerify
         | Schema::EcdsaP1363Verify
-        | Schema::EddsaVerify => Input::Signature {
+        | Schema::EddsaVerify
+        | Schema::RsassaPkcs1Generate => Input::Signature {
             msg: hex_member(msg, "msg")?,
             sig: hex_member(sig, "sig")?,
         },
@@ -1618,6 +1779,11 @@ fn parse_test(schema: Schema, raw: RawTest) -> Result<Test, String> {
             pt: pt.map(|pt| hex(&pt)).transpose()?,
             enc: enc.unwrap_or_default(),
         }),
+        Schema::RsaesOaepDecrypt => Input::Oaep {
+            msg: hex_member(msg, "msg")?,
+            ct: hex_member(ct, "ct")?,
+            label: hex_member(label, "label")?,
+        },
     };
     Ok(Test {
         tc_id,
@@ -2401,8 +2567,9 @@ mod tests {
     fn rebuilt_jwks_match_every_upstream_jwk() {
         let mut compared = 0;
         let mut rebuilt_only = 0;
-        for name in names("rsa_")
+        for name in names("rsa_signature_")
             .into_iter()
+            .chain(names("rsa_pss_"))
             .chain(names("ecdsa_"))
             .chain(names("ed25519"))
         {
@@ -2429,6 +2596,34 @@ mod tests {
         // 9 ECDSA groups per curve and 33 Ed25519 groups have no JWK.
         assert_eq!(rebuilt_only, 4 * 9 + 33);
         assert!(compared > 400, "{compared}");
+    }
+
+    #[test]
+    fn rsa_private_key_groups_carry_a_private_jwk() {
+        // Every RSAES-OAEP group has a raw key with its CRT members (RFC 8017
+        // §3.2), so a JWK even where the file has no `privateKeyJwk`; every
+        // RSASSA-PKCS1-v1_5 generation group with a JOSE hash (RFC 7518 §3.3)
+        // has the file's own JWK.
+        for name in names("rsa_oaep_") {
+            for group in &load(name).groups {
+                let jwk = group
+                    .private_key_jwk
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{name}"));
+                assert!(jwk.contains(r#""qi""#), "{name}");
+            }
+        }
+        for name in names("rsa_pkcs1_") {
+            for group in &load(name).groups {
+                let jose = matches!(
+                    group.sha.as_deref(),
+                    Some("SHA-256" | "SHA-384" | "SHA-512")
+                );
+                if jose && group.key_size.is_some_and(|bits| bits >= 2048) {
+                    assert!(group.private_key_jwk.is_some(), "{name}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -4,7 +4,11 @@ vectors, from the committed key fixtures in this directory's siblings
 
 Expected JWKs are the committed .jwk.json files (OpenSSL's own text dumps or
 the RFCs) and expected PEM texts the committed fixture files, so nothing comes
-from polyjose. DER-only negative vectors are wrapped in PEM here with the
+from polyjose. The RSA private JWKs (ADR 0067) are read here from committed
+fixtures too: an OpenSSL key's from its `openssl pkey -text` dump
+(../openssl/text/), the RFC 9500 key's from the nine INTEGERs of its
+RSAPrivateKey DER (RFC 8017 App. A.1.2), and each is checked with integer
+arithmetic (n = p * q, d * e = 1 mod lcm(p - 1, q - 1), the CRT values). DER-only negative vectors are wrapped in PEM here with the
 label of the structure they hold (RFC 7468 §2: 64-column base64, LF). The
 keys.*_der vectors carry the same fixtures' DER, the body of each PEM file
 decoded here, as canonical base64url (der_b64u), with the format its label
@@ -14,7 +18,7 @@ Run from anywhere: python3 -I make-keys-vectors.py
 It deletes every *.json in conformance/vectors/keys/ first, so the directory
 holds exactly what this script writes.
 """
-import base64, json, os
+import base64, json, math, os, re
 
 here = os.path.dirname(os.path.abspath(__file__))
 data = os.path.dirname(here)                       # tests/data/keys
@@ -36,7 +40,7 @@ def neg_pem(f, label): return wrap(label, neg_der(f))
 def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b'=').decode()
 # The structure each RFC 7468 label names, as a keys.* format.
 # An EncryptedPrivateKeyInfo is offered where a PKCS#8 is expected (RFC 5958 §3).
-FORMATS = {'ENCRYPTED PRIVATE KEY': 'pkcs8', 'PRIVATE KEY': 'pkcs8', 'EC PRIVATE KEY': 'sec1', 'PUBLIC KEY': 'spki', 'RSA PUBLIC KEY': 'pkcs1'}
+FORMATS = {'ENCRYPTED PRIVATE KEY': 'pkcs8', 'PRIVATE KEY': 'pkcs8', 'EC PRIVATE KEY': 'sec1', 'PUBLIC KEY': 'spki', 'RSA PUBLIC KEY': 'pkcs1', 'RSA PRIVATE KEY': 'pkcs1'}
 def unwrap(pem):
     """The label and DER of a single strict PEM block (RFC 7468 §3)."""
     lines = pem.split('\n')
@@ -47,6 +51,52 @@ def unwrap(pem):
 def der_input(pem, fmt=None):
     label, der = unwrap(pem)
     return {'der_b64u': b64u(der), 'format': fmt or FORMATS[label]}
+
+# --- RSA private JWKs (RFC 7518 §6.3.2) from the committed fixtures ------
+def uint(i): return b64u(i.to_bytes((i.bit_length() + 7) // 8, 'big'))   # Base64urlUInt, RFC 7518 §2
+def rsa_private_jwk(n, e, d, p, q, dp, dq, qi):
+    """The JWK of a two-prime RSA key, after checking it (RFC 8017 §3.2)."""
+    assert n == p * q and (d * e) % math.lcm(p - 1, q - 1) == 1
+    assert dp == d % (p - 1) and dq == d % (q - 1) and (qi * q) % p == 1
+    return {'kty': 'RSA', 'n': uint(n), 'e': uint(e), 'd': uint(d), 'p': uint(p), 'q': uint(q), 'dp': uint(dp), 'dq': uint(dq), 'qi': uint(qi)}
+def der_integers(der):
+    """The INTEGERs of a DER SEQUENCE of non-negative INTEGERs (X.690 §8.3), as RSAPrivateKey is."""
+    def read(buf, i):
+        tag, k = buf[i], buf[i + 1]; i += 2
+        if k & 0x80:
+            octets = k & 0x7f; k = int.from_bytes(buf[i:i + octets], 'big'); i += octets
+        return tag, buf[i:i + k], i + k
+    tag, body, end = read(der, 0)
+    assert tag == 0x30 and end == len(der)
+    out, i = [], 0
+    while i < len(body):
+        tag, value, i = read(body, i)
+        assert tag == 0x02 and not value[0] & 0x80
+        out.append(int.from_bytes(value, 'big'))
+    return out
+def rsa_jwk_from_pkcs1(pem):
+    """RFC 8017 App. A.1.2: version 0 (two-prime), n, e, d, p, q, dp, dq, qi."""
+    label, der = unwrap(pem)
+    assert label == 'RSA PRIVATE KEY'
+    version, *values = der_integers(der)
+    assert version == 0 and len(values) == 8
+    return rsa_private_jwk(*values)
+def rsa_jwk_from_openssl_text(f):
+    """OpenSSL's own parse of a two-prime key (`openssl pkey -text -noout`)."""
+    t = text('openssl', os.path.join('text', f))
+    assert '2 primes' in t
+    def block(label):
+        m = re.search(r'^' + label + r':\s*\n((?:\s+[0-9a-f:]+\n)+)', t, re.M)
+        return int(re.sub(r'[\s:]', '', m.group(1)), 16)
+    e = int(re.search(r'^publicExponent: (\d+)', t, re.M).group(1))
+    return rsa_private_jwk(block('modulus'), e, block('privateExponent'), block('prime1'), block('prime2'), block('exponent1'), block('exponent2'), block('coefficient'))
+rfc9500_rsa2048 = rsa_jwk_from_pkcs1(text('rfc', 'reject-rfc9500-testRSA2048-private-pkcs1.pem'))
+ossl_rsa2048 = rsa_jwk_from_openssl_text('reject-rsa2048-private-pkcs8.txt')
+assert ossl_rsa2048 == rsa_jwk_from_openssl_text('reject-rsa2048-private-pkcs1.txt')
+assert ossl_rsa2048 == rsa_jwk_from_pkcs1(text('openssl', 'reject-rsa2048-private-pkcs1.pem'))
+def expected_jwk(jd, jf):
+    """A committed .jwk.json file, or (jd None) a JWK derived above."""
+    return jf if jd is None else jwk(jd, jf)
 
 OSSL = 'OpenSSL 4.1.0 (polyjose key fixtures)'
 n = 0
@@ -81,9 +131,11 @@ imports = [
   ('import-x25519-spki', 'RFC 8037 App. A.6', 'rfc', 'rfc8037-a6-x25519-bob-spki.pem', 'rfc', 'rfc8037-a6-x25519-bob-spki.jwk.json', "the RFC 8037 A.6 recipient's X25519 public key (RFC 7748 §6.1 Bob) as SPKI (RFC 8410 §4); built from the published JWK and checked with OpenSSL"),
   ('import-rsa-spki', 'RFC 7517 App. A.1', 'rfc', 'rfc7517-a1-rsa-spki.pem', 'rfc', 'rfc7517-a1-rsa-spki.jwk.json', 'the RFC 7517 A.1 RSA public key as SPKI with rsaEncryption and NULL (RFC 3279 §2.3.1); built from the published JWK and checked with OpenSSL'),
   ('import-rsa-pkcs1', 'RFC 7517 App. A.1', 'rfc', 'rfc7517-a1-rsa-pkcs1-pub.pem', 'rfc', 'rfc7517-a1-rsa-pkcs1-pub.jwk.json', 'the RFC 7517 A.1 RSA public key as a PKCS#1 RSA PUBLIC KEY (RFC 8017 App. A.1.1)'),
+  ('import-rsa-private-pkcs1', 'RFC 9500 §2.1; ADR 0067', 'rfc', 'reject-rfc9500-testRSA2048-private-pkcs1.pem', None, rfc9500_rsa2048, 'RFC 9500 testRSA2048, a two-prime RSA PRIVATE KEY (RFC 8017 App. A.1.2), as an RSA private JWK with all eight members (RFC 7518 §6.3.2; ADR 0067 §2); the expected members are the INTEGERs of the RFC\'s DER, read and checked (n = p q, the CRT values) by the generator'),
+  ('import-rsa-private-pkcs8', OSSL + '; ADR 0067', 'openssl', 'reject-rsa2048-private-pkcs8.pem', None, ossl_rsa2048, 'a 2048-bit two-prime RSA private key as PKCS#8 with rsaEncryption (RFC 5958 §2, RFC 8017 App. A.1.2), as an RSA private JWK (RFC 7518 §6.3.2; ADR 0067 §2); expected JWK from openssl pkey -text'),
 ]
 for name, source, d, pem, jd, jf, what in imports:
-    write(name, source, 'PEM import of ' + what + '.', 'keys.import_pem', {'pem': text(d, pem)}, {'ok': True, 'jwk': jwk(jd, jf)})
+    write(name, source, 'PEM import of ' + what + '.', 'keys.import_pem', {'pem': text(d, pem)}, {'ok': True, 'jwk': expected_jwk(jd, jf)})
 
 # --- exports: one per key type, plus each format ------------------------
 exports = [
@@ -99,9 +151,11 @@ exports = [
   ('export-x25519-spki', 'RFC 8037 App. A.6', 'rfc', 'rfc8037-a6-x25519-bob-spki.jwk.json', 'spki', 'rfc', 'rfc8037-a6-x25519-bob-spki.pem', 'the RFC 8037 A.6 X25519 public key as SPKI (RFC 8410 §4)'),
   ('export-rsa-spki', 'RFC 7517 App. A.1', 'rfc', 'rfc7517-a1-rsa-spki.jwk.json', 'spki', 'rfc', 'rfc7517-a1-rsa-spki.pem', 'the RFC 7517 A.1 RSA public key as SPKI (RFC 3279 §2.3.1)'),
   ('export-rsa-pkcs1', 'RFC 7517 App. A.1', 'rfc', 'rfc7517-a1-rsa-pkcs1-pub.jwk.json', 'pkcs1', 'rfc', 'rfc7517-a1-rsa-pkcs1-pub.pem', 'the RFC 7517 A.1 RSA public key as PKCS#1 RSAPublicKey (RFC 8017 App. A.1.1)'),
+  ('export-rsa-private-pkcs8', OSSL + '; ADR 0067', None, ossl_rsa2048, 'pkcs8', 'openssl', 'reject-rsa2048-private-pkcs8.pem', 'a 2048-bit RSA private JWK (its members from openssl pkey -text) as PKCS#8 with rsaEncryption and NULL around its RSAPrivateKey (RFC 5958 §2, RFC 8017 App. A.1.2; ADR 0067 §2), byte for byte the OpenSSL fixture it came from'),
+  ('export-rsa-private-to-spki', OSSL + '; ADR 0067', None, ossl_rsa2048, 'spki', 'openssl', 'rsa2048-spki.pem', 'the same RSA private JWK as SPKI: its public half (RFC 3279 §2.3.1), byte for byte openssl pkey -pubout of the fixture'),
 ]
 for name, source, jd, jf, fmt, d, pem, what in exports:
-    write(name, source, 'PEM export of ' + what + '.', 'keys.export_pem', {'jwk': jwk(jd, jf), 'format': fmt}, {'ok': True, 'pem': text(d, pem)})
+    write(name, source, 'PEM export of ' + what + '.', 'keys.export_pem', {'jwk': expected_jwk(jd, jf), 'format': fmt}, {'ok': True, 'pem': text(d, pem)})
 
 # --- export refusals (ADR 0018 §3 format matrix) -------------------------
 oct_a3 = {"kty": "oct", "alg": "A128KW", "k": "GawgguFyGrWKav7AX4VKUg"}
@@ -120,12 +174,14 @@ for name, j, fmt, code, what in [
     write(name, src, 'Export refusal: ' + what + '.', 'keys.export_pem', {'jwk': j, 'format': fmt}, {'ok': False, 'error': code})
     export_refusals.append((name, src, j, fmt, code, what))
 
-# --- the 12 representative import negatives ------------------------------
+# --- the representative import negatives ---------------------------------
 negs = [
   ('reject-pkcs8-encrypted', 'polyjose', text('openssl', 'reject-ec-p256-pkcs8-encrypted.pem'), 'UnsupportedAlgorithm', 'an ENCRYPTED PRIVATE KEY (EncryptedPrivateKeyInfo, RFC 5958 §3; RFC 7468 §11, made by OpenSSL 4.1.0 with PBES2/AES-256-CBC): encrypted keys are out of scope (ADR 0018 §4)'),
   ('reject-pem-legacy-encrypted', 'polyjose', text('openssl', 'reject-ec-p256-sec1-legacy-encrypted.pem'), 'UnsupportedAlgorithm', 'a legacy Proc-Type: 4,ENCRYPTED EC PRIVATE KEY (RFC 1421 §4.6.1.1, made by OpenSSL 4.1.0): encrypted keys are out of scope (ADR 0018 §4)'),
-  ('reject-rsa-private-pkcs1', 'RFC 9500 §2.1', text('rfc', 'reject-rfc9500-testRSA2048-private-pkcs1.pem'), 'UnsupportedAlgorithm', 'RFC 9500 testRSA2048, an RSA PRIVATE KEY (RFC 8017 App. A.1.2): RSA private keys are not supported (ADR 0021)'),
-  ('reject-rsa-private-pkcs8', 'polyjose', neg_pem('N67-rsa-private-pkcs8-minimal.der', 'PRIVATE KEY'), 'UnsupportedAlgorithm', 'a PKCS#8 PRIVATE KEY with rsaEncryption, i.e. an RSA private key: refused from the AlgorithmIdentifier (ADR 0021)'),
+  ('reject-rsa-private-pkcs8-truncated', 'polyjose', neg_pem('N67-rsa-private-pkcs8-minimal.der', 'PRIVATE KEY'), 'InvalidKey', 'a PKCS#8 PRIVATE KEY with rsaEncryption whose RSAPrivateKey holds only version, n (RFC 7517 A.1\'s) and e, without the private INTEGERs RFC 8017 App. A.1.2 requires: malformed (ADR 0067 §2)'),
+  ('reject-rsa-3-prime-pkcs1', 'polyjose', text('openssl', 'reject-rsa2048-3prime-private-pkcs1.pem'), 'UnsupportedAlgorithm', 'a 2048-bit three-prime RSA PRIVATE KEY (version 1 with otherPrimeInfos, RFC 8017 App. A.1.2), made by OpenSSL 4.1.0: multi-prime RSA keys are not supported (ADR 0067 §3)'),
+  ('reject-rsa-3-prime-pkcs8', 'polyjose', text('openssl', 'reject-rsa2048-3prime-private-pkcs8.pem'), 'UnsupportedAlgorithm', 'a 2048-bit three-prime RSA private key as PKCS#8 (RFC 5958 §2, RFC 8017 App. A.1.2), made by OpenSSL 4.1.0: multi-prime RSA keys are not supported (ADR 0067 §3)'),
+  ('reject-rsa-private-1024-bits', 'RFC 9500 §2.1', text('rfc', 'reject-rfc9500-testRSA1024-private-pkcs1.pem'), 'InvalidKey', 'RFC 9500 testRSA1024, a 1024-bit RSA PRIVATE KEY: RSA keys must be at least 2048 bits, private ones too (RFC 7518 §3.3, §4.2; ADR 0007, ADR 0067 §2)'),
   ('reject-ber-indefinite-length', 'polyjose', neg_pem('N03-len-indefinite.der', 'PRIVATE KEY'), 'InvalidKey', 'the RFC 8037 A.1 Ed25519 PKCS#8 with an indefinite outer length, a BER-only encoding (X.690 §10.1, §8.1.3.6; ADR 0018 §2)'),
   ('reject-trailing-der-garbage', 'polyjose', text('negative', 'P16-trailing-der-garbage.pem'), 'InvalidKey', 'valid PEM armor around the RFC 8037 A.1 Ed25519 PKCS#8 followed by one 0x00 octet: no data may follow the outermost element (X.690 §8.1.1, RFC 5958 §2)'),
   ('reject-text-before-begin', 'polyjose', text('negative', 'P07-text-before-begin.pem'), 'InvalidKey', 'explanatory text before the BEGIN line, which RFC 7468 §2 permits and polyjose deliberately rejects (ADR 0018 §2)'),
@@ -140,12 +196,15 @@ for name, src, pem, code, what in negs:
 
 # --- DER imports: the same fixtures, as DER in the format of their label ---
 for name, source, d, pem, jd, jf, what in imports:
-    write(name.replace('import-', 'import-der-', 1), source, 'DER import of ' + what + '.', 'keys.import_der', der_input(text(d, pem)), {'ok': True, 'jwk': jwk(jd, jf)})
+    write(name.replace('import-', 'import-der-', 1), source, 'DER import of ' + what + '.', 'keys.import_der', der_input(text(d, pem)), {'ok': True, 'jwk': expected_jwk(jd, jf)})
 
 # --- DER import negatives: the import negatives whose fault is in the DER --
 der_negs = {
   'reject-pkcs8-encrypted': 'an EncryptedPrivateKeyInfo (RFC 5958 §3, made by OpenSSL 4.1.0 with PBES2/AES-256-CBC) as pkcs8: encrypted keys are out of scope (ADR 0018 §4)',
-  'reject-rsa-private-pkcs8': 'a PKCS#8 with rsaEncryption, i.e. an RSA private key: refused from the AlgorithmIdentifier (ADR 0021)',
+  'reject-rsa-private-pkcs8-truncated': 'a PKCS#8 with rsaEncryption whose RSAPrivateKey holds only version, n (RFC 7517 A.1\'s) and e, without the private INTEGERs RFC 8017 App. A.1.2 requires: malformed (ADR 0067 §2)',
+  'reject-rsa-3-prime-pkcs1': 'a 2048-bit three-prime RSAPrivateKey (version 1 with otherPrimeInfos, RFC 8017 App. A.1.2), made by OpenSSL 4.1.0, as pkcs1: multi-prime RSA keys are not supported (ADR 0067 §3)',
+  'reject-rsa-3-prime-pkcs8': 'a 2048-bit three-prime RSA private key as PKCS#8 (RFC 5958 §2), made by OpenSSL 4.1.0: multi-prime RSA keys are not supported (ADR 0067 §3)',
+  'reject-rsa-private-1024-bits': 'RFC 9500 testRSA1024, a 1024-bit RSAPrivateKey, as pkcs1: RSA keys must be at least 2048 bits, private ones too (RFC 7518 §3.3, §4.2; ADR 0007, ADR 0067 §2)',
   'reject-ber-indefinite-length': 'the RFC 8037 A.1 Ed25519 PKCS#8 with an indefinite outer length, a BER-only encoding (X.690 §10.1, §8.1.3.6; ADR 0018 §2)',
   'reject-trailing-der-garbage': 'the RFC 8037 A.1 Ed25519 PKCS#8 followed by one 0x00 octet: no data may follow the outermost element (X.690 §8.1.1, RFC 5958 §2)',
   'reject-ec-point-off-curve': 'the RFC 7517 A.1 P-256 SPKI with the last octet of y flipped, a point not on the curve (RFC 8725 §3.4, ADR 0041 §4)',
@@ -158,7 +217,7 @@ for name, src, pem, code, what in negs:
 
 # --- DER exports and export refusals: the PEM ones, as DER ----------------
 for name, source, jd, jf, fmt, d, pem, what in exports:
-    write(name.replace('export-', 'export-der-', 1), source, 'DER export of ' + what + '.', 'keys.export_der', {'jwk': jwk(jd, jf), 'format': fmt}, {'ok': True, 'der_b64u': der_input(text(d, pem))['der_b64u']})
+    write(name.replace('export-', 'export-der-', 1), source, 'DER export of ' + what + '.', 'keys.export_der', {'jwk': expected_jwk(jd, jf), 'format': fmt}, {'ok': True, 'der_b64u': der_input(text(d, pem))['der_b64u']})
 for name, src, j, fmt, code, what in export_refusals:
     write(name.replace('reject-export-', 'reject-export-der-', 1), src, 'DER export refusal: ' + what + '.', 'keys.export_der', {'jwk': j, 'format': fmt}, {'ok': False, 'error': code})
 
@@ -195,9 +254,9 @@ for name, source, shape, what in gen_ok:
 gen_refusals = [
   ('ecdh-es', 'ECDH-ES', 'InvalidKey', 'ECDH-ES works on several curves (RFC 7518 §4.6), so a key for it needs a curve, and polyjose never picks one for the caller (ADR 0018 §5)'),
   ('ecdh-es-a128kw', 'ECDH-ES+A128KW', 'InvalidKey', 'ECDH-ES+A128KW works on several curves (RFC 7518 §4.6), so a key for it needs a curve (ADR 0018 §5)'),
-  ('rs256', 'RS256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0021)'),
-  ('ps256', 'PS256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0021)'),
-  ('rsa-oaep-256', 'RSA-OAEP-256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0021)'),
+  ('rs256', 'RS256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0067 §3)'),
+  ('ps256', 'PS256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0067 §3)'),
+  ('rsa-oaep-256', 'RSA-OAEP-256', 'UnsupportedAlgorithm', 'RSA keys are never generated (ADR 0067 §3)'),
   ('dir', 'dir', 'UnsupportedAlgorithm', 'a dir key is the content encryption key of its enc (RFC 7518 §4.5), so its size is not known from dir'),
   ('pbes2-hs256-a128kw', 'PBES2-HS256+A128KW', 'UnsupportedAlgorithm', 'a PBES2 key is a password (RFC 7518 §4.8), which polyjose does not generate'),
   ('none', 'none', 'UnsupportedAlgorithm', 'none has no key (RFC 7518 §3.6)'),
@@ -213,16 +272,18 @@ for name, alg, code, what in gen_refusals:
 # B01: no format sniffing (ADR 0007); an SPKI is not a OneAsymmetricKey.
 write('reject-der-spki-as-pkcs8', 'polyjose', 'DER import rejects the RFC 7517 A.1 P-256 SPKI offered as pkcs8: the caller names the structure and an SPKI is not a OneAsymmetricKey (RFC 5958 §2; ADR 0007, ADR 0018 §2).', 'keys.import_der', der_input(text('rfc', 'rfc7517-a1-ec-p256-spki.pem'), 'pkcs8'), {'ok': False, 'error': 'InvalidKey'})
 
-# F03: a PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2) is an RSA private key in
-# any format or label (ADR 0018 §3, ADR 0021), recognized by its framing.
+# F03, as amended by ADR 0067: a PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2)
+# imports only as pkcs1 or under RSA PRIVATE KEY (import-der-rsa-private-pkcs1,
+# import-rsa-private-pkcs1). Offered as another structure, or under another
+# label, it is that structure's malformed input: no format sniffing (ADR 0007).
 rsa_private = open(os.path.join(data, 'openssl', 'reject-rsa2048-private-pkcs1.der'), 'rb').read()
 assert neg_der('N68-rsa-private-pkcs1-as-pkcs8.der') == rsa_private == neg_der('N69-rsa-private-pkcs1-as-sec1.der')
-for fmt, structure in [('pkcs8', 'a OneAsymmetricKey (RFC 5958 §2)'), ('sec1', 'an ECPrivateKey (RFC 5915 §3)'), ('pkcs1', 'an RSAPublicKey (RFC 8017 App. A.1.1)')]:
-    write('reject-der-rsa-private-pkcs1-as-' + fmt, 'polyjose', f'DER import rejects a 2048-bit PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0) offered as {fmt}, where {structure} is expected: an RSA private key in any format is UnsupportedAlgorithm, not malformed input (ADR 0018 §3, ADR 0021).', 'keys.import_der', {'der_b64u': b64u(rsa_private), 'format': fmt}, {'ok': False, 'error': 'UnsupportedAlgorithm'})
-for f, label in [('P17-label-private-key-body-rsa-pkcs1.pem', 'PRIVATE KEY'), ('P18-label-ec-private-key-body-rsa-pkcs1.pem', 'EC PRIVATE KEY')]:
+for fmt, structure in [('pkcs8', 'a OneAsymmetricKey (RFC 5958 §2)'), ('sec1', 'an ECPrivateKey (RFC 5915 §3)')]:
+    write('reject-der-rsa-private-pkcs1-as-' + fmt, 'polyjose', f'DER import rejects a 2048-bit PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0) offered as {fmt}: the caller names the structure, {structure} is expected and the octets are not one, so it is InvalidKey (ADR 0007, ADR 0018 §2, ADR 0067 §2); the same octets import as pkcs1.', 'keys.import_der', {'der_b64u': b64u(rsa_private), 'format': fmt}, {'ok': False, 'error': 'InvalidKey'})
+for f, label, structure in [('P17-label-private-key-body-rsa-pkcs1.pem', 'PRIVATE KEY', 'PKCS#8 (RFC 7468 §10)'), ('P18-label-ec-private-key-body-rsa-pkcs1.pem', 'EC PRIVATE KEY', 'SEC1 (RFC 5915 §4)')]:
     pem = text('negative', f)
     assert unwrap(pem) == (label, rsa_private)
-    write('reject-rsa-private-pkcs1-under-' + label.lower().replace(' ', '-') + '-label', 'polyjose', f'PEM import rejects a {label} label around a 2048-bit PKCS#1 RSAPrivateKey body (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0): an RSA private key under any label is UnsupportedAlgorithm (ADR 0018 §3, ADR 0021).', 'keys.import_pem', {'pem': pem}, {'ok': False, 'error': 'UnsupportedAlgorithm'})
+    write('reject-rsa-private-pkcs1-under-' + label.lower().replace(' ', '-') + '-label', 'polyjose', f'PEM import rejects a {label} label around a 2048-bit PKCS#1 RSAPrivateKey body (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0): the label selects {structure} and the body is not one, so it is InvalidKey (ADR 0018 §2, ADR 0067 §2); under RSA PRIVATE KEY the body imports.', 'keys.import_pem', {'pem': pem}, {'ok': False, 'error': 'InvalidKey'})
 
 # F02: RSA moduli are 2048 to 8192 bits (RFC 7518 §3.3 floor; ADR 0007 and
 # ADR 0026 §2 ceiling) on every import path. The keys are built here, as in

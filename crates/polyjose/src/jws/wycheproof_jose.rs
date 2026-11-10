@@ -6,8 +6,8 @@
 //! [`verify_compact`], the way an application would:
 //!
 //! - **Key:** the group's verification JWK, `public`, or `private` for an
-//!   `oct` key ([`Group::verification_jwk`]). An RSA `private` JWK is never
-//!   imported: polyjose refuses it with `UnsupportedAlgorithm` (ADR 0021 §2).
+//!   `oct` key ([`Group::verification_jwk`]). The `private` JWKs import too
+//!   (RSA ones since ADR 0067) and verify the same way.
 //! - **Allow-list:** exactly the group's algorithm ([`group_alg`],
 //!   RFC 8725 §3.1).
 //! - **Expectation:** Wycheproof's `result`, adjusted by [`DEVIATIONS`];
@@ -333,33 +333,55 @@ fn json_serialization_case_through_verify_json() {
 }
 
 #[test]
-fn private_jwks_are_refused_for_rsa_and_verify_like_the_public_ones() {
-    // ADR 0021 §2: an RSA private JWK fails to import with
-    // UnsupportedAlgorithm. An EC or oct private JWK verifies every test
-    // exactly as the group's verification JWK does (RFC 7517 §4.3: a
-    // private key may verify; `key_ops`, when present, decides).
+fn private_jwks_import_and_verify_like_the_public_ones() {
+    // ADR 0067 (superseding ADR 0021 §2): an RSA private JWK imports, as an
+    // EC or oct private JWK does, and verifies every test exactly as the
+    // group's verification JWK does (RFC 7517 §4.3: a private key may
+    // verify; `key_ops`, when present, decides). Its public part is the
+    // group's public key.
     let suite = wycheproof::load(SUITE);
-    let (mut rsa, mut others) = (0, 0);
+    let (mut rsa, mut others, mut refused) = (0, 0, 0);
     for group in &suite.groups {
         let keys = group.jws_keys.as_ref().unwrap();
-        let private = Jwk::from_json(keys.private.as_bytes());
+        let private = Jwk::from_json(keys.private.as_bytes()).unwrap();
         let public = verification_key(group);
-        if let KeyMaterial::Rsa(_) = public.material() {
-            assert_eq!(private.map(drop), Err(Error::UnsupportedAlgorithm));
+        if let KeyMaterial::Rsa(key) = private.material() {
+            assert!(key.is_private() && !private.is_public());
+            let KeyMaterial::Rsa(expected) = public.material() else {
+                panic!("an RSA group's public key is RSA");
+            };
+            assert_eq!((key.n(), key.e()), (expected.n(), expected.e()));
             rsa += 1;
-            continue;
+        } else {
+            others += 1;
         }
-        let private = private.unwrap();
         let allowed = [group_alg(&public)];
         let opts = VerifyOptions::new(&allowed).unwrap();
+        // RFC 7517 §4.2, §4.3: a private JWK whose `use` is `enc` or whose
+        // `key_ops` lacks `verify` (the four encryption-key groups, and one
+        // `rfc7520WithKeyOps` group with the single unregistered value
+        // "sign, verify") refuses every verification at key binding
+        // (ADR 0026 §2 step 8).
+        let may_verify = private.permits(&crate::jwk::KeyOp::Verify);
+        if !may_verify {
+            refused += 1;
+        }
         for test in &group.tests {
             let with_private = verify_compact(test.jws(), &private, &opts).map(|v| v.payload);
-            let with_public = verify_compact(test.jws(), &public, &opts).map(|v| v.payload);
-            assert_eq!(with_private, with_public, "tcId {}", test.tc_id);
+            if may_verify {
+                let with_public = verify_compact(test.jws(), &public, &opts).map(|v| v.payload);
+                assert_eq!(with_private, with_public, "tcId {}", test.tc_id);
+            } else {
+                assert_eq!(
+                    with_private.map(drop),
+                    Err(Error::KeyAlgorithmMismatch),
+                    "tcId {}",
+                    test.tc_id
+                );
+            }
         }
-        others += 1;
     }
-    assert_eq!((rsa, others), (13, 10));
+    assert_eq!((rsa, others, refused), (13, 10, 5));
 }
 
 #[test]

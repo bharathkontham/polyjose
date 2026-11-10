@@ -406,25 +406,25 @@
     "id": "N67",
     "file": "N67-rsa-private-pkcs8-minimal.der",
     "base": "rfc7517-a1-rsa-spki.der",
-    "mutation": "PKCS#8 with rsaEncryption (any RSA private key)",
-    "expect": "UnsupportedAlgorithm",
-    "cite": "ADR 0021: RSA private keys are not supported in 0.1.0"
+    "mutation": "PKCS#8 with rsaEncryption whose RSAPrivateKey holds only version, n and e",
+    "expect": "InvalidKey",
+    "cite": "RFC 8017 App. A.1.2 (RSAPrivateKey has nine INTEGERs); ADR 0067 \u00a72 (malformed RSA private key: InvalidKey)"
   },
   {
     "id": "N68",
     "file": "N68-rsa-private-pkcs1-as-pkcs8.der",
     "base": "reject-rsa2048-private-pkcs1.der",
     "mutation": "the PKCS#1 RSAPrivateKey bytes unchanged, read as PKCS#8",
-    "expect": "UnsupportedAlgorithm",
-    "cite": "ADR 0018 \u00a73 (RSA private, any format: UnsupportedAlgorithm); ADR 0021; RFC 8017 App. A.1.2"
+    "expect": "InvalidKey",
+    "cite": "RFC 5958 \u00a72 (PKCS#8 is a OneAsymmetricKey); ADR 0067 \u00a72 (wrong structure for the format: InvalidKey); RFC 8017 App. A.1.2"
   },
   {
     "id": "N69",
     "file": "N69-rsa-private-pkcs1-as-sec1.der",
     "base": "reject-rsa2048-private-pkcs1.der",
     "mutation": "the PKCS#1 RSAPrivateKey bytes unchanged, read as SEC1",
-    "expect": "UnsupportedAlgorithm",
-    "cite": "ADR 0018 \u00a73 (RSA private, any format: UnsupportedAlgorithm); ADR 0021; RFC 8017 App. A.1.2"
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a73 (SEC1 is an ECPrivateKey); ADR 0067 \u00a72 (wrong structure for the format: InvalidKey); RFC 8017 App. A.1.2"
   },
   {
     "id": "P01",
@@ -559,15 +559,15 @@
     "file": "P17-label-private-key-body-rsa-pkcs1.pem",
     "base": "reject-rsa2048-private-pkcs1.der",
     "mutation": "PRIVATE KEY label around a PKCS#1 RSAPrivateKey body",
-    "expect": "UnsupportedAlgorithm",
-    "cite": "ADR 0018 \u00a73 (RSA private, any format); ADR 0021; RFC 7468 \u00a710 names PKCS#8, RFC 8017 App. A.1.2"
+    "expect": "InvalidKey",
+    "cite": "RFC 7468 \u00a710 names PKCS#8; ADR 0067 \u00a72 (wrong structure for the label: InvalidKey); RFC 8017 App. A.1.2"
   },
   {
     "id": "P18",
     "file": "P18-label-ec-private-key-body-rsa-pkcs1.pem",
     "base": "reject-rsa2048-private-pkcs1.der",
     "mutation": "EC PRIVATE KEY label around a PKCS#1 RSAPrivateKey body",
-    "expect": "UnsupportedAlgorithm",
-    "cite": "ADR 0018 \u00a73 (RSA private, any format); ADR 0021; RFC 5915 \u00a74 names SEC1, RFC 8017 App. A.1.2"
+    "expect": "InvalidKey",
+    "cite": "RFC 5915 \u00a74 names SEC1; ADR 0067 \u00a72 (wrong structure for the label: InvalidKey); RFC 8017 App. A.1.2"
   }
 ]

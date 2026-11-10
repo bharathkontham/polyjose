@@ -1,6 +1,6 @@
 {
   "source": "RFC 7520 §4.1.3, Figure 14",
-  "description": "RS256 general JWS JSON Serialization of the RFC 7520 §4 payload verifies with the §3.3 RSA public key (Figure 3, the public half of §3.4's Figure 4); verify-only: RSA signing is not supported (ADR 0021)",
+  "description": "RS256 general JWS JSON Serialization of the RFC 7520 §4 payload verifies with the §3.3 RSA public key (Figure 3, the public half of §3.4's Figure 4); its signing side is 4-1-rs256-general-sign.json (ADR 0067)",
   "operation": "jws.verify",
   "input": {
     "jws": {

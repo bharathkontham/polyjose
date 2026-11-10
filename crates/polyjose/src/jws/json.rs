@@ -117,8 +117,8 @@ pub(crate) fn sign_flattened_with(
 ///   missing, `crit` is malformed or not in the protected header, `b64` is
 ///   not in the protected header or not listed in `crit`, or the signers
 ///   disagree on `b64` (RFC 7515 §4.1.11, §5.2 step 4; RFC 7797 §3, §6).
-/// - [`Error::UnknownCritical`], [`Error::UnsupportedAlgorithm`] (also for
-///   RS*/PS*, ADR 0021), [`Error::AlgorithmNotAllowed`] (`none`),
+/// - [`Error::UnknownCritical`], [`Error::UnsupportedAlgorithm`],
+///   [`Error::AlgorithmNotAllowed`] (`none`),
 ///   [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`], as for
 ///   [`sign_compact`](super::sign_compact).
 /// - [`Error::InvalidFormat`]: `b64: false` with a payload that is not
@@ -1628,7 +1628,9 @@ mod tests {
             ),
             (p(r#"{"alg":"HS1"}"#), None, &k, "UnsupportedAlgorithm"),
             (p(r#"{"alg":"none"}"#), None, &k, "AlgorithmNotAllowed"),
-            (None, u(r#"{"alg":"RS256"}"#), &k, "UnsupportedAlgorithm"),
+            // RFC 8725 §3.1: an `oct` key does not serve RS256 (ADR 0067
+            // made RSA signing supported, with an RSA private key).
+            (None, u(r#"{"alg":"RS256"}"#), &k, "KeyAlgorithmMismatch"),
             (
                 p(r#"{"alg":"ES256"}"#),
                 None,

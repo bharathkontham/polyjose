@@ -1,6 +1,6 @@
 //! Independent tester matrix for the T05 structural JWK validation: every
 //! (crv, member, length) cell, the RSA 2047/2048-bit boundary, the RSA
-//! private-member precedence, and escaped member names. Written from the
+//! private-member rules (ADR 0067), and escaped member names. Written from the
 //! RFC text (RFC 7518 §6.2, §6.3, RFC 8037 §2, RFC 8812 §3.1), not from the
 //! implementation.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
@@ -216,11 +216,17 @@ fn rsa_exponent_rules() {
 }
 
 #[test]
-fn rsa_any_private_member_alone_wins_over_every_other_error() {
+fn rsa_oth_wins_over_every_other_error_and_a_lone_private_member_is_incomplete() {
+    // ADR 0067 §3: `oth` (a multi-prime key, RFC 7518 §6.3.2.7) is
+    // UnsupportedAlgorithm before anything else is looked at. Any one of
+    // the other six private members alone is an incomplete private key,
+    // InvalidKey (RFC 7518 §6.3.2: all of d, p, q, dp, dq, qi), reported
+    // after the n/e structure checks.
     let valid_n = rsa_n(256, 0x80, 1);
+    let incomplete = Error::InvalidKey("RSA private key must have d, p, q, dp, dq and qi");
     for member in ["d", "p", "q", "dp", "dq", "qi", "oth"] {
         // Alone, with garbage n/e, with a short n, with a bad `use`, with
-        // wrong-typed members: always UnsupportedAlgorithm.
+        // wrong-typed members.
         let cases = [
             format!(r#"{{"kty":"RSA","{member}":"AQAB"}}"#),
             format!(r#"{{"kty":"RSA","n":"@@","e":"@@","{member}":"AQAB"}}"#),
@@ -236,15 +242,39 @@ fn rsa_any_private_member_alone_wins_over_every_other_error() {
                 &member[1..]
             ),
         ];
-        for c in cases {
-            assert_eq!(code(&c), "UnsupportedAlgorithm", "{c}");
+        if member == "oth" {
+            for c in cases {
+                assert_eq!(code(&c), "UnsupportedAlgorithm", "{c}");
+            }
+            continue;
+        }
+        let expected = [
+            Error::InvalidKey("n is missing"),
+            Error::InvalidBase64,
+            Error::InvalidKey("RSA modulus is shorter than 2048 bits"),
+            // Valid n/e: the private-member rule decides, before the
+            // common members' types.
+            incomplete.clone(),
+            Error::InvalidKey("n is missing"),
+            // The escaped name is the same member.
+            incomplete.clone(),
+        ];
+        for (c, want) in cases.iter().zip(expected) {
+            assert_eq!(import(c).err(), Some(want), "{c}");
         }
     }
     // Without a private member the same garbage is a plain InvalidKey.
     assert_eq!(code(r#"{"kty":"RSA","n":"AQAB","e":"AQAB"}"#), "InvalidKey");
-    // RFC 7517 Appendix A.2's real RSA private key.
+    // RFC 7517 Appendix A.2's real RSA private key, first with `d` only
+    // (incomplete), then with all six members (imports, ADR 0067).
     let a2 = r#"{"kty":"RSA","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","e":"AQAB","d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q"}"#;
-    assert_eq!(code(a2), "UnsupportedAlgorithm");
+    assert_eq!(import(a2).err(), Some(incomplete));
+    let full = a2.replace(r#""}"#, r#"","p":"83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs","q":"3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk","dp":"G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0","dq":"s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk","qi":"GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU"}"#);
+    assert_eq!(code(&full), "OK");
+    assert!(!import(&full).unwrap().is_public());
+    // With `oth` added, the complete key is unsupported (ADR 0067 §3).
+    let multi = full.replace(r#","qi":"#, r#","oth":[],"qi":"#);
+    assert_eq!(code(&multi), "UnsupportedAlgorithm");
 }
 
 #[test]

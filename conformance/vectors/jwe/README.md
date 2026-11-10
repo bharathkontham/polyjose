@@ -13,7 +13,7 @@ This is the index of the JWE vectors (RFC 7516, RFC 7518 §4–§5, RFC 7520 §5
 | `compact/` | 12 (4 decrypt, 8 encrypt) | RFC 7516 App. A.3; RFC 7520 §5.6, §5.8; `polyjose` (round trips, AAD) | 3 `fixed-rng` | T09, historical |
 | `negative-structure/` | 48 (39 decrypt, 9 encrypt) | `polyjose` (the plan.md error contract, one rule per file); RFC 7516 App. A.1, A.2 and RFC 7520 §5.1, §5.2 (RSA-OAEP and RSA1_5 refused) | 1 `fixed-rng` | T09, historical |
 | `gcmkw/` | 29 (22 decrypt, 7 encrypt) | RFC 7520 §5.7; RFC 7518 §4.7.1 (iv and tag in the per-recipient header); `polyjose`; the Node/OpenSSL oracle | 2 `fixed-rng` | `t10-gcmkw.mjs` (24), `t18-cross-family.mjs` (5) |
-| `rsa-oaep-256/` | 15 (3 decrypt, 12 encrypt) | the Node/OpenSSL oracle (`../../tools/rsa-oaep-oracle.mjs`); `polyjose` | 6 `fixed-rng` | `t11-rsa-oaep-256.mjs` (6); the other 9, historical |
+| `rsa-oaep-256/` | 21 (9 decrypt, 12 encrypt) | the Node/OpenSSL oracle (`../../tools/rsa-oaep-oracle.mjs`); RFC 7518 §4.3 and ADR 0067 (decryption with the test-only private keys of the oracle's JWEs); `polyjose` | 6 `fixed-rng` | `t11-rsa-oaep-256.mjs` (6); the other 15, historical (the ADR 0067 decrypt vectors reuse the oracle's JWEs and plaintexts and the `keys/` JWKs) |
 | `pbes2/` | 27 (16 decrypt, 11 encrypt) | RFC 7520 §5.3; RFC 7517 App. C; RFC 7518 §4.8.1, §4.8.1.1, §4.8.1.2, §8.8; RFC 7516 §11.5; ADR 0023; ADR 0050 §2 (per-token budget, encrypt limits); `polyjose` | 2 `fixed-rng` | `t12-pbes2.py` (24), `f07-pbes2-budget.mjs` (3) |
 | `ecdh-es/` | 39 (23 decrypt, 16 encrypt) | RFC 7520 §5.4, §5.5; `polyjose` (RFC 7518 App. C, X25519, P-521 known answers; `epk` negatives on P-256 and X25519) | 8 `fixed-rng` | `t13-ecdh-es.js` |
 | `json/` | 30 (19 decrypt, 11 encrypt) | RFC 7516 App. A.4, A.5; RFC 7520 §5.6, §5.7 (erratum 4802), §5.8, §5.10, §5.11, §5.12; `polyjose` | 4 `fixed-rng` | `t14-json.py` (28), `t18-cross-family.mjs` (2) |
@@ -23,7 +23,7 @@ This is the index of the JWE vectors (RFC 7516, RFC 7518 §4–§5, RFC 7520 §5
 | `negative-crypto/` | 38 decrypt | RFC 7520 §5.3–§5.7, §5.13; `polyjose` (tokens built by the Node/OpenSSL oracle) | none | `t18-cross-family.mjs` |
 | `negative-cross-mode/` | 20 decrypt (11 InvalidHeader, 1 DecryptionFailed, 8 positive controls) | ADR 0050 §1 (security audit B1; tokens built by the Node/OpenSSL oracle, plus the audit's forged token verbatim) | none | `f06-cross-mode.mjs` |
 
-That is 316 files: 237 `jwe.decrypt`, 79 `jwe.encrypt`; 27 need `fixed-rng` and 13 need `deflate`.
+That is 328 files: 246 `jwe.decrypt`, 82 `jwe.encrypt`; 27 need `fixed-rng` and 13 need `deflate`.
 
 ## `rfc7520-multi/`: RFC 7520 §5.13
 
@@ -65,7 +65,8 @@ Each case of the list is either here or in the directory named, and is not repea
 | `p2c` above the bound (10,001) | `pbes2/p2c-bound-plus-one.json`; also `pbes2/p2c-ceiling-plus-one.json`, `p2c-2pow32-minus-1.json`, `bound-below-count.json` |
 | PBES2 budget per token, summed over candidates (ADR 0050 §2) | `pbes2/budget-16-recipients-over-default.json`, `budget-16-recipients-raised.json`, `budget-16-recipients-one-short.json`; encrypt limits: `encrypt-p2c-ceiling-plus-one.json`, `encrypt-p2s-len-257.json`, `roundtrip-pbes2-hs256-a128kw-p2s-len-256.json` |
 | Missing and extra recipients | here: `rfc7520-5-13-recipient-for-key-removed`, `rfc7520-5-13-encrypted-key-removed`, `rfc7520-5-13-extra-forged-recipient-first`; `negative-json/recipients-empty.json`, `over-max-recipients.json`, `flattened-with-recipients.json`, `json/rfc7516-a4-general-failing-candidate-passed-over-decrypt.json` |
-| RSA-OAEP, RSA-OAEP-256 and RSA1_5 on decrypt | RSA-OAEP: `negative-structure/rfc7516-a1-rsa-oaep-unsupported.json`, `rfc7520-5-2-rsa-oaep-unsupported.json`, `rsa-oaep-256/decrypt-rsa-oaep-sha1-unsupported.json`; RSA-OAEP-256: `negative-structure/rsa-oaep-256-decrypt-unsupported.json`, `rsa-oaep-256/decrypt-own-output-unsupported.json`, `decrypt-rsa-private-jwk-unsupported.json`; RSA1_5: `negative-structure/rfc7516-a2-rsa1-5-unsupported.json`, `rfc7520-5-1-rsa1-5-unsupported.json`, `rfc7520-multi/rfc7520-5-13-rsa-key-only-unsupported.json` |
+| RSA-OAEP-256 decryption (ADR 0067) | `rsa-oaep-256/decrypt-{2048,3072,4096}-{a128gcm,a256cbc-hs512}.json` with the private keys; one flipped encrypted-key bit is `DecryptionFailed` (`decrypt-2048-a128gcm-tampered-encrypted-key.json`, RFC 7516 §11.5); a public key is `KeyAlgorithmMismatch` (`decrypt-public-key-mismatch.json`, `negative-structure/rsa-oaep-256-decrypt-public-key-mismatch.json`); encrypting to a private JWK uses its public part (`encrypt-rsa-private-jwk-round-trip.json`) |
+| RSA-OAEP and RSA1_5 on decrypt | RSA-OAEP: `negative-structure/rfc7516-a1-rsa-oaep-unsupported.json`, `rfc7520-5-2-rsa-oaep-unsupported.json`, `rsa-oaep-256/decrypt-rsa-oaep-sha1-unsupported.json`, `negative-json/no-candidate-unsupported-ranks-second.json`; RSA1_5: `negative-structure/rfc7516-a2-rsa1-5-unsupported.json`, `rfc7520-5-1-rsa1-5-unsupported.json`, `rfc7520-multi/rfc7520-5-13-rsa-key-only-unsupported.json` |
 | RSA-OAEP on encrypt | `rsa-oaep-256/encrypt-rsa-oaep-sha1-unsupported.json`; RSA1_5: `negative-structure/encrypt-rsa1-5-unsupported.json` |
 
 ## Documented omissions
@@ -84,6 +85,6 @@ Other outputs without an exact encrypt vector, for the reasons given:
 
 - **RFC 7520 §5.9** (`zip`): DEFLATE output is not unique (erratum 7680), so `zip/roundtrip-a128kw-a128gcm-def.json` checks a round trip instead.
 - **`compress` without `deflate`**: encrypting with `compress` in a build without the `deflate` feature is `UnsupportedAlgorithm` (ADR 0030 §4, ADR 0017 §5). A vector cannot express it: `features` only lists what a build needs, never a feature it must lack, and an `input/compress` vector must list `"deflate"`. `crates/polyjose/tests/jwe_zip.rs` (`without_deflate`) covers it instead, in every serialization; the `deflate` round trip stays in `zip/`.
-- **RFC 7520 §5.1, §5.2 and RFC 7516 App. A.1, A.2, A.4** (RSA1_5, RSA-OAEP): not implemented (ADRs 0021, 0022); the decrypt vectors expect `UnsupportedAlgorithm` (A.4 decrypts through its A128KW recipient). **RFC 7520 §5.13** is reproduced without its RSA1_5 recipient.
+- **RFC 7520 §5.1, §5.2 and RFC 7516 App. A.1, A.2, A.4** (RSA1_5, RSA-OAEP): not implemented (ADR 0022, ADR 0067 §3); the decrypt vectors expect `UnsupportedAlgorithm` (A.4 decrypts through its A128KW recipient). **RFC 7520 §5.13** is reproduced without its RSA1_5 recipient.
 
 Not yet covered by a vector: the JSON forms of RFC 7520 §5.3, §5.4 and §5.5 (their compact forms are in `pbes2/` and `ecdh-es/`), and §5.7 in the general form (flattened and compact are covered).

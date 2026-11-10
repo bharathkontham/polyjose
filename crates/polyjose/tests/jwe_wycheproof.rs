@@ -11,14 +11,15 @@
 //! - **accepted:** it decrypts to the expected plaintext (`result: valid`);
 //! - **rejected:** it fails with an error other than `UnsupportedAlgorithm`
 //!   (`result: invalid`);
-//! - **unsupported:** polyjose does not implement its algorithm. Every case
-//!   of an RSA group (`jwe_rsa1_5`, `jwe_rsa_oaep`, `jwe_rsa_oaep_256`,
-//!   `jwe_rsa_oaep_modified`, and the RSA keys of `rfc_7520`) is
-//!   unsupported twice over: the RSA private JWK does not import (no RSA
-//!   private-key code, ADR 0021), and decrypting with the group's public
-//!   JWK is `UnsupportedAlgorithm` too, because no RSA `alg` decrypts
-//!   (RSA-OAEP-256 is encrypt-only, ADR 0021; RSA-OAEP is not implemented,
-//!   ADR 0022; RSA1_5 is not implemented, ADR 0021).
+//! - **unsupported:** polyjose does not implement its algorithm.
+//!
+//! The RSA groups (`jwe_rsa1_5`, `jwe_rsa_oaep`, `jwe_rsa_oaep_256`,
+//! `jwe_rsa_oaep_modified`, and the RSA keys of `rfc_7520`) follow ADR 0067:
+//! a private JWK whose `alg` is RSA-OAEP-256 imports (RFC 7518 §6.3.2) and
+//! decrypts its RSA-OAEP-256 cases like any other key, and its cases whose
+//! header says RSA1_5 are unsupported; a private JWK whose `alg` is
+//! RSA-OAEP (SHA-1, ADR 0022) or RSA1_5 (ADR 0021) does not import, so its
+//! cases are unsupported. The group's public JWK never decrypts.
 //!
 //! A `valid` case that is not accepted is a deviation from upstream's
 //! `result`. Each one is listed in [`DEVIATIONS`] with its RFC or ADR
@@ -55,17 +56,11 @@ enum Outcome {
 const DEVIATIONS: &[(&[u32], &str)] = &[
     (
         &[82, 83, 84, 85, 86, 87, 129],
-        "RSA-OAEP (SHA-1) is not implemented (ADR 0022); RSA decryption is not \
-         shipped (ADR 0021, RUSTSEC-2023-0071)",
-    ),
-    (
-        &[88, 89, 90, 91, 92, 93, 121],
-        "RSA-OAEP-256 is encrypt-only: RSA private-key operations are not \
-         shipped (ADR 0021, RUSTSEC-2023-0071)",
+        "RSA-OAEP (SHA-1) is not implemented (ADR 0022, kept by ADR 0067)",
     ),
     (
         &[100, 101, 102, 103, 104, 105, 112, 128],
-        "RSA1_5 is not implemented (ADR 0021; RFC 8725 §3.2)",
+        "RSA1_5 is not implemented (ADR 0021, kept by ADR 0067; RFC 8725 §3.2)",
     ),
     #[cfg(not(feature = "deflate"))]
     (
@@ -85,6 +80,20 @@ fn policy() -> DecryptPolicy {
 fn kty(jwk_text: &str) -> String {
     let value: serde_json::Value = serde_json::from_str(jwk_text).unwrap_or_else(|e| panic!("{e}"));
     value["kty"].as_str().unwrap_or_default().to_owned()
+}
+
+/// The JWK `alg` of a group's key (RFC 7517 §4.4).
+fn key_alg(jwk_text: &str) -> String {
+    let value: serde_json::Value = serde_json::from_str(jwk_text).unwrap_or_else(|e| panic!("{e}"));
+    value["alg"].as_str().unwrap_or_default().to_owned()
+}
+
+/// The protected header's `alg` of a compact JWE (RFC 7516 §7.1).
+fn header_alg(jwe: &str) -> String {
+    let protected = jwe.split('.').next().unwrap_or_default();
+    let octets = polyjose::util::b64url_decode(protected).unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_slice(&octets).unwrap_or_default();
+    value["alg"].as_str().unwrap_or_default().to_owned()
 }
 
 /// Whether a group's key is an RSA key (`kty: RSA`, RFC 7518 §6.3).
@@ -110,31 +119,52 @@ fn run(group: &Group, test: &Test, policy: &DecryptPolicy) -> Outcome {
     outcome(decrypt_compact(&test.jwe, &key, policy).map(|d| d.plaintext().to_vec()))
 }
 
-/// An RSA group: both of polyjose's possible paths must say
-/// `UnsupportedAlgorithm`, and then the case is unsupported.
+/// An RSA group (ADR 0067): the private JWK imports exactly when its `alg`
+/// is RSA-OAEP-256, and then decides the case; otherwise the case is
+/// unsupported. The public JWK decrypts nothing either way.
 fn run_rsa(group: &Group, test: &Test, policy: &DecryptPolicy) -> Outcome {
     let tc = test.tc_id;
-    // No RSA private keys (ADR 0021): the import refuses them.
-    assert_eq!(
-        Jwk::from_json(group.private.as_bytes()).err(),
-        Some(Error::UnsupportedAlgorithm),
-        "tcId {tc}: an RSA private JWK must not import"
-    );
+    let oaep_256 = key_alg(&group.private) == "RSA-OAEP-256";
+    let header_oaep_256 = header_alg(&test.jwe) == "RSA-OAEP-256";
     let public = group
         .public
         .as_deref()
         .unwrap_or_else(|| panic!("tcId {tc}: RSA group without a public key"));
-    // A public JWK whose `alg` is RSA-OAEP or RSA1_5 does not import either
-    // (ADRs 0021, 0022); an RSA-OAEP-256 one does, and cannot decrypt.
+    // A public JWK whose `alg` is RSA-OAEP or RSA1_5 does not import
+    // (ADRs 0021, 0022). An RSA-OAEP-256 one does, but is no decryption
+    // candidate (RFC 8725 §3.1, ADR 0067), unless the header's alg is
+    // unsupported, which is checked first.
     let via_public = Jwk::from_json(public.as_bytes())
         .and_then(|key| decrypt_compact(&test.jwe, &key, policy).map(|d| d.plaintext().to_vec()));
-    let got = outcome(via_public);
+    let public_expected = if oaep_256 && header_oaep_256 {
+        Outcome::Rejected("KeyAlgorithmMismatch")
+    } else {
+        Outcome::Unsupported
+    };
     assert_eq!(
-        got,
-        Outcome::Unsupported,
-        "tcId {tc}: RSA must be unsupported"
+        outcome(via_public),
+        public_expected,
+        "tcId {tc}: the public key"
     );
-    got
+    match Jwk::from_json(group.private.as_bytes()) {
+        Ok(key) => {
+            assert!(oaep_256, "tcId {tc}: only an RSA-OAEP-256 key imports");
+            assert!(!key.is_public(), "tcId {tc}: imported as a private key");
+            let got =
+                outcome(decrypt_compact(&test.jwe, &key, policy).map(|d| d.plaintext().to_vec()));
+            // ADRs 0021, 0022: an RSA1_5 header stays unsupported, even
+            // with the private key.
+            if !header_oaep_256 {
+                assert_eq!(got, Outcome::Unsupported, "tcId {tc}: RSA1_5 header");
+            }
+            got
+        }
+        Err(e) => {
+            assert!(!oaep_256, "tcId {tc}: an RSA-OAEP-256 key must import: {e}");
+            assert_eq!(e, Error::UnsupportedAlgorithm, "tcId {tc}");
+            Outcome::Unsupported
+        }
+    }
 }
 
 /// The deviation reason of `tc_id`, if it has one.
@@ -195,11 +225,12 @@ fn every_case_matches_its_result_or_a_listed_deviation() {
         .filter(|(_, o)| *o == Outcome::Unsupported)
         .count();
     // 65 valid = 43 non-RSA (42 without `deflate`: tcId 135 is zip) + 22
-    // RSA; 74 invalid = 52 non-RSA + 22 RSA.
+    // RSA, of which the 7 RSA-OAEP-256 ones decrypt (ADR 0067); 74 invalid
+    // = 52 non-RSA + 22 RSA, every RSA one unsupported (an RSA1_5 header).
     let expected = if cfg!(feature = "deflate") {
-        (43, 52, 44)
+        (50, 52, 37)
     } else {
-        (42, 52, 45)
+        (49, 52, 38)
     };
     assert_eq!((accepted, rejected, unsupported), expected);
     // Every deviation is a valid case that was not accepted: none is stale.
@@ -208,7 +239,7 @@ fn every_case_matches_its_result_or_a_listed_deviation() {
 }
 
 #[test]
-fn every_rsa_group_case_is_unsupported() {
+fn rsa_oaep_256_cases_decrypt_and_every_other_rsa_case_is_unsupported() {
     let suite = jwe_wycheproof::load();
     let policy = policy();
     let rsa: Vec<_> = suite.tests().filter(|(g, _)| is_rsa(g)).collect();
@@ -220,9 +251,25 @@ fn every_rsa_group_case_is_unsupported() {
             .count(),
         42
     );
+    // ADR 0067: exactly the RSA-OAEP-256 cases (tcIds 88-93 and 121, all
+    // valid) decrypt, to upstream's plaintext; RSA-OAEP and RSA1_5 stay
+    // unsupported (ADRs 0021, 0022).
+    let mut decrypted = Vec::new();
     for (group, test) in rsa {
-        assert_eq!(run(group, test, &policy), Outcome::Unsupported);
+        let got = run(group, test, &policy);
+        if header_alg(&test.jwe) == "RSA-OAEP-256" {
+            assert_eq!(
+                got,
+                Outcome::Plaintext(test.pt.clone().unwrap_or_default()),
+                "tcId {}",
+                test.tc_id
+            );
+            decrypted.push(test.tc_id);
+        } else {
+            assert_eq!(got, Outcome::Unsupported, "tcId {}", test.tc_id);
+        }
     }
+    assert_eq!(decrypted, [88, 89, 90, 91, 92, 93, 121]);
 }
 
 #[test]

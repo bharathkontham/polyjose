@@ -298,8 +298,9 @@ pub(crate) fn to_spki(key: &EcKey) -> Result<Zeroizing<Vec<u8>>> {
 /// # Errors
 ///
 /// - [`Error::UnsupportedAlgorithm`] for a namedCurve outside P-256,
-///   P-384, P-521 and secp256k1, or a specifiedCurve (RFC 5480 §2.1.1),
-///   and for a PKCS#1 RSAPrivateKey given as SEC1 (ADR 0018 §3, ADR 0021).
+///   P-384, P-521 and secp256k1, or a specifiedCurve (RFC 5480 §2.1.1).
+///   A PKCS#1 RSAPrivateKey given as SEC1 is malformed SEC1, `InvalidKey`
+///   (ADR 0067).
 /// - [`Error::InvalidKey`] for malformed DER, a missing `[0]`, a wrong
 ///   version or length, d out of range, an invalid point, or a point that
 ///   is not d·G.

@@ -87,9 +87,8 @@ const A3_SIGN: &str =
     include_str!("../../../conformance/vectors/jws-rfc7515/a3-es256-compact-sign-roundtrip.json");
 const F_DETACHED_COMPACT_SIGN: &str =
     include_str!("../../../conformance/vectors/jws-rfc7515/f-detached-compact-sign.json");
-const A2_RS256_SIGN: &str = include_str!(
-    "../../../conformance/vectors/jws-rfc7515/a2-rs256-sign-private-key-unsupported.json"
-);
+const A2_RS256_SIGN: &str =
+    include_str!("../../../conformance/vectors/jws-rfc7515/a2-rs256-compact-sign.json");
 const A2_RS256_VERIFY: &str =
     include_str!("../../../conformance/vectors/jws-rfc7515/a2-rs256-compact-verify.json");
 

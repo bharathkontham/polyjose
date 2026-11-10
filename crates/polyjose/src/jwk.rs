@@ -35,8 +35,8 @@
 //! # JWK Sets
 //!
 //! [`JwkSet`](crate::jwk::JwkSet) reads a JWK Set (RFC 7517 §5), keeping
-//! the supported, valid keys in order, skipping the rest, and failing on
-//! an RSA private key (ADR 0021).
+//! the supported, valid keys in order and skipping the rest; private keys,
+//! RSA ones included, are kept as imported (ADR 0067 §4).
 //! [`JwkSet::verification_candidates`](crate::jwk::JwkSet::verification_candidates)
 //! picks the keys that may verify a JWS by family, `alg`, `use`, `key_ops`
 //! and `kid` (ADR 0029 §2).
@@ -80,13 +80,16 @@
 //!   u-coordinate (RFC 7748 §5), and torsion is neutralised by clamping
 //!   (ADR 0043 §2). An `X25519` `d` must derive `x`: `x` = X25519(`d`, 9)
 //!   (RFC 7748 §6.1, RFC 8037 §2; ADR 0043 §3).
-//! - **`RSA`**, public keys only (RFC 7518 §6.3.1, ADR 0021): `n` and `e`
-//!   are minimal Base64urlUInt values, non-empty with no leading zero octet
-//!   (RFC 7518 §2, §6.3.1.1); `n` is odd (RFC 8017 §3.1) and 2048 to
-//!   8192 bits (RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8); `e` is odd
-//!   with 3 ≤ e < n (RFC 8017 §3.1). A key with **any** private member
-//!   (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, RFC 7518 §6.3.2) is rejected
-//!   before anything else is read.
+//! - **`RSA`** (RFC 7518 §6.3): `n` and `e` are minimal Base64urlUInt
+//!   values, non-empty with no leading zero octet (RFC 7518 §2,
+//!   §6.3.1.1); `n` is odd (RFC 8017 §3.1) and 2048 to 8192 bits
+//!   (RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8); `e` is odd with
+//!   3 ≤ e < n (RFC 8017 §3.1). A private key (ADR 0067) has all of `d`,
+//!   `p`, `q`, `dp`, `dq` and `qi` (RFC 7518 §6.3.2), each a minimal
+//!   Base64urlUInt, and must be the key of `n` and `e` (ADR 0043):
+//!   n = p·q, d < n, d·e ≡ 1 mod (p − 1) and (q − 1), and `dp`, `dq`,
+//!   `qi` the CRT values of `d`, `p`, `q`. A key with `oth` (more than two
+//!   primes, §6.3.2.7) is rejected before anything else is read.
 //! - **`oct`** (RFC 7518 §6.4): `k` is present and not empty.
 //! - Every binary member is canonical unpadded base64url (RFC 7515 §2),
 //!   so each key has one encoding and re-serializes to the same strings.
@@ -133,8 +136,8 @@
 //! error, so the result does not depend on member order:
 //!
 //! 1. `kty`, then the `EC`/`OKP` `crv` (unsupported → `UnsupportedAlgorithm`).
-//! 2. For `RSA`, any private member (→ `UnsupportedAlgorithm`, ADR 0021),
-//!    before anything else is read.
+//! 2. For `RSA`, `oth` (→ `UnsupportedAlgorithm`, ADR 0067 §3), before
+//!    anything else is read.
 //! 3. Every structural check: the key-type members (for `EC`, the lengths
 //!    of `x`, `y` and `d` first, then the point, then the scalar, then
 //!    whether `d` derives the point; for `OKP`, the lengths, then the
@@ -151,10 +154,10 @@
 //!
 //! One rule decides between the two key codes (ADR 0018 Q3):
 //!
-//! - [`UnsupportedAlgorithm`](crate::Error::UnsupportedAlgorithm): well-formed, but not supported in
-//!   0.1.0. An unknown `kty`; an `EC` or `OKP` `crv` not listed above
-//!   (including another key type's curve); an RSA private key (ADR 0021);
-//!   an `alg` of `RSA1_5` or `RSA-OAEP` (ADRs 0021, 0022).
+//! - [`UnsupportedAlgorithm`](crate::Error::UnsupportedAlgorithm): well-formed, but not supported.
+//!   An unknown `kty`; an `EC` or `OKP` `crv` not listed above
+//!   (including another key type's curve); a multi-prime RSA key (`oth`,
+//!   ADR 0067 §3); an `alg` of `RSA1_5` or `RSA-OAEP` (ADRs 0021, 0022).
 //! - [`KeyAlgorithmMismatch`](crate::Error::KeyAlgorithmMismatch): a
 //!   well-formed key whose known `alg` its family cannot serve
 //!   (RFC 7517 §4.4, RFC 8725 §3.1).
@@ -174,7 +177,8 @@
 //!
 //! # Secrets
 //!
-//! The secret members, `oct` `k` and `EC`/`OKP` `d`, are decoded straight
+//! The secret members, `oct` `k`, `EC`/`OKP` `d` and the `RSA` private
+//! members (`d`, `p`, `q`, `dp`, `dq`, `qi`), are decoded straight
 //! into [`Zeroizing`](zeroize::Zeroizing) buffers of their exact size, so they are wiped when
 //! the key is dropped and never reallocated. `Debug` prints them as
 //! `"<redacted>"` and shows only the names of unknown members.
@@ -237,8 +241,8 @@ use x25519_consistency::{X25519_PRIVATE_MISMATCH, x25519_private_matches};
 pub enum KeyType {
     /// `oct`: a symmetric key (RFC 7518 §6.4).
     Oct,
-    /// `RSA`: an RSA public key (RFC 7518 §6.3.1). RSA private keys are not
-    /// supported in 0.1.0 (ADR 0021).
+    /// `RSA`: an RSA key, public (RFC 7518 §6.3.1) or private (§6.3.2;
+    /// ADR 0067).
     Rsa,
     /// `EC`: an elliptic curve key (RFC 7518 §6.2, RFC 8812 §3.1).
     Ec,
@@ -641,20 +645,71 @@ impl ZeroizeOnDrop for OctKey {}
 /// RSA family passes it to the `rsa` crate when it builds a key.
 pub(crate) const RSA_MODULUS_BITS: RangeInclusive<usize> = 2048..=8192;
 
-/// An RSA public key (`kty` `RSA`, RFC 7518 §6.3.1).
+/// An RSA key (`kty` `RSA`, RFC 7518 §6.3): the public members `n` and `e`
+/// (§6.3.1) and, for a private key, the private members `d`, `p`, `q`,
+/// `dp`, `dq` and `qi` (§6.3.2). The type keeps its 0.1.0 name, from when
+/// RSA keys were public only; [`RsaPublicKey::is_private`] tells the two
+/// apart, as [`EcKey::is_private`] does for EC keys (ADR 0067 §2).
 ///
-/// RSA private keys are not supported in 0.1.0: a JWK with any private
-/// member is rejected with [`Error::UnsupportedAlgorithm`] (ADR 0021).
+/// Validation of the public members is structural: `n` and `e` are minimal
+/// Base64urlUInt values (RFC 7518 §2), `n` is odd (RFC 8017 §3.1) and 2048
+/// to 8192 bits (RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8), and `e` is
+/// odd with 3 ≤ e < n (RFC 8017 §3.1).
 ///
-/// Validation is structural: `n` and `e` are minimal Base64urlUInt values
-/// (RFC 7518 §2), `n` is odd (RFC 8017 §3.1) and 2048 to 8192 bits
-/// (RFC 7518 §3.3, ADR 0007, ADR 0026 §2 step 8), and `e` is odd with
-/// 3 ≤ e < n (RFC 8017 §3.1).
+/// A private key must carry all six private members, each a minimal
+/// Base64urlUInt (RFC 7518 §6.3.2: "If the producer includes any of the
+/// other private key parameters, then all of the others MUST be present";
+/// a key with `d` alone is refused, ADR 0067 §3). It must be a two-prime
+/// key (`oth` is [`Error::UnsupportedAlgorithm`]) and consistent with its
+/// public part (ADR 0043, ADR 0067 §2): `n` = `p`·`q`, `d`·`e` ≡ 1 mod
+/// (`p` − 1) and (`q` − 1), d < n (RFC 8017 §3.2), and `dp`, `dq` and `qi`
+/// the CRT values of `d`, `p` and `q` (RFC 7518 §6.3.2.4–§6.3.2.6).
+///
+/// The private members are held in buffers that are wiped on drop, and
+/// `Debug` prints `"<redacted>"` instead of them.
 #[derive(Clone)]
 pub struct RsaPublicKey {
     n: Vec<u8>,
     e: Vec<u8>,
+    private: Option<RsaPrivateParts>,
 }
+
+/// The private members of an RSA private JWK (RFC 7518 §6.3.2), each the
+/// big-endian magnitude of a minimal Base64urlUInt, in a buffer wiped on
+/// drop. Crate-internal: the RSA files read them to build the `rsa`
+/// crate's key (ADR 0067 §6).
+#[derive(Clone)]
+pub(crate) struct RsaPrivateParts {
+    /// `d`, the private exponent (RFC 7518 §6.3.2.1).
+    pub(crate) d: Zeroizing<Vec<u8>>,
+    /// `p`, the first prime factor (RFC 7518 §6.3.2.2).
+    pub(crate) p: Zeroizing<Vec<u8>>,
+    /// `q`, the second prime factor (RFC 7518 §6.3.2.3).
+    pub(crate) q: Zeroizing<Vec<u8>>,
+    /// `dp`, d mod (p − 1) (RFC 7518 §6.3.2.4).
+    pub(crate) dp: Zeroizing<Vec<u8>>,
+    /// `dq`, d mod (q − 1) (RFC 7518 §6.3.2.5).
+    pub(crate) dq: Zeroizing<Vec<u8>>,
+    /// `qi`, q⁻¹ mod p (RFC 7518 §6.3.2.6).
+    pub(crate) qi: Zeroizing<Vec<u8>>,
+}
+
+impl RsaPrivateParts {
+    /// The members with their JWK names, in RFC 7518 §6.3.2 order.
+    pub(crate) fn members(&self) -> [(&'static str, &[u8]); 6] {
+        [
+            ("d", &self.d),
+            ("p", &self.p),
+            ("q", &self.q),
+            ("dp", &self.dp),
+            ("dq", &self.dq),
+            ("qi", &self.qi),
+        ]
+    }
+}
+
+/// Every member is a [`Zeroizing`] buffer.
+impl ZeroizeOnDrop for RsaPrivateParts {}
 
 impl RsaPublicKey {
     /// `n`: the modulus, big-endian, without leading zero octets
@@ -673,16 +728,44 @@ impl RsaPublicKey {
     pub fn modulus_bits(&self) -> usize {
         bit_len(&self.n)
     }
+
+    /// Whether the private members are present (RFC 7518 §6.3.2): an RSA
+    /// private key, which signs (RS*/PS*) and decrypts (RSA-OAEP-256).
+    pub fn is_private(&self) -> bool {
+        self.private.is_some()
+    }
+
+    /// The private members, if present (RFC 7518 §6.3.2).
+    pub(crate) fn private(&self) -> Option<&RsaPrivateParts> {
+        self.private.as_ref()
+    }
+
+    /// The public part: the same `n` and `e` without the private members.
+    fn to_public(&self) -> RsaPublicKey {
+        RsaPublicKey {
+            n: self.n.clone(),
+            e: self.e.clone(),
+            private: None,
+        }
+    }
 }
 
 impl fmt::Debug for RsaPublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RsaPublicKey")
-            .field("n", &b64url_encode(&self.n))
-            .field("e", &b64url_encode(&self.e))
-            .finish()
+        let mut s = f.debug_struct("RsaPublicKey");
+        s.field("n", &b64url_encode(&self.n))
+            .field("e", &b64url_encode(&self.e));
+        if let Some(private) = &self.private {
+            for (name, _) in private.members() {
+                s.field(name, &REDACTED);
+            }
+        }
+        s.finish()
     }
 }
+
+/// The only secrets, the private members, are [`Zeroizing`] buffers.
+impl ZeroizeOnDrop for RsaPublicKey {}
 
 /// An elliptic curve key (`kty` `EC`, RFC 7518 §6.2, RFC 8812 §3.1): a
 /// public point (`x`, `y`) and, for a private key, the scalar `d`.
@@ -828,7 +911,7 @@ impl ZeroizeOnDrop for OkpKey {}
 pub enum KeyMaterial {
     /// `kty` `oct` (RFC 7518 §6.4).
     Oct(OctKey),
-    /// `kty` `RSA`, public keys only (RFC 7518 §6.3.1, ADR 0021).
+    /// `kty` `RSA` (RFC 7518 §6.3), public or private (ADR 0067).
     Rsa(RsaPublicKey),
     /// `kty` `EC` (RFC 7518 §6.2, RFC 8812 §3.1).
     Ec(EcKey),
@@ -910,7 +993,7 @@ impl KeyMaterial {
     ///
     /// | `alg` | key |
     /// |---|---|
-    /// | `RSA-OAEP-256` (RFC 7518 §4.3; encryption only, ADR 0021) | `RSA` |
+    /// | `RSA-OAEP-256` (RFC 7518 §4.3; ADR 0067) | `RSA` |
     /// | `A128KW`, `A192KW`, `A256KW` (RFC 7518 §4.4) | `oct` |
     /// | `dir` (RFC 7518 §4.5) | `oct` |
     /// | `A128GCMKW`, `A192GCMKW`, `A256GCMKW` (RFC 7518 §4.7) | `oct` |
@@ -1192,6 +1275,11 @@ impl Jwk {
             KeyMaterial::Rsa(key) => {
                 o.push(member("n", b64url_encode(&key.n)));
                 o.push(member("e", b64url_encode(&key.e)));
+                if let Some(private) = &key.private {
+                    for (name, value) in private.members() {
+                        o.push(member(name, b64url_encode(value)));
+                    }
+                }
             }
             KeyMaterial::Ec(key) => {
                 o.push(member("crv", key.crv.as_str()));
@@ -1264,7 +1352,7 @@ impl Jwk {
     pub fn to_public(&self) -> Option<Jwk> {
         let material = match &self.material {
             KeyMaterial::Oct(_) => return None,
-            KeyMaterial::Rsa(key) => KeyMaterial::Rsa(key.clone()),
+            KeyMaterial::Rsa(key) => KeyMaterial::Rsa(key.to_public()),
             KeyMaterial::Ec(key) => KeyMaterial::Ec(key.to_public()),
             KeyMaterial::Okp(key) => KeyMaterial::Okp(key.to_public()),
         };
@@ -1282,12 +1370,14 @@ impl Jwk {
         })
     }
 
-    /// Whether the key is a public key: `RSA`, or `EC`/`OKP` without `d`.
-    /// An `oct` key is secret by nature (RFC 7518 §6.4) and never public.
+    /// Whether the key is a public key: `RSA`, `EC` or `OKP` without its
+    /// private members (`d`, and for `RSA` also `p`, `q`, `dp`, `dq`,
+    /// `qi`). An `oct` key is secret by nature (RFC 7518 §6.4) and never
+    /// public.
     pub fn is_public(&self) -> bool {
         match &self.material {
             KeyMaterial::Oct(_) => false,
-            KeyMaterial::Rsa(_) => true,
+            KeyMaterial::Rsa(key) => !key.is_private(),
             KeyMaterial::Ec(key) => !key.is_private(),
             KeyMaterial::Okp(key) => !key.is_private(),
         }
@@ -1493,7 +1583,7 @@ fn member(name: &str, value: impl Into<Value>) -> (Zeroizing<String>, Value) {
 fn type_members(kty: KeyType) -> &'static [&'static str] {
     match kty {
         KeyType::Oct => &["k"],
-        KeyType::Rsa => &["n", "e"],
+        KeyType::Rsa => &["n", "e", "d", "p", "q", "dp", "dq", "qi"],
         KeyType::Ec => &["crv", "x", "y", "d"],
         KeyType::Okp => &["crv", "x", "d"],
     }
@@ -1600,29 +1690,17 @@ fn key_kind(object: &Object) -> Result<KeyKind> {
 /// Whether `object` is a key whose `kty`, or `EC`/`OKP` `crv`, is a string
 /// polyjose does not support: the members RFC 7517 §5 says a JWK Set
 /// reader SHOULD ignore, and ADR 0029 §3 skips. Malformed members are not
-/// included (the set skips them separately), nor are RSA private keys
-/// (they fail the set, ADR 0021).
+/// included (the set skips them separately).
 pub(crate) fn is_unsupported_key_kind(object: &Object) -> bool {
     matches!(key_kind(object), Err(Error::UnsupportedAlgorithm))
 }
 
-/// The RSA private key members (RFC 7518 §6.3.2).
-const RSA_PRIVATE_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth"];
+/// The private members of a two-prime RSA key (RFC 7518 §6.3.2.1–§6.3.2.6),
+/// in RFC order. `oth` (§6.3.2.7, more than two primes) is not supported.
+const RSA_PRIVATE_MEMBERS: [&str; 6] = ["d", "p", "q", "dp", "dq", "qi"];
 
-/// Whether `object` has any RSA private key member (RFC 7518 §6.3.2),
-/// whatever its value.
-fn has_rsa_private_member(object: &Object) -> bool {
-    RSA_PRIVATE_MEMBERS.iter().any(|name| object.contains(name))
-}
-
-/// Whether `object` is an RSA private JWK: `kty` `RSA` with any RFC 7518
-/// §6.3.2 member, whatever else it holds. [`Jwk::from_object`] rejects it
-/// with [`Error::UnsupportedAlgorithm`] before reading anything else
-/// (ADR 0021), and a JWK Set fails as a whole on it (ADR 0029 §3). This is
-/// the one definition both use.
-pub(crate) fn is_rsa_private_key(object: &Object) -> bool {
-    matches!(key_kind(object), Ok(KeyKind::Rsa)) && has_rsa_private_member(object)
-}
+/// Detail for an RSA private key that lacks some private members.
+const RSA_PRIVATE_INCOMPLETE: &str = "RSA private key must have d, p, q, dp, dq and qi";
 
 /// Decodes the Base64urlUInt member `name` (RFC 7518 §2): canonical
 /// base64url of the big-endian octets, non-empty, and "the minimum number
@@ -1643,6 +1721,27 @@ fn required_uint(
     }
 }
 
+/// [`required_uint`] for a secret member: decoded straight into a
+/// [`Zeroizing`] buffer (RFC 7518 §6.3.2: each private member is a
+/// Base64urlUInt). Only the first octet is looked at for minimality, and
+/// the detail names the rule, never the value (ADR 0007).
+fn required_secret_uint(
+    object: &Object,
+    name: &str,
+    not_minimal: &'static str,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let octets = required_secret(
+        object,
+        name,
+        RSA_PRIVATE_INCOMPLETE,
+        "RSA private key members must be strings",
+    )?;
+    match octets.as_slice() {
+        [] | [0, _, ..] => Err(Error::InvalidKey(not_minimal)),
+        _ => Ok(octets),
+    }
+}
+
 /// The bit length of the big-endian unsigned integer `octets`: 8 bits per
 /// octet minus the leading zeros of the first (RFC 8017 §4.2 OS2IP). Zero
 /// for no octets. Saturates rather than overflows, so an input too long to
@@ -1655,19 +1754,24 @@ fn bit_len(octets: &[u8]) -> usize {
         .saturating_sub(top.leading_zeros() as usize)
 }
 
-/// `kty` `RSA`, public keys only (RFC 7518 §6.3.1, ADR 0021).
+/// `kty` `RSA`: a public key (RFC 7518 §6.3.1) or a two-prime private key
+/// (RFC 7518 §6.3.2, ADR 0067).
 ///
 /// # Errors
 ///
-/// [`Error::UnsupportedAlgorithm`] for any RSA private member (ADR 0021);
+/// [`Error::UnsupportedAlgorithm`] for `oth`, a key with more than two
+/// primes (RFC 7518 §6.3.2.7; ADR 0067 §3);
 /// [`Error::InvalidKey`], with a static detail and no input, for a modulus
 /// outside [`RSA_MODULUS_BITS`] (RFC 7518 §3.3, ADR 0007, ADR 0026 §2
-/// step 8) and every other check below.
+/// step 8), a private key without all of `d`, `p`, `q`, `dp`, `dq` and
+/// `qi`, a private key inconsistent with `n` and `e` (ADR 0043), and every
+/// other check below; [`Error::InvalidBase64`] for a member that is not
+/// canonical base64url.
 fn parse_rsa(object: &Object) -> Result<RsaPublicKey> {
-    // ADR 0021: an RSA private JWK is not supported in 0.1.0. Any private
-    // member (RFC 7518 §6.3.2), whatever its value, rejects the key before
-    // anything else is read, so the outcome does not depend on the rest.
-    if has_rsa_private_member(object) {
+    // ADR 0067 §3: multi-prime keys (RFC 7518 §6.3.2.7 `oth`) are not
+    // supported. Checked before anything else is read, so the outcome
+    // does not depend on the rest.
+    if object.contains("oth") {
         return Err(Error::UnsupportedAlgorithm);
     }
     let n = required_uint(
@@ -1714,7 +1818,40 @@ fn parse_rsa(object: &Object) -> Result<RsaPublicKey> {
             "RSA exponent must be less than the modulus",
         ));
     }
-    Ok(RsaPublicKey { n, e })
+    let private = parse_rsa_private(object)?;
+    if let Some(private) = &private {
+        // ADR 0043, ADR 0067 §2: last, the private members must be the
+        // key of `n` and `e`, checked by the `rsa` crate's arithmetic.
+        crate::keys::rsa::check_private(&n, &e, private)?;
+    }
+    Ok(RsaPublicKey { n, e, private })
+}
+
+/// The private members of an RSA JWK (RFC 7518 §6.3.2), or `None` for a
+/// public key (no member present). RFC 7518 §6.3.2: "d" is REQUIRED for a
+/// private key, and the others "SHOULD be included by producers"; "If the
+/// producer includes any of the other private key parameters, then all of
+/// the others MUST be present". polyjose requires all six (ADR 0067 §3), so
+/// any one without the rest, `d` alone included, is [`Error::InvalidKey`].
+fn parse_rsa_private(object: &Object) -> Result<Option<RsaPrivateParts>> {
+    let present = RSA_PRIVATE_MEMBERS
+        .iter()
+        .filter(|name| object.contains(name))
+        .count();
+    if present == 0 {
+        return Ok(None);
+    }
+    if present != RSA_PRIVATE_MEMBERS.len() {
+        return Err(Error::InvalidKey(RSA_PRIVATE_INCOMPLETE));
+    }
+    Ok(Some(RsaPrivateParts {
+        d: required_secret_uint(object, "d", "d is not a minimal Base64urlUInt")?,
+        p: required_secret_uint(object, "p", "p is not a minimal Base64urlUInt")?,
+        q: required_secret_uint(object, "q", "q is not a minimal Base64urlUInt")?,
+        dp: required_secret_uint(object, "dp", "dp is not a minimal Base64urlUInt")?,
+        dq: required_secret_uint(object, "dq", "dq is not a minimal Base64urlUInt")?,
+        qi: required_secret_uint(object, "qi", "qi is not a minimal Base64urlUInt")?,
+    }))
 }
 
 /// `kty` `EC` (RFC 7518 §6.2, RFC 8812 §3.1).
@@ -2387,33 +2524,211 @@ mod tests {
         }
     }
 
-    /// ADR 0021: the RSA-private predicate a JWK Set fails on is exactly
-    /// the import rejection that precedes every other check, whatever the
-    /// rest of the key (including a rejected `alg`) says.
+    /// ADR 0067 §3: `oth` (RFC 7518 §6.3.2.7) is refused before anything
+    /// else is read, whatever the rest of the key says; a private key that
+    /// lacks some of `d`, `p`, `q`, `dp`, `dq`, `qi` is malformed
+    /// (RFC 7518 §6.3.2: "all of the others MUST be present").
+    /// The RSA private JWK of RFC 7515 Appendix A.2.1, as an object.
+    fn rsa_private_object() -> Object {
+        object(include_str!(
+            "../tests/data/keys/rfc/rfc7515-a2-rsa-private.jwk.json"
+        ))
+    }
+
+    /// The RFC 7515 A.2 private JWK with member `name` set to `value`
+    /// (JSON text).
+    fn rsa_private_with(name: &str, value: &str) -> String {
+        let mut o = rsa_private_object();
+        o.insert(name, json::parse(value.as_bytes()).unwrap());
+        o.to_json()
+    }
+
     #[test]
-    fn rsa_private_key_detection_matches_import() {
-        let private = [
-            r#"{"kty":"RSA","d":"AQAB"}"#.to_owned(),
-            r#"{"kty":"RSA","oth":null,"alg":"RSA1_5"}"#.to_owned(),
-            format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","qi":"AQAB","alg":"HS256"}}"#),
-        ];
-        for json in &private {
-            assert!(is_rsa_private_key(&object(json)), "{json}");
-            assert_eq!(
-                Jwk::from_json(json.as_bytes()).err(),
-                Some(Error::UnsupportedAlgorithm)
+    fn an_rsa_private_jwk_imports_with_its_members_in_rfc_order() {
+        // RFC 7518 §6.3.2, ADR 0067 §2: all six private members, kept in
+        // zeroizing buffers and written back after `n` and `e` in RFC order.
+        let jwk = Jwk::from_object(&rsa_private_object()).unwrap();
+        let KeyMaterial::Rsa(key) = jwk.material() else {
+            panic!("RSA")
+        };
+        assert!(key.is_private() && !jwk.is_public());
+        assert_eq!(key.modulus_bits(), 2048);
+        let members = |jwk: &Jwk| -> Vec<String> {
+            let mut names: Vec<String> =
+                jwk.to_object().iter().map(|(n, _)| n.to_owned()).collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            members(&jwk),
+            ["d", "dp", "dq", "e", "kty", "n", "p", "q", "qi"]
+        );
+        let json = jwk.to_json();
+        let order: Vec<usize> = [
+            "\"n\"", "\"e\"", "\"d\"", "\"p\"", "\"q\"", "\"dp\"", "\"dq\"", "\"qi\"",
+        ]
+        .iter()
+        .map(|name| json.find(name).unwrap())
+        .collect();
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+        // The round trip is exact (RFC 7515 §2: one encoding per value).
+        assert_eq!(*Jwk::from_json(json.as_bytes()).unwrap().to_json(), *json);
+        // The public part has `n` and `e` only, and the same thumbprint
+        // members (RFC 7638 §3.2).
+        let public = jwk.to_public().unwrap();
+        assert!(public.is_public());
+        assert_eq!(members(&public), ["e", "kty", "n"]);
+        assert_eq!(
+            public.thumbprint_members().to_json(),
+            jwk.thumbprint_members().to_json()
+        );
+    }
+
+    #[test]
+    fn rsa_private_members_never_show_in_debug_or_errors() {
+        // ADR 0007, ADR 0067 §2: Debug prints each private member as
+        // "<redacted>"; no error quotes a member.
+        let jwk = Jwk::from_object(&rsa_private_object()).unwrap();
+        let debug = format!("{jwk:?} {jwk:#?}");
+        let object = rsa_private_object();
+        for name in RSA_PRIVATE_MEMBERS {
+            let value = object.get(name).and_then(Value::as_str).unwrap();
+            assert!(!debug.contains(&value[..16]), "{name}");
+            assert!(
+                debug.contains(&format!("{name}: \"<redacted>\"")),
+                "{name}: {debug}"
             );
         }
-        let not_private = [
-            rsa_json(),
-            format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","alg":"RSA-OAEP"}}"#),
-            r#"{"kty":"oct","k":"AA","d":"AQAB"}"#.to_owned(),
-            r#"{"kty":"rsa","d":"AQAB"}"#.to_owned(),
-            r#"{"kty":7,"d":"AQAB"}"#.to_owned(),
-            EC_PRIVATE.to_owned(),
-        ];
-        for json in &not_private {
-            assert!(!is_rsa_private_key(&object(json)), "{json}");
+        for (name, value) in [("d", r#""AAAB""#), ("qi", r#""AQAB""#), ("p", r#""AQAB""#)] {
+            let error = Jwk::from_json(rsa_private_with(name, value).as_bytes()).unwrap_err();
+            let text = format!("{error:?} {error}");
+            for member in RSA_PRIVATE_MEMBERS {
+                let value = object.get(member).and_then(Value::as_str).unwrap();
+                assert!(!text.contains(&value[..16]), "{text}");
+            }
+        }
+        // The private members are wiped on drop (ZeroizeOnDrop markers).
+        fn wipes<T: zeroize::ZeroizeOnDrop>() {}
+        wipes::<RsaPublicKey>();
+        wipes::<RsaPrivateParts>();
+    }
+
+    #[test]
+    fn rsa_private_members_must_be_minimal_and_the_key_of_n_and_e() {
+        // RFC 7518 §2: Base64urlUInt "MUST utilize the minimum number of
+        // octets"; ADR 0043, ADR 0067 §2: the private key must be the key
+        // of `n` and `e` (n = p·q, d·e ≡ 1 mod p − 1 and q − 1, and the
+        // CRT members are those of d, p and q).
+        let a2 = rsa_private_object();
+        let member = |name: &str| a2.get(name).and_then(Value::as_str).unwrap().to_owned();
+        let padded = |name: &str| {
+            let mut octets = vec![0];
+            octets.extend(b64url_decode(&member(name)).unwrap());
+            format!("\"{}\"", b64url_encode(&octets))
+        };
+        for name in RSA_PRIVATE_MEMBERS {
+            assert!(
+                matches!(
+                    Jwk::from_json(rsa_private_with(name, &padded(name)).as_bytes()),
+                    Err(Error::InvalidKey(detail)) if detail.contains("not a minimal Base64urlUInt")
+                ),
+                "{name}"
+            );
+            assert_eq!(
+                Jwk::from_json(rsa_private_with(name, "7").as_bytes()).err(),
+                Some(Error::InvalidKey("RSA private key members must be strings")),
+                "{name}"
+            );
+            assert_eq!(
+                Jwk::from_json(rsa_private_with(name, r#""*""#).as_bytes()).err(),
+                Some(Error::InvalidBase64),
+                "{name}"
+            );
+        }
+        let mismatch = Error::InvalidKey("RSA private key does not match n and e");
+        let crt = Error::InvalidKey("RSA private key dp, dq or qi does not match d, p and q");
+        // p and q swapped: n = q·p still, but qi is then q⁻¹ mod p of the
+        // other order, so the CRT values disagree.
+        let swapped = {
+            let mut o = rsa_private_object();
+            o.insert("p", member("q"));
+            o.insert("q", member("p"));
+            o.to_json()
+        };
+        // Another prime is no factor of n; `d` of another key fails d·e ≡ 1.
+        let rfc7520 = object(include_str!(
+            "../tests/data/keys/rfc/rfc7520-3.4-rsa-private.jwk.json"
+        ));
+        let other_member = |name: &str| {
+            rfc7520
+                .get(name)
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_owned()
+        };
+        for (what, json, expected) in [
+            ("p and q swapped", swapped, &crt),
+            (
+                "another key's p",
+                rsa_private_with("p", &format!("\"{}\"", other_member("p"))),
+                &mismatch,
+            ),
+            (
+                "another key's d",
+                rsa_private_with("d", &format!("\"{}\"", other_member("d"))),
+                &mismatch,
+            ),
+            (
+                "another key's dp",
+                rsa_private_with("dp", &format!("\"{}\"", other_member("dp"))),
+                &crt,
+            ),
+            (
+                "another key's qi",
+                rsa_private_with("qi", &format!("\"{}\"", other_member("qi"))),
+                &crt,
+            ),
+            ("d = 1", rsa_private_with("d", r#""AQ""#), &mismatch),
+        ] {
+            assert_eq!(
+                Jwk::from_json(json.as_bytes()).err().as_ref(),
+                Some(expected),
+                "{what}"
+            );
+        }
+        // The modulus range holds for private keys too (RFC 7518 §3.3).
+        let short = rsa_private_with("n", &format!("\"{}\"", b64url_encode(&[0xff; 128])));
+        assert_eq!(
+            Jwk::from_json(short.as_bytes()).err(),
+            Some(Error::InvalidKey("RSA modulus is shorter than 2048 bits"))
+        );
+    }
+
+    #[test]
+    fn rsa_oth_is_unsupported_and_partial_private_keys_are_invalid() {
+        for json in [
+            r#"{"kty":"RSA","oth":null,"alg":"RSA1_5"}"#.to_owned(),
+            r#"{"kty":"RSA","n":"x","oth":[]}"#.to_owned(),
+            format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","d":"AQAB","oth":[]}}"#),
+        ] {
+            assert_eq!(
+                Jwk::from_json(json.as_bytes()).err(),
+                Some(Error::UnsupportedAlgorithm),
+                "{json}"
+            );
+        }
+        for json in [
+            format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","d":"AQAB"}}"#),
+            format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","qi":"AQAB","alg":"RS256"}}"#),
+            format!(
+                r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","d":"AQ","p":"AQ","q":"AQ","dp":"AQ","dq":"AQ"}}"#
+            ),
+        ] {
+            assert_eq!(
+                Jwk::from_json(json.as_bytes()).err(),
+                Some(Error::InvalidKey(RSA_PRIVATE_INCOMPLETE)),
+                "{json}"
+            );
         }
     }
 
@@ -2663,6 +2978,7 @@ mod tests {
         let n = RsaPublicKey {
             n: vec![0x01, 0xff, 0xff],
             e: vec![3],
+            private: None,
         };
         assert_eq!(n.modulus_bits(), 17);
     }

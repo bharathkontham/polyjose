@@ -12,7 +12,7 @@
 //!
 //! # Secrets
 //!
-//! The private members (`d`, `k`) are encoded with
+//! The private members (`d`, `k`, and RSA's `p`, `q`, `dp`, `dq`, `qi`) are encoded with
 //! [`b64url_encode`], which is constant-time in
 //! its input and allocates its output once at the exact length, and that
 //! `String` moves straight into the `Zeroizing<String>` of a
@@ -22,6 +22,7 @@
 
 use zeroize::Zeroizing;
 
+use super::pkcs1::RsaPrivateFields;
 use crate::error::Result;
 use crate::json::{Object, Value};
 use crate::jwk::{EcCurve, Jwk, OkpCurve};
@@ -94,7 +95,7 @@ pub(crate) fn okp_jwk(crv: OkpCurve, x: &[u8], d: Option<&[u8]>, alg: Option<&st
 /// An `RSA` public key (RFC 7518 §6.3.1): modulus `n` and exponent `e` as
 /// unsigned big-endian integers in their minimal form, with no leading zero
 /// octet (Base64urlUInt, RFC 7518 §2, §6.3.1.1). A DER INTEGER's sign octet
-/// must be removed first. RSA private keys are not supported (ADR 0021).
+/// must be removed first.
 ///
 /// # Errors
 ///
@@ -107,6 +108,35 @@ pub(crate) fn rsa_public_jwk(n: &[u8], e: &[u8], alg: Option<&str>) -> Result<Jw
     object.insert("kty", "RSA");
     object.insert("n", b64url_member(n));
     object.insert("e", b64url_member(e));
+    finish(object, alg)
+}
+
+/// An `RSA` private key (RFC 7518 §6.3.2): `n`, `e` and the private members
+/// `d`, `p`, `q`, `dp`, `dq` and `qi`, each the minimal unsigned big-endian
+/// integer of an RSAPrivateKey field (RFC 8017 App. A.1.2), so
+/// [`Jwk::from_object`] checks them as it does a JSON key, the consistency
+/// of the private members with `n` and `e` included (ADR 0043, ADR 0067).
+///
+/// # Errors
+///
+/// As [`rsa_public_jwk`], and
+/// [`Error::InvalidKey`](crate::Error::InvalidKey) for private members that
+/// are not minimal or not the key of `n` and `e`.
+pub(crate) fn rsa_private_jwk(key: &RsaPrivateFields<'_>, alg: Option<&str>) -> Result<Jwk> {
+    let mut object = Object::new();
+    object.insert("kty", "RSA");
+    object.insert("n", b64url_member(key.n));
+    object.insert("e", b64url_member(key.e));
+    for (name, value) in [
+        ("d", key.d),
+        ("p", key.p),
+        ("q", key.q),
+        ("dp", key.dp),
+        ("dq", key.dq),
+        ("qi", key.qi),
+    ] {
+        object.insert(name, b64url_member(value));
+    }
     finish(object, alg)
 }
 

@@ -8,9 +8,8 @@ use zeroize::Zeroizing;
 
 use super::der::{self, Reader, Writer};
 use super::oid;
-use super::pkcs1;
 use super::spki;
-use super::types::{AlgId, Pkcs8Parts};
+use super::types::Pkcs8Parts;
 use crate::error::{Error, Result};
 
 /// `version` v1(0): PrivateKeyInfo, no publicKey (RFC 5958 §2, RFC 5208
@@ -42,22 +41,19 @@ const V2: u8 = 1;
 /// - `version` is v1(0) or v2(1), and "If publicKey is present, then version
 ///   is set to v2 else version is set to v1" (RFC 5958 §2).
 /// - The algorithm is classified first (`spki::read_algorithm_identifier`,
-///   ADR 0018 §4). rsaEncryption means an RSA private key, unsupported
-///   before privateKey is opened (ADR 0021).
+///   ADR 0018 §4). rsaEncryption is an RSA private key, whose privateKey
+///   `keys::rsa::from_pkcs8` decodes as an RSAPrivateKey (RFC 8017 App. A.1.2,
+///   ADR 0067).
 /// - The attributes must be well-formed DER (a SET OF Attribute) and are
 ///   then ignored (ADR 0018 §3).
 /// - privateKey and publicKey are returned as sub-slices of `der`, whose
 ///   buffer the caller must zeroize; the publicKey has no unused bits.
-/// - Input that fails this parse but is a PKCS#1 RSAPrivateKey (RFC 8017
-///   App. A.1.2), such as one under a `PRIVATE KEY` label, is
-///   `UnsupportedAlgorithm`: an RSA private key in any format (ADR 0018
-///   §3, ADR 0021). It is recognized by framing only
-///   (`pkcs1::relabel_rsa_private_key`), with no private INTEGER's
-///   contents read.
+/// - Input that is not PKCS#8, such as a PKCS#1 RSAPrivateKey (RFC 8017
+///   App. A.1.2) under a `PRIVATE KEY` label, is `InvalidKey`: it is the
+///   wrong structure for the format (ADR 0018 §3; the `RSA PRIVATE KEY`
+///   label and `KeyFormat::Pkcs1` read it, ADR 0067).
 pub(crate) fn decode(der: &[u8]) -> Result<Pkcs8Parts<'_>> {
-    decode_with_attributes(der)
-        .map(|(parts, _)| parts)
-        .map_err(|error| pkcs1::relabel_rsa_private_key(der, error))
+    decode_with_attributes(der).map(|(parts, _)| parts)
 }
 
 /// [`decode`], also returning the whole `[0]` attributes element, so tests
@@ -75,9 +71,6 @@ fn decode_with_attributes(der: &[u8]) -> Result<(Pkcs8Parts<'_>, Option<&[u8]>)>
         return Err(Error::InvalidKey("PKCS#8 version is not v1 or v2"));
     }
     let alg = spki::read_algorithm_identifier(&mut fields)?;
-    if alg == AlgId::RsaEncryption {
-        return Err(Error::UnsupportedAlgorithm);
-    }
     let private_key = fields.octet_string()?;
     let attributes = fields.optional(der::CONTEXT_0)?;
     if let Some(attributes) = attributes {
@@ -149,9 +142,8 @@ fn check_attributes(contents: &[u8]) -> Result<()> {
 /// v1 without a publicKey, or v2 with one, in the layout OpenSSL 4 emits
 /// (ADR 0018 §3).
 ///
-/// `parts.version` must agree with `parts.public_key` (RFC 5958 §2), and RSA
-/// private keys are never written (ADR 0021). The output is zeroized on
-/// drop.
+/// `parts.version` must agree with `parts.public_key` (RFC 5958 §2). The
+/// output is zeroized on drop.
 pub(crate) fn encode(parts: &Pkcs8Parts<'_>) -> Result<Zeroizing<Vec<u8>>> {
     encode_with_attributes(parts, None)
 }
@@ -162,9 +154,6 @@ fn encode_with_attributes(
     parts: &Pkcs8Parts<'_>,
     attributes: Option<&[u8]>,
 ) -> Result<Zeroizing<Vec<u8>>> {
-    if parts.alg == AlgId::RsaEncryption {
-        return Err(Error::UnsupportedAlgorithm);
-    }
     let version = if parts.public_key.is_some() { V2 } else { V1 };
     if parts.version != version {
         return Err(Error::InvalidKey(
@@ -424,22 +413,32 @@ mod tests {
     }
 
     #[test]
-    fn rsa_private_keys_are_unsupported_before_the_private_key_is_read() {
-        // ADR 0021: any PKCS#8 rsaEncryption key is an RSA private key.
+    fn rsa_private_keys_decode_as_rsa_encryption_containers() {
+        // ADR 0067: a PKCS#8 rsaEncryption key (RFC 5958 §2, RFC 3279
+        // §2.3.1) is an RSA private key; the container hands its privateKey
+        // to `keys::rsa::from_pkcs8`, which reads the RSAPrivateKey (RFC 8017
+        // App. A.1.2).
         for der in [
-            fixtures::negative("N67"),
             fixtures::load("openssl", "reject-rsa2048-private-pkcs8.der"),
             fixtures::load("openssl", "reject-rsa4096-private-pkcs8.pem"),
         ] {
-            assert!(is_unsupported(&decode(&der)));
+            let parts = decode(&der).unwrap();
+            assert_eq!((parts.version, parts.alg), (0, AlgId::RsaEncryption));
+            assert!(parts.public_key.is_none());
+            assert!(super::super::pkcs1::decode_private(parts.private_key).is_ok());
         }
-        // The privateKey is never opened: garbage there changes nothing.
+        // The container does not judge the privateKey contents: garbage
+        // there is the RSA mapper's InvalidKey, not the container's.
         let mut body = vec![0x02, 0x01, 0x00];
         body.extend_from_slice(super::super::oid::ALG_RSA_ENCRYPTION);
         body.extend_from_slice(&[0x04, 0x03, 0x30, 0x80, 0xFF]);
         let mut der = vec![0x30, u8::try_from(body.len()).unwrap()];
         der.extend_from_slice(&body);
-        assert!(is_unsupported(&decode(&der)));
+        assert_eq!(decode(&der).unwrap().alg, AlgId::RsaEncryption);
+        assert!(is_invalid(&crate::jwk::Jwk::from_der(
+            &der,
+            super::super::KeyFormat::Pkcs8
+        )));
     }
 
     /// `SEQUENCE { version, field × count }` with a one-octet long-form
@@ -459,11 +458,10 @@ mod tests {
     }
 
     #[test]
-    fn a_pkcs1_rsa_private_key_read_as_pkcs8_is_unsupported() {
-        // ADR 0018 §3 "RSA private, any format": a PKCS#1 RSAPrivateKey
-        // (RFC 8017 App. A.1.2) given as PKCS#8 fails the RFC 5958 §2
-        // parse at the AlgorithmIdentifier and is then recognized by its
-        // framing alone (pkcs1::is_rsa_private_key_der, ADR 0021).
+    fn a_pkcs1_rsa_private_key_read_as_pkcs8_is_invalid() {
+        // ADR 0067 (amending ADR 0018 §3): a PKCS#1 RSAPrivateKey (RFC 8017
+        // App. A.1.2) given as PKCS#8 fails the RFC 5958 §2 parse at the
+        // AlgorithmIdentifier: the wrong structure for the format.
         for (dir, file) in [
             ("openssl", "reject-rsa2048-private-pkcs1.der"),
             ("openssl", "reject-rsa2048-3prime-private-pkcs1.pem"),
@@ -471,15 +469,14 @@ mod tests {
         ] {
             let der = fixtures::load(dir, file);
             let result = decode(&der);
-            assert!(is_unsupported(&result), "{file}: {:?}", result.err());
+            assert!(is_invalid(&result), "{file}: {:?}", result.err());
         }
     }
 
     #[test]
-    fn the_rsa_private_integers_are_not_parsed_on_the_pkcs8_path() {
-        // Garbage contents in the eight INTEGERs (empty, X.690 §8.3.1;
-        // not minimal, §8.3.2) do not change the result: only their
-        // identifier and length octets are read.
+    fn rsa_private_key_shapes_are_invalid_pkcs8() {
+        // ADR 0067: whatever the eight INTEGERs hold (empty, X.690 §8.3.1;
+        // not minimal, §8.3.2), an RSAPrivateKey shape is not PKCS#8.
         let two_prime: &[u8] = &[0x02, 0x01, 0x00];
         let multi: &[u8] = &[0x02, 0x01, 0x01];
         for (version, field) in [
@@ -489,7 +486,7 @@ mod tests {
         ] {
             let der = version_then(version, field, 8);
             let result = decode(&der);
-            assert!(is_unsupported(&result), "{:?}", result.err());
+            assert!(is_invalid(&result), "{:?}", result.err());
         }
     }
 
@@ -808,13 +805,20 @@ mod tests {
             ..v1_with_public
         };
         assert!(is_invalid(&encode(&v2_without_public)));
+        // ADR 0067: rsaEncryption is written like any other algorithm
+        // (RFC 5958 §2); the RSAPrivateKey inside is `rsa.rs`'s.
         let rsa = Pkcs8Parts {
             version: 0,
             alg: AlgId::RsaEncryption,
             private_key: &key,
             public_key: None,
         };
-        assert!(is_unsupported(&encode(&rsa)));
+        let encoded = encode(&rsa).unwrap();
+        let back = decode(&encoded).unwrap();
+        assert_eq!(
+            (back.alg, back.private_key),
+            (AlgId::RsaEncryption, &key[..])
+        );
         let v2 = Pkcs8Parts {
             version: 1,
             ..v1_with_public
@@ -1134,11 +1138,11 @@ mod tests {
 
         #[test]
         fn unsupported_inputs_report_nothing_but_the_code() {
-            // Ed448, an encrypted key and an RSA private key, marker-filled.
+            // Ed448 and an encrypted key, marker-filled. (An rsaEncryption
+            // key is supported since ADR 0067; `rsa.rs` tests its errors.)
             for input in [
                 ed(V0, &seq(&[oid::OID_ED448]), &key(), &[]),
                 seq(&[&seq(&[&[0x06, 0x01, M][..]]), &tlv(0x04, &[M; 48])]),
-                ed(V0, oid::ALG_RSA_ENCRYPTION, &tlv(0x04, &[M; 64]), &[]),
             ] {
                 let error = decode(&input).map(|_| ()).unwrap_err();
                 assert_eq!(error, Error::UnsupportedAlgorithm);
@@ -1193,6 +1197,7 @@ mod tests {
 mod tester_adversarial {
     use super::super::oid;
     use super::super::spki;
+    use super::super::types::AlgId;
     use super::*;
 
     fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {

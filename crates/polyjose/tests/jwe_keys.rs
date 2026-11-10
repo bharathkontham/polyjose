@@ -6,8 +6,9 @@
 //! caller can observe today is that every key the binding relies on was
 //! validated at import (ADR 0041 §4, ADR 0043 §3), that the JWK members the
 //! binding reads (`kid`, `use`, `key_ops`, `alg`) are exposed, and that
-//! the RSA, `RSA-OAEP` and `RSA1_5` refusals happen before any JWE code
-//! runs (ADRs 0021, 0022). The RSA-OAEP-256 modulus range is import's
+//! the `RSA-OAEP` and `RSA1_5` refusals happen before any JWE code runs
+//! (ADRs 0021, 0022), while a complete RSA private JWK imports and serves
+//! RSA-OAEP-256 (ADR 0067). The RSA-OAEP-256 modulus range is import's
 //! alone (`jwk::RSA_MODULUS_BITS`, 0003 F04): a key outside it never
 //! becomes a [`Jwk`], so no [`Recipient`] can be built from it.
 #![allow(clippy::panic)] // test code: a panic is a failed assertion
@@ -16,7 +17,7 @@ use std::path::PathBuf;
 
 use polyjose::Error;
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
-use polyjose::jwe::{Encryptor, Recipient};
+use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient, decrypt_compact};
 use polyjose::jwk::{EcCurve, Jwk, KeyAlg, KeyMaterial, KeyOp, KeyType, KeyUse, OkpCurve};
 use polyjose::util::b64url_decode;
 
@@ -115,22 +116,49 @@ fn rfc7520_3_6_is_a_dir_key_for_a256gcm() {
     assert_eq!(k.len(), 32);
 }
 
-/// ADR 0021: an RSA private JWK, RFC 7520 §3.4, never imports, so JWE can
-/// never be handed one.
+/// ADR 0067 (RFC 7518 §6.3.2): the RSA private JWK of RFC 7520 §3.4
+/// imports, keeps its `use: sig` (RFC 7517 §4.2, so it serves no JWE), and
+/// without that `use` it decrypts what was encrypted to its RFC 7520 §3.3
+/// public half with RSA-OAEP-256 (RFC 7518 §4.3).
 #[test]
-fn rfc7520_3_4_rsa_private_key_is_unsupported() {
-    let private = format!(
+fn rfc7520_3_4_rsa_private_key_imports_and_decrypts_rsa_oaep_256() {
+    let private = jwk(&format!(
         r#"{{"kty":"RSA","kid":"{KID_BILBO}","use":"sig","n":"{RFC7520_3_3_N}","e":"AQAB"{RFC7520_3_4_PRIVATE}}}"#
-    );
+    ));
+    assert!(!private.is_public());
+    let KeyMaterial::Rsa(rsa) = private.material() else {
+        panic!("not RSA")
+    };
+    assert!(rsa.is_private());
+    assert_eq!(rsa.modulus_bits(), 2048);
+    assert!(!private.permits(&KeyOp::UnwrapKey) && !private.permits(&KeyOp::Decrypt));
     assert_eq!(
-        import(&private).map(|_| ()),
-        Err(Error::UnsupportedAlgorithm)
+        private.to_public().map(|k| k.to_json().to_string()),
+        Some(jwk(&rsa_with(r#","use":"sig""#)).to_json().to_string())
     );
-    // One private member is enough.
+    let enc_key = jwk(&format!(
+        r#"{{"kty":"RSA","kid":"{KID_BILBO}","n":"{RFC7520_3_3_N}","e":"AQAB"{RFC7520_3_4_PRIVATE}}}"#
+    ));
+    let token = Encryptor::new(ContentEncAlg::A128GCM)
+        .recipient(Recipient::new(KeyMgmtAlg::RsaOaep256, &jwk(&rsa_with(""))))
+        .encrypt_compact(b"to bilbo")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let policy = DecryptPolicy::new(&[KeyMgmtAlg::RsaOaep256], &[ContentEncAlg::A128GCM])
+        .unwrap_or_else(|e| panic!("{e}"));
+    let opened = decrypt_compact(&token, &enc_key, &policy).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(opened.plaintext(), b"to bilbo");
+    // `use: sig` makes the same key no JWE candidate (RFC 7517 §4.2).
+    assert_eq!(
+        decrypt_compact(&token, &private, &policy).map(|_| ()),
+        Err(Error::KeyAlgorithmMismatch)
+    );
+    // ADR 0067: one private member alone is an incomplete key.
     let d_only = rsa_with(r#","d":"AQAB""#);
     assert_eq!(
         import(&d_only).map(|_| ()),
-        Err(Error::UnsupportedAlgorithm)
+        Err(Error::InvalidKey(
+            "RSA private key must have d, p, q, dp, dq and qi"
+        ))
     );
 }
 
