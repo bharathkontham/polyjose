@@ -27,7 +27,7 @@ use crate::records::{
 };
 
 /// Signs the JWT Claims Set `claims` (JSON text) with `key` into a compact JWS (ADR 0030 §4;
-/// RFC 7519 §7.1). RS*/PS* signing fails with `UnsupportedAlgorithm` (ADR 0021).
+/// RFC 7519 §7.1). RS* and PS* sign with an RSA private key (ADR 0067 §2).
 ///
 /// The steps run in the conformance order (conformance/README.md, "Step order"): import `key`
 /// (RFC 7517 §4), parse `claims` (RFC 7519 §4; ADR 0027 §1–§2), build the core
@@ -83,9 +83,9 @@ pub fn jwt_verify(
 /// (ADR 0029 §4).
 ///
 /// As [`jwt_verify`], with the set imported by the core (RFC 7517 §5: an invalid member is
-/// skipped; an RSA private member fails the whole set with `UnsupportedAlgorithm`, ADR 0021,
-/// ADR 0029 §3). [`JwtVerified::key_index`] is the verifying member's position in the set,
-/// `Some(0)` for the first (ADR 0029 §4).
+/// skipped; an RSA private member is imported as is, ADR 0067 §4, amending ADR 0029 §3).
+/// [`JwtVerified::key_index`] is the verifying member's position in the set, `Some(0)` for the
+/// first (ADR 0029 §4).
 ///
 /// # Errors
 ///

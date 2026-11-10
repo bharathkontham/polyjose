@@ -42,8 +42,8 @@ use crate::records::{
 ///
 /// `InvalidHeader` for `typ` with `omit_typ` or `access_token`, or `omit_typ` with
 /// `access_token` (ADR 0030 §4), and for reserved `header` members (ADR 0027 §6, §8);
-/// `UnsupportedAlgorithm` for RSA signing, `RS*` and `PS*` (ADR 0021); the core's key and claims
-/// errors.
+/// `KeyAlgorithmMismatch` for `RS*` and `PS*` without an RSA private key (ADR 0067 §2); the
+/// core's key and claims errors.
 #[uniffi::export]
 pub fn jwt_sign(
     claims: String,
@@ -86,8 +86,8 @@ pub fn jwt_verify(
 /// # Errors
 ///
 /// Those of [`jwt_verify`], plus `NoMatchingKey` for no candidate or more than
-/// `max_key_candidates` (ADR 0029 §4), and `UnsupportedAlgorithm` for a set holding an RSA
-/// private member (ADR 0021, ADR 0029 §3).
+/// `max_key_candidates` (ADR 0029 §4). An RSA private member is imported as is (ADR 0067 §4,
+/// amending ADR 0029 §3).
 #[uniffi::export]
 pub fn jwt_verify_with_jwks(
     token: String,

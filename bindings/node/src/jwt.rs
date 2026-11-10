@@ -26,8 +26,8 @@ surface_task! {
         = |t| op::jwt_sign(&t.claims, &t.key, &t.options)
 }
 
-/// Signs the JWT Claims Set `claims` (JSON text) with the JWK `key` (RFC 7519 §7.1). RS*/PS*
-/// signing rejects with `UnsupportedAlgorithm` (ADR 0021). Resolves to the token.
+/// Signs the JWT Claims Set `claims` (JSON text) with the JWK `key` (RFC 7519 §7.1). RS* and PS*
+/// sign with an RSA private key (ADR 0067 §2). Resolves to the token.
 #[napi]
 pub fn jwt_sign(claims: String, key: String, options: JwtSignOptions) -> AsyncTask<JwtSignTask> {
     AsyncTask::new(JwtSignTask {
@@ -291,17 +291,42 @@ mod tests {
         assert!(verified.claims.contains(r#""sub":"alice""#));
     }
 
+    /// RFC 7515 Appendix A.2's RSA private key (`jwt/rfc7519/a2-rs256-issue-exact.json`).
+    const RSA_PRIVATE: &str = include_str!(
+        "../../../crates/polyjose/tests/data/keys/rfc/rfc7515-a2-rsa-private.jwk.json"
+    );
+
     #[test]
-    fn rsa_signing_is_unsupported() {
+    fn rsa_signing_runs_through_the_task_and_needs_crt_members() {
+        // ADR 0067 §2: RS256 and PS256 sign with the private key; the task verifies its own
+        // token with the same key's public half (RFC 7515 §5.2).
+        for alg in ["RS256", "PS256"] {
+            let mut sign = JwtSignTask {
+                claims: secret(r#"{"sub":"alice","exp":1300819380}"#),
+                key: secret(RSA_PRIVATE),
+                options: surface::JwtSignOptions::new(alg.into()),
+            };
+            let token = sign.compute().unwrap().unwrap();
+            let mut verify = JwtVerifyTask {
+                token: Zeroizing::new(token),
+                key: secret(RSA_PRIVATE),
+                options: {
+                    let mut o = surface::JwtVerifyOptions::new(vec![alg.into()]);
+                    o.now = Some(BEFORE_EXP);
+                    o
+                },
+            };
+            let verified = verify.compute().unwrap().unwrap();
+            assert_eq!(verified.alg, alg);
+            assert!(verified.claims.contains(r#""sub":"alice""#));
+        }
+        // A private key without its CRT members (RFC 7518 §6.3.2) is InvalidKey (ADR 0067 §3).
         let mut sign = JwtSignTask {
             claims: secret(r#"{"sub":"alice"}"#),
             key: secret(r#"{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB"}"#),
             options: surface::JwtSignOptions::new("RS256".into()),
         };
-        assert_eq!(
-            sign.compute().unwrap().unwrap_err().code(),
-            "UnsupportedAlgorithm"
-        );
+        assert_eq!(sign.compute().unwrap().unwrap_err().code(), "InvalidKey");
     }
 
     #[test]

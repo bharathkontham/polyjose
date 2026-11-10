@@ -17,7 +17,7 @@ type Obj = Record<string, unknown>;
 function jwkImport(text: string): Obj {
   const jwk = JSON.parse(text) as Obj;
   if (typeof jwk["kty"] !== "string") throw coded("InvalidKey", "no kty");
-  if (jwk["kty"] === "RSA" && "d" in jwk) throw coded("UnsupportedAlgorithm", "RSA private keys are not supported");
+  if (jwk["kty"] === "RSA" && "oth" in jwk) throw coded("UnsupportedAlgorithm", "multi-prime RSA keys are not supported");
   return jwk;
 }
 

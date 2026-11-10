@@ -1151,6 +1151,7 @@ version = "0.1.2"
 dependencies = [
  "getrandom",
  "js-sys",
+ "polyjose",
  "polyjose-surface",
  "sha2",
  "wasm-bindgen",

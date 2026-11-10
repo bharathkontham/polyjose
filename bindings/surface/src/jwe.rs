@@ -1,5 +1,5 @@
-//! JWE operations (ADR 0030 §4, "JWE"; RFC 7516, RFC 7518 §4–§5; ADR 0017, 0021, 0022, 0023,
-//! 0050).
+//! JWE operations (ADR 0030 §4, "JWE"; RFC 7516, RFC 7518 §4–§5; ADR 0017, 0022, 0023, 0050,
+//! 0067).
 //!
 //! Keys are JWK JSON text, borrowed or held as [`SecretString`](crate::secret::SecretString)
 //! (ADR 0030 §7.1). Plaintext is borrowed on the way in, and decrypted plaintext and `aad` are
@@ -32,7 +32,7 @@ use crate::secret::SecretBytes;
 ///
 /// - `InvalidFormat` unless there is exactly one recipient and no `aad`, shared unprotected
 ///   header or per-recipient header (RFC 7516 §7.1);
-/// - `UnsupportedAlgorithm` for `RSA-OAEP` and `RSA1_5` (ADR 0021, ADR 0022), an unknown `alg`
+/// - `UnsupportedAlgorithm` for `RSA-OAEP` and `RSA1_5` (ADR 0022, ADR 0067 §3), an unknown `alg`
 ///   or `enc`, and `compress: true`, as the bindings build without `deflate` (ADR 0030 §4,
 ///   ADR 0034 §3);
 /// - `InvalidKey` for a key of the wrong size, or a PBES2 `p2c` or `p2s_len` outside what the
@@ -143,11 +143,13 @@ fn recipient(recipient: &JweRecipient) -> polyjose::Result<Recipient> {
 ///   `enc` is not in them (ADR 0007, RFC 8725 §3.1);
 /// - `InvalidHeader` for `dir` or `ECDH-ES` without both `alg` and `enc` in the JWE Protected
 ///   Header, before any cryptography (ADR 0050 §1);
-/// - `UnsupportedAlgorithm` for `RSA-OAEP-256`, which polyjose only encrypts to (ADR 0021), and
-///   for `RSA-OAEP`, `RSA1_5` (ADR 0022) and `zip` (no `deflate` in the bindings, ADR 0034 §3);
+/// - `KeyAlgorithmMismatch` for an `RSA-OAEP-256` JWE and an RSA public key: decryption needs the
+///   RSA private key (RFC 7518 §4.3, ADR 0067 §2);
+/// - `UnsupportedAlgorithm` for `RSA-OAEP`, `RSA1_5` (ADR 0022, ADR 0067 §3) and `zip` (no
+///   `deflate` in the bindings, ADR 0034 §3);
 /// - `DecryptionFailed`, the same code and message for every failure once key management starts,
-///   including a PBES2 JWE over the `max_pbes2_count` budget (RFC 7516 §11.4–§11.5, ADR 0007,
-///   ADR 0023, ADR 0050 §2).
+///   including a PBES2 JWE over the `max_pbes2_count` budget and an `RSA-OAEP-256` Encrypted Key
+///   that does not decrypt (RFC 7516 §11.4–§11.5, ADR 0007, ADR 0023, ADR 0050 §2, ADR 0067 §5).
 pub fn jwe_decrypt_compact(
     token: &str,
     key: &str,

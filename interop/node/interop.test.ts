@@ -15,12 +15,10 @@
 //
 // Not covered, with the reason:
 // - ES256K (RFC 8812 §3.2): polyjose supports it; jose 6 does not (its JWS table has no secp256k1).
-// - RS256/384/512 and PS256/384/512 polyjose → jose: polyjose has no RSA signing (ADR 0021); only
-//   jose → polyjose runs.
-// - RSA-OAEP-256 jose → polyjose: polyjose has no RSA decryption (ADR 0021); only polyjose → jose
-//   runs.
-// - RSA-OAEP (SHA-1), RSA-OAEP-384/512: jose 6 supports them; polyjose does not (ADR 0021: only
-//   RSA-OAEP-256 encryption). RSA1_5 (RFC 7518 §4.2): neither (RFC 8725 §3.2 advice; jose 6 has none).
+// - RSA key generation: polyjose has none (ADR 0067 §3), so every RSA case (RS*, PS*, RSA-OAEP-256,
+//   both directions) uses a key pair jose generated; polyjose imports its exported private JWK.
+// - RSA-OAEP (SHA-1), RSA-OAEP-384/512: jose 6 supports them; polyjose does not (ADR 0022, ADR 0067
+//   §3: RSA-OAEP-256 only). RSA1_5 (RFC 7518 §4.2): neither (RFC 8725 §3.2 advice; jose 6 has none).
 // - ML-DSA-44/65/87: jose 6 only; polyjose 0.1.0 has no ML-DSA.
 // - Ed448, X448 (RFC 8037): neither library.
 // - zip: "DEF" (RFC 7516 §4.1.3): the bindings build without polyjose's `deflate` feature.
@@ -64,8 +62,8 @@ async function polyjoseRejects(p: Promise<unknown>, code: string): Promise<void>
 // --- JWS (RFC 7515 §5, RFC 7518 §3, RFC 8037 §3.1, RFC 9864 §2.2) ---------------------------------
 
 const BOTH_WAYS_JWS = ["HS256", "HS384", "HS512", "ES256", "ES384", "ES512", "EdDSA", "Ed25519"];
-/** jose → polyjose only: polyjose verifies RSA signatures but has no RSA signing (ADR 0021). */
-const JOSE_ONLY_JWS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"];
+/** RSA signatures (RFC 7518 §3.3, §3.5), both ways with jose-generated keys (ADR 0067 §2, §3). */
+const RSA_JWS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"];
 
 for (const alg of BOTH_WAYS_JWS) {
   test(`JWS ${alg}: polyjose signs, jose verifies`, async () => {
@@ -81,7 +79,25 @@ for (const alg of BOTH_WAYS_JWS) {
   });
 }
 
-for (const alg of [...BOTH_WAYS_JWS, ...JOSE_ONLY_JWS]) {
+for (const alg of RSA_JWS) {
+  test(`JWS ${alg}: polyjose signs with a jose RSA private JWK, jose verifies`, async () => {
+    const pair = await jose.generateKeyPair(alg, { extractable: true });
+    const priv = asPj(await jose.exportJWK(pair.privateKey));
+    const header = { alg, kid: `pj-${alg}` };
+    const token = await pj.jwsSignCompact(PAYLOAD, priv, { protectedHeader: header });
+
+    const out = await jose.compactVerify(token, pair.publicKey, { algorithms: [alg] });
+    assert.deepEqual(out.payload, PAYLOAD);
+    assert.deepEqual(out.protectedHeader, header);
+    await joseRejects(jose.compactVerify(flipBit(token, 2), pair.publicKey, { algorithms: [alg] }), "ERR_JWS_SIGNATURE_VERIFICATION_FAILED");
+    // The same through a JWT (RFC 7519 §7.1): polyjose issues, jose validates.
+    const jwt = await pj.jwtSign(CLAIMS, priv, { alg });
+    const claims = await jose.jwtVerify(jwt, pair.publicKey, { algorithms: [alg], currentDate: new Date(NOW * 1000) });
+    assert.deepEqual(claims.payload, CLAIMS);
+  });
+}
+
+for (const alg of [...BOTH_WAYS_JWS, ...RSA_JWS]) {
   test(`JWS ${alg}: jose signs, polyjose verifies`, async () => {
     let signKey: JoseKey;
     let verifyJwk: jose.JWK;
@@ -205,7 +221,7 @@ for (const c of jweCases) {
   });
 }
 
-// RSA-OAEP-256 (RFC 7518 §4.3), polyjose → jose only: polyjose has no RSA decryption (ADR 0021).
+// RSA-OAEP-256 (RFC 7518 §4.3), both ways, with a jose key pair (polyjose generates no RSA keys).
 for (const e of ["A256GCM", "A128CBC-HS256"]) {
   test(`JWE RSA-OAEP-256 / ${e}: polyjose encrypts, jose decrypts`, async () => {
     const pair = await jose.generateKeyPair("RSA-OAEP-256", { extractable: true });
@@ -217,6 +233,21 @@ for (const e of ["A256GCM", "A128CBC-HS256"]) {
     assert.deepEqual(out.plaintext, PAYLOAD);
     assert.deepEqual(out.protectedHeader, { alg: "RSA-OAEP-256", enc: e });
     await joseRejects(jose.compactDecrypt(flipBit(token, 4), pair.privateKey, options), "ERR_JWE_DECRYPTION_FAILED");
+  });
+
+  test(`JWE RSA-OAEP-256 / ${e}: jose encrypts, polyjose decrypts with the exported private JWK`, async () => {
+    const pair = await jose.generateKeyPair("RSA-OAEP-256", { extractable: true });
+    const priv = asPj(await jose.exportJWK(pair.privateKey));
+    const header = { alg: "RSA-OAEP-256", enc: e, kid: "jose-rsa" };
+    const token = await new jose.CompactEncrypt(PAYLOAD).setProtectedHeader(header).encrypt(pair.publicKey);
+    const options = { allowedAlgs: ["RSA-OAEP-256"], allowedEnc: [e] };
+
+    const out = await pj.jweDecryptCompact(token, priv, options);
+    assert.deepEqual(out.plaintext, PAYLOAD);
+    assert.deepEqual(out.protectedHeader, jose.decodeProtectedHeader(token));
+    // A bad tag and a bad Encrypted Key both fail as DecryptionFailed (RFC 7516 §11.5).
+    await polyjoseRejects(pj.jweDecryptCompact(flipBit(token, 4), priv, options), "DecryptionFailed");
+    await polyjoseRejects(pj.jweDecryptCompact(flipBit(token, 1), priv, options), "DecryptionFailed");
   });
 }
 

@@ -1,6 +1,6 @@
 //! Key generation and PEM/DER import and export (ADR 0030 §4, "JWK", the `jwk_generate_*`,
 //! `jwk_from_*` and `jwk_to_*` operations; RFC 7518 §6, RFC 8037 §2, RFC 7468, RFC 5958,
-//! RFC 5280 §4.1, RFC 5915, RFC 8410; ADR 0005, 0018, 0021).
+//! RFC 5280 §4.1, RFC 5915, RFC 8410, RFC 8017 App. A.1; ADR 0005, 0018, 0067).
 //!
 //! Keys are JWK JSON text (ADR 0030 option C1). Generated keys and imported or exported private
 //! keys are secrets, so they are returned as [`SecretString`]/[`SecretBytes`] (ADR 0030 §7.2).
@@ -106,8 +106,8 @@ pub fn jwk_generate_okp(crv: &str) -> SurfaceResult<SecretString> {
 ///
 /// As the core decides, never substituted by the surface:
 ///
-/// - `UnsupportedAlgorithm` for the RSA algorithms (no RSA key generation, ADR 0021),
-///   `RSA-OAEP` and `RSA1_5` (ADR 0021, ADR 0022), `PBES2-*` (passwords are not generated),
+/// - `UnsupportedAlgorithm` for the RSA algorithms (no RSA key generation, ADR 0067 §3),
+///   `RSA-OAEP` and `RSA1_5` (ADR 0022, ADR 0067 §3), `PBES2-*` (passwords are not generated),
 ///   `dir` (its key is the key of its `enc`), `none`, and any unknown name.
 /// - `InvalidKey` for `ECDH-ES` and `ECDH-ES+A*KW`: they work on several curves, so the caller
 ///   names one with [`jwk_generate_ec`] or [`jwk_generate_okp`]; polyjose never picks one.
@@ -160,7 +160,7 @@ fn key_format(format: &str) -> SurfaceResult<KeyFormat> {
 /// The JWK of the PEM-encoded key `pem` (ADR 0030 §4; RFC 7468 §2, §10, §13; RFC 5915 §4).
 ///
 /// The PEM label selects the structure (`PRIVATE KEY`, `PUBLIC KEY`, `EC PRIVATE KEY`,
-/// `RSA PUBLIC KEY`) and the key type comes from its DER, never from the label
+/// `RSA PRIVATE KEY`, `RSA PUBLIC KEY`) and the key type comes from its DER, never from the label
 /// (`polyjose::jwk::Jwk::from_pem`, ADR 0018 §2, §3). The result never has `kty` `oct`
 /// (RFC 8725 §2.1) and no `alg` member.
 ///
@@ -169,7 +169,7 @@ fn key_format(format: &str) -> SurfaceResult<KeyFormat> {
 ///
 /// # Errors
 ///
-/// As the core decides: `UnsupportedAlgorithm` for RSA private keys in any form (ADR 0021),
+/// As the core decides: `UnsupportedAlgorithm` for multi-prime RSA private keys (ADR 0067 §3),
 /// encrypted keys (RFC 5958 §3, RFC 1421 §4.6.1.1; ADR 0018 §4), other labels such as
 /// `CERTIFICATE` (RFC 7468 §5) and unsupported algorithms or curves; `InvalidKey` for malformed
 /// or non-canonical PEM or DER and keys that fail JWK validation.
@@ -178,7 +178,8 @@ pub fn jwk_from_pem(pem: &str) -> SurfaceResult<SecretString> {
 }
 
 /// The JWK of the DER-encoded key `der` in `format` (ADR 0030 §4; RFC 5958 §2, RFC 5915 §3,
-/// RFC 5280 §4.1.2.7, RFC 8017 App. A.1.1).
+/// RFC 5280 §4.1.2.7, RFC 8017 App. A.1.1; `pkcs1` also reads an RSAPrivateKey, RFC 8017
+/// App. A.1.2, ADR 0067 §2).
 ///
 /// The caller names the structure; the core does no format sniffing (ADR 0007, ADR 0018 §3).
 /// The DER may hold a private key, so it is borrowed, and the JWK returned as a
@@ -214,14 +215,15 @@ pub fn jwk_to_pem(jwk: &str, format: &str) -> SurfaceResult<SecretString> {
 /// App. A.1.1), in the byte layout the core writes (ADR 0018 §3). Only the key material is
 /// exported; `kid`, `use`, `alg` and the other JWK members have no place in these structures.
 ///
-/// `spki` of a private key exports its public half. The DER of a private key is a secret, so
-/// the result is [`SecretBytes`] (ADR 0030 §7.2).
+/// `spki` of a private key exports its public half, and so does `pkcs1` of an RSA private key
+/// (RFC 8017 App. A.1.1; private RSA export is `pkcs8` only, ADR 0067 §2). The DER of a private
+/// key is a secret, so the result is [`SecretBytes`] (ADR 0030 §7.2).
 ///
 /// # Errors
 ///
 /// 1. `UnsupportedAlgorithm` for a format name other than `pkcs8`, `sec1`, `spki` and `pkcs1`
 ///    (ADR 0030 §5), checked before `jwk` is parsed.
-/// 2. The core's JWK parse errors (an RSA private JWK is `UnsupportedAlgorithm`, ADR 0021).
+/// 2. The core's JWK parse errors (a multi-prime RSA JWK is `UnsupportedAlgorithm`, ADR 0067 §3).
 /// 3. The core's export errors (ADR 0018 §3 format matrix): `UnsupportedAlgorithm` for an `oct`
 ///    key in any format (RFC 8725 §2.1), a non-EC key in `sec1` and a non-RSA key in `pkcs1`;
 ///    `InvalidKey` for a public key in `pkcs8` or `sec1`.

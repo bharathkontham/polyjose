@@ -216,31 +216,53 @@ fn sign_compact_reports_the_core_codes_for_bad_arguments() {
 }
 
 #[test]
-fn sign_compact_rs256_is_unsupported() {
-    // ADR 0021: no RSA signing. The RFC 7515 A.2 private key is refused on import, and the A.2
-    // public key is refused for RS256 before key binding.
+fn sign_compact_rs256_reproduces_rfc7515_a2_and_needs_the_private_key() {
+    // ADR 0067 §2: RSASSA-PKCS1-v1_5 is deterministic (RFC 8017 §8.2), so the RFC 7515 A.2
+    // private key reproduces the A.2 JWS byte for byte.
     let v = vector(A2_RS256_SIGN);
     let signer = signer_at(&v, 0);
     let rs256 = header_b64u(text(signer, &["protected_b64u"]));
     let private = json_at(signer, &["key"]);
+    let payload = b64u(text(&v, &["input", "payload_b64u"]));
     assert_eq!(
-        code(jws_sign_compact(b"p", &private, &rs256)),
-        "UnsupportedAlgorithm"
+        jws_sign_compact(&payload, &private, &rs256).unwrap(),
+        text(&v, &["expect", "jws"])
     );
+    // The A.2 public key cannot sign: the core's key binding (RFC 8725 §3.1).
     let public = json_at(&vector(A2_RS256_VERIFY), &["input", "key"]);
     assert_eq!(
         code(jws_sign_compact(b"p", &public, &rs256)),
-        "UnsupportedAlgorithm"
+        "KeyAlgorithmMismatch"
     );
-    assert_eq!(text(&v, &["expect", "error"]), "UnsupportedAlgorithm");
+}
+
+#[test]
+fn sign_compact_ps256_round_trips_through_the_public_key() {
+    // RFC 7518 §3.5: PSS is randomized, so the check is a verify with the public key
+    // (RFC 7515 §5.2), and two signatures of the same input differ.
+    let v = vector(A2_RS256_SIGN);
+    let private = json_at(signer_at(&v, 0), &["key"]);
+    let public = json_at(&vector(A2_RS256_VERIFY), &["input", "key"]);
+    let ps256 = header_json(r#"{"alg":"PS256"}"#);
+    let first = jws_sign_compact(b"PS256 payload", &private, &ps256).unwrap();
+    let second = jws_sign_compact(b"PS256 payload", &private, &ps256).unwrap();
+    assert_ne!(first, second);
+    let key = polyjose::jwk::Jwk::from_json(public.as_bytes()).unwrap();
+    let allowed = [polyjose::jwa::SigningAlg::PS256];
+    let opts = polyjose::jws::VerifyOptions::new(&allowed).unwrap();
+    for token in [first, second] {
+        let verified = polyjose::jws::verify_compact(&token, &key, &opts).unwrap();
+        assert_eq!(&verified.payload[..], b"PS256 payload");
+    }
 }
 
 // --- jws_sign_flattened, jws_sign_general (RFC 7515 §7.2) -------------------------------------
 
 /// Every exact-output JSON `jws.sign` vector: RFC 7515 A.1 in both JSON forms, and RFC 7520
 /// §4.4 (protected header), §4.5 (detached, RFC 7515 Appendix F), §4.6 (protected `alg`,
-/// unprotected `kid`), §4.7 (unprotected header only, ADR 0045 §1) and §4.8 (several signers).
-const JSON_SIGN_VECTORS: [&str; 11] = [
+/// unprotected `kid`), §4.7 (unprotected header only, ADR 0045 §1), §4.8 (several signers) and
+/// §4.1 (RS256).
+const JSON_SIGN_VECTORS: [&str; 13] = [
     include_str!("../../../conformance/vectors/jws-rfc7515/a1-hs256-flattened-sign.json"),
     include_str!("../../../conformance/vectors/jws-rfc7515/a1-hs256-general-sign.json"),
     include_str!(
@@ -265,6 +287,13 @@ const JSON_SIGN_VECTORS: [&str; 11] = [
     RFC7520_4_7_GENERAL_SIGN,
     include_str!(
         "../../../conformance/vectors/third_party/rfc7520/jws/4-8-multiple-hs256-only-general-sign.json"
+    ),
+    // RFC 7520 §4.1 (RS256, deterministic; ADR 0067 §2).
+    include_str!(
+        "../../../conformance/vectors/third_party/rfc7520/jws/4-1-rs256-flattened-sign.json"
+    ),
+    include_str!(
+        "../../../conformance/vectors/third_party/rfc7520/jws/4-1-rs256-general-sign.json"
     ),
 ];
 
@@ -415,9 +444,9 @@ fn json_sign_signer_header_rules() {
         codes(&with(None, None, Some(r#"{"alg":256}"#))),
         ["InvalidHeader"; 2]
     );
-    // RSA signing is not offered (ADR 0021).
+    // An RS256 header with the `oct` key: the key is bound to its family (RFC 8725 §3.1).
     let rs256 = with(None, None, Some(r#"{"alg":"RS256"}"#));
-    assert_eq!(codes(&rs256), ["UnsupportedAlgorithm"; 2]);
+    assert_eq!(codes(&rs256), ["KeyAlgorithmMismatch"; 2]);
 }
 
 #[test]
