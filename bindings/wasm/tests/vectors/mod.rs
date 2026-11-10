@@ -264,6 +264,7 @@ pub(crate) const VECTORS: &[(&str, &str)] = &[
     ("jwe/negative-json/recipients-not-an-array.json", include_str!("../../../../conformance/vectors/jwe/negative-json/recipients-not-an-array.json")),
     ("jwe/negative-json/rfc7516-a4-kid-mismatch.json", include_str!("../../../../conformance/vectors/jwe/negative-json/rfc7516-a4-kid-mismatch.json")),
     ("jwe/negative-json/rfc7516-a4-rsa-key-only.json", include_str!("../../../../conformance/vectors/jwe/negative-json/rfc7516-a4-rsa-key-only.json")),
+    ("jwe/negative-json/rfc7516-a4-rsa1-5-with-rsa-private-key.json", include_str!("../../../../conformance/vectors/jwe/negative-json/rfc7516-a4-rsa1-5-with-rsa-private-key.json")),
     ("jwe/negative-json/rfc7516-a4-wrong-a128kw-key.json", include_str!("../../../../conformance/vectors/jwe/negative-json/rfc7516-a4-wrong-a128kw-key.json")),
     ("jwe/negative-json/shared-and-recipient-header-overlap.json", include_str!("../../../../conformance/vectors/jwe/negative-json/shared-and-recipient-header-overlap.json")),
     ("jwe/negative-json/standard-alphabet-encrypted-key.json", include_str!("../../../../conformance/vectors/jwe/negative-json/standard-alphabet-encrypted-key.json")),
