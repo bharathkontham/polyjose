@@ -5,7 +5,11 @@
 //!   `expect`: PEM rows through `Jwk::from_pem`, DER rows through
 //!   `Jwk::from_der` in the format the vector holds;
 //! - every `reject-*` fixture in `openssl/` and `rfc/` gives the code of the
-//!   fixtures README table (`tests/data/keys/regen/README.md`);
+//!   fixtures README table (`tests/data/keys/regen/README.md`); the two-prime
+//!   RSA private ones of 2048 bits and more now import (ADR 0067) and keep
+//!   their names;
+//! - RSA private keys export to PKCS#8 byte for byte as OpenSSL wrote them,
+//!   and to PKCS#1 and SPKI as their public half (ADR 0067);
 //! - encrypted keys (RFC 5958 §3, RFC 1421 §4.6.1.1) are
 //!   `UnsupportedAlgorithm`;
 //! - the export format matrix (plan.md, ADR 0018 §3);
@@ -19,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use polyjose::Error;
 use polyjose::json::{self, Value};
-use polyjose::jwk::{EcCurve, Jwk, KeyType, OkpCurve};
+use polyjose::jwk::{EcCurve, Jwk, KeyMaterial, KeyType, OkpCurve};
 use polyjose::keys::{KeyFormat, KeySpec, generate};
 use proptest::prelude::*;
 
@@ -165,15 +169,25 @@ fn pem_armor_around_the_wrong_or_trailing_der_is_rejected() {
 /// A fixtures README table row's file pattern.
 type Rule = dyn Fn(&str) -> bool;
 
+/// The two-prime RSA private `reject-*` fixtures of 2048 bits or more:
+/// valid keys since ADR 0067, named before it.
+fn is_valid_rsa_private(file: &str) -> bool {
+    let openssl = ["reject-rsa2048-", "reject-rsa3072-", "reject-rsa4096-"]
+        .iter()
+        .any(|p| file.starts_with(p))
+        && file.contains("-private-")
+        && !file.contains("-3prime-");
+    let rfc9500 = file.starts_with("reject-rfc9500-testRSA2048-")
+        || file.starts_with("reject-rfc9500-testRSA4096-");
+    openssl || rfc9500
+}
+
 /// The code the fixtures README table gives a `reject-*` file, rules in
 /// table order (the first that matches wins).
 fn readme_expect(file: &str) -> &'static str {
-    let rules: [(&Rule, &str); 9] = [
-        // ADR 0021: no RSA private keys (RSA-PSS private included).
-        (
-            &|f| f.starts_with("reject-rsa") && f.contains("-private-") || f.contains("testRSA"),
-            "UnsupportedAlgorithm",
-        ),
+    let rules: [(&Rule, &str); 10] = [
+        // ADR 0067 §3: multi-prime RSA private keys stay unsupported.
+        (&|f| f.contains("-3prime-"), "UnsupportedAlgorithm"),
         // RFC 5958 §3 and RFC 1421 encryption: out of scope.
         (&|f| f.contains("-encrypted"), "UnsupportedAlgorithm"),
         // ADR 0006: no Ed448/X448.
@@ -191,17 +205,24 @@ fn readme_expect(file: &str) -> &'static str {
             &|f| f.starts_with("reject-ec-p256-explicit-"),
             "UnsupportedAlgorithm",
         ),
-        // id-RSASSA-PSS key OID (RFC 4055).
+        // id-RSASSA-PSS key OID (RFC 4055), public or private.
         (
-            &|f| f == "reject-rsapss2048-spki.pem",
+            &|f| f.starts_with("reject-rsapss2048-"),
             "UnsupportedAlgorithm",
         ),
-        // Under 2048 bits (RFC 7518 §3.3, §4.2; ADR 0007).
-        (&|f| f.starts_with("reject-rsa1024-"), "InvalidKey"),
+        // Under 2048 bits (RFC 7518 §3.3, §4.2; ADR 0007), public or
+        // private (ADR 0067 keeps the bound for private keys).
+        (
+            &|f| f.starts_with("reject-rsa1024-") || f.contains("testRSA1024"),
+            "InvalidKey",
+        ),
         // RFC 7468 §2: exactly five dashes (RFC 8410 §7, erratum 5459).
         (&|f| f == "reject-rfc8410-7-six-dash-end.pem", "InvalidKey"),
         // CERTIFICATE is not a key label (ADR 0006).
         (&|f| f.contains("-cert"), "UnsupportedAlgorithm"),
+        // ADR 0067: two-prime RSA private keys of 2048 bits or more import
+        // (RFC 8017 App. A.1.2, RFC 5958), despite the `reject-` name.
+        (&|f| is_valid_rsa_private(f), "ok"),
     ];
     rules
         .iter()
@@ -223,6 +244,22 @@ fn every_reject_fixture_gives_its_readme_code() {
                     "{dir}/{file}: expected {want}, got {}",
                     code(&result)
                 ));
+            } else if let Ok(jwk) = &result {
+                // ADR 0067: an RSA private key, whose public half is the
+                // OpenSSL public fixture made from it (gen-openssl-fixtures.sh).
+                let KeyMaterial::Rsa(rsa) = jwk.material() else {
+                    panic!("{file}: not RSA")
+                };
+                assert!(rsa.is_private() && !jwk.is_public(), "{file}");
+                if dir == "openssl" {
+                    let bits = &file["reject-rsa".len().."reject-rsa".len() + 4];
+                    let public = pem_key("openssl", &format!("rsa{bits}-spki.pem"));
+                    assert_eq!(
+                        jwk.to_public().unwrap().to_object(),
+                        public.to_object(),
+                        "{file}"
+                    );
+                }
             }
             checked += 1;
         }
@@ -351,10 +388,113 @@ fn public_keys_do_not_export_to_private_formats() {
     assert_export(&ec, KeyFormat::Pkcs8, &required, "EC public");
     assert_export(&ec, KeyFormat::Sec1, &required, "EC public");
     assert_export(&okp, KeyFormat::Pkcs8, &required, "OKP public");
+    // ADR 0067: PKCS#8 holds private keys only, RSA included.
     assert_export(&rsa, KeyFormat::Pkcs8, &required, "RSA");
     // The private key's own public half is refused the same way.
     let public = pem_key("openssl", "ec-p384-pkcs8.pem").to_public().unwrap();
     assert_export(&public, KeyFormat::Sec1, &required, "to_public");
+}
+
+/// ADR 0067: an RSA private key exports to PKCS#8 v1 exactly as OpenSSL
+/// wrote it (RFC 5958 §2, RFC 8017 App. A.1.2), and to PKCS#1 and SPKI as
+/// its public half (RFC 8017 App. A.1.1, RFC 5280 §4.1.2.7). The PKCS#1
+/// RSAPrivateKey imports to the same key. SEC1 holds no RSA key.
+#[test]
+fn rsa_private_keys_export_byte_for_byte() {
+    let pkcs8_der = read("openssl", "reject-rsa2048-private-pkcs8.der");
+    let key = Jwk::from_der(&pkcs8_der, KeyFormat::Pkcs8).unwrap();
+    let from_pkcs1 = Jwk::from_der(
+        &read("openssl", "reject-rsa2048-private-pkcs1.der"),
+        KeyFormat::Pkcs1,
+    )
+    .unwrap();
+    assert_eq!(key.to_object(), from_pkcs1.to_object());
+    assert_eq!(
+        key.to_der(KeyFormat::Pkcs8).unwrap().as_slice(),
+        pkcs8_der.as_slice()
+    );
+    assert_eq!(
+        key.to_pem(KeyFormat::Pkcs8).unwrap().as_bytes(),
+        read("openssl", "reject-rsa2048-private-pkcs8.pem").as_slice()
+    );
+    assert_eq!(
+        key.to_der(KeyFormat::Pkcs1).unwrap().as_slice(),
+        read("openssl", "rsa2048-pkcs1-pub.der").as_slice()
+    );
+    assert_eq!(
+        key.to_der(KeyFormat::Spki).unwrap().as_slice(),
+        read("openssl", "rsa2048-spki.der").as_slice()
+    );
+    assert_export(
+        &key,
+        KeyFormat::Sec1,
+        &Error::UnsupportedAlgorithm,
+        "RSA private",
+    );
+    for bits in [3072, 4096] {
+        let file = format!("reject-rsa{bits}-private-pkcs8.pem");
+        let key = pem_key("openssl", &file);
+        assert_eq!(
+            key.to_pem(KeyFormat::Pkcs8).unwrap().as_bytes(),
+            read("openssl", &file).as_slice(),
+            "{bits}"
+        );
+        assert_eq!(
+            key.to_pem(KeyFormat::Spki).unwrap().as_bytes(),
+            read("openssl", &format!("rsa{bits}-spki.pem")).as_slice(),
+            "{bits}"
+        );
+    }
+    // RFC 9500 §2.1's testRSA2048 and testRSA4096 (PKCS#1) re-export to the
+    // same PKCS#1 private structure through PKCS#8 and back.
+    for name in ["testRSA2048", "testRSA4096"] {
+        let key = pem_key("rfc", &format!("reject-rfc9500-{name}-private-pkcs1.pem"));
+        let again =
+            Jwk::from_der(&key.to_der(KeyFormat::Pkcs8).unwrap(), KeyFormat::Pkcs8).unwrap();
+        assert_eq!(again.to_object(), key.to_object(), "{name}");
+    }
+}
+
+/// ADR 0067: no sniffing for RSA private keys either. The structure must
+/// be the one the format or label names (ADR 0018 §2), else `InvalidKey`.
+#[test]
+fn rsa_private_der_in_another_format_or_label_is_invalid_key() {
+    for (file, own) in [
+        ("reject-rsa2048-private-pkcs1.der", KeyFormat::Pkcs1),
+        ("reject-rsa2048-private-pkcs8.der", KeyFormat::Pkcs8),
+    ] {
+        let der = read("openssl", file);
+        for format in FORMATS.into_iter().filter(|f| *f != own) {
+            let result = Jwk::from_der(&der, format);
+            assert!(
+                matches!(result, Err(Error::InvalidKey(_))),
+                "{file} as {format:?}: {:?}",
+                result.err()
+            );
+        }
+    }
+    // RSA PUBLIC KEY around an RSAPrivateKey, RSA PRIVATE KEY around an
+    // RSAPublicKey (RFC 8017 App. A.1.1, A.1.2): the label names one
+    // structure, the body is the other.
+    let private = String::from_utf8(read("openssl", "reject-rsa2048-private-pkcs1.pem")).unwrap();
+    let public = String::from_utf8(read("openssl", "rsa2048-pkcs1-pub.pem")).unwrap();
+    for (what, text) in [
+        (
+            "private body",
+            private.replace("RSA PRIVATE KEY", "RSA PUBLIC KEY"),
+        ),
+        (
+            "public body",
+            public.replace("RSA PUBLIC KEY", "RSA PRIVATE KEY"),
+        ),
+    ] {
+        let result = Jwk::from_pem(&text);
+        assert!(
+            matches!(result, Err(Error::InvalidKey(_))),
+            "{what}: {:?}",
+            result.err()
+        );
+    }
 }
 
 #[test]

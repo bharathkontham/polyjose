@@ -1,0 +1,38 @@
+{
+  "source": "RFC 7518 §6.3.2.7; RFC 7517 §5; RFC 7515 App. A.2; ADR 0029 §3; ADR 0067 §3; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
+  "description": "The RFC 7515 A.2 RS256 token against a set whose only member is a three-prime RSA private key (oth with one r/d/t entry; the OpenSSL 4.1.0 key fixture reject-rsa2048-3prime-private-pkcs8.pem, its members from openssl pkey -text): multi-prime keys are unsupported (ADR 0067 §3), so the member is skipped at import (RFC 7517 §5) instead of failing the set, and no candidate is left: NoMatchingKey",
+  "operation": "jwt.validate",
+  "input": {
+    "token": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw",
+    "now": 1300819320,
+    "allowed_algs": [
+      "RS256"
+    ],
+    "jwks": {
+      "keys": [
+        {
+          "kty": "RSA",
+          "n": "l8kmLDmn-2lOWVzYHglEopZj7t7_dtk6yivlC2YJKCOc1QvPsw_F3JYDkKEzaXirVUJFSMneTCd-4uz0rhxJ965IoCxnROpxLUnlvJsta2Pglq8C_HSfncLJMfDa-6PrJcRxEQnJUzBRsH96fRA94vXF_KqGrtCSPQ_mUPzQU42bgMNeqXgxDrB9fuVWU8nOYW2W7ol47rIxpZrLkLM8Mw-1X1Z73ETDgehUfFHXMGMwgBPsqVoWt5448vU1sysHLk-_t4V9eg7OcQd-wV9QtTYlpAt35vpuGKwO4ElW8TKMAVATihfnJCFCGt2TYiboK-g_F0t7VrkLDAN7fK8bWw",
+          "e": "AQAB",
+          "d": "VYkhXeLP6zoY0PslPyfx6b3eawp35D3eh3fdB2Nk3Z3UD6ssTLgixIA1Whe9pT4_Lzi9WpuIDlpjgvYNnOCMPmuUuc7ME2YaiW8PbA32toH-Wmwdvns1_A_ILeN3ANgYMbQh3Qdl3lJVTnoyyMK5TjaM8CxOifOeBmwYwh3E5EGMAuECkls6roPuegM2xcns-zDou2tFjaq0mu0t_roYOKkOfGAiQuEIUl3FKBKnp57905IfZsvLH5TosweGIM4WDbqXHl4ZJiJpbWf4C78Jqdgg5E2V-l6O-PUlxDrmh5x-qRT5nM6m7pc7aC71JcvrB8WyiPWbtLlyuPgWmPLJAQ",
+          "p": "B0RYoqdMerfZ4MLtPRatwa5nOtQsjytNRun8Pax1zo5wrcxNSXxlhLiz8EvBFzFXQzT0OT10PC0Ew5iXbCh0tpaXEJRQg9tbjNk2NPqP8l0WShV95Gk",
+          "q": "BpL60hwhFUYoZEvf_sQjY8WVyk7zr2_JWQJjedFnLwM0rZG0maEympgJmIvndIOw3GMHB7LjbsjawaP39ErqD7Unsep0Dnb5wRF3wPNabA1v8n_2nG0",
+          "dp": "BFSQ8NP6ugIGnm3pywZRomGX-DFpICNwmDpkaifzx5OPx7E_uPOc1xrtdtrdhEGNu2m5wsZBFn7JIPkz-mqdKhTQjjujQv-bLXJeX_GTh5w65QirjUk",
+          "dq": "A4v2T7anTo_sKLgan5r3sNMfTecsZwC7Mw8r1cPYlC95kw6hzaR-5ZKS0r7f3ydRGoU-fLPRKaqpAoFQu3ZTMqg8QytG86rScYvX_LwNk2_obn8E8D0",
+          "qi": "BtCcpl5bb1ibOVQ00SEykVsLogy5LR8RNn-yYlcLkDHIPu_WkWhaJAzYZRLq_bYMHILGSbXQt1f8f5vRiVlVYObR4tfeBtpfRtrGPVn7cflfgg8Fa2s",
+          "oth": [
+            {
+              "r": "Ay1Z8eOwaB8WJeCv7i2tXY7SyR4Mv2BMhzzIJI-SRPi3TdkVhn8HjQR9pSncNVAa38ewj_eqb4f1HdYuz6DK03CpoQVPGZWWxvstHPdJzePBF2xOEc8",
+              "d": "ARueYrf3-sbkTT8FejOZYad9Hz6ISW_GH951GDKsWbq1CMNrOyQuuODZA3AOZtTRGjmi-wDtAMlTEx1t4175ezOtIwYb6Br-odJSj-g3Z0FFQuq0aoc",
+              "t": "Afq9_YH-6CX2Z1cBBBLuQjflAscXjhCqW0Hh1K6yrqEFkJsORMcbUoA9XUlChlILOUBiZmPVo5WTz9A3OuVo9OaNGgx2pXR4Uwushnk_rGrYVFlJ7sg"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "NoMatchingKey"
+  }
+}

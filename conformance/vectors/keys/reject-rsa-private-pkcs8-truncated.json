@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects a PKCS#8 PRIVATE KEY with rsaEncryption whose RSAPrivateKey holds only version, n (RFC 7517 A.1's) and e, without the private INTEGERs RFC 8017 App. A.1.2 requires: malformed (ADR 0067 §2).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN PRIVATE KEY-----\nMIIBJwIBADANBgkqhkiG9w0BAQEFAASCAREwggENAgEAAoIBAQDS/HtqCh5sZxBK\n64+Isldmm032ed2tCZtcSmzZqIAVtaEzvwuFbHhxtt8AC1VPzrPC7VErto8UXG6E\nNHUvq1Khz8EkQI95tYpFeMFkKIVXifeiSeOEyy2fri1n/Zb7kmwZjgdzmf3IFcCv\nCX3eWq3v9E3nDoJ/SHhDJDm/7rlgaNBHT8UNbZC/OpjfrxBAyJwC1pKrOzwolmCd\nhv1zt3TOB0BkfO7qoxC9EvmFqOufWf3UJs6lshIPTyo0vKt2S35sVNaEAji8xAWH\npZ5m7R8ziUV3Y1xHCvdc+Swg0dpD4b/EGeIipvDQuzWMXjj5ywUK6v6QSBTxrBqk\nnMqeoMqDAgMBAAE=\n-----END PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

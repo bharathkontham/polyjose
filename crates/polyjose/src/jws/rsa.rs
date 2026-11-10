@@ -1,24 +1,29 @@
 //! RSA family: RS256/384/512 (RSASSA-PKCS1-v1_5, RFC 7518 §3.3) and
-//! PS256/384/512 (RSASSA-PSS, RFC 7518 §3.5), verify only (ADR 0021).
+//! PS256/384/512 (RSASSA-PSS, RFC 7518 §3.5), signing and verification
+//! (ADR 0067, superseding ADR 0021 §2–§3).
 //!
 //! Implements the family contract documented in `jws/alg.rs` on the
 //! RustCrypto `rsa` and `sha2` crates (ADR 0002); no part of RSA is
 //! written here.
 //!
-//! - **Public-key operations only (ADR 0021).** RUSTSEC-2023-0071 (Marvin)
-//!   is a timing leak in the `rsa` crate's private-key operations, so
-//!   polyjose verifies RS*/PS* signatures but never makes them: [`sign`]
-//!   always fails. This file uses only `rsa::RsaPublicKey` and the typed
-//!   `rsa::pkcs1v15::VerifyingKey` and `rsa::pss::VerifyingKey`;
-//!   `scripts/check-deps.sh` (ADR 0021 §3) fails the build if any RSA
-//!   private-key, signing or decryption type appears here or anywhere
-//!   else in the core.
+//! - **Signing through the blinded entry points only (ADR 0067 §2, §6).**
+//!   [`sign`] uses `PrivateKey::pkcs1v15_sign_with_rng` and
+//!   `PrivateKey::pss_sign_with_rng`, which blind the private-exponent
+//!   operation (and draw the PSS salt) with the RNG passed in: polyjose's
+//!   OS CSPRNG adapter (ADR 0005). rsa 0.10.0 is the first release patched
+//!   for RUSTSEC-2023-0071 (Marvin). `scripts/check-deps.sh` and
+//!   `scripts/check-rsa-symbols.sh` fail the build on any unblinded,
+//!   typed or scheme-based signing path, key generation or RSA1_5.
+//! - **Verification** uses `rsa::PublicKey` and the typed
+//!   `rsa::pkcs1v15::VerifyingKey` and `rsa::pss::VerifyingKey`.
 //! - **Key import.** [`public_key`] turns a JWK's `n` and `e` into the
 //!   `rsa` crate's key with the modulus bounds of [`RSA_MODULUS_BITS`]. It is
 //!   the crate's one RSA public-key import, shared with RSA-OAEP-256
-//!   encryption (feature 0003).
+//!   encryption (feature 0003). The private key comes from
+//!   `keys::rsa::private_key`, checked at JWK import (ADR 0043).
 //! - **No SHA-1.** Only SHA-256/384/512 (ADR 0022).
-//! - **No secrets.** Every input is public; errors carry no key or input
+//! - **Secrets.** The private key lives in the `rsa` crate's key for the one
+//!   operation and is wiped when it is dropped; errors carry no key or input
 //!   octets (ADR 0007).
 
 use rsa::signature::Verifier;
@@ -28,20 +33,75 @@ use sha2::{Sha256, Sha384, Sha512};
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
 use crate::jwk::{Jwk, KeyMaterial, RSA_MODULUS_BITS};
+use crate::rng::CryptoRngAdapter;
 
 use super::alg::{self, Family};
 
-/// RSA signing is not offered in 0.1.0 (ADR 0021: RUSTSEC-2023-0071
-/// affects private-key operations). This body is final.
+/// Computes an RS256/384/512 (RFC 7518 §3.3) or PS256/384/512
+/// (RFC 7518 §3.5) JWS Signature over `signing_input` (RFC 7515 §5.1
+/// step 5) with an RSA private key, blinded with randomness from the OS
+/// CSPRNG (ADR 0005, ADR 0067 §2). See [`sign_with`].
 ///
 /// # Errors
 ///
-/// Always [`Error::UnsupportedAlgorithm`]. Key binding already refuses
-/// RS*/PS* signing with the same error before any other key check
-/// (ADR 0026 §2 step 8).
+/// As [`sign_with`].
 pub(crate) fn sign(alg: &SigningAlg, key: &Jwk, signing_input: &[u8]) -> Result<Vec<u8>> {
-    let _ = (alg, key, signing_input);
-    Err(Error::UnsupportedAlgorithm)
+    sign_with(alg, key, signing_input, &mut CryptoRngAdapter::os())
+}
+
+/// [`sign`] with an explicit RNG (the OS adapter in production; tests pass
+/// a failing one).
+///
+/// - **RS\***: RSASSA-PKCS1-v1_5 signature generation (RFC 8017 §8.2.1)
+///   with SHA-256/384/512 and the DER DigestInfo prefix (RFC 8017 §9.2
+///   note 1). It is deterministic: blinding changes only the computation,
+///   not the result, so RFC 7515 Appendix A.2 matches byte for byte.
+/// - **PS\***: RSASSA-PSS signature generation (RFC 8017 §8.1.1) with
+///   SHA-256/384/512, MGF1 over the same hash and a random salt as long as
+///   the hash output (RFC 7518 §3.5: "The size of the salt value is the
+///   same size as the hash function output").
+/// - The signature is exactly k octets, the modulus length (RFC 8017
+///   §8.1.1 step 3, §8.2.1 step 3).
+///
+/// Key binding has checked that `key` is an `RSA` private key with a
+/// modulus of 2048..=8192 bits (RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8),
+/// and JWK import that its private members are consistent (ADR 0043).
+///
+/// # Errors
+///
+/// - [`Error::RandomnessUnavailable`] if `rng` fails (ADR 0005); no
+///   unblinded signature is ever made instead.
+/// - [`Error::InvalidKey`] if the key cannot sign.
+/// - [`Error::KeyAlgorithmMismatch`] only if called against the contract
+///   (`alg` not RS*/PS*, a non-RSA or a public key), which key binding
+///   prevents.
+fn sign_with(
+    alg: &SigningAlg,
+    key: &Jwk,
+    signing_input: &[u8],
+    rng: &mut CryptoRngAdapter<'_>,
+) -> Result<Vec<u8>> {
+    use SigningAlg as A;
+    let KeyMaterial::Rsa(jwk_key) = key.material() else {
+        return Err(Error::KeyAlgorithmMismatch);
+    };
+    if alg::family(alg) != Some(Family::Rsa) {
+        return Err(Error::KeyAlgorithmMismatch);
+    }
+    let private = crate::keys::rsa::private_key(jwk_key)?;
+    let signed = match alg {
+        A::RS256 => private.pkcs1v15_sign_with_rng::<Sha256, _>(rng, signing_input),
+        A::RS384 => private.pkcs1v15_sign_with_rng::<Sha384, _>(rng, signing_input),
+        A::RS512 => private.pkcs1v15_sign_with_rng::<Sha512, _>(rng, signing_input),
+        A::PS256 => private.pss_sign_with_rng::<Sha256, _>(rng, signing_input),
+        A::PS384 => private.pss_sign_with_rng::<Sha384, _>(rng, signing_input),
+        A::PS512 => private.pss_sign_with_rng::<Sha512, _>(rng, signing_input),
+        _ => return Err(Error::KeyAlgorithmMismatch),
+    };
+    signed.map_err(|err| match err {
+        rsa::errors::Error::Rng => Error::RandomnessUnavailable,
+        _ => Error::InvalidKey("RSA key cannot make this signature"),
+    })
 }
 
 /// Validates an RS256/384/512 (RFC 7518 §3.3) or PS256/384/512
@@ -63,10 +123,9 @@ pub(crate) fn sign(alg: &SigningAlg, key: &Jwk, signing_input: &[u8]) -> Result<
 ///   leading zero octets were stripped, or with extra ones, fails. The
 ///   signature representative must be below n (RFC 8017 §5.2.2).
 ///
-/// Key binding has checked that `key` is an `RSA` public key with a
-/// modulus of 2048..=8192 bits (RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8);
-/// [`public_key`] checks the key again. Only public-key operations run
-/// (ADR 0021).
+/// Key binding has checked that `key` is an `RSA` key with a modulus of
+/// 2048..=8192 bits (RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8); a private
+/// key verifies with its public part. [`public_key`] checks the key again.
 ///
 /// # Errors
 ///
@@ -121,9 +180,9 @@ fn pss_signature(signature: &[u8]) -> Result<pss::Signature> {
 /// public exponent `e` of an RSA public JWK (RFC 7518 §6.3.1.1,
 /// §6.3.1.2). This is the one RSA public-key import of the crate: JWS
 /// verify uses it, and so does RSA-OAEP-256 encryption (feature 0003,
-/// ADR 0022). It handles public values only (ADR 0021).
+/// ADR 0022). It handles public values only.
 ///
-/// `rsa::RsaPublicKey::new_with_size_limits` with [`RSA_MODULUS_BITS`] checks:
+/// `rsa::PublicKey::new_with_size_limits` with [`RSA_MODULUS_BITS`] checks:
 ///
 /// - the modulus is 2048..=8192 bits (RFC 7518 §3.3, §3.5, §4.3;
 ///   ADR 0026 §2 step 8), and odd (RFC 8017 §3.1: a product of odd primes);
@@ -141,10 +200,10 @@ fn pss_signature(signature: &[u8]) -> Result<pss::Signature> {
 ///
 /// [`Error::InvalidKey`] if any check fails. The detail names the rule,
 /// never the values (ADR 0007).
-pub(crate) fn public_key(n: &[u8], e: &[u8]) -> Result<rsa::RsaPublicKey> {
+pub(crate) fn public_key(n: &[u8], e: &[u8]) -> Result<rsa::PublicKey> {
     use rsa::errors::Error as E;
     let (n, e) = (uint(n)?, uint(e)?);
-    rsa::RsaPublicKey::new_with_size_limits(n, e, RSA_MODULUS_BITS).map_err(|err| {
+    rsa::PublicKey::new_with_size_limits(n, e, RSA_MODULUS_BITS).map_err(|err| {
         Error::InvalidKey(match err {
             E::ModulusTooSmall | E::ModulusTooLarge => "RSA modulus must be 2048 to 8192 bits",
             E::InvalidExponent | E::PublicExponentTooSmall => {
@@ -444,7 +503,7 @@ mod tests {
         n
     }
 
-    fn invalid_key(result: Result<rsa::RsaPublicKey>) -> bool {
+    fn invalid_key(result: Result<rsa::PublicKey>) -> bool {
         matches!(result, Err(Error::InvalidKey(_)))
     }
 
@@ -453,7 +512,7 @@ mod tests {
         // RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8.
         for bits in [2048, 3072, 4096, 8191, 8192] {
             let key = public_key(&modulus(bits), F4).unwrap();
-            assert_eq!(key.n().bits() as usize, bits);
+            assert_eq!(key.n().bit_width() as usize, bits);
             assert_eq!(key.size(), bits.div_ceil(8));
         }
         // e = 3 is the smallest odd exponent above 1 (RFC 8017 §3.1).
@@ -617,29 +676,117 @@ mod tests {
         }
     }
 
+    /// RFC 7515 Appendix A.2.1: the RSA private JWK (`n`, `e`, `d`, `p`,
+    /// `q`, `dp`, `dq`, `qi`).
+    fn rfc7515_a2_private() -> Jwk {
+        Jwk::from_json(include_bytes!(
+            "../../tests/data/keys/rfc/rfc7515-a2-rsa-private.jwk.json"
+        ))
+        .unwrap()
+    }
+
+    /// RFC 7520 §3.4 (Figure 4): the RSA private JWK of the §4.1 and §4.2
+    /// examples (its `kid` and `use` left out, so the fixture also round-trips
+    /// through PEM in `tests/keys_roundtrip.rs`).
+    fn rfc7520_private() -> Jwk {
+        Jwk::from_json(include_bytes!(
+            "../../tests/data/keys/rfc/rfc7520-3.4-rsa-private.jwk.json"
+        ))
+        .unwrap()
+    }
+
     #[test]
-    fn sign_is_unsupported_for_every_rsa_alg_and_key() {
-        // ADR 0021: no RSA private-key operation, whatever the key.
+    fn rs256_signing_reproduces_rfc_7515_a2_and_rfc_7520_4_1_exactly() {
+        // RSASSA-PKCS1-v1_5 is deterministic (RFC 8017 §8.2.1), and
+        // blinding changes only the computation: RFC 7515 A.2.1 and
+        // RFC 7520 §4.1.3 (Figure 13) are reproduced octet for octet.
+        let a2 = rfc7515_a2_private();
+        assert!(!a2.is_public());
+        assert_eq!(
+            sign(&A::RS256, &a2, RFC7515_A2_INPUT.as_bytes()).unwrap(),
+            b64url_decode(RFC7515_A2_SIG).unwrap()
+        );
+        let input = signing_input(RFC7520_4_1_PROTECTED, RFC7520_PAYLOAD);
+        assert_eq!(
+            sign(&A::RS256, &rfc7520_private(), &input).unwrap(),
+            b64url_decode(RFC7520_4_1_SIG).unwrap()
+        );
+        // The private key's public part is the RFC public key.
+        let KeyMaterial::Rsa(public) = a2.material() else {
+            panic!("RSA")
+        };
+        assert_eq!(public.n(), b64url_decode(RFC7515_A2_N).unwrap());
+    }
+
+    #[test]
+    fn every_rsa_alg_signs_and_its_own_verify_accepts_it() {
+        // RFC 7518 §3.3 (RS*), §3.5 (PS*: random salt of hash length,
+        // MGF1 with the same hash): sign-then-verify with the public part;
+        // the signature is k octets (RFC 8017 §8.1.1 step 3, §8.2.1 step 3)
+        // and verification under another RSA alg fails.
+        let all = [A::RS256, A::RS384, A::RS512, A::PS256, A::PS384, A::PS512];
+        let input = signing_input(RFC7520_4_2_PROTECTED, RFC7520_PAYLOAD);
+        for key in [rfc7515_a2_private(), rfc7520_private()] {
+            let public = key.to_public().unwrap();
+            for alg in &all {
+                let sig = sign(alg, &key, &input).unwrap();
+                assert_eq!(sig.len(), 256, "{alg}");
+                assert_eq!(verify(alg, &public, &input, &sig), Ok(()), "{alg}");
+                assert_eq!(verify(alg, &key, &input, &sig), Ok(()), "{alg}");
+                for other in all.iter().filter(|other| *other != alg) {
+                    assert_eq!(
+                        verify(other, &public, &input, &sig),
+                        Err(Error::InvalidSignature),
+                        "{alg} as {other}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pss_signatures_are_randomized_and_rs_signatures_are_not() {
+        // RFC 8017 §9.1.1 step 4: a fresh random salt per PSS signature
+        // (from the OS CSPRNG, ADR 0005); PKCS#1 v1.5 has none.
+        let key = rfc7520_private();
+        let input = signing_input(RFC7520_4_2_PROTECTED, RFC7520_PAYLOAD);
+        for alg in [A::PS256, A::PS384, A::PS512] {
+            assert_ne!(sign(&alg, &key, &input), sign(&alg, &key, &input), "{alg}");
+        }
+        for alg in [A::RS256, A::RS384, A::RS512] {
+            assert_eq!(sign(&alg, &key, &input), sign(&alg, &key, &input), "{alg}");
+        }
+    }
+
+    #[test]
+    fn sign_refuses_public_and_non_rsa_keys_and_non_rsa_algs() {
+        // The family contract (`jws/alg.rs`): key binding refuses these
+        // first; the family still answers KeyAlgorithmMismatch rather than
+        // signing (RFC 7518 §3: signing needs the private key).
         use super::super::alg::test_keys as keys;
         let input = RFC7515_A2_INPUT.as_bytes();
-        let all = [A::RS256, A::RS384, A::RS512, A::PS256, A::PS384, A::PS512];
-        let candidates = [
+        for key in [
             rsa_jwk(RFC7515_A2_N),
-            rsa_jwk(RFC7520_N),
             keys::oct(64, ""),
             keys::p256_private(""),
             keys::ed25519_private(""),
-        ];
-        for alg in &all {
-            for key in &candidates {
+        ] {
+            for alg in [A::RS256, A::PS512] {
                 assert_eq!(
-                    sign(alg, key, input),
-                    Err(Error::UnsupportedAlgorithm),
+                    sign(&alg, &key, input),
+                    Err(Error::KeyAlgorithmMismatch),
                     "{alg}"
                 );
             }
         }
-        // And through the public API, with the RSA key's own alg.
+        for alg in [A::HS256, A::ES256, A::EdDSA, A::None] {
+            assert_eq!(
+                sign(&alg, &rfc7515_a2_private(), input),
+                Err(Error::KeyAlgorithmMismatch),
+                "{alg}"
+            );
+        }
+        // Through the public API: a public key cannot sign (key binding).
         let protected =
             ProtectedHeader::new(Header::from_json(br#"{"alg":"RS256"}"#).unwrap()).unwrap();
         assert_eq!(
@@ -649,8 +796,100 @@ mod tests {
                 &rsa_jwk(RFC7515_A2_N),
                 &SignOptions::new()
             ),
-            Err(Error::UnsupportedAlgorithm)
+            Err(Error::KeyAlgorithmMismatch)
         );
+        let jws = jws::sign_compact(&protected, b"x", &rfc7515_a2_private(), &SignOptions::new())
+            .unwrap();
+        let allowed = [A::RS256];
+        let opts = VerifyOptions::new(&allowed).unwrap();
+        let verified = jws::verify_compact(&jws, &rsa_jwk(RFC7515_A2_N), &opts).unwrap();
+        assert_eq!(*verified.payload, b"x");
+    }
+
+    #[test]
+    fn a_failing_rng_fails_closed_and_never_signs_unblinded() {
+        // ADR 0005: blinding (and the PSS salt) need the OS CSPRNG; if it
+        // fails the result is RandomnessUnavailable, never a signature
+        // made without blinding.
+        let key = rfc7515_a2_private();
+        let error = getrandom::Error::UNSUPPORTED;
+        for alg in [A::RS256, A::RS384, A::RS512, A::PS256, A::PS384, A::PS512] {
+            assert_eq!(
+                sign_with(&alg, &key, b"input", &mut CryptoRngAdapter::failing(error)),
+                Err(Error::RandomnessUnavailable),
+                "{alg}"
+            );
+        }
+    }
+
+    #[test]
+    fn wycheproof_rsa_pkcs1_signature_generation() {
+        // RSASSA-PKCS1-v1_5 generation is deterministic (RFC 8017 §8.2.1),
+        // so every `valid` test is reproduced octet for octet with the
+        // group's private JWK, for the JOSE hashes (RFC 7518 §3.3:
+        // RS256/384/512). The SHA-1 and SHA-224 groups have no JOSE alg.
+        // `acceptable` tests (flag SmallPublicKey: e = 3, which RFC 8017
+        // §3.1 allows) are reproduced too where the key imports: polyjose
+        // accepts e ≥ 3, but not unbalanced primes (see below).
+        let (mut checked, mut unbalanced) = (0, 0);
+        for name in wycheproof::names("rsa_pkcs1_") {
+            let suite = wycheproof::load(name);
+            for group in &suite.groups {
+                let alg = match group.sha.as_deref() {
+                    Some("SHA-256") => A::RS256,
+                    Some("SHA-384") => A::RS384,
+                    Some("SHA-512") => A::RS512,
+                    _ => continue,
+                };
+                let jwk = group.private_key_jwk.as_deref().unwrap();
+                let key = match Jwk::from_json(jwk.as_bytes()) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        // Unbalanced primes (here 1364 and 684 bits of a
+                        // 2048-bit n, with e = 3): rsa 0.10.0's
+                        // `from_components` bounds each prime to half the
+                        // modulus width, so the key is InvalidKey. Every
+                        // test of such a group is `acceptable`.
+                        assert!(matches!(error, Error::InvalidKey(_)), "{name}: {error:?}");
+                        assert!(
+                            group
+                                .tests
+                                .iter()
+                                .all(|t| t.result == wycheproof::Expected::Acceptable),
+                            "{name}"
+                        );
+                        unbalanced += 1;
+                        continue;
+                    }
+                };
+                assert!(!key.is_public());
+                for test in &group.tests {
+                    let (msg, sig) = test.signature();
+                    assert_ne!(
+                        test.result,
+                        wycheproof::Expected::Invalid,
+                        "{name} {}",
+                        test.tc_id
+                    );
+                    assert_eq!(
+                        sign(&alg, &key, msg).as_deref(),
+                        Ok(sig),
+                        "{name} tcId {}",
+                        test.tc_id
+                    );
+                    // And verification accepts it (RFC 8017 §8.2.2).
+                    assert_eq!(
+                        verify(&alg, &key, msg, sig),
+                        Ok(()),
+                        "{name} {}",
+                        test.tc_id
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        // 72 tests reproduced; 5 groups with unbalanced primes refused.
+        assert_eq!((checked, unbalanced), (72, 5));
     }
 
     /// The RFC 7520 §3.3 public key exactly as Figure 3 prints it, with

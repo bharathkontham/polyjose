@@ -13,6 +13,15 @@ use polyjose::util::b64url_encode;
 
 const RSA_N: &str = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw";
 
+/// RFC 7517 Appendix A.2: the private members of the RSA key whose modulus
+/// is `RSA_N` (RFC 7518 §6.3.2).
+const RSA_D: &str = "X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q";
+const RSA_P: &str = "83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs";
+const RSA_Q: &str = "3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk";
+const RSA_DP: &str = "G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0";
+const RSA_DQ: &str = "s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk";
+const RSA_QI: &str = "GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU";
+
 const KINDS: [&str; 8] = [
     "oct",
     "RSA",
@@ -152,33 +161,69 @@ fn set(members: &[String]) -> Result<JwkSet, Error> {
 
 #[test]
 fn set_rsa_private_wherever_placed_and_however_escaped() {
+    // ADR 0067 §4: an RSA private member no longer fails the set. An
+    // escaped member name is the member it decodes to (RFC 8259 §7), so a
+    // complete private key spelled with escapes imports as private, and an
+    // incomplete, multi-prime or malformed one is skipped like any other
+    // unusable member (RFC 7517 §5), wherever it sits.
     let good = key("oct", r#","alg":"HS256""#);
     let bad_alg = key("oct", r#","alg":"RS256""#);
-    let privates = [
-        // member name escaped
+    let unusable = [
+        // member name escaped: `d` alone is incomplete
         format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","\u0064":"AQAB","alg":"RSA1_5"}}"#),
-        // private member first, before kty
+        // private member first, before kty: `p` alone is incomplete
         format!(r#"{{"\u0070":"AQAB","alg":"RS256","kty":"RSA","n":"{RSA_N}","e":"AQAB"}}"#),
-        // kty value escaped
+        // kty value escaped, multi-prime (`oth`, ADR 0067 §3)
         format!(r#"{{"kty":"\u0052SA","n":"{RSA_N}","e":"AQAB","oth":[],"alg":"x"}}"#),
         // kty name escaped
         r#"{"\u006bty":"RSA","qi":7}"#.to_owned(),
         // otherwise malformed RSA with a private member
         r#"{"kty":"RSA","dq":null,"n":1}"#.to_owned(),
     ];
-    for p in &privates {
+    // Alone, the escaped names are recognised as private members.
+    let incomplete = Error::InvalidKey("RSA private key must have d, p, q, dp, dq and qi");
+    for p in &unusable[..2] {
+        assert_eq!(
+            Jwk::from_json(p.as_bytes()).err(),
+            Some(incomplete.clone()),
+            "{p}"
+        );
+    }
+    assert_eq!(
+        Jwk::from_json(unusable[2].as_bytes()).err(),
+        Some(Error::UnsupportedAlgorithm)
+    );
+    for p in &unusable {
         for layout in 0..3 {
-            let members = match layout {
-                0 => vec![p.clone()],
-                1 => vec![bad_alg.clone(), good.clone(), p.clone()],
-                _ => vec![p.clone(), bad_alg.clone()],
+            let (members, kept) = match layout {
+                0 => (vec![p.clone()], 0),
+                1 => (vec![bad_alg.clone(), good.clone(), p.clone()], 1),
+                _ => (vec![p.clone(), bad_alg.clone()], 0),
             };
-            assert_eq!(
-                set(&members).err(),
-                Some(Error::UnsupportedAlgorithm),
-                "{p}"
-            );
+            let s = set(&members).unwrap_or_else(|e| panic!("{p}: {e}"));
+            assert_eq!((s.len(), s.skipped()), (kept, members.len() - kept), "{p}");
         }
+    }
+    // RFC 7517 A.2's RSA private key with escaped member names (`d`, `qi`)
+    // and an escaped kty value, first, middle or last: kept, private.
+    let private = format!(
+        r#"{{"kty":"\u0052SA","n":"{RSA_N}","e":"AQAB","\u0064":"{RSA_D}","p":"{RSA_P}","q":"{RSA_Q}","dp":"{RSA_DP}","dq":"{RSA_DQ}","\u0071\u0069":"{RSA_QI}","alg":"RS256"}}"#
+    );
+    for layout in 0..3 {
+        let members = match layout {
+            0 => vec![private.clone(), good.clone()],
+            1 => vec![bad_alg.clone(), private.clone(), good.clone()],
+            _ => vec![good.clone(), bad_alg.clone(), private.clone()],
+        };
+        let s = set(&members).unwrap_or_else(|e| panic!("{layout}: {e}"));
+        assert_eq!(s.len(), 2, "{layout}");
+        let rsa = s
+            .keys()
+            .iter()
+            .find(|k| k.key_type() == polyjose::jwk::KeyType::Rsa)
+            .unwrap();
+        assert!(!rsa.is_public(), "{layout}");
+        assert_eq!(rsa.alg(), Some(&KeyAlg::from("RS256")));
     }
     // Non-RSA kinds with d / p are not RSA private keys: kept. `d` = 1 is
     // the generator's private key (import checks the pair, ADR 0043 §3).

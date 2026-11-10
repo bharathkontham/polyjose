@@ -594,20 +594,26 @@ mod tests {
         r#""qi":"GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU"}"#,
     );
 
-    /// ADR 0021, ADR 0029 §3: an RSA private member fails the whole set
-    /// import, so no token can verify against it, even one whose `kid`
-    /// names a different, valid member.
+    /// ADR 0067 §4 (amending ADR 0029 §3): an RSA private member is
+    /// imported as is, like an EC/OKP private key, and is a verification
+    /// candidate through its public part (RFC 7517 §4.3).
     #[test]
-    fn a_set_with_an_rsa_private_member_fails_to_import() {
+    fn a_set_with_an_rsa_private_member_imports_and_selects_it() {
         let first = p256_member(&KEY_A, r#","kid":"a""#);
-        let json = format!(r#"{{"keys":[{first},{A2_PRIVATE_MEMBER}]}}"#);
-        assert_eq!(
-            JwkSet::from_json(json.as_bytes()).unwrap_err(),
-            Error::UnsupportedAlgorithm
-        );
-        // Without the private member, the same token verifies.
+        let keys = set(&[&first, A2_PRIVATE_MEMBER]);
+        assert_eq!((keys.len(), keys.skipped()), (2, 0));
+        assert!(!keys.keys()[1].is_public());
         let jws = es256(r#"{"alg":"ES256","kid":"a"}"#, &KEY_A);
-        assert_eq!(selected(&jws, &set(&[&first])), Ok(0));
+        assert_eq!(selected(&jws, &keys), Ok(0));
+        // A token signed by the RFC 7517 A.2 private key itself (RS256,
+        // RFC 7518 §3.3) selects that member.
+        let a2 = Jwk::from_json(A2_PRIVATE_MEMBER.as_bytes()).unwrap();
+        let rs256 = token(r#"{"alg":"RS256","kid":"2011-04-29"}"#, &a2);
+        assert_eq!(selected(&rs256, &keys), Ok(1));
+        // ADR 0067 §3: a multi-prime member (`oth`) is skipped, not fatal.
+        let multi = A2_PRIVATE_MEMBER.replace(r#""qi":"#, r#""oth":[],"qi":"#);
+        let keys = set(&[&first, &multi]);
+        assert_eq!((keys.len(), keys.skipped()), (1, 1));
     }
 
     /// RFC 7517 §5: members of an unknown `kty` or `crv` are skipped, and

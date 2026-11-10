@@ -1,6 +1,6 @@
 //! JWK Set import and verification-key selection, black-box (ADR 0008
-//! layer 2): RFC 7517 §5 skipping, the RSA-private fail-closed rule
-//! (ADR 0021, ADR 0029 §3), the ADR 0029 §2 candidate filter over every
+//! layer 2): RFC 7517 §5 skipping, RSA private keys kept as imported
+//! (ADR 0067 §4, amending ADR 0029 §3), the ADR 0029 §2 candidate filter over every
 //! `SigningAlg`, secret hygiene and robustness.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
@@ -27,6 +27,10 @@ fn m(prefix: &str, extra: &str) -> String {
         format!("{prefix},{extra}}}")
     }
 }
+
+/// RFC 7517 Appendix A.2: the six private members of the `RSA_N` key
+/// (RFC 7518 §6.3.2), without braces.
+const RSA_A2_PRIVATE: &str = r#""d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q","p":"83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs","q":"3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk","dp":"G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0","dq":"s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk","qi":"GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU""#;
 
 fn rsa(extra: &str) -> String {
     m(&format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB""#), extra)
@@ -296,18 +300,22 @@ fn order_and_key_index_semantics() {
     }
 }
 
-/// ADR 0021: an RSA private member fails the set wherever it sits, with
-/// escaped member names, and is never masked by a defect in the same
-/// member or in other members.
+/// ADR 0067 §4: an RSA private member never fails the set. A complete
+/// private key (RFC 7518 §6.3.2), its member names escaped or not, is kept
+/// as a private key wherever it sits; an incomplete, malformed or
+/// multi-prime one (`oth`, ADR 0067 §3) is skipped (RFC 7517 §5) like any
+/// other unusable member, and never hides the other members.
 #[test]
-fn rsa_private_fails_closed_everywhere() {
-    let privates: Vec<String> = vec![
+fn rsa_private_members_never_fail_the_set() {
+    let unusable: Vec<String> = vec![
         rsa(r#""d":"AQAB""#),
         // escaped member names decode to d / p / oth
-        rsa(r#""d":"AQAB""#),
-        rsa(r#""p":"AQAB""#),
-        rsa(r#""oth":[]"#),
-        // defects in the same member must not hide the private part
+        rsa(r#""\u0064":"AQAB""#),
+        rsa(r#""\u0070":"AQAB""#),
+        rsa(r#""\u006fth":[]"#),
+        // a complete key made multi-prime
+        rsa(&format!(r#"{RSA_A2_PRIVATE},"oth":[]"#)),
+        // defects in the same member
         r#"{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB"}"#.to_owned(), // small modulus
         r#"{"kty":"RSA","d":"AQAB"}"#.to_owned(),                       // n, e missing
         r#"{"kty":"RSA","n":7,"e":null,"d":"!!"}"#.to_owned(),
@@ -319,8 +327,16 @@ fn rsa_private_fails_closed_everywhere() {
         rsa(r#""q":"AQAB""#),
         rsa(r#""qi":"AQAB""#),
         // escaped kty
-        r#"{"kty":"RSA","d":"AQAB"}"#.to_owned(),
+        r#"{"kty":"\u0052SA","d":"AQAB"}"#.to_owned(),
     ];
+    let complete: Vec<String> = vec![
+        rsa(RSA_A2_PRIVATE),
+        rsa(&RSA_A2_PRIVATE
+            .replace(r#""d":"#, r#""\u0064":"#)
+            .replace(r#""qi":"#, r#""q\u0069":"#)),
+        rsa(&format!(r#"{RSA_A2_PRIVATE},"kid":"rsa","alg":"RS256""#)),
+    ];
+    // One kept decoy (OCT) and four skipped ones.
     let decoys: Vec<String> = vec![
         r#"{"kty":"XYZ"}"#.to_owned(),
         r#"{"kty":"oct"}"#.to_owned(),
@@ -328,25 +344,44 @@ fn rsa_private_fails_closed_everywhere() {
         r#"{"kty":"EC","crv":"Ed448"}"#.to_owned(),
         m(OCT, ""),
     ];
-    for p in &privates {
+    for (p, kept) in unusable
+        .iter()
+        .map(|p| (p, 0))
+        .chain(complete.iter().map(|p| (p, 1)))
+    {
         for pos in 0..=decoys.len() {
             let mut members = decoys.clone();
             members.insert(pos, p.clone());
-            let r = parse(&members);
-            assert_eq!(r.unwrap_err(), Error::UnsupportedAlgorithm, "{p} at {pos}");
+            let s = parse(&members).unwrap_or_else(|e| panic!("{p} at {pos}: {e}"));
+            assert_eq!((s.len(), s.skipped()), (1 + kept, 5 - kept), "{p} at {pos}");
+            let private = s
+                .keys()
+                .iter()
+                .filter(|k| k.key_type() == polyjose::jwk::KeyType::Rsa && !k.is_public())
+                .count();
+            assert_eq!(private, kept, "{p} at {pos}");
         }
-        assert_eq!(
-            parse(std::slice::from_ref(p)).unwrap_err(),
-            Error::UnsupportedAlgorithm,
-            "{p}"
-        );
+        let s = parse(std::slice::from_ref(p)).unwrap_or_else(|e| panic!("{p}: {e}"));
+        assert_eq!((s.len(), s.skipped()), (kept, 1 - kept), "{p}");
         // Two private members, and a private member after another RSA key.
-        assert_eq!(
-            parse(&[rsa(""), p.clone(), p.clone()]).unwrap_err(),
-            Error::UnsupportedAlgorithm
-        );
+        let s = parse(&[rsa(""), p.clone(), p.clone()]).unwrap();
+        assert_eq!((s.len(), s.skipped()), (1 + 2 * kept, 2 - 2 * kept), "{p}");
     }
-    // Boundary: RSA *public* defects are skipped; private members are fatal.
+    // A kept RSA private key is a verification candidate like its public
+    // half (ADR 0029 §2); to_public drops its private members (ADR 0067).
+    let s = parse(&[complete[2].clone()]).unwrap();
+    assert_eq!(idx(&s, &SigningAlg::RS256, Some("rsa")), [0]);
+    let public = s.keys()[0].to_public().unwrap();
+    assert!(public.is_public());
+    assert_eq!(
+        public.to_json().as_str(),
+        parse(&[rsa(r#""kid":"rsa","alg":"RS256""#)])
+            .unwrap()
+            .keys()[0]
+            .to_json()
+            .as_str()
+    );
+    // Boundary: RSA *public* defects are skipped too.
     let s = parse(&[r#"{"kty":"RSA","n":"AQAB","e":"AQAB"}"#.to_owned(), rsa("")]).unwrap();
     assert_eq!((s.len(), s.skipped()), (1, 1));
     // A private-looking member on a non-RSA key is not an RSA private key.
@@ -408,13 +443,26 @@ fn no_secret_in_debug_or_errors() {
     for forbidden in [SECRET, k, "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"] {
         assert!(!dbg.contains(forbidden), "Debug leaks {forbidden}: {dbg}");
     }
+    // ADR 0067: a set holding an RSA private key prints none of its six
+    // private members (CLAUDE.md secrets rule).
+    let s = parse(&[rsa(RSA_A2_PRIVATE)]).unwrap();
+    assert_eq!(s.len(), 1);
+    let dbg = format!("{s:?} {s:#?}");
+    for member in RSA_A2_PRIVATE.split(',') {
+        let value = member.split('"').nth(3).unwrap();
+        assert!(!dbg.contains(&value[..12]), "Debug leaks {member}: {dbg}");
+    }
+    assert!(dbg.contains("<redacted>"), "{dbg}");
     for name in ["x-top", "iss"] {
         let _ = name; // names may appear; values may not
     }
     // Errors.
+    // An unusable RSA private member is skipped, not an error (ADR 0067
+    // §4); imported alone, its error does not echo it either.
+    let lone = format!(r#"{{"keys":[{{"kty":"RSA","d":"{SECRET}"}}]}}"#);
+    assert_eq!(JwkSet::from_json(lone.as_bytes()).unwrap().skipped(), 1);
     let errs = [
-        JwkSet::from_json(format!(r#"{{"keys":[{{"kty":"RSA","d":"{SECRET}"}}]}}"#).as_bytes())
-            .unwrap_err(),
+        polyjose::jwk::Jwk::from_json(rsa(&format!(r#""d":"{SECRET}""#)).as_bytes()).unwrap_err(),
         JwkSet::from_json(format!(r#"{{"keys":"{SECRET}"}}"#).as_bytes()).unwrap_err(),
         JwkSet::from_json(format!(r#"{{"keys":[],"{SECRET}":1,"{SECRET}":2}}"#).as_bytes())
             .unwrap_err(),
@@ -494,13 +542,14 @@ proptest! {
         }
     }
 
-    /// An RSA private member anywhere in an otherwise well-formed pool set
-    /// always fails the set with UnsupportedAlgorithm.
+    /// ADR 0067 §4: an RSA private member anywhere in a pool set never
+    /// fails it. A complete one is kept, at its document position among the
+    /// kept members, as a private key; an unusable one is skipped.
     #[test]
-    fn rsa_private_always_fatal(
+    fn rsa_private_member_never_fails_a_pool_set(
         picks in prop::collection::vec(0usize..13, 0..8),
         pos in 0usize..9,
-        which in 0usize..4,
+        which in 0usize..5,
     ) {
         let pool = pool();
         let mut members: Vec<String> = picks.iter().map(|&i| pool[i].clone()).collect();
@@ -509,9 +558,26 @@ proptest! {
             r#"{"kty":"RSA","d":null}"#.to_owned(),
             r#"{"kty":"RSA","oth":[{"r":1}]}"#.to_owned(),
             rsa(r#""p":"!","kid":7"#),
+            rsa(RSA_A2_PRIVATE),
         ][which].clone();
+        let complete = which == 4;
         let pos = pos.min(members.len());
         members.insert(pos, private);
-        prop_assert_eq!(parse(&members).unwrap_err(), Error::UnsupportedAlgorithm);
+        let s = parse(&members).unwrap();
+        // Pool entries 0..10 import (the RSA one, 9, is public); 10 (XYZ),
+        // 11 (Ed448) and 12 (null) are skipped.
+        let kept_pool = picks.iter().filter(|&&i| i < 10).count();
+        let kept = kept_pool + usize::from(complete);
+        prop_assert_eq!((s.len(), s.skipped()), (kept, members.len() - kept));
+        let private_at: Vec<usize> = s
+            .keys()
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| k.key_type() == polyjose::jwk::KeyType::Rsa && !k.is_public())
+            .map(|(i, _)| i)
+            .collect();
+        let before = picks[..pos].iter().filter(|&&i| i < 10).count();
+        let expected: Vec<usize> = if complete { vec![before] } else { Vec::new() };
+        prop_assert_eq!(private_at, expected);
     }
 }

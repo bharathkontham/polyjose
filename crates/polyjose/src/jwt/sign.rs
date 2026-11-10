@@ -56,9 +56,9 @@ const SECRET_JWK_MEMBERS: [&str; 8] = ["k", "d", "p", "q", "dp", "dq", "qi", "ot
 ///
 /// [`Error::InvalidHeader`]`("jwk")`, with no part of the value, when `v`
 /// is not a JSON object, has any of [`SECRET_JWK_MEMBERS`], is not a valid
-/// JWK ([`Jwk::from_object`], which also refuses an RSA private JWK,
-/// ADR 0021), or is not a public key ([`Jwk::is_public`]; an `oct` key
-/// never is, RFC 7518 §6.4).
+/// JWK ([`Jwk::from_object`]), or is not a public key ([`Jwk::is_public`];
+/// an `oct` key never is, RFC 7518 §6.4, and an RSA private key is not,
+/// RFC 7518 §6.3.2).
 fn check_public_jwk(v: &Value) -> Result<()> {
     let refused = || Error::InvalidHeader("jwk");
     let object = v.as_object().ok_or_else(refused)?;
@@ -218,12 +218,11 @@ impl IssueOptions {
 ///
 /// Fail-closed: only the algorithms listed here are issued.
 ///
-/// - HS256/384/512 (RFC 7518 §3.2), ES256/384/512 (RFC 7518 §3.4),
-///   ES256K (RFC 8812 §3.2), EdDSA (RFC 8037 §3.1) and Ed25519
-///   (RFC 9864 §2.2) → `Ok`.
+/// - HS256/384/512 (RFC 7518 §3.2), RS256/384/512 (RFC 7518 §3.3),
+///   ES256/384/512 (RFC 7518 §3.4), PS256/384/512 (RFC 7518 §3.5; RSA
+///   signing since ADR 0067), ES256K (RFC 8812 §3.2), EdDSA (RFC 8037
+///   §3.1) and Ed25519 (RFC 9864 §2.2) → `Ok`.
 /// - `none` → [`Error::AlgorithmNotAllowed`] (RFC 8725 §3.2, ADR 0007).
-/// - RS256/384/512 and PS256/384/512 → [`Error::UnsupportedAlgorithm`]:
-///   RSA private-key operations are not shipped (ADR 0021).
 /// - Anything else → [`Error::UnsupportedAlgorithm`] (RFC 7515 §4.1.1).
 fn check_issuable(alg: &SigningAlg) -> Result<()> {
     use SigningAlg as A;
@@ -231,6 +230,12 @@ fn check_issuable(alg: &SigningAlg) -> Result<()> {
         A::HS256
         | A::HS384
         | A::HS512
+        | A::RS256
+        | A::RS384
+        | A::RS512
+        | A::PS256
+        | A::PS384
+        | A::PS512
         | A::ES256
         | A::ES384
         | A::ES512
@@ -277,9 +282,8 @@ fn check_issuable(alg: &SigningAlg) -> Result<()> {
 ///
 /// In this order:
 ///
-/// - [`Error::UnsupportedAlgorithm`] for RS256/384/512 and PS256/384/512,
-///   before `key` is read: polyjose holds no RSA private keys (ADR 0021).
-///   Also for an unknown algorithm (RFC 7515 §4.1.1).
+/// - [`Error::UnsupportedAlgorithm`] for an unknown algorithm, before `key`
+///   is read (RFC 7515 §4.1.1).
 /// - [`Error::AlgorithmNotAllowed`] for `none` (RFC 8725 §3.2).
 /// - [`Error::KeyAlgorithmMismatch`] or [`Error::InvalidKey`] when `key`
 ///   cannot sign with the algorithm, including a public-only key
@@ -287,8 +291,8 @@ fn check_issuable(alg: &SigningAlg) -> Result<()> {
 /// - [`Error::RandomnessUnavailable`] from hedged ECDSA signing
 ///   (ADR 0005, ADR 0026 §5).
 pub fn sign(claims: &Claims, opts: &IssueOptions, key: &Jwk) -> Result<String> {
-    // ADR 0021, ADR 0027 §8: decided by the algorithm alone, before any
-    // key use (sign_compact would reject these too, after reading the key).
+    // ADR 0027 §8: decided by the algorithm alone, before any key use
+    // (sign_compact would reject these too, after reading the key).
     check_issuable(&opts.alg)?;
     let protected = opts.protected_header(key.kid())?;
     // RFC 7519 §7.1 steps 1-2: the Claims Set's octets are the JWS Payload.
@@ -398,16 +402,11 @@ mod tests {
 
     #[test]
     fn issuable_algorithms_are_an_explicit_list() {
-        // ADR 0027 §8, ADR 0021: fail-closed on anything not listed.
+        // ADR 0027 §8: fail-closed on anything not listed. Every known
+        // algorithm but `none` is issued, RS*/PS* since ADR 0067.
         for alg in SigningAlg::KNOWN {
             let expected = match alg {
                 SigningAlg::None => Err(Error::AlgorithmNotAllowed),
-                SigningAlg::RS256
-                | SigningAlg::RS384
-                | SigningAlg::RS512
-                | SigningAlg::PS256
-                | SigningAlg::PS384
-                | SigningAlg::PS512 => Err(Error::UnsupportedAlgorithm),
                 _ => Ok(()),
             };
             assert_eq!(check_issuable(alg), expected, "{alg:?}");

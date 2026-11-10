@@ -415,11 +415,11 @@ part of the core crate; they are listed separately under [Binding frameworks](#b
 - **Upstream:** RustCrypto, [RustCrypto/crypto-bigint](https://github.com/RustCrypto/crypto-bigint)
   ([crates.io](https://crates.io/crates/crypto-bigint))
 - **License:** Apache-2.0 OR MIT
-- **Version:** 0.7.10
+- **Version:** 0.7.11
 - **Used for:** not used directly. Constant-time big-integer arithmetic under the curve crates'
   fields and scalars and under `rsa`.
 - **Audit status:** reviewed by NCC Group in 2023 (for Entropy), in the same review as `k256`, on
-  the 0.5 line; polyjose pins 0.7.10, a later line that has diverged significantly since. A
+  the 0.5 line; polyjose pins 0.7.11, a later line that has diverged significantly since. A
   dependency of `elliptic-curve`, `primefield`, `rfc6979` and `rsa`.
 
 ### `cpubits`
@@ -504,24 +504,26 @@ part of the core crate; they are listed separately under [Binding frameworks](#b
   polyjose writes on `sha2`.
 - **Audit status:** not in the ADR 0019 register; a dependency of `elliptic-curve` (with `ecdh`).
 
-## RSA (public-key operations only)
+## RSA
 
 ### `rsa`
 
 - **Upstream:** RustCrypto, [RustCrypto/RSA](https://github.com/RustCrypto/RSA)
   ([crates.io](https://crates.io/crates/rsa))
 - **License:** MIT OR Apache-2.0
-- **Version:** 0.10.0-rc.21
-- **Used for:** RSA **public-key operations only**: RS256/384/512 and PS256/384/512 signature
-  verification (RFC 7518 §3.3, §3.5) and RSA-OAEP-256 encryption (RFC 7518 §4.3). It is built with
-  no features. polyjose does not sign or decrypt with RSA, generate RSA keys or read RSA private
-  keys, because of the open advisory below; `scripts/check-deps.sh` rejects any such use
-  (ADR 0021).
+- **Version:** 0.10.0
+- **Used for:** RS256/384/512 and PS256/384/512 signing and verification (RFC 7518 §3.3, §3.5),
+  and RSA-OAEP-256 encryption and decryption (RFC 7518 §4.3), with RSA private keys polyjose
+  imports itself (RFC 7518 §6.3.2, PKCS#8, PKCS#1). It is built with the `pkcs1v15` feature only.
+  Private-key operations go only through rsa's blinded entry points, with randomness from
+  polyjose's OS CSPRNG source (ADR 0005, ADR 0067). polyjose does not generate RSA keys or use
+  RSA1_5 or SHA-1; `scripts/check-deps.sh` and `scripts/check-rsa-symbols.sh` reject those.
 - **Audit status:** audited by Include Security in 2019 (one minor finding, per its README), before
-  RUSTSEC-2023-0071 (the "Marvin" timing leak in private-key operations), which has no patched
-  version and affects the release candidate polyjose pins (0.10.0-rc.21). The constant-time 0.10
-  rewrite has no public independent audit. Public-key operations handle no secret, so the advisory
-  does not apply to the way polyjose uses the crate.
+  RUSTSEC-2023-0071 (the "Marvin" timing leak in private-key operations). 0.10.0 is the first
+  release the advisory lists as patched. The constant-time 0.10 rewrite has no public independent
+  audit; upstream checks its constant-time code with BINSEC (`cargo checkct`), and polyjose runs
+  its own dudect-style timing test of RSA-OAEP-256 decryption and RSA signing. There is no
+  Marvin-toolkit run.
 
 ### `crypto-primes`
 

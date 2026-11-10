@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Negative test of scripts/check-rsa-symbols.sh, the compiled-symbol half of the ADR 0021 guard
-# (ADR 0049 §1) that deny.toml's ignore of RUSTSEC-2023-0071 depends on. The gate builds polyjose
-# and each binding and fails on any RSA private-key, signing or decryption symbol in their own
-# objects. Every case runs that gate alone, never check-deps.sh, so a case that fails here is
-# caught by the compiled output whatever the text scan sees.
+# Negative test of scripts/check-rsa-symbols.sh, the compiled-symbol half of the RSA guard
+# (ADR 0049 §1), narrowed by ADR 0067 §6: the gate builds polyjose and each binding and fails on
+# any symbol of RSA key generation, RSA1_5, an unblinded, typed or scheme-based private-key path or
+# hazmat in their own objects. Every case runs that gate alone, never check-deps.sh, so a case that
+# fails here is caught by the compiled output whatever the text scan sees.
 #
 # Must fail (each is reachable code, so it is compiled: unreachable private code is never codegened
 # and ships nothing, which is the text scan's job):
@@ -11,18 +11,24 @@
 #        `use {rsa as r};`, a `#[path]` module outside src/ with `use rsa as r;`, a macro taking
 #        `rsa` as an ident (`<k!(rsa)>::random`), and a `#[path]` child of jws::rsa using
 #        `super::pkcs1v15 as p`, each making a pkcs1v15::SigningKey;
-#   5.   a plain `rsa::RsaPrivateKey::new` from a public function;
+#   5.   a plain `rsa::RsaPrivateKey::new` (key generation) from a public function;
 #   6.   OAEP decryption (`oaep::DecryptingKey` through `rsa::traits::Decryptor`);
 #   7.   PSS signing (`pss::SigningKey`);
 #   8.   a generic polyjose function that only a binding instantiates, so the RSA code is in the
 #        binding's objects and not polyjose's;
 #   9.   a `#[cfg(not(debug_assertions))]` public function (macro spelling), which only the
-#        release configuration compiles.
+#        release configuration compiles;
+#  22.   the unblinded paths ADR 0067 §6 keeps out (`PrivateKey::sign` with a scheme, and the
+#        RNG-less `pkcs1v15_sign` and `oaep_decrypt`), and RSA1_5 in both directions
+#        (`pkcs1v15_decrypt_with_rng`, `pkcs1v15_encrypt_with_rng`).
+#  23.   must fail closed: RSA private-key code in polyjose with no blinded private-key core
+#        (rsa_decrypt, rsa::algorithms::blinding) instantiated with polyjose::rng::CryptoRngAdapter (the positive sentinel; the RNG is renamed in the copy
+#        and a from_components call planted, so the case holds on any tree).
 # (An uncalled `#[inline] pub fn` and an uninstantiated generic `pub fn` are never codegened in
 # polyjose, so they have no symbol to find: the text scan's macro rule catches those, rsa-guard.sh.)
 # Extra targets (--target, feature 0013 F15):
 #  20.   must fail: the 0008 security audit's L2 plant, `#[cfg(target_os = "android")]` code in
-#        polyjose-ffi naming rsa::RsaPrivateKey, with rsa only under
+#        polyjose-ffi calling rsa::RsaPrivateKey::from_p_q (still forbidden), with rsa only under
 #        [target.'cfg(target_os = "android")'.dependencies], under --target aarch64-linux-android,
 #        in the dev and the release configuration; and the same plant in polyjose-surface, which
 #        polyjose-ffi links, in the dev configuration. Documented residual: without --target the
@@ -60,7 +66,7 @@
 #        as plain text (an expansion).
 # Must pass, with the look-alike symbols present in the scanned objects (read back from --dump,
 # so a pass cannot come from scanning nothing): the unchanged tree in every configuration, the
-# release ones included (rsa::RsaPublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
+# release ones included (rsa::PublicKey and the typed pkcs1v15/pss VerifyingKey), and a tree
 # whose own modules are named like the forbidden items outside the rsa crate (a `cbc::Decryptor`
 # as in feature 0003's A*CBC-HS*, and polyjose::jws::rsa::{traits::Decryptor,
 # private_key::RsaPrivateKey}).
@@ -123,7 +129,7 @@ expect_symbol() {
   fi
 }
 
-sym_fail='^FAIL: compiled RSA private-key, signing or decryption code'
+sym_fail='^FAIL: compiled RSA code that ADR 0067 does not allow'
 hmac=crates/polyjose/src/jws/hmac.rs
 lib_rs=crates/polyjose/src/lib.rs
 # The audit's signing body. `#[used]` keeps a pointer to it, so it is compiled although nothing
@@ -160,7 +166,7 @@ for suffix in "" " --release"; do
     tests_failed=$((tests_failed + 1))
   fi
 done
-expect_symbol "unchanged tree" "rsa::public_key::RsaPublicKey"
+expect_symbol "unchanged tree" "rsa::public_key::PublicKey"
 expect_symbol "unchanged tree" "rsa::pkcs1v15::verifying_key::VerifyingKey<sha2::Sha256>"
 expect_symbol "unchanged tree" "rsa::pss::verifying_key::VerifyingKey<sha2::Sha512>"
 expect_symbol "unchanged tree" "polyjose::jws::rsa::sign"
@@ -212,7 +218,7 @@ pub fn evil() -> bool {
     let mut rng = p256::elliptic_curve::rand_core::UnwrapErr(crate::rng::CryptoRngAdapter::os());
     RsaPrivateKey::new(&mut rng, 2048).is_ok()
 }'
-expect_fail "use rsa::RsaPrivateKey; RsaPrivateKey::new" "<rsa::private_key::RsaPrivateKey>::new" "$sym_fail"
+expect_fail "use rsa::RsaPrivateKey; RsaPrivateKey::new" "<rsa::private_key::PrivateKey>::new" "$sym_fail"
 
 # 6. RSA-OAEP decryption.
 new_case oaep-decrypt
@@ -235,6 +241,76 @@ pub fn evil(key: rsa::RsaPrivateKey, msg: &[u8]) -> Vec<u8> {
     rsa::pss::SigningKey::<sha2::Sha256>::new(key).sign_with_rng(&mut rng, msg).to_vec()
 }'
 expect_fail "pss::SigningKey" "rsa::pss::signing_key::SigningKey<sha2::Sha256>" "$sym_fail"
+
+# 22. The unblinded paths and RSA1_5, which ADR 0067 §6 keeps out next to the blinded entry points.
+#     Each plant is a public, non-generic function, so it is compiled.
+new_case unblinded-scheme-sign
+append_to "$lib_rs" '/// Test only.
+#[doc(hidden)]
+pub fn evil(key: &rsa::RsaPrivateKey, digest: &[u8]) -> bool {
+    key.sign(rsa::Pkcs1v15Sign::new::<sha2::Sha256>(), digest).is_ok()
+}'
+expect_fail "PrivateKey::sign (unblinded without an RNG)" "<rsa::private_key::PrivateKey>::sign" "$sym_fail"
+
+new_case unblinded-pkcs1v15-sign
+append_to "$lib_rs" '/// Test only.
+#[doc(hidden)]
+pub fn evil(key: &rsa::RsaPrivateKey, msg: &[u8]) -> bool {
+    key.pkcs1v15_sign::<sha2::Sha256>(msg).is_ok()
+}'
+expect_fail "PrivateKey::pkcs1v15_sign (no RNG)" "<rsa::private_key::PrivateKey>::pkcs1v15_sign" "$sym_fail"
+
+new_case unblinded-oaep-decrypt
+append_to "$lib_rs" '/// Test only.
+#[doc(hidden)]
+pub fn evil(key: &rsa::RsaPrivateKey, ciphertext: &[u8]) -> bool {
+    key.oaep_decrypt::<sha2::Sha256>(ciphertext).is_ok()
+}'
+expect_fail "PrivateKey::oaep_decrypt (no RNG)" "<rsa::private_key::PrivateKey>::oaep_decrypt" "$sym_fail"
+
+new_case rsa1-5-decrypt
+append_to "$lib_rs" '/// Test only.
+#[doc(hidden)]
+pub fn evil(key: &rsa::RsaPrivateKey, ciphertext: &[u8]) -> bool {
+    let mut rng = crate::rng::CryptoRngAdapter::os();
+    key.pkcs1v15_decrypt_with_rng(&mut rng, ciphertext).is_ok()
+}'
+expect_fail "PrivateKey::pkcs1v15_decrypt_with_rng (RSA1_5)" "<rsa::private_key::PrivateKey>::pkcs1v15_decrypt_with_rng" "$sym_fail"
+
+new_case rsa1-5-encrypt
+append_to "$lib_rs" '/// Test only.
+#[doc(hidden)]
+pub fn evil(key: &rsa::RsaPublicKey, msg: &[u8]) -> bool {
+    let mut rng = crate::rng::CryptoRngAdapter::os();
+    key.pkcs1v15_encrypt_with_rng(&mut rng, msg).is_ok()
+}'
+expect_fail "PublicKey::pkcs1v15_encrypt_with_rng (RSA1_5)" "<rsa::public_key::PublicKey>::pkcs1v15_encrypt_with_rng" "$sym_fail"
+
+# 23. The positive sentinel fails closed when polyjose has RSA private-key code but no blinded
+#     entry point instantiated with its RNG: the RNG type is renamed throughout the copy, and a
+#     from_components call makes sure private-key code is there on any tree.
+new_case sentinel-no-blinded-path
+python3 -I -c '
+import os, sys
+for top in sys.argv[1:]:
+    for dirpath, _, names in os.walk(top):
+        for name in names:
+            path = os.path.join(dirpath, name)
+            if not name.endswith(".rs"):
+                continue
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            if "CryptoRngAdapter" in text:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text.replace("CryptoRngAdapter", "OsRngAdapter"))
+' "$case_dir/crates/polyjose/src" "$case_dir/bindings" || lib_die "could not rename the RNG in the copy"
+append_to "$lib_rs" '/// Test only.
+#[doc(hidden)]
+pub fn evil(n: rsa::BoxedUint, e: rsa::BoxedUint, d: rsa::BoxedUint, p: rsa::BoxedUint, q: rsa::BoxedUint) -> bool {
+    rsa::RsaPrivateKey::from_components(n, e, d, vec![p, q]).is_ok()
+}'
+expect_closed "RSA private-key code without a blinded entry point on polyjose's RNG" \
+  "has RSA private-key code but no symbol of rsa's blinded private-key core"
 
 # 9. Code that only a release build compiles (`cfg(not(debug_assertions))`, the F01 tester's
 #    finding (c)), with the macro spelling the text scan's macro rule catches (rsa-guard.sh). The
@@ -275,7 +351,7 @@ pub fn evil() -> bool {
 # polyjose-wasm reaches polyjose through polyjose-surface only; the plant calls it directly.
 replace_in bindings/wasm/Cargo.toml $'[dependencies]\npolyjose-surface' $'[dependencies]\npolyjose.workspace = true\npolyjose-surface'
 expect_fail "generic polyjose fn instantiated by polyjose-wasm only" \
-  "<rsa::private_key::RsaPrivateKey>::new" "$sym_fail in the objects of polyjose_wasm \\("
+  "<rsa::private_key::PrivateKey>::new" "$sym_fail in the objects of polyjose_wasm \\("
 
 # Look-alikes outside the rsa crate: the same item names under polyjose's own paths must pass.
 new_case look-alikes
@@ -327,8 +403,9 @@ dump_dir=""
 # 20. The 0008 audit's L2 plant: RSA private-key code that only an Android build compiles, in
 #     polyjose-ffi (the crate the Android .so is built from, ADR 0033) and in polyjose-surface,
 #     which it links. rsa is reached only under a target-specific table, so no host build has it.
-#     RsaPrivateKey::validate is neither generic nor #[inline], so the release profile cannot
-#     inline the call away and its symbol stays in the plant's objects (a clone() would be).
+#     RsaPrivateKey::from_p_q (it derives d from the primes, which ADR 0067 §3 keeps out with key
+#     generation) is neither generic nor #[inline], so the release profile cannot inline the call
+#     away and its symbol stays in the plant's objects (a clone() would be).
 android=aarch64-linux-android
 android_std=$(cd "$base" && rustc --print target-libdir --target "$android" 2>/dev/null) || android_std=""
 set -- "$android_std"/libstd-*.rlib
@@ -343,12 +420,12 @@ rsa = { workspace = true }'
   android_body='/// Test only.
 #[cfg(target_os = "android")]
 #[doc(hidden)]
-pub fn evil(key: &rsa::RsaPrivateKey) -> bool {
-    key.validate().is_ok()
+pub fn evil(p: rsa::BoxedUint, q: rsa::BoxedUint, e: rsa::BoxedUint) -> bool {
+    rsa::RsaPrivateKey::from_p_q(p, q, e).is_ok()
 }
 #[cfg(target_os = "android")]
 #[used]
-static KEEP: fn(&rsa::RsaPrivateKey) -> bool = evil;'
+static KEEP: fn(rsa::BoxedUint, rsa::BoxedUint, rsa::BoxedUint) -> bool = evil;'
   for crate_dir in ffi surface; do
     new_case "android-only-$crate_dir"
     append_to "bindings/$crate_dir/Cargo.toml" "$android_rsa"
@@ -362,10 +439,10 @@ static KEEP: fn(&rsa::RsaPrivateKey) -> bool = evil;'
       only=$config
       dump_dir="$scratch/dump-$crate_dir-$config"
       expect_fail "Android-only RsaPrivateKey in polyjose-$crate_dir, --target $android, $config" \
-        "matches rsa::private_key: RSA private keys" \
+        "matches rsa::private_key::PrivateKey>::from_p_q: RSA key generation" \
         "$sym_fail in the objects of $crate \\($(printf '%s' "$label" | sed 's/[().]/\\&/g')\\)"
       # The target's own objects were read: polyjose's dump for the triple has its RSA verification.
-      expect_symbol "Android-only plant in polyjose-$crate_dir, $config" "rsa::public_key::RsaPublicKey"
+      expect_symbol "Android-only plant in polyjose-$crate_dir, $config" "rsa::public_key::PublicKey"
       dump_dir=""
     done
     targets=""
@@ -595,7 +672,7 @@ new_case wasm-args-cfg-set
 append_to "$lib_rs" "$cfg_plant"
 allow_line "WASM_CARGO_ARGS=($wasm_args $cfg 'build.rustflags=[\"--cfg\",\"polyjose_f06\",\"--check-cfg\",\"cfg(polyjose_f06)\"]')"
 expect_fail "the same plant with build.rustflags --cfg polyjose_f06 in wasm-cargo-args.sh's WASM_CARGO_ARGS (wasm32)" \
-  "<rsa::private_key::RsaPrivateKey>::new" \
+  "<rsa::private_key::PrivateKey>::new" \
   "$sym_fail in the objects of polyjose \\(polyjose-wasm .*polyjose_f06.* \\(wasm32-unknown-unknown\\)\\)"
 only=""
 

@@ -1,6 +1,6 @@
 {
   "source": "polyjose",
-  "description": "DER import rejects a 2048-bit PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0) offered as pkcs8, where a OneAsymmetricKey (RFC 5958 §2) is expected: an RSA private key in any format is UnsupportedAlgorithm, not malformed input (ADR 0018 §3, ADR 0021).",
+  "description": "DER import rejects a 2048-bit PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2, made by OpenSSL 4.1.0) offered as pkcs8: the caller names the structure, a OneAsymmetricKey (RFC 5958 §2) is expected and the octets are not one, so it is InvalidKey (ADR 0007, ADR 0018 §2, ADR 0067 §2); the same octets import as pkcs1.",
   "operation": "keys.import_der",
   "input": {
     "der_b64u": "MIIEowIBAAKCAQEApTAElx1S4Jsf0MD53-bHKYAj7cbKUA_avvDzTf1y1ScdDULqqIcjnXPp4EMXBFaphbkFU7S5jNDHVVkt5PgvLhccro7cSL6eldcMvu0kCER4rcSLfzC92wlozxW74ZHkb0wFzcWdVPbfXZLtTO1nfgf2rm6IEyklP3yc8qpVSbq26EUuOBxWOcocssykiJ1sQm01WCOLPS160fX-1sBDb80sRk8Liy8ZrDq0ATrFnPoxWLkhgdKRKqmMPhZHA9lRQfr4cSa3eFO7FxX1N7D1y4W5IWbUPATzDTKqgpvccXoZKQDmc4LmRPNXDowvdgxODWugYfbvjPm6WEhpkFEDawIDAQABAoIBAAwj3cp_WLZyICH29MZMTynRJZLVj8vXhnOPAMqkDFr2_28YkmdlWyw4tyEIvTnP5rCRuv7-Yr6jH2s53SIdTVZdU3nOvQjJnZ0Ui3bCtem3oojez4O_AM0GwYGqrr6yuq-lTi3jzp7Ob_cQE8maDweXrTz_mZeS6A5k6aH5-7-pz1hyojeQvy4dxqgDM6dfjbToNenAej8Mhjsgxb80YJLpaAoh1J1NQQMi_oHBOWJ336TxN_GXg0nqQ2Aj_gYvHW2xEq-qZGggPu3GIzgQKjtZp5lmpWRd_5iOw4eWSmza4gmACK9Es_uwW1cujPddod2oR0fgbGR32lKAbyNK29UCgYEA5mNuoiY2ABWvqDCm45iaD3wVvOX7SeobaRyRv0H_SbnYAedRyFnBohqG7IIZ8I8GbNQPtr0GyMUoWn4HLGvDnVnfjzhM0x7ixSwvGtRGh57V6yD1T_qrXCnqtqv47C3pGDXb03lBBFTIDlAjhWEBuh1KZ6RaNCXjSEj324IoR2cCgYEAt40NC1rncImflTvdAhiiwcNX01XjDZuG7rozmHoJ_VYTMr1_frb5vdBCnSzrJIfyHS7pGPrhDKVPKgWdFkeN3s87hT8QyvFCBpRKDyEyPAawqGULZhCkqqgoj_nwI6BTD_iWx7NBC50u0S3stZEyKaysiGDu6kmMqeb8fWFrdV0CgYBOyXowIXkeFkx37Atmke09lmWor817vX-aNpbxHRS8lb11CTJCnc9GLGQvxV4xkffUh8DH8WS8jA_8wlSZsFC5It79D3fWSx2p6C5DsoxcHMlzG1ZI_6RSZFNMHQuHWTv5d5GxhCnj3Up8-pLrLf11NEcZom7mnn5XXfzFKIG1yQKBgDxQRgwIJ-rL3jtse1f3_mtLJC3WmBBdnb4OQ2wEFgo_4XkX2bAqse_UYj9BhlbvsPgz9PZ3YcIFA_lb9N1gT9b6I6XKLltxYW_GBHvqPZaJ4DzFTzSPnXxSW1nMGEOsp_6kge9HEMWfNcYYoCKdfm1BR0RdDcTAvE8MDsWoYGYlAoGBAI-aIap6As6UgbzaAYsX3S-nMiRVBjTgQbzaO8ftfkZ9CTRnYgB5AP-O-dafKCvQwIoI6PO3JIuFYpB4lEnJSreaEowADsi_OnkfOpczQHa32zP57FRsjdUunVQjbmbkgj_GUQVl3PETWSZbIkRGC9ouUV826p7BIZFZndc-8jHs",
@@ -8,6 +8,6 @@
   },
   "expect": {
     "ok": false,
-    "error": "UnsupportedAlgorithm"
+    "error": "InvalidKey"
   }
 }

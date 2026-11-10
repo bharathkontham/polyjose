@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Enforces ADR 0021 (RSA is used for public-key operations only) on compiled output, as ADR 0049 §1
-# requires: deny.toml ignores RUSTSEC-2023-0071 (Marvin, a timing leak in the rsa crate's
-# private-key operations) only while this check and check-deps.sh's text scan (checks 9-12) hold.
+# Enforces ADR 0067 §3, §6 (RSA private-key operations only through rsa 0.10's blinded entry
+# points; no key generation, RSA1_5, unblinded path or hazmat) on compiled output, as ADR 0049 §1
+# requires, beside check-deps.sh's text scan (checks 9-12). It keeps its ADR 0021 form, narrowed:
+# the private key type and the blinded signing and OAEP-256 decryption paths are allowed, and a
+# positive sentinel checks that they are the ones compiled in.
 #
 # A text scan cannot see every way of naming rsa: an alias in a brace use tree, a #[path] module or
 # an include! from outside the scanned roots, a macro that receives `rsa` as an identifier, or a
 # child module that reaches its parent's private imports through super::. Whatever the spelling,
-# code that uses rsa's private-key, signing or decryption items leaves their symbols in the object
-# code of the crate that uses them, so this check reads that object code instead.
+# code that uses rsa's forbidden items leaves their symbols in the object code of the crate that
+# uses them, so this check reads that object code instead.
 #
 # What is built (each a configuration that ships), first in the dev profile and then again with
 # --release:
@@ -39,9 +41,10 @@
 #
 # Fails, naming each symbol, its crate, configuration and object, when a demangled symbol holds a
 # path of the rsa crate (anchored at the crate root, so polyjose::jws::rsa::sign, or a
-# cbc::Decryptor, never matches) of RSA private-key, signing or decryption code: see `RULES`
-# below (rsa 0.10's defining paths, e.g. rsa::private_key::RsaPrivateKey, plus the re-export
-# paths ADR 0049 names, e.g. rsa::key::RsaPrivateKey and rsa::traits::Decryptor). The same paths
+# cbc::Decryptor, never matches) that ADR 0067 keeps out: see `RULES` below (rsa 0.10.0's
+# defining paths: key generation, anything instantiated with rsa::dummy_rng::DummyRng, the
+# unblinded PrivateKey methods, the typed keys and traits, scheme-based signing and decryption,
+# RSA1_5 and hazmat, plus the re-export paths ADR 0049 names, e.g. rsa::traits::Decryptor). The same paths
 # are also matched in the mangled names (`_ZN3rsa11private_key...` legacy, `C..._3rsa11private_key`
 # v0), so a demangler mistake can only add findings. Legacy names are normalized after demangling
 # (`$LT$` -> `<`, `..` -> `::`, ...), since llvm-nm's Itanium demangler leaves those escapes;
@@ -54,7 +57,10 @@
 # a build does not report polyjose's (or the binding's) rlib; an rlib holds no object or a member
 # it does not expect; the symbol tool cannot read an object or prints a line it cannot parse; or
 # the symbols are not demangled (each crate must show a `<crate>::` path, and each polyjose rlib
-# rsa::public_key::RsaPublicKey, which RS*/PS* verification always uses).
+# rsa::public_key::PublicKey, which RS*/PS* verification always uses); or a polyjose rlib holds
+# rsa::private_key::PrivateKey code but no symbol of rsa's blinded private-key core
+# (rsa::algorithms::rsa::rsa_decrypt(_and_check), rsa::algorithms::blinding::*) instantiated with
+# polyjose::rng::CryptoRngAdapter (the positive sentinel).
 #
 # Tools, first found: the toolchain's own llvm-ar and llvm-nm (the llvm-tools component:
 # `rustup component add llvm-tools`; the only choice that reads wasm32 objects everywhere), then
@@ -96,7 +102,7 @@
 #   --target TRIPLE   also build and read polyjose-ffi for this target (repeatable): the
 #                     configurations polyjose-ffi-TRIPLE and polyjose-ffi-TRIPLE-release (see
 #                     "Extra targets" above).
-# Exit status: 0 clean, 1 an RSA private-key, signing or decryption symbol was found, 2 the check
+# Exit status: 0 clean, 1 a symbol ADR 0067 keeps out was found, 2 the check
 # could not run (a syntax error in this script too, under bash 3.2 as well: the completion
 # sentinel, F11). Runs on macOS /bin/bash 3.2 and Linux bash.
 set -euo pipefail
@@ -177,39 +183,55 @@ def run(argv, what, cwd=None):
 # root: `rsa` must not follow an identifier character or `:`, and the last segment must not run
 # on, so rsa::pss::sign does not match rsa::pss::signature. Module paths cover everything in the
 # module. The second field, when set, is matched right after the path (a trait method).
-PRIV = "RSA private keys are not supported (ADR 0021)"
-GEN = "RSA key generation is not supported (ADR 0021)"
-SIGN = "RSA signing is not supported (ADR 0021)"
-DEC = "RSA decryption is not supported (ADR 0021)"
-R15 = "RSA1_5 is not supported in either direction (ADR 0021)"
+GEN = "RSA key generation is not supported; keys are imported (ADR 0067 §3)"
+UNBL = ("an unblinded or OS-RNG-default RSA private-key path; polyjose signs with pkcs1v15_sign_with_rng /"
+        " pss_sign_with_rng and decrypts with oaep_decrypt_with_rng (ADR 0067 §2, §6)")
+SIGN = "a typed or scheme-based RSA signing path; polyjose signs with pkcs1v15_sign_with_rng / pss_sign_with_rng (ADR 0067 §6)"
+DEC = "a typed or scheme-based RSA decryption path; polyjose decrypts with oaep_decrypt_with_rng (ADR 0067 §6)"
+R15 = "RSA1_5 is not supported in either direction (ADR 0067 §3)"
+PK = "rsa::private_key::PrivateKey"
+# ADR 0067 §6 allows the private key type (rsa::private_key::PrivateKey, built by from_components)
+# and the blinded entry points PrivateKey::pkcs1v15_sign_with_rng, ::pss_sign_with_rng and
+# ::oaep_decrypt_with_rng with polyjose's RNG, and so the rsa internals they reach:
+# pkcs1v15::sign, pss::sign_digest and sign_pss_with_salt_digest, oaep::decrypt_digest,
+# algorithms::rsa::rsa_decrypt(_and_check), algorithms::oaep::oaep_decrypt_digest, the PKCS#1 v1.5
+# and PSS encoders and PrivateKeyParts. Everything else stays forbidden: key generation, every path
+# instantiated with rsa's DummyRng (the stand-in for "no RNG", so unblinded), the unblinded and
+# OS-RNG-default methods, the typed keys and traits, the scheme-based paths (a scheme can turn PSS
+# blinding off), RSA1_5 and hazmat.
 RULES = [
-    # Private keys. rsa 0.10 defines RsaPrivateKey in rsa::private_key; rsa::key is ADR 0049's
-    # (older) path and rsa::RsaPrivateKey the re-export.
-    ("rsa::private_key", "", PRIV),
-    ("rsa::key::RsaPrivateKey", "", PRIV),
-    ("rsa::RsaPrivateKey", "", PRIV),
-    ("rsa::traits::keys::PrivateKeyParts", "", PRIV),
-    ("rsa::traits::PrivateKeyParts", "", PRIV),
-    ("rsa::algorithms::rsa::recover_primes", "", PRIV),
-    ("rsa::algorithms::rsa::compute_private_exponent_carmicheal", "", PRIV),
-    ("rsa::algorithms::rsa::compute_private_exponent_euler_totient", "", PRIV),
+    # Key generation (and the constructors that derive d or n from primes).
     ("rsa::algorithms::generate", "", GEN),
-    # Signing: the typed signing keys, the Pkcs1v15Sign/Pss schemes' sign, and the helpers.
+    (PK, ">::new", GEN),
+    (PK, ">::new_unchecked", GEN),
+    (PK, ">::new_with_exp", GEN),
+    (PK, ">::new_with_exp_unchecked", GEN),
+    (PK, ">::from_p_q", GEN),
+    (PK, ">::from_primes", GEN),
+    (PK, " as crypto_common", GEN),
+    ("rsa::algorithms::rsa::recover_primes", "", GEN),
+    ("rsa::algorithms::rsa::compute_private_exponent_carmicheal", "", GEN),
+    ("rsa::algorithms::rsa::compute_private_exponent_euler_totient", "", GEN),
+    # Unblinded paths: anything instantiated with DummyRng, and the methods without an RNG.
+    ("rsa::dummy_rng", "", UNBL),
+    (PK, ">::sign", UNBL),
+    (PK, ">::decrypt", UNBL),
+    (PK, ">::pkcs1v15_sign", UNBL),
+    (PK, ">::pkcs1v15_sign_prehash", UNBL),
+    (PK, ">::pss_sign", UNBL),
+    (PK, ">::pss_sign_prehash", UNBL),
+    (PK, ">::oaep_decrypt", UNBL),
+    ("rsa::pkcs1v15::sign_with_default_rng", "", UNBL),
+    # Typed signing keys and scheme-based signing.
     ("rsa::pkcs1v15::signing_key", "", SIGN),
     ("rsa::pss::signing_key", "", SIGN),
     ("rsa::pss::blinded_signing_key", "", SIGN),
     ("rsa::traits::padding::SignatureScheme", ">::sign", SIGN),
     ("rsa::traits::SignatureScheme", ">::sign", SIGN),
-    ("rsa::pkcs1v15::sign", "", SIGN),
-    ("rsa::pkcs1v15::sign_with_default_rng", "", SIGN),
+    (PK, ">::sign_with_rng", SIGN),
     ("rsa::pss::sign", "", SIGN),
-    ("rsa::pss::sign_digest", "", SIGN),
     ("rsa::pss::sign_pss_with_salt", "", SIGN),
-    ("rsa::pss::sign_pss_with_salt_digest", "", SIGN),
-    ("rsa::algorithms::pkcs1v15::pkcs1v15_sign_pad", "", SIGN),
-    ("rsa::algorithms::pss::emsa_pss_encode", "", SIGN),
-    ("rsa::algorithms::pss::emsa_pss_encode_digest", "", SIGN),
-    # Decryption: the typed decrypting keys, the traits, the schemes' decrypt, and the helpers.
+    # Typed decrypting keys, the decryption traits and scheme-based decryption.
     ("rsa::oaep::decrypting_key", "", DEC),
     ("rsa::pkcs1v15::decrypting_key", "", DEC),
     ("rsa::traits::encryption::Decryptor", "", DEC),
@@ -220,24 +242,36 @@ RULES = [
     ("rsa::traits::EncryptingKeypair", "", DEC),
     ("rsa::traits::padding::PaddingScheme", ">::decrypt", DEC),
     ("rsa::traits::PaddingScheme", ">::decrypt", DEC),
+    (PK, ">::decrypt_blinded", DEC),
     ("rsa::oaep::decrypt", "", DEC),
-    ("rsa::oaep::decrypt_digest", "", DEC),
-    ("rsa::pkcs1v15::decrypt", "", DEC),
-    ("rsa::algorithms::rsa::rsa_decrypt", "", DEC),
-    ("rsa::algorithms::rsa::rsa_decrypt_and_check", "", DEC),
     ("rsa::algorithms::oaep::oaep_decrypt", "", DEC),
-    ("rsa::algorithms::oaep::oaep_decrypt_digest", "", DEC),
-    ("rsa::algorithms::pkcs1v15::implicit_rejection", "", DEC),
-    ("rsa::algorithms::pkcs1v15::selection", "", DEC),
-    # RSA1_5 (RSAES-PKCS1-v1_5), which ADR 0021 drops in both directions.
+    # RSA1_5 (RSAES-PKCS1-v1_5), which ADR 0067 §3 keeps out in both directions.
     ("rsa::pkcs1v15::Pkcs1v15Encrypt", "", R15),
     ("rsa::pkcs1v15::encrypting_key", "", R15),
     ("rsa::pkcs1v15::encrypt", "", R15),
+    ("rsa::pkcs1v15::decrypt", "", R15),
+    (PK, ">::pkcs1v15_decrypt", R15),
+    (PK, ">::pkcs1v15_decrypt_with_rng", R15),
+    ("rsa::public_key::PublicKey", ">::pkcs1v15_encrypt", R15),
+    ("rsa::public_key::PublicKey", ">::pkcs1v15_encrypt_with_rng", R15),
     ("rsa::algorithms::pkcs1v15::pkcs1v15_encrypt_pad", "", R15),
+    ("rsa::algorithms::pkcs1v15::implicit_rejection", "", R15),
+    ("rsa::algorithms::pkcs1v15::selection", "", R15),
     # Only behind the hazmat feature, which check-deps.sh check 11 rejects.
-    ("rsa::hazmat", "", "the rsa hazmat module is not used (ADR 0021)"),
+    ("rsa::hazmat", "", "the rsa hazmat module is not used (ADR 0067 §3)"),
 ]
 IDENT_END = r"(?![A-Za-z0-9_])"
+# The positive sentinel: a polyjose rlib that holds RSA private-key code must hold rsa's blinded
+# private-key core instantiated with polyjose::rng::CryptoRngAdapter: rsa_decrypt(_and_check) or a
+# function of rsa::algorithms::blinding. Every blinded entry point (pkcs1v15_sign_with_rng,
+# pss_sign_with_rng, oaep_decrypt_with_rng) reaches it with polyjose's RNG, and it survives the
+# release profile's inlining, which removes the entry points themselves (oaep_decrypt_with_rng is
+# inlined into polyjose's decrypt_key). An unblinded call instantiates the same core with
+# rsa::dummy_rng::DummyRng instead, which the rules above reject.
+PRIVATE_KEY = re.compile(r"(?<![A-Za-z0-9_:])rsa(?:\[[0-9A-Za-z]+\])?::private_key::PrivateKey" + IDENT_END)
+RNG = r"polyjose(?:\[[0-9A-Za-z]+\])?::rng::CryptoRngAdapter"
+BLINDED_CORE = re.compile(r"(?<![A-Za-z0-9_:])rsa(?:\[[0-9A-Za-z]+\])?::algorithms::"
+                          r"(?:rsa::rsa_decrypt(?:_and_check)?|blinding::[A-Za-z0-9_]+)::<" + RNG + IDENT_END)
 
 
 def demangled_rule(path, suffix):
@@ -533,7 +567,7 @@ def read_rlib(crate, rlib, prefix):
 # --- The check --------------------------------------------------------------------------------------
 if dump_dir:
     os.makedirs(dump_dir, exist_ok=True)
-findings, seen, totals = [], {}, [0, 0, 0]
+findings, unvouched, seen, totals = [], [], {}, [0, 0, 0]
 for label, file_id, args, crates in configs:
     rlibs = build(label, args)
     for pkg in crates:
@@ -551,9 +585,20 @@ for label, file_id, args, crates in configs:
         if not any(re.search(r"(?<![A-Za-z0-9_:])%s::" % re.escape(crate), d) for d in demangled):
             die("no symbol of %s (%s) demangles to a %s:: path; %s does not demangle Rust symbols%s"
                 % (rlib, label, crate, NM, tool_hint))
-        if pkg == CORE and not any(re.search(r"(?<![A-Za-z0-9_:])rsa::public_key::RsaPublicKey", d) for d in demangled):
-            die("no symbol of %s (%s) demangles to rsa::public_key::RsaPublicKey, which RS*/PS*"
+        if pkg == CORE and not any(re.search(r"(?<![A-Za-z0-9_:])rsa::public_key::PublicKey", d) for d in demangled):
+            die("no symbol of %s (%s) demangles to rsa::public_key::PublicKey, which RS*/PS*"
                 " verification always uses; %s does not demangle them as expected%s" % (rlib, label, NM, tool_hint))
+        # The blinded-path sentinel (ADR 0067 §6): once polyjose compiles RSA private-key code, the
+        # blinded entry points must be there, instantiated with polyjose's own RNG (ADR 0005), so
+        # the code read is the blinded one and the rules above can see its paths. Checked after the
+        # rules, below: a forbidden symbol is the more specific finding and is reported first.
+        if pkg == CORE and any(PRIVATE_KEY.search(d) for d in demangled):
+            if not any(BLINDED_CORE.search(d) for d in demangled):
+                unvouched.append("%s (%s) has RSA private-key code but no symbol of rsa's blinded"
+                                 " private-key core with polyjose's RNG (rsa::algorithms::rsa::"
+                                 "rsa_decrypt(_and_check) or rsa::algorithms::blinding::* <polyjose::"
+                                 "rng::CryptoRngAdapter>); the check cannot vouch that the blinded path"
+                                 " is the one compiled in (ADR 0067 §6)" % (rlib, label))
         if dump_dir:
             # One line per symbol: D (defined in some object) or U (only referenced), demangled.
             kinds = {}
@@ -572,19 +617,21 @@ for label, file_id, args, crates in configs:
 
 if findings:
     for label, crate, hits in findings:
-        print("FAIL: compiled RSA private-key, signing or decryption code in the objects of %s (%s)"
-              " (ADR 0021, ADR 0049 §1):" % (crate, label))
+        print("FAIL: compiled RSA code that ADR 0067 does not allow in the objects of %s (%s)"
+              " (ADR 0067 §3, §6; ADR 0049 §1):" % (crate, label))
         for sym in sorted(hits):
             path, why, kind, member = hits[sym]
             print("  - %s" % sym)
             print("      matches %s: %s; %s in %s" % (path, why, kind, member))
-    print("deny.toml ignores RUSTSEC-2023-0071 only while no RSA private-key operation is compiled in;"
-          " use RS*/PS* verification and RSA-OAEP encryption only (rsa::RsaPublicKey, the typed"
-          " pkcs1v15/pss VerifyingKey, Oaep encryption).")
+    print("RSA private-key operations go through PrivateKey::pkcs1v15_sign_with_rng, ::pss_sign_with_rng and"
+          " ::oaep_decrypt_with_rng with polyjose's RNG, in jws/rsa.rs, jwe/rsa_oaep.rs and keys/rsa.rs only;"
+          " no key generation, RSA1_5, unblinded path or hazmat.")
     print("check-rsa-symbols: FAILED")
     sys.exit(1)
-print("ok: no RSA private-key, signing or decryption symbol in the compiled objects of polyjose or"
-      " any binding (ADR 0021, ADR 0049 §1): %d configurations, %d rlibs, %d objects, %d symbols"
+if unvouched:
+    die("; ".join(unvouched))
+print("ok: no RSA key generation, RSA1_5, unblinded, typed or scheme-based private-key or hazmat symbol in"
+      " the compiled objects of polyjose or any binding (ADR 0067 §6, ADR 0049 §1): %d configurations, %d rlibs, %d objects, %d symbols"
       " (defined and undefined), read with %s%s" % (len(configs), totals[0], totals[1], totals[2], NM, narrowed))
 for label, _, _, crates in configs:
     print("  %s: %s" % (label, ", ".join(c.replace("-", "_") for c in crates)))

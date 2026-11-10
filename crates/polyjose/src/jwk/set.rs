@@ -17,8 +17,7 @@ use core::fmt;
 use zeroize::ZeroizeOnDrop;
 
 use super::{
-    Jwk, KeyAlg, KeyMaterial, KeyOp, KeyUse, MemberNames, is_rsa_private_key,
-    is_unsupported_key_kind, member,
+    Jwk, KeyAlg, KeyMaterial, KeyOp, KeyUse, MemberNames, is_unsupported_key_kind, member,
 };
 use crate::error::{Error, Result};
 use crate::json::{self, Object, Value};
@@ -48,7 +47,8 @@ const NO_KEYS_ARRAY: &str = "a JWK Set must have a keys member that is an array"
 /// | unsupported `kty`, or `EC`/`OKP` `crv` (`XYZ`, `Ed448`, `P-192`, ...) | skipped (RFC 7517 §5, ADR 0029 §3) |
 /// | otherwise invalid (not an object, missing or mistyped members, wrong lengths, bad base64url, an RSA modulus under 2048 or over 8192 bits (`RSA_MODULUS_BITS`: RFC 7518 §3.3, ADR 0026 §2 step 8), an EC point off its curve, an EC `d` out of range, an invalid or small-order Ed25519 key, ...) | skipped (RFC 7517 §5, ADR 0041 §2) |
 /// | an `alg` of `RSA1_5` or `RSA-OAEP`, or one the key's family cannot serve (`oct` with `RS256`, `EC` `P-256` with `ES384`, ...) | skipped (RFC 7517 §4.4, §5; ADRs 0021, 0022) |
-/// | an RSA private key | the whole set fails, [`Error::UnsupportedAlgorithm`] (ADR 0021) |
+/// | an RSA private key (RFC 7518 §6.3.2) | kept as imported, like an `EC`/`OKP` private key (ADR 0067 §4) |
+/// | a multi-prime RSA key (`oth`, RFC 7518 §6.3.2.7) | skipped as unsupported (ADR 0067 §3) |
 ///
 /// Skipping invalid entries, rather than failing the set, follows the
 /// RFC 7517 §5 "SHOULD ignore" for members "missing required members, or
@@ -71,9 +71,11 @@ const NO_KEYS_ARRAY: &str = "a JWK Set must have a keys member that is an array"
 ///
 /// # Secrets
 ///
-/// `oct` keys, and `EC`/`OKP` keys with `d`, are secret. Every key is a
-/// [`Jwk`], wiped on drop, and `Debug` prints each key's redacted `Debug`
-/// and only the *names* of the other top-level members.
+/// `oct` keys, and `EC`/`OKP`/`RSA` keys with their private members, are
+/// secret. Every key is a [`Jwk`], wiped on drop, and `Debug` prints each
+/// key's redacted `Debug` and only the *names* of the other top-level
+/// members. A set may hold RSA-OAEP-256 decryption keys (ADR 0067 §4); call
+/// [`Jwk::to_public`] on each key before publishing a set.
 ///
 /// ```
 /// use polyjose::Error;
@@ -87,9 +89,10 @@ const NO_KEYS_ARRAY: &str = "a JWK Set must have a keys member that is an array"
 /// assert_eq!((set.len(), set.skipped()), (1, 1));
 /// assert_eq!(set.keys()[0].kid(), Some("ed"));
 ///
-/// // ADR 0021: an RSA private key fails the whole set.
-/// let leaked = br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB"}]}"#;
-/// assert_eq!(JwkSet::from_json(leaked).unwrap_err(), Error::UnsupportedAlgorithm);
+/// // ADR 0067 §3: a multi-prime RSA key (`oth`) is skipped as unsupported.
+/// let multi = br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB","oth":[]}]}"#;
+/// assert_eq!((JwkSet::from_json(multi)?.len(), JwkSet::from_json(multi)?.skipped()), (0, 1));
+/// # let _ = Error::InvalidKey("");
 /// # Ok::<(), polyjose::Error>(())
 /// ```
 #[derive(Clone)]
@@ -140,18 +143,16 @@ impl JwkSet {
     ///   rejected (`RSA1_5`, `RSA-OAEP`, or a family mismatch, RFC 7517
     ///   §4.4). Skipping can only remove verification candidates, never add
     ///   one.
-    /// - It **fails the whole set** with [`Error::UnsupportedAlgorithm`]
-    ///   if it is an RSA private key (any RFC 7518 §6.3.2 member), whatever
-    ///   else it holds (ADR 0021, ADR 0029 §3): a verification set never
-    ///   needs RSA private material, and skipping it would hide a leaked
-    ///   key.
+    /// - An RSA private key (RFC 7518 §6.3.2) is **imported as is**, like an
+    ///   `EC`/`OKP` private key (ADR 0067 §4, amending ADR 0029 §3 and
+    ///   ADR 0054): a set can hold RSA-OAEP-256 decryption keys. A set meant
+    ///   for publishing should hold public keys only ([`Jwk::to_public`]).
     ///
     /// # Errors
     ///
-    /// - [`Error::InvalidKey`] if `keys` is missing or not an array
-    ///   (RFC 7517 §5: the object "MUST have a "keys" member"; a malformed
-    ///   key set is a key problem, ADR 0018 Q3).
-    /// - [`Error::UnsupportedAlgorithm`] if a member is an RSA private key.
+    /// [`Error::InvalidKey`] if `keys` is missing or not an array
+    /// (RFC 7517 §5: the object "MUST have a "keys" member"; a malformed
+    /// key set is a key problem, ADR 0018 Q3).
     ///
     /// No error contains any part of the input or of a key.
     pub fn from_object(object: &Object) -> Result<JwkSet> {
@@ -380,9 +381,8 @@ impl JwkSet {
     ///   `invalid_token` (RFC 6750 §3.1); see
     ///   [the error module](crate::error#codes-are-for-logs-not-for-clients).
     /// - **The result is the member as imported**, and may hold private
-    ///   members (`EC`/`OKP` `d`, `oct` `k`): it is the caller's key. Call
-    ///   [`Jwk::to_public`] before publishing it. RSA private members never
-    ///   import (ADR 0021).
+    ///   members (`EC`/`OKP`/`RSA` `d`, `oct` `k`): it is the caller's key.
+    ///   Call [`Jwk::to_public`] before publishing it.
     ///
     /// ```
     /// use polyjose::Error;
@@ -892,12 +892,8 @@ fn import_member(member: &Value) -> Result<Option<Jwk>> {
     if is_unsupported_key_kind(object) {
         return Ok(None);
     }
-    // ADR 0021, ADR 0029 §3: an RSA private key fails the set, checked
-    // before anything else in the entry so no other defect can hide it.
-    if is_rsa_private_key(object) {
-        return Err(Error::UnsupportedAlgorithm);
-    }
-    // Every other failure is skipped (RFC 7517 §5 "SHOULD ignore"),
+    // ADR 0067 §4: an RSA private key imports like any other key. Every
+    // failure is skipped (RFC 7517 §5 "SHOULD ignore"),
     // including a JWK `alg` that is not supported (`RSA1_5`, `RSA-OAEP`)
     // or that the key cannot serve (RFC 7517 §4.4): such a key could never
     // be used, so leaving it out removes no usable candidate.
@@ -1159,11 +1155,24 @@ mod tests {
         );
     }
 
-    /// ADR 0021 and ADR 0029 §3: an RSA private member fails the whole set,
-    /// so a publisher that leaked its private key is not silently used.
+    /// ADR 0067 §4 (amending ADR 0029 §3 and ADR 0054): RFC 7517 A.2's
+    /// RSA private key is imported as is, next to its EC private key, and
+    /// [`Jwk::to_public`] gives the key to publish.
     #[test]
-    fn rfc7517_a2_rsa_private_key_fails_the_whole_set() {
-        assert_eq!(parse(A2).unwrap_err(), Error::UnsupportedAlgorithm);
+    fn rfc7517_a2_rsa_private_key_is_imported_as_is() {
+        let set = parse(A2).unwrap();
+        assert_eq!((set.len(), set.skipped()), (2, 0));
+        assert_eq!(kids(&set), [Some("1"), Some("2011-04-29")]);
+        let rsa = &set.keys()[1];
+        let KeyMaterial::Rsa(key) = rsa.material() else {
+            panic!("RSA");
+        };
+        assert!(key.is_private() && !rsa.is_public());
+        assert_eq!(key.modulus_bits(), 2048);
+        let public = rsa.to_public().unwrap();
+        assert!(public.is_public());
+        assert!(!public.to_json().contains(r#""d""#));
+        assert_eq!(rsa.alg(), Some(&KeyAlg::Signing(SigningAlg::RS256)));
     }
 
     /// RFC 7517 §5 / ADR 0029 §3: members of a key type or curve polyjose
@@ -1237,25 +1246,28 @@ mod tests {
         }
     }
 
-    /// ADR 0021: any RSA private member (RFC 7518 §6.3.2), whatever else
-    /// the member holds and wherever it sits, fails the whole set.
+    /// ADR 0067 §3, §4: an RSA member that is not a usable key (a partial
+    /// private key, RFC 7518 §6.3.2; `oth`, §6.3.2.7; a mistyped member) is
+    /// skipped like any other unusable member (RFC 7517 §5), wherever it
+    /// sits; it no longer fails the set.
     #[test]
-    fn any_rsa_private_member_fails_the_whole_set() {
-        let private = [
+    fn unusable_rsa_private_members_are_skipped() {
+        let unusable = [
             r#"{"kty":"RSA","d":"AQAB"}"#,
             r#"{"kty":"RSA","n":"AQAB","e":"AQAB","p":"AQAB"}"#,
             r#"{"kty":"RSA","oth":[]}"#,
             r#"{"kty":"RSA","qi":7,"kid":"broken"}"#,
         ];
-        for member in private {
+        for member in unusable {
             for members in [
                 [member, OCT, EC_P256],
                 [OCT, member, EC_P256],
                 [r#"{"kty":"XYZ"}"#, r#"{"kty":"oct"}"#, member],
             ] {
-                assert_eq!(
-                    parse(&set_of(&members)).unwrap_err(),
-                    Error::UnsupportedAlgorithm,
+                let set = parse(&set_of(&members)).unwrap();
+                assert_eq!(set.len() + set.skipped(), 3, "{members:?}");
+                assert!(
+                    set.keys().iter().all(|key| key.key_type() != KeyType::Rsa),
                     "{members:?}"
                 );
             }
@@ -1353,8 +1365,8 @@ mod tests {
         assert_eq!(kids(&from_object), kids(&from_json));
         let object = json::parse(A2.as_bytes()).unwrap().into_object().unwrap();
         assert_eq!(
-            JwkSet::from_object(&object).unwrap_err(),
-            Error::UnsupportedAlgorithm
+            kids(&JwkSet::from_object(&object).unwrap()),
+            kids(&parse(A2).unwrap())
         );
     }
 
@@ -1602,14 +1614,12 @@ mod tests {
                 Option<&'static [&'static str]>,
             ),
             Skip,
-            /// An RSA private key: the whole set fails.
-            Fatal,
         }
 
         /// Pool members (objects, so a `kid` can be spliced in), each with
         /// its expected outcome.
         fn pool() -> Vec<(String, Expect)> {
-            use Expect::{Fatal, Keep, Skip};
+            use Expect::{Keep, Skip};
             vec![
                 (OCT.to_owned(), Keep("oct", None, None, None)),
                 (
@@ -1673,7 +1683,8 @@ mod tests {
                 (r#"{"kty":"RSA","n":"AQAB","e":"AQAB"}"#.to_owned(), Skip),
                 (r#"{"kty":"oct","k":"AA=="}"#.to_owned(), Skip),
                 ("{}".to_owned(), Skip),
-                (r#"{"kty":"RSA","d":"AQAB"}"#.to_owned(), Fatal),
+                // ADR 0067 §3: `d` alone is a partial private key, skipped.
+                (r#"{"kty":"RSA","d":"AQAB"}"#.to_owned(), Skip),
             ]
         }
 
@@ -1752,7 +1763,6 @@ mod tests {
                 let pool = pool();
                 let mut members = Vec::new();
                 let mut expected = Vec::new();
-                let mut fatal = false;
                 for (index, kid) in &picks {
                     let (json, expect) = &pool[index.index(pool.len())];
                     let json = match kid {
@@ -1763,16 +1773,10 @@ mod tests {
                     match expect {
                         Expect::Keep(..) => expected.push((*expect, *kid)),
                         Expect::Skip => {}
-                        Expect::Fatal => fatal = true,
                     }
                 }
                 let members: Vec<&str> = members.iter().map(String::as_str).collect();
-                let result = parse(&set_of(&members));
-                if fatal {
-                    prop_assert_eq!(result.unwrap_err(), Error::UnsupportedAlgorithm);
-                    return Ok(());
-                }
-                let set = result.unwrap();
+                let set = parse(&set_of(&members)).unwrap();
                 prop_assert_eq!(set.len(), expected.len());
                 prop_assert_eq!(set.skipped(), picks.len() - expected.len());
                 let expected_kids: Vec<Option<&str>> = expected.iter().map(|(_, kid)| *kid).collect();

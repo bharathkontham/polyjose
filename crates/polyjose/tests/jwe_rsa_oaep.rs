@@ -1,17 +1,20 @@
-//! RSA-OAEP-256 (RFC 7518 §4.3) through the public API (0003 T11).
+//! RSA-OAEP-256 (RFC 7518 §4.3) through the public API (0003 T11, 0020).
 //!
-//! polyjose encrypts a CEK to an RSA public key and nothing more: it has no
-//! RSA private-key code (ADR 0021), so these tests cannot open what they
-//! produce. Correctness is checked independently by
-//! `conformance/tools/rsa-oaep-oracle.mjs` (Node's built-in crypto, run by
-//! `scripts/test-all.sh node`), against the test-only private keys that only
-//! it reads. Here:
+//! polyjose encrypts a CEK to an RSA public key and, since ADR 0067
+//! (superseding ADR 0021's "RSA public-key only"), decrypts it with the RSA
+//! private key. The committed vectors were computed by
+//! `conformance/tools/rsa-oaep-oracle.mjs` (Node's built-in crypto), and the
+//! test-only private keys in `conformance/vectors/jwe/rsa-oaep-256/keys/`
+//! open them here too. Here:
 //!
 //! - every key size and `enc` gives the RFC 7516 §7.1 shape with an
 //!   encrypted key of exactly k octets (RFC 8017 §7.1.1) and fresh OS
 //!   randomness each time (ADR 0005);
-//! - RSA-OAEP-256 never decrypts, not even polyjose's own output, and
-//!   RSA-OAEP (SHA-1, ADR 0022) and RSA1_5 (ADR 0021) never encrypt;
+//! - RSA-OAEP-256 decrypts every committed vector and polyjose's own
+//!   output with the private key, never with the public key, and a wrong
+//!   or malformed encrypted key is `DecryptionFailed` (RFC 7516 §11.5);
+//! - RSA-OAEP (SHA-1, ADR 0022) and RSA1_5 (ADR 0021) neither encrypt nor
+//!   decrypt, whatever the key;
 //! - a modulus under 2048 bits is `InvalidKey` (RFC 7518 §4.3);
 //! - with `insecure-test-vectors`, the committed vectors in
 //!   `conformance/vectors/jwe/rsa-oaep-256/` are reproduced byte for byte,
@@ -24,8 +27,8 @@ use std::path::PathBuf;
 use polyjose::Error;
 use polyjose::json::{self, Value};
 use polyjose::jwa::{ContentEncAlg, KeyMgmtAlg};
-use polyjose::jwe::{DecryptPolicy, Encryptor, Recipient, decrypt_compact};
-use polyjose::jwk::Jwk;
+use polyjose::jwe::{DecryptPolicy, Encryptor, JsonForm, Recipient, decrypt_compact, decrypt_json};
+use polyjose::jwk::{Jwk, KeyMaterial};
 use polyjose::util::b64url_decode;
 
 use ContentEncAlg as E;
@@ -127,6 +130,28 @@ fn jwk(json: &str) -> Jwk {
     Jwk::from_json(json.as_bytes()).unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// The test-only RSA private JWK (RFC 7518 §6.3.2) whose public half is
+/// `public`, read from `keys/rsa-<bits>.private.jwk` (ADR 0067).
+fn private_key(public: &Jwk) -> Jwk {
+    let KeyMaterial::Rsa(rsa) = public.material() else {
+        panic!("not an RSA key")
+    };
+    let bits = rsa.modulus_bits();
+    let path = vector_dir().join(format!("keys/rsa-{bits}.private.jwk"));
+    let text = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let key = Jwk::from_json(&text).unwrap_or_else(|e| panic!("{bits}: {e}"));
+    let KeyMaterial::Rsa(private) = key.material() else {
+        panic!("{bits}: not an RSA key")
+    };
+    assert!(private.is_private() && !key.is_public(), "{bits}");
+    assert_eq!(private.n(), rsa.n(), "{bits}: the key matches the vector");
+    key
+}
+
+fn rsa_policy() -> DecryptPolicy {
+    DecryptPolicy::new(&[A::RsaOaep256], ContentEncAlg::KNOWN).unwrap_or_else(|e| panic!("{e}"))
+}
+
 /// The distinct recipient keys of the vectors, with their modulus length k.
 fn keys() -> Vec<(Jwk, usize)> {
     let mut seen: Vec<String> = Vec::new();
@@ -194,16 +219,25 @@ fn every_size_and_enc_gives_a_k_octet_encrypted_key_and_fresh_randomness() {
 }
 
 #[test]
-fn rsa_oaep_256_never_decrypts_not_even_polyjose_output() {
-    // ADR 0021: no RSA private-key operation. The support check comes
-    // before the key and the allow-list (plan.md error contract), so the
-    // result is UnsupportedAlgorithm even when the policy allows the alg.
-    let policy = DecryptPolicy::new(&[A::RsaOaep256], ContentEncAlg::KNOWN)
-        .unwrap_or_else(|e| panic!("{e}"));
+fn rsa_oaep_256_decrypts_every_committed_vector_with_its_private_key() {
+    // ADR 0067, RFC 7518 §4.3 and RFC 8017 §7.1.2: the private key opens
+    // what the Node oracle encrypted, to the exact plaintext. The public
+    // key is no decryption candidate (RFC 8725 §3.1 key binding), so it is
+    // KeyAlgorithmMismatch, even with the alg on the allow-list.
     for v in vectors() {
+        let public = jwk(&v.key);
+        let opened = decrypt_compact(&v.jwe, &private_key(&public), &rsa_policy())
+            .unwrap_or_else(|e| panic!("{}: {e}", v.name));
+        assert_eq!(opened.plaintext(), v.plaintext.as_slice(), "{}", v.name);
         assert_eq!(
-            code(decrypt_compact(&v.jwe, &jwk(&v.key), &policy)),
-            "UnsupportedAlgorithm",
+            opened.header().alg.as_deref(),
+            Some("RSA-OAEP-256"),
+            "{}",
+            v.name
+        );
+        assert_eq!(
+            code(decrypt_compact(&v.jwe, &public, &rsa_policy())),
+            "KeyAlgorithmMismatch",
             "{}",
             v.name
         );
@@ -211,35 +245,100 @@ fn rsa_oaep_256_never_decrypts_not_even_polyjose_output() {
 }
 
 #[test]
+fn polyjose_output_round_trips_with_the_private_key() {
+    // ADR 0067: every size and enc, compact and JSON. Encrypting to the
+    // private JWK uses its public half (RFC 7518 §4.3), so either form of
+    // the key is a valid recipient.
+    for (public, k) in keys() {
+        let private = private_key(&public);
+        for enc in ContentEncAlg::KNOWN {
+            for to in [&public, &private] {
+                let token = encryptor(enc.clone(), to)
+                    .encrypt_compact(PLAINTEXT)
+                    .unwrap_or_else(|e| panic!("{k} {enc}: {e}"));
+                let opened = decrypt_compact(&token, &private, &rsa_policy())
+                    .unwrap_or_else(|e| panic!("{k} {enc}: {e}"));
+                assert_eq!(opened.plaintext(), PLAINTEXT, "{k} {enc}");
+            }
+            let json = encryptor(enc.clone(), &public)
+                .encrypt_json(PLAINTEXT, JsonForm::General)
+                .unwrap_or_else(|e| panic!("{k} {enc}: {e}"));
+            let opened = decrypt_json(&json, &private, &rsa_policy())
+                .unwrap_or_else(|e| panic!("{k} {enc}: {e}"));
+            assert_eq!(opened.plaintext(), PLAINTEXT, "{k} {enc}");
+        }
+    }
+}
+
+#[test]
+fn a_wrong_or_malformed_encrypted_key_is_decryption_failed() {
+    // RFC 7516 §11.5: an OAEP failure is not reported apart from a content
+    // failure (a random CEK is substituted), so a flipped bit, a key of the
+    // wrong length, an all-zero key and another recipient's key all end as
+    // DecryptionFailed (ADR 0067).
+    let v = vectors().remove(0);
+    let public = jwk(&v.key);
+    let private = private_key(&public);
+    let parts: Vec<&str> = v.jwe.split('.').collect();
+    let ek = bytes(parts[1]);
+    let mut flipped = ek.clone();
+    flipped[ek.len() / 2] ^= 0x01;
+    let other = vectors()
+        .into_iter()
+        .find(|o| o.key != v.key)
+        .map(|o| bytes(o.jwe.split('.').nth(1).unwrap_or("")))
+        .unwrap_or_default();
+    let cases: [(&str, Vec<u8>); 5] = [
+        ("flipped", flipped),
+        ("short", ek[1..].to_vec()),
+        ("long", [ek.as_slice(), &[0]].concat()),
+        ("zero", vec![0; ek.len()]),
+        ("other recipient", other),
+    ];
+    for (name, bad) in cases {
+        let mut forged = parts.clone();
+        let bad = polyjose::util::b64url_encode(&bad);
+        forged[1] = &bad;
+        assert_eq!(
+            code(decrypt_compact(&forged.join("."), &private, &rsa_policy())),
+            "DecryptionFailed",
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn rsa_oaep_sha1_never_decrypts() {
     // ADR 0022: RSA-OAEP (SHA-1) is unsupported on decrypt too, even with
-    // the alg on the allow-list. The protected header is swapped for
+    // the alg on the allow-list and the matching private key (ADR 0067
+    // keeps it out). The protected header is swapped for
     // {"alg":"RSA-OAEP","enc":"A128GCM"}; the rest is a real token.
     let v = vectors().remove(0);
     let rest = v.jwe.split_once('.').map(|(_, rest)| rest).unwrap_or("");
     let header = polyjose::util::b64url_encode(br#"{"alg":"RSA-OAEP","enc":"A128GCM"}"#);
     let policy = DecryptPolicy::new(&[A::from("RSA-OAEP")], ContentEncAlg::KNOWN)
         .unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(
-        code(decrypt_compact(
-            &format!("{header}.{rest}"),
-            &jwk(&v.key),
-            &policy
-        )),
-        "UnsupportedAlgorithm"
-    );
+    let public = jwk(&v.key);
+    for key in [&public, &private_key(&public)] {
+        assert_eq!(
+            code(decrypt_compact(&format!("{header}.{rest}"), key, &policy)),
+            "UnsupportedAlgorithm"
+        );
+    }
 }
 
 #[test]
 fn rsa_oaep_and_rsa1_5_never_encrypt() {
-    // ADR 0022 (RSA-OAEP uses SHA-1) and ADR 0021 (RSA1_5), to a key that
-    // RSA-OAEP-256 accepts.
-    let (key, _) = keys().remove(0);
-    for alg in ["RSA-OAEP", "RSA1_5"] {
-        let result = Encryptor::new(E::A128GCM)
-            .recipient(Recipient::new(A::from(alg), &key))
-            .encrypt_compact(PLAINTEXT);
-        assert_eq!(result, Err(Error::UnsupportedAlgorithm), "{alg}");
+    // ADR 0022 (RSA-OAEP uses SHA-1) and ADR 0021 (RSA1_5, kept out by
+    // ADR 0067), to a public or private key that RSA-OAEP-256 accepts.
+    let (public, _) = keys().remove(0);
+    for key in [&public, &private_key(&public)] {
+        for alg in ["RSA-OAEP", "RSA1_5"] {
+            let result = Encryptor::new(E::A128GCM)
+                .recipient(Recipient::new(A::from(alg), key))
+                .encrypt_compact(PLAINTEXT);
+            assert_eq!(result, Err(Error::UnsupportedAlgorithm), "{alg}");
+        }
     }
 }
 

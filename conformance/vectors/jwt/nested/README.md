@@ -17,7 +17,7 @@ Every JWE and every ES256 signature is randomized, so a re-run rewrites every to
 | Inner explicit typing (RFC 8725 §3.11, RFC 9068) | `inner-at-jwt-access-token` | ok |
 | Inner key from a JWK Set (ADR 0029) | `inner-jwks-key-index` | ok, `key_index` 1 |
 | `jwt.issue` with `encrypt` | `issue-es256-ecdh-es-a128kw` (the runner validates the token) | ok |
-| | `issue-es256-rsa-oaep-256-encrypt-only` (shape only: no RSA decryption, ADR 0021) | ok |
+| | `issue-es256-rsa-oaep-256-round-trip` (decrypted with the RFC 7515 A.2 RSA private key, ADR 0067) | ok |
 | Inner signature invalid | `inner-signed-by-key-outside-jwks`, `inner-signature-bit-flipped` | `InvalidSignature` |
 | Inner token expired | `inner-expired` | `TokenExpired` |
 | Outer JWE tampered | `outer-tag-tampered`, `outer-ciphertext-tampered` | `DecryptionFailed` |

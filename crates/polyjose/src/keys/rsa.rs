@@ -1,39 +1,55 @@
-//! RSA public keys (RFC 7518 §6.3.1) to and from SPKI with rsaEncryption and
-//! NULL parameters (RFC 3279 §2.3.1, RFC 8017 App. A.1) and the standalone
-//! PKCS#1 RSAPublicKey (RFC 8017 App. A.1.1, OpenSSL's `RSA PUBLIC KEY`).
+//! RSA keys (RFC 7518 §6.3) to and from their PEM/DER forms, and the one
+//! place polyjose builds the `rsa` crate's private key (ADR 0067 §6).
 //!
-//! Every RSA private key encoding (RFC 8017 App. A.1.2 RSAPrivateKey, in
-//! PKCS#8 or PKCS#1) is rejected as unsupported (ADR 0021), and none of its
-//! private INTEGERs is ever parsed:
+//! - **Public keys** (RFC 7518 §6.3.1): SPKI with rsaEncryption and NULL
+//!   parameters (RFC 3279 §2.3.1, RFC 8017 App. A.1) and the standalone
+//!   PKCS#1 RSAPublicKey (RFC 8017 App. A.1.1, OpenSSL's `RSA PUBLIC KEY`).
+//! - **Private keys** (RFC 7518 §6.3.2): the two-prime RSAPrivateKey
+//!   (RFC 8017 App. A.1.2), standalone (OpenSSL's `RSA PRIVATE KEY`, the
+//!   format RFC 9500 §2.1 uses) or inside a PKCS#8 OneAsymmetricKey with
+//!   rsaEncryption (RFC 5958 §2, RFC 8017 App. A.1.2). Export writes PKCS#8
+//!   v1, the layout OpenSSL 4 emits; [`to_spki`] and [`to_pkcs1`] write the
+//!   public half. A multi-prime key (version multi) is
+//!   [`Error::UnsupportedAlgorithm`] (ADR 0067 §3).
 //!
-//! - PKCS#8 with rsaEncryption: `pkcs8::decode` returns on the
-//!   AlgorithmIdentifier and never opens privateKey.
-//! - PEM `RSA PRIVATE KEY`: `pem::decode` refuses the BEGIN line before the
-//!   body is decoded.
-//! - PKCS#1 DER: `pkcs1::decode` recognizes the RSAPrivateKey shape from
-//!   its version and the framing of the INTEGERs after it.
-//! - A PKCS#1 RSAPrivateKey read as PKCS#8 or SEC1 (under `PRIVATE KEY` or
-//!   `EC PRIVATE KEY`, ADR 0018 §3): `pkcs8::decode` and
-//!   `sec1::decode_standalone` fail their own parse, then
-//!   `pkcs1::relabel_rsa_private_key` recognizes the same framing.
-//!
-//! This module never uses the rsa crate: an RSA public key is two DER
-//! INTEGERs, and [`Jwk::from_object`](crate::jwk::Jwk::from_object), reached
-//! through `jwk_build::rsa_public_jwk`, checks that they are a usable key
-//! (a modulus of 2048–8192 bits, [`RSA_MODULUS_BITS`]: at least 2048 by
+//! Every key is validated by [`Jwk::from_object`](crate::jwk::Jwk::from_object),
+//! reached through `jwk_build`, which checks that the INTEGERs are a usable
+//! key (a modulus of 2048–8192 bits, [`RSA_MODULUS_BITS`]: at least 2048 by
 //! RFC 7518 §3.3, §4.2 and ADR 0007, at most 8192 by ADR 0026 §2 step 8;
-//! odd `n`; odd `e` with 3 ≤ e < n, RFC 8017 §3.1).
+//! odd `n`; odd `e` with 3 ≤ e < n, RFC 8017 §3.1) and, for a private key,
+//! calls [`check_private`].
+//!
+//! # The `rsa` crate's private key
+//!
+//! [`private_key`] and [`check_private`] build `rsa::PrivateKey` with
+//! `from_components` (n, e, d and the two primes; RFC 8017 §3.2 form 2),
+//! which checks n = p·q, distinct primes, d < n and d·e ≡ 1 mod (p − 1)
+//! and (q − 1), and precomputes the CRT values. No other constructor is
+//! used: there is no key generation (ADR 0067 §3). The key the `rsa` crate
+//! holds is wiped on drop by that crate (`ZeroizeOnDrop`), and every
+//! intermediate integer here lives in a [`Zeroizing`] buffer.
 //!
 //! [`RSA_MODULUS_BITS`]: crate::jwk::RSA_MODULUS_BITS
 
+use rsa::BoxedUint;
+use rsa::traits::PrivateKeyParts;
+use subtle::{Choice, ConstantTimeEq};
 use zeroize::Zeroizing;
 
 use super::jwk_build;
-use super::pkcs1::{self, RsaPublicParts};
+use super::pkcs1::{self, Pkcs1Key, RsaPrivateFields, RsaPublicParts};
+use super::pkcs8;
 use super::spki;
-use super::types::{AlgId, SpkiParts};
+use super::types::{AlgId, Pkcs8Parts, SpkiParts};
 use crate::error::{Error, Result};
-use crate::jwk::{Jwk, RsaPublicKey};
+use crate::jwk::{Jwk, RsaPrivateParts, RsaPublicKey};
+
+/// Detail for private members that are not the key of `n` and `e`.
+const PRIVATE_MISMATCH: &str = "RSA private key does not match n and e";
+/// Detail for CRT members that are not the CRT values of `d`, `p`, `q`.
+const CRT_MISMATCH: &str = "RSA private key dp, dq or qi does not match d, p and q";
+/// Detail for an RSA private key member that is empty or too long.
+const MEMBER_SIZE: &str = "RSA key member is empty or too long";
 
 /// Imports the RSA public key of a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7)
 /// that `spki::decode` classified as rsaEncryption with NULL parameters
@@ -56,34 +72,90 @@ pub(crate) fn from_spki(parts: SpkiParts<'_>) -> Result<Jwk> {
     if parts.alg != AlgId::RsaEncryption {
         return Err(Error::InvalidKey("the key is not an RSA key"));
     }
-    to_jwk(pkcs1::decode_public(parts.subject_public_key)?)
+    public_jwk(pkcs1::decode_public(parts.subject_public_key)?)
 }
 
-/// Imports standalone PKCS#1 DER (`KeyFormat::Pkcs1`, the body of an
-/// `RSA PUBLIC KEY` PEM block): an RSAPublicKey (RFC 8017 App. A.1.1),
-/// told apart from an RSAPrivateKey (App. A.1.2) by `pkcs1::decode`.
+/// Imports standalone PKCS#1 DER (`KeyFormat::Pkcs1`): an RSAPublicKey
+/// (RFC 8017 App. A.1.1) or a two-prime RSAPrivateKey (App. A.1.2), told
+/// apart by `pkcs1::decode`.
 ///
 /// # Errors
 ///
-/// [`Error::UnsupportedAlgorithm`] for an RSAPrivateKey (ADR 0021), refused
-/// before any private INTEGER is parsed. [`Error::InvalidKey`] for any other
-/// DER that is not an RSAPublicKey, and for whatever [`Jwk::from_object`]
-/// refuses (see [`from_spki`]).
+/// [`Error::UnsupportedAlgorithm`] for a multi-prime RSAPrivateKey
+/// (ADR 0067 §3). [`Error::InvalidKey`] for any other DER that is neither,
+/// and for whatever [`Jwk::from_object`] refuses (see [`from_spki`], and
+/// for a private key a `d`, `p`, `q`, `dp`, `dq` or `qi` inconsistent with
+/// `n` and `e`, ADR 0043).
 pub(crate) fn from_pkcs1(der: &[u8]) -> Result<Jwk> {
-    to_jwk(pkcs1::decode(der)?)
+    match pkcs1::decode(der)? {
+        Pkcs1Key::Public(key) => public_jwk(key),
+        Pkcs1Key::Private(key) => private_jwk(&key),
+    }
+}
+
+/// Imports the body of an `RSA PUBLIC KEY` PEM block: an RSAPublicKey
+/// (RFC 8017 App. A.1.1) and nothing else, so the label names the
+/// structure (RFC 7468 §2, ADR 0018 §2).
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] for an RSAPrivateKey or any other DER, and as
+/// [`from_spki`].
+pub(crate) fn from_pkcs1_public(der: &[u8]) -> Result<Jwk> {
+    public_jwk(pkcs1::decode_public(der)?)
+}
+
+/// Imports the body of an `RSA PRIVATE KEY` PEM block: a two-prime
+/// RSAPrivateKey (RFC 8017 App. A.1.2) and nothing else.
+///
+/// # Errors
+///
+/// [`Error::UnsupportedAlgorithm`] for a multi-prime key (ADR 0067 §3);
+/// [`Error::InvalidKey`] for an RSAPublicKey or any other DER, and as
+/// [`from_pkcs1`].
+pub(crate) fn from_pkcs1_private(der: &[u8]) -> Result<Jwk> {
+    private_jwk(&pkcs1::decode_private(der)?)
+}
+
+/// Imports a PKCS#8 OneAsymmetricKey (RFC 5958 §2) that `pkcs8::decode`
+/// classified as rsaEncryption: its privateKey is an RSAPrivateKey
+/// (RFC 8017 App. A.1.2: "the RSA private key SHALL have ASN.1 type
+/// RSAPrivateKey"), and the AlgorithmIdentifier's NULL parameters were
+/// checked by the container (RFC 3279 §2.3.1).
+///
+/// # Errors
+///
+/// [`Error::UnsupportedAlgorithm`] for a v2 key with a publicKey, which no
+/// RSA producer polyjose knows writes, and for a multi-prime key
+/// (ADR 0067 §3); [`Error::InvalidKey`] as [`from_pkcs1_private`].
+pub(crate) fn from_pkcs8(parts: Pkcs8Parts<'_>) -> Result<Jwk> {
+    if parts.alg != AlgId::RsaEncryption {
+        return Err(Error::InvalidKey("the key is not an RSA key"));
+    }
+    if parts.public_key.is_some() {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    private_jwk(&pkcs1::decode_private(parts.private_key)?)
 }
 
 /// The JWK of an RSAPublicKey: `n` and `e` as Base64urlUInt in the fewest
 /// octets (RFC 7518 §2, §6.3.1.1, §6.3.1.2), which the DER magnitudes
 /// already are, validated by [`Jwk::from_object`].
-fn to_jwk(key: RsaPublicParts<'_>) -> Result<Jwk> {
+fn public_jwk(key: RsaPublicParts<'_>) -> Result<Jwk> {
     jwk_build::rsa_public_jwk(key.n, key.e, None)
 }
 
-/// Exports an RSA public key as a DER SubjectPublicKeyInfo (RFC 5280
-/// §4.1.2.7): the rsaEncryption + NULL AlgorithmIdentifier (RFC 3279
-/// §2.3.1) and the RSAPublicKey in a BIT STRING with no unused bits, the
-/// layout OpenSSL 4 emits (ADR 0018 §3).
+/// The JWK of an RSAPrivateKey: the eight INTEGERs as the Base64urlUInt
+/// members `n`, `e`, `d`, `p`, `q`, `dp`, `dq` and `qi` (RFC 7518 §6.3.1,
+/// §6.3.2), validated by [`Jwk::from_object`].
+fn private_jwk(key: &RsaPrivateFields<'_>) -> Result<Jwk> {
+    jwk_build::rsa_private_jwk(key, None)
+}
+
+/// Exports an RSA key's public half as a DER SubjectPublicKeyInfo
+/// (RFC 5280 §4.1.2.7): the rsaEncryption + NULL AlgorithmIdentifier
+/// (RFC 3279 §2.3.1) and the RSAPublicKey in a BIT STRING with no unused
+/// bits, the layout OpenSSL 4 emits (ADR 0018 §3).
 pub(crate) fn to_spki(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
     let rsa_public_key = to_pkcs1(key)?;
     spki::encode(&SpkiParts {
@@ -92,10 +164,131 @@ pub(crate) fn to_spki(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
     })
 }
 
-/// Exports an RSA public key as a DER PKCS#1 RSAPublicKey (RFC 8017
-/// App. A.1.1), the body of OpenSSL's `RSA PUBLIC KEY` PEM block.
+/// Exports an RSA key's public half as a DER PKCS#1 RSAPublicKey (RFC 8017
+/// App. A.1.1), the body of OpenSSL's `RSA PUBLIC KEY` PEM block. A private
+/// key exports its public half, as with SPKI (ADR 0018 §3 format matrix).
 pub(crate) fn to_pkcs1(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
     pkcs1::encode_public(key.n(), key.e())
+}
+
+/// Exports an RSA private key as DER PKCS#8 v1 (RFC 5958 §2): rsaEncryption
+/// with NULL parameters (RFC 3279 §2.3.1, RFC 8017 App. A.1) and the
+/// two-prime RSAPrivateKey (RFC 8017 App. A.1.2) as privateKey, without
+/// attributes or publicKey, the layout OpenSSL 4 emits (ADR 0018 §3).
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`]`("private key required")` for a public key (the
+/// caller, `Jwk::to_der`, refuses it first).
+pub(crate) fn to_pkcs8(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
+    let private = key
+        .private()
+        .ok_or(Error::InvalidKey("private key required"))?;
+    let inner = pkcs1::encode_private(&RsaPrivateFields {
+        n: key.n(),
+        e: key.e(),
+        d: &private.d,
+        p: &private.p,
+        q: &private.q,
+        dp: &private.dp,
+        dq: &private.dq,
+        qi: &private.qi,
+    })?;
+    pkcs8::encode(&Pkcs8Parts {
+        // v1(0): no outer publicKey (RFC 5958 §2).
+        version: 0,
+        alg: AlgId::RsaEncryption,
+        private_key: &inner,
+        public_key: None,
+    })
+}
+
+/// The `rsa` crate's private key for an RSA private JWK, for RS*/PS*
+/// signing (RFC 7518 §3.3, §3.5) and RSA-OAEP-256 decryption (§4.3).
+///
+/// The key was checked at import ([`check_private`]); it is built again from
+/// the JWK members for each operation, so the `rsa` crate's copy lives only
+/// as long as the operation and is wiped when it is dropped.
+///
+/// # Errors
+///
+/// [`Error::KeyAlgorithmMismatch`] for a public key (key binding refuses it
+/// first, RFC 7518 §3, §4.3), and [`Error::InvalidKey`] if the members are
+/// not a valid key, which import already rules out.
+pub(crate) fn private_key(key: &RsaPublicKey) -> Result<rsa::PrivateKey> {
+    let private = key.private().ok_or(Error::KeyAlgorithmMismatch)?;
+    from_components(key.n(), key.e(), private)
+}
+
+/// ADR 0043, ADR 0067 §2: checks at import that the private members of an
+/// RSA JWK (RFC 7518 §6.3.2) are the key of `n` and `e`:
+///
+/// - `rsa::PrivateKey::from_components` (see the module docs): n = p·q,
+///   distinct primes that fit the half-modulus width, d < n (RFC 8017
+///   §3.2) and d·e ≡ 1 mod (p − 1) and (q − 1);
+/// - then `dp`, `dq` and `qi` must equal d mod (p − 1), d mod (q − 1) and
+///   q⁻¹ mod p (RFC 7518 §6.3.2.4–§6.3.2.6, RFC 8017 §3.2), compared in
+///   constant time (`subtle`). They are recomputed for every operation
+///   anyway, so a wrong CRT value could not change a signature, but a key
+///   whose members disagree is malformed and would export as such.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`] with a static detail; no error says which member
+/// or value failed (ADR 0007).
+pub(crate) fn check_private(n: &[u8], e: &[u8], private: &RsaPrivateParts) -> Result<()> {
+    let key = from_components(n, e, private)?;
+    let (Some(dp), Some(dq), Some(qi)) = (key.dp(), key.dq(), key.crt_coefficient()) else {
+        return Err(Error::InvalidKey(PRIVATE_MISMATCH));
+    };
+    let qi = Zeroizing::new(qi);
+    let equal = same_value(&private.dp, &Zeroizing::new(dp.to_be_bytes()))
+        & same_value(&private.dq, &Zeroizing::new(dq.to_be_bytes()))
+        & same_value(&private.qi, &Zeroizing::new(qi.to_be_bytes()));
+    if bool::from(equal) {
+        Ok(())
+    } else {
+        Err(Error::InvalidKey(CRT_MISMATCH))
+    }
+}
+
+/// `rsa::PrivateKey::from_components(n, e, d, [p, q])`; see the module docs.
+fn from_components(n: &[u8], e: &[u8], private: &RsaPrivateParts) -> Result<rsa::PrivateKey> {
+    let n = uint(n)?;
+    let e = uint(e)?;
+    let d = uint(&private.d)?;
+    let p = uint(&private.p)?;
+    let q = uint(&private.q)?;
+    rsa::PrivateKey::from_components(n, e, d, vec![p, q])
+        .map_err(|_| Error::InvalidKey(PRIVATE_MISMATCH))
+}
+
+/// Whether the minimal big-endian `minimal` (a JWK member) and the
+/// fixed-width big-endian `fixed` (the `rsa` crate's value) are the same
+/// integer, in constant time with respect to both values. Only the lengths,
+/// which the encoded JWK already reveals, may affect the timing.
+fn same_value(minimal: &[u8], fixed: &[u8]) -> Choice {
+    let Some(pad) = fixed.len().checked_sub(minimal.len()) else {
+        return Choice::from(0);
+    };
+    let (zeros, digits) = fixed.split_at(pad);
+    let zeros_ok = zeros
+        .iter()
+        .fold(Choice::from(1), |acc, b| acc & b.ct_eq(&0));
+    zeros_ok & digits.ct_eq(minimal)
+}
+
+/// The unsigned integer of the big-endian `bytes` (OS2IP, RFC 8017 §4.2),
+/// with a precision of 8 bits per octet, as the `rsa` crate's own PKCS#1
+/// decoder sizes it. Empty input is no integer. The integer moves into the
+/// `rsa` crate's key, which wipes it on drop.
+fn uint(bytes: &[u8]) -> Result<BoxedUint> {
+    let bits = u32::try_from(bytes.len())
+        .ok()
+        .and_then(|len| len.checked_mul(8))
+        .filter(|&bits| bits > 0)
+        .ok_or(Error::InvalidKey(MEMBER_SIZE))?;
+    BoxedUint::from_be_slice(bytes, bits).map_err(|_| Error::InvalidKey(MEMBER_SIZE))
 }
 
 #[cfg(test)]
@@ -338,18 +531,21 @@ mod tests {
 
     /// `text` through polyjose's PEM codec, then the structure its label
     /// names: PKCS#8 for `PRIVATE KEY`, SPKI for `PUBLIC KEY`, PKCS#1 for
-    /// `RSA PUBLIC KEY` (the T08 dispatch, reduced to what RSA needs).
-    fn import_pem(text: &str) -> Result<()> {
+    /// `RSA PUBLIC KEY` and `RSA PRIVATE KEY` (the T08 dispatch, reduced to
+    /// what RSA needs).
+    fn import_pem(text: &str) -> Result<Jwk> {
         let (label, der) = pem::decode(text)?;
         match label {
-            Label::PrivateKey => pkcs8::decode(&der).map(drop),
-            Label::PublicKey => import_spki(&der).map(drop),
-            Label::RsaPublic => from_pkcs1(&der).map(drop),
+            Label::PrivateKey => from_pkcs8(pkcs8::decode(&der)?),
+            Label::PublicKey => import_spki(&der),
+            Label::RsaPublic => from_pkcs1_public(&der),
+            Label::RsaPrivate => from_pkcs1_private(&der),
             other => panic!("pem::decode returned {other:?}"),
         }
     }
 
-    /// Every RSA private key fixture of the acceptance criteria (ADR 0021),
+    /// Every RSA private key fixture of the 0.1.0 acceptance criteria (named
+    /// `reject-` then, ADR 0021),
     /// with whether it is PKCS#8 (else PKCS#1 RSAPrivateKey) and whether the
     /// test oracle can turn it into DER (legacy encrypted PEM has RFC 1421
     /// headers, which RFC 7468 does not allow).
@@ -383,38 +579,96 @@ mod tests {
         out
     }
 
+    /// What ADR 0067 makes of an RSA private key fixture: imported, or the
+    /// error it still gets.
+    fn adr_0067_outcome(file: &str) -> std::result::Result<(), Error> {
+        if file.contains("encrypted") || file.contains("3prime") {
+            // RFC 5958 §3 / RFC 1421 encryption (ADR 0018 §4), and
+            // multi-prime keys (ADR 0067 §3).
+            Err(Error::UnsupportedAlgorithm)
+        } else if file.contains("1024") {
+            // RFC 7518 §3.3, §4.3; ADR 0007.
+            Err(Error::InvalidKey("RSA modulus is shorter than 2048 bits"))
+        } else {
+            Ok(())
+        }
+    }
+
     #[test]
-    fn every_rsa_private_key_fixture_is_unsupported() {
-        // ADR 0021 end to end. PEM through polyjose's codec: `RSA PRIVATE
-        // KEY` and `ENCRYPTED PRIVATE KEY` are refused from the BEGIN line,
-        // and `PRIVATE KEY` (PKCS#8 rsaEncryption) by pkcs8::decode on the
-        // AlgorithmIdentifier. DER through the decoder of its format.
+    fn every_rsa_private_key_fixture_has_its_adr_0067_outcome() {
+        // ADR 0067 end to end: two-prime keys of 2048 to 4096 bits import
+        // as PKCS#8 (`PRIVATE KEY`, rsaEncryption) and PKCS#1 (`RSA PRIVATE
+        // KEY`, RFC 8017 App. A.1.2), as PEM and DER; 1024-bit keys,
+        // three-prime and encrypted keys do not. Every imported key is
+        // private and the PEM and DER forms give the same JWK.
         for (dir, file, pkcs8, oracle) in rsa_private_fixtures() {
+            let expected = adr_0067_outcome(&file);
+            let mut imported = Vec::new();
             if file.ends_with(".pem") {
                 let result = import_pem(&pem_text(dir, &file));
-                assert!(is_unsupported(&result), "{file}: {:?}", result.err());
+                assert_eq!(
+                    result.as_ref().map(drop).map_err(Clone::clone),
+                    expected,
+                    "{file}"
+                );
+                imported.extend(result.ok());
             }
             if oracle {
                 let der = fixtures::load(dir, &file);
                 let result = if pkcs8 {
-                    pkcs8::decode(&der).map(drop)
+                    pkcs8::decode(&der).and_then(from_pkcs8)
                 } else {
-                    from_pkcs1(&der).map(drop)
+                    from_pkcs1(&der)
                 };
-                assert!(is_unsupported(&result), "{file} as DER: {:?}", result.err());
+                assert_eq!(
+                    result.as_ref().map(drop).map_err(Clone::clone),
+                    expected,
+                    "{file} as DER"
+                );
+                imported.extend(result.ok());
+            }
+            for jwk in &imported {
+                assert!(!jwk.is_public() && jwk.alg().is_none(), "{file}");
+                assert_eq!(*jwk.to_json(), *imported[0].to_json(), "{file}");
             }
         }
-        // N67: a minimal PKCS#8 with rsaEncryption.
-        assert!(is_unsupported(&pkcs8::decode(&fixtures::negative("N67"))));
     }
 
     #[test]
-    fn pkcs8_rsa_private_keys_are_refused_before_private_key_is_opened() {
-        // pkcs8::decode returns on the rsaEncryption AlgorithmIdentifier
-        // (ADR 0021): with the privateKey's identifier octet replaced by
-        // the high-tag-number form, which any read of that element rejects
-        // as InvalidKey (X.690 §8.1.2.4), the result is still
-        // UnsupportedAlgorithm.
+    fn pkcs8_and_pkcs1_private_keys_round_trip_byte_for_byte() {
+        // ADR 0018 §3: export in the layout OpenSSL 4 writes. The 2048-bit
+        // key's PKCS#8 and PKCS#1 forms are the same key (RFC 8017
+        // App. A.1.2 inside RFC 5958 §2), and PKCS#8 export reproduces the
+        // OpenSSL DER; the PKCS#1 RSAPrivateKey inside it is the PKCS#1
+        // fixture.
+        let pkcs8_der = fixtures::load("openssl", "reject-rsa2048-private-pkcs8.der");
+        let pkcs1_der = fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der");
+        let from_8 = from_pkcs8(pkcs8::decode(&pkcs8_der).unwrap()).unwrap();
+        let from_1 = from_pkcs1(&pkcs1_der).unwrap();
+        assert_eq!(*from_8.to_json(), *from_1.to_json());
+        let exported = to_pkcs8(rsa(&from_1)).unwrap();
+        assert_eq!(&exported[..], &pkcs8_der[..]);
+        let inner = pkcs8::decode(&exported).unwrap();
+        assert_eq!(inner.private_key, &pkcs1_der[..]);
+        // The PKCS#1 and SPKI exports are the public half (ADR 0018 §3).
+        let public = rsa(&from_1);
+        assert!(from_pkcs1(&to_pkcs1(public).unwrap()).unwrap().is_public());
+        assert!(import_spki(&to_spki(public).unwrap()).unwrap().is_public());
+        // A public key has no PKCS#8 form.
+        let public_jwk = from_1.to_public().unwrap();
+        assert_eq!(
+            to_pkcs8(rsa(&public_jwk)).err(),
+            Some(Error::InvalidKey("private key required"))
+        );
+    }
+
+    #[test]
+    fn a_pkcs8_rsa_key_with_a_malformed_private_key_is_invalid() {
+        // ADR 0067: the privateKey of an rsaEncryption PKCS#8 is read as an
+        // RSAPrivateKey (RFC 8017 App. A.1.2); with its identifier octet
+        // replaced by the high-tag-number form (X.690 §8.1.2.4), or a
+        // minimal privateKey that is no RSAPrivateKey (N67), the key is
+        // malformed: InvalidKey.
         let mut keys = vec![fixtures::negative("N67")];
         for (dir, file, pkcs8, oracle) in rsa_private_fixtures() {
             if pkcs8 && oracle && !file.contains("encrypted") {
@@ -422,15 +676,20 @@ mod tests {
             }
         }
         assert_eq!(keys.len(), 7);
-        for mut der in keys {
-            let at = der
-                .windows(oid::ALG_RSA_ENCRYPTION.len())
-                .position(|window| window == oid::ALG_RSA_ENCRYPTION)
-                .unwrap()
-                + oid::ALG_RSA_ENCRYPTION.len();
-            assert_eq!(der[at], 0x04, "privateKey is an OCTET STRING");
-            der[at] = 0x1F;
-            assert!(is_unsupported(&pkcs8::decode(&der)));
+        for (index, mut der) in keys.into_iter().enumerate() {
+            if index > 0 {
+                let at = der
+                    .windows(oid::ALG_RSA_ENCRYPTION.len())
+                    .position(|window| window == oid::ALG_RSA_ENCRYPTION)
+                    .unwrap()
+                    + oid::ALG_RSA_ENCRYPTION.len();
+                assert_eq!(der[at], 0x04, "privateKey is an OCTET STRING");
+                der[at] = 0x1F;
+            }
+            assert!(
+                is_invalid(&Jwk::from_der(&der, super::super::KeyFormat::Pkcs8)),
+                "key {index}"
+            );
         }
     }
 
@@ -467,13 +726,26 @@ mod tests {
             })
             .unwrap()
         };
+        // A well-formed RSAPrivateKey whose INTEGERs are the marker with
+        // the sign bit clear: refused by the JWK validation (n even, too
+        // short), never echoed.
+        let mut positive = vec![0x30, 0x81, 0x00, 0x02, 0x01, 0x00];
+        for _ in 0..8 {
+            positive.extend_from_slice(&[0x02, 0x11, 0x00]);
+            positive.extend_from_slice(&[0xA5; 16]);
+        }
+        positive[2] = u8::try_from(positive.len() - 3).unwrap();
         let errors = [
             import_spki(&spki_of(&marker)).unwrap_err(),
             import_spki(&spki_of(&even)).unwrap_err(),
             from_pkcs1(&pkcs1::encode_public(&marker, &[0xA5]).unwrap()).unwrap_err(),
             from_pkcs1(&private).unwrap_err(),
+            from_pkcs1(&positive).unwrap_err(),
         ];
-        assert_eq!(errors[3], Error::UnsupportedAlgorithm);
+        // ADR 0067: the private INTEGERs are parsed now; 0xA5 has the sign
+        // bit set, so the first form is a negative INTEGER (X.690 §8.3.3).
+        assert_eq!(errors[3], Error::InvalidKey("DER INTEGER negative"));
+        assert!(matches!(errors[4], Error::InvalidKey(_)));
         for error in errors {
             for text in [
                 format!("{error:?}"),
@@ -493,7 +765,7 @@ mod tests {
 #[cfg(test)]
 mod adversarial {
     use super::super::types::{AlgId, SpkiParts};
-    use super::super::{pem, pkcs8, spki};
+    use super::super::{pem, spki};
     use super::*;
 
     /// A DER INTEGER with exactly these contents octets (no normalisation).
@@ -725,11 +997,16 @@ mod adversarial {
     }
 
     #[test]
-    fn rsa_private_pem_is_refused_before_its_body_is_decoded() {
+    fn encrypted_pem_is_refused_before_its_body_and_rsa_private_pem_is_read() {
         // The literal criterion for PEM: the BEGIN line decides. A body that
-        // is not even base64 still gives UnsupportedAlgorithm, so no body
-        // octet can have been decoded.
-        for label in ["RSA PRIVATE KEY", "ENCRYPTED PRIVATE KEY"] {
+        // is not even base64 still gives UnsupportedAlgorithm for an
+        // encrypted key (ADR 0018 §4), so no body octet can have been
+        // decoded. `RSA PRIVATE KEY` is a key label since ADR 0067: its body
+        // is decoded, and a bad one is InvalidKey.
+        let text = "-----BEGIN RSA PRIVATE KEY-----\n!!!not base64 at all!!!\n-----END RSA PRIVATE KEY-----\n";
+        assert!(matches!(pem::decode(text), Err(Error::InvalidKey(_))));
+        {
+            let label = "ENCRYPTED PRIVATE KEY";
             let text = format!(
                 "-----BEGIN {label}-----\n!!!not base64 at all!!!\n-----END {label}-----\n"
             );
@@ -741,11 +1018,11 @@ mod adversarial {
     }
 
     #[test]
-    fn pkcs8_rsa_encryption_returns_on_the_algorithm_identifier() {
-        // rsaEncryption AlgorithmIdentifier followed by an OCTET STRING whose
-        // contents are not DER at all, and by nothing at all after the
-        // AlgorithmIdentifier: both are UnsupportedAlgorithm, never a parse
-        // error from privateKey.
+    fn pkcs8_rsa_encryption_with_a_bad_or_missing_private_key_is_invalid() {
+        // ADR 0067: an rsaEncryption AlgorithmIdentifier followed by an
+        // OCTET STRING whose contents are not DER at all, or by nothing at
+        // all, is a malformed key: InvalidKey, never UnsupportedAlgorithm,
+        // and never an error that quotes the privateKey.
         let alg = [
             0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01, 0x05,
             0x00,
@@ -759,10 +1036,9 @@ mod adversarial {
             let mut der = vec![0x30];
             push_len(&mut der, body.len());
             der.extend_from_slice(&body);
-            assert_eq!(
-                pkcs8::decode(&der).map(drop).unwrap_err(),
-                Error::UnsupportedAlgorithm
-            );
+            let error = Jwk::from_der(&der, super::super::KeyFormat::Pkcs8).unwrap_err();
+            assert!(matches!(error, Error::InvalidKey(_)), "{error:?}");
+            assert!(!format!("{error:?}").to_ascii_lowercase().contains("a5"));
         }
     }
 }

@@ -1,6 +1,6 @@
 {
-  "source": "ADR 0021",
-  "description": "Compact RS256 signing with the RFC 7515 A.2 RSA public JWK fails: RSA signing is not supported, checked before the rest of key binding (ADR 0026 §2 step 8)",
+  "source": "RFC 7515 §5.1; RFC 8725 §3.1; ADR 0067",
+  "description": "Compact RS256 signing with the RFC 7515 A.2 RSA public JWK fails with KeyAlgorithmMismatch: RSASSA signing needs the private key (RFC 7518 §3.3, RFC 8017 §8.2.1), so a public key is never a signing key (ADR 0026 §2 step 8, ADR 0067 §2); the A.2 private key signs (jws-rfc7515/a2-rs256-compact-sign.json)",
   "operation": "jws.sign",
   "input": {
     "serialization": "compact",
@@ -19,6 +19,6 @@
   },
   "expect": {
     "ok": false,
-    "error": "UnsupportedAlgorithm"
+    "error": "KeyAlgorithmMismatch"
   }
 }

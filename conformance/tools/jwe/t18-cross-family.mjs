@@ -219,7 +219,7 @@ write(M, 'rfc7520-5-13-aes-key-decrypts-recipient-2', {
 write(M, 'rfc7520-5-13-rsa-key-only-unsupported', {
   source: 'RFC 7520 §5.13',
   description:
-    'The RFC 7520 §5.13 general JSON JWE with only recipient #1\'s RSA key (its public members; RSA private JWKs are refused at import, ADR 0021): RSA1_5 is not implemented (ADR 0022) and the other two recipients do not fit an RSA key, so there is no candidate and the best error is UnsupportedAlgorithm (plan.md recipient selection; generated from the ietf-jose cookbook)',
+    'The RFC 7520 §5.13 general JSON JWE with only recipient #1\'s RSA key (its public members): RSA1_5 is not implemented (ADR 0022) and the other two recipients do not fit an RSA key, so there is no candidate and the best error is UnsupportedAlgorithm (plan.md recipient selection; generated from the ietf-jose cookbook)',
   operation: 'jwe.decrypt',
   input: decrypt(m513, rsa513Public, algs513, [enc513]),
   expect: fails('UnsupportedAlgorithm'),

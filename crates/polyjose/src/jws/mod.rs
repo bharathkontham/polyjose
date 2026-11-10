@@ -24,7 +24,9 @@
 //!   operation (RFC 7517 §4.2–§4.4, RFC 8725 §3.1). An `oct` key never
 //!   verifies RS256, so the RS256→HS256 confusion (RFC 8725 §2.1) cannot
 //!   happen.
-//! - **No RSA signing** in 0.1.0 (ADR 0021): RS*/PS* verify only.
+//! - **RSA signing** (RS*/PS*, RFC 7518 §3.3, §3.5) needs an RSA private
+//!   key and goes through the `rsa` crate's blinded entry points only
+//!   (ADR 0067).
 //! - **`crit`.** Only `b64` (RFC 7797) is understood; any other critical
 //!   extension makes the JWS invalid (RFC 7515 §4.1.11).
 //! - **Embedded keys are data.** A header's `jwk`, `jku`, `x5u`, `x5c` or

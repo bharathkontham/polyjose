@@ -6,7 +6,9 @@
 //!   (with `insecure-test-vectors`) `encrypt_reproducible` reproduces the
 //!   RFC's compact string byte for byte from its CEK and IV.
 //! - RFC 7516 A.1 and A.2 and RFC 7520 §5.1 and §5.2 (RSA-OAEP, RSA1_5)
-//!   are `UnsupportedAlgorithm` (ADRs 0021, 0022), even when allowed.
+//!   are `UnsupportedAlgorithm` (ADRs 0021, 0022, 0067), even when allowed
+//!   and even with an RSA private key; RSA-OAEP-256 decrypts with an RSA
+//!   private key only (ADR 0067).
 //! - One test per row of the error contract, and the uniform
 //!   `DecryptionFailed`.
 //! - A property test round-trips `dir` and A*KW over every `enc`.
@@ -448,6 +450,15 @@ fn alg_and_enc_must_be_in_the_protected_header() {
 /// An RSA public key (RFC 7516 A.1.3, `n` and `e` only).
 const RSA_A1: &str = r#"{"kty":"RSA","n":"oahUIoWw0K0usKNuOR6H4wkf4oBUXHTxRvgb48E-BVvxkeDNjbC4he8rUWcJoZmds2h7M70imEVhRU5djINXtqllXI4DFqcI1DgjT9LewND8MW2Krf3Spsk_ZkoFnilakGygTwpZ3uesH-PFABNIUYpOiN15dsQRkgr0vEhxN92i2asbOenSZeyaxziK72UwxrrKoExv6kc5twXTq4h-QChLOln0_mtUZwfsRaMStPs6mS6XrgxnxbWhojf663tuEQueGC-FCMfra36C9knDFGzKsNa7LZK2djYgyD3JR_MB_4NUJW_TqOQtwHYbxevoJArm-L5StowjzGy-_bq6Gw","e":"AQAB"}"#;
 
+/// A test-only 2048-bit RSA private JWK (RFC 7518 §6.3.2), committed for the
+/// RSA-OAEP-256 vectors (ADR 0067).
+fn rsa_private() -> Jwk {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../conformance/vectors/jwe/rsa-oaep-256/keys/rsa-2048.private.jwk");
+    let text = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    Jwk::from_json(&text).unwrap_or_else(|e| panic!("{e}"))
+}
+
 /// Every RSA key management `alg` there is, all listed in the policy.
 fn rsa_policy() -> DecryptPolicy {
     let algs = [A::RsaOaep256, A::from("RSA-OAEP"), A::from("RSA1_5")];
@@ -456,27 +467,46 @@ fn rsa_policy() -> DecryptPolicy {
 
 #[test]
 fn unsupported_alg_is_unsupported_even_when_allowed() {
-    // ADR 0021 (no RSA private-key operation), ADR 0022 (no SHA-1): the
-    // support check precedes the allow-list.
+    // ADR 0021 (no RSA1_5), ADR 0022 (no SHA-1), both kept by ADR 0067:
+    // the support check precedes the allow-list and the key, so even the
+    // RSA private key does not get past it.
     let rsa = jwk(RSA_A1);
+    let private = rsa_private();
     let other = oct(&[1; 16]);
     let unknown = policy(&[A::from("ECDH-1PU"), A::A128KW], &[E::A128GCM]);
-    for alg in ["RSA-OAEP-256", "RSA-OAEP", "RSA1_5"] {
-        let token = forge(
+    let token = |alg: &str| {
+        forge(
             &format!(r#"{{"alg":"{alg}","enc":"A128GCM"}}"#),
             &[1; 256],
             &[0; 12],
             &[0; 4],
             &[0; 16],
-        );
-        for key in [&rsa, &other] {
+        )
+    };
+    for alg in ["RSA-OAEP", "RSA1_5"] {
+        for key in [&rsa, &private, &other] {
             assert_eq!(
-                code(decrypt_compact(&token, key, &rsa_policy())),
+                code(decrypt_compact(&token(alg), key, &rsa_policy())),
                 "UnsupportedAlgorithm",
                 "{alg}"
             );
         }
     }
+    // ADR 0067: RSA-OAEP-256 is supported. Only an RSA private key is a
+    // candidate (RFC 8725 §3.1), so an RSA public key or an oct key is
+    // KeyAlgorithmMismatch; with the private key the forged encrypted key
+    // gets to the cryptography and fails uniformly (RFC 7516 §11.5).
+    let oaep = token("RSA-OAEP-256");
+    for key in [&rsa, &other] {
+        assert_eq!(
+            code(decrypt_compact(&oaep, key, &rsa_policy())),
+            "KeyAlgorithmMismatch"
+        );
+    }
+    assert_eq!(
+        code(decrypt_compact(&oaep, &private, &rsa_policy())),
+        "DecryptionFailed"
+    );
     let token = forge(
         r#"{"alg":"ECDH-1PU","enc":"A128GCM"}"#,
         &[],
@@ -503,9 +533,11 @@ fn unsupported_alg_is_unsupported_even_when_allowed() {
 
 /// RFC 7516 A.1 (RSA-OAEP + A256GCM) and A.2 (RSA1_5 + A128CBC-HS256),
 /// RFC 7520 §5.1 (RSA1_5) and §5.2 (RSA-OAEP), with each RFC's own public
-/// key, are refused before any cryptography (ADRs 0021, 0022).
+/// key or an RSA private key, are refused before any cryptography (ADRs
+/// 0021, 0022; ADR 0067 keeps both algorithms out).
 #[test]
 fn rfc_rsa_vectors_are_unsupported() {
+    let private = rsa_private();
     let tokens = [
         (RFC_7516_A1, RSA_A1),
         (RFC_7516_A2, RSA_A2),
@@ -514,10 +546,12 @@ fn rfc_rsa_vectors_are_unsupported() {
     ];
     for (token, key) in tokens {
         assert_eq!(token.split('.').count(), 5);
-        assert_eq!(
-            code(decrypt_compact(token, &jwk(key), &rsa_policy())),
-            "UnsupportedAlgorithm"
-        );
+        for key in [&jwk(key), &private] {
+            assert_eq!(
+                code(decrypt_compact(token, key, &rsa_policy())),
+                "UnsupportedAlgorithm"
+            );
+        }
     }
 }
 
@@ -823,11 +857,13 @@ fn encrypt_refuses_unsupported_algorithms_and_unusable_keys() {
     let to =
         |alg: KeyMgmtAlg, key: &Jwk| Encryptor::new(E::A128GCM).recipient(Recipient::new(alg, key));
     for alg in ["RSA-OAEP", "RSA1_5", "nope"] {
-        assert_eq!(
-            code(to(A::from(alg), &key).encrypt_compact(b"x")),
-            "UnsupportedAlgorithm",
-            "{alg}"
-        );
+        for key in [&key, &rsa_private()] {
+            assert_eq!(
+                code(to(A::from(alg), key).encrypt_compact(b"x")),
+                "UnsupportedAlgorithm",
+                "{alg}"
+            );
+        }
     }
     assert_eq!(
         code(to(A::A256KW, &key).encrypt_compact(b"x")),

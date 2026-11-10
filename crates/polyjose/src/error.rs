@@ -126,8 +126,8 @@ pub enum Error {
     /// (RFC 7516 §4.1.1–§4.1.2). The rejected value is not echoed.
     ///
     /// Also a well-formed key or key encoding that polyjose does not
-    /// support, e.g. encrypted PKCS#8 (RFC 5958 §3) or RSA private keys
-    /// (ADR 0018, ADR 0021).
+    /// support, e.g. encrypted PKCS#8 (RFC 5958 §3) or multi-prime RSA keys
+    /// (ADR 0018, ADR 0067 §3).
     UnsupportedAlgorithm,
 
     /// The algorithm is supported but not in the caller's allow-list.

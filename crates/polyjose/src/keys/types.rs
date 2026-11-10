@@ -14,7 +14,7 @@ use crate::jwk::{EcCurve, OkpCurve};
 #[non_exhaustive]
 pub enum KeyFormat {
     /// PKCS#8 OneAsymmetricKey (RFC 5958 §2; PrivateKeyInfo, RFC 5208 §5):
-    /// an EC or OKP private key. PEM label `PRIVATE KEY` (RFC 7468 §10).
+    /// an EC, OKP or RSA private key. PEM label `PRIVATE KEY` (RFC 7468 §10).
     Pkcs8,
     /// SEC1 ECPrivateKey (RFC 5915 §3): an EC private key. PEM label
     /// `EC PRIVATE KEY` (RFC 5915 §4).
@@ -22,9 +22,11 @@ pub enum KeyFormat {
     /// SubjectPublicKeyInfo (RFC 5280 §4.1.2.7): an EC, OKP or RSA public
     /// key. PEM label `PUBLIC KEY` (RFC 7468 §13).
     Spki,
-    /// PKCS#1 RSAPublicKey (RFC 8017 App. A.1.1): an RSA public key. PEM
-    /// label `RSA PUBLIC KEY` (OpenSSL's; no RFC defines it). RSA private
-    /// keys are not supported in any format (ADR 0021).
+    /// PKCS#1 (RFC 8017 App. A.1): on import an RSAPublicKey (App. A.1.1,
+    /// PEM label `RSA PUBLIC KEY`) or a two-prime RSAPrivateKey (App.
+    /// A.1.2, PEM label `RSA PRIVATE KEY`; OpenSSL's labels, no RFC defines
+    /// them). Export writes the RSAPublicKey, also for a private key, whose
+    /// private export format is [`KeyFormat::Pkcs8`] (ADR 0067).
     Pkcs1,
 }
 
@@ -104,7 +106,7 @@ pub(crate) enum AlgId {
     /// id-X25519, parameters absent (RFC 8410 §3).
     X25519,
     /// rsaEncryption with NULL parameters (RFC 3279 §2.3.1, RFC 8017
-    /// App. A.1). Only RSA public keys are supported (ADR 0021).
+    /// App. A.1): an RSA public key in SPKI, an RSA private key in PKCS#8.
     RsaEncryption,
 }
 
@@ -125,8 +127,7 @@ pub(crate) enum Label {
     /// label; no RFC defines it.
     RsaPublic,
     /// `RSA PRIVATE KEY`: PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2), the
-    /// OpenSSL format RFC 9500 §2.1 uses. Recognized only to reject it as
-    /// unsupported (ADR 0021).
+    /// OpenSSL format RFC 9500 §2.1 uses (ADR 0067).
     RsaPrivate,
     /// `ENCRYPTED PRIVATE KEY`: EncryptedPrivateKeyInfo (RFC 7468 §11,
     /// RFC 5958 §3). Recognized only to reject it as unsupported

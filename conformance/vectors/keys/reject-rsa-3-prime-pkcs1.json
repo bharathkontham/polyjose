@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "PEM import rejects a 2048-bit three-prime RSA PRIVATE KEY (version 1 with otherPrimeInfos, RFC 8017 App. A.1.2), made by OpenSSL 4.1.0: multi-prime RSA keys are not supported (ADR 0067 §3).",
+  "operation": "keys.import_pem",
+  "input": {
+    "pem": "-----BEGIN RSA PRIVATE KEY-----\nMIIE2QIBAQKCAQEAl8kmLDmn+2lOWVzYHglEopZj7t7/dtk6yivlC2YJKCOc1QvP\nsw/F3JYDkKEzaXirVUJFSMneTCd+4uz0rhxJ965IoCxnROpxLUnlvJsta2Pglq8C\n/HSfncLJMfDa+6PrJcRxEQnJUzBRsH96fRA94vXF/KqGrtCSPQ/mUPzQU42bgMNe\nqXgxDrB9fuVWU8nOYW2W7ol47rIxpZrLkLM8Mw+1X1Z73ETDgehUfFHXMGMwgBPs\nqVoWt5448vU1sysHLk+/t4V9eg7OcQd+wV9QtTYlpAt35vpuGKwO4ElW8TKMAVAT\nihfnJCFCGt2TYiboK+g/F0t7VrkLDAN7fK8bWwIDAQABAoIBAFWJIV3iz+s6GND7\nJT8n8em93msKd+Q93od33QdjZN2d1A+rLEy4IsSANVoXvaU+Py84vVqbiA5aY4L2\nDZzgjD5rlLnOzBNmGolvD2wN9raB/lpsHb57NfwPyC3jdwDYGDG0Id0HZd5SVU56\nMsjCuU42jPAsTonzngZsGMIdxORBjALhApJbOq6D7noDNsXJ7Psw6LtrRY2qtJrt\nLf66GDipDnxgIkLhCFJdxSgSp6ee/dOSH2bLyx+U6LMHhiDOFg26lx5eGSYiaW1n\n+Au/CanYIORNlfpejvj1JcQ65oecfqkU+ZzOpu6XO2gu9SXL6wfFsoj1m7S5crj4\nFpjyyQECVgdEWKKnTHq32eDC7T0WrcGuZzrULI8rTUbp/D2sdc6OcK3MTUl8ZYS4\ns/BLwRcxV0M09Dk9dDwtBMOYl2wodLaWlxCUUIPbW4zZNjT6j/JdFkoVfeRpAlYG\nkvrSHCEVRihkS9/+xCNjxZXKTvOvb8lZAmN50WcvAzStkbSZoTKamAmYi+d0g7Dc\nYwcHsuNuyNrBo/f0SuoPtSex6nQOdvnBEXfA81psDW/yf/acbQJWBFSQ8NP6ugIG\nnm3pywZRomGX+DFpICNwmDpkaifzx5OPx7E/uPOc1xrtdtrdhEGNu2m5wsZBFn7J\nIPkz+mqdKhTQjjujQv+bLXJeX/GTh5w65QirjUkCVgOL9k+2p06P7Ci4Gp+a97DT\nH03nLGcAuzMPK9XD2JQveZMOoc2kfuWSktK+398nURqFPnyz0SmqqQKBULt2UzKo\nPEMrRvOq0nGL1/y8DZNv6G5/BPA9AlYG0JymXltvWJs5VDTRITKRWwuiDLktHxE2\nf7JiVwuQMcg+79aRaFokDNhlEur9tgwcgsZJtdC3V/x/m9GJWVVg5tHi194G2l9G\n2sY9Wftx+V+CDwVrazCCAQwwggEIAlYDLVnx47BoHxYl4K/uLa1djtLJHgy/YEyH\nPMgkj5JE+LdN2RWGfweNBH2lKdw1UBrfx7CP96pvh/Ud1i7PoMrTcKmhBU8ZlZbG\n+y0c90nN48EXbE4RzwJWARueYrf3+sbkTT8FejOZYad9Hz6ISW/GH951GDKsWbq1\nCMNrOyQuuODZA3AOZtTRGjmi+wDtAMlTEx1t4175ezOtIwYb6Br+odJSj+g3Z0FF\nQuq0aocCVgH6vf2B/ugl9mdXAQQS7kI35QLHF44QqltB4dSusq6hBZCbDkTHG1KA\nPV1JQoZSCzlAYmZj1aOVk8/QNzrlaPTmjRoMdqV0eFMLrIZ5P6xq2FRZSe7I\n-----END RSA PRIVATE KEY-----\n"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

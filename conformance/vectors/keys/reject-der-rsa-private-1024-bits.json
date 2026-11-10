@@ -1,0 +1,13 @@
+{
+  "source": "RFC 9500 §2.1",
+  "description": "DER import rejects RFC 9500 testRSA1024, a 1024-bit RSAPrivateKey, as pkcs1: RSA keys must be at least 2048 bits, private ones too (RFC 7518 §3.3, §4.2; ADR 0007, ADR 0067 §2).",
+  "operation": "keys.import_der",
+  "input": {
+    "der_b64u": "MIICXQIBAAKBgQCw0YNSqI9T1VFvRsIOejZ9feiKz1SgGfbe9Xq5tEzt2yJCsbyg-xtcuCswNhdqY5A1ZN7G60HbL4_Hh_TlLhFJ4zNHVylz9mDDx3yp4IIcK2lb566dfTD0B5EQ9Iqub4twLUdLKQCBfyhmJJvsEqKxm4J4QWgI-Brh_Pm3d4piPwIDAQABAoGASC6fj6TkLfMNdYHLQqG9kOlPfys4fstarpZD7X-fUBJ_H_7y5DzeZLGCYAIU-QeAHWv6TfZIQjReW7Qy00RFJdgwFlTFRCsKXhG5x-IB-jL0Grr08KbgPPDgy4JmxirRHZVtU8lGbkiZX-omDIU28EHLNWL6rFEcTWao_tERspECQQDp2G5Nw0qYWn7HWm9Up1zkUTnkUkCzhqtxHbeRvNmHGKE7ryGMJEk2RmgHVstQpsvuFY4lIUSZEjAcDUFJERhFAkEAwZH6O1ULORp8sHKDdidyleYcZU8L7y9Y3OXJYqELfddfBgFUZeVQduRmJj7ryu0g0uurOTE-i8VnMg_ostxiswJBAOc64Dd8uLJWKa6uug-XPr91oi0nOFtM-xHrNK2jc-WmcSg3UJDnAI3uqMc5B-pERLq0Dc6hStehqHjUko3RnZECQEGZeRYWciE-Cre5dzfZkomeXE0xBrhecV0bOq6EKWLSVE-yr6mAl05ThRK9DCfPSOpyF6rgN3QiyCA9J_1FluUCQQC5nX-PTU1FXx-6Ri2ZCi6EjEKMHr7gHcABhMinZYOtN59pra9UdVQw9jxCU9G7eMyb0jJkNACAuEwakX3gi27b",
+    "format": "pkcs1"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

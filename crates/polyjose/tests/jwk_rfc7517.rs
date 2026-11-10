@@ -1,6 +1,6 @@
 //! RFC 7517 Appendix A and B keys: every key parses and re-serializes to
-//! equal JSON members, except the RSA private key of Appendix A.2, which is
-//! rejected with `UnsupportedAlgorithm` (ADR 0021).
+//! equal JSON members, the RSA private key of Appendix A.2 included
+//! (RFC 7518 §6.3.2, ADR 0067).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 use polyjose::Error;
@@ -133,7 +133,7 @@ fn a1_public_keys_round_trip() {
 }
 
 #[test]
-fn a2_ec_private_key_round_trips_and_rsa_private_key_is_unsupported() {
+fn a2_ec_and_rsa_private_keys_round_trip() {
     let keys = set_members(A2);
     assert_eq!(keys.len(), 2);
 
@@ -148,8 +148,42 @@ fn a2_ec_private_key_round_trips_and_rsa_private_key_is_unsupported() {
     assert!(public.is_public());
     assert_eq!(Value::from(public.to_object()), set_members(A1)[0]);
 
-    // ADR 0021: RSA private JWKs are not supported in 0.1.0.
-    assert_eq!(import(&keys[1]).err(), Some(Error::UnsupportedAlgorithm));
+    // ADR 0067 (RFC 7518 §6.3.2): the RSA private key imports, all six
+    // private members, and to_object/to_json give back the same members.
+    let rsa = round_trip(&keys[1]);
+    assert!(!rsa.is_public());
+    assert_eq!(rsa.alg(), Some(&KeyAlg::Signing(SigningAlg::RS256)));
+    assert_eq!(rsa.kid(), Some("2011-04-29"));
+    let KeyMaterial::Rsa(key) = rsa.material() else {
+        panic!("not RSA")
+    };
+    assert!(key.is_private());
+    assert_eq!(key.modulus_bits(), 2048);
+    // to_json writes the private members after n and e, in the order
+    // d, p, q, dp, dq, qi (ADR 0067).
+    let text = rsa.to_json();
+    let at = |name: &str| {
+        text.find(&format!(r#""{name}":"#))
+            .unwrap_or_else(|| panic!("no {name}"))
+    };
+    let order = ["n", "e", "d", "p", "q", "dp", "dq", "qi"].map(at);
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+    // Its public part is exactly the A.1 RSA public key.
+    let public = rsa.to_public().expect("RSA has a public part");
+    assert!(public.is_public());
+    assert_eq!(Value::from(public.to_object()), set_members(A1)[1]);
+    // Debug never prints a private member (ADR 0067; CLAUDE.md secrets).
+    let debug = format!("{rsa:?}");
+    for name in ["d", "p", "q", "dp", "dq", "qi"] {
+        let value = keys[1].get(name).and_then(Value::as_str).unwrap();
+        assert!(!debug.contains(value), "{name} in {debug}");
+        assert!(!debug.contains(&value[..16]), "{name} in {debug}");
+    }
+    assert!(debug.contains("<redacted>"), "{debug}");
+    // The whole A.2 set imports, both private keys kept (ADR 0067 §4).
+    let set = polyjose::jwk::JwkSet::from_json(A2.as_bytes()).unwrap();
+    assert_eq!((set.len(), set.skipped()), (2, 0));
+    assert!(set.keys().iter().all(|k| !k.is_public()));
 }
 
 #[test]

@@ -6,8 +6,9 @@
 //! `use` and `key_ops` (RFC 7517 §4.2–§4.4) and the key size the `alg`
 //! needs, and picks the public or private part `direction` uses.
 //!
-//! RSA keys are held as their validated `n` and `e` only (ADR 0021: public
-//! keys, encryption only); this file never names the `rsa` crate.
+//! RSA keys are held as their validated JWK members: `n` and `e` to encrypt,
+//! the whole private key to decrypt (ADR 0067); this file never names the
+//! `rsa` crate.
 
 use core::fmt;
 
@@ -42,8 +43,11 @@ pub(crate) enum RecipientKey {
     /// PBES2: the password, carried as an `oct` key's `k` (RFC 7518 §4.8).
     Password(Zeroizing<Vec<u8>>),
     /// RSA-OAEP-256 encryption: the validated modulus and public exponent,
-    /// big-endian (RFC 7518 §6.3.1, §4.3; ADR 0021).
+    /// big-endian (RFC 7518 §6.3.1, §4.3).
     RsaPublic { n: Vec<u8>, e: Vec<u8> },
+    /// RSA-OAEP-256 decryption: the validated RSA private JWK key (RFC 7518
+    /// §6.3.2, §4.3; ADR 0067), whose private members wipe on drop.
+    RsaPrivate(RsaPublicKey),
     /// ECDH-ES on P-256 (RFC 7518 §4.6): the recipient's public key.
     P256Public(p256::PublicKey),
     /// ECDH-ES on P-256: our private key.
@@ -69,17 +73,17 @@ impl RecipientKey {
     /// The key itself was validated when the [`Jwk`] was imported
     /// (`Jwk::from_object`: exact member lengths, EC points on their curve
     /// and not the identity, `d` in [1, n − 1], RSA moduli of 2048 to 8192
-    /// bits by `jwk::RSA_MODULUS_BITS` (RFC 7518 §4.3, ADR 0026 §2 step 8),
-    /// RSA private keys refused; ADR 0041 §4, ADR 0021), and so is
-    /// private-to-public consistency (ADR 0043 §3: EC `d·G` = (`x`, `y`),
-    /// and X25519 `x` = X25519(`d`, 9) by RFC 7748 §6.1, through
-    /// `jwk::x25519_consistency`). None of that is repeated here. In this
+    /// bits by `jwk::RSA_MODULUS_BITS` (RFC 7518 §4.3, ADR 0026 §2 step 8);
+    /// ADR 0041 §4), and so is private-to-public consistency (ADR 0043 §3:
+    /// EC `d·G` = (`x`, `y`), X25519 `x` = X25519(`d`, 9) by RFC 7748 §6.1,
+    /// through `jwk::x25519_consistency`, and the RSA private members by
+    /// `keys::rsa::check_private`, ADR 0067). None of that is repeated here. In this
     /// order:
     ///
     /// 1. **Support** → [`Error::UnsupportedAlgorithm`]: `alg` must be
-    ///    implemented in `direction` (`keymgmt::supported`: RSA-OAEP-256 is
-    ///    encrypt only, ADR 0021; `RSA-OAEP` and `RSA1_5` are not
-    ///    implemented, ADRs 0021, 0022), and for `dir` the `enc` must be
+    ///    implemented in `direction` (`keymgmt::supported`: `RSA-OAEP` and
+    ///    `RSA1_5` are not implemented, ADRs 0021, 0022), and for `dir` the
+    ///    `enc` must be
     ///    known, since it fixes the key length (RFC 7518 §4.5).
     /// 2. **Binding** → [`Error::KeyAlgorithmMismatch`] if any of these
     ///    fails:
@@ -92,7 +96,8 @@ impl RecipientKey {
     ///      present, contains the operation of [`key_op`] (`Jwk::permits`;
     ///      RFC 7517 §4.2, §4.3);
     ///    - the key holds what `direction` needs: decrypting with ECDH-ES
-    ///      needs the private key (RFC 7518 §4.6).
+    ///      needs the private key (RFC 7518 §4.6), and so does decrypting
+    ///      with RSA-OAEP-256 (RFC 7518 §4.3, ADR 0067).
     /// 3. **Size** of an `oct` key: A*KW and A*GCMKW need exactly the AES
     ///    key size the `alg` names (RFC 7518 §4.4, §4.7), and `dir` on
     ///    encrypt needs exactly the CEK length of `enc` (RFC 7518 §4.5,
@@ -346,22 +351,27 @@ fn okp_key(key: &OkpKey, direction: Direction) -> Result<RecipientKey> {
     }
 }
 
-/// An `RSA` public key (RFC 7518 §6.3.1) for RSA-OAEP-256 encryption
-/// (RFC 7518 §4.3), held as its validated `n` and `e`, big-endian.
+/// An `RSA` key (RFC 7518 §6.3) for RSA-OAEP-256 (RFC 7518 §4.3): its
+/// validated `n` and `e`, big-endian, to encrypt; the whole private key to
+/// decrypt (ADR 0067).
 ///
-/// Only encryption reaches here: RSA-OAEP-256 decryption is
-/// [`Error::UnsupportedAlgorithm`] (ADR 0021), and an RSA private JWK
-/// never imports. The modulus is in range already: JWK import, on every
-/// path (JSON, PEM, DER), refuses one outside `jwk::RSA_MODULUS_BITS`
-/// (RFC 7518 §4.3, ADR 0026 §2 step 8), so no bound is repeated here.
+/// The modulus is in range already: JWK import, on every path (JSON, PEM,
+/// DER), refuses one outside `jwk::RSA_MODULUS_BITS` (RFC 7518 §4.3,
+/// ADR 0026 §2 step 8), and checks a private key against `n` and `e`
+/// (ADR 0043), so neither is repeated here.
 fn rsa_key(key: &RsaPublicKey, direction: Direction) -> Result<RecipientKey> {
-    if direction == Direction::Decrypt {
-        return Err(Error::UnsupportedAlgorithm);
+    match direction {
+        // RFC 7518 §4.3: encrypting needs the public key; a private key
+        // encrypts to its own public part.
+        Direction::Encrypt => Ok(RecipientKey::RsaPublic {
+            n: key.n().to_vec(),
+            e: key.e().to_vec(),
+        }),
+        // Decrypting needs the private key (ADR 0067): a public key is not
+        // a candidate for the recipient.
+        Direction::Decrypt if key.is_private() => Ok(RecipientKey::RsaPrivate(key.clone())),
+        Direction::Decrypt => Err(Error::KeyAlgorithmMismatch),
     }
-    Ok(RecipientKey::RsaPublic {
-        n: key.n().to_vec(),
-        e: key.e().to_vec(),
-    })
 }
 
 /// Whether `jwk` may be tried for a recipient whose header `kid` is
@@ -382,7 +392,8 @@ pub(crate) fn kid_matches(jwk: &Jwk, header_kid: Option<&str>) -> bool {
 
 /// Every secret variant holds a type that wipes itself on drop:
 /// `Zeroizing` (`Symmetric`, `Password`), `p256`/`p384`/`p521`
-/// `SecretKey`, and `x25519_dalek::StaticSecret` (`zeroize` feature).
+/// `SecretKey`, `x25519_dalek::StaticSecret` (`zeroize` feature), and the
+/// RSA JWK key, whose private members are `Zeroizing` (`RsaPrivate`).
 /// The public variants hold no secret (ADR 0007).
 impl ZeroizeOnDrop for RecipientKey {}
 
@@ -392,6 +403,7 @@ impl fmt::Debug for RecipientKey {
             RecipientKey::Symmetric(_) => "Symmetric",
             RecipientKey::Password(_) => "Password",
             RecipientKey::RsaPublic { .. } => "RsaPublic",
+            RecipientKey::RsaPrivate(_) => "RsaPrivate",
             RecipientKey::P256Public(_) => "P256Public",
             RecipientKey::P256Secret(_) => "P256Secret",
             RecipientKey::P384Public(_) => "P384Public",
@@ -783,13 +795,57 @@ mod tests {
         ));
     }
 
+    /// The RSA private key of RFC 7515 Appendix A.2.1, with `extra`
+    /// members appended.
+    fn rsa_private(extra: &str) -> Jwk {
+        let json = include_str!("../../tests/data/keys/rfc/rfc7515-a2-rsa-private.jwk.json");
+        let json = json.trim_end().strip_suffix('}').unwrap_or(json);
+        jwk(&format!("{json}{extra}}}"))
+    }
+
     #[test]
-    fn rsa_oaep_256_decrypt_is_unsupported() {
-        // ADR 0021: no RSA private-key operation.
+    fn rsa_oaep_256_decrypt_needs_the_private_key() {
+        // ADR 0067, RFC 7518 §4.3: decrypting needs the RSA private key; a
+        // public key is no candidate (KeyAlgorithmMismatch). Encrypting
+        // with a private key uses its public part.
         assert_eq!(
             bind(&rsa(""), &A::RsaOaep256, &GCM128, Decrypt),
-            Err(Error::UnsupportedAlgorithm)
+            Err(MISMATCH)
         );
+        let private = rsa_private("");
+        let KeyMaterial::Rsa(material) = private.material() else {
+            panic!("not RSA")
+        };
+        assert!(matches!(
+            RecipientKey::from_jwk(&private, &A::RsaOaep256, &GCM128, Decrypt),
+            Ok(RecipientKey::RsaPrivate(ref key)) if key.is_private() && key.n() == material.n()
+        ));
+        assert!(matches!(
+            RecipientKey::from_jwk(&private, &A::RsaOaep256, &GCM128, Encrypt),
+            Ok(RecipientKey::RsaPublic { ref n, ref e }) if n == material.n() && *e == [1, 0, 1]
+        ));
+        // RFC 7517 §4.3: `unwrapKey` is the decrypting key operation.
+        assert_eq!(
+            bind(
+                &rsa_private(r#","key_ops":["wrapKey"]"#),
+                &A::RsaOaep256,
+                &GCM128,
+                Decrypt
+            ),
+            Err(MISMATCH)
+        );
+        assert!(
+            bind(
+                &rsa_private(r#","key_ops":["unwrapKey"]"#),
+                &A::RsaOaep256,
+                &GCM128,
+                Decrypt
+            )
+            .is_ok()
+        );
+        // Debug names the variant only (ADR 0007).
+        let bound = RecipientKey::from_jwk(&private, &A::RsaOaep256, &GCM128, Decrypt).unwrap();
+        assert_eq!(format!("{bound:?}"), "RecipientKey::RsaPrivate(<redacted>)");
     }
 
     #[test]
@@ -809,9 +865,6 @@ mod tests {
         ];
         for (key, alg) in &cases {
             for d in [Encrypt, Decrypt] {
-                if *alg == A::RsaOaep256 && d == Decrypt {
-                    continue;
-                }
                 assert_eq!(bind(key, alg, &GCM128, d), Err(MISMATCH), "{alg} {d:?}");
             }
         }
@@ -819,14 +872,13 @@ mod tests {
 
     #[test]
     fn support_is_checked_before_the_family_and_the_family_before_the_size() {
-        // RSA-OAEP-256 decrypt is not implemented (ADR 0021), whatever the
-        // key; RSA-OAEP and RSA1_5 are not implemented at all (ADRs 0021,
-        // 0022).
-        for key in [rsa(""), p521_private(""), oct(16, "")] {
-            assert_eq!(
-                bind(&key, &A::RsaOaep256, &GCM128, Decrypt),
-                Err(Error::UnsupportedAlgorithm)
-            );
+        // RSA-OAEP and RSA1_5 are not implemented at all (ADRs 0021, 0022,
+        // ADR 0067 §3), whatever the key; RSA-OAEP-256 decryption is
+        // (ADR 0067), so these keys are no candidates for it.
+        for key in [rsa(""), p521_private(""), oct(16, ""), rsa_private("")] {
+            if !key.material().serves_key_mgmt_alg(&A::RsaOaep256) || key.is_public() {
+                assert_eq!(bind(&key, &A::RsaOaep256, &GCM128, Decrypt), Err(MISMATCH));
+            }
             for name in ["RSA-OAEP", "RSA1_5"] {
                 for d in [Encrypt, Decrypt] {
                     let alg = KeyMgmtAlg::from(name);

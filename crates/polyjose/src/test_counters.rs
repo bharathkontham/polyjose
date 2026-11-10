@@ -123,6 +123,53 @@ pub(crate) mod ecdh_agreements {
     }
 }
 
+/// RSA-OAEP-256 Encrypted Key decryptions (`jwe/rsa_oaep.rs`, feature
+/// 0020): ticked once per decryption, whatever its outcome, so a test can
+/// show that a malformed Encrypted Key takes the same path as a valid one
+/// (RFC 7516 §11.5).
+pub(crate) mod rsa_oaep_unwraps {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of ticks on this
+    /// thread while it ran.
+    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
+}
+
+/// Content decryptions run by JWE (`jwe/content.rs`, feature 0020): with
+/// [`rsa_oaep_unwraps`], it shows that a malformed RSA-OAEP-256 Encrypted
+/// Key still reaches the content decryption (RFC 7516 §11.5).
+pub(crate) mod content_decryptions {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// Runs `f` and returns its result with the number of ticks on this
+    /// thread while it ran.
+    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let before = COUNT.with(Cell::get);
+        let result = f();
+        (result, COUNT.with(Cell::get) - before)
+    }
+}
+
 /// Inflate calls made by JWE `zip` (`jwe/zip.rs`, T15): a JWE whose tag
 /// fails must leave it at 0, since decompression comes after tag
 /// verification (RFC 7516 §5.2 step 17).

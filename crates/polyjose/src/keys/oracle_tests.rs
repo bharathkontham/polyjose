@@ -112,8 +112,8 @@ fn our_import(kind: Kind, der: &[u8]) -> Result<Jwk> {
             match parts.alg {
                 AlgId::Ec(_) => super::ec::from_pkcs8(parts),
                 AlgId::Ed25519 | AlgId::X25519 => super::okp::from_pkcs8(parts),
-                // pkcs8::decode already refuses it (ADR 0021).
-                AlgId::RsaEncryption => Err(Error::UnsupportedAlgorithm),
+                // ADR 0067: the RSAPrivateKey inside (RFC 8017 App. A.1.2).
+                AlgId::RsaEncryption => super::rsa::from_pkcs8(parts),
             }
         }
         Kind::Spki => {
@@ -195,8 +195,11 @@ fn our_fields(kind: Kind, der: &[u8]) -> Result<Fields> {
         }
         Kind::Sec1 => fields.ec = Some(our_ec_fields(der)?),
         Kind::Pkcs1 => {
-            let key = super::pkcs1::decode(der)?;
-            fields.rsa = Some((key.n.to_vec(), key.e.to_vec()));
+            let (n, e) = match super::pkcs1::decode(der)? {
+                super::pkcs1::Pkcs1Key::Public(key) => (key.n, key.e),
+                super::pkcs1::Pkcs1Key::Private(key) => (key.n, key.e),
+            };
+            fields.rsa = Some((n.to_vec(), e.to_vec()));
         }
     }
     Ok(fields)
@@ -829,6 +832,11 @@ fn our_import_file(name: &str, bytes: &[u8]) -> Result<Jwk> {
     }
     let text = core::str::from_utf8(bytes).map_err(|_| Error::InvalidKey("not UTF-8"))?;
     let (label, der) = super::pem::decode(text)?;
+    if label == Label::RsaPrivate {
+        // ADR 0067: the PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2), which
+        // has no oracle kind here; the public entry point reads it.
+        return Jwk::from_pem(text);
+    }
     let kind = Kind::of_label(label).ok_or(Error::UnsupportedAlgorithm)?;
     our_import(kind, &der)
 }
@@ -856,9 +864,8 @@ const WHY_ENC: &str = "ENCRYPTED PRIVATE KEY (RFC 5958 §3): encrypted PKCS#8 is
 const WHY_X448: &str =
     "Ed448/X448 (RFC 8410 §3): not JOSE curves in 0.1.0, UnsupportedAlgorithm (ADR 0018 §4 step 1)";
 const WHY_RSA1024: &str = "a 1024-bit RSA modulus: RFC 7518 §3.3 and §4.2 need at least 2048 bits (ADR 0007, ADR 0018 §3 validation); the oracle has no RSA primitive";
-const WHY_RSAPRIV: &str =
-    "an RSA private key: unsupported, UnsupportedAlgorithm (ADR 0021, ADR 0018 §4)";
-const WHY_RSAPRIVPEM: &str = "RSA PRIVATE KEY: no RSA private keys, refused from the BEGIN line so the body is never decoded (ADR 0021, ADR 0018 §2)";
+const WHY_RSA1024_PRIVATE: &str = "a 1024-bit RSA private key: RFC 7518 §3.3 and §4.2 need at least 2048 bits (ADR 0007); InvalidKey";
+const WHY_RSA_MULTI: &str = "a three-prime RSA private key (RFC 8017 App. A.1.2 version multi): unsupported, UnsupportedAlgorithm (ADR 0067 §3)";
 const WHY_PSS: &str = "id-RSASSA-PSS (RFC 4055 §3.1): an unsupported key OID, UnsupportedAlgorithm (ADR 0018 §4 step 1)";
 
 /// The `reject-*` fixtures the oracle accepts, each a place where polyjose
@@ -874,31 +881,33 @@ const REJECT_FIXTURES_STRICTER_THAN_ORACLE: &[(&str, &str)] = &[
     ("reject-ed448-pkcs8.pem", WHY_X448),
     ("reject-ed448-spki.pem", WHY_X448),
     ("reject-rsa1024-pkcs1-pub.pem", WHY_RSA1024),
-    ("reject-rsa1024-private-pkcs8.pem", WHY_RSAPRIV),
+    ("reject-rsa1024-private-pkcs8.pem", WHY_RSA1024_PRIVATE),
     ("reject-rsa1024-spki.pem", WHY_RSA1024),
-    ("reject-rsa2048-3prime-private-pkcs1.pem", WHY_RSAPRIVPEM),
-    ("reject-rsa2048-3prime-private-pkcs8.pem", WHY_RSAPRIV),
+    ("reject-rsa2048-3prime-private-pkcs1.pem", WHY_RSA_MULTI),
+    ("reject-rsa2048-3prime-private-pkcs8.pem", WHY_RSA_MULTI),
     ("reject-rsa2048-pkcs8-encrypted.pem", WHY_ENC),
-    ("reject-rsa2048-private-pkcs1.pem", WHY_RSAPRIVPEM),
-    ("reject-rsa2048-private-pkcs8.der", WHY_RSAPRIV),
-    ("reject-rsa2048-private-pkcs8.pem", WHY_RSAPRIV),
-    ("reject-rsa3072-private-pkcs8.pem", WHY_RSAPRIV),
-    ("reject-rsa4096-private-pkcs8.pem", WHY_RSAPRIV),
     ("reject-rsapss2048-private-pkcs8.pem", WHY_PSS),
     ("reject-rsapss2048-spki.pem", WHY_PSS),
     ("reject-x448-pkcs8.pem", WHY_X448),
     (
         "reject-rfc9500-testRSA1024-private-pkcs1.pem",
-        WHY_RSAPRIVPEM,
+        WHY_RSA1024_PRIVATE,
     ),
-    (
-        "reject-rfc9500-testRSA2048-private-pkcs1.pem",
-        WHY_RSAPRIVPEM,
-    ),
-    (
-        "reject-rfc9500-testRSA4096-private-pkcs1.pem",
-        WHY_RSAPRIVPEM,
-    ),
+];
+
+/// The `reject-*` fixtures that ADR 0067 made valid: two-prime RSA private
+/// keys of 2048 to 4096 bits (RFC 8017 App. A.1.2, as PKCS#1 and inside
+/// PKCS#8). Their names date from 0.1.0 (ADR 0021); fixtures are never
+/// renamed (`SHA256SUMS`). polyjose imports each as an RSA private key.
+const REJECT_FIXTURES_IMPORTED_SINCE_ADR_0067: &[&str] = &[
+    "reject-rsa2048-private-pkcs1.der",
+    "reject-rsa2048-private-pkcs1.pem",
+    "reject-rsa2048-private-pkcs8.der",
+    "reject-rsa2048-private-pkcs8.pem",
+    "reject-rsa3072-private-pkcs8.pem",
+    "reject-rsa4096-private-pkcs8.pem",
+    "reject-rfc9500-testRSA2048-private-pkcs1.pem",
+    "reject-rfc9500-testRSA4096-private-pkcs1.pem",
 ];
 
 /// Every `reject-*` fixture (OpenSSL and RFC) is rejected by polyjose with
@@ -912,12 +921,20 @@ fn reject_fixtures_are_rejected_and_every_oracle_acceptance_is_listed() {
         for name in fixtures::files(dir, |name| name.starts_with("reject-")) {
             let bytes = raw(dir, &name);
             let ours = our_import_file(&name, &bytes);
+            count += 1;
+            if REJECT_FIXTURES_IMPORTED_SINCE_ADR_0067.contains(&name.as_str()) {
+                let key = ours.unwrap_or_else(|e| panic!("{dir}/{name}: {e:?}"));
+                assert!(!key.is_public(), "{dir}/{name}");
+                continue;
+            }
             // A weak RSA key and broken PEM armor are malformed input;
             // everything else, the RFC 8410 §10.2 certificate included (its
             // label is refused before its 66-character lines are read), is
-            // a well-formed but unsupported key (ADR 0018 §2, §4; ADR 0021).
+            // a well-formed but unsupported key (ADR 0018 §2, §4; ADR 0067).
             let expect = if name.contains("rsa1024-pkcs1-pub")
                 || name.contains("rsa1024-spki")
+                || name.contains("rsa1024-private")
+                || name.contains("testRSA1024")
                 || name.contains("six-dash")
             {
                 "InvalidKey"
@@ -932,7 +949,6 @@ fn reject_fixtures_are_rejected_and_every_oracle_acceptance_is_listed() {
             if let Ok(checked) = oracle_file(&name, &bytes) {
                 oracle_accepts.push((name.clone(), checked));
             }
-            count += 1;
         }
     }
     let listed: Vec<&str> = REJECT_FIXTURES_STRICTER_THAN_ORACLE
@@ -1615,8 +1631,14 @@ fn check_canonical(m: &[u8]) -> bool {
     if let Ok(key) = super::sec1::decode(m) {
         assert_eq!(*super::sec1::encode(&key).unwrap(), m);
     }
-    if let Ok(key) = super::pkcs1::decode(m) {
-        assert_eq!(*super::pkcs1::encode_public(key.n, key.e).unwrap(), m);
+    match super::pkcs1::decode(m) {
+        Ok(super::pkcs1::Pkcs1Key::Public(key)) => {
+            assert_eq!(*super::pkcs1::encode_public(key.n, key.e).unwrap(), m);
+        }
+        Ok(super::pkcs1::Pkcs1Key::Private(key)) => {
+            assert_eq!(*super::pkcs1::encode_private(&key).unwrap(), m);
+        }
+        Err(_) => {}
     }
     if let Ok(key) = super::pkcs1::decode_public(m) {
         assert_eq!(*super::pkcs1::encode_public(key.n, key.e).unwrap(), m);
