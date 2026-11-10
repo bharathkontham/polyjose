@@ -10,13 +10,14 @@ All notable changes to polyjose are documented in this file. The format is based
 
 - **RSA signing:** `RS256`, `RS384`, `RS512`, `PS256`, `PS384` and `PS512` sign with an RSA private key, in compact and JSON JWS and in JWT issuing (RFC 7518 §3.3, §3.5). `RS*` signatures are deterministic and match RFC 7515 Appendix A.2 exactly.
 - **RSA-OAEP-256 decryption** (RFC 7518 §4.3), in compact and JSON JWE, with one or more recipients. A bad Encrypted Key is never reported as such: a random content key is used instead and the result is `DecryptionFailed`, like any other failure (RFC 7516 §11.5).
-- **RSA private keys:** import from a JWK (all of `d`, `p`, `q`, `dp`, `dq` and `qi`; RFC 7518 §6.3.2), PKCS#8 (`PRIVATE KEY`) and PKCS#1 (`RSA PRIVATE KEY`, and `KeyFormat::Pkcs1` DER); export as a JWK and as PKCS#8. The private members must be the key of `n` and `e`, the modulus is 2048 to 8192 bits, and the key is wiped on drop and redacted in `Debug`. `RsaPublicKey::is_private` tells a private RSA key from a public one, and `Jwk::to_public` drops the private members.
+- **RSA private keys:** import from a JWK (all of `d`, `p`, `q`, `dp`, `dq` and `qi`; RFC 7518 §6.3.2), PKCS#8 (`PRIVATE KEY`) and PKCS#1 (`RSA PRIVATE KEY`, and `KeyFormat::Pkcs1` DER); export as a JWK and as PKCS#8. The private members must be the key of `n` and `e`, the modulus is 2048 to 8192 bits, and the key is wiped on drop and redacted in `Debug`. `RsaKey::is_private` tells a private RSA key from a public one, and `Jwk::to_public` drops the private members.
 - **JWK Sets** keep an RSA private member as imported, like EC and OKP private keys, so a set can hold RSA-OAEP-256 decryption keys. Call `to_public` on each key before publishing a set.
 
 ### Changed
 
 - **Behaviour change:** an RSA private JWK, PEM or DER key used to fail with `UnsupportedAlgorithm`; it now imports. A JWK Set with an RSA private member used to fail as a whole; it now keeps the member. Signing RS*/PS* or decrypting RSA-OAEP-256 used to fail with `UnsupportedAlgorithm`; with a public key it now fails with `KeyAlgorithmMismatch`.
 - **Behaviour change:** a PKCS#1 RSAPrivateKey given as PKCS#8 or SEC1 (by `KeyFormat` or by PEM label) is now `InvalidKey` (the wrong structure for the format), not `UnsupportedAlgorithm`.
+- **Rust:** the RSA JWK key type `jwk::RsaPublicKey` is renamed `jwk::RsaKey`, since it now also holds private keys. `RsaPublicKey` stays as a deprecated alias of `RsaKey` (`#[deprecated(since = "0.2.0")]`), so 0.1 code still compiles, with a warning.
 - **Rust:** the `rsa` dependency is `0.10.0` with only its `pkcs1v15` feature; `crypto-bigint` is `0.7.11`.
 
 ### Security

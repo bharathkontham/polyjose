@@ -647,9 +647,10 @@ pub(crate) const RSA_MODULUS_BITS: RangeInclusive<usize> = 2048..=8192;
 
 /// An RSA key (`kty` `RSA`, RFC 7518 §6.3): the public members `n` and `e`
 /// (§6.3.1) and, for a private key, the private members `d`, `p`, `q`,
-/// `dp`, `dq` and `qi` (§6.3.2). The type keeps its 0.1.0 name, from when
-/// RSA keys were public only; [`RsaPublicKey::is_private`] tells the two
-/// apart, as [`EcKey::is_private`] does for EC keys (ADR 0067 §2).
+/// `dp`, `dq` and `qi` (§6.3.2). [`RsaKey::is_private`] tells the two
+/// apart, as [`EcKey::is_private`] does for EC keys (ADR 0067 §2). Its
+/// 0.1 name, [`RsaPublicKey`], from when RSA keys were public only, is a
+/// deprecated alias.
 ///
 /// Validation of the public members is structural: `n` and `e` are minimal
 /// Base64urlUInt values (RFC 7518 §2), `n` is odd (RFC 8017 §3.1) and 2048
@@ -668,11 +669,16 @@ pub(crate) const RSA_MODULUS_BITS: RangeInclusive<usize> = 2048..=8192;
 /// The private members are held in buffers that are wiped on drop, and
 /// `Debug` prints `"<redacted>"` instead of them.
 #[derive(Clone)]
-pub struct RsaPublicKey {
+pub struct RsaKey {
     n: Vec<u8>,
     e: Vec<u8>,
     private: Option<RsaPrivateParts>,
 }
+
+/// The 0.1 name of [`RsaKey`], kept so 0.1 code compiles. The type now
+/// also holds RSA private keys (ADR 0067 §2), so the name is misleading.
+#[deprecated(since = "0.2.0", note = "use RsaKey")]
+pub type RsaPublicKey = RsaKey;
 
 /// The private members of an RSA private JWK (RFC 7518 §6.3.2), each the
 /// big-endian magnitude of a minimal Base64urlUInt, in a buffer wiped on
@@ -711,7 +717,7 @@ impl RsaPrivateParts {
 /// Every member is a [`Zeroizing`] buffer.
 impl ZeroizeOnDrop for RsaPrivateParts {}
 
-impl RsaPublicKey {
+impl RsaKey {
     /// `n`: the modulus, big-endian, without leading zero octets
     /// (RFC 7518 §6.3.1.1).
     pub fn n(&self) -> &[u8] {
@@ -741,8 +747,8 @@ impl RsaPublicKey {
     }
 
     /// The public part: the same `n` and `e` without the private members.
-    fn to_public(&self) -> RsaPublicKey {
-        RsaPublicKey {
+    fn to_public(&self) -> RsaKey {
+        RsaKey {
             n: self.n.clone(),
             e: self.e.clone(),
             private: None,
@@ -750,9 +756,9 @@ impl RsaPublicKey {
     }
 }
 
-impl fmt::Debug for RsaPublicKey {
+impl fmt::Debug for RsaKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut s = f.debug_struct("RsaPublicKey");
+        let mut s = f.debug_struct("RsaKey");
         s.field("n", &b64url_encode(&self.n))
             .field("e", &b64url_encode(&self.e));
         if let Some(private) = &self.private {
@@ -765,7 +771,7 @@ impl fmt::Debug for RsaPublicKey {
 }
 
 /// The only secrets, the private members, are [`Zeroizing`] buffers.
-impl ZeroizeOnDrop for RsaPublicKey {}
+impl ZeroizeOnDrop for RsaKey {}
 
 /// An elliptic curve key (`kty` `EC`, RFC 7518 §6.2, RFC 8812 §3.1): a
 /// public point (`x`, `y`) and, for a private key, the scalar `d`.
@@ -912,7 +918,7 @@ pub enum KeyMaterial {
     /// `kty` `oct` (RFC 7518 §6.4).
     Oct(OctKey),
     /// `kty` `RSA` (RFC 7518 §6.3), public or private (ADR 0067).
-    Rsa(RsaPublicKey),
+    Rsa(RsaKey),
     /// `kty` `EC` (RFC 7518 §6.2, RFC 8812 §3.1).
     Ec(EcKey),
     /// `kty` `OKP` (RFC 8037 §2).
@@ -1767,7 +1773,7 @@ fn bit_len(octets: &[u8]) -> usize {
 /// `qi`, a private key inconsistent with `n` and `e` (ADR 0043), and every
 /// other check below; [`Error::InvalidBase64`] for a member that is not
 /// canonical base64url.
-fn parse_rsa(object: &Object) -> Result<RsaPublicKey> {
+fn parse_rsa(object: &Object) -> Result<RsaKey> {
     // ADR 0067 §3: multi-prime keys (RFC 7518 §6.3.2.7 `oth`) are not
     // supported. Checked before anything else is read, so the outcome
     // does not depend on the rest.
@@ -1824,7 +1830,7 @@ fn parse_rsa(object: &Object) -> Result<RsaPublicKey> {
         // key of `n` and `e`, checked by the `rsa` crate's arithmetic.
         crate::keys::rsa::check_private(&n, &e, private)?;
     }
-    Ok(RsaPublicKey { n, e, private })
+    Ok(RsaKey { n, e, private })
 }
 
 /// The private members of an RSA JWK (RFC 7518 §6.3.2), or `None` for a
@@ -2609,8 +2615,23 @@ mod tests {
         }
         // The private members are wiped on drop (ZeroizeOnDrop markers).
         fn wipes<T: zeroize::ZeroizeOnDrop>() {}
-        wipes::<RsaPublicKey>();
+        wipes::<RsaKey>();
         wipes::<RsaPrivateParts>();
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn the_0_1_name_rsa_public_key_still_names_rsa_key() {
+        // 0.1 code that names the type keeps compiling (decisions.md
+        // 2026-11-10, owner): the alias is the same type.
+        fn public_part(key: &RsaPublicKey) -> &[u8] {
+            key.n()
+        }
+        let KeyMaterial::Rsa(key) = parse(&rsa_json()).material().clone() else {
+            panic!("not RSA");
+        };
+        let same: &RsaKey = &key;
+        assert_eq!(public_part(same).len(), 256);
     }
 
     #[test]
@@ -2975,7 +2996,7 @@ mod tests {
         assert_eq!(key.modulus_bits(), 2048);
         assert_eq!(key.n().len(), 256);
         assert_eq!(key.e(), [1, 0, 1]);
-        let n = RsaPublicKey {
+        let n = RsaKey {
             n: vec![0x01, 0xff, 0xff],
             e: vec![3],
             private: None,
