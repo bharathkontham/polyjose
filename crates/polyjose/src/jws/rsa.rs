@@ -8,7 +8,7 @@
 //! - **Public-key operations only (ADR 0021).** RUSTSEC-2023-0071 (Marvin)
 //!   is a timing leak in the `rsa` crate's private-key operations, so
 //!   polyjose verifies RS*/PS* signatures but never makes them: [`sign`]
-//!   always fails. This file uses only `rsa::RsaPublicKey` and the typed
+//!   always fails. This file uses only `rsa::PublicKey` and the typed
 //!   `rsa::pkcs1v15::VerifyingKey` and `rsa::pss::VerifyingKey`;
 //!   `scripts/check-deps.sh` (ADR 0021 §3) fails the build if any RSA
 //!   private-key, signing or decryption type appears here or anywhere
@@ -123,7 +123,7 @@ fn pss_signature(signature: &[u8]) -> Result<pss::Signature> {
 /// verify uses it, and so does RSA-OAEP-256 encryption (feature 0003,
 /// ADR 0022). It handles public values only (ADR 0021).
 ///
-/// `rsa::RsaPublicKey::new_with_size_limits` with [`RSA_MODULUS_BITS`] checks:
+/// `rsa::PublicKey::new_with_size_limits` with [`RSA_MODULUS_BITS`] checks:
 ///
 /// - the modulus is 2048..=8192 bits (RFC 7518 §3.3, §3.5, §4.3;
 ///   ADR 0026 §2 step 8), and odd (RFC 8017 §3.1: a product of odd primes);
@@ -141,10 +141,10 @@ fn pss_signature(signature: &[u8]) -> Result<pss::Signature> {
 ///
 /// [`Error::InvalidKey`] if any check fails. The detail names the rule,
 /// never the values (ADR 0007).
-pub(crate) fn public_key(n: &[u8], e: &[u8]) -> Result<rsa::RsaPublicKey> {
+pub(crate) fn public_key(n: &[u8], e: &[u8]) -> Result<rsa::PublicKey> {
     use rsa::errors::Error as E;
     let (n, e) = (uint(n)?, uint(e)?);
-    rsa::RsaPublicKey::new_with_size_limits(n, e, RSA_MODULUS_BITS).map_err(|err| {
+    rsa::PublicKey::new_with_size_limits(n, e, RSA_MODULUS_BITS).map_err(|err| {
         Error::InvalidKey(match err {
             E::ModulusTooSmall | E::ModulusTooLarge => "RSA modulus must be 2048 to 8192 bits",
             E::InvalidExponent | E::PublicExponentTooSmall => {
@@ -444,7 +444,7 @@ mod tests {
         n
     }
 
-    fn invalid_key(result: Result<rsa::RsaPublicKey>) -> bool {
+    fn invalid_key(result: Result<rsa::PublicKey>) -> bool {
         matches!(result, Err(Error::InvalidKey(_)))
     }
 
@@ -453,7 +453,7 @@ mod tests {
         // RFC 7518 §3.3, §3.5; ADR 0026 §2 step 8.
         for bits in [2048, 3072, 4096, 8191, 8192] {
             let key = public_key(&modulus(bits), F4).unwrap();
-            assert_eq!(key.n().bits() as usize, bits);
+            assert_eq!(key.n().bit_width() as usize, bits);
             assert_eq!(key.size(), bits.div_ceil(8));
         }
         // e = 3 is the smallest odd exponent above 1 (RFC 8017 §3.1).

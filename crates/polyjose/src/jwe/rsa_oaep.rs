@@ -50,7 +50,7 @@ const KEY_INVALID: &str = "RSA public key is not valid for RSA-OAEP-256";
 /// the draw order of `jwe::random`. The key checks run first, so a
 /// refused key draws nothing.
 ///
-/// The key is imported with `rsa::RsaPublicKey::new` (RFC 8017 §3.1: n
+/// The key is imported with `rsa::PublicKey::new` (RFC 8017 §3.1: n
 /// odd, e odd and 1 < e < n; at most 8192 bits). `jwk` import has already
 /// bounded the modulus to 2048..=8192 bits (`jwk::RSA_MODULUS_BITS`;
 /// RFC 7518 §4.3, ADR 0026 §2 step 8).
@@ -104,14 +104,14 @@ pub(super) fn encrypt_key(
 /// The `rsa` crate's public key for the big-endian modulus `n` and public
 /// exponent `e` (RFC 7518 §6.3.1.1–§6.3.1.2, OS2IP of RFC 8017 §4.2),
 /// refusing a modulus under [`MIN_MODULUS_BITS`] (RFC 7518 §4.3) before
-/// `rsa::RsaPublicKey::new` checks the rest (RFC 8017 §3.1). The error
+/// `rsa::PublicKey::new` checks the rest (RFC 8017 §3.1). The error
 /// detail names the rule, never the values (ADR 0007).
-fn public_key(n: &[u8], e: &[u8]) -> Result<rsa::RsaPublicKey> {
+fn public_key(n: &[u8], e: &[u8]) -> Result<rsa::PublicKey> {
     let (n, e) = (uint(n)?, uint(e)?);
-    if n.bits() < MIN_MODULUS_BITS {
+    if n.bit_width() < MIN_MODULUS_BITS {
         return Err(Error::InvalidKey(MODULUS_SIZE));
     }
-    rsa::RsaPublicKey::new(n, e).map_err(|_| Error::InvalidKey(KEY_INVALID))
+    rsa::PublicKey::new(n, e).map_err(|_| Error::InvalidKey(KEY_INVALID))
 }
 
 /// The unsigned integer of the big-endian `bytes` (OS2IP, RFC 8017
