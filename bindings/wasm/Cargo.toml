@@ -44,6 +44,10 @@ wasm-bindgen-test = "=0.3.80"
 # called directly, never through polyjose's API under test (ADR 0060 §5). The core's own sha2
 # (the workspace pin, default features off), so no crate is added to the tree.
 sha2.workspace = true
+# tests/rsa_timing.rs includes the core's dudect harness (crates/polyjose/tests/rsa_timing.rs),
+# which calls polyjose's own API (feature 0020 T02). The crate the surface already depends on,
+# with the same features, so neither tree changes.
+polyjose.workspace = true
 
 [features]
 # Test-only: T02's wasm-bindgen-test suite enables `run_in_browser` with it for the Chrome run

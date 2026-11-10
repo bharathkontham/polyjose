@@ -40,9 +40,9 @@ use crate::records::{JwsSignOptions, JwsSigner, JwsVerified, JwsVerifyOptions};
 /// # Errors
 ///
 /// `InvalidHeader` for both or neither header form (ADR 0030 §4) or a missing `alg` (RFC 7515
-/// §4.1.1); `UnsupportedAlgorithm` for RSA signing (ADR 0021) and unknown algorithms;
-/// `AlgorithmNotAllowed` for `none` (RFC 8725 §3.2); `KeyAlgorithmMismatch` and the core's key
-/// errors.
+/// §4.1.1); `UnsupportedAlgorithm` for unknown algorithms; `AlgorithmNotAllowed` for `none`
+/// (RFC 8725 §3.2); `KeyAlgorithmMismatch` (`RS*` and `PS*` need an RSA private key, ADR 0067 §2)
+/// and the core's key errors.
 #[uniffi::export]
 pub fn jws_sign_compact(
     payload: Vec<u8>,

@@ -205,7 +205,7 @@ expect_also "the offending crate is named" '^  - base64ct$'
 # check 6 (crates.io only, walked from every workspace member) and check 7 (no root exclude) catch it.
 # The same fork outside the repository, with no exclude, is check 6's alone.
 new_case surface-path-fork
-append_to vendor/zeroize/Cargo.toml $'[package]\nname = "zeroize"\nversion = "1.9.99"\nedition = "2021"\nlicense = "MIT"\n\n[dependencies]\nrsa = { version = "=0.10.0-rc.21", default-features = false }\nsha2 = { version = "0.11.1", default-features = false }'
+append_to vendor/zeroize/Cargo.toml $'[package]\nname = "zeroize"\nversion = "1.9.99"\nedition = "2021"\nlicense = "MIT"\n\n[dependencies]\nrsa = { version = "=0.10.0", default-features = false }\nsha2 = { version = "0.11.1", default-features = false }'
 append_to vendor/zeroize/src/lib.rs $'pub fn wipe(p: &[u8], q: &[u8], m: &[u8]) -> Vec<u8> {\n    let k = rsa::RsaPrivateKey::from_p_q(rsa::BoxedUint::from_be_slice_vartime(p),\n        rsa::BoxedUint::from_be_slice_vartime(q), rsa::BoxedUint::from(65537u64)).unwrap();\n    rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(k).sign(m).to_vec()\n}'
 append_to bindings/surface/src/lib.rs '#[doc(hidden)] pub fn wipe_all(p: &[u8], q: &[u8], m: &[u8]) -> Vec<u8> { zeroize2::wipe(p, q, m) }'
 replace_in Cargo.toml $'resolver = "3"\n' $'resolver = "3"\nexclude = ["vendor"]\n'

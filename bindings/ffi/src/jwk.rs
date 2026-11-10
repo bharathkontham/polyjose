@@ -28,7 +28,8 @@ use crate::records::JwkSelector;
 /// # Errors
 ///
 /// The core's JWK parse errors: `InvalidJson`, `InvalidBase64`, `InvalidKey`,
-/// `KeyAlgorithmMismatch`, and `UnsupportedAlgorithm` for an RSA private JWK (ADR 0021).
+/// `KeyAlgorithmMismatch`, and `UnsupportedAlgorithm` for a multi-prime RSA JWK (ADR 0067 §3);
+/// an RSA private JWK without its CRT members is `InvalidKey`.
 #[uniffi::export]
 pub fn jwk_parse(jwk: String) -> Result<String, PolyjoseError> {
     let jwk = Zeroizing::new(jwk);
@@ -66,7 +67,7 @@ pub fn jwk_to_public(jwk: String) -> Result<String, PolyjoseError> {
 /// # Errors
 ///
 /// In this order (ADR 0057 §2): the core's JWK parse errors (`InvalidJson`, `InvalidBase64`,
-/// `InvalidKey`, `UnsupportedAlgorithm` for an RSA private JWK), then `UnsupportedAlgorithm` for
+/// `InvalidKey`, `UnsupportedAlgorithm` for a multi-prime RSA JWK), then `UnsupportedAlgorithm` for
 /// any other `hash` name, `SHA-1` included (ADR 0022).
 #[uniffi::export(default(hash = None))]
 pub fn jwk_thumbprint(jwk: String, hash: Option<String>) -> Result<String, PolyjoseError> {
@@ -109,8 +110,8 @@ pub fn jwk_thumbprint_uri(jwk: String, hash: Option<String>) -> Result<String, P
 ///
 /// # Errors
 ///
-/// In this order (ADR 0054 §4): the set's import errors (`InvalidJson`, `InvalidKey`,
-/// `UnsupportedAlgorithm` for an RSA private member); `UnsupportedAlgorithm` for an `alg` or
+/// In this order (ADR 0054 §4): the set's import errors (`InvalidJson`, `InvalidKey`; an RSA
+/// private member is imported as is, ADR 0067 §4); `UnsupportedAlgorithm` for an `alg` or
 /// `key_use` the core refuses; `NoMatchingKey` for no match, `MultipleMatchingKeys` for two or
 /// more.
 #[uniffi::export]

@@ -2038,7 +2038,7 @@ enum PolyjoseError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError 
     )
     /**
      * The `alg`, `enc`, curve, hash or format names nothing polyjose implements (RFC 7515
-     * §4.1.1, RFC 7516 §4.1.1–§4.1.2; ADR 0021, ADR 0022).
+     * §4.1.1, RFC 7516 §4.1.1–§4.1.2; ADR 0022, ADR 0067 §3).
      */
     case UnsupportedAlgorithm(
         /**
@@ -2592,10 +2592,11 @@ fileprivate struct FfiConverterSequenceTypeJwsSigner: FfiConverterRustBuffer {
  *
  * `AlgorithmNotAllowed` for an empty allow-list or an `alg`/`enc` outside it (RFC 8725 §3.1);
  * `InvalidHeader` for `dir` or `ECDH-ES` without `alg` and `enc` protected (ADR 0050 §1);
- * `UnsupportedAlgorithm` for `RSA-OAEP-256` decryption (ADR 0021), `RSA-OAEP`, `RSA1_5`
- * (ADR 0022) and `zip`; and `DecryptionFailed`, one code and message for every failure once key
- * management starts, a PBES2 count over `max_pbes2_count` included (RFC 7516 §11.4–§11.5,
- * ADR 0023, ADR 0050 §2).
+ * `KeyAlgorithmMismatch` for `RSA-OAEP-256` with an RSA public key (decryption needs the private
+ * key, ADR 0067 §2); `UnsupportedAlgorithm` for `RSA-OAEP`, `RSA1_5` (ADR 0022) and `zip`; and
+ * `DecryptionFailed`, one code and message for every failure once key management starts, a PBES2
+ * count over `max_pbes2_count` and an `RSA-OAEP-256` Encrypted Key that does not decrypt included
+ * (RFC 7516 §11.4–§11.5, ADR 0023, ADR 0050 §2, ADR 0067 §5).
  */
 public func jweDecryptCompact(token: String, key: String, options: JweDecryptOptions)throws  -> JweDecrypted  {
     return try  FfiConverterTypeJweDecrypted_lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
@@ -2639,7 +2640,7 @@ public func jweDecryptJson(jwe: String, key: String, options: JweDecryptOptions)
  *
  * `InvalidFormat` unless there is exactly one recipient and no `aad`, shared unprotected header
  * or per-recipient header (RFC 7516 §7.1); `UnsupportedAlgorithm` for `RSA-OAEP`, `RSA1_5`
- * (ADR 0021, ADR 0022), unknown names and `compress: true`; `InvalidKey` for a key of the wrong
+ * (ADR 0022, ADR 0067 §3), unknown names and `compress: true`; `InvalidKey` for a key of the wrong
  * size or a PBES2 `p2c`/`p2s_len` outside the core's range (RFC 7518 §4.8.1.1, §4.8.1.2;
  * ADR 0050 §2).
  */
@@ -2681,7 +2682,8 @@ public func jweEncryptJson(plaintext: Data, options: JweEncryptOptions, form: St
  * # Errors
  *
  * The core's JWK parse errors: `InvalidJson`, `InvalidBase64`, `InvalidKey`,
- * `KeyAlgorithmMismatch`, and `UnsupportedAlgorithm` for an RSA private JWK (ADR 0021).
+ * `KeyAlgorithmMismatch`, and `UnsupportedAlgorithm` for a multi-prime RSA JWK (ADR 0067 §3);
+ * an RSA private JWK without its CRT members is `InvalidKey`.
  */
 public func jwkParse(jwk: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
@@ -2710,7 +2712,7 @@ public func jwkParse(jwk: String)throws  -> String  {
  * # Errors
  *
  * In this order (ADR 0057 §2): the core's JWK parse errors (`InvalidJson`, `InvalidBase64`,
- * `InvalidKey`, `UnsupportedAlgorithm` for an RSA private JWK), then `UnsupportedAlgorithm` for
+ * `InvalidKey`, `UnsupportedAlgorithm` for a multi-prime RSA JWK), then `UnsupportedAlgorithm` for
  * any other `hash` name, `SHA-1` included (ADR 0022).
  */
 public func jwkThumbprint(jwk: String, hash: String? = nil)throws  -> String  {
@@ -2774,8 +2776,8 @@ public func jwkToPublic(jwk: String)throws  -> String  {
  *
  * # Errors
  *
- * In this order (ADR 0054 §4): the set's import errors (`InvalidJson`, `InvalidKey`,
- * `UnsupportedAlgorithm` for an RSA private member); `UnsupportedAlgorithm` for an `alg` or
+ * In this order (ADR 0054 §4): the set's import errors (`InvalidJson`, `InvalidKey`; an RSA
+ * private member is imported as is, ADR 0067 §4); `UnsupportedAlgorithm` for an `alg` or
  * `key_use` the core refuses; `NoMatchingKey` for no match, `MultipleMatchingKeys` for two or
  * more.
  */
@@ -2799,9 +2801,9 @@ public func jwksSelect(jwks: String, selector: JwkSelector)throws  -> String  {
  * # Errors
  *
  * `InvalidHeader` for both or neither header form (ADR 0030 §4) or a missing `alg` (RFC 7515
- * §4.1.1); `UnsupportedAlgorithm` for RSA signing (ADR 0021) and unknown algorithms;
- * `AlgorithmNotAllowed` for `none` (RFC 8725 §3.2); `KeyAlgorithmMismatch` and the core's key
- * errors.
+ * §4.1.1); `UnsupportedAlgorithm` for unknown algorithms; `AlgorithmNotAllowed` for `none`
+ * (RFC 8725 §3.2); `KeyAlgorithmMismatch` (`RS*` and `PS*` need an RSA private key, ADR 0067 §2)
+ * and the core's key errors.
  */
 public func jwsSignCompact(payload: Data, key: String, options: JwsSignOptions)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
@@ -2974,8 +2976,8 @@ public func jwtEncryptNested(signedJwt: String, options: JweEncryptOptions)throw
  *
  * `InvalidHeader` for `typ` with `omit_typ` or `access_token`, or `omit_typ` with
  * `access_token` (ADR 0030 §4), and for reserved `header` members (ADR 0027 §6, §8);
- * `UnsupportedAlgorithm` for RSA signing, `RS*` and `PS*` (ADR 0021); the core's key and claims
- * errors.
+ * `KeyAlgorithmMismatch` for `RS*` and `PS*` without an RSA private key (ADR 0067 §2); the
+ * core's key and claims errors.
  */
 public func jwtSign(claims: String, key: String, options: JwtSignOptions)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
@@ -3019,8 +3021,8 @@ public func jwtVerify(token: String, key: String, options: JwtVerifyOptions)thro
  * # Errors
  *
  * Those of [`jwt_verify`], plus `NoMatchingKey` for no candidate or more than
- * `max_key_candidates` (ADR 0029 §4), and `UnsupportedAlgorithm` for a set holding an RSA
- * private member (ADR 0021, ADR 0029 §3).
+ * `max_key_candidates` (ADR 0029 §4). An RSA private member is imported as is (ADR 0067 §4,
+ * amending ADR 0029 §3).
  */
 public func jwtVerifyWithJwks(token: String, jwks: String, options: JwtVerifyOptions)throws  -> JwtVerified  {
     return try  FfiConverterTypeJwtVerified_lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
@@ -3039,8 +3041,8 @@ public func jwtVerifyWithJwks(token: String, jwks: String, options: JwtVerifyOpt
  *
  * # Errors
  *
- * `UnsupportedAlgorithm` for an unknown format name (ADR 0030 §5), RSA private keys
- * (ADR 0021) and unsupported key types; `InvalidKey` for DER that is not the named structure.
+ * `UnsupportedAlgorithm` for an unknown format name (ADR 0030 §5), multi-prime RSA keys
+ * (ADR 0067 §3) and unsupported key types; `InvalidKey` for DER that is not the named structure.
  */
 public func jwkFromDer(der: Data, format: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
@@ -3059,7 +3061,7 @@ public func jwkFromDer(der: Data, format: String)throws  -> String  {
  * # Errors
  *
  * `InvalidKey` for malformed PEM or DER; `UnsupportedAlgorithm` for encrypted PKCS#8, a
- * certificate, an RSA private key (ADR 0021) or an unsupported key type.
+ * certificate, a multi-prime RSA key (ADR 0067 §3) or an unsupported key type.
  */
 public func jwkFromPem(pem: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
@@ -3091,7 +3093,8 @@ public func jwkGenerateEc(crv: String)throws  -> String  {
  *
  * # Errors
  *
- * `UnsupportedAlgorithm` for RSA (ADR 0021), `PBES2-*`, `dir`, `none` (RFC 8725 §3.1) and
+ * `UnsupportedAlgorithm` for RSA (no key generation, ADR 0067 §3), `PBES2-*`, `dir`, `none`
+ * (RFC 8725 §3.1) and
  * unknown names;
  * `InvalidKey` where the core needs a curve the name does not fix (ECDH-ES);
  * `RandomnessUnavailable`.
@@ -3159,8 +3162,8 @@ public func jwkToDer(jwk: String, format: String)throws  -> Data  {
  *
  * # Errors
  *
- * `UnsupportedAlgorithm` for an unknown format name (ADR 0030 §5), an RSA private JWK
- * (ADR 0021) or a format the key type has none of (ADR 0018 §3 format matrix; an `oct` key in
+ * `UnsupportedAlgorithm` for an unknown format name (ADR 0030 §5), a multi-prime RSA JWK
+ * (ADR 0067 §3) or a format the key type has none of (ADR 0018 §3 format matrix; an `oct` key in
  * any format, RFC 8725 §2.1); `InvalidKey` for a public key in `pkcs8` or `sec1`; the core's
  * JWK parse errors.
  */
@@ -3250,22 +3253,22 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwe_decrypt_compact() != 1580) {
+    if (uniffi_polyjose_ffi_checksum_func_jwe_decrypt_compact() != 13762) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwe_decrypt_json() != 61561) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwe_encrypt_compact() != 12782) {
+    if (uniffi_polyjose_ffi_checksum_func_jwe_encrypt_compact() != 51989) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwe_encrypt_json() != 52935) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwk_parse() != 16858) {
+    if (uniffi_polyjose_ffi_checksum_func_jwk_parse() != 58935) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwk_thumbprint() != 41428) {
+    if (uniffi_polyjose_ffi_checksum_func_jwk_thumbprint() != 64088) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwk_thumbprint_uri() != 13368) {
@@ -3274,10 +3277,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_polyjose_ffi_checksum_func_jwk_to_public() != 51356) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwks_select() != 49844) {
+    if (uniffi_polyjose_ffi_checksum_func_jwks_select() != 38702) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jws_sign_compact() != 59186) {
+    if (uniffi_polyjose_ffi_checksum_func_jws_sign_compact() != 12754) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jws_sign_flattened() != 13329) {
@@ -3301,25 +3304,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_polyjose_ffi_checksum_func_jwt_encrypt_nested() != 53654) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwt_sign() != 63440) {
+    if (uniffi_polyjose_ffi_checksum_func_jwt_sign() != 39872) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwt_verify() != 65260) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwt_verify_with_jwks() != 46863) {
+    if (uniffi_polyjose_ffi_checksum_func_jwt_verify_with_jwks() != 12882) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwk_from_der() != 17955) {
+    if (uniffi_polyjose_ffi_checksum_func_jwk_from_der() != 42594) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwk_from_pem() != 11611) {
+    if (uniffi_polyjose_ffi_checksum_func_jwk_from_pem() != 28969) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwk_generate_ec() != 44290) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwk_generate_for_alg() != 49381) {
+    if (uniffi_polyjose_ffi_checksum_func_jwk_generate_for_alg() != 35062) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwk_generate_oct() != 61019) {
@@ -3331,7 +3334,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_polyjose_ffi_checksum_func_jwk_to_der() != 33491) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_jwk_to_pem() != 53912) {
+    if (uniffi_polyjose_ffi_checksum_func_jwk_to_pem() != 29514) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_base64url_decode() != 17623) {

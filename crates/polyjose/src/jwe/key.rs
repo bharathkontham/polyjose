@@ -19,7 +19,7 @@ use super::content;
 use super::keymgmt::{self, Mode};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
 use crate::jwk::{
-    EcCurve, EcKey, Jwk, KeyAlg, KeyMaterial, KeyOp, OctKey, OkpCurve, OkpKey, RsaPublicKey,
+    EcCurve, EcKey, Jwk, KeyAlg, KeyMaterial, KeyOp, OctKey, OkpCurve, OkpKey, RsaKey,
 };
 use crate::{Error, Result};
 
@@ -47,7 +47,7 @@ pub(crate) enum RecipientKey {
     RsaPublic { n: Vec<u8>, e: Vec<u8> },
     /// RSA-OAEP-256 decryption: the validated RSA private JWK key (RFC 7518
     /// §6.3.2, §4.3; ADR 0067), whose private members wipe on drop.
-    RsaPrivate(RsaPublicKey),
+    RsaPrivate(RsaKey),
     /// ECDH-ES on P-256 (RFC 7518 §4.6): the recipient's public key.
     P256Public(p256::PublicKey),
     /// ECDH-ES on P-256: our private key.
@@ -359,7 +359,7 @@ fn okp_key(key: &OkpKey, direction: Direction) -> Result<RecipientKey> {
 /// DER), refuses one outside `jwk::RSA_MODULUS_BITS` (RFC 7518 §4.3,
 /// ADR 0026 §2 step 8), and checks a private key against `n` and `e`
 /// (ADR 0043), so neither is repeated here.
-fn rsa_key(key: &RsaPublicKey, direction: Direction) -> Result<RecipientKey> {
+fn rsa_key(key: &RsaKey, direction: Direction) -> Result<RecipientKey> {
     match direction {
         // RFC 7518 §4.3: encrypting needs the public key; a private key
         // encrypts to its own public part.

@@ -3,7 +3,8 @@
 //!
 //! The RFC values are those of `conformance/vectors/jwe` (RFC 7516 App. A.3 and A.4, RFC 7520
 //! §5.4 and §5.8); the security rules are the core's, passed through unchanged: allow-lists
-//! (ADR 0007), RSA public-only (ADR 0021), no SHA-1 (ADR 0022), the PBES2 bound and per-token
+//! (ADR 0007), RSA-OAEP-256 only, decrypted with an RSA private key (ADR 0067), no SHA-1
+//! (ADR 0022), the PBES2 bound and per-token
 //! budget (ADR 0023, ADR 0050 §2), protected direct modes (ADR 0050 §1) and secret results
 //! (ADR 0030 §7, ADR 0050 §4).
 
@@ -343,8 +344,10 @@ const X25519_PUBLIC: &str =
 const PASSWORD: &str = r#"{"kty":"oct","k":"ZW50cmFwX2_igJNwZXRlcl9sb25n4oCTY3JlZGl0X3R1bg"}"#;
 /// Another password, for a PBES2 recipient the key above does not open.
 const OTHER_PASSWORD: &str = r#"{"kty":"oct","k":"bm90LXRoZS1wYXNzd29yZA"}"#;
-/// The public part of `rsa-oaep-256/keys/rsa-2048.private.jwk` (RSA-OAEP-256 encrypts to public
-/// keys only, ADR 0021).
+/// `jwe/rsa-oaep-256/keys/rsa-2048.private.jwk`, the RSA-OAEP-256 decryption key (ADR 0067 §2).
+const RSA_2048_PRIVATE: &str =
+    include_str!("../../../conformance/vectors/jwe/rsa-oaep-256/keys/rsa-2048.private.jwk");
+/// Its public part, the encryption key (RFC 7518 §4.3).
 const RSA_2048_PUBLIC: &str = r#"{"kty":"RSA","n":"tNzZIjyPSkJr-WPJsHzUF7m9m1lgV1mm1EJa5nCuxo_YdYRLmbEKaGcY6eNquHIa6oQFeh-Mg35K6jZ2Vg77QLaC_Z8YpL8Rk0jhPb6mQALM_4iQcBFT4Ce9XrRdYnsVdjziflVEJTf2_-5ZBcRTaqCf59fvgWkdKZcJwppBDnjCabj8wmWBmomY9RDECwPk9ahNyo9AZWg2CdaSg3U09NaPx39VEXvbZOQuG_yJCv58D1d7DeeEFPo8vZfpRO2mAZVHREMacrN2CbaEfQZiPMkBkAV0zg6g7zKUyEW7Osa92VJXPlQR1tko4sqbKAGBWz6WjcdXEiTLCLGgn3e5bQ","e":"AQAB"}"#;
 
 const PLAINTEXT: &[u8] = b"The true sign of intelligence is not knowledge but imagination.";
@@ -409,7 +412,7 @@ fn encrypt_compact_round_trips_every_alg_with_a256gcm_and_a128cbc_hs256() {
 }
 
 #[test]
-fn rsa_oaep_256_encrypts_to_a_public_key_and_never_decrypts() {
+fn rsa_oaep_256_encrypts_to_the_public_key_and_decrypts_with_the_private_key() {
     for enc in ["A256GCM", "A128CBC-HS256"] {
         let options = encrypt_options(enc, vec![recipient("RSA-OAEP-256", RSA_2048_PUBLIC)]);
         let token = jwe_encrypt_compact(PLAINTEXT, &options).unwrap();
@@ -418,18 +421,42 @@ fn rsa_oaep_256_encrypts_to_a_public_key_and_never_decrypts() {
             compact_protected(&token),
             format!(r#"{{"alg":"RSA-OAEP-256","enc":"{enc}"}}"#)
         );
-        // RSA is public-key only (ADR 0021): decrypting is UnsupportedAlgorithm even when
-        // allowed.
+        // ADR 0067 §2: the private key decrypts, in compact and JSON form (RFC 7516 §5.2).
+        let rsa = policy(&["RSA-OAEP-256"], &[enc]);
+        let d = jwe_decrypt_compact(&token, RSA_2048_PRIVATE, &rsa).unwrap();
+        assert_eq!(d.plaintext.as_bytes(), PLAINTEXT, "{enc}");
+        let json = jwe_encrypt_json(PLAINTEXT, &options, "general").unwrap();
+        let d = jwe_decrypt_json(&json, RSA_2048_PRIVATE, &rsa).unwrap();
+        assert_eq!(d.plaintext.as_bytes(), PLAINTEXT, "{enc}");
+        // A public key holds no decryption key: the core's `KeyAlgorithmMismatch`.
         assert_code(
-            jwe_decrypt_compact(&token, RSA_2048_PUBLIC, &policy(&["RSA-OAEP-256"], &[enc])),
-            "UnsupportedAlgorithm",
+            jwe_decrypt_compact(&token, RSA_2048_PUBLIC, &rsa),
+            "KeyAlgorithmMismatch",
         );
+        // RFC 7516 §11.5: a bad Encrypted Key fails exactly like a bad tag, `DecryptionFailed`
+        // with the same message.
+        let parts: Vec<&str> = token.split('.').collect();
+        let flip = |part: &str| {
+            let first = if part.starts_with('A') { "B" } else { "A" };
+            format!("{first}{}", &part[1..])
+        };
+        let bad_key = [parts[0], &flip(parts[1]), parts[2], parts[3], parts[4]].join(".");
+        let bad_tag = [parts[0], parts[1], parts[2], parts[3], &flip(parts[4])].join(".");
+        let key_err = assert_code(
+            jwe_decrypt_compact(&bad_key, RSA_2048_PRIVATE, &rsa),
+            "DecryptionFailed",
+        );
+        let tag_err = assert_code(
+            jwe_decrypt_compact(&bad_tag, RSA_2048_PRIVATE, &rsa),
+            "DecryptionFailed",
+        );
+        assert_eq!(key_err, tag_err);
     }
 }
 
 #[test]
 fn rsa_oaep_and_rsa1_5_are_unsupported_on_encrypt() {
-    // SHA-1 RSA-OAEP and RSA1_5 are not implemented (ADR 0022, ADR 0021).
+    // SHA-1 RSA-OAEP and RSA1_5 are not implemented (ADR 0022, ADR 0067 §3).
     for alg in ["RSA-OAEP", "RSA1_5"] {
         let options = encrypt_options("A256GCM", vec![recipient(alg, RSA_2048_PUBLIC)]);
         assert_code(

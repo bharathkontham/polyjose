@@ -44,12 +44,15 @@
 //! `POLYJOSE_DUDECT_SAMPLES` sets the number of measurements per test
 //! (default 20000, both classes together).
 //!
-//! # Reuse on wasm32 (feature 0020 T02)
+//! # On wasm32 (feature 0020 T02)
 //!
 //! [`welch`] and [`run`] need no `std::time`: the clock is a parameter
-//! (`FnMut() -> u64`, any monotonic unit), so a wasm32 runner can pass
-//! `performance.now()` and reuse the classes and the statistics unchanged.
-//! Only [`native_clock`] and the `#[test]` wrappers are native.
+//! (`FnMut() -> u64`, any monotonic unit). `bindings/wasm/tests/rsa_timing.rs`
+//! runs the same classes and statistics on wasm32-unknown-unknown with
+//! `performance.now()`. It holds a copy of them, since
+//! `scripts/check-deps.sh` refuses module path attributes and the
+//! code-inclusion macro (ADR 0049 §1), so a change here is made there too. Only [`native_clock`] and the
+//! `#[test]` wrappers are native.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic is a failed assertion
 
 use polyjose::Error;

@@ -42,7 +42,7 @@ use super::pkcs8;
 use super::spki;
 use super::types::{AlgId, Pkcs8Parts, SpkiParts};
 use crate::error::{Error, Result};
-use crate::jwk::{Jwk, RsaPrivateParts, RsaPublicKey};
+use crate::jwk::{Jwk, RsaKey, RsaPrivateParts};
 
 /// Detail for private members that are not the key of `n` and `e`.
 const PRIVATE_MISMATCH: &str = "RSA private key does not match n and e";
@@ -156,7 +156,7 @@ fn private_jwk(key: &RsaPrivateFields<'_>) -> Result<Jwk> {
 /// (RFC 5280 §4.1.2.7): the rsaEncryption + NULL AlgorithmIdentifier
 /// (RFC 3279 §2.3.1) and the RSAPublicKey in a BIT STRING with no unused
 /// bits, the layout OpenSSL 4 emits (ADR 0018 §3).
-pub(crate) fn to_spki(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
+pub(crate) fn to_spki(key: &RsaKey) -> Result<Zeroizing<Vec<u8>>> {
     let rsa_public_key = to_pkcs1(key)?;
     spki::encode(&SpkiParts {
         alg: AlgId::RsaEncryption,
@@ -167,7 +167,7 @@ pub(crate) fn to_spki(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
 /// Exports an RSA key's public half as a DER PKCS#1 RSAPublicKey (RFC 8017
 /// App. A.1.1), the body of OpenSSL's `RSA PUBLIC KEY` PEM block. A private
 /// key exports its public half, as with SPKI (ADR 0018 §3 format matrix).
-pub(crate) fn to_pkcs1(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
+pub(crate) fn to_pkcs1(key: &RsaKey) -> Result<Zeroizing<Vec<u8>>> {
     pkcs1::encode_public(key.n(), key.e())
 }
 
@@ -180,7 +180,7 @@ pub(crate) fn to_pkcs1(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
 ///
 /// [`Error::InvalidKey`]`("private key required")` for a public key (the
 /// caller, `Jwk::to_der`, refuses it first).
-pub(crate) fn to_pkcs8(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
+pub(crate) fn to_pkcs8(key: &RsaKey) -> Result<Zeroizing<Vec<u8>>> {
     let private = key
         .private()
         .ok_or(Error::InvalidKey("private key required"))?;
@@ -215,7 +215,7 @@ pub(crate) fn to_pkcs8(key: &RsaPublicKey) -> Result<Zeroizing<Vec<u8>>> {
 /// [`Error::KeyAlgorithmMismatch`] for a public key (key binding refuses it
 /// first, RFC 7518 §3, §4.3), and [`Error::InvalidKey`] if the members are
 /// not a valid key, which import already rules out.
-pub(crate) fn private_key(key: &RsaPublicKey) -> Result<rsa::PrivateKey> {
+pub(crate) fn private_key(key: &RsaKey) -> Result<rsa::PrivateKey> {
     let private = key.private().ok_or(Error::KeyAlgorithmMismatch)?;
     from_components(key.n(), key.e(), private)
 }
@@ -318,7 +318,7 @@ mod tests {
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
     }
 
-    fn rsa(jwk: &Jwk) -> &RsaPublicKey {
+    fn rsa(jwk: &Jwk) -> &RsaKey {
         let KeyMaterial::Rsa(key) = jwk.material() else {
             panic!("an RSA key")
         };
@@ -838,7 +838,7 @@ mod adversarial {
         ));
     }
 
-    fn rsa(jwk: &Jwk) -> &RsaPublicKey {
+    fn rsa(jwk: &Jwk) -> &RsaKey {
         let crate::jwk::KeyMaterial::Rsa(key) = jwk.material() else {
             panic!("an RSA key")
         };

@@ -61,8 +61,8 @@ surface_task! {
 }
 
 /// Generates a JWK for the JWS `alg`, JWE `alg` or `enc` name, with `alg` set (RFC 7517 §4.4,
-/// RFC 7518 §3.1, §4.1, §5.1). RSA rejects with `UnsupportedAlgorithm` (ADR 0021). Resolves to
-/// JWK JSON text.
+/// RFC 7518 §3.1, §4.1, §5.1). RSA rejects with `UnsupportedAlgorithm` (no RSA key generation,
+/// ADR 0067 §3). Resolves to JWK JSON text.
 #[napi]
 pub fn jwk_generate_for_alg(alg: String) -> AsyncTask<JwkGenerateForAlgTask> {
     AsyncTask::new(JwkGenerateForAlgTask { alg })
@@ -74,9 +74,9 @@ surface_task! {
         = |t| op::jwk_from_pem(&t.pem)
 }
 
-/// Imports a PEM key (`PRIVATE KEY`, `EC PRIVATE KEY`, `PUBLIC KEY`, `RSA PUBLIC KEY`;
-/// RFC 7468 §10, §11, §13) as a JWK. RSA private keys reject with `UnsupportedAlgorithm`
-/// (ADR 0021). Resolves to JWK JSON text.
+/// Imports a PEM key (`PRIVATE KEY`, `EC PRIVATE KEY`, `RSA PRIVATE KEY`, `PUBLIC KEY`,
+/// `RSA PUBLIC KEY`; RFC 7468 §10, §11, §13, RFC 8017 App. A.1) as a JWK; an RSA private key
+/// imports with all its members (ADR 0067 §2). Resolves to JWK JSON text.
 #[napi]
 pub fn jwk_from_pem(pem: String) -> AsyncTask<JwkFromPemTask> {
     AsyncTask::new(JwkFromPemTask {

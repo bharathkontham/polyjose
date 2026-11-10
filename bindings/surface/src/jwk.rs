@@ -1,5 +1,5 @@
 //! JWK operations (ADR 0030 §4, "JWK"; ADR 0054 §9): parsing, the public form, thumbprints and JWK Set
-//! selection (RFC 7517, RFC 7518 §6, RFC 7638, RFC 9278, RFC 8037; ADR 0018, 0021, 0022).
+//! selection (RFC 7517, RFC 7518 §6, RFC 7638, RFC 9278, RFC 8037; ADR 0018, 0022, 0067).
 //!
 //! JWKs and JWK Sets are JSON text in and out, parsed and written by the core's strict I-JSON
 //! code (ADR 0016, ADR 0030 §2). A JWK argument may be private, so it is borrowed and never
@@ -9,7 +9,9 @@
 //! Every operation parses its JWK with [`Jwk::from_json`], so the core's validation and its error
 //! codes apply unchanged: `InvalidJson` for text that is not one I-JSON object, `InvalidBase64`,
 //! `InvalidKey`, `KeyAlgorithmMismatch`, and `UnsupportedAlgorithm` for well-formed keys polyjose
-//! does not support, an RSA private key among them (ADR 0021).
+//! does not support. An RSA private key (RFC 7518 §6.3.2) is supported with all its CRT members
+//! (`InvalidKey` without them) and two primes only (`UnsupportedAlgorithm` for `oth`); ADR 0067
+//! §2, §3.
 
 use polyjose::jwk::{Jwk, JwkSelector as CoreSelector, JwkSet, KeyAlg, KeyUse, ThumbprintHash};
 
@@ -31,8 +33,8 @@ fn parse(jwk: &str) -> SurfaceResult<Jwk> {
 ///
 /// # Errors
 ///
-/// The core's JWK parse errors (module docs); an RSA private JWK fails with
-/// `UnsupportedAlgorithm` (ADR 0021).
+/// The core's JWK parse errors (module docs); a multi-prime RSA JWK fails with
+/// `UnsupportedAlgorithm` and one without its CRT members with `InvalidKey` (ADR 0067 §3).
 pub fn jwk_parse(jwk: &str) -> SurfaceResult<SecretString> {
     Ok(SecretString::from(parse(jwk)?.to_json()))
 }
@@ -104,8 +106,8 @@ fn thumbprint_hash(hash: Option<&str>) -> SurfaceResult<ThumbprintHash> {
 ///
 /// In this order, the first being the outcome (ADR 0057 §2):
 ///
-/// 1. the core's JWK parse errors (module docs), an RSA private JWK's `UnsupportedAlgorithm`
-///    among them;
+/// 1. the core's JWK parse errors (module docs), a multi-prime RSA JWK's `UnsupportedAlgorithm`
+///    among them (ADR 0067 §3);
 /// 2. `UnsupportedAlgorithm` for any other `hash` name, from the core (ADR 0054 §8.2, ADR 0022,
 ///    ADR 0030 §5).
 pub fn jwk_thumbprint(jwk: &str, hash: Option<&str>) -> SurfaceResult<String> {
@@ -137,7 +139,8 @@ pub fn jwk_thumbprint_uri(jwk: &str, hash: Option<&str>) -> SurfaceResult<String
 /// selector, in this order, the first error being the outcome (ADR 0054 §4):
 ///
 /// 1. [`JwkSet::from_json`] imports `jwks`; members the core cannot use are skipped
-///    (ADR 0041 §2), and an RSA private member fails the whole set (ADR 0021, ADR 0029 §3);
+///    (ADR 0041 §2), and an RSA private member is imported as is, like EC and OKP members
+///    (ADR 0067 §4, amending ADR 0029 §3);
 /// 2. a core [`JwkSelector`](polyjose::jwk::JwkSelector) from `new()`, then `kid`, then `alg`
 ///    parsed by [`KeyAlg::from`], then `key_use` parsed by [`KeyUse::from`], each set only when
 ///    `Some`; the core setters validate the names (ADR 0054 §1.1), the surface maps none;
@@ -166,7 +169,7 @@ pub fn jwk_thumbprint_uri(jwk: &str, hash: Option<&str>) -> SurfaceResult<String
 /// # Errors
 ///
 /// In the order above: the set's import errors (`InvalidJson`; `InvalidKey` for a missing or
-/// non-array `keys`; `UnsupportedAlgorithm` for an RSA private member), then
+/// non-array `keys`), then
 /// `UnsupportedAlgorithm` for an `alg` that is not a JWS or JWE key management algorithm
 /// polyjose implements (`none`, `RSA1_5`, `RSA-OAEP`, an `enc` name, an unknown name) or a
 /// `key_use` other than `sig` or `enc`, then `NoMatchingKey` or `MultipleMatchingKeys`.
