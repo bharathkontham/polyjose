@@ -18,7 +18,13 @@
 #   - bindings/js/package.json: version (the shared facade, not published);
 #   - bindings/wasm/package.template.json keeps its "@VERSION@" placeholder (build-package.sh
 #     fills it from Cargo.toml);
-#   - Package.swift: the binaryTarget url is .../releases/download/v<version>/PolyjoseFFI.xcframework.zip.
+#   - Package.swift: the binaryTarget url is .../releases/download/v<version>/PolyjoseFFI.xcframework.zip;
+#   - Cargo.lock: the entry of every workspace member, and fuzz/Cargo.lock: the entry of each
+#     workspace member it locks (polyjose at least; the fuzz workspace has its own lockfile, which
+#     a version bump must refresh too);
+#   - the install snippets: every `dev.polyjose:<artifact>:<version>` coordinate of
+#     platforms/android/README.md and every `from: "<version>"` of platforms/swift/README.md
+#     (at least one each).
 #
 # Exit status: 0 all equal; 1 a mismatch (each printed); 2 usage. Needs cargo and python3.
 set -euo pipefail
@@ -61,8 +67,10 @@ echo "==> $me: $version"
 
 check "Cargo.toml [workspace.package] version" \
   "$(awk '/^\[/ { t = ($0 == "[workspace.package]") } t && /^version *=/ { gsub(/.*= *"|".*/, ""); print; exit }' Cargo.toml)"
+members=" "
 while IFS=' ' read -r name ver; do
   check "crate $name" "$ver"
+  members="$members$name "
 done < <(cargo metadata --no-deps --locked --format-version 1 |
   python3 -I -c 'import json, sys
 for p in json.load(sys.stdin)["packages"]:
@@ -84,6 +92,43 @@ else
   echo "  FAIL Package.swift binaryTarget url: '$url', expected '$want_url'"
   bad=1
 fi
+
+# lock_entries <lockfile>: `<name> <version>` of every [[package]] entry.
+lock_entries() {
+  awk '/^\[\[package\]\]$/ { name = "" }
+       /^name = "/ { name = $3; gsub(/"/, "", name) }
+       /^version = "/ && name != "" { v = $3; gsub(/"/, "", v); print name, v; name = "" }' "$1"
+}
+# check_lock <lockfile> <member that must be locked>...: every entry named like a workspace member
+# holds the version, and each required member has an entry.
+check_lock() {
+  local lock=$1 name ver seen=" "
+  shift
+  [ -f "$lock" ] || { echo "  FAIL $lock does not exist"; bad=1; return 0; }
+  while IFS=' ' read -r name ver; do
+    case $members in *" $name "*) check "$lock entry $name" "$ver"; seen="$seen$name " ;; esac
+  done < <(lock_entries "$lock")
+  for name in "$@"; do
+    case $seen in *" $name "*) ;; *) echo "  FAIL $lock has no entry for $name"; bad=1 ;; esac
+  done
+}
+# shellcheck disable=SC2086 # the member names, one word each
+check_lock Cargo.lock $members
+check_lock fuzz/Cargo.lock polyjose
+
+# check_snippets <file> <what> <sed expression printing each version>: at least one, all equal.
+check_snippets() {
+  local found=0 ver
+  while IFS= read -r ver; do
+    found=1
+    check "$1 $2" "$ver"
+  done < <(sed -n "$3" "$1")
+  [ "$found" -eq 1 ] || { echo "  FAIL $1: no $2 found"; bad=1; }
+}
+check_snippets platforms/android/README.md "dev.polyjose coordinate" \
+  's/.*"dev\.polyjose:[a-z-]*:\([^"]*\)".*/\1/p'
+check_snippets platforms/swift/README.md 'SPM from: version' \
+  's/.*\.package(url: "[^"]*", from: "\([^"]*\)").*/\1/p'
 
 if [ -n "$notes" ]; then
   [ -f CHANGELOG.md ] || { echo "  FAIL CHANGELOG.md does not exist"; exit 1; }

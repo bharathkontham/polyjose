@@ -57,7 +57,13 @@ Before the tag (items 1–6) and before Gate 3 (item 7):
 
 ## 4. Release steps
 
-1. **Version and CHANGELOG PR** (release agent, branch `chore/release-X.Y.Z`). Bump every manifest that [`check-version.sh`](scripts/release/check-version.sh) checks. Set the `Package.swift` url to `.../releases/download/vX.Y.Z/PolyjoseFFI.xcframework.zip`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`, which becomes the release notes.
+1. **Version and CHANGELOG PR** (release agent, branch `chore/release-X.Y.Z`). Bump every version carrier that [`check-version.sh`](scripts/release/check-version.sh) checks: the manifests, `Cargo.lock` and `fuzz/Cargo.lock`, and the install snippets in `platforms/android/README.md` and `platforms/swift/README.md`. Set the `Package.swift` url to `.../releases/download/vX.Y.Z/PolyjoseFFI.xcframework.zip`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`, which becomes the release notes.
+   - **Before dispatching the candidate**, on the version-bump tree, run these three locally. Each has failed a candidate run before, and a candidate attempt costs about 20 minutes:
+     ```sh
+     scripts/release/check-version.sh X.Y.Z             # every version carrier holds X.Y.Z
+     scripts/test-all.sh node                           # the Node and facade tests, which read the version
+     platforms/android/scripts/check-artifacts.sh       # the AAR and jar contents and size limits
+     ```
 2. **Candidate** (owner's go-ahead): `gh workflow run release.yml --repo bharathkontham/polyjose --ref chore/release-X.Y.Z -f mode=candidate`. It builds everything unsigned and creates no release. When it is green:
    - `gh run download <run-id> --name apple-xcframework`
    - write the zip's SHA-256 into `Package.swift`'s `checksum:`
