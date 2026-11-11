@@ -18,7 +18,8 @@
 #   AAR      classes.jar, jni/{arm64-v8a,armeabi-v7a,x86,x86_64}/libpolyjose_ffi.so, proguard.txt
 #            (= consumer-rules.pro); LOAD alignment >= 0x4000 for the 64-bit libraries
 #            (llvm-readelf -l from the NDK; Google Play's 16 KB page-size requirement); the AAR
-#            under 4 MB (4,000,000 bytes; ADR 0033 §1); each .so size and the AAR size printed.
+#            under 5 MB (5,000,000 bytes; ADR 0033 §1 as amended by decisions.md 2026-11-11); each
+#            .so size and the AAR size printed.
 #            Every class in classes.jar is class-file major version 61, Java 17 (feature 0008
 #            F04, review S7).
 #            The manifest declares android:minSdkVersion="23" and each .so's .note.android.ident
@@ -314,10 +315,10 @@ else
     esac
   done
   aar_size=$(size "$aar")
-  if [ "$aar_size" -lt 4000000 ]; then
-    pass "AAR: $aar_size bytes, under 4 MB (4,000,000 bytes)"
+  if [ "$aar_size" -lt 5000000 ]; then
+    pass "AAR: $aar_size bytes, under 5 MB (5,000,000 bytes)"
   else
-    fail "AAR: $aar_size bytes, not under 4 MB: the ADR 0033 §1 size override is needed"
+    fail "AAR: $aar_size bytes, not under 5 MB: the ADR 0033 §1 dist-mobile size override is needed"
   fi
 fi
 
