@@ -1,0 +1,22 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "The node:crypto RS384 JWS, signed with the RFC 7515 A.2 key, verified with another RSA public key (RFC 7520 §3.4): the signature does not verify (RFC 7515 §5.2 step 8); node:crypto refuses it too",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzM4NCJ9.RXhhbXBsZSBvZiBSUzM4NCBzaWduaW5n.LWsK2mTF4q3cKLLDMaywbrHeWk0a-hzDDzwzcrcQ9DsvW1g8HtJSUICTzQmKqmZh8qHW5SNoyTKsm_ZB2rkdYnEe6fvw8weCxIW3bozN2bDJ_uNh3jHTga_GNj561lC4EFKrfjVooX4bHduJojQC_Rh_0QWhYSs-QO56DAfFaY1yZOFER8-DxZI0thICSrpJnkhjs1GONrdbt0xCGRu7ERclKGUyfsL9nTAINhl9XX0-Q8d4F-bJ__mnkngUHRvezGMlDpdwBzIyLCghwOVYsb_z4TPY_Am8McZY0Xa6nNQQ3Z-Wlx-SZ0wlIgdgABTqUJYOtnJg8bnF7jHcYjiOfw",
+    "key": {
+      "kty": "RSA",
+      "kid": "bilbo.baggins@hobbiton.example",
+      "use": "sig",
+      "n": "n4EPtAOCc9AlkeQHPzHStgAbgs7bTZLwUBZdR8_KuKPEHLd4rHVTeT-O-XV2jRojdNhxJWTDvNd7nqQ0VEiZQHz_AJmSCpMaJMRBSFKrKb2wqVwGU_NsYOYL-QtiWN2lbzcEe6XC0dApr5ydQLrHqkHHig3RBordaZ6Aj-oBHqFEHYpPe7Tpe-OfVfHd1E6cS6M1FZcD1NNLYD5lFHpPI9bTwJlsde3uhGqC0ZCuEHg8lhzwOHrtIQbS0FVbb9k3-tVTU4fg_3L_vniUFAKwuCLqKnS2BYwdq_mzSnbLY7h_qixoR7jig3__kRhuaxwUkRz5iaiQkqgc5gHdrNP5zw",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "RS384"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

@@ -1,14 +1,16 @@
-# Pull-request gates for polyjose (ADR 0009). The steps mirror `scripts/test-all.sh rust`,
-# so a green local run and a green CI run check the same things.
+# The Rust gates of polyjose (ADR 0009), on Linux and macOS. The steps mirror
+# `scripts/test-all.sh rust tooling`, so a green local run and a green run here check the same
+# things.
+#
+# Manual dispatch only (ADR 0044): no workflow runs on pull requests or pushes. Changes are
+# verified locally with scripts/test-all.sh before they merge (CONTRIBUTING.md). This workflow
+# stays for an on-demand run on GitHub's runners.
 #
 # Every third-party action is pinned to a full commit SHA; the trailing comment is the release tag
 # that SHA was resolved from. Bump both together.
 name: CI
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 # Least privilege: the workflow only reads the repository. No job needs a write scope.
@@ -16,8 +18,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -61,7 +63,7 @@ jobs:
           rustup show
           cargo --version
 
-      # Only pushes to main save the cache; pull requests restore it read-only, so PR runs
+      # Only runs on main save the cache; a run on any other ref restores it read-only, so it
       # cannot churn or poison the cache that later runs start from.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -142,7 +144,7 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/check-test-vectors-off.sh
 
-      # The gate scripts' own negative tests, as in `scripts/test-all.sh rust`: every
+      # The gate scripts' own negative tests, as in `scripts/test-all.sh tooling`: every
       # scripts/tests/<gate>/*.sh except lib.sh (the helpers they source), each in its own log
       # group and reported by name. They prove the gates above still fail when they should, e.g.
       # check-deps.sh's ADR 0021 guard, which the RUSTSEC-2023-0071 ignore in deny.toml depends
@@ -207,9 +209,8 @@ jobs:
       - name: check (polyjose)
         run: cargo "+$MSRV" check -p polyjose --all-features --locked
 
-  # The single required status check for branch protection on main (see git-ops). It needs every
-  # gate job, and it fails unless all of them succeeded, so a skipped or cancelled job can never
-  # count as green. Add each new job (WASM, Node, Swift, Android) to `needs` as it lands.
+  # One verdict for the run: it needs every gate job, and it fails unless all of them succeeded,
+  # so a skipped or cancelled job can never count as green.
   ci-ok:
     name: ci-ok
     if: ${{ always() }}

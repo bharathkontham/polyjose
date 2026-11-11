@@ -8,7 +8,9 @@
 # trap after one) still fails the gate.
 #
 # Each case runs test-all.sh in a copy of the working tree, under the bash that runs this test
-# (lib.sh), with a broken script added or put in place of a real one. Usage:
+# (lib.sh), with a broken script added or put in place of a real one. The platform a case names is
+# a passing fixture (android_fixture): the cases test the syntax step and its place among the other
+# steps, not the Android suite, so no Gradle build or emulator run happens. Usage:
 # scripts/tests/test-all/syntax-step.sh
 set -euo pipefail
 export LC_ALL=C
@@ -24,9 +26,16 @@ broken_file() {
   printf '#!/usr/bin/env bash\n%s\n' "$broken" >"$case_dir/$1" || lib_die "could not write $1"
 }
 
+# android_fixture: the copy's android suite is a passing fixture that writes its runners' results.
+android_fixture() {
+  fixture platforms/android/test.sh 0 'fixture android suite ran'
+  writes_own_results platforms/android/test.sh android
+}
+
 # --- A tree that parses ---------------------------------------------------------------------------------
 
 new_case clean
+android_fixture
 run_test_all android
 check "every script parses: the step passes" 0 '^==> syntax$' '^  syntax: PASS$'
 check_order "it is the first step" '^==> syntax$' '^==> parity$'
@@ -42,15 +51,16 @@ check_order "it runs before the rust block's first step" '^==> syntax$' '^==> no
 
 # --- Each place a broken script can be ------------------------------------------------------------------
 
-# broken_case <name> <path in the copy> [<platform>]: a copy with a broken script at the path; the
-# step FAILs naming it, the run exits 1, and the other steps still ran.
+# broken_case <name> <path in the copy>: a copy with a broken script at the path; the step FAILs
+# naming it, the run exits 1, and the other steps still ran.
 broken_case() {
   new_case "$1"
+  android_fixture
   broken_file "$2"
-  run_test_all "${3:-android}"
+  run_test_all android
   check "a broken $2 FAILs the step and the run" 1 '^  syntax: FAIL$' "$2"
   check_absent "a broken $2 is not reported as passing" '^  syntax: PASS$'
-  check "the other steps still run after a broken $2" 1 "^  ${3:-android}: "
+  check "the other steps still run after a broken $2" 1 '^fixture android suite ran$' '^  android: PASS$'
 }
 
 broken_case scripts scripts/f10-broken.sh
@@ -86,6 +96,7 @@ new_case not-shell
 mkdir -p "$case_dir/scripts/tests/f10"
 printf 'if then\n' >"$case_dir/scripts/tests/f10/notes.txt"
 printf 'if then\n' >"$case_dir/bindings/js/f10.sh"
+android_fixture
 run_test_all android
 check "files outside the listed globs are not checked" 0 '^  syntax: PASS$'
 

@@ -1,0 +1,20 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "The node:crypto RS384 JWS, verified with its own public key but an allow-list of only RS512, is refused: the header alg alone is never trusted (RFC 8725 §3.1; ADR 0026 §2 step 7)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzM4NCJ9.RXhhbXBsZSBvZiBSUzM4NCBzaWduaW5n.LWsK2mTF4q3cKLLDMaywbrHeWk0a-hzDDzwzcrcQ9DsvW1g8HtJSUICTzQmKqmZh8qHW5SNoyTKsm_ZB2rkdYnEe6fvw8weCxIW3bozN2bDJ_uNh3jHTga_GNj561lC4EFKrfjVooX4bHduJojQC_Rh_0QWhYSs-QO56DAfFaY1yZOFER8-DxZI0thICSrpJnkhjs1GONrdbt0xCGRu7ERclKGUyfsL9nTAINhl9XX0-Q8d4F-bJ__mnkngUHRvezGMlDpdwBzIyLCghwOVYsb_z4TPY_Am8McZY0Xa6nNQQ3Z-Wlx-SZ0wlIgdgABTqUJYOtnJg8bnF7jHcYjiOfw",
+    "key": {
+      "kty": "RSA",
+      "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "RS512"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "AlgorithmNotAllowed"
+  }
+}

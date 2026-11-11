@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
 # Run polyjose's test suites on every platform (or the ones named as arguments).
+#
+#   scripts/test-all.sh                       rust wasm node android swift
+#   scripts/test-all.sh <name>...             only these: rust, wasm, node, android, swift (alias
+#                                             apple), tooling
+#
+# `tooling` is not a platform and not part of the default set: it runs the gate scripts' own
+# self-tests (every scripts/tests/<gate>/*.sh; run_negative_tests below), which take far longer
+# than the suites and only change when scripts/ or .github/ change. Run it then, e.g.
+# `scripts/test-all.sh rust tooling`. The rust block itself keeps only the negative tests of the
+# test-vectors-off guard (rust_negative_tests below; about a minute).
+#
 # A platform whose toolchain or test suite is missing is reported as SKIPPED with the reason,
 # never silently passed; a suite that exists always runs and can FAIL.
 # wasm, node, android and swift run their binding's own script when it exists (bindings/wasm/test.sh,
 # bindings/node/test.sh, platforms/android/test.sh, platforms/swift/test.sh; see dispatch below).
+# node also runs the shared facade's suite (bindings/js/test.sh, step js-facade) and interop-jose.
 # After the suites, scripts/conformance-parity.sh compares their conformance results (ADR 0034 §5),
 # and each platform that passed must have written the results files of its runners (results_runners).
 # A platform script may waive one of its host-optional runners (marked ? in results_runners) with a
@@ -123,7 +135,9 @@ run_script() {
   esac
   return 0
 }
-# The negative tests of the gate scripts: every scripts/tests/<gate>/*.sh, each its own step
+# The negative tests of the gate scripts, scripts/tests/<gate>/*.sh: the `tooling` argument runs
+# every one, the rust block those of rust_negative_tests (run_negative_tests <glob>...; one that
+# already ran in this run is not run again). Each is its own step
 # ("negative: <gate>/<script>"), except lib.sh, the helpers they source. A script that is not
 # executable FAILs (it would otherwise drop out unnoticed), and so does finding none at all.
 # The gate scripts guard what CI relies on, e.g. check-deps.sh's ADR 0021 guard, which deny.toml's
@@ -140,12 +154,22 @@ run_script() {
 #               workflow check's text rules still run without it (0006 F04).
 # Adding a tool needs the owner's acceptance, recorded here with the reason.
 negative_skip_tools="actionlint"
+# The negative tests every rust run keeps (measured 2026-11-12: 14 s and 64 s): they prove that
+# check-test-vectors-off.sh still refuses a build that could enable the deterministic test RNG
+# (ADR 0005). The other two Tier A guard negatives, check-deps/rsa-guard.sh (about 20 min) and
+# check-deps/rsa-symbols.sh (a build per case), are too slow for every run and stay in `tooling`.
+rust_negative_tests='scripts/tests/check-test-vectors-off/*.sh'
+negatives_done="|"
 run_negative_tests() {
   local t name found=0 out rc last tool
-  for t in scripts/tests/*/*.sh; do
+  # Unquoted on purpose: each argument is a glob (as syntax_globs below).
+  # shellcheck disable=SC2068
+  for t in $@; do
     [ -e "$t" ] || continue # bash 3.2 has no nullglob by default: an unmatched glob stays literal
     case ${t##*/} in lib.sh) continue ;; esac
     found=1; name="negative: ${t#scripts/tests/}"
+    case $negatives_done in *"|$t|"*) continue ;; esac
+    negatives_done="$negatives_done$t|"
     echo "==> $name"
     if [ ! -x "$t" ]; then echo "$t is not executable"; record "$name" FAIL; continue; fi
     out="$scratch/negative-$(printf '%s' "${t#scripts/tests/}" | tr '/ ' '__').out"
@@ -171,7 +195,7 @@ run_negative_tests() {
       *) record "$name" PASS ;;
     esac
   done
-  if [ "$found" -eq 0 ]; then echo "no negative tests found (scripts/tests/*/*.sh)"; record negative-tests FAIL; fi
+  if [ "$found" -eq 0 ]; then echo "no negative tests found ($*)"; record negative-tests FAIL; fi
 }
 
 # The binding API name check (feature 0013 T13, ADR 0030 §2, §8): one step per mode file in
@@ -303,9 +327,15 @@ for p in "${platforms[@]}"; do
       # signing or decryption symbol. Needs ar and nm (best: rustup component add llvm-tools).
       if have cargo; then run rsa-symbols scripts/check-rsa-symbols.sh
       else record rsa-symbols "SKIPPED (cargo missing)"; fi
+      # The negative tests of the test-vectors-off guard only (rust_negative_tests above); every
+      # other gate's are the `tooling` argument's.
+      if have cargo; then run_negative_tests "$rust_negative_tests"
+      else record negative-tests "SKIPPED (cargo missing)"; fi ;;
+    tooling)
       # The gate scripts' own negative tests (scripts/tests/*/*.sh), e.g. that check-deps.sh
-      # still rejects RSA private-key use and the guarded groups' second paths.
-      if have cargo; then run_negative_tests
+      # still rejects RSA private-key use and the guarded groups' second paths. Not a platform and
+      # not in the default set (header): only on request.
+      if have cargo; then run_negative_tests 'scripts/tests/*/*.sh'
       else record negative-tests "SKIPPED (cargo missing)"; fi ;;
     wasm)
       if dispatch wasm; then :
@@ -318,6 +348,12 @@ for p in "${platforms[@]}"; do
       # private key, which no Rust code reads. It needs only node, not the binding's toolchain.
       if have node; then run rsa-oaep-oracle node conformance/tools/rsa-oaep-oracle.mjs
       else record rsa-oaep-oracle "SKIPPED (node missing)"; fi
+      # The shared TypeScript facade's own suite (bindings/js/test.sh: the TypeScript-only rule,
+      # the misuse type-checks, node --test over its compiled tests), which neither package's suite
+      # runs. Its own step, before the node suite: both build bindings/js/dist, so they must never
+      # run at the same time (bindings/wasm/test.sh), and here they run one after the other.
+      if have node && have npm; then run_script js-facade bindings/js/test.sh
+      else record js-facade "SKIPPED (node or npm missing)"; fi
       # `npm pkg get` prints {} for a missing key; an unreadable package.json is not skipped, so it FAILs.
       if dispatch node; then :
       elif ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"
@@ -335,7 +371,7 @@ for p in "${platforms[@]}"; do
       if dispatch swift; then :
       elif have swift && [ -f Package.swift ]; then run swift bash -c 'swift test'
       else record swift "SKIPPED (swift or Package.swift missing)"; fi ;;
-    *) echo "unknown platform: $p"; exit 2 ;;
+    *) echo "unknown platform: $p (rust, wasm, node, android, swift, tooling)"; exit 2 ;;
   esac
 done
 
@@ -391,6 +427,7 @@ checked="|"
 for p in "${platforms[@]}"; do
   case $checked in *"|$p|"*) continue ;; esac
   checked="$checked$p|"
+  [ "$p" = tooling ] && continue # not a platform: it has no conformance runner
   if ! line_runners=$(runners_of "$p"); then
     echo "parity: no line for $p in the runner table (results_runners in scripts/test-all.sh)"
     missing "no line for $p in the runner table"; continue

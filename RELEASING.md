@@ -22,12 +22,6 @@ What the workflows read (names only):
 
 The guide also sets a variable `GPG_SIGNING_KEY_ID`, which no workflow reads. Because the environments admit tags only, **tag-mode `release.yml` and every `publish.yml` run are dispatched from the tag ref** (`--ref vX.Y.Z`, the same value as the `tag` input). Both workflows refuse any other ref.
 
-### Owner to-dos after the first publish (0.1.1; 0.1.0 was tagged but never published)
-
-- [ ] Revoke both bootstrap tokens on crates.io and npm, then `gh secret delete CARGO_REGISTRY_BOOTSTRAP_TOKEN --env publish` and `gh secret delete NPM_BOOTSTRAP_TOKEN --env publish`.
-- [ ] Check that the crate `polyjose` and the npm packages `@polyjose/node` and `@polyjose/wasm` show the trusted publisher `bharathkontham/polyjose`, `publish.yml`, environment `publish`. Then turn on npm's "Require two-factor authentication and disallow tokens" for each package. (0.1.1 also published the 8 `@polyjose/node-<platform>` packages; from 0.1.2 they are no longer published, see the 0.1.2 step below.)
-- [ ] From 0.1.2 on, dispatch `publish.yml` with `bootstrap: false`, which is the default. crates.io and npm then authenticate by OIDC, with provenance.
-
 ## 2. Release public key
 
 [`.github/keys/polyjose-release.asc`](.github/keys/polyjose-release.asc) has fingerprint `D41352A0F5B7FA339E036C6B097272B7A3B1FFE6` (RSA 4096, expires 2029-11-04) and is also on keys.openpgp.org and keyserver.ubuntu.com ([keys README](.github/keys/README.md)). It signs `SHA256SUMS.asc` and the Maven artifacts. To verify a release:
@@ -50,14 +44,20 @@ Before the tag (items 1–6) and before Gate 3 (item 7):
 1. [ ] The candidate run (step 2 below) is green, at the release PR head, and less than about 90 days old.
 2. [ ] `scripts/fuzz.sh --seconds 600` reports no crash. `jws` and `jwe` get far fewer execs per second, so also give those two a longer budget, for example `scripts/fuzz.sh --seconds 3600 jws jwe`.
 3. [ ] MSRV: `cargo +1.89.0 check -p polyjose`.
-4. [ ] The rsa 0.10 advisory re-check (ADR 0055): is there a stable `rsa` 0.10.x that RUSTSEC-2023-0071 marks as patched, with no other advisory? If so, note it for an adoption feature. It is never part of the current release.
-5. [ ] An orchestrator short check of `publish.yml` (secrets, pins, gating, inputs, permissions). **0.1.0: done** on 2026-11-08 against 4e2808d. It found two fixes, `--no-verify` on the cargo steps and `--ignore-scripts` on `npm publish`; both landed and were rechecked. For later releases, re-check whenever `publish.yml` or `scripts/release/` changed since the last release.
+4. [ ] Advisories: `cargo deny --all-features check advisories` is clean, with no `rsa` ignore in `deny.toml`. Note any `rsa` 0.10.x newer than the locked one for a later update; a dependency bump is never part of the current release.
+5. [ ] An orchestrator short check of `publish.yml` (secrets, pins, gating, inputs, permissions). Needed only when `publish.yml` or `scripts/release/` changed since the last release.
 6. [ ] Version and changelog: `scripts/release/check-version.sh X.Y.Z --notes "$(mktemp)"` passes.
 7. [ ] The tag run is green and the draft holds every asset (step 5 below).
 
 ## 4. Release steps
 
-1. **Version and CHANGELOG PR** (release agent, branch `chore/release-X.Y.Z`). Bump every manifest that [`check-version.sh`](scripts/release/check-version.sh) checks. Set the `Package.swift` url to `.../releases/download/vX.Y.Z/PolyjoseFFI.xcframework.zip`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`, which becomes the release notes.
+1. **Version and CHANGELOG PR** (release agent, branch `chore/release-X.Y.Z`). Bump every version carrier that [`check-version.sh`](scripts/release/check-version.sh) checks: the manifests, `Cargo.lock` and `fuzz/Cargo.lock`, and the install snippets in `platforms/android/README.md` and `platforms/swift/README.md`. Set the `Package.swift` url to `.../releases/download/vX.Y.Z/PolyjoseFFI.xcframework.zip`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`, which becomes the release notes.
+   - **Before dispatching the candidate**, on the version-bump tree, run these three locally. Each has failed a candidate run before, and a candidate attempt costs about 20 minutes:
+     ```sh
+     scripts/release/check-version.sh X.Y.Z             # every version carrier holds X.Y.Z
+     scripts/test-all.sh node                           # the Node and facade tests, which read the version
+     platforms/android/scripts/check-artifacts.sh       # the AAR and jar contents and size limits
+     ```
 2. **Candidate** (owner's go-ahead): `gh workflow run release.yml --repo bharathkontham/polyjose --ref chore/release-X.Y.Z -f mode=candidate`. It builds everything unsigned and creates no release. When it is green:
    - `gh run download <run-id> --name apple-xcframework`
    - write the zip's SHA-256 into `Package.swift`'s `checksum:`
@@ -78,19 +78,12 @@ Before the tag (items 1–6) and before Gate 3 (item 7):
    git diff --quiet "$last" vX.Y.Z -- .github/workflows/publish.yml scripts/release/ && echo "skip the dry run" || echo "run the dry run"
    ```
    - **Skipped** when that `git diff --quiet` holds: neither `publish.yml` nor `scripts/release/` changed. Go straight to Gate 3. Its per-job approvals let the owner stop after the first failure, and a fix ships as the next patch (section 5).
-   - **Otherwise, run it once** (owner's go-ahead), on the real draft, from the tag ref: `gh workflow run publish.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=true`. (`-f bootstrap=true` was for the first published release, 0.1.1, only.) Even a dry run waits in `publish`, so the owner approves each job. Every job must be green. If the dry run exposes a workflow bug, the fix ships under the next patch tag (section 5).
+   - **Otherwise, run it once** (owner's go-ahead), on the real draft, from the tag ref: `gh workflow run publish.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=true`. Leave `bootstrap` at its default, `false`: crates.io and npm authenticate by OIDC. Even a dry run waits in `publish`, so the owner approves each job. Every job must be green. If the dry run exposes a workflow bug, the fix ships under the next patch tag (section 5).
 7. **Gate 3** (owner only): the same dispatch with `-f dry_run=false`, approving each `publish` job in turn: `crates` → `npm` (`@polyjose/node`, which holds the native addons of all 8 targets, then `@polyjose/wasm`) → `maven` (upload, polled until `VALIDATED`; its log prints the deployment id) → `github` (un-drafts the release, which makes SPM live). The `spm` job then resolves and builds the package at the tag.
-   - **0.1.2 only, after the `npm` job is green** (owner, by hand; nothing in CI does this): deprecate the 8 platform packages that 0.1.1 published, since `@polyjose/node` >= 0.1.2 no longer depends on them (ADR 0066):
-     ```sh
-     for p in darwin-x64 darwin-arm64 linux-x64-gnu linux-arm64-gnu linux-x64-musl linux-arm64-musl win32-x64-msvc win32-arm64-msvc; do
-       npm deprecate "@polyjose/node-$p@*" "Merged into @polyjose/node >= 0.1.2"
-     done
-     ```
-     Then check one: `npm view @polyjose/node-linux-x64-gnu deprecated`.
 8. **Maven Central Portal** (owner): Deployments → the printed deployment id → check it → **Publish**.
 9. **Docs**: the release agent opens a `polyjose-docs` PR (version, changelog, install snippets) for git-ops, and writes the session summary in the brain.
 
-Optional: `publish.yml` also accepts a disposable `dryrun-vX.Y.Z[-N]` draft, with `dry_run: true` only, and unsigned assets are allowed there. It is not used for 0.1.0.
+Optional: `publish.yml` also accepts a disposable `dryrun-vX.Y.Z[-N]` draft, with `dry_run: true` only, and unsigned assets are allowed there.
 
 ## 5. Rules the workflows enforce
 

@@ -37,7 +37,7 @@ check_order "the step follows the inventory modes" '^  api-names: surface: ' '^ 
 check_order "the step runs before the cargo steps" '^  api-names: ffi-generated: PASS$' '^  rust: PASS$'
 check_order "rsa-symbols still follows the wasm builds" '^  wasm32-build-deflate: PASS$' '^  rsa-symbols: PASS$'
 check_order "rsa-symbols still follows deps" '^  deps: PASS$' '^  rsa-symbols: PASS$'
-check_order "the negative tests still come last" '^  rsa-symbols: PASS$' '^  negative: fixture/ok\.sh: PASS$'
+check_order "the block's negative tests still come last" '^  rsa-symbols: PASS$' '^  negative: check-test-vectors-off/ok\.sh: PASS$'
 
 rust_case fail
 fixture "$names" 1 'generated-names: FAIL: kotlin: inventory entries missing or in another form' 'generated-names: FAIL'

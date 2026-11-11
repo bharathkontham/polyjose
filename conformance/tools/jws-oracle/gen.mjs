@@ -9,14 +9,16 @@
 // See README.md next to this file for what it generates and why.
 
 import {
+  constants,
   createECDH,
   createHash,
+  createHmac,
   createPrivateKey,
   createPublicKey,
   sign,
   verify,
 } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -162,6 +164,153 @@ const ES256K_LOW_JWS = `${ES256K_PROTECTED}.${ES256K_PAYLOAD}.${b64u(lowSig)}`;
 const ES256K_HIGH_JWS = `${ES256K_PROTECTED}.${ES256K_PAYLOAD}.${b64u(highSig)}`;
 
 // ---------------------------------------------------------------------------
+// RS384, RS512 (RFC 7518 §3.3) and PS512 (§3.5): no RFC prints a JWS for
+// them. The keys are read from committed RFC vectors, never generated: the
+// RFC 7515 A.2 key pair signs and verifies, the RFC 7520 §3.4 RSA public key
+// is the wrong key, and the RFC 7515 A.3 P-256 public key is the key of
+// another family. RSASSA-PKCS1-v1_5 is deterministic (RFC 8017 §8.2.1), so
+// the RS* entries are reproduced byte for byte; RSASSA-PSS is salted, so the
+// two PS512 token entries change on every run.
+// ---------------------------------------------------------------------------
+
+const vectorsRoot = join(here, "..", "..", "vectors");
+const committed = (rel) => JSON.parse(readFileSync(join(vectorsRoot, rel), "utf8"));
+
+const A2_SIGN = committed("jws-rfc7515/a2-rs256-compact-sign.json");
+const RSA_PRIVATE = A2_SIGN.input.signers[0].key;
+const RSA_PUBLIC = { kty: "RSA", n: RSA_PRIVATE.n, e: RSA_PRIVATE.e };
+const RSA_OTHER_PUBLIC = committed("third_party/rfc7520/jws/4-1-rs256-compact-verify.json").input.key;
+const P256_PUBLIC = committed("jws-rfc7515/a3-es256-compact-verify.json").input.key;
+check(RSA_OTHER_PUBLIC.kty === "RSA" && RSA_OTHER_PUBLIC.n !== RSA_PUBLIC.n, "the RFC 7520 key is not another RSA key");
+check(P256_PUBLIC.kty === "EC" && P256_PUBLIC.crv === "P-256" && !("d" in P256_PUBLIC), "not a P-256 public key");
+
+const rsaKey = createPrivateKey({ key: RSA_PRIVATE, format: "jwk" });
+const rsaPub = createPublicKey({ key: RSA_PUBLIC, format: "jwk" });
+const rsaOtherPub = createPublicKey({ key: { kty: "RSA", n: RSA_OTHER_PUBLIC.n, e: RSA_OTHER_PUBLIC.e }, format: "jwk" });
+
+// The oracle must first reproduce RFC 7515 A.2 exactly.
+{
+  const signer = A2_SIGN.input.signers[0];
+  const sig = sign("sha256", signingInput(signer.protected_b64u, A2_SIGN.input.payload_b64u), rsaKey);
+  check(
+    `${signer.protected_b64u}.${A2_SIGN.input.payload_b64u}.${b64u(sig)}` === A2_SIGN.expect.jws,
+    "node:crypto does not reproduce the RFC 7515 A.2 JWS",
+  );
+}
+
+/** The same octets with the lowest bit of the last one flipped: still canonical base64url of the same length. */
+function tampered(sig) {
+  const out = Buffer.from(sig);
+  out[out.length - 1] ^= 1;
+  return out;
+}
+
+/** The RS<bits> entries: an exact signature, and what must refuse it or a relative of it. */
+function rsEntries(bits, otherBits) {
+  const alg = `RS${bits}`;
+  const other = `RS${otherBits}`;
+  const hash = `sha${bits}`;
+  const protectedB64u = b64u(utf8(`{"alg":"${alg}"}`));
+  const payload = b64u(utf8(`Example of ${alg} signing`));
+  const input = signingInput(protectedB64u, payload);
+  const sig = sign(hash, input, rsaKey);
+  check(sig.length === 256, "an RSA-2048 signature is 256 octets (RFC 8017 §8.2.1)");
+  check(verify(hash, input, rsaPub, sig), `the ${alg} JWS does not verify`);
+  check(!verify(hash, input, rsaPub, tampered(sig)), `the tampered ${alg} signature verifies`);
+  check(!verify(hash, input, rsaOtherPub, sig), `the ${alg} JWS verifies with another key`);
+  const jws = `${protectedB64u}.${payload}.${b64u(sig)}`;
+  // A valid SHA-<bits> signature over a signing input whose header names the other RS* alg.
+  const otherProtected = b64u(utf8(`{"alg":"${other}"}`));
+  const otherInput = signingInput(otherProtected, payload);
+  const crossSig = sign(hash, otherInput, rsaKey);
+  check(verify(hash, otherInput, rsaPub, crossSig), "the cross-hash signature is not a valid one under its own hash");
+  check(!verify(`sha${otherBits}`, otherInput, rsaPub, crossSig), "the cross-hash signature verifies under the header's hash");
+  const name = alg.toLowerCase();
+  const key = "the RFC 7515 A.2 RSA";
+  return {
+    [`${name}-compact-sign.json`]: vector(
+      `${alg} (RFC 7518 §3.3) compact sign with ${key} private key over header {"alg":"${alg}"}; RSASSA-PKCS1-v1_5 is deterministic (RFC 8017 §8.2.1), so the expected JWS is node:crypto's exact output (the generator first checks that node:crypto reproduces RFC 7515 A.2)`,
+      "jws.sign",
+      { serialization: "compact", payload_b64u: payload, detached: false, signers: [{ protected_b64u: protectedB64u, key: RSA_PRIVATE }] },
+      { ok: true, jws },
+    ),
+    [`${name}-compact-verify.json`]: vector(
+      `${alg} (RFC 7518 §3.3) compact verify of the node:crypto JWS with ${key} public key and allow-list ["${alg}"]`,
+      "jws.verify",
+      { jws, key: RSA_PUBLIC, allowed_algs: [alg] },
+      verified(payload, alg),
+    ),
+    [`${name}-compact-verify-tampered-signature.json`]: vector(
+      `The node:crypto ${alg} JWS with the lowest bit of its last signature octet flipped (still 256 canonical octets) fails RSASSA-PKCS1-v1_5 verification (RFC 7515 §5.2 step 8; RFC 8017 §8.2.2); node:crypto refuses it too`,
+      "jws.verify",
+      { jws: `${protectedB64u}.${payload}.${b64u(tampered(sig))}`, key: RSA_PUBLIC, allowed_algs: [alg] },
+      { ok: false, error: "InvalidSignature" },
+    ),
+    [`${name}-compact-verify-wrong-key.json`]: vector(
+      `The node:crypto ${alg} JWS, signed with the RFC 7515 A.2 key, verified with another RSA public key (RFC 7520 §3.4): the signature does not verify (RFC 7515 §5.2 step 8); node:crypto refuses it too`,
+      "jws.verify",
+      { jws, key: RSA_OTHER_PUBLIC, allowed_algs: [alg] },
+      { ok: false, error: "InvalidSignature" },
+    ),
+    [`${name}-compact-verify-alg-not-allowed.json`]: vector(
+      `The node:crypto ${alg} JWS, verified with its own public key but an allow-list of only ${other}, is refused: the header alg alone is never trusted (RFC 8725 §3.1; ADR 0026 §2 step 7)`,
+      "jws.verify",
+      { jws, key: RSA_PUBLIC, allowed_algs: [other] },
+      { ok: false, error: "AlgorithmNotAllowed" },
+    ),
+    [`${name}-compact-verify-ec-key.json`]: vector(
+      `The node:crypto ${alg} JWS verified with the RFC 7515 A.3 P-256 public key: ${alg} is bound to RSA keys (RFC 7518 §3.3; RFC 8725 §3.1; ADR 0026 §2 step 8)`,
+      "jws.verify",
+      { jws, key: P256_PUBLIC, allowed_algs: [alg] },
+      { ok: false, error: "KeyAlgorithmMismatch" },
+    ),
+    [`${other.toLowerCase()}-compact-verify-sha${bits}-signature.json`]: vector(
+      `A compact JWS whose header says ${other} but whose signature is RSASSA-PKCS1-v1_5 with SHA-${bits} over that signing input, by ${key} private key: the header alg fixes the hash (RFC 7518 §3.3), so it does not verify as ${other} (RFC 7515 §5.2 step 8); node:crypto verifies it with SHA-${bits} and refuses it with SHA-${otherBits}`,
+      "jws.verify",
+      { jws: `${otherProtected}.${payload}.${b64u(crossSig)}`, key: RSA_PUBLIC, allowed_algs: [other] },
+      { ok: false, error: "InvalidSignature" },
+    ),
+  };
+}
+
+// PS512: RSASSA-PSS with SHA-512, MGF1 with SHA-512 and a 64-octet salt (RFC 7518 §3.5).
+const PS512_PROTECTED = b64u(utf8('{"alg":"PS512"}'));
+const PS512_PAYLOAD = b64u(utf8("Example of PS512 signing"));
+const pss = { padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 64 };
+const ps512Input = signingInput(PS512_PROTECTED, PS512_PAYLOAD);
+const ps512Sig = sign("sha512", ps512Input, { key: rsaKey, ...pss });
+check(ps512Sig.length === 256, "an RSA-2048 signature is 256 octets (RFC 8017 §8.1.1)");
+check(verify("sha512", ps512Input, { key: rsaPub, ...pss }, ps512Sig), "the PS512 JWS does not verify");
+check(!verify("sha512", ps512Input, { key: rsaPub, ...pss }, tampered(ps512Sig)), "the tampered PS512 signature verifies");
+
+// ---------------------------------------------------------------------------
+// HS512 (RFC 7518 §3.2): HMAC is deterministic, so every entry is reproduced
+// byte for byte. The key is fixed: SHA-512 of a label, 64 octets, the hash
+// output size §3.2 requires as a minimum. It is a test key, used nowhere else.
+// ---------------------------------------------------------------------------
+
+// The oracle must first reproduce RFC 7515 A.1 exactly.
+{
+  const a1 = committed("jws-rfc7515/a1-hs256-compact-sign.json");
+  const signer = a1.input.signers[0];
+  const mac = createHmac("sha256", Buffer.from(signer.key.k, "base64url"))
+    .update(signingInput(signer.protected_b64u, a1.input.payload_b64u))
+    .digest();
+  check(
+    `${signer.protected_b64u}.${a1.input.payload_b64u}.${b64u(mac)}` === a1.expect.jws,
+    "node:crypto does not reproduce the RFC 7515 A.1 JWS",
+  );
+}
+
+const hs512K = createHash("sha512").update("polyjose jws-oracle HS512 key v1").digest();
+const HS512_KEY = { kty: "oct", k: b64u(hs512K) };
+const HS512_PROTECTED = b64u(utf8('{"alg":"HS512"}'));
+const HS512_PAYLOAD = b64u(utf8("Example of HS512 signing"));
+const hs512Mac = createHmac("sha512", hs512K).update(signingInput(HS512_PROTECTED, HS512_PAYLOAD)).digest();
+check(hs512Mac.length === 64, "an HS512 MAC is 64 octets (RFC 7518 §3.2)");
+const HS512_JWS = `${HS512_PROTECTED}.${HS512_PAYLOAD}.${b64u(hs512Mac)}`;
+
+// ---------------------------------------------------------------------------
 // The vectors, one per file (conformance/README.md).
 // ---------------------------------------------------------------------------
 
@@ -213,6 +362,54 @@ const vectors = {
     "jws.verify",
     { jws: ES256K_HIGH_JWS, key: ES256K_PUBLIC, allowed_algs: ["ES256K"] },
     verified(ES256K_PAYLOAD, "ES256K"),
+  ),
+  ...rsEntries(384, 512),
+  ...rsEntries(512, 384),
+  "ps512-compact-sign-roundtrip.json": vector(
+    "PS512 (RFC 7518 §3.5) compact sign with the RFC 7515 A.2 RSA private key, then verify with its public key: RSASSA-PSS is salted, so the output is checked by round trip, not bytes",
+    "jws.sign",
+    {
+      serialization: "compact",
+      payload_b64u: PS512_PAYLOAD,
+      detached: false,
+      signers: [{ protected_b64u: PS512_PROTECTED, key: RSA_PRIVATE }],
+    },
+    { ok: true, verify_with: { key: RSA_PUBLIC, allowed_algs: ["PS512"] } },
+  ),
+  "ps512-compact-verify.json": vector(
+    "PS512 (RFC 7518 §3.5) compact verify of a node:crypto RSASSA-PSS signature (SHA-512, MGF1 with SHA-512, 64-octet salt) by the RFC 7515 A.2 RSA key, with its public key",
+    "jws.verify",
+    { jws: `${PS512_PROTECTED}.${PS512_PAYLOAD}.${b64u(ps512Sig)}`, key: RSA_PUBLIC, allowed_algs: ["PS512"] },
+    verified(PS512_PAYLOAD, "PS512"),
+  ),
+  "ps512-compact-verify-tampered-signature.json": vector(
+    "The PS512 JWS of ps512-compact-verify.json with the lowest bit of its last signature octet flipped (still 256 canonical octets) fails RSASSA-PSS verification (RFC 7515 §5.2 step 8; RFC 8017 §8.1.2); node:crypto refuses it too",
+    "jws.verify",
+    { jws: `${PS512_PROTECTED}.${PS512_PAYLOAD}.${b64u(tampered(ps512Sig))}`, key: RSA_PUBLIC, allowed_algs: ["PS512"] },
+    { ok: false, error: "InvalidSignature" },
+  ),
+  "hs512-compact-sign.json": vector(
+    'HS512 (RFC 7518 §3.2) compact sign with the generator\'s fixed 64-octet key (SHA-512 of a label) over header {"alg":"HS512"}; HMAC is deterministic, so the expected JWS is node:crypto\'s exact output (the generator first checks that node:crypto reproduces RFC 7515 A.1)',
+    "jws.sign",
+    {
+      serialization: "compact",
+      payload_b64u: HS512_PAYLOAD,
+      detached: false,
+      signers: [{ protected_b64u: HS512_PROTECTED, key: HS512_KEY }],
+    },
+    { ok: true, jws: HS512_JWS },
+  ),
+  "hs512-compact-verify.json": vector(
+    'HS512 (RFC 7518 §3.2) compact verify of the node:crypto JWS with the generator\'s fixed 64-octet key and allow-list ["HS512"]',
+    "jws.verify",
+    { jws: HS512_JWS, key: HS512_KEY, allowed_algs: ["HS512"] },
+    verified(HS512_PAYLOAD, "HS512"),
+  ),
+  "hs512-compact-verify-tampered-signature.json": vector(
+    "The node:crypto HS512 JWS with the lowest bit of its last MAC octet flipped (still 64 canonical octets) fails the MAC check (RFC 7515 §5.2 step 8)",
+    "jws.verify",
+    { jws: `${HS512_PROTECTED}.${HS512_PAYLOAD}.${b64u(tampered(hs512Mac))}`, key: HS512_KEY, allowed_algs: ["HS512"] },
+    { ok: false, error: "InvalidSignature" },
   ),
 };
 

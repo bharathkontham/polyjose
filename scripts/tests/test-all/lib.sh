@@ -10,11 +10,16 @@
 # shellcheck source=../check-deps/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../check-deps/lib.sh"
 
-# The node platform's interop-jose step (feature 0010 I1) builds @polyjose/node and runs jose: in
-# the base copy it is a passing stub, so the cases stay hermetic and build nothing.
+# The node platform's interop-jose step (feature 0010 I1) builds @polyjose/node and runs jose, and
+# its js-facade step runs npm ci and tsc in bindings/js: in the base copy each is a passing stub, so
+# the cases stay hermetic and build nothing.
 if [ -f "$base/interop/node/test.sh" ]; then
   printf '#!/bin/sh\necho "fixture interop-jose ran"\n' >"$base/interop/node/test.sh" \
     || lib_die "could not stub interop/node/test.sh in the base copy"
+fi
+if [ -f "$base/bindings/js/test.sh" ]; then
+  printf '#!/bin/sh\necho "fixture js-facade ran"\n' >"$base/bindings/js/test.sh" \
+    || lib_die "could not stub bindings/js/test.sh in the base copy"
 fi
 
 gate_name=test-all.sh
@@ -119,7 +124,9 @@ with open(path, "w", encoding="utf-8") as f:
 # rust_fixtures <exit status of cargo test --workspace> [<results file stem>...]: makes
 # `test-all.sh rust` cheap and hermetic in the copy. Every gate script of the rust block is a passing
 # fixture (bindings/ffi/tests/generated-names.sh too; a case replaces it to test that step), one
-# passing fixture stands in for scripts/tests/ (so this test does not run itself), and a cargo stub,
+# passing fixture stands in for scripts/tests/ (so a `tooling` case does not run this test) and one
+# for the negative tests the rust block keeps (scripts/tests/check-test-vectors-off/), and a
+# cargo stub,
 # first on PATH in run_test_all, does nothing and exits 0, except that `cargo test --workspace`
 # writes target/conformance/<stem>.json for each stem and exits with the given status, and
 # `cargo test -p polyjose --all-features` writes rust-core-deflate-fixed-rng.json, as the real
@@ -134,6 +141,7 @@ rust_fixtures() {
   fixture bindings/ffi/tests/generated-names.sh 0 'fixture generated-names ran' 'generated-names: PASS'
   rm -rf "$case_dir/scripts/tests" || lib_die "could not remove the copy's scripts/tests"
   fixture scripts/tests/fixture/ok.sh 0 'fixture negative test ran'
+  fixture scripts/tests/check-test-vectors-off/ok.sh 0 'fixture test-vectors-off negative test ran'
   bin="$scratch/bin-${case_dir##*/}"
   rm -rf "$bin"; mkdir -p "$bin" || lib_die "could not create $bin"
   {

@@ -1,0 +1,20 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "A compact JWS whose header says RS384 but whose signature is RSASSA-PKCS1-v1_5 with SHA-512 over that signing input, by the RFC 7515 A.2 RSA private key: the header alg fixes the hash (RFC 7518 §3.3), so it does not verify as RS384 (RFC 7515 §5.2 step 8); node:crypto verifies it with SHA-512 and refuses it with SHA-384",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzM4NCJ9.RXhhbXBsZSBvZiBSUzUxMiBzaWduaW5n.BT8zLx2oWf91qBnekZaq4pci9G6J8E4ZXjKqx9cNw6DWvi5iVJOZJD4QMsI2DAKVLbo6JtIPaCM1nHvTx2YZLw5QNTXLyN7DGCNncfsjIFTd3KQM5HopLlIYY-AuyoHxkWwlTcxvSmFqu27O7g1F8jaSudGgbR-SeI21B_4OFDjF1DB09imvl5PyUpEQUcVFl37VTgpzmymFLAIeo5bqLaeUvyLG_kVvz0widxBJfK5HNMFjSN0ABFcY3CCv55To-BUYmXv09IliNeqsS_Q44PJ5z_1VZD_FrL5khL_xk8SB1jKUHsRJUkemwj8TXLzh_iRPJq_ySyGlG5RdEtoc0Q",
+    "key": {
+      "kty": "RSA",
+      "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "RS384"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}
