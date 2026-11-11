@@ -57,6 +57,7 @@ The Rust code of the Kotlin and Swift bindings is `bindings/ffi`; their packages
 ```sh
 scripts/test-all.sh            # rust + wasm + node + android + apple (skips platforms whose toolchain is missing, and says so)
 scripts/test-all.sh rust node  # only some platforms
+scripts/test-all.sh tooling    # the self-tests of the guard scripts; slow, only needed when scripts/ or .github/ change
 ```
 
 ## License

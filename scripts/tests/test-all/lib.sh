@@ -119,7 +119,9 @@ with open(path, "w", encoding="utf-8") as f:
 # rust_fixtures <exit status of cargo test --workspace> [<results file stem>...]: makes
 # `test-all.sh rust` cheap and hermetic in the copy. Every gate script of the rust block is a passing
 # fixture (bindings/ffi/tests/generated-names.sh too; a case replaces it to test that step), one
-# passing fixture stands in for scripts/tests/ (so this test does not run itself), and a cargo stub,
+# passing fixture stands in for scripts/tests/ (so a `tooling` case does not run this test) and one
+# for the negative tests the rust block keeps (scripts/tests/check-test-vectors-off/), and a
+# cargo stub,
 # first on PATH in run_test_all, does nothing and exits 0, except that `cargo test --workspace`
 # writes target/conformance/<stem>.json for each stem and exits with the given status, and
 # `cargo test -p polyjose --all-features` writes rust-core-deflate-fixed-rng.json, as the real
@@ -134,6 +136,7 @@ rust_fixtures() {
   fixture bindings/ffi/tests/generated-names.sh 0 'fixture generated-names ran' 'generated-names: PASS'
   rm -rf "$case_dir/scripts/tests" || lib_die "could not remove the copy's scripts/tests"
   fixture scripts/tests/fixture/ok.sh 0 'fixture negative test ran'
+  fixture scripts/tests/check-test-vectors-off/ok.sh 0 'fixture test-vectors-off negative test ran'
   bin="$scratch/bin-${case_dir##*/}"
   rm -rf "$bin"; mkdir -p "$bin" || lib_die "could not create $bin"
   {
