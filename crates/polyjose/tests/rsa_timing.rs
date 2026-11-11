@@ -22,7 +22,19 @@
 //!   unrestricted random keys).
 //! - **RS256 and PS256 signing** (RFC 7518 §3.3, §3.5), through
 //!   `jws::sign_compact`: class 0 signs one fixed payload, class 1 a fresh
-//!   random payload each time (dudect's fixed-versus-random).
+//!   random payload each time (dudect's fixed-versus-random). Both classes
+//!   sign with the same key, so this tests **message dependence only**: it
+//!   says nothing about whether the timing depends on the private key
+//!   (`d`, `p`, `q`), which would need classes of different keys. That is
+//!   left to the `rsa` crate's blinding (ADR 0067 §2) and its audits.
+//! - **Positive control** (`#[ignore]` too): a random Encrypted Key below n
+//!   against one of at least n. The second is refused before any
+//!   private-key arithmetic (RFC 8017 §5.1.2 step 1, a check on public
+//!   values), so the classes differ by design and the test requires
+//!   |t| > 10. If it does not see that, the harness or the machine cannot
+//!   show a leak, and a passing measurement above means nothing. It is
+//!   native only: it checks the statistic and [`run`], which the wasm32
+//!   copy holds unchanged.
 //!
 //! Classes are interleaved at random (bits from the OS CSPRNG) so drift in
 //! the machine's state spreads over both. The t statistic is computed on
@@ -291,6 +303,59 @@ fn oaep_inputs(key: &Jwk) -> impl FnMut(u8) -> String + use<> {
         ]
         .join(".")
     }
+}
+
+/// The positive control's classes: the tampered-tag JWE of [`oaep_inputs`]
+/// with a random Encrypted Key below n (class 0), or with a random one of
+/// at least n (class 1: its first octet is 0xff, and the A.2 modulus starts
+/// with 0xa1), which RSADP refuses at once (RFC 8017 §5.1.2 step 1).
+fn oaep_control_inputs(key: &Jwk) -> impl FnMut(u8) -> String + use<> {
+    let mut inputs = oaep_inputs(key);
+    move |class| {
+        let below_n = inputs(1);
+        if class == 0 {
+            return below_n;
+        }
+        let mut parts: Vec<&str> = below_n.split('.').collect();
+        let mut random = os_bytes(256);
+        random[0] = 0xff;
+        let at_least_n = b64url(&random);
+        parts[1] = &at_least_n;
+        parts.join(".")
+    }
+}
+
+#[test]
+#[ignore = "statistical timing test: run alone in release mode (see the module docs)"]
+fn dudect_positive_control_detects_a_ciphertext_of_at_least_n() {
+    let key = rsa_key();
+    let policy = DecryptPolicy::new(&[KeyMgmtAlg::RsaOaep256], &[ContentEncAlg::A128GCM]).unwrap();
+    let mut prepare = oaep_control_inputs(&key);
+    // Both classes still fail the same way (RFC 7516 §11.5).
+    for class in [0, 1] {
+        let jwe = prepare(class);
+        assert_eq!(
+            decrypt_compact(&jwe, &key, &policy).err(),
+            Some(Error::DecryptionFailed)
+        );
+    }
+    let measured = run(samples(), native_clock(), os_bits(), prepare, |jwe| {
+        let result = decrypt_compact(jwe, &key, &policy);
+        std::hint::black_box(result.is_err());
+    });
+    let (t, n0, n1) = welch::max_abs_t(&measured);
+    println!(
+        "dudect positive control (Encrypted Key < n vs >= n): max |t| = {t:.2} over {n0} + {n1} samples: {}",
+        if t > 10.0 {
+            "detected, as it must be"
+        } else {
+            "NOT detected: the harness cannot show a leak here"
+        }
+    );
+    assert!(
+        t > 10.0,
+        "positive control: max |t| = {t:.2}, expected > 10"
+    );
 }
 
 #[test]

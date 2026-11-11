@@ -271,6 +271,22 @@ write(
   OAEP_ENCRYPT.input,
   fails('UnsupportedAlgorithm'),
 );
+// PKCS#1 export writes the RSAPublicKey (RFC 8017 App. A.1.1) of a public key only: a private key
+// is InvalidKey, never its public half written silently (feature 0020 review, decisions.md
+// 2026-11-11). The public-key positive is keys/export-rsa-pkcs1.json and export-der-rsa-pkcs1.json.
+for (const [name, from, operation, form] of [
+  ['keys-export-pem-rsa-private-pkcs1', 'keys/export-rsa-private-to-spki.json', 'keys.export_pem', 'PEM'],
+  ['keys-export-der-rsa-private-pkcs1', 'keys/export-der-rsa-private-to-spki.json', 'keys.export_der', 'DER'],
+]) {
+  write(
+    name,
+    'ADR 0067; ADR 0018 §3; ADR 0034 §6',
+    `ADR 0018 §3 format matrix, RFC 8017 App. A.1.1: ${form} export of the RSA private JWK of ${from} as pkcs1 is InvalidKey, since PKCS#1 export writes only the RSAPublicKey; no binding may drop the private members and write the public half instead (export the private key as pkcs8, or its to_public as pkcs1)`,
+    operation,
+    { jwk: read(from).input.jwk, format: 'pkcs1' },
+    fails('InvalidKey'),
+  );
+}
 
 // ---- No DEFLATE in the binding configuration (ADR 0030 §4, ADR 0056) ---------------------------
 // `features_absent: ["deflate"]`: run where the core has no `deflate` (every binding and the

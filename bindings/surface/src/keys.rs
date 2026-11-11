@@ -215,9 +215,9 @@ pub fn jwk_to_pem(jwk: &str, format: &str) -> SurfaceResult<SecretString> {
 /// App. A.1.1), in the byte layout the core writes (ADR 0018 §3). Only the key material is
 /// exported; `kid`, `use`, `alg` and the other JWK members have no place in these structures.
 ///
-/// `spki` of a private key exports its public half, and so does `pkcs1` of an RSA private key
-/// (RFC 8017 App. A.1.1; private RSA export is `pkcs8` only, ADR 0067 §2). The DER of a private
-/// key is a secret, so the result is [`SecretBytes`] (ADR 0030 §7.2).
+/// `spki` of a private key exports its public half. `pkcs1` writes the RSAPublicKey of an RSA
+/// public key only (RFC 8017 App. A.1.1): private RSA export is `pkcs8` only (ADR 0067 §2). The
+/// DER of a private key is a secret, so the result is [`SecretBytes`] (ADR 0030 §7.2).
 ///
 /// # Errors
 ///
@@ -226,7 +226,7 @@ pub fn jwk_to_pem(jwk: &str, format: &str) -> SurfaceResult<SecretString> {
 /// 2. The core's JWK parse errors (a multi-prime RSA JWK is `UnsupportedAlgorithm`, ADR 0067 §3).
 /// 3. The core's export errors (ADR 0018 §3 format matrix): `UnsupportedAlgorithm` for an `oct`
 ///    key in any format (RFC 8725 §2.1), a non-EC key in `sec1` and a non-RSA key in `pkcs1`;
-///    `InvalidKey` for a public key in `pkcs8` or `sec1`.
+///    `InvalidKey` for a public key in `pkcs8` or `sec1` and for an RSA private key in `pkcs1`.
 pub fn jwk_to_der(jwk: &str, format: &str) -> SurfaceResult<SecretBytes> {
     let format = key_format(format)?;
     let key = Jwk::from_json(jwk.as_bytes())?;

@@ -6,9 +6,9 @@
 //! `use` and `key_ops` (RFC 7517 §4.2–§4.4) and the key size the `alg`
 //! needs, and picks the public or private part `direction` uses.
 //!
-//! RSA keys are held as their validated JWK members: `n` and `e` to encrypt,
-//! the whole private key to decrypt (ADR 0067); this file never names the
-//! `rsa` crate.
+//! RSA keys are held as their validated JWK members `n` and `e` to encrypt,
+//! and as the opaque `keys::rsa::PreparedRsaKey` to decrypt, built once when
+//! the key is bound (ADR 0067); this file never names the `rsa` crate.
 
 use core::fmt;
 
@@ -45,9 +45,11 @@ pub(crate) enum RecipientKey {
     /// RSA-OAEP-256 encryption: the validated modulus and public exponent,
     /// big-endian (RFC 7518 §6.3.1, §4.3).
     RsaPublic { n: Vec<u8>, e: Vec<u8> },
-    /// RSA-OAEP-256 decryption: the validated RSA private JWK key (RFC 7518
-    /// §6.3.2, §4.3; ADR 0067), whose private members wipe on drop.
-    RsaPrivate(RsaKey),
+    /// RSA-OAEP-256 decryption: the RSA private key (RFC 7518 §6.3.2,
+    /// §4.3; ADR 0067), validated and with its CRT values precomputed once,
+    /// so every recipient a decrypt call tries shares it (`jwe::core`
+    /// binds a key once per `alg` and call). It wipes itself on drop.
+    RsaPrivate(crate::keys::rsa::PreparedRsaKey),
     /// ECDH-ES on P-256 (RFC 7518 §4.6): the recipient's public key.
     P256Public(p256::PublicKey),
     /// ECDH-ES on P-256: our private key.
@@ -352,8 +354,8 @@ fn okp_key(key: &OkpKey, direction: Direction) -> Result<RecipientKey> {
 }
 
 /// An `RSA` key (RFC 7518 §6.3) for RSA-OAEP-256 (RFC 7518 §4.3): its
-/// validated `n` and `e`, big-endian, to encrypt; the whole private key to
-/// decrypt (ADR 0067).
+/// validated `n` and `e`, big-endian, to encrypt; the private key, built
+/// here once as a `keys::rsa::PreparedRsaKey`, to decrypt (ADR 0067).
 ///
 /// The modulus is in range already: JWK import, on every path (JSON, PEM,
 /// DER), refuses one outside `jwk::RSA_MODULUS_BITS` (RFC 7518 §4.3,
@@ -369,7 +371,9 @@ fn rsa_key(key: &RsaKey, direction: Direction) -> Result<RecipientKey> {
         }),
         // Decrypting needs the private key (ADR 0067): a public key is not
         // a candidate for the recipient.
-        Direction::Decrypt if key.is_private() => Ok(RecipientKey::RsaPrivate(key.clone())),
+        Direction::Decrypt if key.is_private() => {
+            crate::keys::rsa::PreparedRsaKey::new(key).map(RecipientKey::RsaPrivate)
+        }
         Direction::Decrypt => Err(Error::KeyAlgorithmMismatch),
     }
 }
@@ -392,8 +396,9 @@ pub(crate) fn kid_matches(jwk: &Jwk, header_kid: Option<&str>) -> bool {
 
 /// Every secret variant holds a type that wipes itself on drop:
 /// `Zeroizing` (`Symmetric`, `Password`), `p256`/`p384`/`p521`
-/// `SecretKey`, `x25519_dalek::StaticSecret` (`zeroize` feature), and the
-/// RSA JWK key, whose private members are `Zeroizing` (`RsaPrivate`).
+/// `SecretKey`, `x25519_dalek::StaticSecret` (`zeroize` feature), and
+/// `keys::rsa::PreparedRsaKey`, whose `rsa` crate key is `ZeroizeOnDrop`
+/// (`RsaPrivate`).
 /// The public variants hold no secret (ADR 0007).
 impl ZeroizeOnDrop for RecipientKey {}
 
@@ -816,10 +821,13 @@ mod tests {
         let KeyMaterial::Rsa(material) = private.material() else {
             panic!("not RSA")
         };
-        assert!(matches!(
-            RecipientKey::from_jwk(&private, &A::RsaOaep256, &GCM128, Decrypt),
-            Ok(RecipientKey::RsaPrivate(ref key)) if key.is_private() && key.n() == material.n()
-        ));
+        // Binding builds the private key once (validation and CRT
+        // precomputation), for every recipient of the call to share.
+        let (bound, builds) = crate::test_counters::rsa_private_key_builds::count(|| {
+            RecipientKey::from_jwk(&private, &A::RsaOaep256, &GCM128, Decrypt)
+        });
+        assert!(matches!(bound, Ok(RecipientKey::RsaPrivate(_))));
+        assert_eq!(builds, 1);
         assert!(matches!(
             RecipientKey::from_jwk(&private, &A::RsaOaep256, &GCM128, Encrypt),
             Ok(RecipientKey::RsaPublic { ref n, ref e }) if n == material.n() && *e == [1, 0, 1]

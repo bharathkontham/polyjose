@@ -1239,17 +1239,24 @@ fn rsa_private_keys_import_from_pkcs8_and_pkcs1_and_export_as_pkcs8() {
         keys::jwk_from_pem(pem.as_str()).unwrap().as_str(),
         jwk.as_str()
     );
-    // The public formats write the public half only (RFC 5280 §4.1.2.7, RFC 8017 App. A.1.1).
+    // SPKI writes the public half only (RFC 5280 §4.1.2.7). PKCS#1 export is the RSAPublicKey
+    // (RFC 8017 App. A.1.1) of a public key only: the private key is InvalidKey, its public half
+    // exports (feature 0020 review).
     let public = jwk::jwk_to_public(jwk.as_str()).unwrap();
-    for format in ["spki", "pkcs1"] {
-        assert_eq!(
-            keys::jwk_to_der(jwk.as_str(), format).unwrap().as_bytes(),
-            keys::jwk_to_der(public.as_str(), format)
-                .unwrap()
-                .as_bytes(),
-            "{format}"
-        );
-    }
+    assert_eq!(
+        keys::jwk_to_der(jwk.as_str(), "spki").unwrap().as_bytes(),
+        keys::jwk_to_der(public.as_str(), "spki")
+            .unwrap()
+            .as_bytes(),
+    );
+    assert_eq!(code(keys::jwk_to_der(jwk.as_str(), "pkcs1")), "InvalidKey");
+    assert_eq!(code(keys::jwk_to_pem(jwk.as_str(), "pkcs1")), "InvalidKey");
+    assert!(
+        keys::jwk_to_pem(public.as_str(), "pkcs1")
+            .unwrap()
+            .as_str()
+            .starts_with("-----BEGIN RSA PUBLIC KEY-----\n")
+    );
 }
 
 #[test]

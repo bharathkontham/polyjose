@@ -396,9 +396,11 @@ fn public_keys_do_not_export_to_private_formats() {
 }
 
 /// ADR 0067: an RSA private key exports to PKCS#8 v1 exactly as OpenSSL
-/// wrote it (RFC 5958 §2, RFC 8017 App. A.1.2), and to PKCS#1 and SPKI as
-/// its public half (RFC 8017 App. A.1.1, RFC 5280 §4.1.2.7). The PKCS#1
-/// RSAPrivateKey imports to the same key. SEC1 holds no RSA key.
+/// wrote it (RFC 5958 §2, RFC 8017 App. A.1.2), and to SPKI as its public
+/// half (RFC 5280 §4.1.2.7). PKCS#1 export, which writes the RSAPublicKey
+/// (RFC 8017 App. A.1.1), refuses it (`InvalidKey`, feature 0020 review);
+/// its `to_public` exports. The PKCS#1 RSAPrivateKey imports to the same
+/// key. SEC1 holds no RSA key.
 #[test]
 fn rsa_private_keys_export_byte_for_byte() {
     let pkcs8_der = read("openssl", "reject-rsa2048-private-pkcs8.der");
@@ -417,8 +419,16 @@ fn rsa_private_keys_export_byte_for_byte() {
         key.to_pem(KeyFormat::Pkcs8).unwrap().as_bytes(),
         read("openssl", "reject-rsa2048-private-pkcs8.pem").as_slice()
     );
+    assert!(matches!(
+        key.to_der(KeyFormat::Pkcs1),
+        Err(Error::InvalidKey(_))
+    ));
     assert_eq!(
-        key.to_der(KeyFormat::Pkcs1).unwrap().as_slice(),
+        key.to_public()
+            .unwrap()
+            .to_der(KeyFormat::Pkcs1)
+            .unwrap()
+            .as_slice(),
         read("openssl", "rsa2048-pkcs1-pub.der").as_slice()
     );
     assert_eq!(
