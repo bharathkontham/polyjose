@@ -1,6 +1,6 @@
 {
   "name": "@polyjose/js-facade",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "description": "The TypeScript facade shared unchanged by @polyjose/node and @polyjose/wasm (ADR 0031 §1, ADR 0047), and their conformance runner. Not published on its own.",
   "license": "MIT",

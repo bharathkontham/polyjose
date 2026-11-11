@@ -6,24 +6,51 @@ All notable changes to polyjose are documented in this file. The format is based
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
+RSA private keys: RSA signing, RSA-OAEP-256 decryption and RSA private-key import, in the Rust crate and in every binding. This is a minor release because, on 0.x, behaviour changes to the public API bump the minor version: inputs that 0.1 refused now work, some error codes changed, and the Rust RSA key type has a new name. No binding function, type or signature changed (`bindings/api-inventory.txt` is the same as in 0.1.2).
+
 ### Added
 
-- **RSA signing:** `RS256`, `RS384`, `RS512`, `PS256`, `PS384` and `PS512` sign with an RSA private key, in compact and JSON JWS and in JWT issuing (RFC 7518 §3.3, §3.5). `RS*` signatures are deterministic and match RFC 7515 Appendix A.2 exactly.
-- **RSA-OAEP-256 decryption** (RFC 7518 §4.3), in compact and JSON JWE, with one or more recipients. A bad Encrypted Key is never reported as such: a random content key is used instead and the result is `DecryptionFailed`, like any other failure (RFC 7516 §11.5).
-- **RSA private keys:** import from a JWK (all of `d`, `p`, `q`, `dp`, `dq` and `qi`; RFC 7518 §6.3.2), PKCS#8 (`PRIVATE KEY`) and PKCS#1 (`RSA PRIVATE KEY`, and `KeyFormat::Pkcs1` DER); export as a JWK and as PKCS#8. The private members must be the key of `n` and `e`, the modulus is 2048 to 8192 bits, and the key is wiped on drop and redacted in `Debug`. `RsaKey::is_private` tells a private RSA key from a public one, and `Jwk::to_public` drops the private members.
-- **JWK Sets** keep an RSA private member as imported, like EC and OKP private keys, so a set can hold RSA-OAEP-256 decryption keys. Call `to_public` on each key before publishing a set.
+- **RSA signing:** `RS256`, `RS384`, `RS512`, `PS256`, `PS384` and `PS512` sign with an RSA private key, in compact and JSON JWS and when issuing a JWT (RFC 7518 §3.3, §3.5). `RS*` signatures are deterministic and match RFC 7515 Appendix A.2 exactly.
+- **RSA-OAEP-256 decryption** (RFC 7518 §4.3), in compact and JSON JWE, with one or more recipients. A bad Encrypted Key is never reported as one: a random content key is used instead and the result is `DecryptionFailed`, like any other failure (RFC 7516 §11.5).
+- **RSA private keys:** import from a JWK (all of `d`, `p`, `q`, `dp`, `dq` and `qi`; RFC 7518 §6.3.2), from PKCS#8 (`PRIVATE KEY`) and from PKCS#1 (`RSA PRIVATE KEY` and `KeyFormat::Pkcs1` DER); export as a JWK and as PKCS#8. The private members must belong to the key of `n` and `e`, the modulus must be 2048 to 8192 bits, and the key is wiped on drop and redacted in `Debug`. `RsaKey::is_private` tells a private RSA key from a public one, and `Jwk::to_public` drops the private members.
+- **JWK Sets** keep an RSA private member as imported, as they already did for EC and OKP private keys, so a set can hold RSA-OAEP-256 decryption keys. Call `to_public` on each key before you publish a set.
 
 ### Changed
 
-- **Behaviour change:** an RSA private JWK, PEM or DER key used to fail with `UnsupportedAlgorithm`; it now imports. A JWK Set with an RSA private member used to fail as a whole; it now keeps the member. Signing RS*/PS* or decrypting RSA-OAEP-256 used to fail with `UnsupportedAlgorithm`; with a public key it now fails with `KeyAlgorithmMismatch`.
-- **Behaviour change:** a PKCS#1 RSAPrivateKey given as PKCS#8 or SEC1 (by `KeyFormat` or by PEM label) is now `InvalidKey` (the wrong structure for the format), not `UnsupportedAlgorithm`.
-- **Rust:** the RSA JWK key type `jwk::RsaPublicKey` is renamed `jwk::RsaKey`, since it now also holds private keys. `RsaPublicKey` stays as a deprecated alias of `RsaKey` (`#[deprecated(since = "0.2.0")]`), so 0.1 code still compiles, with a warning.
-- **Rust:** the `rsa` dependency is `0.10.0` with only its `pkcs1v15` feature; `crypto-bigint` is `0.7.11`.
+- **Behaviour change:** an RSA private JWK, PEM or DER key used to fail with `UnsupportedAlgorithm`; it now imports. A JWK Set with an RSA private member used to fail as a whole; it now keeps the member. Signing with RS*/PS* or decrypting RSA-OAEP-256 used to fail with `UnsupportedAlgorithm`; with a public key, both now fail with `KeyAlgorithmMismatch`.
+- **Behaviour change:** a PKCS#1 RSAPrivateKey passed as PKCS#8 or SEC1 (by `KeyFormat` or by PEM label) is now `InvalidKey`, because the structure is wrong for the format. It used to be `UnsupportedAlgorithm`.
+- **Behaviour change: PKCS#1 export of an RSA private key fails with `InvalidKey`**, in both DER and PEM, with the message "pkcs1 export writes the public key; call to_public first". PKCS#1 export always writes the RSAPublicKey (RFC 8017 Appendix A.1.1), so polyjose refuses rather than silently dropping the private part. A public key still exports as before. To export a private key, use PKCS#8 or a JWK.
+- **Rust: `jwk::RsaPublicKey` is renamed `jwk::RsaKey`**, because it now also holds private keys. `RsaPublicKey` stays as a deprecated alias of `RsaKey` (`#[deprecated(since = "0.2.0")]`), so 0.1 code still compiles, with a warning.
+  - **Migration:** replace `RsaPublicKey` with `RsaKey`.
+- **Rust:** the `rsa` dependency is now `=0.10.0`, with only its `pkcs1v15` feature. `crypto-bigint` is now `0.7.11`.
+- **Release builds:** every published artifact is the exact build that the release candidate run built and smoke-tested. The tag run no longer rebuilds anything: it signs, attests and drafts those bytes (ADR 0068).
 
 ### Security
 
-- `rsa` 0.10.0 is the first release patched for RUSTSEC-2023-0071 (Marvin); the `cargo deny` ignore is gone. RSA private-key operations go only through `rsa`'s blinded entry points with the OS CSPRNG, and the build checks keep key generation, `RSA1_5`, unblinded paths and `rsa`'s `hazmat` API out. See SECURITY.md for the evidence and the two known `rsa` deviations.
-- Multi-prime RSA keys (`oth`, PKCS#1 version `multi`) are `UnsupportedAlgorithm`, and an RSA private JWK without its CRT members is `InvalidKey`.
+- **Marvin (RUSTSEC-2023-0071) is patched.** `rsa` 0.10.0 is the first release the advisory lists as patched, and the `cargo deny` ignore for it is gone. RSA private-key operations go only through `rsa`'s blinded entry points, with randomness from the OS CSPRNG. Build checks (`check-deps.sh` and a symbol check on the compiled library) keep key generation, `RSA1_5`, unblinded paths and `rsa`'s `hazmat` API out, and they require `rsa`'s blinded core to be present wherever private-key code is.
+- **Constant-time evidence:**
+  - upstream's BINSEC verification (`cargo checkct`) of `rsa`'s constant-time code;
+  - polyjose's own dudect-style Welch t-test, run natively and on wasm32. It compares valid with invalid RSA-OAEP-256 ciphertexts, and signing different messages, and has a positive control that must detect a known public-input difference.
+
+  The signing test shows only that timing does not depend on the message. Both of its classes use the same key, so independence from the private key rests on `rsa`'s blinding. There is no Marvin-toolkit run, and the `rsa` 0.10 rewrite has no published independent audit.
+- **Residual risk: zeroization inside `rsa` 0.10.0.** polyjose wipes its own copies of RSA private members, and `rsa`'s private key wipes itself on drop. But `rsa`'s big integers (`BoxedUint`) are `Zeroize`, not `ZeroizeOnDrop`. On the error paths of `PrivateKey::from_components` (a key that fails validation), and in some of its intermediate values, secret limbs may be freed without being wiped. This touches only rejected keys and transient values inside `rsa`. The fix belongs upstream.
+- **Known deviations of `rsa` 0.10.0** (see SECURITY.md):
+  - RSA-OAEP decryption does not check that the first octet of the encoded message is zero (RFC 8017 §7.1.2 step 3.g). This cannot help an attacker in JWE.
+  - A private key whose two primes differ in size by more than the half-modulus width is refused on import with `InvalidKey`.
+- **Bounded decryption cost:** each candidate RSA-OAEP-256 recipient costs one private-key build (validation and CRT precomputation) and one blinded private-key operation. A decrypt call tries at most `DecryptPolicy::max_recipients` of them, and there is no separate RSA budget. With keys of 4096 bits or more, give the key and the recipients a `kid`, which narrows the candidates (RFC 7516 §4.1.6), or lower `max_recipients`.
+- Multi-prime RSA keys (`oth`, PKCS#1 version `multi`) are `UnsupportedAlgorithm`, and an RSA private JWK without its CRT members is `InvalidKey`. RSA key generation, `RSA-OAEP` (SHA-1) and `RSA1_5` are still not implemented, and no feature flag turns them on.
+
+### API by platform
+
+No binding adds, removes or changes a function, type or signature. In every binding, these existing entry points now accept RSA private keys, and their error codes change as described under Changed: key import and export, JWS and JWT signing, JWE decryption, and JWK Sets.
+
+- **Rust (`polyjose`):** `jwk::RsaKey` is the new name of `jwk::RsaPublicKey`, which stays as a deprecated alias. `RsaKey::is_private` is new. RS*/PS* signing, RSA-OAEP-256 decryption and RSA private import work through the existing `jws`, `jwt`, `jwe` and `jwk` functions.
+- **Node.js (`@polyjose/node`):** no change to `index.d.ts` or the `exports` map. Behaviour changes as above.
+- **Web (`@polyjose/wasm`):** no change to the TypeScript declarations. Behaviour changes as above.
+- **Android and the JVM (`dev.polyjose:polyjose`, `polyjose-jvm`):** no change to the Kotlin API. Behaviour changes as above.
+- **Swift (`Polyjose`):** no change to the Swift API; only doc comments are regenerated. Behaviour changes as above. `Package.swift` points at the 0.2.0 XCFramework.
 
 ## [0.1.2] - 2026-11-10
 

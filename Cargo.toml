@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/polyjose", "bindings/surface", "bindings/node", "bindings/wasm", "bindings/ffi", "bindings/uniffi-bindgen"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
