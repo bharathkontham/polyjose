@@ -238,6 +238,9 @@ fn allowed_formats(jwk: &Jwk) -> Vec<(KeyFormat, bool)> {
         ],
         KeyMaterial::Okp(_) if private => vec![(KeyFormat::Pkcs8, true), (KeyFormat::Spki, false)],
         KeyMaterial::Ec(_) | KeyMaterial::Okp(_) => vec![(KeyFormat::Spki, false)],
+        // PKCS#1 export is the RSAPublicKey of a public key only (RFC 8017
+        // App. A.1.1); a private key is InvalidKey (feature 0020 review).
+        KeyMaterial::Rsa(_) if private => vec![(KeyFormat::Pkcs8, true), (KeyFormat::Spki, false)],
         KeyMaterial::Rsa(_) => vec![(KeyFormat::Spki, false), (KeyFormat::Pkcs1, false)],
         other => panic!("no PEM/DER form for {:?}", other.key_type()),
     }

@@ -9,7 +9,8 @@
 //!   format RFC 9500 §2.1 uses) or inside a PKCS#8 OneAsymmetricKey with
 //!   rsaEncryption (RFC 5958 §2, RFC 8017 App. A.1.2). Export writes PKCS#8
 //!   v1, the layout OpenSSL 4 emits; [`to_spki`] and [`to_pkcs1`] write the
-//!   public half. A multi-prime key (version multi) is
+//!   public half (`Jwk::to_der` uses `to_pkcs1` for public keys only). A
+//!   multi-prime key (version multi) is
 //!   [`Error::UnsupportedAlgorithm`] (ADR 0067 §3).
 //!
 //! Every key is validated by [`Jwk::from_object`](crate::jwk::Jwk::from_object),
@@ -27,7 +28,10 @@
 //! and (q − 1), and precomputes the CRT values. No other constructor is
 //! used: there is no key generation (ADR 0067 §3). The key the `rsa` crate
 //! holds is wiped on drop by that crate (`ZeroizeOnDrop`), and every
-//! intermediate integer here lives in a [`Zeroizing`] buffer.
+//! intermediate integer here lives in a [`Zeroizing`] buffer. On an error
+//! path of `from_components`, and in some of its intermediates, rsa 0.10.0
+//! may free secret limbs without wiping them (`BoxedUint` is `Zeroize`, not
+//! `ZeroizeOnDrop`); SECURITY.md lists this as a residual risk.
 //!
 //! [`RSA_MODULUS_BITS`]: crate::jwk::RSA_MODULUS_BITS
 
@@ -50,6 +54,9 @@ const PRIVATE_MISMATCH: &str = "RSA private key does not match n and e";
 const CRT_MISMATCH: &str = "RSA private key dp, dq or qi does not match d, p and q";
 /// Detail for an RSA private key member that is empty or too long.
 const MEMBER_SIZE: &str = "RSA key member is empty or too long";
+/// Detail for a public exponent above the `rsa` crate's bound, the detail
+/// `jws::rsa::public_key` gives for the same rule.
+const EXPONENT_TOO_LARGE: &str = "RSA exponent is larger than 2^33 - 1";
 
 /// Imports the RSA public key of a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7)
 /// that `spki::decode` classified as rsaEncryption with NULL parameters
@@ -164,9 +171,11 @@ pub(crate) fn to_spki(key: &RsaKey) -> Result<Zeroizing<Vec<u8>>> {
     })
 }
 
-/// Exports an RSA key's public half as a DER PKCS#1 RSAPublicKey (RFC 8017
-/// App. A.1.1), the body of OpenSSL's `RSA PUBLIC KEY` PEM block. A private
-/// key exports its public half, as with SPKI (ADR 0018 §3 format matrix).
+/// Encodes an RSA key's public half as a DER PKCS#1 RSAPublicKey (RFC 8017
+/// App. A.1.1), the body of OpenSSL's `RSA PUBLIC KEY` PEM block and of the
+/// SPKI's subjectPublicKey ([`to_spki`]). `Jwk::to_der` refuses a private
+/// key in `KeyFormat::Pkcs1` before calling this, so the format never
+/// silently drops the private members.
 pub(crate) fn to_pkcs1(key: &RsaKey) -> Result<Zeroizing<Vec<u8>>> {
     pkcs1::encode_public(key.n(), key.e())
 }
@@ -253,14 +262,25 @@ pub(crate) fn check_private(n: &[u8], e: &[u8], private: &RsaPrivateParts) -> Re
 }
 
 /// `rsa::PrivateKey::from_components(n, e, d, [p, q])`; see the module docs.
+///
+/// # Errors
+///
+/// [`Error::InvalidKey`]: with the detail of `jws::rsa::public_key` for a
+/// public exponent above 2^33 − 1, the `rsa` crate's bound against slow
+/// public-key operations (RFC 8017 §3.1 allows any e < n); otherwise with
+/// one static detail, whatever check failed (ADR 0007).
 fn from_components(n: &[u8], e: &[u8], private: &RsaPrivateParts) -> Result<rsa::PrivateKey> {
     let n = uint(n)?;
     let e = uint(e)?;
     let d = uint(&private.d)?;
     let p = uint(&private.p)?;
     let q = uint(&private.q)?;
-    rsa::PrivateKey::from_components(n, e, d, vec![p, q])
-        .map_err(|_| Error::InvalidKey(PRIVATE_MISMATCH))
+    rsa::PrivateKey::from_components(n, e, d, vec![p, q]).map_err(|err| {
+        Error::InvalidKey(match err {
+            rsa::errors::Error::PublicExponentTooLarge => EXPONENT_TOO_LARGE,
+            _ => PRIVATE_MISMATCH,
+        })
+    })
 }
 
 /// Whether the minimal big-endian `minimal` (a JWK member) and the
@@ -650,7 +670,8 @@ mod tests {
         assert_eq!(&exported[..], &pkcs8_der[..]);
         let inner = pkcs8::decode(&exported).unwrap();
         assert_eq!(inner.private_key, &pkcs1_der[..]);
-        // The PKCS#1 and SPKI exports are the public half (ADR 0018 §3).
+        // The PKCS#1 and SPKI encoders write the public half (ADR 0018 §3);
+        // `Jwk::to_der` refuses a private key as PKCS#1 before reaching it.
         let public = rsa(&from_1);
         assert!(from_pkcs1(&to_pkcs1(public).unwrap()).unwrap().is_public());
         assert!(import_spki(&to_spki(public).unwrap()).unwrap().is_public());
@@ -701,6 +722,36 @@ mod tests {
         assert!(is_unsupported(&result), "{:?}", result.err());
         let result = import_pem(&pem_text("openssl", "reject-rsapss2048-private-pkcs8.pem"));
         assert!(is_unsupported(&result), "{:?}", result.err());
+    }
+
+    #[test]
+    fn a_private_key_with_an_exponent_over_2_pow_33_gives_the_exponent_detail() {
+        // RFC 8017 §3.1 allows any odd 3 <= e < n; the rsa crate bounds e at
+        // 2^33 - 1. A private JWK with e = 2^34 + 1 (and the RFC 7515 A.2
+        // n, d, p, q) passes the JWK checks and fails `from_components` on
+        // that bound, with the detail `jws::rsa::public_key` gives for it,
+        // not the generic mismatch.
+        let text = String::from_utf8(
+            std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/data/keys/rfc/rfc7515-a2-rsa-private.jwk.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(text.contains(r#""e":"AQAB""#));
+        let large = text.replace(r#""e":"AQAB""#, r#""e":"BAAAAAE""#);
+        assert_eq!(
+            Jwk::from_json(large.as_bytes()).err(),
+            Some(Error::InvalidKey(EXPONENT_TOO_LARGE))
+        );
+        assert_eq!(EXPONENT_TOO_LARGE, "RSA exponent is larger than 2^33 - 1");
+        // A small exponent that is not the key's is still the mismatch.
+        let wrong = text.replace(r#""e":"AQAB""#, r#""e":"Aw""#);
+        assert_eq!(
+            Jwk::from_json(wrong.as_bytes()).err(),
+            Some(Error::InvalidKey(PRIVATE_MISMATCH))
+        );
     }
 
     #[test]

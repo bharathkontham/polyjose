@@ -57,6 +57,8 @@ pub(crate) const VECTORS: &[(&str, &str)] = &[
     ("binding-surface/jws-verify-max-input-len-small.json", include_str!("../../../../conformance/vectors/binding-surface/jws-verify-max-input-len-small.json")),
     ("binding-surface/jwt-jwks-kidless-second-key.json", include_str!("../../../../conformance/vectors/binding-surface/jwt-jwks-kidless-second-key.json")),
     ("binding-surface/jwt-jwks-no-candidate.json", include_str!("../../../../conformance/vectors/binding-surface/jwt-jwks-no-candidate.json")),
+    ("binding-surface/keys-export-der-rsa-private-pkcs1.json", include_str!("../../../../conformance/vectors/binding-surface/keys-export-der-rsa-private-pkcs1.json")),
+    ("binding-surface/keys-export-pem-rsa-private-pkcs1.json", include_str!("../../../../conformance/vectors/binding-surface/keys-export-pem-rsa-private-pkcs1.json")),
     ("binding-surface/pbes2-p2c-10000-default-decrypts.json", include_str!("../../../../conformance/vectors/binding-surface/pbes2-p2c-10000-default-decrypts.json")),
     ("binding-surface/pbes2-p2c-10001-bound-20000-decrypts.json", include_str!("../../../../conformance/vectors/binding-surface/pbes2-p2c-10001-bound-20000-decrypts.json")),
     ("binding-surface/pbes2-p2c-10001-default-fails.json", include_str!("../../../../conformance/vectors/binding-surface/pbes2-p2c-10001-default-fails.json")),

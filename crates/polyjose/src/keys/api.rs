@@ -10,7 +10,7 @@
 //! | [`KeyFormat::Spki`] | exports its public half | yes | `UnsupportedAlgorithm` |
 //! | [`KeyFormat::Pkcs8`] | EC, OKP, RSA | `InvalidKey("private key required")` | `UnsupportedAlgorithm` |
 //! | [`KeyFormat::Sec1`] | EC only | `InvalidKey("private key required")` | `UnsupportedAlgorithm` |
-//! | [`KeyFormat::Pkcs1`] | RSA: imports RSAPrivateKey, exports its public half | RSA only | `UnsupportedAlgorithm` |
+//! | [`KeyFormat::Pkcs1`] | RSA: imports RSAPrivateKey; export is `InvalidKey` | RSA only | `UnsupportedAlgorithm` |
 //!
 //! On export the checks run in this order, the first failure being the
 //! result:
@@ -20,11 +20,15 @@
 //!    a non-EC key in SEC1 (RFC 5915 §3 holds only EC keys), a non-RSA key
 //!    in PKCS#1 (RFC 8017 App. A.1);
 //! 3. a public key in a private-key format (PKCS#8, SEC1) is
-//!    `InvalidKey("private key required")`.
+//!    `InvalidKey("private key required")`, and an RSA private key in
+//!    PKCS#1 is `InvalidKey` with [`PKCS1_PRIVATE`]'s detail.
 //!
-//! PKCS#1 export always writes the RSAPublicKey (RFC 8017 App. A.1.1), as
-//! `RSA PUBLIC KEY`; an RSA private key is exported as PKCS#8 (ADR 0067,
-//! PRD 0003 R3), and its PKCS#1 export is its public half, as SPKI's is.
+//! PKCS#1 export writes the RSAPublicKey (RFC 8017 App. A.1.1), as
+//! `RSA PUBLIC KEY`, of an RSA public key only. An RSA private key is
+//! exported as PKCS#8 (ADR 0067, PRD 0003 R3); its PKCS#1 export is refused
+//! rather than silently dropping the private members (feature 0020
+//! review), so the caller writes the public half with [`Jwk::to_public`]
+//! first, or uses SPKI, which is a public-key format.
 //!
 //! The dispatch to the per-family mappers (`okp`, `ec`, `super::rsa`) is on
 //! the container's classified [`AlgId`], from a structural DER parse, never
@@ -40,6 +44,10 @@ use crate::jwk::{Jwk, KeyMaterial};
 /// The static detail for exporting a public key in a private-key format
 /// (PKCS#8, SEC1): the plan.md format matrix wording.
 const PRIVATE_KEY_REQUIRED: &str = "private key required";
+
+/// The static detail for exporting an RSA private key as PKCS#1, which
+/// polyjose writes as the RSAPublicKey only (RFC 8017 App. A.1.1).
+const PKCS1_PRIVATE: &str = "pkcs1 export writes the public key; call to_public first";
 
 /// The structure a PEM label names (RFC 7468 §2: the label "determines the
 /// type of message encoded"), or `None` for a label polyjose does not
@@ -220,8 +228,9 @@ impl Jwk {
     /// - [`KeyFormat::Spki`]: SubjectPublicKeyInfo of the public half; EC
     ///   points uncompressed (RFC 5480 §2.2), OKP raw (RFC 8410 §4), RSA as
     ///   rsaEncryption + NULL (RFC 3279 §2.3.1).
-    /// - [`KeyFormat::Pkcs1`]: RSAPublicKey (RFC 8017 App. A.1.1), the
-    ///   public half of a private key too (export a private key as PKCS#8).
+    /// - [`KeyFormat::Pkcs1`]: RSAPublicKey (RFC 8017 App. A.1.1) of an RSA
+    ///   public key. A private key is refused (export it as PKCS#8, or call
+    ///   [`Jwk::to_public`] first).
     ///
     /// Only the key material is exported: `kid`, `use`, `key_ops`, `alg` and
     /// the `x5*` members have no place in these structures. The output is
@@ -236,7 +245,9 @@ impl Jwk {
     /// 2. [`Error::UnsupportedAlgorithm`] for a non-EC key in
     ///    [`KeyFormat::Sec1`] and a non-RSA key in [`KeyFormat::Pkcs1`];
     /// 3. [`Error::InvalidKey`]`("private key required")` for a public key
-    ///    in [`KeyFormat::Pkcs8`] or [`KeyFormat::Sec1`].
+    ///    in [`KeyFormat::Pkcs8`] or [`KeyFormat::Sec1`], and
+    ///    [`Error::InvalidKey`]`("pkcs1 export writes the public key; call
+    ///    to_public first")` for an RSA private key in [`KeyFormat::Pkcs1`].
     pub fn to_der(&self, format: KeyFormat) -> Result<Zeroizing<Vec<u8>>> {
         let private_format = matches!(format, KeyFormat::Pkcs8 | KeyFormat::Sec1);
         match (self.material(), format) {
@@ -246,6 +257,9 @@ impl Jwk {
                 Err(Error::UnsupportedAlgorithm)
             }
             _ if private_format && self.is_public() => Err(Error::InvalidKey(PRIVATE_KEY_REQUIRED)),
+            (KeyMaterial::Rsa(_), KeyFormat::Pkcs1) if !self.is_public() => {
+                Err(Error::InvalidKey(PKCS1_PRIVATE))
+            }
             (KeyMaterial::Ec(key), KeyFormat::Pkcs8) => ec::to_pkcs8(key),
             (KeyMaterial::Ec(key), KeyFormat::Sec1) => ec::to_sec1(key),
             (KeyMaterial::Ec(key), KeyFormat::Spki) => ec::to_spki(key),
@@ -336,23 +350,55 @@ mod tests {
         let public = super::super::der::fixtures::load("openssl", "rsa2048-pkcs1-pub.der");
         let text = pem::encode(Label::RsaPrivate, &public).unwrap();
         assert!(matches!(Jwk::from_pem(&text), Err(Error::InvalidKey(_))));
-        // Export: PKCS#8 holds the private key; PKCS#1 and SPKI the public
-        // half (the module's format matrix).
+        // Export: PKCS#8 holds the private key, SPKI the public half (the
+        // module's format matrix).
         let pkcs8 = imported.to_der(KeyFormat::Pkcs8).unwrap();
         let back = Jwk::from_der(&pkcs8, KeyFormat::Pkcs8).unwrap();
         assert_eq!(*back.to_json(), *imported.to_json());
-        let pkcs1 = imported.to_der(KeyFormat::Pkcs1).unwrap();
-        assert!(Jwk::from_der(&pkcs1, KeyFormat::Pkcs1).unwrap().is_public());
-        assert!(
-            imported
-                .to_pem(KeyFormat::Pkcs1)
-                .unwrap()
-                .starts_with("-----BEGIN RSA PUBLIC KEY-----\n")
-        );
         let public = imported.to_public().unwrap();
         assert_eq!(
             public.to_der(KeyFormat::Pkcs8).err(),
             Some(Error::InvalidKey(PRIVATE_KEY_REQUIRED))
+        );
+    }
+
+    #[test]
+    fn pkcs1_export_writes_a_public_key_and_refuses_a_private_one() {
+        // RFC 8017 App. A.1.1: PKCS#1 export is the RSAPublicKey, so a
+        // private key is InvalidKey with a static detail (feature 0020
+        // review), in DER and in PEM, rather than its public half written
+        // silently; its public half (`to_public`) exports as before.
+        let der = super::super::der::fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der");
+        let private = Jwk::from_der(&der, KeyFormat::Pkcs1).unwrap();
+        assert!(!private.is_public());
+        let refused = Some(Error::InvalidKey(PKCS1_PRIVATE));
+        assert_eq!(private.to_der(KeyFormat::Pkcs1).err(), refused);
+        assert_eq!(private.to_pem(KeyFormat::Pkcs1).err(), refused);
+        assert_eq!(
+            PKCS1_PRIVATE,
+            "pkcs1 export writes the public key; call to_public first"
+        );
+        let public = private.to_public().unwrap();
+        let pkcs1 = public.to_der(KeyFormat::Pkcs1).unwrap();
+        assert_eq!(
+            &pkcs1[..],
+            &super::super::der::fixtures::load("openssl", "rsa2048-pkcs1-pub.der")[..]
+        );
+        assert!(
+            public
+                .to_pem(KeyFormat::Pkcs1)
+                .unwrap()
+                .starts_with("-----BEGIN RSA PUBLIC KEY-----\n")
+        );
+        // The earlier checks still come first: an EC private key in PKCS#1
+        // is UnsupportedAlgorithm, not this InvalidKey.
+        let ec = Jwk::from_json(
+            br#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ec.to_der(KeyFormat::Pkcs1).err(),
+            Some(Error::UnsupportedAlgorithm)
         );
     }
 }

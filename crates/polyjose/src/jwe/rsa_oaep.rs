@@ -140,13 +140,21 @@ pub(super) fn encrypt_key(
 /// tampered tag. The `rsa` crate's OAEP decoding is constant-time up to its
 /// final result; this layer adds no branch on why it failed.
 ///
+/// The private key is built here (validated, CRT values precomputed) for
+/// each candidate recipient: each costs one private-key build and one
+/// blinded private-key operation, at most `max_recipients` per decrypt
+/// call (`DecryptPolicy`).
+///
 /// # Errors
 ///
 /// [`Error::UnsupportedAlgorithm`] for an `alg` other than RSA-OAEP-256 or
 /// an unknown `enc`, [`Error::KeyAlgorithmMismatch`] for a key that is not
 /// an RSA private key, [`Error::InvalidKey`] if the private key cannot be
-/// built (import rules that out), and [`Error::RandomnessUnavailable`] if
-/// the OS CSPRNG fails (ADR 0005). `core` reports every one as
+/// built (import rules that out), and [`Error::RandomnessUnavailable`] only
+/// if the OS CSPRNG cannot supply the substitute CEK of step 1 (ADR 0005). A
+/// blinding RNG failure inside the RSA decryption is not reported: like
+/// any other decryption failure, it leaves the random CEK in place
+/// (RFC 7516 §11.5). `core` reports every error as
 /// [`Error::DecryptionFailed`]. No error depends on the Encrypted Key.
 pub(super) fn decrypt_key(
     alg: &KeyMgmtAlg,
@@ -191,7 +199,8 @@ pub(super) fn decrypt_key(
 ///
 /// [`Error::DecryptionFailed`] for any decryption error (RFC 8017 §7.1.2:
 /// "decryption error", whatever the cause; RFC 7516 §11.5),
-/// [`Error::RandomnessUnavailable`] if the blinding RNG fails.
+/// [`Error::RandomnessUnavailable`] if the blinding RNG fails. Either way
+/// [`decrypt_key`] discards the error and keeps the random CEK.
 fn unwrap(
     private: &rsa::PrivateKey,
     encrypted_key: &[u8],
@@ -656,6 +665,43 @@ mod tests {
             decrypt_compact(&jwe, &public, &policy()).err(),
             Some(Error::KeyAlgorithmMismatch)
         );
+    }
+
+    #[test]
+    fn sixteen_kidless_rsa_recipients_decrypt_under_the_default_limit() {
+        // Feature 0020 review (decrypt amplification): with no `kid`, every
+        // RSA-OAEP-256 recipient is a candidate (RFC 7516 §4.1.6), each
+        // costing one private-key build and operation, bounded by
+        // `max_recipients` (default 16, ADR 0026 §7). A JWE at that bound
+        // still decrypts: the first recipient succeeds after one unwrap,
+        // and with a bad tag every recipient is tried once.
+        use crate::test_counters::rsa_oaep_unwraps;
+        assert_eq!(DecryptPolicy::DEFAULT_MAX_RECIPIENTS, 16);
+        let key = private_jwk();
+        let public = key.to_public().unwrap();
+        let mut encryptor = Encryptor::new(ContentEncAlg::A128GCM);
+        for _ in 0..16 {
+            encryptor = encryptor.recipient(Recipient::new(KeyMgmtAlg::RsaOaep256, &public));
+        }
+        let jwe = encryptor.encrypt_json(b"16", JsonForm::General).unwrap();
+        assert_eq!(jwe.matches("\"encrypted_key\"").count(), 16);
+        assert!(!jwe.contains("\"kid\""));
+        let counted = |jwe: &str| {
+            let (result, unwraps) = rsa_oaep_unwraps::count(|| decrypt_json(jwe, &key, &policy()));
+            (
+                result.map(|d| (d.recipient(), d.plaintext().to_vec())),
+                unwraps,
+            )
+        };
+        assert_eq!(counted(&jwe), (Ok((0, b"16".to_vec())), 1));
+        // A tampered tag fails every candidate, each tried once.
+        let (start, _) = jwe.match_indices("\"tag\":\"").next().unwrap();
+        let start = start + "\"tag\":\"".len();
+        let end = start + jwe[start..].find('"').unwrap();
+        let mut tag = b64url_decode(&jwe[start..end]).unwrap();
+        tag[0] ^= 0x01;
+        let bad = format!("{}{}{}", &jwe[..start], b64url_encode(&tag), &jwe[end..]);
+        assert_eq!(counted(&bad), (Err(Error::DecryptionFailed), 16));
     }
 
     #[test]
