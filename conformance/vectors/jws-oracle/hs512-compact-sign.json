@@ -1,0 +1,23 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "HS512 (RFC 7518 §3.2) compact sign with the generator's fixed 64-octet key (SHA-512 of a label) over header {\"alg\":\"HS512\"}; HMAC is deterministic, so the expected JWS is node:crypto's exact output (the generator first checks that node:crypto reproduces RFC 7515 A.1)",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "compact",
+    "payload_b64u": "RXhhbXBsZSBvZiBIUzUxMiBzaWduaW5n",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJIUzUxMiJ9",
+        "key": {
+          "kty": "oct",
+          "k": "up-f5pg0dlSllf9uzBPIDnpcA8hVT4saQGIyiAE_orcajm5Mnp9WIxvv3ycD5b6UjxYwESQom8819Qg9dUmONg"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "jws": "eyJhbGciOiJIUzUxMiJ9.RXhhbXBsZSBvZiBIUzUxMiBzaWduaW5n.kPZNRIqwnTADMKPwxTuaf2pvu5uHF5G6BPh2wsMjzcjyBX02-aCpLgOqllIiKm96vVL8Tt1kYMFqKtZgmjUCEQ"
+  }
+}

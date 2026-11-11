@@ -1,0 +1,21 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "HS512 (RFC 7518 §3.2) compact verify of the node:crypto JWS with the generator's fixed 64-octet key and allow-list [\"HS512\"]",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzUxMiJ9.RXhhbXBsZSBvZiBIUzUxMiBzaWduaW5n.kPZNRIqwnTADMKPwxTuaf2pvu5uHF5G6BPh2wsMjzcjyBX02-aCpLgOqllIiKm96vVL8Tt1kYMFqKtZgmjUCEQ",
+    "key": {
+      "kty": "oct",
+      "k": "up-f5pg0dlSllf9uzBPIDnpcA8hVT4saQGIyiAE_orcajm5Mnp9WIxvv3ycD5b6UjxYwESQom8819Qg9dUmONg"
+    },
+    "allowed_algs": [
+      "HS512"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "RXhhbXBsZSBvZiBIUzUxMiBzaWduaW5n",
+    "alg": "HS512",
+    "signature_index": 0
+  }
+}

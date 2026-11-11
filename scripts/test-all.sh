@@ -15,6 +15,7 @@
 # never silently passed; a suite that exists always runs and can FAIL.
 # wasm, node, android and swift run their binding's own script when it exists (bindings/wasm/test.sh,
 # bindings/node/test.sh, platforms/android/test.sh, platforms/swift/test.sh; see dispatch below).
+# node also runs the shared facade's suite (bindings/js/test.sh, step js-facade) and interop-jose.
 # After the suites, scripts/conformance-parity.sh compares their conformance results (ADR 0034 §5),
 # and each platform that passed must have written the results files of its runners (results_runners).
 # A platform script may waive one of its host-optional runners (marked ? in results_runners) with a
@@ -347,6 +348,12 @@ for p in "${platforms[@]}"; do
       # private key, which no Rust code reads. It needs only node, not the binding's toolchain.
       if have node; then run rsa-oaep-oracle node conformance/tools/rsa-oaep-oracle.mjs
       else record rsa-oaep-oracle "SKIPPED (node missing)"; fi
+      # The shared TypeScript facade's own suite (bindings/js/test.sh: the TypeScript-only rule,
+      # the misuse type-checks, node --test over its compiled tests), which neither package's suite
+      # runs. Its own step, before the node suite: both build bindings/js/dist, so they must never
+      # run at the same time (bindings/wasm/test.sh), and here they run one after the other.
+      if have node && have npm; then run_script js-facade bindings/js/test.sh
+      else record js-facade "SKIPPED (node or npm missing)"; fi
       # `npm pkg get` prints {} for a missing key; an unreadable package.json is not skipped, so it FAILs.
       if dispatch node; then :
       elif ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"

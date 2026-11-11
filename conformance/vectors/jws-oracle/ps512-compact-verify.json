@@ -1,0 +1,22 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "PS512 (RFC 7518 §3.5) compact verify of a node:crypto RSASSA-PSS signature (SHA-512, MGF1 with SHA-512, 64-octet salt) by the RFC 7515 A.2 RSA key, with its public key",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJQUzUxMiJ9.RXhhbXBsZSBvZiBQUzUxMiBzaWduaW5n.UfWibUD9hDZC4wnTS4SscaIwNrg8wApnclL5rKt-SQ8W_olTsS9V97y5Ci1S0T-6JPgBc3ho1GtFGw4yju1HA8HdABFkfTiAzZAGoFlW5YSCl5XyMJrzItND8vy1NT9hvcfboC0FDluLuHZR67hZr-ntASJ-tXgIzMQlSQtrTXnrZ3tEX_UKqCLjRXeDd7HsC6qvOlqyekvrmOzMOQ_EsNbvFIeCz5eIWKyD3Q5mVVXvZbQyJG1q7yGyTbxETH_IN3yahcvKTgHLOCDbUXAPhiRXoWFrZpUsNPXriz0BUZ_AYnv2T201BAmDNb0KcWTCKcc6n98BCEv4L5u7D1uBqQ",
+    "key": {
+      "kty": "RSA",
+      "n": "ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "PS512"
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "payload_b64u": "RXhhbXBsZSBvZiBQUzUxMiBzaWduaW5n",
+    "alg": "PS512",
+    "signature_index": 0
+  }
+}

@@ -39,6 +39,25 @@ else
   check "the node platform still reports the RSA-OAEP-256 oracle" 0 '^  rsa-oaep-oracle: SKIPPED \(node missing\)$'
 fi
 
+# The shared facade's suite (bindings/js/test.sh) is a step of the node platform, before its suite.
+if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+  check "the node platform runs the facade suite" 0 '^==> js-facade \(bindings/js/test\.sh\)$' '^  js-facade: PASS$'
+  check_order "before the node suite" '^  js-facade: PASS$' '^  node: PASS$'
+else
+  check "the node platform reports the facade suite" 0 '^  js-facade: SKIPPED \(node or npm missing\)$'
+fi
+
+new_case facade-fail
+fixture bindings/node/test.sh 0 'fixture node suite ran'
+writes_own_results bindings/node/test.sh node
+fixture bindings/js/test.sh 1 'fixture facade suite failed'
+run_test_all node
+if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+  check "a failing facade suite FAILs the run; the node suite still runs" 1 '^  js-facade: FAIL$' '^  node: PASS$'
+else
+  check "without node or npm the facade suite is SKIPPED, never passing" 0 '^  js-facade: SKIPPED \(node or npm missing\)$'
+fi
+
 # --- Exit status and the SKIPPED line -----------------------------------------------------------------
 
 new_case fail

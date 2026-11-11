@@ -10,11 +10,16 @@
 # shellcheck source=../check-deps/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../check-deps/lib.sh"
 
-# The node platform's interop-jose step (feature 0010 I1) builds @polyjose/node and runs jose: in
-# the base copy it is a passing stub, so the cases stay hermetic and build nothing.
+# The node platform's interop-jose step (feature 0010 I1) builds @polyjose/node and runs jose, and
+# its js-facade step runs npm ci and tsc in bindings/js: in the base copy each is a passing stub, so
+# the cases stay hermetic and build nothing.
 if [ -f "$base/interop/node/test.sh" ]; then
   printf '#!/bin/sh\necho "fixture interop-jose ran"\n' >"$base/interop/node/test.sh" \
     || lib_die "could not stub interop/node/test.sh in the base copy"
+fi
+if [ -f "$base/bindings/js/test.sh" ]; then
+  printf '#!/bin/sh\necho "fixture js-facade ran"\n' >"$base/bindings/js/test.sh" \
+    || lib_die "could not stub bindings/js/test.sh in the base copy"
 fi
 
 gate_name=test-all.sh

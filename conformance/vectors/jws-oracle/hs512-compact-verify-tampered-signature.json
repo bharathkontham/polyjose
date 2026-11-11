@@ -1,0 +1,19 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "The node:crypto HS512 JWS with the lowest bit of its last MAC octet flipped (still 64 canonical octets) fails the MAC check (RFC 7515 §5.2 step 8)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJIUzUxMiJ9.RXhhbXBsZSBvZiBIUzUxMiBzaWduaW5n.kPZNRIqwnTADMKPwxTuaf2pvu5uHF5G6BPh2wsMjzcjyBX02-aCpLgOqllIiKm96vVL8Tt1kYMFqKtZgmjUCEA",
+    "key": {
+      "kty": "oct",
+      "k": "up-f5pg0dlSllf9uzBPIDnpcA8hVT4saQGIyiAE_orcajm5Mnp9WIxvv3ycD5b6UjxYwESQom8819Qg9dUmONg"
+    },
+    "allowed_algs": [
+      "HS512"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "The node:crypto RS512 JWS, signed with the RFC 7515 A.2 key, verified with another RSA public key (RFC 7520 §3.4): the signature does not verify (RFC 7515 §5.2 step 8); node:crypto refuses it too",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzUxMiJ9.RXhhbXBsZSBvZiBSUzUxMiBzaWduaW5n.Fm3rqw5Nw2NXn40lp2PzadVkyEJcQcXc5OBesAgV8Mn5RPTsAJhxQEVC8F2o7z3xk6U6pSFT0O6kx6dJYkzkpcvcZ9lZ26PZQHCnWl37w3GK71B3fh5sr_wZDyYzTlDo-mzedPUCP_GfHNZQqzeuJ9i3Mmne_RUXsKCRJBOC5n0XCBdENrd3cWmnSDfuJd7H1fHlcs0Fzo6U_icKWQPzi40vnI8eXinV4k8c7xmszIxgzgwPS1oZhtY0XA9s6Zl8y1OFJSHdF6MJNCpDSy3hIkEZhQPNnDRhOTuUhBW8twpgiHA-TidBRoLiXZktM6EpyPYmOFiVLDMguteRGoHeYw",
+    "key": {
+      "kty": "RSA",
+      "kid": "bilbo.baggins@hobbiton.example",
+      "use": "sig",
+      "n": "n4EPtAOCc9AlkeQHPzHStgAbgs7bTZLwUBZdR8_KuKPEHLd4rHVTeT-O-XV2jRojdNhxJWTDvNd7nqQ0VEiZQHz_AJmSCpMaJMRBSFKrKb2wqVwGU_NsYOYL-QtiWN2lbzcEe6XC0dApr5ydQLrHqkHHig3RBordaZ6Aj-oBHqFEHYpPe7Tpe-OfVfHd1E6cS6M1FZcD1NNLYD5lFHpPI9bTwJlsde3uhGqC0ZCuEHg8lhzwOHrtIQbS0FVbb9k3-tVTU4fg_3L_vniUFAKwuCLqKnS2BYwdq_mzSnbLY7h_qixoR7jig3__kRhuaxwUkRz5iaiQkqgc5gHdrNP5zw",
+      "e": "AQAB"
+    },
+    "allowed_algs": [
+      "RS512"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidSignature"
+  }
+}

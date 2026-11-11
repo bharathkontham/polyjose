@@ -1,0 +1,21 @@
+{
+  "source": "node:crypto (Node v24.21.0, OpenSSL 3.5.8), conformance/tools/jws-oracle/gen.mjs",
+  "description": "The node:crypto RS384 JWS verified with the RFC 7515 A.3 P-256 public key: RS384 is bound to RSA keys (RFC 7518 §3.3; RFC 8725 §3.1; ADR 0026 §2 step 8)",
+  "operation": "jws.verify",
+  "input": {
+    "jws": "eyJhbGciOiJSUzM4NCJ9.RXhhbXBsZSBvZiBSUzM4NCBzaWduaW5n.LWsK2mTF4q3cKLLDMaywbrHeWk0a-hzDDzwzcrcQ9DsvW1g8HtJSUICTzQmKqmZh8qHW5SNoyTKsm_ZB2rkdYnEe6fvw8weCxIW3bozN2bDJ_uNh3jHTga_GNj561lC4EFKrfjVooX4bHduJojQC_Rh_0QWhYSs-QO56DAfFaY1yZOFER8-DxZI0thICSrpJnkhjs1GONrdbt0xCGRu7ERclKGUyfsL9nTAINhl9XX0-Q8d4F-bJ__mnkngUHRvezGMlDpdwBzIyLCghwOVYsb_z4TPY_Am8McZY0Xa6nNQQ3Z-Wlx-SZ0wlIgdgABTqUJYOtnJg8bnF7jHcYjiOfw",
+    "key": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "allowed_algs": [
+      "RS384"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "KeyAlgorithmMismatch"
+  }
+}
