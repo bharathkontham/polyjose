@@ -87,7 +87,7 @@ polyjose_error! {
     /// The JOSE Header is structurally invalid (RFC 7515 §4, RFC 7516 §4).
     InvalidHeader,
     /// The `alg`, `enc`, curve, hash or format names nothing polyjose implements (RFC 7515
-    /// §4.1.1, RFC 7516 §4.1.1–§4.1.2; ADR 0021, ADR 0022).
+    /// §4.1.1, RFC 7516 §4.1.1–§4.1.2; ADR 0022, ADR 0067 §3).
     UnsupportedAlgorithm,
     /// The algorithm is supported but not in the caller's allow-list (RFC 8725 §3.1, ADR 0007).
     AlgorithmNotAllowed,

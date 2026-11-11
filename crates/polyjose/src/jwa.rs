@@ -126,8 +126,8 @@ macro_rules! alg_enum {
 alg_enum! {
     /// JWS `alg` values (RFC 7515 §4.1.1, RFC 7518 §3.1).
     ///
-    /// RS*/PS* are known so that tokens from identity providers can be
-    /// verified; polyjose does not sign with RSA (ADR 0021).
+    /// RS*/PS* sign with an RSA private key and verify with an RSA key
+    /// (RFC 7518 §3.3, §3.5; ADR 0067).
     SigningAlg {
         /// `HS256`: HMAC using SHA-256 (RFC 7518 §3.2).
         HS256 => "HS256",
@@ -178,7 +178,8 @@ alg_enum! {
     /// but not implemented, so they are [`KeyMgmtAlg::Unknown`].
     KeyMgmtAlg {
         /// `RSA-OAEP-256`: RSAES OAEP using SHA-256 and MGF1 with SHA-256
-        /// (RFC 7518 §4.3). Encryption to RSA public keys only (ADR 0021).
+        /// (RFC 7518 §4.3). Encrypts to an RSA public key and decrypts with
+        /// the private key (ADR 0067).
         RsaOaep256 => "RSA-OAEP-256",
         /// `A128KW`: AES Key Wrap with a 128-bit key (RFC 7518 §4.4).
         A128KW => "A128KW",

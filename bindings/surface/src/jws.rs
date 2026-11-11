@@ -4,7 +4,7 @@
 //! Keys are JWK JSON text, borrowed (ADR 0030 §7.1). Payloads are treated as secret: they are
 //! borrowed on the way in, and a verified payload is [`SecretBytes`] (ADR 0049 §4).
 //! Verification takes the caller's allow-list and nothing else selects the algorithm (ADR 0007,
-//! RFC 8725 §3.1); RSA signing fails with `UnsupportedAlgorithm` (ADR 0021).
+//! RFC 8725 §3.1); RS* and PS* sign with an RSA private key (ADR 0067 §2).
 //!
 //! Each operation parses its JSON arguments with the core's own parser, converts the surface
 //! records to core options, calls the core once and converts the result (ADR 0030 §3, §4). It
@@ -45,8 +45,8 @@ const NO_PROTECTED_HEADER: &str = "compact JWS needs protected_header or protect
 /// The key is parsed first, then the header, then the core signs (the order of the core's
 /// `jws.sign` conformance runner): the core's code for a bad key or header JSON, `InvalidHeader`
 /// for the header-form misuse above, then every error of `polyjose::jws::sign_compact`, among
-/// them `UnsupportedAlgorithm` for RS*/PS* (ADR 0021) and `AlgorithmNotAllowed` for `none`
-/// (RFC 8725 §3.2).
+/// them `KeyAlgorithmMismatch` for RS* or PS* with an RSA public key (RFC 8725 §3.1, ADR 0067 §2)
+/// and `AlgorithmNotAllowed` for `none` (RFC 8725 §3.2).
 pub fn jws_sign_compact(
     payload: &[u8],
     key: &str,
@@ -105,7 +105,8 @@ pub fn jws_sign_flattened(
 /// `InvalidHeader` for both protected forms (ADR 0030 §4). Then every error of
 /// `polyjose::jws::sign_general`: `InvalidFormat` for no signers (RFC 7515 §7.2.1),
 /// `InvalidHeader` for a missing `alg` or a member in both headers (RFC 7515 §4.1.1, §5.2
-/// step 4), `UnsupportedAlgorithm` for RS*/PS* (ADR 0021), and the rest of its list.
+/// step 4), `KeyAlgorithmMismatch` for RS* or PS* with an RSA public key (ADR 0067 §2), and the
+/// rest of its list.
 pub fn jws_sign_general(
     payload: &[u8],
     signers: &[JwsSigner],

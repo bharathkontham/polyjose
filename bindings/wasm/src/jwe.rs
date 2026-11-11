@@ -1,5 +1,5 @@
 //! The JWE exports (ADR 0030 §4, "JWE"): `jweEncryptCompact`, `jweEncryptJson`,
-//! `jweDecryptCompact` and `jweDecryptJson` (RFC 7516, RFC 7518 §4–§5; ADR 0017, ADR 0021–0023).
+//! `jweDecryptCompact` and `jweDecryptJson` (RFC 7516, RFC 7518 §4–§5; ADR 0017, ADR 0022, ADR 0023, ADR 0067).
 //!
 //! Plaintext, keys and the `aad` are secret (ADR 0030 §7, ADR 0050 §4): inputs are taken by value
 //! and wiped on return (ADR 0030 §7.1), and decrypted values are copied out of the surface's

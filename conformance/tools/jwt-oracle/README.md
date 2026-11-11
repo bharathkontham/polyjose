@@ -96,7 +96,7 @@ Signing:
 - `EdDSA` (RFC 8037 §3.1) and `Ed25519` (RFC 9864 §2.2) with an Ed25519 key.
 - `none`: an empty signature (RFC 7519 §6.1), no key.
 - The signing input is ASCII(BASE64URL(protected) ‖ '.' ‖ BASE64URL(payload)) (RFC 7515 §5.1). When the protected header has `"b64": false`, it is BASE64URL(protected) ‖ '.' ‖ the payload octets, and the payload is written unencoded (RFC 7797 §3). A compact payload containing '.' is refused (RFC 7797 §5.2).
-- **RSA signing is refused**: any `RS*`/`PS*` alg, or any RSA key (ADR 0021). RS256/PS256 vectors use RFC-published tokens only (for example RFC 7515 A.2) and pass through as entries without `jws`.
+- **RSA signing is refused** by the oracle: any `RS*`/`PS*` alg, or any RSA key. RS256/PS256 tokens to validate are RFC-published (for example RFC 7515 A.2) and pass through as entries without `jws`; polyjose's own RSA issuance (ADR 0067) is checked by `jwt.issue` round trips (`positive/issue-ps256-round-trip.json`) and by `jwt/rfc7519/a2-rs256-issue-exact.json`, whose token is derived with Python integers.
 - A key that doesn't match the alg (wrong `kty` or curve, a public key) is refused.
 
 The flattened form has the members `payload`, `protected`, `header` (if `unprotected` is given) and `signature`, in RFC 7515 §7.2.2's order. Its `protected`, `payload` and `signature` are exactly the compact token's three parts. The unprotected header isn't signed, so the signature stays valid.

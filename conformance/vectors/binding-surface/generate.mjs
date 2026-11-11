@@ -9,9 +9,10 @@
 //   script names are written, so it can be run into an empty directory and diffed.
 //
 // Where the values come from, never from polyjose:
-// - the allow-list, limit, RSA and DEFLATE-off pins reuse inputs of committed vectors (RFC 7515
-//   App. A.1-A.3, RFC 7516 App. A.3, RFC 7520 §5.9, the jws-negative/, jwe/rsa-oaep-256/ and
-//   jwe/zip/ files), read from <repo-root>;
+// - the allow-list, limit, RSA and DEFLATE-off pins reuse inputs (and, for the RSA positives,
+//   the RFC 7515 A.2 and oracle-built outputs) of committed vectors (RFC 7515 App. A.1-A.3,
+//   RFC 7516 App. A.3, RFC 7520 §5.9, the jws-negative/, jwe/rsa-oaep-256/ and jwe/zip/ files),
+//   read from <repo-root>;
 // - the PBES2 tokens are built here with node:crypto (OpenSSL) from SHA-256-derived bytes, so a
 //   rerun gives identical files, and each is opened with node:crypto before it is written;
 // - the key-generation vectors expect the RFC shapes (RFC 7518 §6.2, §6.4; RFC 8037 §2);
@@ -224,33 +225,42 @@ write(
   fails('InvalidFormat'),
 );
 
-// ---- RSA public-key only (ADR 0021), no RSA-OAEP (ADR 0022) ------------------------------------
-const A2_SIGN = read('jws-rfc7515/a2-rs256-sign-private-key-unsupported.json');
+// ---- RSA private keys (ADR 0067), no RSA-OAEP (ADR 0022) ---------------------------------------
+const A2_SIGN = read('jws-rfc7515/a2-rs256-compact-sign.json');
 write(
   'jws-sign-rsa-private-jwk',
-  'ADR 0021; ADR 0034 §6',
-  'ADR 0021: signing the RFC 7515 App. A.2 payload with its RSA private JWK fails at JWK import with UnsupportedAlgorithm: RSA private keys are not supported on any platform',
+  'ADR 0067; ADR 0034 §6',
+  'ADR 0067 §2: RS256 signing of the RFC 7515 App. A.2 payload with its RSA private JWK reproduces the A.2 JWS exactly (RSASSA-PKCS1-v1_5 is deterministic, RFC 8017 §8.2), on every platform; the expected JWS is the RFC\'s, as in jws-rfc7515/a2-rs256-compact-sign.json',
   'jws.sign',
   A2_SIGN.input,
-  fails('UnsupportedAlgorithm'),
+  A2_SIGN.expect,
 );
 const a2Signer = A2_SIGN.input.signers[0];
 write(
   'jws-sign-rs256-public-key',
-  'ADR 0021; ADR 0034 §6',
-  'ADR 0021: RS256 signing with the RFC 7515 App. A.2 RSA public key (n and e of its JWK) and the A.2 protected header is UnsupportedAlgorithm: polyjose never signs with RSA',
+  'ADR 0067; ADR 0034 §6',
+  'ADR 0067 §2, RFC 8725 §3.1: RS256 signing with the RFC 7515 App. A.2 RSA public key (n and e of its JWK) and the A.2 protected header is KeyAlgorithmMismatch: only the private key signs, and no binding may treat a public key as a signing key',
   'jws.sign',
   { ...A2_SIGN.input, signers: [{ protected_b64u: a2Signer.protected_b64u, key: { kty: 'RSA', n: a2Signer.key.n, e: a2Signer.key.e } }] },
-  fails('UnsupportedAlgorithm'),
+  fails('KeyAlgorithmMismatch'),
 );
-const OAEP_DECRYPT = read('jwe/rsa-oaep-256/decrypt-own-output-unsupported.json');
+const OAEP_DECRYPT = read('jwe/rsa-oaep-256/decrypt-2048-a128gcm.json');
 write(
   'jwe-decrypt-rsa-oaep-256',
-  'ADR 0021; ADR 0034 §6',
-  'ADR 0021: the RSA-OAEP-256 + A128GCM JWE of jwe/rsa-oaep-256/decrypt-own-output-unsupported.json, with RSA-OAEP-256 allowed and the RSA public key, does not decrypt: UnsupportedAlgorithm (no RSA decryption on any platform)',
+  'ADR 0067; ADR 0034 §6',
+  'ADR 0067 §2: the oracle-built RSA-OAEP-256 + A128GCM JWE of jwe/rsa-oaep-256/decrypt-2048-a128gcm.json decrypts with its test-only RSA private JWK to that vector\'s plaintext, on every platform',
   'jwe.decrypt',
   OAEP_DECRYPT.input,
-  fails('UnsupportedAlgorithm'),
+  OAEP_DECRYPT.expect,
+);
+const OAEP_PUBLIC = read('jwe/rsa-oaep-256/decrypt-public-key-mismatch.json');
+write(
+  'jwe-decrypt-rsa-oaep-256-public-key',
+  'ADR 0067; ADR 0034 §6',
+  'ADR 0067 §2, RFC 8725 §3.1: the same JWE with RSA-OAEP-256 allowed and only the RSA public key (n, e) is KeyAlgorithmMismatch: decryption needs the private key, so the public key is no candidate',
+  'jwe.decrypt',
+  OAEP_PUBLIC.input,
+  fails('KeyAlgorithmMismatch'),
 );
 const OAEP_ENCRYPT = read('jwe/rsa-oaep-256/encrypt-rsa-oaep-sha1-unsupported.json');
 write(
@@ -261,6 +271,22 @@ write(
   OAEP_ENCRYPT.input,
   fails('UnsupportedAlgorithm'),
 );
+// PKCS#1 export writes the RSAPublicKey (RFC 8017 App. A.1.1) of a public key only: a private key
+// is InvalidKey, never its public half written silently (feature 0020 review, decisions.md
+// 2026-11-11). The public-key positive is keys/export-rsa-pkcs1.json and export-der-rsa-pkcs1.json.
+for (const [name, from, operation, form] of [
+  ['keys-export-pem-rsa-private-pkcs1', 'keys/export-rsa-private-to-spki.json', 'keys.export_pem', 'PEM'],
+  ['keys-export-der-rsa-private-pkcs1', 'keys/export-der-rsa-private-to-spki.json', 'keys.export_der', 'DER'],
+]) {
+  write(
+    name,
+    'ADR 0067; ADR 0018 §3; ADR 0034 §6',
+    `ADR 0018 §3 format matrix, RFC 8017 App. A.1.1: ${form} export of the RSA private JWK of ${from} as pkcs1 is InvalidKey, since PKCS#1 export writes only the RSAPublicKey; no binding may drop the private members and write the public half instead (export the private key as pkcs8, or its to_public as pkcs1)`,
+    operation,
+    { jwk: read(from).input.jwk, format: 'pkcs1' },
+    fails('InvalidKey'),
+  );
+}
 
 // ---- No DEFLATE in the binding configuration (ADR 0030 §4, ADR 0056) ---------------------------
 // `features_absent: ["deflate"]`: run where the core has no `deflate` (every binding and the

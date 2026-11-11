@@ -1,0 +1,37 @@
+{
+  "source": "RFC 7518 §6.3.2.7; ADR 0067 §3",
+  "description": "Flattened JSON RS256 signing with a three-prime RSA private JWK (2048 bits, oth with one r/d/t entry, RFC 7518 §6.3.2.7; the OpenSSL 4.1.0 key fixture reject-rsa2048-3prime-private-pkcs8.pem, its members from openssl pkey -text) fails at JWK import with UnsupportedAlgorithm: multi-prime RSA keys are not supported (ADR 0067 §3)",
+  "operation": "jws.sign",
+  "input": {
+    "serialization": "flattened",
+    "payload_b64u": "UGF5bG9hZA",
+    "detached": false,
+    "signers": [
+      {
+        "protected_b64u": "eyJhbGciOiJSUzI1NiJ9",
+        "key": {
+          "kty": "RSA",
+          "n": "l8kmLDmn-2lOWVzYHglEopZj7t7_dtk6yivlC2YJKCOc1QvPsw_F3JYDkKEzaXirVUJFSMneTCd-4uz0rhxJ965IoCxnROpxLUnlvJsta2Pglq8C_HSfncLJMfDa-6PrJcRxEQnJUzBRsH96fRA94vXF_KqGrtCSPQ_mUPzQU42bgMNeqXgxDrB9fuVWU8nOYW2W7ol47rIxpZrLkLM8Mw-1X1Z73ETDgehUfFHXMGMwgBPsqVoWt5448vU1sysHLk-_t4V9eg7OcQd-wV9QtTYlpAt35vpuGKwO4ElW8TKMAVATihfnJCFCGt2TYiboK-g_F0t7VrkLDAN7fK8bWw",
+          "e": "AQAB",
+          "d": "VYkhXeLP6zoY0PslPyfx6b3eawp35D3eh3fdB2Nk3Z3UD6ssTLgixIA1Whe9pT4_Lzi9WpuIDlpjgvYNnOCMPmuUuc7ME2YaiW8PbA32toH-Wmwdvns1_A_ILeN3ANgYMbQh3Qdl3lJVTnoyyMK5TjaM8CxOifOeBmwYwh3E5EGMAuECkls6roPuegM2xcns-zDou2tFjaq0mu0t_roYOKkOfGAiQuEIUl3FKBKnp57905IfZsvLH5TosweGIM4WDbqXHl4ZJiJpbWf4C78Jqdgg5E2V-l6O-PUlxDrmh5x-qRT5nM6m7pc7aC71JcvrB8WyiPWbtLlyuPgWmPLJAQ",
+          "p": "B0RYoqdMerfZ4MLtPRatwa5nOtQsjytNRun8Pax1zo5wrcxNSXxlhLiz8EvBFzFXQzT0OT10PC0Ew5iXbCh0tpaXEJRQg9tbjNk2NPqP8l0WShV95Gk",
+          "q": "BpL60hwhFUYoZEvf_sQjY8WVyk7zr2_JWQJjedFnLwM0rZG0maEympgJmIvndIOw3GMHB7LjbsjawaP39ErqD7Unsep0Dnb5wRF3wPNabA1v8n_2nG0",
+          "dp": "BFSQ8NP6ugIGnm3pywZRomGX-DFpICNwmDpkaifzx5OPx7E_uPOc1xrtdtrdhEGNu2m5wsZBFn7JIPkz-mqdKhTQjjujQv-bLXJeX_GTh5w65QirjUk",
+          "dq": "A4v2T7anTo_sKLgan5r3sNMfTecsZwC7Mw8r1cPYlC95kw6hzaR-5ZKS0r7f3ydRGoU-fLPRKaqpAoFQu3ZTMqg8QytG86rScYvX_LwNk2_obn8E8D0",
+          "qi": "BtCcpl5bb1ibOVQ00SEykVsLogy5LR8RNn-yYlcLkDHIPu_WkWhaJAzYZRLq_bYMHILGSbXQt1f8f5vRiVlVYObR4tfeBtpfRtrGPVn7cflfgg8Fa2s",
+          "oth": [
+            {
+              "r": "Ay1Z8eOwaB8WJeCv7i2tXY7SyR4Mv2BMhzzIJI-SRPi3TdkVhn8HjQR9pSncNVAa38ewj_eqb4f1HdYuz6DK03CpoQVPGZWWxvstHPdJzePBF2xOEc8",
+              "d": "ARueYrf3-sbkTT8FejOZYad9Hz6ISW_GH951GDKsWbq1CMNrOyQuuODZA3AOZtTRGjmi-wDtAMlTEx1t4175ezOtIwYb6Br-odJSj-g3Z0FFQuq0aoc",
+              "t": "Afq9_YH-6CX2Z1cBBBLuQjflAscXjhCqW0Hh1K6yrqEFkJsORMcbUoA9XUlChlILOUBiZmPVo5WTz9A3OuVo9OaNGgx2pXR4Uwushnk_rGrYVFlJ7sg"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

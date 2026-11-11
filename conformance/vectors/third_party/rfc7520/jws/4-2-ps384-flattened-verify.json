@@ -1,6 +1,6 @@
 {
   "source": "RFC 7520 §4.2.3, Figure 22",
-  "description": "PS384 flattened JWS JSON Serialization of the RFC 7520 §4 payload verifies with the §3.3 RSA public key (Figure 3, the public half of §3.4's Figure 4); verify-only: RSA signing is not supported (ADR 0021) and RSASSA-PSS is randomized",
+  "description": "PS384 flattened JWS JSON Serialization of the RFC 7520 §4 payload verifies with the §3.3 RSA public key (Figure 3, the public half of §3.4's Figure 4); RSASSA-PSS is randomized, so signing is checked by round trip instead (4-2-ps384-compact-sign-roundtrip.json, ADR 0067)",
   "operation": "jws.verify",
   "input": {
     "jws": {

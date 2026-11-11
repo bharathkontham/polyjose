@@ -28,9 +28,9 @@
 //!   ([`Error::InvalidSignature`]).
 //! - **Errors.** `verify` returns only [`Error::InvalidSignature`] or
 //!   [`Error::InvalidKey`]. `sign` returns only [`Error::InvalidKey`] or,
-//!   for ECDSA, [`Error::RandomnessUnavailable`]; RSA `sign` always
-//!   returns [`Error::UnsupportedAlgorithm`] (ADR 0021). No error carries
-//!   key material or input (ADR 0007).
+//!   for ECDSA and RSA (whose blinding and PSS salt need randomness,
+//!   ADR 0005, ADR 0067 §2), [`Error::RandomnessUnavailable`]. No error
+//!   carries key material or input (ADR 0007).
 //!
 //! # The test seam
 //!
@@ -127,9 +127,7 @@ pub(crate) enum Operation {
 /// 1. `alg` must have a family: `none` → [`Error::AlgorithmNotAllowed`]
 ///    (RFC 8725 §3.2), unknown → [`Error::UnsupportedAlgorithm`]
 ///    (RFC 7515 §4.1.1). The verify allow-list stops both earlier.
-/// 2. Signing with RS*/PS* → [`Error::UnsupportedAlgorithm`], whatever
-///    the key (ADR 0021).
-/// 3. → [`Error::KeyAlgorithmMismatch`] if any of these fails:
+/// 2. → [`Error::KeyAlgorithmMismatch`] if any of these fails:
 ///    - the key is of the family `alg` requires, per
 ///      [`KeyMaterial::serves_signing_alg`], the single copy of that table
 ///      (RFC 7518 §3, RFC 8037 §3.1, RFC 8812 §3.3, RFC 9864 §2.2;
@@ -139,16 +137,15 @@ pub(crate) enum Operation {
 ///    - a JWK `use`, if present, is `sig`, and a JWK `key_ops`, if present,
 ///      contains `sign` or `verify` ([`Jwk::permits`]; RFC 7517 §4.2,
 ///      §4.3);
-///    - a key for signing holds private material (RFC 7518 §3).
-/// 4. → [`Error::InvalidKey`] for weak material: an HMAC key shorter than
+///    - a key for signing holds private material (RFC 7518 §3), an RSA
+///      key its private members (RFC 7518 §6.3.2; ADR 0067 supersedes the
+///      ADR 0021 refusal of RS*/PS* signing).
+/// 3. → [`Error::InvalidKey`] for weak material: an HMAC key shorter than
 ///    the hash output, on sign **and** verify (RFC 7518 §3.2), or an RSA
 ///    modulus outside 2048..=8192 bits (RFC 7518 §3.3, §3.5). EC and
 ///    Ed25519 checks need the curve arithmetic and are the family's.
 pub(crate) fn bind_key(alg: &SigningAlg, key: &Jwk, op: Operation) -> Result<()> {
-    let family = family(alg).ok_or_else(|| unserved(alg))?;
-    if op == Operation::Sign && family == Family::Rsa {
-        return Err(Error::UnsupportedAlgorithm);
-    }
+    family(alg).ok_or_else(|| unserved(alg))?;
     let jwk_alg_ok = key
         .alg()
         .is_none_or(|key_alg| matches!(key_alg, KeyAlg::Signing(a) if a == alg));
@@ -309,6 +306,14 @@ pub(crate) mod test_keys {
         n[0] >>= (8 - bits % 8) % 8;
         let n = b64url_encode(&n);
         jwk(&format!(r#"{{"kty":"RSA","n":"{n}","e":"AQAB"}}"#))
+    }
+
+    /// The RSA private key of RFC 7515 Appendix A.2.1 (2048 bits), with
+    /// `extra` members appended.
+    pub(crate) fn rsa_private(extra: &str) -> Jwk {
+        let json = include_str!("../../tests/data/keys/rfc/rfc7515-a2-rsa-private.jwk.json");
+        let json = json.trim_end().strip_suffix('}').unwrap_or(json);
+        jwk(&format!("{json}{extra}}}"))
     }
 
     pub(crate) fn p256(extra: &str) -> Jwk {
@@ -489,30 +494,33 @@ mod tests {
     }
 
     #[test]
-    fn binding_refuses_rsa_signing_before_anything_else() {
-        // ADR 0021 / ADR 0026 §2 step 8: UnsupportedAlgorithm even when the
-        // key would fail the other checks. The key that fails binding is a
-        // 2048-bit RSA key whose `key_ops` allow only `encrypt` (it was an
-        // 8200-bit key, which JWK import now refuses, F02).
-        let encrypt_only = {
-            let n = b64url_encode(&[0xff; 256]);
-            keys::jwk(&format!(
-                r#"{{"kty":"RSA","n":"{n}","e":"AQAB","key_ops":["encrypt"]}}"#
-            ))
-        };
+    fn rsa_signing_binds_like_every_other_family() {
+        // ADR 0067 (superseding ADR 0021's refusal) and ADR 0026 §2 step 8:
+        // RS*/PS* signing needs an RSA private key whose `alg`, `use` and
+        // `key_ops` allow `sign` (RFC 7517 §4.2–§4.4, RFC 7518 §3); a
+        // public RSA key, another family or a key limited to `encrypt` is
+        // KeyAlgorithmMismatch.
+        let private = keys::rsa_private("");
+        let encrypt_only = keys::rsa_private(r#","key_ops":["encrypt"]"#);
         assert_eq!(
             bind_key(&A::RS256, &encrypt_only, Verify),
             Err(Error::KeyAlgorithmMismatch)
         );
         for alg in [A::RS256, A::RS384, A::RS512, A::PS256, A::PS384, A::PS512] {
+            assert_eq!(bind_key(&alg, &private, Sign), Ok(()), "{alg}");
+            assert_eq!(bind_key(&alg, &private, Verify), Ok(()), "{alg}");
             for key in [keys::rsa(2048), keys::oct(64, ""), encrypt_only.clone()] {
                 assert_eq!(
                     bind_key(&alg, &key, Sign),
-                    Err(Error::UnsupportedAlgorithm),
+                    Err(Error::KeyAlgorithmMismatch),
                     "{alg}"
                 );
             }
         }
+        assert_eq!(
+            bind_key(&A::PS256, &keys::rsa_private(r#","alg":"RS256""#), Sign),
+            Err(Error::KeyAlgorithmMismatch)
+        );
     }
 
     #[test]
@@ -582,14 +590,17 @@ mod tests {
     }
 
     #[test]
-    fn rsa_sign_is_never_offered() {
-        // ADR 0021: no RSA private-key operations in 0.1.0.
-        let key = oct();
+    fn rsa_sign_dispatches_to_the_rsa_family() {
+        // ADR 0067: RS*/PS* reach `rsa::sign`, which signs with a private
+        // key (k = 256 octets for RFC 7515 A.2's key) and refuses a key of
+        // another family.
         for alg in [SigningAlg::RS256, SigningAlg::PS512] {
             assert_eq!(
-                (FAMILIES.sign)(&alg, &key, b"x"),
-                Err(Error::UnsupportedAlgorithm)
+                (FAMILIES.sign)(&alg, &oct(), b"x"),
+                Err(Error::KeyAlgorithmMismatch)
             );
+            let sig = (FAMILIES.sign)(&alg, &test_keys::rsa_private(""), b"x").unwrap();
+            assert_eq!(sig.len(), 256);
         }
     }
 

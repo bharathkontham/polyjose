@@ -56,8 +56,8 @@ const RFC7517_A3_OCT: &str = r#"{"kty":"oct",
     "k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow",
     "kid":"HMAC key used in JWS spec Appendix A.1 example"}"#;
 
-/// RFC 7517 Appendix A.2: the RSA private key (RFC 7517 A.2 with `alg` and `kid`). RSA private
-/// keys are not supported (ADR 0021).
+/// RFC 7517 Appendix A.2: the RSA private key (RFC 7517 A.2 with `alg` and `kid`), imported with
+/// its private members since ADR 0067 §2. Its `n` and `e` are [`RFC7638_RSA`]'s.
 const RFC7517_A2_RSA_PRIVATE: &str = r#"{"kty":"RSA",
     "n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
     "e":"AQAB",
@@ -69,6 +69,27 @@ const RFC7517_A2_RSA_PRIVATE: &str = r#"{"kty":"RSA",
     "qi":"GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU",
     "alg":"RS256",
     "kid":"2011-04-29"}"#;
+
+/// [`RFC7517_A2_RSA_PRIVATE`] with an `oth` member: a three-prime key (RFC 7518 §6.3.2.7), which
+/// the core refuses with `UnsupportedAlgorithm` before reading anything else (ADR 0067 §3).
+fn rsa_multi_prime() -> String {
+    RFC7517_A2_RSA_PRIVATE.replace(
+        r#""alg":"RS256","#,
+        r#""oth":[{"r":"AQAB","d":"AQAB","t":"AQAB"}],"alg":"RS256","#,
+    )
+}
+
+/// [`RFC7517_A2_RSA_PRIVATE`] without `qi`: a private key without all CRT members is `InvalidKey`
+/// (RFC 7518 §6.3.2, ADR 0067 §3).
+fn rsa_without_qi() -> String {
+    let start = RFC7517_A2_RSA_PRIVATE.find(r#""qi":"#).unwrap();
+    let end = start + RFC7517_A2_RSA_PRIVATE[start..].find(',').unwrap() + 1;
+    format!(
+        "{}{}",
+        &RFC7517_A2_RSA_PRIVATE[..start],
+        &RFC7517_A2_RSA_PRIVATE[end..]
+    )
+}
 
 /// The code of a failed surface call.
 fn code<T: std::fmt::Debug>(result: Result<T, SurfaceError>) -> &'static str {
@@ -114,12 +135,36 @@ fn parse_keeps_public_rsa_and_oct_keys() {
 }
 
 #[test]
-fn parse_rejects_an_rsa_private_key_as_unsupported() {
-    // ADR 0021: RSA is public-key only.
+fn parse_keeps_an_rsa_private_key_and_refuses_multi_prime_or_partial_ones() {
+    // ADR 0067 §2: an RSA private JWK (RFC 7518 §6.3.2) imports with all its members, `n`, `e`,
+    // then `d`, `p`, `q`, `dp`, `dq`, `qi` (Jwk::to_object order), and parses to itself.
+    let parsed = jwk::jwk_parse(RFC7517_A2_RSA_PRIVATE).unwrap();
+    let text = parsed.as_str();
+    assert!(text.starts_with(r#"{"kty":"RSA","n":"0vx7"#), "{text}");
+    let mut last = 0;
+    for member in [
+        r#""e":"AQAB""#,
+        r#""d":"X4cT"#,
+        r#""p":"83i-"#,
+        r#""q":"3dfO"#,
+        r#""dp":"G4sP"#,
+        r#""dq":"s9lA"#,
+        r#""qi":"GyM_"#,
+        r#""alg":"RS256","kid":"2011-04-29"}"#,
+    ] {
+        let at = text
+            .find(member)
+            .unwrap_or_else(|| panic!("{member} in {text}"));
+        assert!(at > last, "{member} out of order in {text}");
+        last = at;
+    }
+    assert_eq!(jwk::jwk_parse(text).unwrap().as_str(), text);
+    // ADR 0067 §3: no multi-prime keys, and no private key without its CRT members.
     assert_eq!(
-        code(jwk::jwk_parse(RFC7517_A2_RSA_PRIVATE)),
+        code(jwk::jwk_parse(&rsa_multi_prime())),
         "UnsupportedAlgorithm"
     );
+    assert_eq!(code(jwk::jwk_parse(&rsa_without_qi())), "InvalidKey");
 }
 
 #[test]
@@ -197,9 +242,26 @@ fn to_public_of_an_oct_key_is_unsupported() {
 fn to_public_reports_parse_errors_with_the_core_codes() {
     assert_eq!(code(jwk::jwk_to_public("{")), "InvalidJson");
     assert_eq!(
-        code(jwk::jwk_to_public(RFC7517_A2_RSA_PRIVATE)),
+        code(jwk::jwk_to_public(&rsa_multi_prime())),
         "UnsupportedAlgorithm"
     );
+    assert_eq!(code(jwk::jwk_to_public(&rsa_without_qi())), "InvalidKey");
+}
+
+#[test]
+fn to_public_of_an_rsa_private_key_drops_every_private_member() {
+    // RFC 7517 A.2 -> A.1 (ADR 0067 §2): only `n` and `e` stay, with the common members; the
+    // result is RFC 7638 §3.1's public key in core member order.
+    let public = jwk::jwk_to_public(RFC7517_A2_RSA_PRIVATE).unwrap();
+    assert_eq!(
+        public.as_str(),
+        jwk::jwk_parse(RFC7638_RSA).unwrap().as_str()
+    );
+    for member in [
+        r#""d":"#, r#""p":"#, r#""q":"#, r#""dp":"#, r#""dq":"#, r#""qi":"#,
+    ] {
+        assert!(!public.as_str().contains(member), "{member}");
+    }
 }
 
 // --- jwk_thumbprint / jwk_thumbprint_uri ------------------------------------------------------
@@ -383,10 +445,14 @@ fn the_key_is_imported_before_the_hash_is_parsed() {
             code(jwk::jwk_thumbprint_uri(off_curve, Some(hash))),
             "InvalidKey"
         );
-        // An RSA private JWK fails its import (ADR 0021) before the name is looked at.
+        // A multi-prime RSA JWK fails its import (ADR 0067 §3) before the name is looked at.
         assert_eq!(
-            code(jwk::jwk_thumbprint(RFC7517_A2_RSA_PRIVATE, Some(hash))),
+            code(jwk::jwk_thumbprint(&rsa_multi_prime(), Some(hash))),
             "UnsupportedAlgorithm"
+        );
+        assert_eq!(
+            code(jwk::jwk_thumbprint(&rsa_without_qi(), Some(hash))),
+            "InvalidKey"
         );
     }
     // With a valid key, the bad name is the outcome.
@@ -401,12 +467,30 @@ fn thumbprint_reports_key_errors_with_the_core_codes() {
     for hash in [None, Some("SHA-256"), Some("sha-512")] {
         assert_eq!(code(jwk::jwk_thumbprint("{", hash)), "InvalidJson");
         assert_eq!(code(jwk::jwk_thumbprint_uri("{", hash)), "InvalidJson");
-        // The RSA private key is rejected before any hash is computed (ADR 0021).
+        // A multi-prime RSA key is rejected before any hash is computed (ADR 0067 §3).
         assert_eq!(
-            code(jwk::jwk_thumbprint(RFC7517_A2_RSA_PRIVATE, hash)),
+            code(jwk::jwk_thumbprint(&rsa_multi_prime(), hash)),
             "UnsupportedAlgorithm"
         );
     }
+}
+
+#[test]
+fn thumbprint_of_an_rsa_private_key_is_that_of_its_public_key() {
+    // RFC 7638 §3.2: only `e`, `kty` and `n` are hashed, so RFC 7517 A.2's private key has
+    // RFC 7638 §3.1's thumbprint (and RFC 9278 §3's URI).
+    assert_eq!(
+        jwk::jwk_thumbprint(RFC7517_A2_RSA_PRIVATE, None).unwrap(),
+        RFC7638_THUMBPRINT
+    );
+    assert_eq!(
+        jwk::jwk_thumbprint_uri(RFC7517_A2_RSA_PRIVATE, None).unwrap(),
+        RFC9278_URI
+    );
+    assert_eq!(
+        jwk::jwk_thumbprint(RFC7517_A2_RSA_PRIVATE, Some("sha-384")).unwrap(),
+        RFC7638_THUMBPRINT_SHA384
+    );
 }
 
 #[test]
@@ -617,15 +701,23 @@ fn jwks_select_reports_set_errors_first_then_the_selector() {
     assert_eq!(code(jwk::jwks_select("{", &bad_alg)), "InvalidJson");
     // A set without a `keys` array is InvalidKey (RFC 7517 §5).
     assert_eq!(code(jwk::jwks_select("{}", &bad_alg)), "InvalidKey");
-    // An RSA private member fails the whole set (ADR 0021, ADR 0029 §3), even when the selector
-    // would pick another member.
-    let with_rsa = set(&[RFC7517_A1_P256_PUBLIC, RFC7517_A2_RSA_PRIVATE]);
-    assert_eq!(
-        code(jwk::jwks_select(
-            &with_rsa,
-            &selector(Some("1"), None, None)
-        )),
-        "UnsupportedAlgorithm"
+    // An RSA private member is imported as is (ADR 0067 §4, amending ADR 0029 §3), so the
+    // selector decides; a multi-prime member is skipped like any member the core refuses
+    // (ADR 0041 §2, ADR 0067 §3).
+    let with_rsa = set(&[
+        RFC7517_A1_P256_PUBLIC,
+        RFC7517_A2_RSA_PRIVATE,
+        &rsa_multi_prime(),
+    ]);
+    assert_selects(
+        &with_rsa,
+        &selector(Some("1"), None, None),
+        RFC7517_A1_P256_PUBLIC,
+    );
+    assert_selects(
+        &with_rsa,
+        &selector(Some("2011-04-29"), None, None),
+        RFC7517_A2_RSA_PRIVATE,
     );
     // The selector is validated before an empty set gives NoMatchingKey.
     assert_eq!(
@@ -801,7 +893,7 @@ fn generate_for_alg_follows_the_core_table() {
 
 #[test]
 fn generate_for_alg_rejects_what_the_core_rejects() {
-    // ADR 0021 (no RSA key generation), ADR 0022 (`RSA-OAEP`), passwords are not generated
+    // ADR 0067 §3 (no RSA key generation), ADR 0022 (`RSA-OAEP`), passwords are not generated
     // (`PBES2-*`), `dir` depends on `enc`, `none` has no key, names are case-sensitive
     // (RFC 7515 §4.1.1), and unknown names are unsupported.
     for alg in [
@@ -1039,20 +1131,28 @@ fn only_the_four_format_names_are_accepted() {
 #[test]
 fn import_rejects_what_the_core_rejects() {
     for (name, pem, expected) in [
-        // ADR 0021: RSA private keys in any form.
+        // ADR 0067 §3: multi-prime RSA keys, in both private formats.
         (
-            "rsa private pkcs8",
+            "rsa 3-prime pkcs8",
             include_str!(
-                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs8.pem"
+                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-3prime-private-pkcs8.pem"
             ),
             "UnsupportedAlgorithm",
         ),
         (
-            "rsa private pkcs1",
+            "rsa 3-prime pkcs1",
             include_str!(
-                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs1.pem"
+                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-3prime-private-pkcs1.pem"
             ),
             "UnsupportedAlgorithm",
+        ),
+        // RFC 7518 §3.3, §4.3 (ADR 0007): an RSA private key under 2048 bits.
+        (
+            "rsa 1024 private pkcs8",
+            include_str!(
+                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa1024-private-pkcs8.pem"
+            ),
+            "InvalidKey",
         ),
         // ADR 0018 §4: encrypted keys are out of scope (RFC 5958 §3).
         (
@@ -1085,14 +1185,77 @@ fn import_rejects_what_the_core_rejects() {
     assert_eq!(code(keys::jwk_from_der(spki.der, "pkcs8")), "InvalidKey");
     assert_eq!(code(keys::jwk_from_der(spki.der, "sec1")), "InvalidKey");
     assert_eq!(code(keys::jwk_from_der(b"", "spki")), "InvalidKey");
+    // A PKCS#1 RSAPrivateKey is not a PKCS#8 PrivateKeyInfo, nor the reverse (ADR 0018 §3).
+    let pkcs8 = include_bytes!(
+        "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs8.der"
+    );
+    let pkcs1 = include_bytes!(
+        "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs1.der"
+    );
+    assert_eq!(code(keys::jwk_from_der(pkcs1, "pkcs8")), "InvalidKey");
+    assert_eq!(code(keys::jwk_from_der(pkcs8, "pkcs1")), "InvalidKey");
+}
+
+#[test]
+fn rsa_private_keys_import_from_pkcs8_and_pkcs1_and_export_as_pkcs8() {
+    // ADR 0067 §2, PRD 0003 R3: the same OpenSSL 2048-bit key (named `reject-` before ADR 0067)
+    // in PKCS#8 (RFC 5958) and PKCS#1 (RFC 8017 App. A.1.2), PEM and DER, gives one JWK with
+    // every private member; PKCS#8 export gives the PKCS#8 DER back.
+    let pkcs8_pem = include_str!(
+        "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs8.pem"
+    );
+    let pkcs1_pem = include_str!(
+        "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs1.pem"
+    );
+    let pkcs8_der: &[u8] = include_bytes!(
+        "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs8.der"
+    );
+    let pkcs1_der: &[u8] = include_bytes!(
+        "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs1.der"
+    );
+    let jwk = keys::jwk_from_pem(pkcs8_pem).unwrap();
+    for member in [
+        r#""d":"#, r#""p":"#, r#""q":"#, r#""dp":"#, r#""dq":"#, r#""qi":"#,
+    ] {
+        assert!(jwk.as_str().contains(member), "{member}");
+    }
     assert_eq!(
-        code(keys::jwk_from_der(
-            include_bytes!(
-                "../../../crates/polyjose/tests/data/keys/openssl/reject-rsa2048-private-pkcs8.der"
-            ),
-            "pkcs8"
-        )),
-        "UnsupportedAlgorithm"
+        keys::jwk_from_pem(pkcs1_pem).unwrap().as_str(),
+        jwk.as_str()
+    );
+    assert_eq!(
+        keys::jwk_from_der(pkcs8_der, "pkcs8").unwrap().as_str(),
+        jwk.as_str()
+    );
+    assert_eq!(
+        keys::jwk_from_der(pkcs1_der, "pkcs1").unwrap().as_str(),
+        jwk.as_str()
+    );
+    let der: SecretBytes = keys::jwk_to_der(jwk.as_str(), "pkcs8").unwrap();
+    assert_eq!(der.as_bytes(), pkcs8_der);
+    let pem: SecretString = keys::jwk_to_pem(jwk.as_str(), "pkcs8").unwrap();
+    assert!(pem.as_str().starts_with("-----BEGIN PRIVATE KEY-----\n"));
+    assert_eq!(
+        keys::jwk_from_pem(pem.as_str()).unwrap().as_str(),
+        jwk.as_str()
+    );
+    // SPKI writes the public half only (RFC 5280 §4.1.2.7). PKCS#1 export is the RSAPublicKey
+    // (RFC 8017 App. A.1.1) of a public key only: the private key is InvalidKey, its public half
+    // exports (feature 0020 review).
+    let public = jwk::jwk_to_public(jwk.as_str()).unwrap();
+    assert_eq!(
+        keys::jwk_to_der(jwk.as_str(), "spki").unwrap().as_bytes(),
+        keys::jwk_to_der(public.as_str(), "spki")
+            .unwrap()
+            .as_bytes(),
+    );
+    assert_eq!(code(keys::jwk_to_der(jwk.as_str(), "pkcs1")), "InvalidKey");
+    assert_eq!(code(keys::jwk_to_pem(jwk.as_str(), "pkcs1")), "InvalidKey");
+    assert!(
+        keys::jwk_to_pem(public.as_str(), "pkcs1")
+            .unwrap()
+            .as_str()
+            .starts_with("-----BEGIN RSA PUBLIC KEY-----\n")
     );
 }
 
@@ -1123,10 +1286,17 @@ fn export_rejects_what_the_core_rejects() {
             "InvalidKey",
         ),
         ("rsa pkcs8", RFC7638_RSA, "pkcs8", "InvalidKey"),
+        // RSA has no SEC 1 form (ADR 0018 §3); a multi-prime key fails its import (ADR 0067 §3).
         (
-            "rsa private",
+            "rsa private sec1",
             RFC7517_A2_RSA_PRIVATE,
-            "spki",
+            "sec1",
+            "UnsupportedAlgorithm",
+        ),
+        (
+            "rsa 3-prime pkcs8",
+            &rsa_multi_prime(),
+            "pkcs8",
             "UnsupportedAlgorithm",
         ),
         ("bad json", "{", "spki", "InvalidJson"),
@@ -1343,8 +1513,9 @@ fn no_failing_path_puts_a_marked_private_member_into_its_error() {
     let marked_b64 = util::base64url_encode(MARKER.as_bytes());
     // Private members holding the marker: as raw text (21 characters, a length no base64url
     // has), base64url-encoded in a well-formed `oct` key (which parses, then fails later), in an
-    // RSA private key (ADR 0021), and next to a JSON syntax error, where a quoting parser would
-    // echo it.
+    // RSA private key whose `qi` fails the consistency check (ADR 0043, ADR 0067 §2) or whose
+    // `oth` is refused (ADR 0067 §3), and next to a JSON syntax error, where a quoting parser
+    // would echo it.
     let marked_ec = format!(
         r#"{{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"{MARKER}"}}"#
     );
@@ -1352,14 +1523,24 @@ fn no_failing_path_puts_a_marked_private_member_into_its_error() {
         format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{MARKER}","d":"{marked_b64}"}}"#);
     let marked_oct = format!(r#"{{"kty":"oct","k":"{marked_b64}"}}"#);
     let marked_oct_raw = format!(r#"{{"kty":"oct","k":"{MARKER}"}}"#);
-    let marked_rsa =
-        RFC7517_A2_RSA_PRIVATE.replace(r#""kid":"2011-04-29""#, &format!(r#""p2":"{marked_b64}""#));
+    let qi_start = RFC7517_A2_RSA_PRIVATE.find(r#""qi":""#).unwrap() + r#""qi":""#.len();
+    let qi_end = qi_start + RFC7517_A2_RSA_PRIVATE[qi_start..].find('"').unwrap();
+    let marked_rsa = format!(
+        "{}{marked_b64}{}",
+        &RFC7517_A2_RSA_PRIVATE[..qi_start],
+        &RFC7517_A2_RSA_PRIVATE[qi_end..]
+    );
+    let marked_rsa_oth = rsa_multi_prime().replace(
+        r#"{"r":"AQAB","d":"AQAB","t":"AQAB"}"#,
+        &format!(r#"{{"r":"{marked_b64}","d":"{marked_b64}","t":"{marked_b64}"}}"#),
+    );
     let marked_json = format!(r#"{{"kty":"oct","k":"{MARKER}" {MARKER}}}"#);
     let marked_keys = [
         &marked_ec,
         &marked_okp,
         &marked_oct_raw,
         &marked_rsa,
+        &marked_rsa_oth,
         &marked_json,
     ];
 
@@ -1404,7 +1585,8 @@ fn no_failing_path_puts_a_marked_private_member_into_its_error() {
     };
     assert_no_marker("jwks_select", jwk::jwks_select(&jwks, &selector));
     // The marked oct key parses, so the set imports and fails later: no match, several matches,
-    // a refused key_use, and a set failing on its RSA private member.
+    // a refused key_use, and a set whose only other member is a refused RSA private key (skipped,
+    // ADR 0041 §2), so two identical members match.
     let parsed = format!(r#"{{"keys":[{marked_oct},{marked_oct}]}}"#);
     for selector in [
         JwkSelector {
@@ -1419,7 +1601,8 @@ fn no_failing_path_puts_a_marked_private_member_into_its_error() {
     ] {
         assert_no_marker("jwks_select parsed", jwk::jwks_select(&parsed, &selector));
     }
-    let with_rsa = format!(r#"{{"keys":[{marked_oct},{marked_rsa}]}}"#);
+    let with_rsa =
+        format!(r#"{{"keys":[{marked_oct},{marked_rsa},{marked_rsa_oth},{marked_oct}]}}"#);
     assert_no_marker(
         "jwks_select rsa",
         jwk::jwks_select(&with_rsa, &JwkSelector::default()),

@@ -1,6 +1,6 @@
 {
   "source": "RFC 7515 App. A.2; conformance/tools/jwt-oracle (node:crypto, Node v24.21.0, OpenSSL 3.5.8)",
-  "description": "The RFC 7515 A.2 RS256 JWT (passed through, not re-signed: no RSA signing, ADR 0021) through a JWK Set whose first member is the A.2 public key, followed by oct, P-256 and Ed25519 members: key_index 0 next to other members (RFC 7519 App. A.2 claims, ADR 0029 §2.1, §4)",
+  "description": "The RFC 7515 A.2 RS256 JWT (passed through, not re-signed: the oracle signs no RSA) through a JWK Set whose first member is the A.2 public key, followed by oct, P-256 and Ed25519 members: key_index 0 next to other members (RFC 7519 App. A.2 claims, ADR 0029 §2.1, §4)",
   "operation": "jwt.validate",
   "input": {
     "token": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw",

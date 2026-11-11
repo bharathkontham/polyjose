@@ -516,13 +516,13 @@
       "expect": { "error": "UnsupportedAlgorithm" }
     },
     {
-      "id": "unsupported-rsa-private-member",
-      "source": "RFC 7517 App. A.2; ADR 0054 §3, §4",
-      "description": "The RFC 7517 A.2 set, which holds an RSA private key, fails with UnsupportedAlgorithm",
-      "rule": "decided by ADR 0054 §3 (ADR 0021, ADR 0029 §3): an RSA private member fails the whole set import, so no selection runs (§4 precedence 1)",
+      "id": "select-rfc7517-a2-rsa-private-by-kid",
+      "source": "RFC 7517 App. A.2; ADR 0054 §3, §4; ADR 0067 §4",
+      "description": "The RFC 7517 A.2 set, which holds an EC and an RSA private key, selected by the RSA key's kid 2011-04-29, returns the RSA private member with its private members",
+      "rule": "decided by ADR 0067 §4 (amending ADR 0054 §3 and ADR 0029 §3): an RSA private member is imported as is, like an EC or OKP one, so the set imports and the kid matches only member 1, returned as imported with d, p, q, dp, dq and qi (RFC 7518 §6.3.2; the caller calls to_public before publishing it)",
       "jwks": { "$set": "rfc7517-a2" },
-      "selector": {},
-      "expect": { "error": "UnsupportedAlgorithm" }
+      "selector": { "kid": "2011-04-29" },
+      "expect": { "member": 1 }
     },
     {
       "id": "invalid-key-keys-missing",
@@ -579,13 +579,35 @@
       "expect": { "error": "UnsupportedAlgorithm" }
     },
     {
-      "id": "precedence-rsa-private-before-no-match",
-      "source": "RFC 7517 App. A.2; ADR 0054 §3, §4",
-      "description": "The RFC 7517 A.2 set with a kid no member carries fails with UnsupportedAlgorithm: the set import comes first",
-      "rule": "decided by ADR 0054 §4 precedence: the RSA private member fails the import (1; §3, ADR 0021) before selection (3) could give NoMatchingKey for the unknown kid",
-      "jwks": { "$set": "rfc7517-a2" },
-      "selector": { "kid": "no-such-kid" },
-      "expect": { "error": "UnsupportedAlgorithm" }
+      "id": "no-match-rsa-multi-prime-member-skipped",
+      "source": "RFC 7518 §6.3.2.7; RFC 7517 §5; ADR 0054 §3, §4; ADR 0067 §3",
+      "description": "A set whose only member is a three-prime RSA private key with kid 3p (oth with one r/d/t entry; the OpenSSL 4.1.0 key fixture reject-rsa2048-3prime-private-pkcs8.pem, its members from openssl pkey -text), selected by kid 3p, gives NoMatchingKey",
+      "rule": "decided by ADR 0067 §3 and ADR 0054 §3: a multi-prime RSA key is unsupported, so the member is skipped at import (RFC 7517 §5) instead of failing the set; the set is then empty and selection (§4 precedence 3) finds no match",
+      "jwks": {
+        "keys": [
+          {
+            "kty": "RSA",
+            "n": "l8kmLDmn-2lOWVzYHglEopZj7t7_dtk6yivlC2YJKCOc1QvPsw_F3JYDkKEzaXirVUJFSMneTCd-4uz0rhxJ965IoCxnROpxLUnlvJsta2Pglq8C_HSfncLJMfDa-6PrJcRxEQnJUzBRsH96fRA94vXF_KqGrtCSPQ_mUPzQU42bgMNeqXgxDrB9fuVWU8nOYW2W7ol47rIxpZrLkLM8Mw-1X1Z73ETDgehUfFHXMGMwgBPsqVoWt5448vU1sysHLk-_t4V9eg7OcQd-wV9QtTYlpAt35vpuGKwO4ElW8TKMAVATihfnJCFCGt2TYiboK-g_F0t7VrkLDAN7fK8bWw",
+            "e": "AQAB",
+            "d": "VYkhXeLP6zoY0PslPyfx6b3eawp35D3eh3fdB2Nk3Z3UD6ssTLgixIA1Whe9pT4_Lzi9WpuIDlpjgvYNnOCMPmuUuc7ME2YaiW8PbA32toH-Wmwdvns1_A_ILeN3ANgYMbQh3Qdl3lJVTnoyyMK5TjaM8CxOifOeBmwYwh3E5EGMAuECkls6roPuegM2xcns-zDou2tFjaq0mu0t_roYOKkOfGAiQuEIUl3FKBKnp57905IfZsvLH5TosweGIM4WDbqXHl4ZJiJpbWf4C78Jqdgg5E2V-l6O-PUlxDrmh5x-qRT5nM6m7pc7aC71JcvrB8WyiPWbtLlyuPgWmPLJAQ",
+            "p": "B0RYoqdMerfZ4MLtPRatwa5nOtQsjytNRun8Pax1zo5wrcxNSXxlhLiz8EvBFzFXQzT0OT10PC0Ew5iXbCh0tpaXEJRQg9tbjNk2NPqP8l0WShV95Gk",
+            "q": "BpL60hwhFUYoZEvf_sQjY8WVyk7zr2_JWQJjedFnLwM0rZG0maEympgJmIvndIOw3GMHB7LjbsjawaP39ErqD7Unsep0Dnb5wRF3wPNabA1v8n_2nG0",
+            "dp": "BFSQ8NP6ugIGnm3pywZRomGX-DFpICNwmDpkaifzx5OPx7E_uPOc1xrtdtrdhEGNu2m5wsZBFn7JIPkz-mqdKhTQjjujQv-bLXJeX_GTh5w65QirjUk",
+            "dq": "A4v2T7anTo_sKLgan5r3sNMfTecsZwC7Mw8r1cPYlC95kw6hzaR-5ZKS0r7f3ydRGoU-fLPRKaqpAoFQu3ZTMqg8QytG86rScYvX_LwNk2_obn8E8D0",
+            "qi": "BtCcpl5bb1ibOVQ00SEykVsLogy5LR8RNn-yYlcLkDHIPu_WkWhaJAzYZRLq_bYMHILGSbXQt1f8f5vRiVlVYObR4tfeBtpfRtrGPVn7cflfgg8Fa2s",
+            "oth": [
+              {
+                "r": "Ay1Z8eOwaB8WJeCv7i2tXY7SyR4Mv2BMhzzIJI-SRPi3TdkVhn8HjQR9pSncNVAa38ewj_eqb4f1HdYuz6DK03CpoQVPGZWWxvstHPdJzePBF2xOEc8",
+                "d": "ARueYrf3-sbkTT8FejOZYad9Hz6ISW_GH951GDKsWbq1CMNrOyQuuODZA3AOZtTRGjmi-wDtAMlTEx1t4175ezOtIwYb6Br-odJSj-g3Z0FFQuq0aoc",
+                "t": "Afq9_YH-6CX2Z1cBBBLuQjflAscXjhCqW0Hh1K6yrqEFkJsORMcbUoA9XUlChlILOUBiZmPVo5WTz9A3OuVo9OaNGgx2pXR4Uwushnk_rGrYVFlJ7sg"
+              }
+            ],
+            "kid": "3p"
+          }
+        ]
+      },
+      "selector": { "kid": "3p" },
+      "expect": { "error": "NoMatchingKey" }
     }
   ]
 }

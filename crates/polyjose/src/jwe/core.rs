@@ -1030,18 +1030,21 @@ mod tests {
     }
 
     #[test]
-    fn rsa_oaep_256_never_decrypts_even_when_allowed() {
-        // ADR 0021: support comes before the allow-list.
+    fn rsa_oaep_and_rsa1_5_never_decrypt_even_when_allowed() {
+        // ADR 0021, ADR 0022, ADR 0067 §3: support comes before the
+        // allow-list. RSA-OAEP-256 is supported since ADR 0067, so an `oct`
+        // key is simply no candidate for it (RFC 8725 §3.1).
         let k = oct(&[1; 16], "");
         let p = policy(&[A::RsaOaep256, A::from("RSA-OAEP"), A::from("RSA1_5")]);
-        for alg in ["RSA-OAEP-256", "RSA-OAEP", "RSA1_5", "nope"] {
+        for (alg, expected) in [
+            ("RSA-OAEP-256", "KeyAlgorithmMismatch"),
+            ("RSA-OAEP", "UnsupportedAlgorithm"),
+            ("RSA1_5", "UnsupportedAlgorithm"),
+            ("nope", "UnsupportedAlgorithm"),
+        ] {
             let mut parts = general(&[&k]);
             set_alg(&mut parts, 0, alg);
-            assert_eq!(
-                code(decrypt(parts, &k, &p)),
-                "UnsupportedAlgorithm",
-                "{alg}"
-            );
+            assert_eq!(code(decrypt(parts, &k, &p)), expected, "{alg}");
         }
     }
 

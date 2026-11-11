@@ -1,6 +1,6 @@
 {
-  "source": "ADR 0021; ADR 0034 §6",
-  "description": "ADR 0021: RS256 signing with the RFC 7515 App. A.2 RSA public key (n and e of its JWK) and the A.2 protected header is UnsupportedAlgorithm: polyjose never signs with RSA",
+  "source": "ADR 0067; ADR 0034 §6",
+  "description": "ADR 0067 §2, RFC 8725 §3.1: RS256 signing with the RFC 7515 App. A.2 RSA public key (n and e of its JWK) and the A.2 protected header is KeyAlgorithmMismatch: only the private key signs, and no binding may treat a public key as a signing key",
   "operation": "jws.sign",
   "input": {
     "serialization": "compact",
@@ -19,6 +19,6 @@
   },
   "expect": {
     "ok": false,
-    "error": "UnsupportedAlgorithm"
+    "error": "KeyAlgorithmMismatch"
   }
 }

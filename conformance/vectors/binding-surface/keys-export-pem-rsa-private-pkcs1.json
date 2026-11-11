@@ -1,0 +1,23 @@
+{
+  "source": "ADR 0067; ADR 0018 §3; ADR 0034 §6",
+  "description": "ADR 0018 §3 format matrix, RFC 8017 App. A.1.1: PEM export of the RSA private JWK of keys/export-rsa-private-to-spki.json as pkcs1 is InvalidKey, since PKCS#1 export writes only the RSAPublicKey; no binding may drop the private members and write the public half instead (export the private key as pkcs8, or its to_public as pkcs1)",
+  "operation": "keys.export_pem",
+  "input": {
+    "jwk": {
+      "kty": "RSA",
+      "n": "pTAElx1S4Jsf0MD53-bHKYAj7cbKUA_avvDzTf1y1ScdDULqqIcjnXPp4EMXBFaphbkFU7S5jNDHVVkt5PgvLhccro7cSL6eldcMvu0kCER4rcSLfzC92wlozxW74ZHkb0wFzcWdVPbfXZLtTO1nfgf2rm6IEyklP3yc8qpVSbq26EUuOBxWOcocssykiJ1sQm01WCOLPS160fX-1sBDb80sRk8Liy8ZrDq0ATrFnPoxWLkhgdKRKqmMPhZHA9lRQfr4cSa3eFO7FxX1N7D1y4W5IWbUPATzDTKqgpvccXoZKQDmc4LmRPNXDowvdgxODWugYfbvjPm6WEhpkFEDaw",
+      "e": "AQAB",
+      "d": "DCPdyn9YtnIgIfb0xkxPKdElktWPy9eGc48AyqQMWvb_bxiSZ2VbLDi3IQi9Oc_msJG6_v5ivqMfazndIh1NVl1Tec69CMmdnRSLdsK16beiiN7Pg78AzQbBgaquvrK6r6VOLePOns5v9xATyZoPB5etPP-Zl5LoDmTpofn7v6nPWHKiN5C_Lh3GqAMzp1-NtOg16cB6PwyGOyDFvzRgkuloCiHUnU1BAyL-gcE5YnffpPE38ZeDSepDYCP-Bi8dbbESr6pkaCA-7cYjOBAqO1mnmWalZF3_mI7Dh5ZKbNriCYAIr0Sz-7BbVy6M912h3ahHR-BsZHfaUoBvI0rb1Q",
+      "p": "5mNuoiY2ABWvqDCm45iaD3wVvOX7SeobaRyRv0H_SbnYAedRyFnBohqG7IIZ8I8GbNQPtr0GyMUoWn4HLGvDnVnfjzhM0x7ixSwvGtRGh57V6yD1T_qrXCnqtqv47C3pGDXb03lBBFTIDlAjhWEBuh1KZ6RaNCXjSEj324IoR2c",
+      "q": "t40NC1rncImflTvdAhiiwcNX01XjDZuG7rozmHoJ_VYTMr1_frb5vdBCnSzrJIfyHS7pGPrhDKVPKgWdFkeN3s87hT8QyvFCBpRKDyEyPAawqGULZhCkqqgoj_nwI6BTD_iWx7NBC50u0S3stZEyKaysiGDu6kmMqeb8fWFrdV0",
+      "dp": "Tsl6MCF5HhZMd-wLZpHtPZZlqK_Ne71_mjaW8R0UvJW9dQkyQp3PRixkL8VeMZH31IfAx_FkvIwP_MJUmbBQuSLe_Q931ksdqeguQ7KMXBzJcxtWSP-kUmRTTB0Lh1k7-XeRsYQp491KfPqS6y39dTRHGaJu5p5-V138xSiBtck",
+      "dq": "PFBGDAgn6sveO2x7V_f-a0skLdaYEF2dvg5DbAQWCj_heRfZsCqx79RiP0GGVu-w-DP09ndhwgUD-Vv03WBP1vojpcouW3Fhb8YEe-o9longPMVPNI-dfFJbWcwYQ6yn_qSB70cQxZ81xhigIp1-bUFHRF0NxMC8TwwOxahgZiU",
+      "qi": "j5ohqnoCzpSBvNoBixfdL6cyJFUGNOBBvNo7x-1-Rn0JNGdiAHkA_4751p8oK9DAigjo87cki4VikHiUSclKt5oSjAAOyL86eR86lzNAdrfbM_nsVGyN1S6dVCNuZuSCP8ZRBWXc8RNZJlsiREYL2i5RXzbqnsEhkVmd1z7yMew"
+    },
+    "format": "pkcs1"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidKey"
+  }
+}

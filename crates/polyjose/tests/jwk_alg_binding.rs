@@ -1,5 +1,5 @@
 //! JWK `alg` strictness at import (RFC 7517 §4.4, RFC 7518 §3–§5,
-//! RFC 8037 §3, RFC 8812 §3; ADRs 0006, 0021, 0022, 0026 §2 step 8), black
+//! RFC 8037 §3, RFC 8812 §3; ADRs 0006, 0021, 0022, 0026 §2 step 8, 0067), black
 //! box (ADR 0008 layer 2): `RSA-OAEP` and `RSA1_5` are unsupported, a known
 //! `alg` the key family cannot serve is a mismatch, unknown values are kept,
 //! the error precedence is fixed, and a JWK Set skips such members.
@@ -18,6 +18,10 @@ use polyjose::util::b64url_encode;
 
 /// The 2048-bit modulus of RFC 7517 Appendix A.1.
 const RSA_N: &str = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw";
+
+/// RFC 7517 Appendix A.2: the private members of the `RSA_N` key
+/// (RFC 7518 §6.3.2), as JSON members to append after `n` and `e`.
+const RSA_A2_PRIVATE: &str = r#","d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYtqc0X4jfcKoAC8Q","p":"83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQBQxtPVnwD20R-60eTDmD2ujnMt5PoqMrm8RfmNhVWDtjjMmCMjOpSXicFHj7XOuVIYQyqVWlWEh6dN36GVZYk93N8Bc9vY41xy8B9RzzOGVQzXvNEvn7O0nVbfs","q":"3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobLyumqjVZQO1dIrdwgTnCdpYzBcOfW5r370AFXjiWft_NGEiovonizhKpo9VVS78TzFgxkIdrecRezsZ-1kYd_s1qDbxtkDEgfAITAG9LUnADun4vIcb6yelxk","dp":"G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0oimYwxIi2emTAue0UOa5dpgFGyBJ4c8tQ2VF402XRugKDTP8akYhFo5tAA77Qe_NmtuYZc3C3m3I24G2GvR5sSDxUyAN2zq8Lfn9EUms6rY3Ob8YeiKkTiBj0","dq":"s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huUUvMfBcMpn8lqeW6vzznYY5SSQF7pMdC_agI3nG8Ibp1BUb0JUiraRNqUfLhcQb_d9GF4Dh7e74WbRsobRonujTYN1xCaP6TO61jvWrX-L18txXw494Q_cgk","qi":"GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYzgUIZEVFEcOqwemRN81zoDAaa-Bk0KWNGDjJHZDdDmFhW3AN7lI-puxk_mHZGJ11rxyR8O55XLSe3SPmRfKwZI6yU24ZxvQKFYItdldUKGzO6Ia6zTKhAVRU""#;
 
 /// The key kinds polyjose imports, by a short label.
 const KINDS: &[&str] = &[
@@ -262,18 +266,39 @@ fn from_object_applies_the_same_rules() {
 }
 
 /// The precedence, fixed and documented in `crate::jwk`:
-/// 1. `kty`/`crv` support, then the RSA private-member check (ADR 0021);
-/// 2. every structural check of the key and the common members;
+/// 1. `kty`/`crv` support, and a multi-prime RSA key (`oth`, ADR 0067 §3);
+/// 2. every structural check of the key and the common members, an
+///    incomplete RSA private key included (ADR 0067);
 /// 3. then the `alg` checks: `RSA-OAEP`/`RSA1_5`, then the family.
 #[test]
 fn error_precedence() {
-    let rsa_private =
+    let rsa_d_only =
         |alg: &str| format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","d":"AQAB","alg":"{alg}"}}"#);
+    let rsa_private = |alg: &str| {
+        format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB"{RSA_A2_PRIVATE},"alg":"{alg}"}}"#)
+    };
+    let incomplete = Error::InvalidKey("RSA private key must have d, p, q, dp, dq and qi");
     let cases: Vec<(String, Error)> = vec![
-        // 1. The RSA private-member check comes first, whatever the alg.
+        // 1. `oth` (multi-prime) comes first, whatever else is wrong.
+        (
+            r#"{"kty":"RSA","n":"AQAB","oth":[],"alg":"HS256"}"#.to_owned(),
+            Error::UnsupportedAlgorithm,
+        ),
+        (
+            format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","d":"AQAB","oth":7,"alg":"RS256"}}"#),
+            Error::UnsupportedAlgorithm,
+        ),
+        // 2. An incomplete RSA private key is structural: it wins over
+        // every alg check (ADR 0067).
+        (rsa_d_only("RSA1_5"), incomplete.clone()),
+        (rsa_d_only("HS256"), incomplete.clone()),
+        (rsa_d_only("x-future"), incomplete.clone()),
+        // 3. A complete RSA private key gets to the alg checks like a
+        // public one.
         (rsa_private("RSA1_5"), Error::UnsupportedAlgorithm),
-        (rsa_private("HS256"), Error::UnsupportedAlgorithm),
-        (rsa_private("x-future"), Error::UnsupportedAlgorithm),
+        (rsa_private("RSA-OAEP"), Error::UnsupportedAlgorithm),
+        (rsa_private("HS256"), Error::KeyAlgorithmMismatch),
+        (rsa_private("EdDSA"), Error::KeyAlgorithmMismatch),
         // An unsupported kty or crv is reported before the alg.
         (
             r#"{"kty":"OKP","crv":"Ed448","x":"AA","alg":"HS256"}"#.to_owned(),
@@ -323,6 +348,11 @@ fn error_precedence() {
     ];
     for (json, want) in cases {
         assert_eq!(import(&json).err(), Some(want), "{json}");
+    }
+    // A complete RSA private key with an alg it serves imports (ADR 0067).
+    for alg in ["RS256", "PS512", "RSA-OAEP-256", "x-future"] {
+        let key = import(&rsa_private(alg)).unwrap_or_else(|e| panic!("{alg}: {e}"));
+        assert!(!key.is_public(), "{alg}");
     }
 }
 
@@ -376,23 +406,30 @@ fn jwk_set_skips_alg_failures() {
     assert_eq!(candidates, [0]);
 }
 
-/// The set still fails on an RSA private member (ADR 0021, ADR 0029 §3),
-/// even when the same member also has a skippable alg, and on JSON errors.
+/// ADR 0067 §4 (amending ADR 0029 §3): an RSA private member no longer
+/// fails the set. A complete one is kept when its alg fits; one with an
+/// unsupported or mismatched alg, an incomplete one, or a multi-prime one
+/// is skipped (RFC 7517 §5). JSON errors still fail the whole set.
 #[test]
-fn jwk_set_still_fails_on_rsa_private_and_json_errors() {
-    let rsa_private =
+fn jwk_set_keeps_usable_rsa_private_keys_and_still_fails_on_json_errors() {
+    let p_only =
         |alg: &str| format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB","p":"AQAB","alg":"{alg}"}}"#);
+    let complete = |alg: &str| {
+        format!(r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB"{RSA_A2_PRIVATE},"alg":"{alg}"}}"#)
+    };
+    let multi = |alg: &str| {
+        format!(
+            r#"{{"kty":"RSA","n":"{RSA_N}","e":"AQAB"{RSA_A2_PRIVATE},"oth":[],"alg":"{alg}"}}"#
+        )
+    };
     for alg in ["RSA1_5", "RSA-OAEP", "HS256", "RS256"] {
-        let doc = format!(
-            r#"{{"keys":[{},{}]}}"#,
-            with_alg("RSA", "RSA-OAEP"),
-            rsa_private(alg)
-        );
-        assert_eq!(
-            JwkSet::from_json(doc.as_bytes()).err(),
-            Some(Error::UnsupportedAlgorithm),
-            "{alg}"
-        );
+        for member in [p_only(alg), complete(alg), multi(alg)] {
+            let doc = format!(r#"{{"keys":[{},{member}]}}"#, with_alg("RSA", "RSA-OAEP"));
+            let set = JwkSet::from_json(doc.as_bytes()).unwrap_or_else(|e| panic!("{alg}: {e}"));
+            let kept = usize::from(alg == "RS256" && member == complete(alg));
+            assert_eq!((set.len(), set.skipped()), (kept, 2 - kept), "{member}");
+            assert!(set.keys().iter().all(|k| !k.is_public()), "{alg}");
+        }
     }
     let duplicate = r#"{"keys":[{"kty":"oct","k":"AA","alg":"RS256","alg":"RS256"}]}"#;
     assert!(matches!(

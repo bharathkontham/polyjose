@@ -27,7 +27,7 @@ Each platform name links to its get-started page on [polyjose.dev](https://polyj
 
 ## Built on
 polyjose writes no cryptographic primitives of its own. It composes pure-Rust primitives into JOSE, with no OpenSSL, `ring` or `aws-lc`:
-- **[RustCrypto](https://github.com/RustCrypto):** `sha2`, `hmac`, `aes`, `aes-gcm`, `aes-kw`, `cbc`, `pbkdf2`, `p256`, `p384`, `p521`, `k256`, `rsa` (public-key operations only) and `zeroize`
+- **[RustCrypto](https://github.com/RustCrypto):** `sha2`, `hmac`, `aes`, `aes-gcm`, `aes-kw`, `cbc`, `pbkdf2`, `p256`, `p384`, `p521`, `k256`, `rsa` and `zeroize`
 - **[dalek-cryptography](https://github.com/dalek-cryptography):** `ed25519-dalek`, `x25519-dalek` and `subtle`
 - **[rust-random](https://github.com/rust-random):** `getrandom`, the operating system's random number generator
 

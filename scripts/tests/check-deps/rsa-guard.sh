@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# Negative test of the ADR 0021 guard in scripts/check-deps.sh (checks 9-11), which deny.toml's
-# ignore of RUSTSEC-2023-0071 depends on. Each change below is made in a copy of the tree and must
-# make check-deps.sh fail with the guard's own message (and no other check's):
-#   - RSA private-key and signing types and an Oaep decryption in crates/polyjose/src, and the
-#     same in a binding (bindings/**);
+# Negative test of the RSA guard in scripts/check-deps.sh (checks 9-12), narrowed by ADR 0067 §6:
+# RSA private keys and the blinded signing and OAEP-256 decryption entry points are allowed in the
+# RSA files (jws/rsa.rs, jwe/rsa_oaep.rs, keys/rsa.rs) only, and key generation, RSA1_5, the
+# unblinded, typed and scheme-based private-key paths and hazmat stay forbidden everywhere. Each
+# change below is made in a copy of the tree and must make check-deps.sh fail with the guard's own
+# message (and no other check's):
+#   - RSA private-key and signing types and an Oaep decryption in crates/polyjose/src outside the
+#     RSA files, and the same in a binding (bindings/**);
+#   - in the RSA files themselves: key generation (`PrivateKey::new`, `::from_p_q`, `Generate`),
+#     the unblinded entry points (`.sign(`, `pkcs1v15_sign`, `pss_sign`, `oaep_decrypt`,
+#     `decrypt_blinded`), RSA1_5 (`pkcs1v15_decrypt_with_rng`) and `hazmat`, and an out-of-line
+#     child module of keys/rsa.rs;
 #   - the same in a workspace member outside bindings/: the feature 0013 security audit's L1 plant
 #     (a bin-only tools/evil member with an optional rsa and polyjose behind a feature, compiling
 #     rsa::pkcs1v15::SigningKey), and a member whose [[bin]] path is outside its own directory
@@ -15,11 +22,11 @@
 #     (`k!(rsa)`) is invisible to text; the compiled-symbol check catches all four
 #     (scripts/check-rsa-symbols.sh, tested by rsa-symbols.sh);
 #   - a sha1 dependency (also when sha1 is allowlisted and credited, so check 10 alone catches it);
-#   - an rsa feature.
+#   - an rsa feature other than `pkcs1v15` (ADR 0067 §1), beside it or instead of it.
 # Legitimate look-alikes must pass: an ECDSA SigningKey and a cbc Decryptor in files that do not
 # use the rsa crate, a child module named `rsa` reached as `self::rsa::`, the typed RSA
-# VerifyingKey, and inline modules (`#[cfg(test)] mod tests { .. }`) in the RSA files. The
-# unchanged tree must pass.
+# VerifyingKey, inline modules (`#[cfg(test)] mod tests { .. }`) in the RSA files, and the blinded
+# private-key code ADR 0067 allows in the RSA files. The unchanged tree must pass.
 # Usage: scripts/tests/check-deps/rsa-guard.sh
 set -euo pipefail
 export LC_ALL=C
@@ -112,6 +119,98 @@ expect_fail "RsaPrivateKey in a binding" "bindings/wasm/src/lib.rs:[0-9]+: RsaPr
 new_case binding-new-file
 append_to bindings/ffi/src/sign/rsa.rs 'pub fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
 expect_fail "rsa SigningKey in a new binding file" "bindings/ffi/src/sign/rsa.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+
+# --- Check 9: what ADR 0067 §6 still forbids inside the RSA files ----------------------------------
+rsa_rs=crates/polyjose/src/jws/rsa.rs
+oaep_rs=crates/polyjose/src/jwe/rsa_oaep.rs
+keys_rsa=crates/polyjose/src/keys/rsa.rs
+
+new_case keygen-new-in-rsa-file
+append_to "$rsa_rs" 'fn k<R: rsa::rand_core::TryCryptoRng>(r: &mut R) { let _ = rsa::RsaPrivateKey::new(r, 2048); }'
+expect_fail "RsaPrivateKey::new in jws/rsa.rs" "$rsa_rs:[0-9]+: PrivateKey::new in a file that uses the rsa crate: RSA key generation" "$src_fail"
+
+new_case keygen-from-p-q-in-rsa-file
+append_to "$oaep_rs" $'fn k(p: rsa::BoxedUint, q: rsa::BoxedUint, e: rsa::BoxedUint) {
+    let _ = rsa::PrivateKey
+        ::from_p_q(p, q, e);
+}'
+expect_fail "PrivateKey / newline / ::from_p_q in jwe/rsa_oaep.rs" "$oaep_rs:[0-9]+: PrivateKey::from_p_q in a file that uses the rsa crate: RSA key generation" "$src_fail"
+
+new_case keygen-generate-trait
+append_to "$keys_rsa" 'use rsa::Generate as _;'
+expect_fail "use rsa::Generate in keys/rsa.rs" "$keys_rsa:[0-9]+: Generate in a file that uses the rsa crate" "$src_fail"
+
+new_case unblinded-sign-method
+append_to "$rsa_rs" 'fn s<S: rsa::traits::SignatureScheme>(k: &rsa::PrivateKey, s: S, d: &[u8]) { let _ = k.sign(s, d); }'
+expect_fail "PrivateKey .sign( (unblinded) in jws/rsa.rs" "$rsa_rs:[0-9]+: a \\.sign\\( call in an RSA file" "$src_fail"
+
+new_case unblinded-pkcs1v15-sign
+append_to "$rsa_rs" 'fn s(k: &rsa::PrivateKey, m: &[u8]) { let _ = k.pkcs1v15_sign::<sha2::Sha256>(m); }'
+expect_fail "pkcs1v15_sign (no RNG) in jws/rsa.rs" "$rsa_rs:[0-9]+: pkcs1v15_sign in a file that uses the rsa crate: an unblinded" "$src_fail"
+
+new_case unblinded-pss-sign
+append_to "$keys_rsa" 'fn s(k: &rsa::PrivateKey, m: &[u8]) { let _ = k.pss_sign::<sha2::Sha256>(m); }'
+expect_fail "pss_sign (no RNG) in keys/rsa.rs" "$keys_rsa:[0-9]+: pss_sign in a file that uses the rsa crate: an unblinded" "$src_fail"
+
+new_case unblinded-scheme-sign-with-rng
+append_to "$rsa_rs" 'fn s<R, S>(k: &rsa::PrivateKey, r: &mut R, s: S, d: &[u8]) { let _ = k.sign_with_rng(r, s, d); }'
+expect_fail "scheme-based sign_with_rng in jws/rsa.rs" "$rsa_rs:[0-9]+: sign_with_rng in a file that uses the rsa crate" "$src_fail"
+
+new_case unblinded-oaep-decrypt
+append_to "$oaep_rs" 'fn d(k: &rsa::PrivateKey, c: &[u8]) { let _ = k.oaep_decrypt::<sha2::Sha256>(c); }'
+expect_fail "oaep_decrypt (no RNG) in jwe/rsa_oaep.rs" "$oaep_rs:[0-9]+: oaep_decrypt in a file that uses the rsa crate: an unblinded" "$src_fail"
+
+new_case decrypt-blinded-scheme
+append_to "$oaep_rs" 'fn d<R, P>(k: &rsa::PrivateKey, r: &mut R, p: P, c: &[u8]) { let _ = k.decrypt_blinded(r, p, c); }'
+expect_fail "scheme-based decrypt_blinded in jwe/rsa_oaep.rs" "$oaep_rs:[0-9]+: a decrypt call in a file that uses the rsa crate" "$src_fail"
+
+new_case rsa1-5-in-rsa-file
+append_to "$oaep_rs" 'fn d<R>(k: &rsa::PrivateKey, r: &mut R, c: &[u8]) { let _ = k.pkcs1v15_decrypt_with_rng(r, c); }'
+expect_fail "pkcs1v15_decrypt_with_rng (RSA1_5) in jwe/rsa_oaep.rs" "$oaep_rs:[0-9]+: pkcs1v15_decrypt_with_rng: RSA1_5" "$src_fail"
+
+new_case rsa1-5-encrypt
+append_to crates/polyjose/src/jwe.rs 'fn e<R>(k: &rsa::PublicKey, r: &mut R, m: &[u8]) { let _ = k.pkcs1v15_encrypt_with_rng(r, m); }'
+expect_fail "pkcs1v15_encrypt_with_rng (RSA1_5)" "crates/polyjose/src/jwe.rs:[0-9]+: pkcs1v15_encrypt_with_rng: RSA1_5" "$src_fail"
+
+new_case hazmat
+append_to "$keys_rsa" 'use rsa::hazmat::rsa_decrypt as _;'
+expect_fail "rsa::hazmat in keys/rsa.rs" "$keys_rsa:[0-9]+: hazmat in a file that uses the rsa crate" "$src_fail"
+
+new_case child-module-keys-rsa
+append_to "$keys_rsa" 'mod child;'
+append_to crates/polyjose/src/keys/rsa/child.rs 'use super::BoxedUint as _;'
+expect_fail "out-of-line mod child; in keys/rsa.rs" "$keys_rsa:[0-9]+: mod child;: an out-of-line child module of an RSA file" "$src_fail"
+
+# --- Check 9: the allowed RSA private-key items, outside the RSA files -----------------------------
+new_case private-key-outside
+append_to crates/polyjose/src/jwk.rs 'fn k(x: &rsa::PrivateKey) {}'
+expect_fail "rsa::PrivateKey in jwk.rs" "crates/polyjose/src/jwk.rs:[0-9]+: PrivateKey in a file that uses the rsa crate, outside the RSA files" "$src_fail"
+
+new_case blinded-sign-outside
+append_to crates/polyjose/src/jws/hmac.rs 'fn s<K, R>(k: &K, r: &mut R, m: &[u8]) { let _ = k.pkcs1v15_sign_with_rng::<Sha256, _>(r, m); }'
+expect_fail "pkcs1v15_sign_with_rng in jws/hmac.rs" "crates/polyjose/src/jws/hmac.rs:[0-9]+: pkcs1v15_sign_with_rng outside the RSA files" "$src_fail"
+
+new_case from-components-binding
+append_to bindings/surface/src/lib.rs 'pub fn k(n: B, e: B, d: B, p: B, q: B) { let _ = K::from_components(n, e, d, vec![p, q]); }'
+expect_fail "from_components in a binding" "bindings/surface/src/lib.rs:[0-9]+: from_components outside the RSA files" "$src_fail"
+
+# --- Check 9: the blinded private-key code ADR 0067 allows in the RSA files must pass ---------------
+new_case allowed-blinded-paths
+append_to "$keys_rsa" $'fn private(n: rsa::BoxedUint, e: rsa::BoxedUint, d: rsa::BoxedUint, p: rsa::BoxedUint, q: rsa::BoxedUint)
+    -> Option<rsa::PrivateKey> {
+    rsa::PrivateKey::from_components(n, e, d, vec![p, q]).ok()
+}'
+append_to "$rsa_rs" $'fn sign<R: rsa::rand_core::TryCryptoRng>(key: &rsa::PrivateKey, rng: &mut R, input: &[u8]) -> Vec<u8> {
+    let rs = key
+        .pkcs1v15_sign_with_rng::<Sha256, _>(rng, input)
+        .unwrap_or_default();
+    let ps = key.pss_sign_with_rng::<Sha384, _>(rng, input).unwrap_or_default();
+    [rs, ps].concat()
+}'
+append_to "$oaep_rs" $'fn unwrap<R: rsa::rand_core::TryCryptoRng>(key: &rsa::PrivateKey, rng: &mut R, ek: &[u8]) -> Option<Vec<u8>> {
+    key.oaep_decrypt_with_rng::<sha2::Sha256, _>(rng, ek).ok()
+}'
+expect_pass "from_components, pkcs1v15_sign_with_rng, pss_sign_with_rng and oaep_decrypt_with_rng in the RSA files"
 
 # --- Check 9: workspace members outside bindings/ (feature 0013 security audit L1) ----------------
 # The audit's plant, as written: build tooling under tools/, which no shipped library links, still
@@ -540,8 +639,22 @@ expect_fail "package = \"rsa\" renamed in a [target.*.dependencies] table" \
   "^  - polyjose-node \\(bindings/node/Cargo.toml\\): rsa as r in \\[target\\.cfg\\(unix\\)\\.dependencies\\]$" "$rename_fail"
 
 # --- Check 11: rsa features ------------------------------------------------------------------------
+# The pin carries `features = ["pkcs1v15"]` (ADR 0067 §1); a plant adds to that list or replaces it.
+case $rsa_line in
+  *'features = ["pkcs1v15"]'*) ;;
+  *) lib_die "Cargo.toml's rsa line does not enable exactly the pkcs1v15 feature: $rsa_line" ;;
+esac
+feature_fail='^FAIL: rsa must be built with no feature but pkcs1v15'
 new_case rsa-feature
-replace_in Cargo.toml "$rsa_line" "$(printf '%s\n' "$rsa_line" | sed 's/ }$/, features = ["hazmat"] }/')"
-expect_fail "rsa feature" "^  - rsa $rsa_locked_ere with features: hazmat$" "^FAIL: rsa must be built with no features"
+replace_in Cargo.toml "$rsa_line" "$(printf '%s\n' "$rsa_line" | sed 's/features = \["pkcs1v15"\]/features = ["pkcs1v15", "hazmat"]/')"
+expect_fail "rsa feature hazmat beside pkcs1v15" "^  - rsa $rsa_locked_ere with features: hazmat$" "$feature_fail"
+
+new_case rsa-feature-getrandom
+replace_in Cargo.toml "$rsa_line" "$(printf '%s\n' "$rsa_line" | sed 's/features = \["pkcs1v15"\]/features = ["getrandom"]/')"
+expect_fail "rsa feature getrandom instead of pkcs1v15" "^  - rsa $rsa_locked_ere with features: getrandom$" "$feature_fail"
+
+new_case rsa-feature-binding
+replace_in bindings/ffi/Cargo.toml $'[dependencies]\n' $'[dependencies]\nrsa = { workspace = true, features = ["std"] }\n'
+expect_fail "rsa feature std from a binding" "^  - rsa $rsa_locked_ere with features: std$" "$feature_fail"
 
 finish

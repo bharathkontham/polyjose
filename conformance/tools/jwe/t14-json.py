@@ -292,8 +292,8 @@ def a4_algs(*algs):
     return j
 neg("no-candidate-not-allowed-ranks-first", "plan.md recipient selection: RFC 7516 A.4.7's A128KW recipient copied three times with alg RSA1_5 (unsupported), A192KW (allowed, but the 16-octet key cannot serve it) and A256KW (not allowed): with no candidate, AlgorithmNotAllowed ranks first",
     a4_algs("RSA1_5", "A192KW", "A256KW"), "AlgorithmNotAllowed", algs=["A128KW", "A192KW"])
-neg("no-candidate-unsupported-ranks-second", "plan.md recipient selection: RFC 7516 A.4.7's A128KW recipient copied with alg A192KW (allowed, but the 16-octet key cannot serve it), RSA-OAEP-256 (not decrypted, ADR 0021) and A192KW: UnsupportedAlgorithm outranks KeyAlgorithmMismatch",
-    a4_algs("A192KW", "RSA-OAEP-256", "A192KW"), "UnsupportedAlgorithm", algs=["A128KW", "A192KW", "RSA-OAEP-256"])
+neg("no-candidate-unsupported-ranks-second", "plan.md recipient selection: RFC 7516 A.4.7's A128KW recipient copied with alg A192KW (allowed, but the 16-octet key cannot serve it), RSA-OAEP (SHA-1 OAEP, allowed but never implemented, ADR 0022) and A192KW: UnsupportedAlgorithm outranks KeyAlgorithmMismatch",
+    a4_algs("A192KW", "RSA-OAEP", "A192KW"), "UnsupportedAlgorithm", algs=["A128KW", "A192KW", "RSA-OAEP"])
 neg("no-candidate-key-mismatch", "plan.md recipient selection: RFC 7516 A.4.7's A128KW recipient copied twice with alg A192KW and A256KW, both allowed, neither servable by the 16-octet key: KeyAlgorithmMismatch",
     a4_algs("A192KW", "A256KW"), "KeyAlgorithmMismatch", algs=["A128KW", "A192KW", "A256KW"])
 vec(J, "rfc7516-a4-general-one-candidate-among-failures-decrypt", "RFC 7516 App. A.4",

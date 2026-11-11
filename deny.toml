@@ -36,26 +36,12 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "MPL-2.0"]
 
 [advisories]
-# RUSTSEC-2023-0071 (Marvin timing leak in rsa private-key operations) has no patched version: it also
-# affects rsa 0.10.0-rc.21, which the core depends on with no features. polyjose uses rsa for
-# public-key operations only (RS*/PS* verification, RSA-OAEP-256 encryption), which handle no
-# secret, so the advisory does not apply to them (ADR 0021). It is ignored only because of a
-# two-layer guard (ADR 0049 §1):
-#   - for codegened code, scripts/check-rsa-symbols.sh: it builds polyjose (all features) and every
-#     binding, in the dev and the release profile, and fails on any RSA private-key, signing or
-#     decryption symbol in their own compiled object code, which no alias, macro, #[path] or
-#     include! can hide;
-#   - for public code that is never codegened in the workspace (an uncalled #[inline] pub fn, a
-#     generic pub fn never instantiated), which has no symbol yet a downstream crate can compile,
-#     the text scan of scripts/check-deps.sh check 9, including its macro rule (no `rsa`
-#     identifier inside a macro call). Checks 9-12 also run first as the fast layer and reject any
-#     rsa feature, any sha1 in the core and rsa under another name.
-# Both are negative-tested (scripts/tests/check-deps/rsa-symbols.sh and rsa-guard.sh) and run in
-# `scripts/test-all.sh rust` and CI. Removing the guard means removing this ignore; never ignore
-# the advisory for any other reason. Re-enabling RSA private-key operations needs a new ADR
-# once RustSec marks the advisory resolved for a stable rsa release.
+# RUSTSEC-2023-0071 (Marvin) is not ignored: rsa 0.10.0, the exact pin, is its first patched release
+# (advisory-db `patched = [">= 0.10.0"]`; ADR 0067). RSA private-key operations are allowed only
+# through rsa's blinded entry points and only in the RSA files; key generation, RSA1_5, unblinded
+# paths and hazmat stay blocked by scripts/check-deps.sh (checks 9-12) and
+# scripts/check-rsa-symbols.sh (ADR 0067 §6, ADR 0049 §1). Never add an ignore for an rsa advisory.
 ignore = [
-  { id = "RUSTSEC-2023-0071", reason = "ADR 0021: public-key RSA operations only; guarded by scripts/check-deps.sh" },
   # basic-toml is *unmaintained* (not a vulnerability). It reaches us only through uniffi_bindgen,
   # the build-time code generator behind uniffi's "cli" feature; it is never linked into a shipped
   # library. Re-check on every uniffi upgrade and drop this entry as soon as uniffi stops using it.

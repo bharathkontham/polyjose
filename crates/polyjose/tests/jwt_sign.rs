@@ -493,21 +493,46 @@ fn every_signing_alg_round_trips_through_jws_verify_and_claims_parse() {
     }
 }
 
-#[test]
-fn rs_and_ps_issuing_is_unsupported_with_an_rsa_public_key() {
-    // ADR 0021: polyjose holds no RSA private key, so RS*/PS* never sign.
-    let key = jwk(RS_PUBLIC);
-    for alg in RS_PS_ALGS {
-        let err = jwt::sign(&rfc7519_claims(), &IssueOptions::new(alg.clone()), &key).unwrap_err();
-        assert_eq!(err, Error::UnsupportedAlgorithm, "{alg:?}");
-    }
+/// RFC 7515 Appendix A.2.1's RSA private key.
+fn rs_private() -> Jwk {
+    Jwk::from_json(include_bytes!(
+        "data/keys/rfc/rfc7515-a2-rsa-private.jwk.json"
+    ))
+    .unwrap()
 }
 
 #[test]
-fn rs_and_ps_issuing_is_unsupported_before_the_key_is_looked_at() {
-    // The algorithm decides before any key binding: an HMAC key (wrong
-    // family, which would be KeyAlgorithmMismatch) still reports
-    // UnsupportedAlgorithm (ADR 0021, ADR 0026 §2 step 8).
+fn rs_and_ps_issuing_needs_an_rsa_private_key() {
+    // ADR 0067 (superseding ADR 0021): RS*/PS* issue with an RSA private
+    // key (RFC 7518 §3.3, §3.5), and the token validates with the public
+    // part; a public key cannot sign (key binding, ADR 0026 §2 step 8).
+    let private = rs_private();
+    let public = private.to_public().unwrap();
+    for alg in RS_PS_ALGS {
+        let token = jwt::sign(&rfc7519_claims(), &IssueOptions::new(alg.clone()), &private)
+            .unwrap_or_else(|e| panic!("{alg:?}: {e:?}"));
+        let allowed = [alg.clone()];
+        let opts = polyjose::jws::VerifyOptions::new(&allowed).unwrap();
+        assert!(
+            polyjose::jws::verify_compact(&token, &public, &opts).is_ok(),
+            "{alg:?}"
+        );
+        let err =
+            jwt::sign(&rfc7519_claims(), &IssueOptions::new(alg.clone()), &public).unwrap_err();
+        assert_eq!(err, Error::KeyAlgorithmMismatch, "{alg:?}");
+    }
+    // RS256 is deterministic (RFC 8017 §8.2.1): the same claims give the
+    // same token.
+    let opts = IssueOptions::new(SigningAlg::RS256);
+    assert_eq!(
+        jwt::sign(&rfc7519_claims(), &opts, &private).unwrap(),
+        jwt::sign(&rfc7519_claims(), &opts, &private).unwrap()
+    );
+}
+
+#[test]
+fn rs_and_ps_issuing_with_a_key_of_another_family_is_a_mismatch() {
+    // RFC 8725 §3.1: an HMAC key (or EC, OKP) does not serve RS*/PS*.
     for alg in RS_PS_ALGS {
         let err = jwt::sign(
             &rfc7519_claims(),
@@ -515,7 +540,7 @@ fn rs_and_ps_issuing_is_unsupported_before_the_key_is_looked_at() {
             &jwk(OCT_32_KID),
         )
         .unwrap_err();
-        assert_eq!(err, Error::UnsupportedAlgorithm, "{alg:?}");
+        assert_eq!(err, Error::KeyAlgorithmMismatch, "{alg:?}");
     }
 }
 
@@ -627,12 +652,13 @@ fn an_ec_key_of_the_wrong_curve_is_rejected_for_the_alg() {
 }
 
 #[test]
-fn rs_and_ps_with_an_ec_okp_or_rsa_key_are_unsupported() {
-    // The algorithm check is first for every key kind.
+fn rs_and_ps_with_an_ec_okp_or_public_rsa_key_are_mismatches() {
+    // ADR 0067: RS*/PS* are issuable, so key binding decides: none of these
+    // keys can make an RSA signature (RFC 7518 §3.3, §3.5; RFC 8725 §3.1).
     for key in [jwk(P256), ed25519(), jwk(RS_PUBLIC)] {
         for alg in [SigningAlg::RS256, SigningAlg::PS256] {
             let err = jwt::sign(&rfc7519_claims(), &IssueOptions::new(alg), &key).unwrap_err();
-            assert_eq!(err, Error::UnsupportedAlgorithm);
+            assert_eq!(err, Error::KeyAlgorithmMismatch);
         }
     }
 }

@@ -9,14 +9,14 @@
 //!   [`JsonForm::Flattened`] (one), and [`decrypt_json`] (either form).
 //!   Shared and per-recipient unprotected headers and the JWE AAD.
 //!
-//! # Algorithms (ADR 0006, ADR 0021, ADR 0022)
+//! # Algorithms (ADR 0006, ADR 0021, ADR 0022, ADR 0067)
 //!
 //! | `alg` | encrypt | decrypt |
 //! |---|---|---|
 //! | `dir`, `A128KW`/`A192KW`/`A256KW`, `A128GCMKW`/`A192GCMKW`/`A256GCMKW` | yes | yes |
 //! | `ECDH-ES`, `ECDH-ES+A128KW`/`+A192KW`/`+A256KW` on P-256/384/521 and X25519 | yes | yes |
 //! | `PBES2-HS256+A128KW`, `PBES2-HS384+A192KW`, `PBES2-HS512+A256KW` | yes | yes |
-//! | `RSA-OAEP-256` | yes, to a public key | [`Error::UnsupportedAlgorithm`] |
+//! | `RSA-OAEP-256` | yes, to a public key | yes, with the private key; a bad Encrypted Key is never reported as such (RFC 7516 §11.5) |
 //! | `RSA-OAEP` (SHA-1), `RSA1_5` | [`Error::UnsupportedAlgorithm`] | [`Error::UnsupportedAlgorithm`] |
 //!
 //! Every `enc`: A128CBC-HS256, A192CBC-HS384, A256CBC-HS512 (RFC 7518

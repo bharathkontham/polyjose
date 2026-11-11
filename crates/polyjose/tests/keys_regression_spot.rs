@@ -121,9 +121,11 @@ fn generate_for_table() {
 
 #[test]
 fn unsupported_inputs_are_unsupported_algorithm() {
+    // ADR 0067 §3: multi-prime RSA private keys stay unsupported (the
+    // two-prime ones import; see the next test).
     for f in [
-        "openssl/reject-rsa2048-private-pkcs8.pem",
-        "openssl/reject-rsa2048-private-pkcs1.pem",
+        "openssl/reject-rsa2048-3prime-private-pkcs8.pem",
+        "openssl/reject-rsa2048-3prime-private-pkcs1.pem",
         "openssl/reject-rsa2048-pkcs8-encrypted.pem",
         "openssl/reject-ec-p256-pkcs8-encrypted.pem",
         "openssl/reject-ed25519-pkcs8-encrypted.pem",
@@ -140,25 +142,47 @@ fn unsupported_inputs_are_unsupported_algorithm() {
             "{f}"
         );
     }
-    for f in [
-        "openssl/reject-rsa2048-private-pkcs8.der",
-        "openssl/reject-ec-p256-pkcs8-encrypted.der",
-    ] {
-        assert!(
-            matches!(
-                Jwk::from_der(&fixture(f), KeyFormat::Pkcs8),
-                Err(Error::UnsupportedAlgorithm)
-            ),
-            "{f}"
-        );
-    }
     assert!(matches!(
         Jwk::from_der(
-            &fixture("openssl/reject-rsa2048-private-pkcs1.der"),
-            KeyFormat::Pkcs1
+            &fixture("openssl/reject-ec-p256-pkcs8-encrypted.der"),
+            KeyFormat::Pkcs8
         ),
         Err(Error::UnsupportedAlgorithm)
     ));
+}
+
+#[test]
+fn two_prime_rsa_private_keys_import_in_every_form() {
+    // ADR 0067: PKCS#8 (RFC 5958) and PKCS#1 RSAPrivateKey (RFC 8017
+    // App. A.1.2), PEM and DER, all give the one private key whose public
+    // half is rsa2048-spki.pem. The fixtures keep their `reject-` names.
+    let public = Jwk::from_pem(&String::from_utf8(fixture("openssl/rsa2048-spki.pem")).unwrap())
+        .unwrap()
+        .to_object();
+    let keys = [
+        Jwk::from_pem(
+            &String::from_utf8(fixture("openssl/reject-rsa2048-private-pkcs8.pem")).unwrap(),
+        ),
+        Jwk::from_pem(
+            &String::from_utf8(fixture("openssl/reject-rsa2048-private-pkcs1.pem")).unwrap(),
+        ),
+        Jwk::from_der(
+            &fixture("openssl/reject-rsa2048-private-pkcs8.der"),
+            KeyFormat::Pkcs8,
+        ),
+        Jwk::from_der(
+            &fixture("openssl/reject-rsa2048-private-pkcs1.der"),
+            KeyFormat::Pkcs1,
+        ),
+    ];
+    for (i, key) in keys.iter().enumerate() {
+        let key = key.as_ref().unwrap_or_else(|e| panic!("{i}: {e}"));
+        let KeyMaterial::Rsa(rsa) = key.material() else {
+            panic!("{i}: not RSA")
+        };
+        assert!(rsa.is_private(), "{i}");
+        assert_eq!(key.to_public().unwrap().to_object(), public, "{i}");
+    }
 }
 
 #[test]
@@ -193,10 +217,25 @@ fn pem_and_der_never_yield_oct_and_oct_never_exports() {
 }
 
 #[test]
-fn private_rsa_never_exports_and_public_rsa_round_trips() {
+fn rsa_keys_round_trip_and_public_rsa_has_no_private_form() {
     let pem = String::from_utf8(fixture("openssl/rsa2048-spki.pem")).unwrap();
     let k = Jwk::from_pem(&pem).unwrap();
     assert_eq!(k.to_pem(KeyFormat::Spki).unwrap().as_str(), pem);
-    assert!(k.to_pem(KeyFormat::Pkcs8).is_err());
+    // ADR 0067: PKCS#8 of an RSA public key needs a private key.
+    assert_eq!(
+        k.to_pem(KeyFormat::Pkcs8).map(|_| ()),
+        Err(Error::InvalidKey("private key required"))
+    );
     assert!(k.to_pem(KeyFormat::Sec1).is_err());
+    // ADR 0067: the private key round-trips through PKCS#8, and its SPKI
+    // export is the public fixture.
+    let private_pem =
+        String::from_utf8(fixture("openssl/reject-rsa2048-private-pkcs8.pem")).unwrap();
+    let private = Jwk::from_pem(&private_pem).unwrap();
+    assert_eq!(
+        private.to_pem(KeyFormat::Pkcs8).unwrap().as_str(),
+        private_pem
+    );
+    assert_eq!(private.to_pem(KeyFormat::Spki).unwrap().as_str(), pem);
+    assert!(private.to_pem(KeyFormat::Sec1).is_err());
 }

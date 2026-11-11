@@ -1,5 +1,5 @@
 //! Key generation and PEM/DER import and export (ADR 0030 §4, "JWK"; RFC 7518 §6, RFC 8037 §2,
-//! RFC 7468, RFC 5958, RFC 5280 §4.1, RFC 5915, RFC 8410; ADR 0005, ADR 0018, ADR 0021).
+//! RFC 7468, RFC 5958, RFC 5280 §4.1, RFC 5915, RFC 8410; ADR 0005, ADR 0018, ADR 0067).
 //!
 //! Generated keys and imported or exported private keys are secrets: inputs are taken by value
 //! and wiped on return (ADR 0030 §7.1), and results are copied into the JS value from the
@@ -39,16 +39,17 @@ pub fn jwk_generate_okp(crv: &str) -> Result<JsString, JsValue> {
 }
 
 /// A new key for the JWS `alg` or JWE `alg`/`enc` name, with `alg` set (RFC 7517 §4.4;
-/// RFC 7518 §3.1, §4.1, §5.1). RSA fails with `UnsupportedAlgorithm` (ADR 0021).
+/// RFC 7518 §3.1, §4.1, §5.1). RSA fails with `UnsupportedAlgorithm` (no RSA key generation,
+/// ADR 0067 §3).
 #[wasm_bindgen(js_name = jwkGenerateForAlg)]
 pub fn jwk_generate_for_alg(alg: &str) -> Result<JsString, JsValue> {
     let jwk = keys::jwk_generate_for_alg(alg).map_err(polyjose_error)?;
     Ok(JsString::from(jwk.as_str()))
 }
 
-/// The JWK of a PEM key (RFC 7468): PKCS #8, SEC 1, SPKI or PKCS #1 public (RFC 5958, RFC 5915,
-/// RFC 5280 §4.1.2.7, RFC 8017 Appendix A.1.1). An RSA private key fails with
-/// `UnsupportedAlgorithm` (ADR 0021).
+/// The JWK of a PEM key (RFC 7468): PKCS #8, SEC 1, SPKI, or PKCS #1 public or private
+/// (RFC 5958, RFC 5915, RFC 5280 §4.1.2.7, RFC 8017 Appendix A.1.1, A.1.2). An RSA private key
+/// imports with all its members (ADR 0067 §2).
 #[wasm_bindgen(js_name = jwkFromPem)]
 pub fn jwk_from_pem(pem: String) -> Result<JsString, JsValue> {
     let pem = Zeroizing::new(pem);

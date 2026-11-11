@@ -1,0 +1,18 @@
+{
+  "source": "polyjose",
+  "description": "Runner fixture (fake backend): a multi-prime RSA JWK (oth, RFC 7518 §6.3.2.7) is refused at import, as the core does (ADR 0067 §3)",
+  "operation": "jwk.thumbprint",
+  "input": {
+    "jwk": {
+      "kty": "RSA",
+      "n": "AQAB",
+      "e": "AQAB",
+      "oth": []
+    },
+    "hash": "sha-256"
+  },
+  "expect": {
+    "ok": false,
+    "error": "UnsupportedAlgorithm"
+  }
+}

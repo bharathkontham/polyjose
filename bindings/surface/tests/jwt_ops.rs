@@ -37,8 +37,9 @@ const RFC7519_3_1_CLAIMS: &str =
 const EXP: i64 = 1_300_819_380;
 /// 60 s before [`EXP`]: the RFC 7519 §3.1 token is valid (conformance `3-1-hs256-before-exp`).
 const BEFORE_EXP: i64 = 1_300_819_320;
-/// An RSA private JWK: never imported, in a key or a set (ADR 0021, ADR 0029 §3).
-const RSA_PRIVATE: &str = r#"{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB"}"#;
+/// An RSA private JWK with `d` but none of the CRT members: `InvalidKey` (RFC 7518 §6.3.2,
+/// ADR 0067 §3), as a key, and a skipped member in a set (ADR 0041 §2).
+const RSA_PRIVATE_WITHOUT_CRT: &str = r#"{"kty":"RSA","n":"AQAB","e":"AQAB","d":"AQAB"}"#;
 /// A distinctive value standing in for key material or claims (the core's marker style).
 const MARKER: &str = "pj-SECRET-marker-7f3a";
 
@@ -310,10 +311,19 @@ fn a_tampered_token_or_the_wrong_key_fails_the_signature() {
         "InvalidSignature"
     );
     assert_eq!(
-        code(jwt_verify(RFC7519_3_1, RSA_PRIVATE, &hs256())),
-        "UnsupportedAlgorithm"
+        code(jwt_verify(RFC7519_3_1, RSA_PRIVATE_WITHOUT_CRT, &hs256())),
+        "InvalidKey"
+    );
+    // A valid RSA private key is no HS256 key (RFC 8725 §3.1).
+    let rsa_private = member_json(&vector_input(RS256_ISSUE), "key");
+    assert_eq!(
+        code(jwt_verify(RFC7519_3_1, &rsa_private, &hs256())),
+        "KeyAlgorithmMismatch"
     );
 }
+
+/// RS256 issuing with the RFC 7515 A.2 private key, exact output (ADR 0067 §2).
+const RS256_ISSUE: &str = "jwt/rfc7519/a2-rs256-issue-exact.json";
 
 // --- JWK Sets (ADR 0029) ----------------------------------------------------------------------
 
@@ -372,16 +382,20 @@ fn a_set_without_a_candidate_is_no_matching_key() {
 }
 
 #[test]
-fn a_set_holding_an_rsa_private_jwk_is_unsupported() {
-    // ADR 0021, ADR 0029 §3: the whole set fails at import.
-    assert_eq!(
-        code(jwt_verify_with_jwks(
-            RFC7519_3_1,
-            &jwks(&[OCT, RSA_PRIVATE]),
-            &hs256()
-        )),
-        "UnsupportedAlgorithm"
-    );
+fn a_set_holding_an_rsa_private_jwk_imports_it_as_is() {
+    // ADR 0067 §4 (amending ADR 0029 §3): the RSA private member is imported and verifies with
+    // its public half; a partial RSA private member is skipped (ADR 0041 §2).
+    let input = vector_input("jwt/rfc7519/a2-rs256-key.json");
+    let token = member_str(&input, "token");
+    let rsa_private = member_json(&vector_input(RS256_ISSUE), "key");
+    let set = jwks(&[OCT, RSA_PRIVATE_WITHOUT_CRT, &rsa_private]);
+    let verified = jwt_verify_with_jwks(&token, &set, &at(BEFORE_EXP, &["RS256"])).unwrap();
+    // `key_index` indexes the imported keys (`JwkSet::keys`, ADR 0029 §4): the skipped member
+    // has none, so the RSA key is 1.
+    assert_eq!(verified.key_index, Some(1));
+    assert_eq!(parse(&verified.claims), parse(RFC7519_3_1_CLAIMS));
+    let verified = jwt_verify_with_jwks(RFC7519_3_1, &set, &hs256()).unwrap();
+    assert_eq!(verified.key_index, Some(0));
 }
 
 #[test]
@@ -872,28 +886,60 @@ fn header_members_go_through_the_cores_header_param() {
 }
 
 #[test]
-fn rsa_signing_is_unsupported_and_none_is_not_allowed() {
-    // ADR 0021: no RSA private-key operations, whatever the key.
-    let input = vector_input("jwt/rfc7519/a2-rs256-key.json");
-    let rsa_public = member_json(&input, "key");
+fn rsa_signing_needs_the_private_key_and_none_is_not_allowed() {
+    // ADR 0067 §2: RS256 is deterministic (RFC 8017 §8.2), so the conformance vector's token is
+    // reproduced exactly; PS256 is randomized (RFC 7518 §3.5) and is checked by verifying.
+    let issue = vector_input(RS256_ISSUE);
+    let rsa_private = member_json(&issue, "key");
+    let rsa_public = member_json(&vector_input("jwt/rfc7519/a2-rs256-key.json"), "key");
+    let rs256 = jwt_sign(
+        RFC7519_3_1_CLAIMS,
+        &rsa_private,
+        &JwtSignOptions::new("RS256".to_owned()),
+    )
+    .unwrap();
+    let file = format!(
+        "{}/../../conformance/vectors/{RS256_ISSUE}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let whole = parse(&std::fs::read_to_string(file).unwrap());
+    let token = whole
+        .get("expect")
+        .and_then(|e| e.get("token"))
+        .and_then(Value::as_str)
+        .unwrap();
+    assert_eq!(rs256, token);
     for alg in ["RS256", "PS256"] {
         let options = JwtSignOptions::new(alg.to_owned());
+        let token = jwt_sign(RFC7519_3_1_CLAIMS, &rsa_private, &options).unwrap();
+        let verified = jwt_verify(&token, &rsa_public, &at(BEFORE_EXP, &[alg])).unwrap();
+        assert_eq!(verified.alg, alg);
+        assert_eq!(parse(&verified.claims), parse(RFC7519_3_1_CLAIMS));
+        // A key of another family, or the public key, cannot sign (RFC 8725 §3.1).
         assert_eq!(
             code(jwt_sign(RFC7519_3_1_CLAIMS, OCT, &options)),
-            "UnsupportedAlgorithm"
+            "KeyAlgorithmMismatch"
         );
         assert_eq!(
             code(jwt_sign(RFC7519_3_1_CLAIMS, &rsa_public, &options)),
-            "UnsupportedAlgorithm"
+            "KeyAlgorithmMismatch"
+        );
+        assert_eq!(
+            code(jwt_sign(
+                RFC7519_3_1_CLAIMS,
+                RSA_PRIVATE_WITHOUT_CRT,
+                &options
+            )),
+            "InvalidKey"
         );
     }
     assert_eq!(
         code(jwt_sign(
             RFC7519_3_1_CLAIMS,
-            RSA_PRIVATE,
+            &rsa_private,
             &JwtSignOptions::new("HS256".to_owned())
         )),
-        "UnsupportedAlgorithm"
+        "KeyAlgorithmMismatch"
     );
     assert_eq!(
         code(jwt_sign(

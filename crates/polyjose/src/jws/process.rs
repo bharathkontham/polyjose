@@ -390,8 +390,7 @@ impl SignReady<'_> {
 /// 6. [`Error::UnsupportedAlgorithm`]: `alg` is not a known JWS algorithm.
 /// 7. [`Error::AlgorithmNotAllowed`]: `alg` is `none` (RFC 8725 §3.2,
 ///    ADR 0007).
-/// 8. [`Error::UnsupportedAlgorithm`] for RS*/PS* (ADR 0021), then
-///    [`Error::KeyAlgorithmMismatch`] / [`Error::InvalidKey`] from key
+/// 8. [`Error::KeyAlgorithmMismatch`] / [`Error::InvalidKey`] from key
 ///    binding, including a public-only key ([`bind_key`]).
 pub(crate) fn prepare_sign<'k>(header: &JoseHeader, key: &'k Jwk) -> Result<SignReady<'k>> {
     let alg = understood_alg(header)?;
@@ -984,12 +983,17 @@ mod tests {
         assert_eq!(sign_code(r#"{"alg":"HS1"}"#, &hs), "UnsupportedAlgorithm");
         // RFC 8725 §3.2: never produce `none`.
         assert_eq!(sign_code(r#"{"alg":"none"}"#, &hs), "AlgorithmNotAllowed");
-        // ADR 0021: no RSA signing, whatever the key.
+        // ADR 0067: RS*/PS* sign with an RSA private key only (RFC 7518
+        // §3); a public RSA key or another family is KeyAlgorithmMismatch.
+        assert_eq!(
+            sign_code(r#"{"alg":"RS256"}"#, &keys::rsa_private("")),
+            "ok"
+        );
         assert_eq!(
             sign_code(r#"{"alg":"RS256"}"#, &keys::rsa(2048)),
-            "UnsupportedAlgorithm"
+            "KeyAlgorithmMismatch"
         );
-        assert_eq!(sign_code(r#"{"alg":"PS256"}"#, &hs), "UnsupportedAlgorithm");
+        assert_eq!(sign_code(r#"{"alg":"PS256"}"#, &hs), "KeyAlgorithmMismatch");
         // Key binding: a public key cannot sign; a short HMAC key is weak.
         assert_eq!(
             sign_code(r#"{"alg":"ES256"}"#, &keys::p256("")),

@@ -1,0 +1,23 @@
+{
+  "source": "OpenSSL 4.1.0 (polyjose key fixtures); ADR 0067",
+  "description": "PEM export of a 2048-bit RSA private JWK (its members from openssl pkey -text) as PKCS#8 with rsaEncryption and NULL around its RSAPrivateKey (RFC 5958 §2, RFC 8017 App. A.1.2; ADR 0067 §2), byte for byte the OpenSSL fixture it came from.",
+  "operation": "keys.export_pem",
+  "input": {
+    "jwk": {
+      "kty": "RSA",
+      "n": "pTAElx1S4Jsf0MD53-bHKYAj7cbKUA_avvDzTf1y1ScdDULqqIcjnXPp4EMXBFaphbkFU7S5jNDHVVkt5PgvLhccro7cSL6eldcMvu0kCER4rcSLfzC92wlozxW74ZHkb0wFzcWdVPbfXZLtTO1nfgf2rm6IEyklP3yc8qpVSbq26EUuOBxWOcocssykiJ1sQm01WCOLPS160fX-1sBDb80sRk8Liy8ZrDq0ATrFnPoxWLkhgdKRKqmMPhZHA9lRQfr4cSa3eFO7FxX1N7D1y4W5IWbUPATzDTKqgpvccXoZKQDmc4LmRPNXDowvdgxODWugYfbvjPm6WEhpkFEDaw",
+      "e": "AQAB",
+      "d": "DCPdyn9YtnIgIfb0xkxPKdElktWPy9eGc48AyqQMWvb_bxiSZ2VbLDi3IQi9Oc_msJG6_v5ivqMfazndIh1NVl1Tec69CMmdnRSLdsK16beiiN7Pg78AzQbBgaquvrK6r6VOLePOns5v9xATyZoPB5etPP-Zl5LoDmTpofn7v6nPWHKiN5C_Lh3GqAMzp1-NtOg16cB6PwyGOyDFvzRgkuloCiHUnU1BAyL-gcE5YnffpPE38ZeDSepDYCP-Bi8dbbESr6pkaCA-7cYjOBAqO1mnmWalZF3_mI7Dh5ZKbNriCYAIr0Sz-7BbVy6M912h3ahHR-BsZHfaUoBvI0rb1Q",
+      "p": "5mNuoiY2ABWvqDCm45iaD3wVvOX7SeobaRyRv0H_SbnYAedRyFnBohqG7IIZ8I8GbNQPtr0GyMUoWn4HLGvDnVnfjzhM0x7ixSwvGtRGh57V6yD1T_qrXCnqtqv47C3pGDXb03lBBFTIDlAjhWEBuh1KZ6RaNCXjSEj324IoR2c",
+      "q": "t40NC1rncImflTvdAhiiwcNX01XjDZuG7rozmHoJ_VYTMr1_frb5vdBCnSzrJIfyHS7pGPrhDKVPKgWdFkeN3s87hT8QyvFCBpRKDyEyPAawqGULZhCkqqgoj_nwI6BTD_iWx7NBC50u0S3stZEyKaysiGDu6kmMqeb8fWFrdV0",
+      "dp": "Tsl6MCF5HhZMd-wLZpHtPZZlqK_Ne71_mjaW8R0UvJW9dQkyQp3PRixkL8VeMZH31IfAx_FkvIwP_MJUmbBQuSLe_Q931ksdqeguQ7KMXBzJcxtWSP-kUmRTTB0Lh1k7-XeRsYQp491KfPqS6y39dTRHGaJu5p5-V138xSiBtck",
+      "dq": "PFBGDAgn6sveO2x7V_f-a0skLdaYEF2dvg5DbAQWCj_heRfZsCqx79RiP0GGVu-w-DP09ndhwgUD-Vv03WBP1vojpcouW3Fhb8YEe-o9longPMVPNI-dfFJbWcwYQ6yn_qSB70cQxZ81xhigIp1-bUFHRF0NxMC8TwwOxahgZiU",
+      "qi": "j5ohqnoCzpSBvNoBixfdL6cyJFUGNOBBvNo7x-1-Rn0JNGdiAHkA_4751p8oK9DAigjo87cki4VikHiUSclKt5oSjAAOyL86eR86lzNAdrfbM_nsVGyN1S6dVCNuZuSCP8ZRBWXc8RNZJlsiREYL2i5RXzbqnsEhkVmd1z7yMew"
+    },
+    "format": "pkcs8"
+  },
+  "expect": {
+    "ok": true,
+    "pem": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQClMASXHVLgmx/Q\nwPnf5scpgCPtxspQD9q+8PNN/XLVJx0NQuqohyOdc+ngQxcEVqmFuQVTtLmM0MdV\nWS3k+C8uFxyujtxIvp6V1wy+7SQIRHitxIt/ML3bCWjPFbvhkeRvTAXNxZ1U9t9d\nku1M7Wd+B/aubogTKSU/fJzyqlVJurboRS44HFY5yhyyzKSInWxCbTVYI4s9LXrR\n9f7WwENvzSxGTwuLLxmsOrQBOsWc+jFYuSGB0pEqqYw+FkcD2VFB+vhxJrd4U7sX\nFfU3sPXLhbkhZtQ8BPMNMqqCm9xxehkpAOZzguZE81cOjC92DE4Na6Bh9u+M+bpY\nSGmQUQNrAgMBAAECggEADCPdyn9YtnIgIfb0xkxPKdElktWPy9eGc48AyqQMWvb/\nbxiSZ2VbLDi3IQi9Oc/msJG6/v5ivqMfazndIh1NVl1Tec69CMmdnRSLdsK16bei\niN7Pg78AzQbBgaquvrK6r6VOLePOns5v9xATyZoPB5etPP+Zl5LoDmTpofn7v6nP\nWHKiN5C/Lh3GqAMzp1+NtOg16cB6PwyGOyDFvzRgkuloCiHUnU1BAyL+gcE5Ynff\npPE38ZeDSepDYCP+Bi8dbbESr6pkaCA+7cYjOBAqO1mnmWalZF3/mI7Dh5ZKbNri\nCYAIr0Sz+7BbVy6M912h3ahHR+BsZHfaUoBvI0rb1QKBgQDmY26iJjYAFa+oMKbj\nmJoPfBW85ftJ6htpHJG/Qf9JudgB51HIWcGiGobsghnwjwZs1A+2vQbIxShafgcs\na8OdWd+POEzTHuLFLC8a1EaHntXrIPVP+qtcKeq2q/jsLekYNdvTeUEEVMgOUCOF\nYQG6HUpnpFo0JeNISPfbgihHZwKBgQC3jQ0LWudwiZ+VO90CGKLBw1fTVeMNm4bu\nujOYegn9VhMyvX9+tvm90EKdLOskh/IdLukY+uEMpU8qBZ0WR43ezzuFPxDK8UIG\nlEoPITI8BrCoZQtmEKSqqCiP+fAjoFMP+JbHs0ELnS7RLey1kTIprKyIYO7qSYyp\n5vx9YWt1XQKBgE7JejAheR4WTHfsC2aR7T2WZaivzXu9f5o2lvEdFLyVvXUJMkKd\nz0YsZC/FXjGR99SHwMfxZLyMD/zCVJmwULki3v0Pd9ZLHanoLkOyjFwcyXMbVkj/\npFJkU0wdC4dZO/l3kbGEKePdSnz6kust/XU0Rxmibuaefldd/MUogbXJAoGAPFBG\nDAgn6sveO2x7V/f+a0skLdaYEF2dvg5DbAQWCj/heRfZsCqx79RiP0GGVu+w+DP0\n9ndhwgUD+Vv03WBP1vojpcouW3Fhb8YEe+o9longPMVPNI+dfFJbWcwYQ6yn/qSB\n70cQxZ81xhigIp1+bUFHRF0NxMC8TwwOxahgZiUCgYEAj5ohqnoCzpSBvNoBixfd\nL6cyJFUGNOBBvNo7x+1+Rn0JNGdiAHkA/4751p8oK9DAigjo87cki4VikHiUSclK\nt5oSjAAOyL86eR86lzNAdrfbM/nsVGyN1S6dVCNuZuSCP8ZRBWXc8RNZJlsiREYL\n2i5RXzbqnsEhkVmd1z7yMew=\n-----END PRIVATE KEY-----\n"
+  }
+}

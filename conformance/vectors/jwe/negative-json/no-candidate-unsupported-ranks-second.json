@@ -1,6 +1,6 @@
 {
   "source": "polyjose",
-  "description": "plan.md recipient selection: RFC 7516 A.4.7's A128KW recipient copied with alg A192KW (allowed, but the 16-octet key cannot serve it), RSA-OAEP-256 (not decrypted, ADR 0021) and A192KW: UnsupportedAlgorithm outranks KeyAlgorithmMismatch",
+  "description": "plan.md recipient selection: RFC 7516 A.4.7's A128KW recipient copied with alg A192KW (allowed, but the 16-octet key cannot serve it), RSA-OAEP (SHA-1 OAEP, allowed but never implemented, ADR 0022) and A192KW: UnsupportedAlgorithm outranks KeyAlgorithmMismatch",
   "operation": "jwe.decrypt",
   "input": {
     "jwe": {
@@ -18,7 +18,7 @@
         },
         {
           "header": {
-            "alg": "RSA-OAEP-256",
+            "alg": "RSA-OAEP",
             "kid": "7"
           },
           "encrypted_key": "6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ"
@@ -42,7 +42,7 @@
     "allowed_algs": [
       "A128KW",
       "A192KW",
-      "RSA-OAEP-256"
+      "RSA-OAEP"
     ],
     "allowed_enc": [
       "A128CBC-HS256"

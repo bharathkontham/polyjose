@@ -27,18 +27,19 @@
 #      bindings/surface or bindings/ffi has a build script (build.rs, a `build` key, or a
 #      custom-build target in cargo metadata; security audit L2 of feature 0013);
 #   9. a Rust file of the workspace (crates/polyjose/src, bindings/, and every other workspace
-#      member's directory and target directories, from cargo metadata) names an RSA private-key or
-#      signing type,
-#      or decrypts with rsa (ADR 0021 §3: RSA is used for public-key operations only), or has a
+#      member's directory and target directories, from cargo metadata) uses an RSA item that stays
+#      forbidden (ADR 0067 §3, §6: key generation, RSA1_5, an unblinded or typed private-key entry
+#      point, hazmat), or names the RSA private key type or a blinded private-key entry point
+#      outside the RSA files (jws/rsa.rs, jwe/rsa_oaep.rs, keys/rsa.rs), or has a
 #      spelling that could hide such a use from this scan (ADR 0049 §1): `rsa` aliased or
 #      re-exported in a use tree (any `rsa` token in one names the crate), `#[path]` or `include!`,
-#      an out-of-line `mod x;` in jws/rsa.rs or jwe/rsa_oaep.rs (or a file below jws/rsa/ or
-#      jwe/rsa_oaep/), or `rsa` as an identifier in a macro call or attribute (the macro rule; the
+#      an out-of-line `mod x;` in an RSA file (or a file below jws/rsa/, jwe/rsa_oaep/ or
+#      keys/rsa/), or `rsa` as an identifier in a macro call or attribute (the macro rule; the
 #      arguments of std macros such as `assert!` and `format!` are exempt). Reported with its file
 #      and line;
 #  10. `sha1` is in the core's tree (ADR 0022: no SHA-1 anywhere in the core);
-#  11. `rsa` is built with any feature enabled, by the core or by anything else in the workspace
-#      (ADR 0021: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
+#  11. `rsa` is built with any feature but `pkcs1v15`, by the core or by anything else in the
+#      workspace (ADR 0067 §1: no `getrandom`, `encoding`, `sha1`, `hazmat` or other feature);
 #  12. a workspace member depends on the `rsa` package under another name (`package = "rsa"`),
 #      which would hide its use from check 9;
 #  13. the normal and build tree of a binding package (bindings/<name>, any target, default,
@@ -51,8 +52,8 @@
 #      `# serde-only-below:` line of its allowlist (ADR 0030 §1), or that line is not needed.
 #  Checks 9-12 are, with scripts/check-rsa-symbols.sh (the same rule read from the compiled object
 #  code of polyjose and the bindings, built in the dev and the release profile, ADR 0049 §1), the
-#  guard that deny.toml's ignore of RUSTSEC-2023-0071 depends on: removing them means removing
-#  that ignore.
+#  guard that keeps RSA key generation, RSA1_5, unblinded private-key paths and hazmat out
+#  (ADR 0067 §3, §6). They outlive the RUSTSEC-2023-0071 ignore, which rsa 0.10.0 made unneeded.
 #
 # The tree is `cargo tree -p polyjose -e normal,build --all-features --target all --prefix none`:
 # runtime dependencies and the build-dependencies of every crate in it (a build script or a
@@ -660,35 +661,50 @@ with open(out, "w", encoding="utf-8") as f:
   nbs_checked=$checked
 }
 
-# 9. RSA is used for public-key operations only (ADR 0021 §3): RUSTSEC-2023-0071 (Marvin) is a
-#    timing leak of rsa's private-key operations, and deny.toml ignores it only while this check
-#    holds. Every *.rs file under crates/polyjose/src, bindings/, and the directory of every other
+# 9. RSA private-key operations only where and as ADR 0067 allows them (§2, §3, §6; it supersedes
+#    ADR 0021 §2-§3): RS*/PS* signing and RSA-OAEP-256 decryption through rsa 0.10's blinded
+#    entry points, with polyjose's RNG (ADR 0005), in the RSA files only. Every *.rs file under
+#    crates/polyjose/src, bindings/, and the directory of every other
 #    workspace member (read from cargo metadata, so build tooling outside bindings/, such as a
 #    tools/<name> member, is scanned too; feature 0013 security audit L1) and of each of its
 #    targets is scanned as text, comments and strings included, so the check errs toward failing.
 #    Exempt, as before: build output and node_modules, and crates/polyjose outside the directories
 #    of its library and binary targets (src/): its tests and benches use RSA private keys as test
-#    oracles, and dev-dependencies never ship (ADR 0016 §5). Fails, naming the file and line, on:
-#    - anywhere: `RsaPrivateKey` (so `RsaPrivateKey::new` too), `BlindedSigningKey`,
-#      `DecryptingKey`, `RandomizedDecryptor`, `Pkcs1v15Sign` and the `Pss` scheme struct
-#      (verification uses the typed `pkcs1v15::VerifyingKey` / `pss::VerifyingKey`), and
-#      `Pkcs1v15Encrypt` (RSA1_5, ADR 0021);
+#    oracles, and dev-dependencies never ship (ADR 0016 §5). The RSA files are
+#    crates/polyjose/src/jws/rsa.rs, jwe/rsa_oaep.rs and keys/rsa.rs (or their mod.rs forms).
+#    Fails, naming the file and line, on:
+#    - outside the RSA files, anywhere: `RsaPrivateKey`, and the blinded private-key entry points
+#      `from_components`, `pkcs1v15_sign_with_rng`, `pss_sign_with_rng`, `oaep_decrypt_with_rng`
+#      (and their `_prehash_` and `_with_wide_primes` forms); in a file that names the rsa crate
+#      (see below), also the word `PrivateKey` (rsa 0.10's name for the type);
+#    - anywhere: `BlindedSigningKey`, `DecryptingKey`, `RandomizedDecryptor` (the typed keys and
+#      traits, some of them unblinded), `Pkcs1v15Sign` and the `Pss` scheme struct (scheme-based
+#      signing can turn blinding off; verification uses the typed `pkcs1v15::VerifyingKey` /
+#      `pss::VerifyingKey`), and RSA1_5 (ADR 0067 §3): `Pkcs1v15Encrypt`, `pkcs1v15_encrypt`,
+#      `pkcs1v15_decrypt` and their `_with_rng` forms;
 #    - anywhere: `use rsa;`, `use rsa as …`, `pub use rsa…` and `extern crate rsa`, which would let
 #      other files name rsa items without writing `rsa::`, and the same inside any use tree
 #      (`use {rsa as r};`, `pub(crate) use {rsa::pkcs1v15};`, `use r#rsa as r;`; ADR 0049 §1);
 #    - anywhere: `#[path …]` (also inside `cfg_attr`) and `include!`, which can load code from a
 #      file outside the scanned roots (ADR 0049 §1); include_str!/include_bytes! stay allowed;
-#    - in jws/rsa.rs and jwe/rsa_oaep.rs (or their mod.rs forms): any out-of-line child module
-#      (`mod x;`), and any file in jws/rsa/ or jwe/rsa_oaep/. A child module reaches the parent's
-#      private `use rsa::{pkcs1v15, ..}` as `super::pkcs1v15` without naming rsa (ADR 0049 §1).
-#      Inline modules (`#[cfg(test)] mod tests { .. }`) are allowed: their text is the file's;
+#    - in an RSA file: any out-of-line child module (`mod x;`), and any file in jws/rsa/,
+#      jwe/rsa_oaep/ or keys/rsa/. A child module reaches the parent's private
+#      `use rsa::{pkcs1v15, ..}` as `super::pkcs1v15` without naming rsa (ADR 0049 §1).
+#      Inline modules (`#[cfg(test)] mod tests { .. }`) are allowed: their text is the file's.
+#      In an RSA file, also a `.sign(` method call and `PrivateKey::sign` (the unblinded
+#      `PrivateKey::sign`, or a typed signing key's `Signer::sign`);
 #    - in a file that names the rsa crate (`rsa::` not preceded by a path, `use rsa…`, or an `rsa`
 #      token anywhere in a use tree, e.g. `use super::{hmac, rsa};`): the word
 #      `SigningKey` (e.g. `rsa::pkcs1v15::SigningKey`), the word `Decryptor` (`rsa::traits::
-#      Decryptor`) and any `decrypt(`/`decrypt_blinded(` call (e.g. an `Oaep` decryption). These
-#      words are legitimate elsewhere (`p256::ecdsa::SigningKey`, `cbc::Decryptor`), so RSA code
-#      lives in files of its own (jws/rsa.rs, jwe/rsa_oaep.rs) and refers to child modules named
-#      `rsa` as `self::rsa::`;
+#      Decryptor`), any `decrypt(`/`decrypt_blinded(` call (e.g. an `Oaep` scheme decryption;
+#      OAEP-256 decryption is `oaep_decrypt_with_rng` only), key generation (`PrivateKey::new`,
+#      `::new_with_exp`, `::from_p_q`, `::from_primes`, `::generate` and the other constructors
+#      that make primes or d, and the word `Generate`), the unblinded or OS-RNG-default entry
+#      points `pkcs1v15_sign`, `pkcs1v15_sign_prehash`, `pss_sign`, `pss_sign_prehash`,
+#      `oaep_decrypt`, `sign_with_default_rng` and the scheme-based `sign_with_rng`, and the word
+#      `hazmat`. These words are legitimate elsewhere (`p256::ecdsa::SigningKey`, `cbc::Decryptor`,
+#      elliptic-curve's `Generate`), so RSA code lives in files of its own (the RSA files) and
+#      refers to child modules named `rsa` as `self::rsa::`;
 #    - anywhere, the macro rule (ADR 0049 §1): `rsa` or `r#rsa` as an identifier inside the token
 #      tree of a macro call (`name!(..)`, `name![..]`, `name!{..}`, `macro_rules! name {..}`, at
 #      any depth) or of an attribute (`#[..]`, `#![..]`). A macro can make it the head of a path
@@ -753,14 +769,28 @@ roots = sorted(roots)
 PRUNE = set(roots) | {core_dir}
 word = lambda w: re.compile(r"(?<![A-Za-z0-9_])" + w + r"(?![A-Za-z0-9_])")
 USE_TREE = r"[A-Za-z0-9_:{},*#\s]"
+# The blinded private-key items ADR 0067 §6 allows, in the RSA files only.
+BLINDED = re.compile(r"(?<![A-Za-z0-9_])(from_components(?:_with_wide_primes)?|pkcs1v15_sign(?:_prehash)?_with_rng"
+                     r"|pss_sign(?:_prehash)?_with_rng|oaep_decrypt_with_rng)(?![A-Za-z0-9_])")
+OUTSIDE_RSA_FILES = [
+    (word("RsaPrivateKey"), "RsaPrivateKey outside the RSA files: RSA private keys are used only in jws/rsa.rs,"
+                            " jwe/rsa_oaep.rs and keys/rsa.rs (ADR 0067 §6)"),
+    (BLINDED, lambda m: "%s outside the RSA files: RSA private-key operations stay in jws/rsa.rs,"
+                        " jwe/rsa_oaep.rs and keys/rsa.rs (ADR 0067 §6)" % m.group(1)),
+]
+OUTSIDE_RSA_FILES_NAMING_RSA = [
+    (word("PrivateKey"), "PrivateKey in a file that uses the rsa crate, outside the RSA files: RSA private keys"
+                         " are used only in jws/rsa.rs, jwe/rsa_oaep.rs and keys/rsa.rs (ADR 0067 §6)"),
+]
 ANYWHERE = [
-    (word("RsaPrivateKey"), "RsaPrivateKey: RSA private keys are not supported (ADR 0021)"),
-    (word("BlindedSigningKey"), "BlindedSigningKey: RSA signing is not supported (ADR 0021)"),
-    (word("DecryptingKey"), "DecryptingKey: RSA decryption is not supported (ADR 0021)"),
-    (word("RandomizedDecryptor"), "RandomizedDecryptor: RSA decryption is not supported (ADR 0021)"),
-    (word("Pkcs1v15Sign"), "Pkcs1v15Sign: use the typed rsa::pkcs1v15::VerifyingKey (ADR 0021)"),
-    (word("Pss"), "Pss: use the typed rsa::pss::VerifyingKey (ADR 0021)"),
-    (word("Pkcs1v15Encrypt"), "Pkcs1v15Encrypt: RSA1_5 is not supported (ADR 0021)"),
+    (word("BlindedSigningKey"), "BlindedSigningKey: RSA signing goes through pkcs1v15_sign_with_rng/pss_sign_with_rng only (ADR 0067 §6)"),
+    (word("DecryptingKey"), "DecryptingKey: RSA-OAEP-256 decryption goes through oaep_decrypt_with_rng only (ADR 0067 §6)"),
+    (word("RandomizedDecryptor"), "RandomizedDecryptor: RSA-OAEP-256 decryption goes through oaep_decrypt_with_rng only (ADR 0067 §6)"),
+    (word("Pkcs1v15Sign"), "Pkcs1v15Sign: use the typed rsa::pkcs1v15::VerifyingKey, and pkcs1v15_sign_with_rng to sign (ADR 0067 §6)"),
+    (word("Pss"), "Pss: use the typed rsa::pss::VerifyingKey, and pss_sign_with_rng to sign (ADR 0067 §6)"),
+    (word("Pkcs1v15Encrypt"), "Pkcs1v15Encrypt: RSA1_5 is not supported in either direction (ADR 0067 §3)"),
+    (re.compile(r"(?<![A-Za-z0-9_])(pkcs1v15_(?:en|de)crypt(?:_with_rng)?)(?![A-Za-z0-9_])"),
+     lambda m: "%s: RSA1_5 is not supported in either direction (ADR 0067 §3)" % m.group(1)),
     (re.compile(r"(?<![A-Za-z0-9_])use\s+(::\s*)?rsa\s*(;|as(?![A-Za-z0-9_]))"),
      "use rsa / use rsa as: aliasing the rsa crate hides it from this check"),
     # A use tree is the text from `use` to its `;` when that text holds only path characters, so
@@ -787,18 +817,40 @@ NAMES_RSA = re.compile(r"(?<![A-Za-z0-9_:])rsa\s*::|(?<![A-Za-z0-9_])::\s*rsa\s*
 # `super::pkcs1v15` in a file that never names rsa, so these files may only have inline modules
 # (`mod x { .. }`, e.g. `#[cfg(test)] mod tests`), whose text this check sees as part of the file.
 RSA_FILES = {"crates/polyjose/src/jws/rsa.rs", "crates/polyjose/src/jws/rsa/mod.rs",
-             "crates/polyjose/src/jwe/rsa_oaep.rs", "crates/polyjose/src/jwe/rsa_oaep/mod.rs"}
-RSA_CHILD_DIRS = ("crates/polyjose/src/jws/rsa/", "crates/polyjose/src/jwe/rsa_oaep/")
+             "crates/polyjose/src/jwe/rsa_oaep.rs", "crates/polyjose/src/jwe/rsa_oaep/mod.rs",
+             "crates/polyjose/src/keys/rsa.rs", "crates/polyjose/src/keys/rsa/mod.rs"}
+RSA_CHILD_DIRS = ("crates/polyjose/src/jws/rsa/", "crates/polyjose/src/jwe/rsa_oaep/",
+                  "crates/polyjose/src/keys/rsa/")
 IN_RSA_MODULE_FILE = [
     (re.compile(r"(?<![A-Za-z0-9_])mod\s+((r#)?[A-Za-z_][A-Za-z0-9_]*)\s*;"),
      lambda m: "mod %s;: an out-of-line child module of an RSA file can use its private rsa imports"
                " through super:: (ADR 0049 §1); use an inline mod %s { .. }" % (m.group(1), m.group(1))),
+    (re.compile(r"\.\s*sign\s*(::\s*<[^()]*>)?\s*\("),
+     "a .sign( call in an RSA file: the unblinded PrivateKey::sign or a typed signing key; sign with"
+     " pkcs1v15_sign_with_rng/pss_sign_with_rng (ADR 0067 §6)"),
+    (re.compile(r"(?<![A-Za-z0-9_])(Rsa)?PrivateKey\s*::\s*sign(?![A-Za-z0-9_])"),
+     "PrivateKey::sign in an RSA file: unblinded; sign with pkcs1v15_sign_with_rng/pss_sign_with_rng (ADR 0067 §6)"),
 ]
+UNBLINDED = re.compile(r"(?<![A-Za-z0-9_])(pkcs1v15_sign|pkcs1v15_sign_prehash|pss_sign|pss_sign_prehash|oaep_decrypt"
+                       r"|sign_with_default_rng|sign_with_rng)(?![A-Za-z0-9_])")
+KEYGEN = re.compile(r"(?<![A-Za-z0-9_])(?:Rsa)?PrivateKey\s*::\s*(new|new_unchecked|new_with_exp|new_with_exp_unchecked"
+                    r"|from_p_q|from_primes|generate|try_generate|from_rng|try_from_rng|generate_from_rng"
+                    r"|try_generate_from_rng)(?![A-Za-z0-9_])")
 IN_RSA_FILE = [
-    (word("SigningKey"), "SigningKey in a file that uses the rsa crate: RSA signing is not supported (ADR 0021)"),
-    (word("Decryptor"), "Decryptor in a file that uses the rsa crate: RSA decryption is not supported (ADR 0021)"),
+    (word("SigningKey"), "SigningKey in a file that uses the rsa crate: typed RSA signing keys are not used;"
+                         " sign with pkcs1v15_sign_with_rng/pss_sign_with_rng (ADR 0067 §6)"),
+    (word("Decryptor"), "Decryptor in a file that uses the rsa crate: RSA-OAEP-256 decryption goes through"
+                        " oaep_decrypt_with_rng only (ADR 0067 §6)"),
     (re.compile(r"(?<![A-Za-z0-9_])decrypt(_blinded)?\s*(::\s*<[^()]*>)?\s*\("),
-     "a decrypt call in a file that uses the rsa crate: RSA decryption is not supported (ADR 0021)"),
+     "a decrypt call in a file that uses the rsa crate: RSA-OAEP-256 decryption goes through"
+     " oaep_decrypt_with_rng only (ADR 0067 §6)"),
+    (KEYGEN, lambda m: "PrivateKey::%s in a file that uses the rsa crate: RSA key generation is not supported;"
+                       " keys are imported (ADR 0067 §3)" % m.group(1)),
+    (word("Generate"), "Generate in a file that uses the rsa crate: RSA key generation is not supported (ADR 0067 §3)"),
+    (UNBLINDED, lambda m: "%s in a file that uses the rsa crate: an unblinded, OS-RNG-default or scheme-based RSA"
+                          " private-key entry point; use pkcs1v15_sign_with_rng, pss_sign_with_rng or"
+                          " oaep_decrypt_with_rng (ADR 0067 §2, §6)" % m.group(1)),
+    (word("hazmat"), "hazmat in a file that uses the rsa crate: the rsa hazmat module is not used (ADR 0067 §3)"),
 ]
 SKIP_DIRS = {"target", "node_modules", ".git"}
 # The whole-file views. Comments are found with a small lexer that knows string, raw string and
@@ -940,10 +992,15 @@ for root in roots:
             views = [flatten((ch, k) for k, ch in enumerate(text)), flatten(strip_comments(text))]
             rel = path.replace(os.sep, "/")
             rules = list(ANYWHERE)
-            if any(NAMES_RSA.search(line) for line in lines) or any(NAMES_RSA.search(v) for v, _ in views):
+            names_rsa = any(NAMES_RSA.search(line) for line in lines) or any(NAMES_RSA.search(v) for v, _ in views)
+            if names_rsa:
                 rules += IN_RSA_FILE
             if rel in RSA_FILES:
                 rules += IN_RSA_MODULE_FILE
+            else:
+                rules += OUTSIDE_RSA_FILES
+                if names_rsa:
+                    rules += OUTSIDE_RSA_FILES_NAMING_RSA
             reported = set()
             if rel.startswith(RSA_CHILD_DIRS) and rel not in RSA_FILES:
                 print("%s:1: a child module file of an RSA file (ADR 0049 §1): RSA code stays in"
@@ -978,7 +1035,7 @@ for root in roots:
         sys.exit("%s is not a directory" % root)
 ' "$work/metadata.json" "$root_physical" "$(dirname "$core_manifest")" >"$work/rsa-uses" || die "could not scan the sources for RSA private-key use"
   if [ -s "$work/rsa-uses" ]; then
-    fail "RSA private-key or signing use (ADR 0021 §3; deny.toml ignores RUSTSEC-2023-0071 only while this holds):"
+    fail "RSA private-key or signing use that ADR 0067 does not allow (§3, §6):"
     sed 's/^/  - /' "$work/rsa-uses"
   fi
 }
@@ -992,8 +1049,10 @@ check_no_sha1() {
   fi
 }
 
-# 11. rsa is built with no feature at all (ADR 0021): not `getrandom` (blinded private-key
-#     operations), `encoding` (pkcs1/pkcs8/spki), `sha1` (ADR 0022), `hazmat`, `std` or any other.
+# 11. rsa is built with exactly one feature, `pkcs1v15` (ADR 0067 §1, owner 2026-11-10): rsa 0.10.0
+#     puts RSASSA-PKCS1-v1_5 (RS256/384/512, RFC 7518 §3.3) behind it. Any other feature fails:
+#     `getrandom`/`os_rng` (blinding randomness is polyjose's own, ADR 0005), `encoding`
+#     (pkcs1/pkcs8/spki; polyjose owns DER), `sha1` (ADR 0022), `hazmat`, `std`, `serde`, `pkcs5`.
 #     Read from cargo metadata's resolve graph, whose features are unified across the whole
 #     workspace with every feature on, so a binding or another member that enables one fails too.
 check_rsa_no_features() {
@@ -1006,11 +1065,12 @@ if meta.get("resolve") is None:
     sys.exit("cargo metadata has no resolve graph")
 for node in meta["resolve"]["nodes"]:
     p = packages[node["id"]]
-    if p["name"] == "rsa" and node["features"]:
-        print("rsa %s with features: %s" % (p["version"], ", ".join(sorted(node["features"]))))
+    extra = sorted(set(node["features"]) - {"pkcs1v15"})
+    if p["name"] == "rsa" and extra:
+        print("rsa %s with features: %s" % (p["version"], ", ".join(extra)))
 ' "$work/metadata.json" >"$work/rsa-features" || die "could not read rsa's features from cargo metadata"
   if [ -s "$work/rsa-features" ]; then
-    fail "rsa must be built with no features (ADR 0021, ADR 0022):"
+    fail "rsa must be built with no feature but pkcs1v15 (ADR 0067 §1, ADR 0022):"
     sed 's/^/  - /' "$work/rsa-features"
     echo "  To see what enables them: cargo tree -e features --all-features --target all -i rsa"
   fi
@@ -1348,7 +1408,7 @@ if [ "$failed" -ne 0 ]; then
   exit 1
 fi
 
-echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA public-key use only, no sha1, rsa without features and under its own name (ADR 0021, ADR 0022)"
+echo "ok: the core's tree ($(wc -l <"$work/tree" | tr -d ' ') crates, normal and build) matches $allowlist, all with default features off, all credited in $credits, all from crates.io; RSA private-key use only as ADR 0067 allows, no sha1, rsa with pkcs1v15 only and under its own name (ADR 0067, ADR 0022)"
 # One line per group, in allowlist order.
 awk '$1 != last { if (NR > 1) printf "\n"; printf "  %s:", $1; last = $1 } { printf " %s", $2 } END { printf "\n" }' "$work/groups"
 echo "ok: no build script in $nbs_checked; bindings/node keeps napi-build's build.rs (ADR 0031)"

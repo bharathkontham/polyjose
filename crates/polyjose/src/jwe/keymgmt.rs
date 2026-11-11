@@ -72,16 +72,13 @@ pub(crate) fn mode(alg: &KeyMgmtAlg) -> Option<Mode> {
 }
 
 /// Whether polyjose implements `alg` in `direction`: every known `alg`
-/// both ways, except `RSA-OAEP-256`, which is encrypt only (ADR 0021).
-/// `RSA-OAEP` (ADR 0022), `RSA1_5` (ADR 0021) and unknown names are
+/// both ways, `RSA-OAEP-256` included since ADR 0067. `RSA-OAEP`
+/// (ADR 0022), `RSA1_5` (ADR 0021, ADR 0067 §3) and unknown names are
 /// [`KeyMgmtAlg::Unknown`] and unsupported both ways. This is the support
 /// check that precedes the allow-list (plan.md error contract).
 pub(crate) fn supported(alg: &KeyMgmtAlg, direction: Direction) -> bool {
-    match alg {
-        KeyMgmtAlg::RsaOaep256 => direction == Direction::Encrypt,
-        KeyMgmtAlg::Unknown(_) => false,
-        _ => true,
-    }
+    let _ = direction;
+    !matches!(alg, KeyMgmtAlg::Unknown(_))
 }
 
 /// Per-recipient encryption options (RFC 7518 §4.6.1.2–§4.6.1.3,
@@ -153,10 +150,6 @@ pub(crate) fn encrypt_key(
 /// 6–12) and returns the CEK. `header` is the union of the JOSE Header
 /// parts for this recipient (§5.2 step 4).
 ///
-/// RSA-OAEP-256 is answered here with [`Error::UnsupportedAlgorithm`],
-/// without reaching `rsa_oaep`: polyjose performs no RSA private-key
-/// operation (ADR 0021).
-///
 /// `pbes2_budget` is the decrypt call's PBKDF2 budget, shared by all its
 /// candidates (ADR 0050 §2); only the PBES2 family reads it.
 ///
@@ -189,7 +182,8 @@ pub(crate) fn decrypt_key(
         A::EcdhEs | A::EcdhEsA128KW | A::EcdhEsA192KW | A::EcdhEsA256KW => {
             ecdh_es::decrypt_key(alg, key, enc, header, encrypted_key, policy)
         }
-        A::RsaOaep256 | A::Unknown(_) => Err(Error::UnsupportedAlgorithm),
+        A::RsaOaep256 => rsa_oaep::decrypt_key(alg, key, enc, header, encrypted_key, policy),
+        A::Unknown(_) => Err(Error::UnsupportedAlgorithm),
     }
 }
 
@@ -237,11 +231,12 @@ mod tests {
     }
 
     #[test]
-    fn rsa_oaep_256_is_encrypt_only_and_unknown_is_unsupported() {
+    fn every_known_alg_is_supported_both_ways_and_unknown_is_not() {
+        // ADR 0067: RSA-OAEP-256 decrypts too; RSA-OAEP (ADR 0022) and
+        // RSA1_5 (ADR 0067 §3) are unknown both ways.
         for alg in KeyMgmtAlg::KNOWN {
-            let decrypts = *alg != KeyMgmtAlg::RsaOaep256;
             assert!(supported(alg, Direction::Encrypt), "{alg}");
-            assert_eq!(supported(alg, Direction::Decrypt), decrypts, "{alg}");
+            assert!(supported(alg, Direction::Decrypt), "{alg}");
         }
         for name in ["RSA-OAEP", "RSA1_5", "nope"] {
             let alg = KeyMgmtAlg::from(name);
@@ -251,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn rsa_oaep_256_and_unknown_decrypt_fail_as_unsupported() {
+    fn rsa1_5_is_unsupported_and_rsa_oaep_256_needs_an_rsa_private_key() {
         let key = RecipientKey::RsaPublic {
             n: vec![0xC1; 256],
             e: vec![1, 0, 1],
@@ -260,15 +255,30 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         let enc = ContentEncAlg::A128GCM;
         let header = Header::new();
-        for alg in [KeyMgmtAlg::RsaOaep256, KeyMgmtAlg::from("RSA1_5")] {
-            let mut budget = pbes2::Budget::new(&policy);
-            let result = decrypt_key(&alg, &key, &enc, &header, &[0; 256], &policy, &mut budget);
-            assert_eq!(
-                result.map(|_| ()),
-                Err(Error::UnsupportedAlgorithm),
-                "{alg}"
-            );
-        }
+        let mut budget = pbes2::Budget::new(&policy);
+        let rsa1_5 = KeyMgmtAlg::from("RSA1_5");
+        let result = decrypt_key(
+            &rsa1_5,
+            &key,
+            &enc,
+            &header,
+            &[0; 256],
+            &policy,
+            &mut budget,
+        );
+        assert_eq!(result.map(|_| ()), Err(Error::UnsupportedAlgorithm));
+        // ADR 0067: RSA-OAEP-256 reaches `rsa_oaep`, which needs the
+        // private key; key binding never hands it a public one.
+        let result = decrypt_key(
+            &KeyMgmtAlg::RsaOaep256,
+            &key,
+            &enc,
+            &header,
+            &[0; 256],
+            &policy,
+            &mut budget,
+        );
+        assert_eq!(result.map(|_| ()), Err(Error::KeyAlgorithmMismatch));
         let mut rng = super::super::random::OsRandom;
         let unknown = KeyMgmtAlg::from("RSA-OAEP");
         let options = RecipientOptions::default();

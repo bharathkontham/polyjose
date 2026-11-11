@@ -55,7 +55,7 @@ fail() { tests_run=$((tests_run + 1)); tests_failed=$((tests_failed + 1)); echo 
 # The scripts/*.sh that install an EXIT trap and follow the rule, and the ones without a trap.
 trap_scripts="test-all.sh check-binding-api.sh check-no-cargo-config.sh third-party-notices.sh
   check-deps.sh check-rsa-symbols.sh check-test-vectors-off.sh"
-no_trap_scripts="conformance-parity.sh"
+no_trap_scripts="conformance-parity.sh fuzz.sh"
 # The other scripts with an EXIT trap (paths from the repository root): test scripts that follow the
 # rule as the scripts/*.sh do, and sourced test helpers whose finish sets the sentinel (F11, F14).
 test_trap_scripts="scripts/tests/syntax/guards.sh scripts/tests/check-test-vectors-off/fixed-adapter-unreachable.sh

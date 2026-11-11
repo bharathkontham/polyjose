@@ -4,7 +4,7 @@
 //     with a PolyjoseError whose message, string form, stack and inspected form hold none of them;
 //   - off the JS thread: a costly PBES2 decrypt resolves while the event loop keeps running timers;
 //   - input copy: the payload is copied when the call is made, so the caller may reuse its buffer;
-//   - the security decisions (allow-lists, RSA public-key only, no SHA-1) reach JS unchanged, for
+//   - the security decisions (allow-lists, RSA key binding and redaction, no SHA-1) reach JS unchanged, for
 //     the JS call shapes the conformance vectors cannot express, such as a missing allowedAlgs.
 // No assertion reads a clock (pipeline rule 8): event-loop progress is a count of timer ticks.
 import { assert, fs, path, test } from "../../js/dist/node/builtins.js";
@@ -347,27 +347,70 @@ test("JWE decrypt and JWT verify without their allow-lists reject with Algorithm
   );
 });
 
-test("an RSA private JWK is UnsupportedAlgorithm (ADR 0021), and so is a SHA-1 thumbprint (ADR 0022)", async () => {
-  // RFC 7515 Appendix A.2's RSA private JWK.
+test("RSA private keys work and their failing paths leak no private member (ADR 0067), and a SHA-1 thumbprint is UnsupportedAlgorithm (ADR 0022)", async () => {
+  // RFC 7515 Appendix A.2's RSA private JWK (binding-surface/jws-sign-rsa-private-jwk.json).
   const signer = (vectorInput("jws-sign-rsa-private-jwk.json")["signers"] as { key: JwkObject }[])[0];
   assert.ok(signer !== undefined, "the vector has a signer");
   const rsa = signer.key;
-  const rsaSecrets = [rsa["d"] as string, rsa["p"] as string, rsa["q"] as string];
-  await rejectsWithoutSecrets("jwkParse RSA private", () => jwkParse(rsa), "UnsupportedAlgorithm", rsaSecrets);
-  await rejectsWithoutSecrets("jwkToPublic RSA private", () => jwkToPublic(rsa), "UnsupportedAlgorithm", rsaSecrets);
-  await rejectsWithoutSecrets(
-    "jwsSignCompact RSA private",
-    () => jwsSignCompact(ascii("x"), rsa, { protectedHeader: { alg: "RS256" } }),
-    "UnsupportedAlgorithm",
-    rsaSecrets,
-  );
-  // A JWK Set with an RSA private member is refused whole, before selection (ADR 0021, ADR 0054 §4).
+  const privateMembers = ["d", "p", "q", "dp", "dq", "qi"] as const;
+  const rsaSecrets = privateMembers.map((m) => rsa[m] as string);
+  // Imported with every private member (RFC 7518 §6.3.2); the public form has none of them.
+  const parsed = await jwkParse(rsa);
+  for (const m of privateMembers) assert.equal(parsed[m], rsa[m], `jwkParse keeps ${m}`);
+  const publicKey = await jwkToPublic(rsa);
+  for (const m of privateMembers) assert.ok(!(m in publicKey), `jwkToPublic drops ${m}`);
+  // RS256 signs with the private key and verifies with the public one (RFC 7515 §5.1, §5.2).
+  const jws = await jwsSignCompact(ascii("x"), rsa, { protectedHeader: { alg: "RS256" } });
+  assert.equal((await jwsVerifyCompact(jws, publicKey, { allowedAlgs: ["RS256"] })).alg, "RS256");
+  // A JWK Set keeps an RSA private member (ADR 0067 §4); an unmatched selector is NoMatchingKey.
   await rejectsWithoutSecrets(
     "jwksSelect RSA private member",
     () => jwksSelect({ keys: [rsa] }, { kid: "no-such-kid" }),
-    "UnsupportedAlgorithm",
+    "NoMatchingKey",
     rsaSecrets,
   );
+  // A private key whose qi is not q^-1 mod p fails the consistency check (ADR 0043, ADR 0067 §2).
+  const inconsistent: JwkObject = { ...rsa, qi: rsa["dp"] as string };
+  for (const [what, call] of [
+    ["jwkParse", () => jwkParse(inconsistent)],
+    ["jwkToPublic", () => jwkToPublic(inconsistent)],
+    ["jwsSignCompact", () => jwsSignCompact(ascii("x"), inconsistent, { protectedHeader: { alg: "RS256" } })],
+    ["jwkToPem", () => jwkToPem(inconsistent, "pkcs8")],
+  ] as const) {
+    await rejectsWithoutSecrets(`${what} inconsistent RSA private`, call, "InvalidKey", rsaSecrets);
+  }
+  // The public key cannot sign: keys are bound to their role (RFC 8725 §3.1).
+  await rejectsWithoutSecrets(
+    "jwsSignCompact RSA public",
+    () => jwsSignCompact(ascii("x"), publicKey, { protectedHeader: { alg: "RS256" } }),
+    "KeyAlgorithmMismatch",
+    rsaSecrets,
+  );
+
+  // RSA-OAEP-256 (RFC 7518 §4.3): a bad Encrypted Key fails like a bad tag, DecryptionFailed with
+  // the same message, and neither names a private member (RFC 7516 §11.5, ADR 0067 §5).
+  const oaepFile = path.join(repo, "conformance", "vectors", "jwe", "rsa-oaep-256", "keys", "rsa-2048.private.jwk");
+  const oaepKey = JSON.parse(fs.readFileSync(oaepFile, "utf8")) as JwkObject;
+  const oaepSecrets = privateMembers.map((m) => oaepKey[m] as string);
+  const jwe = await jweEncryptCompact(ascii("RSA-OAEP-256"), {
+    enc: "A256GCM",
+    recipients: [{ alg: "RSA-OAEP-256", key: await jwkToPublic(oaepKey) }],
+  });
+  const oaep = { allowedAlgs: ["RSA-OAEP-256"], allowedEnc: ["A256GCM"] } as JweDecryptOptions;
+  assert.deepEqual((await jweDecryptCompact(jwe, oaepKey, oaep)).plaintext, ascii("RSA-OAEP-256"));
+  const parts = jwe.split(".");
+  const flip = (part: string): string => (part.startsWith("A") ? "B" : "A") + part.slice(1);
+  const badKey = [parts[0], flip(parts[1] ?? ""), parts[2], parts[3], parts[4]].join(".");
+  const badTag = [parts[0], parts[1], parts[2], parts[3], flip(parts[4] ?? "")].join(".");
+  const messages: string[] = [];
+  for (const [what, token] of [["bad Encrypted Key", badKey], ["bad tag", badTag]] as const) {
+    await rejectsWithoutSecrets(`jweDecryptCompact ${what}`, () => jweDecryptCompact(token, oaepKey, oaep), "DecryptionFailed", oaepSecrets);
+    await jweDecryptCompact(token, oaepKey, oaep).catch((e: unknown) => {
+      if (e instanceof PolyjoseError) messages.push(e.message);
+    });
+  }
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0], messages[1], "one message for both failures");
 
   const jwk = await jwkGenerateOct(32);
   const sha1 = "SHA-1" as ThumbprintHash; // outside the type on purpose: a JS caller can pass it

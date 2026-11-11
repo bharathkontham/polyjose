@@ -40,7 +40,7 @@ use crate::records::{JweDecryptOptions, JweDecrypted, JweEncryptOptions};
 ///
 /// `InvalidFormat` unless there is exactly one recipient and no `aad`, shared unprotected header
 /// or per-recipient header (RFC 7516 §7.1); `UnsupportedAlgorithm` for `RSA-OAEP`, `RSA1_5`
-/// (ADR 0021, ADR 0022), unknown names and `compress: true`; `InvalidKey` for a key of the wrong
+/// (ADR 0022, ADR 0067 §3), unknown names and `compress: true`; `InvalidKey` for a key of the wrong
 /// size or a PBES2 `p2c`/`p2s_len` outside the core's range (RFC 7518 §4.8.1.1, §4.8.1.2;
 /// ADR 0050 §2).
 #[uniffi::export]
@@ -83,10 +83,11 @@ pub fn jwe_encrypt_json(
 ///
 /// `AlgorithmNotAllowed` for an empty allow-list or an `alg`/`enc` outside it (RFC 8725 §3.1);
 /// `InvalidHeader` for `dir` or `ECDH-ES` without `alg` and `enc` protected (ADR 0050 §1);
-/// `UnsupportedAlgorithm` for `RSA-OAEP-256` decryption (ADR 0021), `RSA-OAEP`, `RSA1_5`
-/// (ADR 0022) and `zip`; and `DecryptionFailed`, one code and message for every failure once key
-/// management starts, a PBES2 count over `max_pbes2_count` included (RFC 7516 §11.4–§11.5,
-/// ADR 0023, ADR 0050 §2).
+/// `KeyAlgorithmMismatch` for `RSA-OAEP-256` with an RSA public key (decryption needs the private
+/// key, ADR 0067 §2); `UnsupportedAlgorithm` for `RSA-OAEP`, `RSA1_5` (ADR 0022) and `zip`; and
+/// `DecryptionFailed`, one code and message for every failure once key management starts, a PBES2
+/// count over `max_pbes2_count` and an `RSA-OAEP-256` Encrypted Key that does not decrypt included
+/// (RFC 7516 §11.4–§11.5, ADR 0023, ADR 0050 §2, ADR 0067 §5).
 #[uniffi::export]
 pub fn jwe_decrypt_compact(
     token: String,

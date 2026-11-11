@@ -207,6 +207,8 @@ pub(crate) fn decrypt(
     ciphertext: &[u8],
     tag: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
+    #[cfg(test)]
+    crate::test_counters::content_decryptions::tick();
     match enc {
         ContentEncAlg::A128GCM | ContentEncAlg::A192GCM | ContentEncAlg::A256GCM => {
             enc_gcm::decrypt(enc, cek.as_bytes(), iv, aad, ciphertext, tag)

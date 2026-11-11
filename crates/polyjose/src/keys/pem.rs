@@ -10,10 +10,10 @@
 //! 64 KiB DER cap) is refused first, before any allocation or parse.
 //!
 //! The decoder classifies the label from the BEGIN line before it reads the
-//! body (ADR 0018 §2). A label that names no key structure, `ENCRYPTED
-//! PRIVATE KEY` (ADR 0018 §4) and `RSA PRIVATE KEY` (ADR 0021) fail at once
-//! with [`Error::UnsupportedAlgorithm`], whatever follows, so their bodies
-//! are never decoded. Every other fault is [`Error::InvalidKey`] with a
+//! body (ADR 0018 §2). A label that names no key structure and `ENCRYPTED
+//! PRIVATE KEY` (ADR 0018 §4) fail at once with
+//! [`Error::UnsupportedAlgorithm`], whatever follows, so their bodies are
+//! never decoded. `RSA PRIVATE KEY` is a key label since ADR 0067. Every other fault is [`Error::InvalidKey`] with a
 //! static detail that never quotes the input.
 //!
 //! A private key's PEM body is secret, so the base64 text and the decoded
@@ -124,18 +124,14 @@ pub(crate) const MAX_INPUT_LEN: usize = MAX_BODY_CHARS
 ///   that names no supported structure (ADR 0018 §2, §4):
 ///   - [`Label::Other`], such as `CERTIFICATE` or `DSA PRIVATE KEY`;
 ///   - [`Label::EncryptedPrivateKey`]: encrypted PKCS#8 is out of scope;
-///   - [`Label::RsaPrivate`]: no RSA private keys (ADR 0021), so their
-///     secret body is never decoded into memory.
 ///
 ///   Also for a `Proc-Type:` header (RFC 1421 legacy encryption).
 ///
-///   This is stricter than T03's original wording, under which these two
+///   This is stricter than T03's original wording, under which these
 ///   labels decoded and the caller rejected them. ADR 0018 §2 ("a
 ///   `CERTIFICATE` or `ENCRYPTED PRIVATE KEY` block fails with
-///   `UnsupportedAlgorithm` whatever its body") and ADR 0021 take
-///   precedence (lead decision, 2026-11-06). The error code at the API is
-///   the same. RSA private keys inside PKCS#8 carry the generic `PRIVATE KEY`
-///   label and are rejected by their AlgorithmIdentifier instead.
+///   `UnsupportedAlgorithm` whatever its body") takes precedence (lead
+///   decision, 2026-11-06). The error code at the API is the same.
 /// - [`Error::InvalidKey`] for everything else that breaks the grammar.
 ///
 /// The returned octets wipe on drop; the base64 copy is wiped before
@@ -199,8 +195,7 @@ fn parse(text: &[u8], body: &mut Vec<u8>) -> Result<Label> {
     let label = parse_label(label_text)?;
     if is_unsupported(label) {
         // ADR 0018 §2: classified from the BEGIN line, before the body, so
-        // an RSA private key (ADR 0021) or an encrypted one is never
-        // base64-decoded into memory.
+        // an encrypted key is never base64-decoded into memory.
         return Err(Error::UnsupportedAlgorithm);
     }
 
@@ -245,13 +240,11 @@ fn parse(text: &[u8], body: &mut Vec<u8>) -> Result<Label> {
 }
 
 /// Labels that are unsupported whatever the block holds: any label that names
-/// no key structure (RFC 7468 §5, e.g. `CERTIFICATE`), `ENCRYPTED PRIVATE
-/// KEY` (RFC 7468 §11; ADR 0018 §2, §4) and `RSA PRIVATE KEY` (ADR 0021).
+/// no key structure (RFC 7468 §5, e.g. `CERTIFICATE`) and `ENCRYPTED PRIVATE
+/// KEY` (RFC 7468 §11; ADR 0018 §2, §4). `RSA PRIVATE KEY` is read since
+/// ADR 0067.
 fn is_unsupported(label: Label) -> bool {
-    matches!(
-        label,
-        Label::Other | Label::EncryptedPrivateKey | Label::RsaPrivate
-    )
+    matches!(label, Label::Other | Label::EncryptedPrivateKey)
 }
 
 /// Whitespace allowed around the block (ADR 0018 §2): RFC 7468 §3 `WSP`
@@ -323,9 +316,9 @@ fn parse_label(text: &[u8]) -> Result<Label> {
 /// # Errors
 ///
 /// - [`Error::UnsupportedAlgorithm`] for the labels [`decode`] rejects from
-///   the BEGIN line: [`Label::Other`] (no text), [`Label::RsaPrivate`]
-///   (ADR 0021) and [`Label::EncryptedPrivateKey`] (ADR 0018 §4). polyjose
-///   never writes what it will not read.
+///   the BEGIN line: [`Label::Other`] (no text) and
+///   [`Label::EncryptedPrivateKey`] (ADR 0018 §4). polyjose never writes
+///   what it will not read.
 /// - [`Error::InvalidKey`] for empty `der`: the strict grammar has at least
 ///   one base64 quantum (§3 `strictbase64finl`).
 ///
@@ -486,6 +479,9 @@ mod tests {
             Label::EcPrivateKey
         } else if name.contains("-pkcs1-pub") {
             Label::RsaPublic
+        } else if name.contains("-private-pkcs1") {
+            // RFC 8017 App. A.1.2 under OpenSSL's label (ADR 0067).
+            Label::RsaPrivate
         } else {
             panic!("no label known for {name}")
         }
@@ -533,13 +529,10 @@ mod tests {
                 .filter(|n| n.starts_with("reject-"))
             {
                 let got = outcome(&read_text(dir, &name)).map(|(label, _)| label);
-                let want = if name.contains("-cert")
-                    || name.contains("-encrypted")
-                    || name.contains("-private-pkcs1")
-                {
-                    // CERTIFICATE, ENCRYPTED PRIVATE KEY and RSA PRIVATE KEY
-                    // (classified from the BEGIN line) and RFC 1421
-                    // Proc-Type encryption.
+                let want = if name.contains("-cert") || name.contains("-encrypted") {
+                    // CERTIFICATE and ENCRYPTED PRIVATE KEY (classified from
+                    // the BEGIN line) and RFC 1421 Proc-Type encryption.
+                    // `RSA PRIVATE KEY` is a key label since ADR 0067.
                     Err("UnsupportedAlgorithm")
                 } else if name.contains("six-dash") {
                     Err("InvalidKey")
@@ -553,23 +546,21 @@ mod tests {
         assert!(seen >= 30, "{seen} reject files");
     }
 
-    /// `RSA PRIVATE KEY` (ADR 0021) and `ENCRYPTED PRIVATE KEY` (ADR 0018
-    /// §4) blocks are unsupported from the BEGIN line, whatever the body
+    /// `ENCRYPTED PRIVATE KEY` (ADR 0018 §4) blocks are unsupported from
+    /// the BEGIN line, whatever the body
     /// (ADR 0018 §2): valid, corrupt, missing, or followed by junk. The body
     /// is never touched. Read back after the error, both working buffers
     /// are still unallocated, so no body character was collected and
     /// `b64_decode_into` (which allocates its output for any non-empty body)
     /// never ran: no private-key octet was ever decoded into memory.
     #[test]
-    fn rsa_private_and_encrypted_blocks_are_rejected_before_the_body() {
-        let mut texts = Vec::new();
-        for name in [
-            "reject-rsa2048-private-pkcs1.pem",
-            "reject-ec-p256-pkcs8-encrypted.pem",
-        ] {
-            texts.push(read_text("openssl", name));
-        }
-        for label in ["RSA PRIVATE KEY", "ENCRYPTED PRIVATE KEY"] {
+    fn encrypted_blocks_are_rejected_before_the_body() {
+        let mut texts = vec![read_text("openssl", "reject-ec-p256-pkcs8-encrypted.pem")];
+        // ADR 0067: `RSA PRIVATE KEY` decodes like any key label.
+        let rsa = read_text("openssl", "reject-rsa2048-private-pkcs1.pem");
+        assert_eq!(outcome(&rsa).map(|(label, _)| label), Ok(Label::RsaPrivate));
+        {
+            let label = "ENCRYPTED PRIVATE KEY";
             texts.push(block(label, ED25519_BODY));
             texts.push(block(label, "not base64 at all *** QR=="));
             texts.push(block(label, &"A".repeat(65)));
@@ -654,10 +645,9 @@ mod tests {
     #[test]
     fn encoder_rejects_unsupported_labels_and_empty_input() {
         // The labels decode rejects from the BEGIN line are never written
-        // either: RSA private keys (ADR 0021) and encrypted PKCS#8
-        // (ADR 0018 §4).
+        // either: encrypted PKCS#8 (ADR 0018 §4) and non-key labels.
         let rsa_private = read_der("openssl", "reject-rsa2048-private-pkcs1.der");
-        for label in [Label::Other, Label::RsaPrivate, Label::EncryptedPrivateKey] {
+        for label in [Label::Other, Label::EncryptedPrivateKey] {
             assert_eq!(
                 encode(label, &rsa_private).map(|_| ()),
                 Err(Error::UnsupportedAlgorithm),

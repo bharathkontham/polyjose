@@ -85,7 +85,7 @@ Imports `jwk` and computes its JWK Thumbprint (RFC 7638 §3) and JWK Thumbprint 
 
 **Error order (ADR 0057 §2).** A runner imports `jwk` first and parses `hash` second, so the outcome is:
 
-1. the JWK import error (`InvalidJson`, `InvalidKey`, `InvalidBase64`, `UnsupportedAlgorithm` for an RSA private JWK, and so on)
+1. the JWK import error (`InvalidJson`, `InvalidKey`, `InvalidBase64`, `UnsupportedAlgorithm` for a multi-prime RSA JWK, and so on)
 2. then `UnsupportedAlgorithm` for a `hash` name that isn't accepted
 
 `jwk-thumbprint/hash-reject-invalid-key-p256-off-curve.json` has both an invalid key and an invalid name, and expects the import error. This matches the `jwks.select` step order below (ADR 0054 §4: import, then the selector).
@@ -96,10 +96,10 @@ Selects exactly one key from a JWK Set (RFC 7517 §5) with a selector, under ADR
 
 | Input member | Meaning |
 |---|---|
-| `jwks` | The JWK Set, a JSON object. Unconstrained: import errors and the members import skips are under test. A missing or non-array `keys` is `InvalidKey`, and an RSA private member fails the whole set with `UnsupportedAlgorithm` (ADR 0021, ADR 0029 §3). Members with an unknown `kty`/`crv`, or that are otherwise invalid, are skipped (ADR 0041 §2). |
+| `jwks` | The JWK Set, a JSON object. Unconstrained: import errors and the members import skips are under test. A missing or non-array `keys` is `InvalidKey`. An RSA private member is imported as is (ADR 0067 §4, amending ADR 0029 §3). Members with an unknown `kty`/`crv`, a multi-prime RSA key (`oth`, ADR 0067 §3), or that are otherwise invalid, are skipped (ADR 0041 §2). |
 | `selector` | **Required**, closed: `kid`, `alg` and `key_use`, each optional and any string. `{}` selects every member (ADR 0054 §1.3). There is no `key_op` (ADR 0054 §9), so a vector with one is a broken vector. |
 
-Expect `{ "ok": true, "jwk" }`: the one matching member as the library serializes it, compared as a JSON value (member order ignored). It may hold private members (`EC` and `OKP` `d`, `oct` `k`, ADR 0054 §3). Or `{ "ok": false, "error": <code> }`.
+Expect `{ "ok": true, "jwk" }`: the one matching member as the library serializes it, compared as a JSON value (member order ignored). It may hold private members (`EC`, `OKP` and `RSA` `d`, the other RSA private members, `oct` `k`; ADR 0054 §3, ADR 0067 §4). Or `{ "ok": false, "error": <code> }`.
 
 **Step order**, the first error being the outcome. This is ADR 0054 §4's precedence:
 
@@ -129,11 +129,11 @@ The schema also enforces the serialization's shape: `compact` has exactly one si
 
 Expect one of:
 
-- **`{ "ok": true, "jws": <jws> }`** for a deterministic algorithm (HMAC, EdDSA): the exact output. A compact JWS is a string, compared exactly. A JSON JWS is an object, compared as a JSON value: member order is ignored (RFC 8259 §4), every string must match octet for octet.
-- **`{ "ok": true, "verify_with": { "key", "allowed_algs" } }`** for a randomized algorithm (ECDSA). The runner checks its own output: it has the requested serialization's shape (three compact parts; `signature` without `signatures` for flattened; one `signatures` entry per signer for general), it verifies with `verify_with.key` and `verify_with.allowed_algs` (with the payload passed separately when `detached`), and the verified payload equals `payload_b64u`. Any failure there fails the vector, as does a `verify_with` key that doesn't import.
+- **`{ "ok": true, "jws": <jws> }`** for a deterministic algorithm (HMAC, EdDSA, RS\*): the exact output. A compact JWS is a string, compared exactly. A JSON JWS is an object, compared as a JSON value: member order is ignored (RFC 8259 §4), every string must match octet for octet.
+- **`{ "ok": true, "verify_with": { "key", "allowed_algs" } }`** for a randomized algorithm (ECDSA, PS\*). The runner checks its own output: it has the requested serialization's shape (three compact parts; `signature` without `signatures` for flattened; one `signatures` entry per signer for general), it verifies with `verify_with.key` and `verify_with.allowed_algs` (with the payload passed separately when `detached`), and the verified payload equals `payload_b64u`. Any failure there fails the vector, as does a `verify_with` key that doesn't import.
 - **`{ "ok": false, "error": <code> }`.**
 
-RSA signing is not supported (ADR 0021): an RSA private JWK fails at JWK import with `UnsupportedAlgorithm`, and an `RS*`/`PS*` header with a public key fails at sign with `UnsupportedAlgorithm`.
+RSA signing needs an RSA private JWK with all of `d`, `p`, `q`, `dp`, `dq` and `qi` (RFC 7518 §6.3.2; ADR 0067). An `RS*`/`PS*` header with an RSA public key fails at sign with `KeyAlgorithmMismatch`; a multi-prime key (`oth`) fails at JWK import with `UnsupportedAlgorithm`, and one without its CRT members, or inconsistent, with `InvalidKey`.
 
 ## `jws.verify`
 
@@ -155,7 +155,7 @@ Expect `{ "ok": true, "payload_b64u", "alg", "signature_index" }`: the payload, 
   1. `jws.sign`: for each signer in order, import `key` (the library's JWK import), then parse `protected_b64u`, then parse `header`. `jws.verify`: import `key`, then build the options from `allowed_algs`, `detached_payload_b64u` and the limits.
   2. Call the library.
 
-  So a **JWK import error is the vector's result**, compared like any other (for example the RSA private key of RFC 7515 A.2 → `UnsupportedAlgorithm`, ADR 0021).
+  So a **JWK import error is the vector's result**, compared like any other (for example a multi-prime RSA JWK → `UnsupportedAlgorithm`, ADR 0067 §3).
 - **One fault per failure vector.** A failure vector breaks one thing, so the step order above never decides its outcome. The exceptions are vectors that pin ADR 0026's precedence; they put every fault inside `jws` itself.
 - **JSON-object `jws`.** Pass the object's JSON text in any formatting. The serialized length then depends on the platform's JSON writer, so a `max_input_len` vector uses a compact `jws` or a limit far from the boundary. A JSON-object `jws` can't contain duplicate member names, because the vector file itself must be I-JSON. Duplicate members can therefore be tested only inside a base64url-encoded protected header.
 - Map `serialization` to the binding's compact, flattened and general sign functions, `detached` to its detached option, and the limits to its verify options. Never substitute defaults of your own: an absent limit means the library default (ADR 0030).
@@ -166,15 +166,16 @@ Imports one RFC 7468 PEM block with the library's PEM key import (ADR 0018 §3).
 
 | Label | Structure |
 |---|---|
-| `PRIVATE KEY` | PKCS#8 (RFC 5958 §2): EC or OKP private key |
+| `PRIVATE KEY` | PKCS#8 (RFC 5958 §2): EC, OKP or RSA private key |
 | `PUBLIC KEY` | SubjectPublicKeyInfo (RFC 5280 §4.1.2.7): EC, OKP or RSA public key |
 | `EC PRIVATE KEY` | SEC1 ECPrivateKey (RFC 5915 §3) |
 | `RSA PUBLIC KEY` | PKCS#1 RSAPublicKey (RFC 8017 App. A.1.1) |
+| `RSA PRIVATE KEY` | PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2), two-prime |
 
 Expect `{ "ok": true, "jwk": <object> }`, compared as a JSON value: member order is ignored (RFC 8259 §4) and every string must match exactly. An imported key never has `kty` `oct` and has no `alg`; a runner fails a vector whose import returns an `oct` key, whatever it expects (RFC 8725 §2.1). Or `{ "ok": false, "error": <code> }`:
 
-- `UnsupportedAlgorithm` for well-formed input polyjose does not support: encrypted keys (`ENCRYPTED PRIVATE KEY`, RFC 5958 §3; legacy `Proc-Type: 4,ENCRYPTED`), RSA private keys (ADR 0021), Ed448/X448, non-JOSE curves, specifiedCurve, and labels such as `CERTIFICATE`;
-- `InvalidKey` for anything malformed (BER, trailing data, explanatory text around the block, a label around the wrong structure) or invalid (an off-curve point, RSA under 2048 bits).
+- `UnsupportedAlgorithm` for well-formed input polyjose does not support: encrypted keys (`ENCRYPTED PRIVATE KEY`, RFC 5958 §3; legacy `Proc-Type: 4,ENCRYPTED`), multi-prime RSA keys (ADR 0067 §3), Ed448/X448, non-JOSE curves, specifiedCurve, and labels such as `CERTIFICATE`;
+- `InvalidKey` for anything malformed (BER, trailing data, explanatory text around the block, a label around the wrong structure, such as a PKCS#1 RSAPrivateKey under `PRIVATE KEY`) or invalid (an off-curve point, RSA under 2048 bits, public or private).
 
 ## `keys.export_pem`
 
@@ -183,15 +184,15 @@ Imports `jwk` with the library's JWK import, then exports it as PEM in `format` 
 | `format` | Private key | Public key | `oct` |
 |---|---|---|---|
 | `spki` | its public half | yes | `UnsupportedAlgorithm` |
-| `pkcs8` | EC, OKP | `InvalidKey` | `UnsupportedAlgorithm` |
+| `pkcs8` | EC, OKP, RSA | `InvalidKey` | `UnsupportedAlgorithm` |
 | `sec1` | EC only; other types `UnsupportedAlgorithm` | `InvalidKey` (EC) | `UnsupportedAlgorithm` |
-| `pkcs1` | — | RSA only; other types `UnsupportedAlgorithm` | `UnsupportedAlgorithm` |
+| `pkcs1` | RSA: `InvalidKey` (PKCS#1 export writes the RSAPublicKey only; export `to_public`); other types `UnsupportedAlgorithm` | RSA only; other types `UnsupportedAlgorithm` | `UnsupportedAlgorithm` |
 
-The checks run in that order: `oct`, then a key type the format cannot hold, then a public key in a private-key format. Only the key material is exported; `kid`, `use`, `alg` and the other JWK members are dropped.
+The checks run in that order: `oct`, then a key type the format cannot hold, then a public key in a private-key format or an RSA private key in `pkcs1`. Only the key material is exported; `kid`, `use`, `alg` and the other JWK members are dropped.
 
 ## `keys.import_der`
 
-Imports DER with the library's DER key import in the structure `format` names (ADR 0018 §3). There is no format sniffing (ADR 0007): DER of another structure fails, so an SPKI offered as `pkcs8` is `InvalidKey`. `format` selects the structure as the PEM label does for `keys.import_pem`: `pkcs8` (RFC 5958 §2), `sec1` (RFC 5915 §3), `spki` (RFC 5280 §4.1.2.7), `pkcs1` (RFC 8017 App. A.1.1). The expectations and error codes are those of `keys.import_pem`, compared the same way, and an `oct` result fails the vector whatever it expects. Only the PEM-level faults (armor, labels, explanatory text) have no DER counterpart.
+Imports DER with the library's DER key import in the structure `format` names (ADR 0018 §3). There is no format sniffing (ADR 0007): DER of another structure fails, so an SPKI offered as `pkcs8` is `InvalidKey`. `format` selects the structure as the PEM label does for `keys.import_pem`: `pkcs8` (RFC 5958 §2), `sec1` (RFC 5915 §3), `spki` (RFC 5280 §4.1.2.7), `pkcs1` (RFC 8017 App. A.1.1 RSAPublicKey, or App. A.1.2 RSAPrivateKey). The expectations and error codes are those of `keys.import_pem`, compared the same way, and an `oct` result fails the vector whatever it expects. Only the PEM-level faults (armor, labels, explanatory text) have no DER counterpart.
 
 ## `keys.export_der`
 
@@ -221,7 +222,7 @@ The expected shapes are the RFC sizes and curves per algorithm: HMAC keys the si
 The failures are:
 
 - `InvalidKey` for `ECDH-ES` and `ECDH-ES+A*KW`. They work on several curves (RFC 7518 §4.6), so the request lacks a curve, and polyjose never picks one. A binding must not substitute a default;
-- `UnsupportedAlgorithm` for the RSA algorithms (ADR 0021), `dir` (its key size depends on `enc`, RFC 7518 §4.5), `PBES2-*` (passwords aren't generated), `none`, and any unknown or wrongly cased name.
+- `UnsupportedAlgorithm` for the RSA algorithms (RSA keys are never generated, ADR 0067 §3), `dir` (its key size depends on `enc`, RFC 7518 §4.5), `PBES2-*` (passwords aren't generated), `none`, and any unknown or wrongly cased name.
 
 A success expectation may also have **`use_with`**, a round trip the runner runs with the generated key (ADR 0034 §6). It is a check, never an outcome, and the runner echoes it back as an output, as it does `verify_with`:
 
@@ -273,7 +274,7 @@ Decrypts a JWE with one key and the allow-lists (RFC 7516 §5.2, RFC 8725 §3.1)
 |---|---|
 | `jwe` | A **string** is a compact JWE (RFC 7516 §7.1). An **object** is a flattened or general JSON JWE (§7.2); the runner passes its JSON text to the library's JSON decrypt. Otherwise unconstrained. |
 | `key` | The decrypting JWK, a JSON object. |
-| `allowed_algs`, `allowed_enc` | The allow-lists, arrays of names passed as given. An empty list is `AlgorithmNotAllowed`. An unknown or unimplemented name (`RSA1_5`, `RSA-OAEP`, `RSA-OAEP-256`) may be listed, but never decrypts: the support check comes first (`UnsupportedAlgorithm`). |
+| `allowed_algs`, `allowed_enc` | The allow-lists, arrays of names passed as given. An empty list is `AlgorithmNotAllowed`. An unknown or unimplemented name (`RSA1_5`, `RSA-OAEP`) may be listed, but never decrypts: the support check comes first (`UnsupportedAlgorithm`). `RSA-OAEP-256` decrypts with an RSA private key; an RSA public key is no candidate (`KeyAlgorithmMismatch`, ADR 0067). |
 | `understood_crit` | Optional. The `crit` extension names the caller understands (§4.1.13); none when absent. |
 | `max_input_len`, `max_recipients`, `max_pbes2_count`, `max_decompressed_len` | Optional limits; absent means the library default (1 MiB, 16, 10,000 (ADR 0023), 250,000 (ADR 0017)). |
 
@@ -334,7 +335,7 @@ Issues a signed JWT (RFC 7519 §7.1; ADR 0027 §8) and, with `encrypt`, encrypts
 | Input member | Meaning |
 |---|---|
 | `claims` | The JWT Claims Set, a JSON object. The library serializes the registered claims first, then the others in order (ADR 0027 §1). |
-| `alg` | The JWS `alg`, passed as given. RS\*/PS\* are `UnsupportedAlgorithm` (ADR 0021); `none` is `AlgorithmNotAllowed`. |
+| `alg` | The JWS `alg`, passed as given. RS\*/PS\* need an RSA private key (ADR 0067; a public key is `KeyAlgorithmMismatch`); `none` is `AlgorithmNotAllowed`. |
 | `key` | The signing JWK, a JSON object. |
 | `typ` | Optional. Absent: the library default `JWT`. A string sets it (`at+jwt` for an access token, RFC 9068 §2.1). `null` omits it (RFC 7519 §5.1). |
 | `encrypt` | Optional; `{ "alg", "enc", "key" }`: one recipient's key management `alg` and JWK (a public key, or an `oct` key) and the content encryption `enc`. The library puts `cty: "JWT"` in the protected header itself (RFC 7519 §5.2). |
@@ -342,8 +343,8 @@ Issues a signed JWT (RFC 7519 §7.1; ADR 0027 §8) and, with `encrypt`, encrypts
 
 Expect one of:
 
-- **`{ "ok": true, "token": <token> }`** for a deterministic signature (HMAC, EdDSA): the exact compact token, compared as a string. Not allowed with `encrypt`, whose output is randomized (RFC 7516 §5.1). With `validate`, the runner also validates it.
-- **`{ "ok": true }`**: the runner checks the token itself. It must have three compact parts (a JWS, RFC 7515 §7.1), or five with `encrypt` (a JWE, RFC 7516 §7.1); then it must validate with `validate`, with the `alg` it was issued with, giving back the issued `claims` (compared as a JSON value). Any failure there, including a `validate` the library refuses, fails the vector. `validate` is required, unless `encrypt` is set: a recipient polyjose can't decrypt for (RSA-OAEP-256, ADR 0021) can only be checked by shape.
+- **`{ "ok": true, "token": <token> }`** for a deterministic signature (HMAC, EdDSA, RS\*): the exact compact token, compared as a string. Not allowed with `encrypt`, whose output is randomized (RFC 7516 §5.1). With `validate`, the runner also validates it.
+- **`{ "ok": true }`**: the runner checks the token itself. It must have three compact parts (a JWS, RFC 7515 §7.1), or five with `encrypt` (a JWE, RFC 7516 §7.1); then it must validate with `validate`, with the `alg` it was issued with, giving back the issued `claims` (compared as a JSON value). Any failure there, including a `validate` the library refuses, fails the vector. `validate` is required, unless `encrypt` is set: a recipient whose private key the vector does not hold can only be checked by shape.
 - **`{ "ok": false, "error": <code> }`**, with no `validate`.
 
 ## Rules for `jwt.*` runners
@@ -354,7 +355,7 @@ Expect one of:
   2. `jwt.issue`: import `key`, then parse `claims`, then import `encrypt.key`, then sign, then encrypt.
   3. Call the library.
 
-  So a **JWK or JWK Set import error is the vector's result**, compared like any other: an RSA private JWK (or a JWK Set holding one, ADR 0029 §3) is `UnsupportedAlgorithm` (ADR 0021), and a set without a `keys` array is `InvalidKey`. A set member that is merely invalid is skipped at import (RFC 7517 §5), which can leave `NoMatchingKey` at validation.
+  So a **JWK or JWK Set import error is the vector's result**, compared like any other: a multi-prime RSA JWK is `UnsupportedAlgorithm` (ADR 0067 §3; in a JWK Set such a member is skipped), and a set without a `keys` array is `InvalidKey`. A set member that is merely invalid is skipped at import (RFC 7517 §5), which can leave `NoMatchingKey` at validation.
 - **One fault per failure vector**, as for `jws.*`; the ADR 0027 §9 precedence vectors put every fault inside `token` itself.
 - **Strictness.** The schema is closed at every level: a misspelled member anywhere (`allowed_alg`, `policy.audiences`), a missing `now`, or both `key` and `jwks` fail the run. The `jwt.issue` cross-member rules above (no exact `token` with `encrypt`; `validate` required for `{ "ok": true }` unless `encrypt` is set; no `validate` on a failure vector) and the `profile`/`typ` contradiction fail it too.
 - Map `policy` to the binding's validation options member by member, `typ` to its typing mode, `profile` to its access-token policy, `key`/`jwks` to its single-key and key-set forms, and `decrypt` to its nested-JWT call. Never substitute defaults of your own (ADR 0030).
@@ -608,7 +609,7 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 6. **`policy.audience` is an array only; `policy.issuer` is a string or an array.** A boolean member set to `false` (`allow_missing_exp`, `ignore_audience`) means "keep the default". Leave the option unset. Never call an opt-out, or set a field the core reads as configured, because of a `false`.
 7. **The policy is built before the token is parsed.** The Rust runner builds the policy, checking the allow-list and then `leeway` (over 600 is `InvalidClaim`), before the library looks at the token, and the surface's `jwt_verify*` and `jwt_decrypt_nested*` calls must do the same (the `rust-surface` parity run checks it). A binding must not validate its options lazily after reading the token. A vector with a bad `leeway` and a bad token would then report the other error. The one-fault rule keeps today's vectors from depending on this, but only by convention.
 8. **The outcome's `error` is the core code.** Read it from the binding's error: JS `PolyjoseError.code`, Kotlin `PolyjoseException.code()`, Swift `PolyjoseError.code()` (ADR 0030 §5), never from a class name or message. Any other thrown error is not an outcome, and the vector is a `fail`. That covers a JS `TypeError`, a napi `InvalidArg` and a Kotlin `IllegalArgumentException`.
-9. **JWK Set import is lenient, as in the core.** A member that is merely invalid is skipped (RFC 7517 §5), which can leave `NoMatchingKey` at validation. So the runner passes the vector's `jwks` text to the surface unchanged, and never parses, filters or pre-validates the set itself. A set without a `keys` array is `InvalidKey`, and a set holding an RSA private JWK is `UnsupportedAlgorithm` (ADR 0021, ADR 0029 §3).
+9. **JWK Set import is lenient, as in the core.** A member that is merely invalid is skipped (RFC 7517 §5), which can leave `NoMatchingKey` at validation. So the runner passes the vector's `jwks` text to the surface unchanged, and never parses, filters or pre-validates the set itself. A set without a `keys` array is `InvalidKey`; an RSA private member is imported and a multi-prime one skipped (ADR 0067 §3, §4).
 10. **`jwt.issue` `{ "ok": true }` is runner logic.** The runner checks that the token has three compact parts (five with `encrypt`), then validates it with `validate` through the `jwt.validate` mapping. The validated `alg` must be the issued one, and the claims must equal the issued `claims` as a JSON value. Any failure there is a `fail`, and the result then has **no** `actual` (as for every failed runner check inside an operation, see `results[].actual`); a passing vector's `actual` is `{ "ok": true }`.
 11. **A `jws.sign` signer may have only an unprotected header** (RFC 7515 §7.2.1, ADR 0045 §1): `header` and no `protected_b64u`, in the flattened and general serializations. It maps to a `JwsSigner` with `unprotected_header` only, and the surface signs it over `"." || payload`. Compact signers always have `protected_b64u`.
 12. **The RFC 7520 §4.7 vectors are never skipped.** `third_party/rfc7520/jws/4-7-unprotected-only-hs256-{flattened,general}-{sign,verify}.json` need no feature, so every binding runs them (ADR 0045 §1), like every other vector without `features`.
@@ -619,7 +620,7 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 
 - Name files after what they check, grouped by operation: `vectors/b64url/encode-rfc4648-10-foo.json`, `vectors/jwk-thumbprint/reject-oct-k-padded.json`.
 - Key vectors live in `keys/`. Successes are `import-*`, `import-der-*`, `export-*`, `export-der-*` and `generate-*`; failures are `reject-*`. Their expected values never come from polyjose:
-  - JWKs, PEM texts and DER are the committed key fixtures (`crates/polyjose/tests/data/keys/`: OpenSSL 4.1.0 output and the RFC golden files). The DER is each PEM fixture's body.
+  - JWKs, PEM texts and DER are the committed key fixtures (`crates/polyjose/tests/data/keys/`: OpenSSL 4.1.0 output and the RFC golden files). The DER is each PEM fixture's body. An RSA private JWK (ADR 0067) is read from OpenSSL's `text/` dump of its fixture, or from the INTEGERs of the RFC 9500 key's DER, and checked with integer arithmetic.
   - `generate-*` shapes are the RFC sizes and curves.
   - The RSA modulus-bound keys are built by the generator, which also writes their JWK.
 
@@ -627,7 +628,7 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 - JWE vectors live under `jwe/`, one directory per task and kind: `jwe/compact/` (RFC 7516 Appendix A, RFC 7520 §5.6 and §5.8, round trips), `jwe/negative-structure/` (the error contract, one vector per rule; `source` "polyjose" or the RFC whose vector is refused), and the per-family and JSON directories of the later JWE tasks. RFC 7520 values are generated from the vendored ietf-jose cookbook (`crates/polyjose/tests/third_party/ietf-jose-cookbook/`), not transcribed.
 - JWS vectors are grouped by origin: `jws-rfc7515/` (RFC 7515 Appendix A and F; `source` "RFC 7515 App. A.x" or "RFC 7515 App. F"), `jws-rfc7797/`, `jws-rfc8037/`, `jws-oracle/` (generated independently of polyjose; `source` names the tool and its versions), `jws-negative/` (`source` names the RFC section, CVE or ADR enforced), `jws-limits/` (the default ADR 0026 §7 limits, at and just over each), and `third_party/rfc7520/jws/` (the RFC 7520 §4 cookbook).
 - Check every expected value against the RFC text yourself. If the RFC doesn't print the value, derive it independently of polyjose (for example with Python's `hashlib` over the hand-built input) and say so in `description`.
-- **Deterministic algorithms** (HMAC, EdDSA) also have `sign` vectors with an exact expected output. **Randomized ones** (ECDSA, JWE) are checked by round trip (`verify_with`) plus a `verify`/`decrypt` vector of the RFC's published output. RS\*/PS\* are verify-only (ADR 0021): only `verify` vectors, and `sign` vectors that expect `UnsupportedAlgorithm`.
+- **Deterministic algorithms** (HMAC, EdDSA, RS\*) also have `sign` vectors with an exact expected output (RS256: RFC 7515 A.2, RFC 7520 §4.1). **Randomized ones** (ECDSA, PS\*, JWE) are checked by round trip (`verify_with`, `decrypt_with`) plus a `verify`/`decrypt` vector of the RFC's or an oracle's output (ADR 0067).
 - **Negative vectors are mandatory:** tampered signatures, `alg: none`, alg/key mismatch, wrong `crit`, expired JWTs, invalid curve points, non-canonical encodings.
 - Imported upstream suites that every platform runs (the RFC 7520 cookbook) live in `vectors/third_party/`, converted to this format, with their licenses alongside them (non-JSON files are ignored).
 - JWK Set selection vectors live in `jwks-select/`, one per file (ADR 0045), named by outcome (see [`jwks.select`](#jwksselect)). `source` cites the ADR 0054 rule and the RFC section, and `description` states the rule that decides the outcome. That outcome is written by hand from the ADR 0054 text in `tools/jwk-oracle/specs/select.json`. It is never computed by polyjose, and the generator never decides one. Keys are the committed fixtures: RFC 7517 App. A, `tools/jwt-oracle/keys.json`, `crates/polyjose/tests/data/jwe/rsa-bound/rsa1024.jwk.json`, RFC 8037 A.6's X25519 key and the `jws-oracle` secp256k1 key. Edit the spec and rerun the generator; don't edit the files.
@@ -636,7 +637,8 @@ Points the sections above imply but that are easy to get wrong in a binding runn
   - allow-lists (ADR 0007): `jws-verify-allowed-algs-{empty,none-only}`, `jwe-decrypt-allowed-algs-{empty,none-only}`, `jwe-decrypt-allowed-enc-empty`, all `AlgorithmNotAllowed`;
   - the PBES2 bound (ADR 0023): `pbes2-p2c-10000-default-decrypts`, `pbes2-p2c-10001-default-fails` (`DecryptionFailed`), `pbes2-p2c-10001-bound-20000-decrypts`; the per-token budget (ADR 0050 §2): `pbes2-two-recipients-over-default-budget` (`DecryptionFailed`) and `pbes2-two-recipients-budget-raised`;
   - JWS limits (ADR 0026 §7): `jws-verify-17-signatures-default` and `jws-verify-max-input-len-small`, both `InvalidFormat`;
-  - RSA public-key only (ADR 0021) and no RSA-OAEP (ADR 0022): `jws-sign-rsa-private-jwk`, `jws-sign-rs256-public-key`, `jwe-decrypt-rsa-oaep-256` and `jwe-encrypt-rsa-oaep`, all `UnsupportedAlgorithm`;
+  - RSA private keys (ADR 0067) and no RSA-OAEP (ADR 0022): `jws-sign-rsa-private-jwk` (the exact RFC 7515 A.2 JWS) and `jwe-decrypt-rsa-oaep-256` (the plaintext) succeed, `jws-sign-rs256-public-key` and `jwe-decrypt-rsa-oaep-256-public-key` are `KeyAlgorithmMismatch`, and `jwe-encrypt-rsa-oaep` is `UnsupportedAlgorithm`;
+  - PKCS#1 export of an RSA private key (ADR 0018 §3, RFC 8017 App. A.1.1): `keys-export-pem-rsa-private-pkcs1` and `keys-export-der-rsa-private-pkcs1`, both `InvalidKey`, so no binding writes the public half in its place;
   - JWK Set selection (ADR 0029): `jwt-jwks-kidless-second-key` (`key_index` 1) and `jwt-jwks-no-candidate` (`NoMatchingKey`);
   - no DEFLATE in the binding configuration (ADR 0030 §4): `jwe-decrypt-zip-def-without-deflate` and `jwe-encrypt-compress-without-deflate`, both `UnsupportedAlgorithm`. They have `features_absent: ["deflate"]` (ADR 0056), so the only skips among these files are in builds with `deflate` (`feature:!deflate`);
   - one vector per generator (ADR 0030 §4, ADR 0034 §6), by shape and a `use_with` round trip: `generate-oct-32-hs256`, `generate-ec-p256-es256`, `generate-okp-ed25519-eddsa`, `generate-okp-x25519-ecdh-es`; the `oct` length bound, `generate-oct-15-invalid-key` (`InvalidKey`); and `generate-for-alg-es256` and `generate-for-alg-a128kw`, which add the round trip to `jwk_generate_for_alg`.
@@ -653,11 +655,11 @@ Points the sections above imply but that are easy to get wrong in a binding runn
 The scripts that generated or check vectors live in [`tools/`](tools/). They read only data (the vendored ietf-jose cookbook and Wycheproof files, the RFC text, committed key files) and use only Node's built-ins (node:crypto, which is OpenSSL) and Python's standard library: no npm or pip packages, and none of them calls polyjose. Paths below are relative to this directory (`conformance/`). The index of the JWE vectors, with the generator of each directory, is [`vectors/jwe/README.md`](vectors/jwe/README.md).
 
 - **`tools/jwe/reproduce.sh <rfc-dir>`** re-runs every JWE generator below into a temporary directory and compares each file it writes with the committed vector, byte for byte; a historical generator is reported as such. `<rfc-dir>` holds `rfc7516.txt` and `rfc7517.txt` from `https://www.rfc-editor.org/rfc/` (the script checks their SHA-256). The Node generators write the Node and OpenSSL versions into `source` or `description`, so they reproduce byte for byte with the versions named in the committed files (Node.js 24.21.0, OpenSSL 3.5.8); another version changes only that text.
-- **`vectors/binding-surface/generate.mjs <repo-root> [<out-dir>]`**, the one generator kept beside its vectors, writes the 27 files of `binding-surface/` (0013 T11, T15, ADR 0034 §6; see [Writing vectors](#writing-vectors)) and reproduces them byte for byte with the Node version named in their descriptions.
+- **`vectors/binding-surface/generate.mjs <repo-root> [<out-dir>]`**, the one generator kept beside its vectors, writes the 30 files of `binding-surface/` (0013 T11, T15, ADR 0034 §6; see [Writing vectors](#writing-vectors)) and reproduces them byte for byte with the Node version named in their descriptions.
 - **`tools/jwk-oracle/thumbprints.mjs <out-dir>`** writes the 25 `jwk-thumbprint/` files named `sha384-*`, `sha512-*` and `hash-*` (feature 0015 T03, ADR 0054 §8): SHA-384 and SHA-512 thumbprints of six RFC keys, the absent-hash default, the accepted aliases and the rejected names. It hand-builds the RFC 7638 §3.3 hash input and hashes it with node:crypto, after checking that it reproduces RFC 7638 §3.1, RFC 8037 A.3 and RFC 9278 §6. A re-run with Node.js 24.21.0 / OpenSSL 3.5.8 reproduces the files byte for byte. Its [README](tools/jwk-oracle/README.md) lists the keys and the panva/jose 6.2.15 cross-check.
 - **`tools/jwk-oracle/select.mjs <specs/select.json> <out-dir>`** writes the 64 `jwks-select/` files (feature 0015 T04, ADR 0054 §1–§4), one per entry of [`tools/jwk-oracle/specs/select.json`](tools/jwk-oracle/specs/select.json). It resolves key references into the committed fixtures and checks them (for example that RFC 7517 A.2's EC `d` gives A.1's point and its RSA `p · q` gives `n`). For each positive it checks that the expected `jwk` is one of the input members. It computes no outcome, so a rerun reproduces every file byte for byte on any Node 24. Its [README](tools/jwk-oracle/README.md) has the spec format and the panva/jose 6.2.15 cross-check.
 - **`tools/jwt-oracle/gen.mjs <spec.json> <out.json>`** builds `jwt.validate` and `jwt.issue` vectors from a spec: compact and flattened JWSs over raw payload octets (so malformed claims sit behind valid signatures) and nested JWEs, with `node:crypto` only. Its [README](tools/jwt-oracle/README.md) has the spec format and the fixed test keys.
-- **`tools/rsa-oaep-oracle.mjs [vector-dir]`** checks every exact RSA-OAEP-256 `jwe.encrypt` vector in `vectors/jwe/rsa-oaep-256/` against its test-only private key (`keys/*.private.jwk`) with Node's built-in RSA, independently of polyjose, which has no RSA private-key code (ADR 0021).
+- **`tools/rsa-oaep-oracle.mjs [vector-dir]`** checks every exact RSA-OAEP-256 `jwe.encrypt` vector in `vectors/jwe/rsa-oaep-256/` against its test-only private key (`keys/*.private.jwk`) with Node's built-in RSA, independently of polyjose.
 - **`tools/jwe/t09-extract-rfc-inputs.py <rfc7516.txt> <cookbook jwe dir> <out.json>`**: *historical.* Extracts the RFC 7516 App. A.1 and A.2 and RFC 7520 §5.1 and §5.2 compact JWEs and RSA public keys used by four `negative-structure/` vectors. The script that wrote `compact/` and `negative-structure/` (0003 T09) was not preserved, so those 60 files have no generator; `reproduce.sh` checks that the four extracted inputs match their vectors.
 - **`tools/jwe/t10-gcmkw.mjs <cookbook 5_7 json> <out-dir>`** writes the 24 0003 T10 files of `gcmkw/`: RFC 7520 §5.7 decrypt and exact encrypt from the cookbook, and A\*GCMKW tokens and negatives built with node:crypto from SHA-256-derived bytes.
 - **`tools/jwe/t11-rsa-oaep-256.mjs <repo-root>`** writes the six `rsa-oaep-256/*-reproduced.json` exact encrypt vectors into `<repo-root>/conformance/vectors/jwe/rsa-oaep-256/`, from `rsa-oaep-oracle.mjs`'s own EME-OAEP encoding and Node's raw RSA with the test keys in `keys/`. The other nine files of that directory (0003 T11 negatives) have no preserved generator: *historical*.

@@ -4,7 +4,8 @@
 //!
 //! Each export is a type conversion and one call into `polyjose_surface::keys` (ADR 0030 §1,
 //! "the adapter test"). Key generation draws from the OS CSPRNG inside the core (ADR 0005); RSA
-//! generation and RSA private import fail with `UnsupportedAlgorithm` (ADR 0021).
+//! generation fails with `UnsupportedAlgorithm`, and RSA private keys import and export
+//! (ADR 0067 §2, §3).
 //!
 //! **Secrets (ADR 0030 §7).**
 //! - **Inputs.** A JWK or PEM `String` argument is moved into a [`Zeroizing`] owner in the first
@@ -76,7 +77,8 @@ pub fn jwk_generate_okp(crv: String) -> Result<String, PolyjoseError> {
 ///
 /// # Errors
 ///
-/// `UnsupportedAlgorithm` for RSA (ADR 0021), `PBES2-*`, `dir`, `none` (RFC 8725 §3.1) and
+/// `UnsupportedAlgorithm` for RSA (no key generation, ADR 0067 §3), `PBES2-*`, `dir`, `none`
+/// (RFC 8725 §3.1) and
 /// unknown names;
 /// `InvalidKey` where the core needs a curve the name does not fix (ECDH-ES);
 /// `RandomnessUnavailable`.
@@ -94,7 +96,7 @@ pub fn jwk_generate_for_alg(alg: String) -> Result<String, PolyjoseError> {
 /// # Errors
 ///
 /// `InvalidKey` for malformed PEM or DER; `UnsupportedAlgorithm` for encrypted PKCS#8, a
-/// certificate, an RSA private key (ADR 0021) or an unsupported key type.
+/// certificate, a multi-prime RSA key (ADR 0067 §3) or an unsupported key type.
 #[uniffi::export]
 pub fn jwk_from_pem(pem: String) -> Result<String, PolyjoseError> {
     let pem = Zeroizing::new(pem);
@@ -109,8 +111,8 @@ pub fn jwk_from_pem(pem: String) -> Result<String, PolyjoseError> {
 ///
 /// # Errors
 ///
-/// `UnsupportedAlgorithm` for an unknown format name (ADR 0030 §5), RSA private keys
-/// (ADR 0021) and unsupported key types; `InvalidKey` for DER that is not the named structure.
+/// `UnsupportedAlgorithm` for an unknown format name (ADR 0030 §5), multi-prime RSA keys
+/// (ADR 0067 §3) and unsupported key types; `InvalidKey` for DER that is not the named structure.
 #[uniffi::export]
 pub fn jwk_from_der(der: Vec<u8>, format: String) -> Result<String, PolyjoseError> {
     let der = Zeroizing::new(der);
@@ -124,8 +126,8 @@ pub fn jwk_from_der(der: Vec<u8>, format: String) -> Result<String, PolyjoseErro
 ///
 /// # Errors
 ///
-/// `UnsupportedAlgorithm` for an unknown format name (ADR 0030 §5), an RSA private JWK
-/// (ADR 0021) or a format the key type has none of (ADR 0018 §3 format matrix; an `oct` key in
+/// `UnsupportedAlgorithm` for an unknown format name (ADR 0030 §5), a multi-prime RSA JWK
+/// (ADR 0067 §3) or a format the key type has none of (ADR 0018 §3 format matrix; an `oct` key in
 /// any format, RFC 8725 §2.1); `InvalidKey` for a public key in `pkcs8` or `sec1`; the core's
 /// JWK parse errors.
 #[uniffi::export]

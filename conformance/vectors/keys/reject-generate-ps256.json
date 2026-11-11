@@ -1,6 +1,6 @@
 {
   "source": "polyjose",
-  "description": "Key generation refuses \"PS256\": RSA keys are never generated (ADR 0021).",
+  "description": "Key generation refuses \"PS256\": RSA keys are never generated (ADR 0067 §3).",
   "operation": "keys.generate_for",
   "input": {
     "alg": "PS256"

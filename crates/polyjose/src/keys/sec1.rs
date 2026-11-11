@@ -15,7 +15,7 @@ use core::fmt;
 use zeroize::Zeroizing;
 
 use super::der::{self, Reader, Writer};
-use super::{oid, pkcs1};
+use super::oid;
 use crate::error::{Error, Result};
 use crate::jwk::EcCurve;
 
@@ -121,21 +121,15 @@ pub(crate) fn decode(der: &[u8]) -> Result<EcPrivateKey<'_>> {
 
 /// Decodes a standalone SEC1 `EC PRIVATE KEY` (RFC 5915 §3, §4) as
 /// [`decode`] does, for `KeyFormat::Sec1` and the `EC PRIVATE KEY` label.
-///
-/// Input that fails that parse but is a PKCS#1 RSAPrivateKey (RFC 8017
-/// App. A.1.2) is `UnsupportedAlgorithm`, an RSA private key in any format
-/// (ADR 0018 §3, ADR 0021). It is recognized by framing only
-/// (`pkcs1::relabel_rsa_private_key`), with no private INTEGER's contents
-/// read. The ECPrivateKey inside a PKCS#8 privateKey is decoded with
-/// [`decode`] instead: there an RSAPrivateKey is an inconsistent body for
-/// id-ecPublicKey, whose privateKey holds an ECPrivateKey (RFC 5915 §1),
-/// and stays `InvalidKey`.
+/// Any other structure, a PKCS#1 RSAPrivateKey (RFC 8017 App. A.1.2)
+/// included, is `InvalidKey`: the wrong structure for the format
+/// (ADR 0018 §3; ADR 0067 reads RSA private keys as PKCS#1 or PKCS#8).
 ///
 /// # Errors
 ///
-/// Those of [`decode`], with the re-labelling above.
+/// Those of [`decode`].
 pub(crate) fn decode_standalone(der: &[u8]) -> Result<EcPrivateKey<'_>> {
-    decode(der).map_err(|error| pkcs1::relabel_rsa_private_key(der, error))
+    decode(der)
 }
 
 /// Reads the contents of the EXPLICIT `[0]`: exactly one ECParameters
@@ -286,10 +280,10 @@ mod tests {
     }
 
     #[test]
-    fn a_pkcs1_rsa_private_key_read_as_standalone_sec1_is_unsupported() {
-        // ADR 0018 §3 "RSA private, any format" (ADR 0021): version 0
-        // fails RFC 5915 §3 at the version, version 1 (multi) at the
-        // privateKey OCTET STRING; both are then recognized by framing.
+    fn a_pkcs1_rsa_private_key_read_as_standalone_sec1_is_invalid() {
+        // ADR 0067 (amending ADR 0018 §3): version 0 fails RFC 5915 §3 at
+        // the version, version 1 (multi) at the privateKey OCTET STRING;
+        // either is the wrong structure for SEC1, InvalidKey.
         for (dir, file) in [
             ("openssl", "reject-rsa2048-private-pkcs1.der"),
             ("openssl", "reject-rsa2048-3prime-private-pkcs1.pem"),
@@ -297,26 +291,27 @@ mod tests {
         ] {
             let der = fixtures::load(dir, file);
             let result = super::super::ec::from_sec1(&der);
-            assert_eq!(result.err(), Some(Error::UnsupportedAlgorithm), "{file}");
+            assert!(matches!(result, Err(Error::InvalidKey(_))), "{file}");
         }
         // Garbage INTEGER contents (empty, X.690 §8.3.1; redundant 0xFF,
-        // §8.3.2) are never parsed, so they change nothing.
+        // §8.3.2) are malformed SEC1 too.
         for (version, field) in [(0, &[0x02, 0x00][..]), (1, &[0x02, 0x02, 0xFF, 0x80][..])] {
             let der = rsa_private_shape(version, field);
             let result = super::super::ec::from_sec1(&der);
-            assert_eq!(result.err(), Some(Error::UnsupportedAlgorithm));
+            assert!(matches!(result, Err(Error::InvalidKey(_))));
         }
     }
 
     #[test]
-    fn only_the_standalone_decoder_relabels_an_rsa_private_key() {
-        // `decode` itself, which also reads the ECPrivateKey inside PKCS#8,
-        // keeps InvalidKey (RFC 5915 §3 version / privateKey).
+    fn both_decoders_report_an_rsa_private_key_as_malformed_sec1() {
+        // ADR 0067: neither `decode` (which also reads the ECPrivateKey
+        // inside PKCS#8) nor `decode_standalone` relabels an RSAPrivateKey
+        // any more; both keep the RFC 5915 §3 version detail.
         let rsa = fixtures::load("openssl", "reject-rsa2048-private-pkcs1.der");
         assert_eq!(invalid(decode(&rsa)), "ECPrivateKey version is not 1");
         assert_eq!(
-            decode_standalone(&rsa).err(),
-            Some(Error::UnsupportedAlgorithm)
+            invalid(decode_standalone(&rsa)),
+            "ECPrivateKey version is not 1"
         );
         // An id-ecPublicKey PKCS#8 whose privateKey holds that
         // RSAPrivateKey is an inconsistent body (RFC 5915 §1), not an RSA

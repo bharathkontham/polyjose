@@ -61,7 +61,8 @@ fn check_order_support_then_allow_list_then_key_family() {
     let oct16 = oct(&[1; 16]);
     let narrow = policy(&[A::A128KW], &[E::A128GCM]);
     // An unsupported alg that is NOT in the policy: support comes first.
-    for alg in ["none", "RSA1_5", "RSA-OAEP", "RSA-OAEP-256", "bogus", ""] {
+    // RSA1_5 and RSA-OAEP (SHA-1) stay unsupported (ADRs 0021, 0022, 0067).
+    for alg in ["none", "RSA1_5", "RSA-OAEP", "bogus", ""] {
         let t = forge(&format!(r#"{{"alg":"{alg}","enc":"A128GCM"}}"#), &[1; 40]);
         assert_eq!(
             err(&t, &oct16, &narrow),
@@ -69,6 +70,13 @@ fn check_order_support_then_allow_list_then_key_family() {
             "{alg:?}"
         );
     }
+    // ADR 0067: RSA-OAEP-256 is supported, so outside the policy it is
+    // AlgorithmNotAllowed (allow-list before key family), and allowed with
+    // the wrong key family it is KeyAlgorithmMismatch.
+    let t = forge(r#"{"alg":"RSA-OAEP-256","enc":"A128GCM"}"#, &[1; 256]);
+    assert_eq!(err(&t, &oct16, &narrow), Error::AlgorithmNotAllowed);
+    let oaep = policy(&[A::RsaOaep256], &[E::A128GCM]);
+    assert_eq!(err(&t, &oct16, &oaep), Error::KeyAlgorithmMismatch);
     // An unsupported enc beats a not-allowed alg and a wrong key family.
     let t = forge(r#"{"alg":"dir","enc":"A128CTR"}"#, &[]);
     assert_eq!(err(&t, &ec, &narrow), Error::UnsupportedAlgorithm);
