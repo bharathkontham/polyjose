@@ -8,6 +8,7 @@
 # unlike ADR 0037 §2 (decisions.md, 2026-11-08, H3). Two modes:
 #   - candidate: dispatched on the release PR branch. Builds and tests every artifact unsigned (the
 #     build jobs never reach the signing key: environment `release-signing` admits `v*` tags only),
+#     runs the Rust workspace tests on Linux (the rust job),
 #     checks and checksums them, attests them, and uploads them as the `release-assets` workflow
 #     artifact. No release is created. The release agent then records this run in
 #     platforms/swift/release-candidate.json and the Apple zip's checksum in Package.swift (ADR 0037
@@ -186,6 +187,36 @@ jobs:
           path: target/release-crate/*.crate
           if-no-files-found: error
 
+  # Candidate mode only: the workspace test suite on Linux. The regression before a merge runs on
+  # the owner's macOS host (scripts/test-all.sh) and ci.yml is manual-dispatch only (ADR 0044), so
+  # this is the one run of the Rust tests on Linux before a release. It builds no artifact and
+  # uploads nothing; the sums job needs it like the build jobs, so a failure stops the candidate
+  # before anything is assembled, and the tag run only accepts a candidate run that succeeded
+  # (scripts/release/candidate.sh).
+  rust:
+    name: rust (linux, cargo test --workspace)
+    needs: [verify]
+    if: inputs.mode == 'candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: no cargo config
+        run: scripts/check-no-cargo-config.sh
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --profile minimal
+          rustup show
+
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked
+
   # Candidate mode only: the platform workflows in release mode (ADR 0037 §1, §2 option 3a), the
   # same build and tests as CI, uploading the fixed-name artifacts the sums job collects.
   node:
@@ -304,11 +335,12 @@ jobs:
   # no secret, and nothing is signed.
   sums:
     name: sums (assemble, SHA256SUMS${{ inputs.mode == 'tag' && ', signed' || '' }})
-    needs: [verify, crate, node, wasm, android, apple, candidate]
+    needs: [verify, crate, rust, node, wasm, android, apple, candidate]
     if: >-
       ${{ !cancelled() && needs.verify.result == 'success' &&
-      ((inputs.mode == 'candidate' && needs.crate.result == 'success' && needs.node.result == 'success' &&
-      needs.wasm.result == 'success' && needs.android.result == 'success' && needs.apple.result == 'success') ||
+      ((inputs.mode == 'candidate' && needs.crate.result == 'success' && needs.rust.result == 'success' &&
+      needs.node.result == 'success' && needs.wasm.result == 'success' && needs.android.result == 'success' &&
+      needs.apple.result == 'success') ||
       (inputs.mode == 'tag' && needs.candidate.result == 'success')) }}
     environment: ${{ inputs.mode == 'tag' && 'release-signing' || '' }}
     runs-on: ubuntu-24.04
