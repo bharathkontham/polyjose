@@ -33,11 +33,6 @@
 //! may free secret limbs without wiping them (`BoxedUint` is `Zeroize`, not
 //! `ZeroizeOnDrop`); SECURITY.md lists this as a residual risk.
 //!
-//! JWE decryption builds the key once per decrypt call, as a
-//! [`PreparedRsaKey`] (RFC 7516 §5.2 step 7), so trying several
-//! RSA-OAEP-256 recipients does not repeat the validation and the CRT
-//! precomputation.
-//!
 //! [`RSA_MODULUS_BITS`]: crate::jwk::RSA_MODULUS_BITS
 
 use rsa::BoxedUint;
@@ -234,38 +229,6 @@ pub(crate) fn private_key(key: &RsaKey) -> Result<rsa::PrivateKey> {
     from_components(key.n(), key.e(), private)
 }
 
-/// The `rsa` crate's private key of an RSA private JWK, built once by
-/// [`private_key`] (validated, CRT values precomputed) for one JWE decrypt
-/// call, and shared by every RSA-OAEP-256 recipient that call tries
-/// (RFC 7516 §5.2 steps 7–10, RFC 7518 §4.3).
-///
-/// It is opaque so that `jwe::key` can hold it without naming the `rsa`
-/// crate (ADR 0067 §6): only `jwe/rsa_oaep.rs` reads the key inside. The
-/// `rsa` crate wipes that key on drop (`ZeroizeOnDrop`). There is no
-/// `Debug`, so the key can never be printed.
-pub(crate) struct PreparedRsaKey(rsa::PrivateKey);
-
-impl PreparedRsaKey {
-    /// Builds the key of `key` with [`private_key`].
-    ///
-    /// # Errors
-    ///
-    /// Those of [`private_key`]: [`Error::KeyAlgorithmMismatch`] for a
-    /// public key, [`Error::InvalidKey`] for members that are not a valid
-    /// key, which import already rules out.
-    pub(crate) fn new(key: &RsaKey) -> Result<Self> {
-        private_key(key).map(Self)
-    }
-
-    /// The `rsa` crate's key, for the blinded private-key operation.
-    pub(crate) fn key(&self) -> &rsa::PrivateKey {
-        &self.0
-    }
-}
-
-/// The one field is `rsa::PrivateKey`, which is `ZeroizeOnDrop`.
-impl zeroize::ZeroizeOnDrop for PreparedRsaKey {}
-
 /// ADR 0043, ADR 0067 §2: checks at import that the private members of an
 /// RSA JWK (RFC 7518 §6.3.2) are the key of `n` and `e`:
 ///
@@ -307,8 +270,6 @@ pub(crate) fn check_private(n: &[u8], e: &[u8], private: &RsaPrivateParts) -> Re
 /// public-key operations (RFC 8017 §3.1 allows any e < n); otherwise with
 /// one static detail, whatever check failed (ADR 0007).
 fn from_components(n: &[u8], e: &[u8], private: &RsaPrivateParts) -> Result<rsa::PrivateKey> {
-    #[cfg(test)]
-    crate::test_counters::rsa_private_key_builds::tick();
     let n = uint(n)?;
     let e = uint(e)?;
     let d = uint(&private.d)?;

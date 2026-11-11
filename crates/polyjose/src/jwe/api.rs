@@ -135,12 +135,12 @@ impl DecryptPolicy {
     /// by the recipient count, not budgeted (ADR 0050 §2).
     ///
     /// RSA-OAEP-256 has the same multiplier and no budget: each candidate
-    /// RSA-OAEP-256 recipient costs one RSA private-key operation (RFC 8017
+    /// RSA-OAEP-256 recipient costs one private-key build (validation and
+    /// CRT precomputation) and one private-key operation (RFC 8017
     /// §7.1.2), so a decrypt call costs at most
-    /// [`max_recipients`](Self::max_recipients) of them. The key itself is
-    /// validated and prepared once per call. A private-key operation grows
-    /// roughly with the cube of the modulus size, so with 4096-bit or larger
-    /// keys, give the key and the recipients a `kid`, which narrows the
+    /// [`max_recipients`](Self::max_recipients) of each. Both grow roughly
+    /// with the cube of the modulus size, so with 4096-bit or larger keys,
+    /// give the key and the recipients a `kid`, which narrows the
     /// candidates (RFC 7516 §4.1.6), or lower `max_recipients`.
     #[must_use]
     pub fn max_pbes2_count(mut self, n: u32) -> Self {
@@ -197,11 +197,11 @@ impl DecryptPolicy {
     ///
     /// The count also bounds the asymmetric work of one decrypt call: each
     /// candidate ECDH-ES recipient costs one scalar multiplication, and
-    /// each candidate RSA-OAEP-256 recipient one RSA private-key operation
-    /// (the RSA key is prepared once per call). For RSA keys of 4096 bits or
-    /// more, give the key and the recipients a `kid` (RFC 7516 §4.1.6), so
-    /// only the matching recipients are candidates, or lower this bound.
-    /// PBES2 has its own budget, [`max_pbes2_count`](Self::max_pbes2_count).
+    /// each candidate RSA-OAEP-256 recipient one private-key build and
+    /// operation. For RSA keys of 4096 bits or more, give the key and the
+    /// recipients a `kid` (RFC 7516 §4.1.6), so only the matching recipients
+    /// are candidates, or lower this bound. PBES2 has its own budget,
+    /// [`max_pbes2_count`](Self::max_pbes2_count).
     #[must_use]
     pub fn max_recipients(mut self, n: usize) -> Self {
         self.max_recipients = n;

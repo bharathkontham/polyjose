@@ -289,16 +289,13 @@ fn rank(error: &Error) -> u8 {
 /// 4. **`kid`**: when both the header and the key carry one, they are
 ///    equal (RFC 7516 §4.1.6) → else [`Error::KeyAlgorithmMismatch`].
 ///
-/// `enc` is already known to be supported. The key binding comes from
-/// `bindings`, so it runs once per `alg` in the call. The result is the
-/// candidate's `alg` and the index of its key in `bindings`.
+/// `enc` is already known to be supported.
 fn candidate(
     header: &Header,
     enc: &ContentEncAlg,
     key: &Jwk,
     policy: &DecryptPolicy,
-    bindings: &mut Bindings,
-) -> Result<(KeyMgmtAlg, usize)> {
+) -> Result<(KeyMgmtAlg, RecipientKey)> {
     let alg = KeyMgmtAlg::from(header.alg.as_deref().unwrap_or_default());
     if !keymgmt::supported(&alg, Direction::Decrypt) {
         return Err(Error::UnsupportedAlgorithm);
@@ -306,52 +303,11 @@ fn candidate(
     if !policy.allowed_algs.contains(&alg) || !policy.allowed_enc.contains(enc) {
         return Err(Error::AlgorithmNotAllowed);
     }
-    let slot = bindings.bind(key, &alg, enc)?;
+    let recipient_key = RecipientKey::from_jwk(key, &alg, enc, Direction::Decrypt)?;
     if !kid_matches(key, header.kid.as_deref()) {
         return Err(Error::KeyAlgorithmMismatch);
     }
-    Ok((alg, slot))
-}
-
-/// The key bindings of one decrypt call, one per `alg`.
-///
-/// [`RecipientKey::from_jwk`] depends only on the key, the `alg`, the `enc`
-/// (one for every recipient, RFC 7516 §7.2.1) and the direction, so a
-/// binding made for one recipient serves every other recipient with that
-/// `alg`. The key is then bound, and for RSA-OAEP-256 the private key built
-/// (validated, CRT values precomputed), once per call, however many
-/// recipients name the `alg` (RFC 7516 §5.2 step 7); an error is kept and
-/// reported for each of them alike.
-#[derive(Default)]
-struct Bindings(Vec<(KeyMgmtAlg, Result<RecipientKey>)>);
-
-impl Bindings {
-    /// The index of `key`'s binding for `alg` and `enc`, binding it on the
-    /// first call for `alg`.
-    ///
-    /// # Errors
-    ///
-    /// The error of [`RecipientKey::from_jwk`], the same for every call
-    /// with that `alg`.
-    fn bind(&mut self, key: &Jwk, alg: &KeyMgmtAlg, enc: &ContentEncAlg) -> Result<usize> {
-        let slot = match self.0.iter().position(|(bound, _)| bound == alg) {
-            Some(slot) => slot,
-            None => {
-                let bound = RecipientKey::from_jwk(key, alg, enc, Direction::Decrypt);
-                self.0.push((alg.clone(), bound));
-                self.0.len() - 1
-            }
-        };
-        match &self.0[slot].1 {
-            Ok(_) => Ok(slot),
-            Err(e) => Err(e.clone()),
-        }
-    }
-
-    /// The bound key at `slot`, an index [`Bindings::bind`] returned.
-    fn key(&self, slot: usize) -> Option<&RecipientKey> {
-        self.0.get(slot).and_then(|(_, bound)| bound.as_ref().ok())
-    }
+    Ok((alg, recipient_key))
 }
 
 /// RFC 7516 §5.2 steps 6–17 for one candidate recipient: key management,
@@ -406,10 +362,6 @@ fn decrypt_recipient(
 ///    `max_pbes2_count` iterations (ADR 0050 §2): one whose `p2c` exceeds
 ///    what is left fails, without deriving, and the next is tried.
 ///
-/// The key is bound once per `alg` ([`Bindings`]), so an RSA private key is
-/// built once per call; each RSA-OAEP-256 candidate then costs one
-/// private-key operation, at most `max_recipients` of them.
-///
 /// # Errors
 ///
 /// The errors of the steps above. With no candidate, the best-ranked
@@ -423,11 +375,10 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
     let inflate = check_zip(parts.protected.as_ref().and_then(|p| p.zip.as_deref()))?;
 
     let mut best: Option<Error> = None;
-    let mut bindings = Bindings::default();
     let mut candidates = Vec::new();
     for (index, header) in headers.iter().enumerate() {
-        match candidate(header, &enc, key, policy, &mut bindings) {
-            Ok((alg, slot)) => candidates.push((index, alg, slot)),
+        match candidate(header, &enc, key, policy) {
+            Ok((alg, recipient_key)) => candidates.push((index, alg, recipient_key)),
             Err(e) => {
                 if best.as_ref().is_none_or(|b| rank(&e) > rank(b)) {
                     best = Some(e);
@@ -444,10 +395,7 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
     // ADR 0050 §2: one PBKDF2 budget for the whole call, so the sum of
     // `p2c` over the PBES2 candidates tried is at most `max_pbes2_count`.
     let mut pbes2_budget = pbes2::Budget::new(policy);
-    for (index, alg, slot) in &candidates {
-        let Some(recipient_key) = bindings.key(*slot) else {
-            continue;
-        };
+    for (index, alg, recipient_key) in &candidates {
         let header = &headers[*index];
         let recipient = &parts.recipients[*index];
         let result = decrypt_recipient(

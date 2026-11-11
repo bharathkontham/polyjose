@@ -147,29 +147,6 @@ pub(crate) mod rsa_oaep_unwraps {
     }
 }
 
-/// RSA private keys built by `keys/rsa.rs` (validated, CRT values
-/// precomputed; feature 0020 review): JWE decryption builds one per
-/// decrypt call, however many RSA-OAEP-256 recipients it tries.
-pub(crate) mod rsa_private_key_builds {
-    use core::cell::Cell;
-
-    std::thread_local! {
-        static COUNT: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub(crate) fn tick() {
-        COUNT.with(|c| c.set(c.get().saturating_add(1)));
-    }
-
-    /// Runs `f` and returns its result with the number of ticks on this
-    /// thread while it ran.
-    pub(crate) fn count<R>(f: impl FnOnce() -> R) -> (R, u64) {
-        let before = COUNT.with(Cell::get);
-        let result = f();
-        (result, COUNT.with(Cell::get) - before)
-    }
-}
-
 /// Content decryptions run by JWE (`jwe/content.rs`, feature 0020): with
 /// [`rsa_oaep_unwraps`], it shows that a malformed RSA-OAEP-256 Encrypted
 /// Key still reaches the content decryption (RFC 7516 §11.5).
