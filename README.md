@@ -35,15 +35,23 @@ polyjose writes no cryptographic primitives of its own. It composes pure-Rust pr
 
 ## Layout
 ```
-crates/polyjose/   core library (no unsafe)
-bindings/node/     napi-rs addon
-bindings/wasm/     wasm-bindgen package
-bindings/ffi/      UniFFI cdylib/staticlib → Kotlin + Swift
-platforms/android/ Gradle library (AAR) + tests
-platforms/swift/   Swift Package + XCTest (iOS first)
-conformance/       shared test vectors, consumed by every platform's test suite
-scripts/           test-all.sh and build helpers
+crates/polyjose/         core library (no unsafe)
+bindings/surface/        the binding-facing API over the core, shared by every binding crate
+bindings/node/           napi-rs addon (@polyjose/node)
+bindings/wasm/           wasm-bindgen package (@polyjose/wasm)
+bindings/js/             TypeScript facade shared by the Node and WASM packages (not published on its own)
+bindings/ffi/            UniFFI cdylib/staticlib → Kotlin + Swift
+bindings/uniffi-bindgen/ the pinned UniFFI generator for the Kotlin and Swift sources
+platforms/android/       Gradle library (AAR, JVM jar) + tests
+platforms/swift/         Swift Package + XCTest (iOS first)
+conformance/             shared test vectors, consumed by every platform's test suite
+interop/                 two-way interop tests against other JOSE libraries (panva/jose)
+fuzz/                    cargo-fuzz targets (scripts/fuzz.sh); its own workspace
+scripts/                 test-all.sh, the dependency and release guards, build helpers
+dist/                    build output (packed release artifacts), git-ignored
 ```
+
+The Rust code of the Kotlin and Swift bindings is `bindings/ffi`; their packages, generated sources and tests are in `platforms/android` and `platforms/swift`.
 
 ## Test everything
 ```sh
