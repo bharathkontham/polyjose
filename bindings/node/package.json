@@ -1,6 +1,6 @@
 {
   "name": "@polyjose/node",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "polyjose for Node.js: JOSE (JWS, JWE, JWK, JWT) in pure Rust through Node-API, with the shared TypeScript facade (ADR 0031, ADR 0047).",
   "license": "MIT",
   "repository": {
