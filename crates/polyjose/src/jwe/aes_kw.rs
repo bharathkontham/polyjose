@@ -418,7 +418,9 @@ mod tests {
     ];
 
     fn kek(len: usize) -> RecipientKey {
-        RecipientKey::Symmetric(Zeroizing::new((0..len).map(|i| 0x40 ^ i as u8).collect()))
+        RecipientKey::Symmetric(Box::new(Zeroizing::new(
+            (0..len).map(|i| 0x40 ^ i as u8).collect(),
+        )))
     }
 
     fn cek_for(enc: &ContentEncAlg) -> Cek {
@@ -526,8 +528,8 @@ mod tests {
             encrypt(&alg, &key, &enc, Some(&short)).map(|_| ()),
             Err(Error::InvalidKey(CEK_SIZE))
         );
-        let password = RecipientKey::Password(Zeroizing::new(vec![0x50; 16]));
-        let x25519 = RecipientKey::X25519Public(x25519_dalek::PublicKey::from([9; 32]));
+        let password = RecipientKey::Password(Box::new(Zeroizing::new(vec![0x50; 16])));
+        let x25519 = RecipientKey::X25519Public(Box::new(x25519_dalek::PublicKey::from([9; 32])));
         for wrong in [password, x25519] {
             assert_eq!(
                 encrypt(&alg, &wrong, &enc, Some(&cek_for(&enc))).map(|_| ()),
@@ -618,7 +620,7 @@ mod tests {
             (
                 "password key",
                 alg.clone(),
-                RecipientKey::Password(Zeroizing::new(vec![0x40; 16])),
+                RecipientKey::Password(Box::new(Zeroizing::new(vec![0x40; 16]))),
                 enc.clone(),
                 wrapped.clone(),
             ),
@@ -660,7 +662,7 @@ mod tests {
             /// `enc` CEK length (RFC 7518 §4.4, §5.2.3–§5.2.5, §5.3).
             #[test]
             fn encrypt_key_then_decrypt_key_round_trips((alg, kek, enc, cek) in case()) {
-                let key = RecipientKey::Symmetric(Zeroizing::new(kek));
+                let key = RecipientKey::Symmetric(Box::new(Zeroizing::new(kek)));
                 let random_cek = Cek::from_slice(&cek);
                 let out = encrypt(&alg, &key, &enc, Some(&random_cek))?;
                 prop_assert_eq!(out.encrypted_key.len(), cek.len() + 8);
@@ -676,7 +678,7 @@ mod tests {
                 at in any::<prop::sample::Index>(),
                 bit in 0..8u8,
             ) {
-                let key = RecipientKey::Symmetric(Zeroizing::new(kek));
+                let key = RecipientKey::Symmetric(Box::new(Zeroizing::new(kek)));
                 let mut wrapped = encrypt(&alg, &key, &enc, Some(&Cek::from_slice(&cek)))?.encrypted_key;
                 let at = at.index(wrapped.len());
                 wrapped[at] ^= 1 << bit;

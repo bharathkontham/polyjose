@@ -415,7 +415,7 @@ mod tests {
     const P2S: [u8; 16] = [0x11; 16];
 
     fn password(pw: &[u8]) -> RecipientKey {
-        RecipientKey::Password(Zeroizing::new(pw.to_vec()))
+        RecipientKey::Password(Box::new(Zeroizing::new(pw.to_vec())))
     }
 
     fn policy() -> DecryptPolicy {
@@ -665,7 +665,7 @@ mod tests {
         );
         assert_eq!(out.map(|_| ()), Err(Error::DecryptionFailed));
         // RFC 8725 §3.1: a symmetric key is not a password; nothing derived.
-        let symmetric = RecipientKey::Symmetric(Zeroizing::new(PASSWORD.to_vec()));
+        let symmetric = RecipientKey::Symmetric(Box::new(Zeroizing::new(PASSWORD.to_vec())));
         let enc = ContentEncAlg::A128CbcHs256;
         let (out, n) = decrypt_counted(&alg, &symmetric, &enc, &h, &ek, &policy());
         assert_eq!((out.map(|_| ()), n), (Err(Error::DecryptionFailed), 0));
@@ -942,7 +942,7 @@ mod tests {
         let enc = ContentEncAlg::A128GCM;
         let opts = options(None, None);
         let mut rng = FixedRng::new(vec![0; 16]);
-        let symmetric = RecipientKey::Symmetric(Zeroizing::new(vec![1; 16]));
+        let symmetric = RecipientKey::Symmetric(Box::new(Zeroizing::new(vec![1; 16])));
         let cek = cek_for(&enc);
         assert_eq!(
             encrypt_key(&alg, &symmetric, &enc, Some(&cek), &opts, &mut rng).map(|_| ()),

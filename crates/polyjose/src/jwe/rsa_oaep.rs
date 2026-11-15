@@ -89,9 +89,10 @@ pub(super) fn encrypt_key(
     if *alg != KeyMgmtAlg::RsaOaep256 {
         return Err(Error::UnsupportedAlgorithm);
     }
-    let RecipientKey::RsaPublic { n, e } = key else {
+    let RecipientKey::RsaPublic(public) = key else {
         return Err(Error::KeyAlgorithmMismatch);
     };
+    let (n, e) = (&public.n, &public.e);
     let cek_len = cek_len(enc)?;
     let cek = cek
         .filter(|cek| cek.len() == cek_len)
@@ -257,10 +258,7 @@ mod tests {
     }
 
     fn key(bits: usize) -> RecipientKey {
-        RecipientKey::RsaPublic {
-            n: modulus(bits),
-            e: F4.to_vec(),
-        }
+        RecipientKey::rsa_public(modulus(bits), F4.to_vec())
     }
 
     fn cek(enc: &ContentEncAlg) -> Cek {
@@ -384,7 +382,7 @@ mod tests {
             (Vec::new(), F4.to_vec()),
         ];
         for (n, e) in cases {
-            let key = RecipientKey::RsaPublic { n, e };
+            let key = RecipientKey::rsa_public(n, e);
             let out = run(&key, &enc, Some(&cek), &mut seed());
             assert!(matches!(out, Err(Error::InvalidKey(_))), "{key:?}");
         }
@@ -411,7 +409,7 @@ mod tests {
         // RSA-OAEP (SHA-1) is not implemented (ADR 0022).
         let enc = ContentEncAlg::A128GCM;
         let cek = cek(&enc);
-        let oct = RecipientKey::Symmetric(zeroize::Zeroizing::new(vec![0u8; 16]));
+        let oct = RecipientKey::Symmetric(Box::new(zeroize::Zeroizing::new(vec![0u8; 16])));
         assert_eq!(
             run(&oct, &enc, Some(&cek), &mut seed()).err(),
             Some(Error::KeyAlgorithmMismatch)
@@ -452,17 +450,14 @@ mod tests {
         let KeyMaterial::Rsa(key) = private_jwk().material().clone() else {
             panic!("RSA");
         };
-        RecipientKey::RsaPrivate(key)
+        RecipientKey::RsaPrivate(Box::new(key))
     }
 
     fn public_key() -> RecipientKey {
         let KeyMaterial::Rsa(key) = private_jwk().material().clone() else {
             panic!("RSA");
         };
-        RecipientKey::RsaPublic {
-            n: key.n().to_vec(),
-            e: key.e().to_vec(),
-        }
+        RecipientKey::rsa_public(key.n().to_vec(), key.e().to_vec())
     }
 
     fn policy() -> DecryptPolicy {
