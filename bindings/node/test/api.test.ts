@@ -40,14 +40,20 @@ function workspaceVersion(): string {
   return m[1];
 }
 
-/** The `op` names of bindings/api-inventory.txt (ADR 0030 §4), in its order. */
+/**
+ * The `op` names of bindings/api-inventory.txt (ADR 0030 §4) that exist in the Node binding, in its
+ * order. An op marked `only <mode>...` exists only in those modes (ADR 0071 §5), so one whose modes
+ * exclude `node` is skipped, as `scripts/check-binding-api.sh node` does.
+ */
 function inventoryOps(): string[] {
   return fs
     .readFileSync(path.join(repo, "bindings", "api-inventory.txt"), "utf8")
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith("op "))
-    .map((line) => line.slice(3).trim());
+    .map((line) => line.slice(3).trim().split(/\s+/))
+    .filter(([, marker, ...modes]) => marker !== "only" || modes.includes("node"))
+    .map(([name]) => name ?? "");
 }
 
 /** Every inventory operation, plus the facade's PolyjoseError and ERROR_CODES (BACKEND.md). */

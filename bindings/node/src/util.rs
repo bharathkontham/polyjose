@@ -153,17 +153,18 @@ mod tests {
 
     #[test]
     fn error_codes_end_with_multiple_matching_keys() {
-        // ADR 0054 §5: `MultipleMatchingKeys` is appended last, after `NoMatchingKey`, at index
-        // 16, giving the 17 codes of 0.1.0. Codes are never reordered or removed (ADR 0030 §8),
-        // so these indices stay; a code added later goes after them.
+        // ADR 0054 §5: `MultipleMatchingKeys` is appended after `NoMatchingKey`, at index 16,
+        // giving the 17 codes of 0.1.0. Codes are never reordered or removed (ADR 0030 §8), so
+        // these indices stay; a code added later goes after them. ADR 0071 (0025) appends
+        // `KeyNotFound`, `UserAuthenticationRequired` and `PlatformKeyFailed`, giving 20.
         let codes = error_codes();
-        assert_eq!(codes.len(), 17, "{codes:?}");
+        assert_eq!(codes.len(), 20, "{codes:?}");
         assert_eq!(codes[15], "NoMatchingKey");
         assert_eq!(codes[16], "MultipleMatchingKeys");
-        assert_eq!(
-            codes.last().map(String::as_str),
-            Some("MultipleMatchingKeys")
-        );
+        assert_eq!(codes[17], "KeyNotFound");
+        assert_eq!(codes[18], "UserAuthenticationRequired");
+        assert_eq!(codes[19], "PlatformKeyFailed");
+        assert_eq!(codes.last().map(String::as_str), Some("PlatformKeyFailed"));
         let mut unique = codes.clone();
         unique.sort_unstable();
         unique.dedup();
