@@ -276,3 +276,95 @@ fn no_error_or_debug_contains_input() {
         assert!(!rendered.contains(MARKER), "{rendered}");
     }
 }
+
+/// The `{`-prefix rule of ADR 0069 §2 (a JSON serialization is
+/// `InvalidFormat`) only ever fires for input whose first non-whitespace
+/// character is `{`, so it can't change the code for a compact-shaped
+/// token. Over a sweep of single-character mutations of RFC 7515 A.1
+/// (every position, several replacement characters, never producing a
+/// leading `{`), decode agrees with verification: the same code when
+/// verification fails at steps 1-5, success otherwise.
+#[test]
+fn json_serialization_rule_does_not_mask_compact_errors() {
+    const A1: &str = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let key = Jwk::from_json(STAND_IN_KEY.as_bytes()).unwrap();
+    let algs = [SigningAlg::HS256];
+    let opts = VerifyOptions::new(&algs).unwrap();
+    let mut checked = 0;
+    for i in 0..A1.len() {
+        for replacement in ['.', '=', '+', '/', 'A', ' ', '\n', '\u{e9}'] {
+            let mut token = String::new();
+            for (j, c) in A1.chars().enumerate() {
+                token.push(if j == i { replacement } else { c });
+            }
+            let decoded = decode_jws_unverified(&token);
+            match jws::verify_compact(&token, &key, &opts) {
+                Err(v) if STEPS_1_TO_5.contains(&v.code()) => {
+                    assert_eq!(decoded.unwrap_err().code(), v.code(), "{token}");
+                }
+                _ => assert!(decoded.is_ok(), "{token}"),
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, A1.chars().count() * 8);
+    // The serialization rule itself: JSON text, with or without leading
+    // JSON whitespace, is InvalidFormat from JWS and JWT decode.
+    for json in [
+        r#"{"protected":"eyJhbGciOiJub25lIn0","payload":"e30","signature":""}"#,
+        "  \t\r\n{\"payload\":\"e30\"}",
+        "{",
+    ] {
+        assert_eq!(
+            decode_jws_unverified(json).unwrap_err().code(),
+            "InvalidFormat"
+        );
+        assert_eq!(
+            decode_jwt_unverified(json).unwrap_err().code(),
+            "InvalidFormat"
+        );
+    }
+}
+
+/// ADR 0027 §9 J1: `jwt::verify` and `decode_jwt_unverified` give the same
+/// code for the signed-layer structure rules (`b64: false`, `cty: JWT`),
+/// and a policy failure (`typ`, `exp`) is verify-only.
+#[test]
+fn jwt_decode_agrees_with_verify_on_signed_layer_structure() {
+    use polyjose::jwt::{FixedClock, Keys, Policy};
+    let h = |json: &str| b64url_encode(json.as_bytes());
+    let key = Jwk::from_json(STAND_IN_KEY.as_bytes()).unwrap();
+    let algs = [SigningAlg::HS256];
+    let clock = FixedClock(1_000);
+    let policy = Policy::new(&clock, &algs).unwrap();
+    let claims = h(r#"{"exp":5}"#);
+    for (header, decode_code) in [
+        (
+            r#"{"alg":"HS256","b64":false,"crit":["b64"]}"#,
+            Some("InvalidHeader"),
+        ),
+        (r#"{"alg":"HS256","cty":"JWT"}"#, Some("InvalidHeader")),
+        (r#"{"alg":"HS256","cty":"jwt"}"#, Some("InvalidHeader")),
+        (
+            r#"{"alg":"HS256","cty":"JWT","b64":false,"crit":["b64"]}"#,
+            Some("InvalidHeader"),
+        ),
+        // verify-only failures: typ policy, then the expired exp
+        (r#"{"alg":"HS256","typ":"at+jwt"}"#, None),
+        (r#"{"alg":"HS256"}"#, None),
+    ] {
+        let token = format!("{}.{claims}.c2ln", h(header));
+        let verify = polyjose::jwt::verify(&token, Keys::One(&key), &policy);
+        let decode = decode_jwt_unverified(&token);
+        match decode_code {
+            Some(code) => {
+                assert_eq!(verify.unwrap_err().code(), code, "{header}");
+                assert_eq!(decode.unwrap_err().code(), code, "{header}");
+            }
+            None => {
+                assert!(verify.is_err(), "{header}");
+                assert!(decode.is_ok(), "{header}");
+            }
+        }
+    }
+}
