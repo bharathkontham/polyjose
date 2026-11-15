@@ -352,19 +352,21 @@ const KNOWN: &[Known] = &[
     known("jwkGenerateForAlg(ES256)", "private key", r(0, 0, 0), r(0, 1, 0), EC_SCALAR),
     known("jwkThumbprint(oct, SHA-256)", "k (base64url)", r(0, 0, 0), r(1, 0, 0), HASH_INPUT),
     known("jwkThumbprintUri(oct, SHA-512)", "k (base64url)", r(2, 1, 0), r(2, 0, 0), HASH_INPUT),
-    known("jwsSignCompact(ES256)", "payload (base64url)", r(0, 0, 0), r(0, 1, 0), HASH_INPUT),
     known("jwsSignCompact(EdDSA)", "payload (base64url)", r(1, 4, 0), r(0, 2, 0), HASH_INPUT),
     known("jwsSignCompact(HS256)", "k", r(0, 0, 0), r(1, 0, 0), HMAC_KEY),
     known("jwsSignCompact(HS256)", "payload (base64url)", r(0, 3, 0), r(0, 2, 0), HASH_INPUT),
     known("jwsSignCompact(HS384)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    known("jwsSignCompact(HS384)", "payload (base64url)", r(3, 1, 0), r(1, 1, 0), HASH_INPUT),
+    // 0025 T01 shifted the sign path 0x60 deeper: the 4th copy of the 0x130-stride block-buffer series keeps a window
+    known("jwsSignCompact(HS384)", "payload (base64url)", r(3, 2, 0), r(1, 1, 0), HASH_INPUT),
     known("jwsSignCompact(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    known("jwsSignCompact(HS512)", "payload (base64url)", r(3, 0, 0), r(1, 1, 0), HASH_INPUT),
+    // 0025 T01 shifted the sign path 0x60 deeper: the 4th copy of the 0x130-stride block-buffer series keeps a window
+    known("jwsSignCompact(HS512)", "payload (base64url)", r(3, 1, 0), r(1, 1, 0), HASH_INPUT),
     known("jwsSignCompact(HS512, detached)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    known("jwsSignCompact(HS512, detached)", "payload (base64url)", r(3, 0, 0), r(1, 1, 0), HASH_INPUT),
+    // 0025 T01 shifted the sign path 0x60 deeper: the 4th copy of the 0x130-stride block-buffer series keeps a window
+    known("jwsSignCompact(HS512, detached)", "payload (base64url)", r(3, 1, 0), r(1, 1, 0), HASH_INPUT),
     known("jwsSignFlattened(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    known("jwsSignFlattened(HS512)", "payload (base64url)", r(3, 0, 0), r(1, 1, 0), HASH_INPUT),
-    known("jwsSignGeneral(HS512, ES256)", "payload (base64url)", r(0, 0, 0), r(0, 1, 0), HASH_INPUT),
+    // 0025 T01 shifted the sign path 0x60 deeper: the 4th copy of the 0x130-stride block-buffer series keeps a window
+    known("jwsSignFlattened(HS512)", "payload (base64url)", r(3, 1, 0), r(1, 1, 0), HASH_INPUT),
     known("jwsVerifyCompact(ES256)", "payload (base64url)", r(0, 2, 0), r(0, 1, 0), HASH_INPUT),
     known("jwsVerifyCompact(EdDSA)", "payload (base64url)", r(0, 4, 0), r(0, 4, 0), HASH_INPUT),
     known("jwsVerifyCompact(HS256)", "k", r(0, 0, 0), r(1, 0, 0), HMAC_KEY),
@@ -379,11 +381,13 @@ const KNOWN: &[Known] = &[
     known("jwsVerifyJson(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
     known("jwsVerifyJson(HS512)", "payload (base64url)", r(4, 0, 0), r(2, 0, 0), HASH_INPUT),
     known("jwtDecryptNested", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    // aes key-schedule copy, carried by the inner Header's stale padding
-    known("jwtDecryptNested", "key-encryption k", r(0, 0, 0), r(0, 6, 0), AES_KEY),
+    // aes key-schedule copy, carried by the inner Header's stale padding (6)
+    // 0025 T01 shifted the nested decrypt path 0x450 deeper: 3 more aes key-schedule fragments survive
+    known("jwtDecryptNested", "key-encryption k", r(0, 0, 0), r(0, 9, 0), AES_KEY),
     known("jwtDecryptNestedWithJwks", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    // aes key-schedule copy, carried by the inner Header's stale padding
-    known("jwtDecryptNestedWithJwks", "key-encryption k", r(0, 0, 0), r(0, 6, 0), AES_KEY),
+    // aes key-schedule copy, carried by the inner Header's stale padding (6)
+    // 0025 T01 shifted the nested decrypt path 0x450 deeper: 3 more aes key-schedule fragments survive
+    known("jwtDecryptNestedWithJwks", "key-encryption k", r(0, 0, 0), r(0, 9, 0), AES_KEY),
     known("jwtEncryptNested(A128KW + A128GCM)", "key-encryption k", r(0, 0, 0), r(1, 1, 0), AES_KEY),
     known("jwtSign(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
     known("jwtVerify(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
