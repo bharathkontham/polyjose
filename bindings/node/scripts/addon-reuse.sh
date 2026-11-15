@@ -9,14 +9,22 @@
 #   scripts/addon-reuse.sh check [<build.sh arguments>...]
 #     exit 0 and `addon-reuse: reusing ...` when the addon may be reused; exit 1 and
 #     `addon-reuse: building: <reason>` otherwise (any other failure also means build).
-#   scripts/addon-reuse.sh save [<build.sh arguments>...]
-#     after a build: writes addon-inputs.sha256 (git-ignored, next to the addon), or removes it
-#     when the build is not one that check would reuse.
+#   scripts/addon-reuse.sh key
+#     prints the inputs key (below); build.sh takes it before napi build.
+#   scripts/addon-reuse.sh save <key> [<build.sh arguments>...]
+#     after a build: writes addon-inputs.sha256 (git-ignored, next to the addon) with <key>, the
+#     key taken before the build, and only when the key computed now is still <key>: an input
+#     edited while napi build ran may or may not be in the addon, so such a build is never
+#     recorded (and the next run builds again). Otherwise, or when the build is not one that check
+#     would reuse, it removes the record.
 #
 # The key, the SHA-256 of:
 #   - this format's version, the host (uname -sm) and the profile (build.sh's napi build is
 #     --release; build.sh itself is an input below, so any change of its flags changes the key);
 #   - `rustc -vV` and `cargo -V` as run here (rust-toolchain.toml applies);
+#   - the content of $CARGO_HOME/config and $CARGO_HOME/config.toml (default ~/.cargo), the user's
+#     cargo configuration, which can set rustflags or a linker (the repository has none:
+#     scripts/check-no-cargo-config.sh);
 #   - the build-affecting environment: RUST*, CARGO_* (except CARGO_TARGET_DIR, CARGO_HOME,
 #     CARGO_TERM_*, which change where or how cargo prints, not what it builds), NAPI_*,
 #     MACOSX_DEPLOYMENT_TARGET, SDKROOT, DEVELOPER_DIR, CC, CXX, AR, CFLAGS, CXXFLAGS, LDFLAGS (and
@@ -54,6 +62,9 @@ inputs_key() {
     echo "profile release"
     rustc -vV
     cargo -V
+    for f in "${CARGO_HOME:-$HOME/.cargo}/config" "${CARGO_HOME:-$HOME/.cargo}/config.toml"; do
+      if [ -f "$f" ]; then echo "cargo-home ${f##*/} $(sha256 "$f")"; else echo "cargo-home ${f##*/} absent"; fi
+    done
     env | LC_ALL=C grep -E '^(RUST[A-Z0-9_]*|CARGO_[A-Z0-9_]*|NAPI_[A-Z0-9_]*|MACOSX_DEPLOYMENT_TARGET|SDKROOT|DEVELOPER_DIR|(CC|CXX|AR|CFLAGS|CXXFLAGS|LDFLAGS)(_[A-Za-z0-9_]*)?)=' \
       | LC_ALL=C grep -vE '^(CARGO_TARGET_DIR|CARGO_HOME|CARGO_TERM_[A-Z_]*)=' | LC_ALL=C sort || true
     git -C "$repo" ls-files -z --cached --others --exclude-standard -- \
@@ -105,16 +116,25 @@ process.stdout.write(typeof p[process.argv[1]] === "string" ? p[process.argv[1]]
     [ "$pin" = "$sum" ] || build "addon-sha256.json does not pin $a's SHA-256 for $platform"
     echo "addon-reuse: reusing $a (sha256 $sum, pinned in addon-sha256.json): inputs unchanged (key ${key%"${key#????????????}"}); POLYJOSE_FORCE_REBUILD=1 rebuilds"
     exit 0 ;;
+  key)
+    inputs_key ;;
   save)
     shift
     rm -f "$record"
+    before=${1:-}
+    [ $# -eq 0 ] || shift
+    [ -n "$before" ] || exit 0
     [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] || exit 0
     [ $# -eq 0 ] || exit 0
     a=$(addon)
     [ -n "$a" ] && [ -f binding.d.ts ] || exit 0
     key=$(inputs_key) || exit 0
+    if [ "$key" != "$before" ]; then
+      echo "addon-reuse: an input changed while napi build ran; not recorded, the next build compiles the addon again"
+      exit 0
+    fi
     printf 'inputs %s\naddon %s %s\ndts binding.d.ts %s\n' "$key" "$a" "$(sha256 "$a")" "$(sha256 binding.d.ts)" >"$record.tmp"
     mv "$record.tmp" "$record"
     echo "addon-reuse: recorded $a's inputs in $record" ;;
-  *) echo "usage: scripts/addon-reuse.sh check|save [<build.sh arguments>...]" >&2; exit 2 ;;
+  *) echo "usage: scripts/addon-reuse.sh check [<build.sh arguments>...] | key | save <key> [<build.sh arguments>...]" >&2; exit 2 ;;
 esac

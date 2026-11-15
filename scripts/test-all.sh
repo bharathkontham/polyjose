@@ -78,12 +78,16 @@ duration() {
 step_start=""
 begin_step() { echo "==> $1"; step_start=$SECONDS; }
 # records_file: set inside a parallel lane, where record appends `<name><TAB><result><TAB><time>`
-# to the platform's records file instead, which the main shell replays (add_record) in order.
+# to the platform's records file instead, which the main shell replays (add_record) in order. A
+# write that fails ends the lane, so its platform FAILs (show_block); a lost line never passes.
 records_file=""
 record() {
   local took=""
   if [ -n "$step_start" ]; then took=$(duration $((SECONDS - step_start))); step_start=""; fi
-  if [ -n "$records_file" ]; then printf '%s\t%s\t%s\n' "$1" "$2" "$took" >>"$records_file"; return 0; fi
+  if [ -n "$records_file" ]; then
+    printf '%s\t%s\t%s\n' "$1" "$2" "$took" >>"$records_file" || { echo "test-all.sh: could not write $records_file"; exit 1; }
+    return 0
+  fi
   add_record "$1" "$2" "$took"
 }
 # add_record <name> <result> [<wall time>]: one summary line, and the step's verdict.
@@ -113,8 +117,21 @@ scratch=$(mktemp -d "${TMPDIR:-/tmp}/test-all.XXXXXX") || { echo "mktemp failed"
 # turns 0 into 2 when the script stopped before it. Every scripts/*.sh with an EXIT trap does the
 # same (scripts/tests/syntax/guards.sh).
 completed=""
+# lane_pids: the running parallel lanes (run_group), each the leader of its own process group.
+# stop_lanes ends each lane's whole group (the platform scripts and their children too) and waits
+# for the lanes, so nothing is left running or writing into $scratch when it is removed.
 lane_pids=""
-trap 'rc=$?; [ -z "${lane_pids:-}" ] || kill $lane_pids 2>/dev/null; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-all.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
+# shellcheck disable=SC2329 # called by the EXIT trap below
+stop_lanes() {
+  local p
+  [ -n "${lane_pids:-}" ] || return 0
+  for p in $lane_pids; do kill -TERM -"$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null; done
+  # shellcheck disable=SC2086
+  wait $lane_pids 2>/dev/null
+  lane_pids=""
+  return 0
+}
+trap 'rc=$?; stop_lanes; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-all.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 # Each binding feature owns its platform's suite as one script (feature 0013 T04, ADR 0030 §1), so
 # the four can change their test commands without editing this file. platform_script prints it.
 platform_script() {
@@ -445,7 +462,7 @@ run_lane() {
   shift
   for p in "$@"; do
     records_file="$scratch/block-$p.records"
-    : >"$records_file"
+    : >"$records_file" || exit 1
     run_platform "$p" >"$scratch/block-$p.log" 2>&1
     : >"$scratch/block-$p.done"
   done
@@ -453,14 +470,21 @@ run_lane() {
 # show_block <platform> <pid of its lane>: waits for the platform's block, prints its log and
 # replays its summary lines; a lane that stopped before the block finished FAILs the platform.
 show_block() {
-  local p=$1 pid=$2 name result took
+  local p=$1 pid=$2 name result took own=0
   while [ ! -f "$scratch/block-$p.done" ] && kill -0 "$pid" 2>/dev/null; do sleep 1; done
   [ ! -f "$scratch/block-$p.log" ] || cat "$scratch/block-$p.log"
   if [ -f "$scratch/block-$p.records" ]; then
-    while IFS="$tab" read -r name result took; do add_record "$name" "$result" "$took"; done <"$scratch/block-$p.records"
+    while IFS="$tab" read -r name result took; do
+      add_record "$name" "$result" "$took"
+      [ "$name" != "$p" ] || own=1
+    done <"$scratch/block-$p.records"
   fi
   if [ ! -f "$scratch/block-$p.done" ]; then
     echo "test-all.sh: the $p block stopped before it finished (its lane exited)"
+    add_record "$p" FAIL
+  elif [ "$own" -eq 0 ]; then
+    # Every block records its platform's own step; a block without it lost its records.
+    echo "test-all.sh: the $p block finished without a summary line for $p"
     add_record "$p" FAIL
   fi
 }
@@ -480,11 +504,15 @@ run_group() {
     return 0
   fi
   echo "test-all.sh: running $desc in parallel lanes (TEST_ALL_SERIAL=1 runs them one at a time)"
+  # set -m (bash 3.2 too) starts each lane as the leader of its own process group, which
+  # stop_lanes can end as a whole; it is on only while the lanes start.
+  set -m
   # Word splitting of $js on purpose: its platforms, in argument order.
   # shellcheck disable=SC2086
   if [ -n "$js" ]; then (run_lane js $js) </dev/null >"$scratch/lane-js.err" 2>&1 & pid_js=$!; lane_pids="$lane_pids $pid_js"; fi
   if [ -n "$android" ]; then (run_lane android android) </dev/null >"$scratch/lane-android.err" 2>&1 & pid_android=$!; lane_pids="$lane_pids $pid_android"; fi
   if [ -n "$swift" ]; then (run_lane swift swift) </dev/null >"$scratch/lane-swift.err" 2>&1 & pid_swift=$!; lane_pids="$lane_pids $pid_swift"; fi
+  set +m
   for p in "$@"; do
     case $p in wasm | node) pid=$pid_js ;; android) pid=$pid_android ;; *) pid=$pid_swift ;; esac
     show_block "$p" "$pid"

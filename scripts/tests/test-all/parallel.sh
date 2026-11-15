@@ -5,8 +5,12 @@
 #     platform's output printed whole and in argument order, even when a later one finishes first;
 #     the output, summary and exit status equal a TEST_ALL_SERIAL=1 run's, apart from the line that
 #     announces the lanes and the times;
+#   - wasm and node, which share bindings/js, never run at the same time;
 #   - a failing platform FAILs the run as in a sequential run, and a lane that dies before its
-#     platform finished FAILs that platform (never a pass);
+#     platform finished FAILs that platform (never a pass), and so does a lane whose summary line
+#     could not be written or was lost;
+#   - when test-all.sh is stopped, each lane's whole process group goes with it: no platform
+#     script or child of one keeps running;
 #   - each summary line of a step that ran ends with its wall time, a step recorded without running
 #     has none, and the summary ends with `Total: <time>`;
 #   - POLYJOSE_ADDON_REUSE=1 reaches the platform scripts, and POLYJOSE_RUST_CORE_FRESH=1 only after
@@ -109,6 +113,69 @@ check "a lane that dies before its platform finished FAILs that platform" 1 \
   '^test-all\.sh: the android block stopped before it finished \(its lane exited\)$' '^  android: FAIL$' \
   '^  swift: PASS$' '^  wasm: PASS$'
 check_absent "the dead lane's platform is not reported as passing" '^  android: PASS$'
+
+new_case no-overlap
+all_fixtures 0
+# Each js-lane suite logs its start and end; wasm takes a while, so an overlap would show.
+fixture_append bindings/wasm/test.sh "echo 'wasm start' >>$scratch/js-lane.log; sleep 2; echo 'wasm end' >>$scratch/js-lane.log"
+fixture_append bindings/node/test.sh "echo 'node start' >>$scratch/js-lane.log; echo 'node end' >>$scratch/js-lane.log"
+rm -f "$scratch/js-lane.log"
+run_test_all wasm node android swift
+tests_run=$((tests_run + 1))
+if [ "$rc" -eq 0 ] && [ "$(tr '\n' ' ' <"$scratch/js-lane.log")" = "wasm start wasm end node start node end " ]; then
+  echo "ok   - wasm and node run one after the other, never at the same time"
+else
+  echo "FAIL - wasm and node run one after the other, never at the same time (exit $rc):"
+  sed 's/^/       /' "$scratch/js-lane.log"; tests_failed=$((tests_failed + 1))
+fi
+
+# lost_records <case> <shell line run by the android fixture, with $T the run's TMPDIR>: test-all.sh
+# under its own TMPDIR, so the fixture can reach the lane's records file.
+lost_records() {
+  new_case "$1"
+  all_fixtures 0
+  mkdir -p "$scratch/tmp-$1"
+  fixture_append platforms/android/test.sh "T=$scratch/tmp-$1; $2"
+  local saved=${TMPDIR:-}
+  export TMPDIR="$scratch/tmp-$1"
+  run_test_all wasm node android swift
+  if [ -n "$saved" ]; then export TMPDIR=$saved; else unset TMPDIR; fi
+}
+# shellcheck disable=SC2016 # expanded by the fixture, not here
+lost_records records-unwritable 'chmod 0 "$T"/test-all.*/block-android.records'
+check "a summary line that cannot be written ends the lane and FAILs the platform" 1 \
+  '^test-all\.sh: could not write .*block-android\.records$' \
+  '^test-all\.sh: the android block stopped before it finished \(its lane exited\)$' '^  android: FAIL$' '^  swift: PASS$'
+check_absent "never as passing" '^  android: PASS$'
+# shellcheck disable=SC2016 # expanded by the fixture, not here
+lost_records records-lost 'f=$(ls "$T"/test-all.*/block-android.records) && rm -f "$f" && ln -s /dev/null "$f"'
+check "a block that finished without its own summary line FAILs the platform" 1 \
+  '^test-all\.sh: the android block finished without a summary line for android$' '^  android: FAIL$' '^  swift: PASS$'
+check_absent "never as passing" '^  android: PASS$'
+
+new_case stopped
+all_fixtures 0
+# The android suite starts a child that would outlive a lane killed alone, and records its pid.
+fixture_append platforms/android/test.sh "sleep 120 & echo \$! >$scratch/child.pid; wait"
+rm -f "$scratch/child.pid"
+(cd "$case_dir" && exec "${BASH:-bash}" scripts/test-all.sh wasm node android swift) </dev/null >"$scratch/out.raw" 2>&1 &
+tpid=$!
+n=0
+while [ ! -s "$scratch/child.pid" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+child=$(cat "$scratch/child.pid" 2>/dev/null || true)
+kill -TERM "$tpid" 2>/dev/null || true
+wait "$tpid" 2>/dev/null || true
+# Signals are delivered asynchronously: up to 10 s for the child to be gone.
+n=0
+while [ -n "$child" ] && kill -0 "$child" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+tests_run=$((tests_run + 1))
+if [ -n "$child" ] && ! kill -0 "$child" 2>/dev/null; then
+  echo "ok   - stopping test-all.sh ends the lanes' process groups: the suite's child is gone"
+else
+  echo "FAIL - stopping test-all.sh ends the lanes' process groups: child ${child:-never started} still runs"
+  [ -z "$child" ] || kill "$child" 2>/dev/null || true
+  sed 's/^/       /' "$scratch/out.raw"; tests_failed=$((tests_failed + 1))
+fi
 
 # --- Times --------------------------------------------------------------------------------------------
 

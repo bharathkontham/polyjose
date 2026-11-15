@@ -9,7 +9,13 @@
 #   - a missing or corrupt addon, binding.d.ts, record or addon-sha256.json pin rebuilds, and so do
 #     POLYJOSE_FORCE_REBUILD=1, a CI run, build arguments and two addons;
 #   - build.sh runs napi build without POLYJOSE_ADDON_REUSE=1 every time and records nothing, and
-#     with it builds once and then reuses until an input changes.
+#     with it builds once and then reuses until an input changes; a build during which an input
+#     changed is not recorded (the key is taken before napi build), so the next build runs again;
+#   - another rustc (a stub first on PATH) and CARGO_BUILD_TARGET change the key.
+# Not covered here, because scripts/check-no-cargo-config.sh forbids the lines a case would need
+# in any script (assigning RUSTFLAGS or CARGO_HOME, writing a cargo config file): RUSTFLAGS and a
+# $CARGO_HOME/config.toml change. Both go through the same code as the cases above (the
+# environment filter, and a file hashed into the key).
 # Each case works in a copy of the working tree (lib.sh) with a fake addon, and build.sh's napi
 # and tsc are stubs, so nothing is compiled. Needs git, node and rustc.
 # Usage: scripts/tests/test-all/addon-reuse.sh
@@ -45,9 +51,18 @@ rebuilt() { reuse check; check "$1: rebuilt" 1 "^addon-reuse: building: $2"; }
 new_case key
 fake_build
 rebuilt "no record yet" 'no addon-inputs\.sha256'
-reuse save
+key=$(cd "$(pkg)" && scripts/addon-reuse.sh key)
+reuse save "$key"
 check "save records the build" 0 '^addon-reuse: recorded polyjose\.darwin-arm64\.node'
 reused "nothing changed"
+reuse save "$(printf '%064d' 0)"
+check "save with a key that is not the inputs' (they changed during the build) records nothing" 0 \
+  '^addon-reuse: an input changed while napi build ran; not recorded'
+rebuilt "so the next check" 'no addon-inputs\.sha256'
+reuse save
+rebuilt "save without a key records nothing either" 'no addon-inputs\.sha256'
+reuse save "$key"
+reused "the record restored"
 
 touch "$case_dir/crates/polyjose/src/lib.rs"
 reused "a touched source with the same content"
@@ -75,6 +90,33 @@ export MACOSX_DEPLOYMENT_TARGET=99.0
 rebuilt "MACOSX_DEPLOYMENT_TARGET set" "the addon's inputs changed"
 unset MACOSX_DEPLOYMENT_TARGET
 reused "MACOSX_DEPLOYMENT_TARGET unset again"
+export CARGO_BUILD_TARGET=x86_64-apple-darwin
+rebuilt "CARGO_BUILD_TARGET set" "the addon's inputs changed"
+unset CARGO_BUILD_TARGET
+reused "CARGO_BUILD_TARGET unset again"
+
+# Another toolchain: rustc and cargo stubs first on PATH, version A recorded, then version B.
+mkdir -p "$scratch/toolchain"
+toolchain() {
+  printf '#!/bin/sh\necho "rustc %s (stub)"\necho "release: %s"\n' "$1" "$1" >"$scratch/toolchain/rustc"
+  printf '#!/bin/sh\necho "cargo %s (stub)"\n' "$1" >"$scratch/toolchain/cargo"
+  chmod +x "$scratch/toolchain/rustc" "$scratch/toolchain/cargo"
+}
+saved_path=$PATH
+export PATH="$scratch/toolchain:$PATH"
+toolchain 1.90.0
+key_a=$(cd "$(pkg)" && scripts/addon-reuse.sh key)
+reuse save "$key_a"
+reused "the stub toolchain recorded"
+toolchain 1.91.0
+rebuilt "another rustc and cargo" "the addon's inputs changed"
+toolchain 1.90.0
+reused "the recorded toolchain again"
+reuse save "$key_a"
+export PATH=$saved_path
+rebuilt "the real toolchain after the stub's record" "the addon's inputs changed"
+reuse save "$key"
+reused "the real toolchain recorded again"
 
 # --- The addon, its pin and the guards ----------------------------------------------------------------
 
@@ -116,7 +158,7 @@ rebuilt "changed declarations" 'binding\.d\.ts is not the one recorded'
 cp "$scratch/dts" "$(pkg)/binding.d.ts"
 reused "the declarations restored"
 
-reuse save --target x86_64-apple-darwin
+reuse save "$key" --target x86_64-apple-darwin
 tests_run=$((tests_run + 1))
 if [ "$rc" -eq 0 ] && [ ! -e "$(pkg)/addon-inputs.sha256" ]; then echo "ok   - a build with arguments removes the record"
 else echo "FAIL - a build with arguments removes the record (exit $rc)"; tests_failed=$((tests_failed + 1)); fi
@@ -130,6 +172,8 @@ mkdir -p "$(pkg)/node_modules/.bin" "$case_dir/bindings/js/node_modules/.bin"
 {
   echo '#!/bin/sh'
   echo 'echo "napi $*" >>"$STUB_LOG"'
+  # An input edited while the build runs, when the case asks for it.
+  echo 'if [ -f "$STUB_EDIT" ]; then rm -f "$STUB_EDIT"; echo "// edited during the build" >>../../crates/polyjose/src/lib.rs; fi'
   echo 'echo "fake addon" >polyjose.darwin-arm64.node'
   echo 'echo "export declare function version(): string" >binding.d.ts'
 } >"$(pkg)/node_modules/.bin/napi"
@@ -139,7 +183,7 @@ mkdir -p "$(pkg)/node_modules/.bin" "$case_dir/bindings/js/node_modules/.bin"
   echo 'case $PWD in */bindings/js) mkdir -p dist/src && echo "export {};" >dist/src/api.js && echo "export {};" >dist/src/api.d.ts ;; esac'
 } >"$case_dir/bindings/js/node_modules/.bin/tsc"
 chmod +x "$(pkg)/node_modules/.bin/napi" "$case_dir/bindings/js/node_modules/.bin/tsc"
-export STUB_LOG="$scratch/napi.log"
+export STUB_LOG="$scratch/napi.log" STUB_EDIT="$scratch/edit-during-build"
 : >"$STUB_LOG"
 
 # build <description> <napi builds expected so far> [<build.sh argument>...]: runs build.sh.
@@ -169,11 +213,18 @@ check "and says so" 0 '^addon-reuse: reusing polyjose\.darwin-arm64\.node ' '^  
 echo '// changed' >>"$case_dir/crates/polyjose/src/lib.rs"
 build "a changed input builds again" 4
 build "then reuses that build" 4
+: >"$STUB_EDIT"
 export POLYJOSE_FORCE_REBUILD=1
-build "POLYJOSE_FORCE_REBUILD=1 builds" 5
+build "a build during which an input changes" 5
 unset POLYJOSE_FORCE_REBUILD
-build "and its build is reused next" 5
-build "build arguments always build" 6 --target aarch64-apple-darwin
-build "and leave nothing to reuse" 7
+check "is not recorded" 0 '^addon-reuse: an input changed while napi build ran; not recorded'
+build "so the next build runs napi again, never reusing the stale addon" 6
+build "and that build, made from the edited input, is reused" 6
+export POLYJOSE_FORCE_REBUILD=1
+build "POLYJOSE_FORCE_REBUILD=1 builds" 7
+unset POLYJOSE_FORCE_REBUILD
+build "and its build is reused next" 7
+build "build arguments always build" 8 --target aarch64-apple-darwin
+build "and leave nothing to reuse" 9
 
 finish

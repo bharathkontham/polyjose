@@ -43,15 +43,16 @@ if [ "$reuse" = 1 ] && scripts/addon-reuse.sh check "$@"; then
   # The same bytes as a fresh build; newer than their sources, as one (check-binding-api.d/node.sh).
   touch polyjose.*.node binding.d.ts
 else
-  [ "$reuse" != 1 ] || reuse=build
   rm -f addon-inputs.sha256
+  # The inputs key before the build: save records the build only if the inputs are still those.
+  if [ "$reuse" = 1 ]; then reuse=build; key=$(scripts/addon-reuse.sh key) || key=""; fi
   "$napi" build --platform --release --no-js --dts binding.d.ts "$@" -- --locked
 fi
 
 echo "==> @polyjose/node build: addon-sha256.json (scripts/addon-hashes.sh)"
 scripts/addon-hashes.sh addon-sha256.json polyjose.*.node
 if [ "$reuse" = build ]; then
-  scripts/addon-reuse.sh save "$@" || echo "addon-reuse: could not record the addon's inputs; the next build compiles the addon again"
+  scripts/addon-reuse.sh save "$key" "$@" || echo "addon-reuse: could not record the addon's inputs; the next build compiles the addon again"
 fi
 
 echo "==> @polyjose/node build: facade/ (compiled .js and .d.ts of bindings/js/dist/src)"

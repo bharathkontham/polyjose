@@ -113,6 +113,10 @@ if [ "$crt_static" = true ]; then
 fi
 
 echo "==> @polyjose/node ci-build: $target ($platform), results node-$label.json"
+# Never scripts/test-all.sh's work reuse (a reused addon, a skipped rust-core reference run): CI
+# builds and tests everything itself.
+unset POLYJOSE_RUST_CORE_FRESH
+export POLYJOSE_ADDON_REUSE=0
 CARGO_BUILD_TARGET=$target POLYJOSE_CONFORMANCE_SUFFIX=$label ./test.sh
 
 results=../../target/conformance/node-$label.json
