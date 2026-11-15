@@ -409,7 +409,7 @@ public final class AppleKey: PlatformKey, CustomStringConvertible, CustomDebugSt
         return try jwkParse(jwk: #"{"kty":"EC","crv":"\#(crv)","x":"\#(x)","y":"\#(y)"}"#)
     }
 
-    // MARK: - Error mapping (ADR 0072 §1): a pure function of the platform's status or code
+    // MARK: - Error mapping (ADR 0072 §1; ADR 0071 §4, §6): a pure function of the platform's status or code
 
     /// `errSecItemNotFound` is `NotFound`; a cancelled, failed, lockout or not-interactive user
     /// authentication is `UserAuthenticationRequired`; any other status is `Failed`. None depends
@@ -423,13 +423,22 @@ public final class AppleKey: PlatformKey, CustomStringConvertible, CustomDebugSt
     }
 
     /// The same mapping for an error domain and code: `NSOSStatusErrorDomain` statuses as above,
-    /// and the `LAError` cancel, failure, lockout and not-interactive codes.
+    /// and these `LAError` codes as `UserAuthenticationRequired`, which ADR 0071 §6 defines as "the
+    /// user has not authenticated, cancelled, or can't (lockout, no biometry)":
+    /// - has not, or cancelled: `userCancel`, `appCancel`, `systemCancel`, `authenticationFailed`,
+    ///   `notInteractive`, `userFallback`;
+    /// - can't: `biometryLockout`, `biometryNotAvailable`, `biometryNotEnrolled`, `passcodeNotSet`.
+    ///
+    /// Every one is the user's or the device's state, never a function of a ciphertext, so
+    /// returning it from `decryptKey` meets the ADR 0071 §4 contract. Any other code is `Failed`.
     static func platformKeyError(domain: String, code: Int) -> PlatformKeyError {
         if domain == NSOSStatusErrorDomain { return platformKeyError(status: OSStatus(truncatingIfNeeded: code)) }
         if domain == LAErrorDomain {
-            var authentication: [LAError.Code] = [.userCancel, .appCancel, .systemCancel, .authenticationFailed, .notInteractive]
-            #if !os(watchOS)  // watchOS has no biometry, and no LAError.Code.biometryLockout
-            authentication.append(.biometryLockout)
+            var authentication: [LAError.Code] = [
+                .userCancel, .appCancel, .systemCancel, .authenticationFailed, .notInteractive, .userFallback, .passcodeNotSet,
+            ]
+            #if !os(watchOS)  // watchOS has no biometry: these three LAError.Code cases are unavailable there
+            authentication += [.biometryLockout, .biometryNotAvailable, .biometryNotEnrolled]
             #endif
             return authentication.contains { $0.rawValue == code } ? .UserAuthenticationRequired : .Failed
         }

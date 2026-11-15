@@ -83,6 +83,10 @@ The test passes whatever you do; the answers are in its `POLYJOSE-DEVICE` lines.
   `UserAuthenticationRequired`. Any other code means the mapping in `AppleKey.swift` misses the
   platform's cancel error: report it with the next line.
 - **The raw cancel error:** `userPresence raw cancel: signed=false domain=<domain> code=<code>`.
+  Record the domain and code exactly. `AppleKey` maps `NSOSStatusErrorDomain` `errSecUserCanceled`
+  (-128) and `LAErrorDomain` cancels to `UserAuthenticationRequired`. If the domain is
+  `CryptoTokenKit` (for example code -4, canceled by user), the mapping doesn't cover it yet
+  (audit L1 in the feature backlog): report it.
 - `userPresence approve:` should read `signed`.
 
 ## 3. A `.biometryCurrentSet` key
@@ -106,11 +110,28 @@ The test stores a Secure Enclave key with `.userPresence`, opens it with one `LA
 **Approve every prompt** and count them. Record the two `POLYJOSE-DEVICE context` lines (both
 should read `signed`) and **how many prompts appeared: 1 or 2**.
 
-## 5. Record the result
+## 5. A device that can't authenticate (optional)
+
+Only on a spare device whose settings you can change. Remove every Face ID appearance or Touch ID
+fingerprint (**Settings › Face ID & Passcode**), keep the passcode, and run step 3 again:
+
+```sh
+hosted -only-testing:$T/testDeviceBiometryCurrentSet
+```
+
+Record whether a prompt appeared, and the `POLYJOSE-DEVICE biometryCurrentSet:` line or the error
+the test fails with if the key can't be created. `AppleKey` maps `LAError.biometryNotEnrolled`,
+`.biometryNotAvailable` and `.passcodeNotSet` to `UserAuthenticationRequired` (ADR 0071 §6, "can't
+authenticate"); any other code means the platform reports this state differently: report it.
+Turning the passcode off removes the device's Apple Pay cards and the keychain items that need a
+passcode (`kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`), so do that only on a device set up
+for testing; then run the same test and record the same line with no passcode set.
+
+## 6. Record the result
 
 Add one row for the device to `STATE.md` in the private brain repo, polyjose-brain (the
 maintainers' record of test runs), on the tree from "What you need", and keep `device-tests.log`:
 
 ```text
-| <date> | AppleKey device run | <iPhone model> | iOS <version> | tree <tree hash> | secure-enclave: <pass/fail> | keychain ES384, RS256: <pass/fail> | SE item attributes: <kSecAttrAccessible>, <access control> | userPresence: prompt during call <yes/no>, blocked <yes/no, N s>, cancel <code>, raw <domain> <code> | biometryCurrentSet: <signed/code> | LAContext reuse: <1/2> prompts |
+| <date> | AppleKey device run | <iPhone model> | iOS <version> | tree <tree hash> | secure-enclave: <pass/fail> | keychain ES384, RS256: <pass/fail> | SE item attributes: <kSecAttrAccessible>, <access control> | userPresence: prompt during call <yes/no>, blocked <yes/no, N s>, cancel <code>, raw <domain> <code> | biometryCurrentSet: <signed/code> | LAContext reuse: <1/2> prompts | can't authenticate: no biometry <code/not run>, no passcode <code/not run> |
 ```

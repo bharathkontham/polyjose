@@ -165,8 +165,10 @@ try an unauthenticated key on a device first.
   and asking for the other choice there is `UnsupportedAlgorithm`.
 
 **Off the main thread.** A sign or decrypt call on a key that needs the user blocks its thread
-while the prompt is up. `BiometricPromptAuthorizer.authorize` throws `IllegalStateException` on the
-main thread, before showing anything, because waiting for the prompt there would deadlock.
+while the prompt is up. On the main thread `BiometricPromptAuthorizer.authorize` refuses before
+showing anything, because waiting for the prompt there would deadlock. Inside a polyjose call the
+app doesn't see that `IllegalStateException`: it gets `PlatformKeyFailed` when signing and
+`DecryptionFailed` when decrypting.
 
 **Errors** (`PolyjoseException.code()`):
 
