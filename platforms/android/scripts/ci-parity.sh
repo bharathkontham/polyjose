@@ -11,8 +11,7 @@
 # whole CI set:
 #   jvm-darwin-aarch64.json jvm-linux-x86-64.json jvm-linux-aarch64.json jvm-win32-x86-64.json
 #   android-emulator-ci.json
-# darwin-x86-64 is cross-built and not tested in this workflow (ci-host-natives.sh), so it has no
-# results file. A missing expected file is a FAIL, never a skip (ADR 0060 §7): a job that passed
+# These are the jar's four host platforms (ADR 0073 §2), each tested on its own runner. A missing expected file is a FAIL, never a skip (ADR 0060 §7): a job that passed
 # without its results must not pass parity.
 #
 # 1. `cargo test -p polyjose --test conformance --locked` (default features) writes the reference

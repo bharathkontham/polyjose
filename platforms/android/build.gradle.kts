@@ -39,9 +39,10 @@ val hostLibraryName: String = when {
 
 /**
  * JNA's resource prefix for this host (`Platform.RESOURCE_PREFIX`), the folder JNA searches on the
- * classpath: `darwin-aarch64`, `darwin-x86-64`, `linux-x86-64`, `linux-aarch64` or `win32-x86-64`
- * (ADR 0033 §3a, confirmed from the JNA jar's own jnidispatch folders). Resolved only when a task
- * needs it, so an unsupported host can still build the AAR.
+ * classpath: one of the four the jar ships, `darwin-aarch64`, `linux-x86-64`, `linux-aarch64` or
+ * `win32-x86-64` (ADR 0033 §3a, confirmed from the JNA jar's own jnidispatch folders; ADR 0073 §2:
+ * macOS is Apple silicon only, so an x86_64 JVM on macOS is refused like Windows on arm64).
+ * Resolved only when a task needs it, so an unsupported host can still build the AAR.
  */
 fun jnaResourcePrefix(): String {
     val os = when {
@@ -55,7 +56,7 @@ fun jnaResourcePrefix(): String {
         "x86_64", "amd64" -> "x86-64"
         else -> null
     }
-    if (os == null || arch == null || (os == "win32" && arch != "x86-64")) {
+    if (os == null || arch == null || (os == "win32" && arch != "x86-64") || (os == "darwin" && arch != "aarch64")) {
         throw GradleException("polyjose ships no JVM native library for $osName/$osArch (ADR 0033 §4)")
     }
     return "$os-$arch"

@@ -1,6 +1,6 @@
 # The Kotlin/Android binding on GitHub's runners (feature 0008 T05; ADR 0033 §4, §5; ADR 0037 §1):
-# the JVM suite on each of the five host platforms with its own library, the instrumented suite on
-# an x86_64 emulator with KVM, the release AAR and the five-platform JVM jar, and parity of every
+# the JVM suite on each of the four host platforms with its own library, the instrumented suite on
+# an x86_64 emulator with KVM, the release AAR and the four-platform JVM jar, and parity of every
 # result with a fresh rust-core run. It builds and checks; it never publishes or signs anything.
 #
 # Never on PRs, pushes or a schedule (ADR 0044; owner, 2026-11-07). Two triggers: a manual dispatch,
@@ -65,8 +65,8 @@ jobs:
             *) echo "::error::the mode input must be ci or release"; exit 1 ;;
           esac
 
-  # The five JVM host libraries (ADR 0033 §4), each built and tested on a native runner, except
-  # darwin-x86-64, which is cross-built on the arm64 Mac and not tested here.
+  # The four JVM host libraries (ADR 0033 §4; ADR 0073 §2: macOS is Apple silicon only), each
+  # built and tested on its own native runner. Nothing is cross-built.
   host-natives:
     name: host natives (${{ matrix.prefix }})
     needs: [mode]
@@ -74,10 +74,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-15, prefix: darwin-aarch64, cross: darwin-x86-64 }
-          - { os: ubuntu-24.04, prefix: linux-x86-64, cross: "" }
-          - { os: ubuntu-24.04-arm, prefix: linux-aarch64, cross: "" }
-          - { os: windows-2025, prefix: win32-x86-64, cross: "" }
+          - { os: macos-15, prefix: darwin-aarch64 }
+          - { os: ubuntu-24.04, prefix: linux-x86-64 }
+          - { os: ubuntu-24.04-arm, prefix: linux-aarch64 }
+          - { os: windows-2025, prefix: win32-x86-64 }
     permissions:
       contents: read
     runs-on: ${{ matrix.os }}
@@ -111,11 +111,9 @@ jobs:
 
       # The library this runner builds for the jar is polyjose-ffi for this host (ADR 0033 §4), so
       # its two configurations are read here (audit L2). darwin-aarch64 is skipped: ci.yml runs
-      # the full check on arm64 macOS. The darwin-x86-64 library cross-built beside it is not read
-      # (an Apple target: check-rsa-symbols.sh's documented residual until a caller passes it). The
-      # toolchain's llvm-tools folder goes first on PATH (on Windows the script's own lookup, which
-      # does not add .exe, misses it), and where python3 does not run but python does (Windows),
-      # a python3 in a temporary folder runs python.
+      # the full check on arm64 macOS. The toolchain's llvm-tools folder goes first on PATH (on
+      # Windows the script's own lookup, which does not add .exe, misses it), and where python3
+      # does not run but python does (Windows), a python3 in a temporary folder runs python.
       - name: RSA public-key only (compiled symbols of this host's polyjose-ffi)
         if: ${{ matrix.prefix != 'darwin-aarch64' }}
         run: |
@@ -140,23 +138,12 @@ jobs:
       - name: Build and test the host library
         env:
           PREFIX: ${{ matrix.prefix }}
-          CROSS: ${{ matrix.cross }}
-        run: |
-          # CROSS is empty or one prefix.
-          # shellcheck disable=SC2086
-          platforms/android/scripts/ci-host-natives.sh "$PREFIX" $CROSS
+        run: platforms/android/scripts/ci-host-natives.sh "$PREFIX"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: jvm-natives-${{ matrix.prefix }}
           path: target/ci/jvm-natives-${{ matrix.prefix }}/
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ matrix.cross != '' }}
-        with:
-          name: jvm-natives-${{ matrix.cross }}
-          path: target/ci/jvm-natives-${{ matrix.cross }}/
           if-no-files-found: error
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -274,12 +261,12 @@ jobs:
           path: platforms/android/polyjose/build/outputs/androidTest-results/
           if-no-files-found: warn
 
-  # The release AAR and the five-platform jar (ADR 0033 §4), from the libraries above, checked by
+  # The release AAR and the four-platform jar (ADR 0033 §4), from the libraries above, checked by
   # scripts/check-artifacts.sh. The AAR packs the emulator job's tested libraries (feature 0008
   # F05, review S4). Built into build/repo only; nothing leaves the run but artifacts. It waits for
   # the guards too, so no AAR or jar is assembled from a tree they reject.
   assemble:
-    name: assemble (AAR, five-platform jar)
+    name: assemble (AAR, four-platform jar)
     needs: [host-natives, emulator, guards]
     permissions:
       contents: read

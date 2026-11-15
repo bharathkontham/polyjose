@@ -33,7 +33,7 @@
 #            --target per library, and each library's crate set must be a subset of the file's
 #            (it fails naming the target and the crates).
 #   jar      the classes, the host libraries under their JNA prefixes (each of the right
-#            architecture: `file -b` against ci_file_pattern of ci-lib.sh, for any of the five
+#            architecture: `file -b` against ci_file_pattern of ci-lib.sh, for any of the four
 #            prefixes; review N4), and a Polyjose-Native-Platforms manifest attribute listing
 #            exactly the prefixes present; no native library or notices file in the sources jar.
 #            Every class of the jar is class-file major version 61, Java 17, as the AAR.
@@ -74,7 +74,7 @@ readelf=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf 2>/
 zipalign=$(ls "$ANDROID_HOME"/build-tools/*/zipalign 2>/dev/null | sort -V | tail -n 1)
 [ -x "$zipalign" ] || die "no zipalign in $ANDROID_HOME/build-tools"
 for tool in unzip python3 cargo file; do command -v "$tool" >/dev/null 2>&1 || die "$tool not found"; done
-# ci_file_pattern and ci_is_prefix (the five JNA prefixes); defines variables and functions only.
+# ci_file_pattern and ci_is_prefix (the four JNA prefixes); defines variables and functions only.
 # shellcheck source=ci-lib.sh source-path=SCRIPTDIR
 . "$android/scripts/ci-lib.sh" || die "cannot read scripts/ci-lib.sh"
 
@@ -329,7 +329,6 @@ jar="$android/polyjose-jvm/build/libs/polyjose-jvm-$version.jar"
 triple_of() {
   case $1 in
     darwin-aarch64) echo aarch64-apple-darwin ;;
-    darwin-x86-64) echo x86_64-apple-darwin ;;
     linux-x86-64) echo x86_64-unknown-linux-gnu ;;
     linux-aarch64) echo aarch64-unknown-linux-gnu ;;
     win32-x86-64) echo x86_64-pc-windows-msvc ;;
@@ -347,7 +346,7 @@ else
   fi
   present=$(grep -E '^[a-z0-9-]+/(libpolyjose_ffi\.(dylib|so)|polyjose_ffi\.dll)$' "$work/jar.list" | cut -d/ -f1 | sort -u)
   case $(uname -s) in
-    Darwin) expected_local="darwin-aarch64 darwin-x86-64" ;;
+    Darwin) expected_local="darwin-aarch64" ;;
     *) expected_local="" ;;
   esac
   for prefix in $expected_local; do
@@ -355,7 +354,7 @@ else
   done
   mkdir -p "$work/jar" && unzip -q -o "$jar" -d "$work/jar"
   check_class_version jar "$jar"
-  # Each library present, whatever host built it (the CI jar carries all five): `file -b` must
+  # Each library present, whatever host built it (the CI jar carries all four): `file -b` must
   # match the prefix's pattern from ci-lib.sh, the one ci-host-natives.sh checks the natives with.
   for prefix in $present; do
     lib=$(ls "$work/jar/$prefix"/* | head -n 1)
