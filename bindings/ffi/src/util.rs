@@ -1,9 +1,19 @@
-//! The utility exports (ADR 0030 §4, "Utilities"). Each is a type conversion and one surface
-//! call (ADR 0030 §1, "the adapter test").
+//! The utility exports (ADR 0030 §4, "Utilities"), with the unverified decode utilities of
+//! ADR 0069. Each is a type conversion and one surface call (ADR 0030 §1, "the adapter test").
+//!
+//! **Secrets (ADR 0030 §7).** The tokens passed to the decode utilities are not secret-bearing
+//! inputs, as for `jws_verify_compact` (ADR 0030 §7). [`JwsUnverified::payload`] is copied once
+//! from the surface's `SecretBytes`, which is wiped when the surface record drops (ADR 0069 §5,
+//! ADR 0030 §7.2), and leaves the same UniFFI residual as `JwsVerified::payload`: **at least 2**
+//! full Rust-heap copies, plus a full or partial copy for each move of the growing buffer
+//! (ADR 0058, ADR 0064; counts in the `jws` module docs). Callers should wipe the
+//! `ByteArray`/`Data` they receive (ADR 0030 §7.4). Headers and claims are plain `String`s, not
+//! secret (ADR 0058 decision 2, ADR 0065 §3).
 
 use zeroize::Zeroizing;
 
 use crate::PolyjoseError;
+use crate::records::{JwsUnverified, JwtUnverified};
 
 /// The polyjose crate version, e.g. `0.1.0` (ADR 0030 §4).
 #[uniffi::export]
@@ -51,6 +61,71 @@ pub fn base64url_encode(data: Vec<u8>) -> String {
 pub fn base64url_decode(text: String) -> Result<Vec<u8>, PolyjoseError> {
     let text = Zeroizing::new(text);
     Ok(polyjose_surface::util::base64url_decode(&text)?)
+}
+
+/// Reads the JOSE Protected Header of a compact JWS (3 parts) or JWE (5 parts) without verifying
+/// or decrypting anything, as JSON text (ADR 0069 §1–§2; RFC 7515 §7.1, RFC 7516 §7.1). This
+/// doesn't check the signature; don't trust these values until you verify the token with
+/// `jwtVerify` or `jwsVerifyCompact`.
+///
+/// Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
+/// from `jku` or `x5u` (RFC 8725 §3.10). A JWK Set already selects by `kid` during
+/// `jwtVerifyWithJwks` (ADR 0029). Only the first part is read; for a nested JWT that is the
+/// outer JWE's header.
+///
+/// # Errors
+///
+/// `InvalidFormat` (over 1 MiB, not 3 or 5 parts), `InvalidBase64`, `InvalidJson`,
+/// `InvalidHeader`, as the core decides. No error message contains any part of the token
+/// (ADR 0030 §5).
+#[uniffi::export]
+pub fn decode_protected_header_unverified(token: String) -> Result<String, PolyjoseError> {
+    Ok(polyjose_surface::util::decode_protected_header_unverified(
+        &token,
+    )?)
+}
+
+/// Reads the protected header and the payload of a compact JWS without verifying it
+/// (ADR 0069 §1–§3; RFC 7515 §7.1). This doesn't check the signature; don't trust these values
+/// until you verify the JWS with `jwsVerifyCompact`.
+///
+/// Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
+/// from `jku` or `x5u` (RFC 8725 §3.10).
+///
+/// The core runs exactly verification's steps 1–5 (ADR 0048) and nothing after them, so
+/// `alg: none`, an unknown `alg` and an unknown `crit` entry come back as data in
+/// `protectedHeader`. A `b64: false` payload is the payload part's octets (RFC 7797 §3), and a
+/// detached payload is empty (RFC 7515 Appendix F). The payload is treated as secret: printing
+/// the record redacts it (ADR 0065, ADR 0069 §5).
+///
+/// # Errors
+///
+/// `InvalidFormat` (over 1 MiB, not 3 parts, a JSON serialization), `InvalidBase64`,
+/// `InvalidJson`, `InvalidHeader`, as the core decides, with verification's own code for each
+/// step. No error message contains any part of the JWS (ADR 0030 §5).
+#[uniffi::export]
+pub fn decode_jws_unverified(jws: String) -> Result<JwsUnverified, PolyjoseError> {
+    Ok(polyjose_surface::util::decode_jws_unverified(&jws)?.into())
+}
+
+/// Reads the header and the claims of a compact signed JWT without verifying or validating it,
+/// as JSON text (ADR 0069 §1–§2; RFC 7519 §7.2). This doesn't check the signature; don't trust
+/// these values until you verify the token with `jwtVerify`.
+///
+/// No claim is validated: no `exp`, `nbf`, `iat`, `iss`, `sub`, `aud` or `typ` check, and no
+/// clock. After reading `iss` to choose a key set, verify with that issuer in `issuers`
+/// (RFC 8725 §3.8); sanitise a `kid` before using it in a lookup, and take keys from your own
+/// configuration, not from `jku` or `x5u` (RFC 8725 §3.10).
+///
+/// # Errors
+///
+/// Those of `decodeJwsUnverified`, plus `InvalidHeader` for `b64: false` or `cty: JWT`
+/// (RFC 7797 §7, RFC 7519 §5.2), `InvalidJson` for claims that are not one JSON object, and
+/// `InvalidClaim` for a mistyped registered claim. A five-part token is `InvalidFormat`. No error
+/// message contains any part of the token (ADR 0030 §5).
+#[uniffi::export]
+pub fn decode_jwt_unverified(token: String) -> Result<JwtUnverified, PolyjoseError> {
+    Ok(polyjose_surface::util::decode_jwt_unverified(&token)?.into())
 }
 
 #[cfg(test)]

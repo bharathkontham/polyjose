@@ -63,6 +63,7 @@ public final class UniffiKotlinPatch {
         m.put("JweEncryptOptions", List.of("aad"));
         m.put("JweRecipient", List.of("key"));
         m.put("JwsSigner", List.of("key"));
+        m.put("JwsUnverified", List.of("payload"));
         m.put("JwsVerified", List.of("payload"));
         m.put("JwsVerifyOptions", List.of("detachedPayload"));
         REDACTED = Collections.unmodifiableMap(m);

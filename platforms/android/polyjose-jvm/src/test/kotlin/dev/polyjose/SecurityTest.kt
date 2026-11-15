@@ -35,10 +35,23 @@ class SecurityTest {
         val jwtOptions = JwtVerifyOptions(allowedAlgs = listOf("HS256"), now = 2_000_000_000L)
         val markedToken = listOf(MARKER, MARKER, MARKER).joinToString(".")
         val markedJwe = List(5) { MARKER }.joinToString(".")
+        val markedB64 = base64urlEncode(MARKER.toByteArray())
+        val hs256Header = base64urlEncode("""{"alg":"HS256"}""".toByteArray())
+        val badJsonToken = base64urlEncode("""{"alg":"$MARKER" $MARKER}""".toByteArray()) + ".$markedB64.c2ln"
+        val twoParts = "$hs256Header.$markedB64"
+        val mistypedClaim = "$hs256Header." + base64urlEncode("""{"exp":"$MARKER"}""".toByteArray()) + ".c2ln"
 
         val cases: List<Pair<String, () -> Any>> = listOf(
             // Utilities (RFC 4648 §5).
             "base64url" to { base64urlDecode("$MARKER*") },
+            // Unverified decode (ADR 0069): raw parts, a header with a JSON syntax error, two parts,
+            // a mistyped claim (RFC 7519 §4.1.4).
+            "decode header raw" to { decodeProtectedHeaderUnverified(markedToken) },
+            "decode header json" to { decodeProtectedHeaderUnverified(badJsonToken) },
+            "decode jws raw" to { decodeJwsUnverified(markedToken) },
+            "decode jws parts" to { decodeJwsUnverified(twoParts) },
+            "decode jwt raw" to { decodeJwtUnverified(markedToken) },
+            "decode jwt claim" to { decodeJwtUnverified(mistypedClaim) },
             // JWK (RFC 7517, RFC 7638, ADR 0054).
             "unparseable key" to { jwkParse(MARKED_UNPARSEABLE[0]) },
             "off-curve key" to { jwkParse(MARKED_UNPARSEABLE[1]) },

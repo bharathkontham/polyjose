@@ -494,6 +494,60 @@ impl From<surface::JwtNestedVerified> for JwtNestedVerified {
     }
 }
 
+// ------------------------------------------------------------------------------------------------
+// Utilities: unverified decode (ADR 0069)
+// ------------------------------------------------------------------------------------------------
+
+/// A compact JWS read without verifying it, the result of `decodeJwsUnverified` (ADR 0069 §1,
+/// §4; RFC 7515 §7.1). The signature isn't checked; don't trust these values until you verify
+/// the JWS with `jwsVerifyCompact`.
+///
+/// A distinct record from `JwsVerified`, with no `alg` and no `signatureIndex`: the `alg` is
+/// inside `protected_header`, unchecked, and may be `none` or unknown (ADR 0069 §4).
+#[derive(uniffi::Record)]
+pub struct JwsUnverified {
+    /// The JWS Protected Header, the whole JOSE Header of a compact JWS (RFC 7515 §7.1), as the
+    /// core serializes it. Unverified.
+    pub protected_header: String,
+    /// The JWS Payload (RFC 7515 §2): base64url-decoded, the payload part's octets when `b64` is
+    /// `false` (RFC 7797 §3), or empty when detached (RFC 7515 Appendix F). Unverified. Treated
+    /// as secret (ADR 0049 §4, ADR 0069 §5).
+    pub payload: Vec<u8>,
+}
+
+impl From<surface::JwsUnverified> for JwsUnverified {
+    fn from(v: surface::JwsUnverified) -> Self {
+        Self {
+            protected_header: v.protected_header,
+            payload: v.payload.as_bytes().to_vec(),
+        }
+    }
+}
+
+/// A compact signed JWT read without verifying or validating it, the result of
+/// `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). The signature isn't checked; don't
+/// trust these values until you verify the token with `jwtVerify`.
+///
+/// No claim was validated: it may be expired or for another audience. A distinct record from
+/// `JwtVerified`, with no `alg`, `keyIndex` or `kid` (ADR 0069 §4).
+#[derive(uniffi::Record)]
+pub struct JwtUnverified {
+    /// The JWS Protected Header, as the core serializes it (RFC 7519 §5). Unverified.
+    pub header: String,
+    /// The JWT Claims Set as the core serializes it, registered claims first (ADR 0027 §1).
+    /// Parsed and type-checked, not validated. Unverified.
+    pub claims: String,
+}
+
+impl From<surface::JwtUnverified> for JwtUnverified {
+    fn from(v: surface::JwtUnverified) -> Self {
+        Self {
+            header: v.header,
+            claims: v.claims,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,6 +639,26 @@ mod tests {
         assert_eq!(out.protected_header.as_deref(), Some(r#"{"alg":"ES256"}"#));
         assert_eq!(out.unprotected_header.as_deref(), Some(r#"{"kid":"a"}"#));
         assert_eq!(out.signature_index, 3);
+    }
+
+    #[test]
+    fn jws_unverified_maps_every_field() {
+        let out = JwsUnverified::from(surface::JwsUnverified {
+            protected_header: s(r#"{"alg":"none"}"#),
+            payload: SecretBytes::from(vec![6, 7]),
+        });
+        assert_eq!(out.protected_header, r#"{"alg":"none"}"#);
+        assert_eq!(out.payload, [6, 7]);
+    }
+
+    #[test]
+    fn jwt_unverified_maps_every_field() {
+        let out = JwtUnverified::from(surface::JwtUnverified {
+            header: s(r#"{"alg":"HS256"}"#),
+            claims: s(r#"{"sub":"a"}"#),
+        });
+        assert_eq!(out.header, r#"{"alg":"HS256"}"#);
+        assert_eq!(out.claims, r#"{"sub":"a"}"#);
     }
 
     #[test]

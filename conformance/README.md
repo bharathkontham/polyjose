@@ -438,9 +438,9 @@ Which operation families each platform's runner runs today. A cell that isn't "r
 | Rust surface | `bindings/surface/tests/conformance.rs` (`polyjose-surface`, ADR 0030) | runs | runs | runs | runs |
 | WASM | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/wasm` (0006): `wasm-node`, `wasm-chrome` (wasm-bindgen-test) and `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` (the packed tarball) | runs | runs | runs | runs |
 | Node | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/node` (0007): `node` | runs | runs | runs | runs |
-| Kotlin (JVM) | `platforms/android/shared-test/kotlin` (`dev.polyjose.conformance`), hosted by `polyjose-jvm`'s `ConformanceTest` | runs | runs | runs | 0026 T03 |
-| Kotlin (Android) | the same runner, hosted by `:polyjose`'s `ConformanceInstrumentedTest` on the emulator (`platforms/android/scripts/run-instrumented.sh`) | runs | runs | runs | 0026 T03 |
-| Swift (iOS) | `platforms/swift/Tests/PolyjoseTests/ConformanceRunner.swift` (0009): `swift-macos` on the macOS host, `swift-ios-sim` on the iOS 27.2 Simulator | runs | runs | runs | 0026 T03 |
+| Kotlin (JVM) | `platforms/android/shared-test/kotlin` (`dev.polyjose.conformance`), hosted by `polyjose-jvm`'s `ConformanceTest` | runs | runs | runs | runs |
+| Kotlin (Android) | the same runner, hosted by `:polyjose`'s `ConformanceInstrumentedTest` on the emulator (`platforms/android/scripts/run-instrumented.sh`) | runs | runs | runs | runs |
+| Swift (iOS) | `platforms/swift/Tests/PolyjoseTests/ConformanceRunner.swift` (0009): `swift-macos` on the macOS host, `swift-ios-sim` on the iOS 27.2 Simulator | runs | runs | runs | runs |
 
 `jwks.select`, and `jwk.thumbprint`'s optional `hash`, run through the surface (`rust-surface`, 0013 T14) and in every binding runner above (the shared JS runner, the Kotlin runner and the Swift runner implement both).
 

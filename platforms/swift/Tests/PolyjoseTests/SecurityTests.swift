@@ -51,6 +51,47 @@ final class SecurityTests: XCTestCase {
         }
     }
 
+    /// ADR 0030 §5 marker test for the unverified decode utilities (ADR 0069): a marker in the
+    /// token, raw, base64url-decoded or next to a JSON syntax error, never appears in the error.
+    func testDecodeErrorsNeverContainTheToken() {
+        let marker = Self.marker
+        let header = base64urlEncode(data: Data(#"{"alg":"HS256"}"#.utf8))
+        let badJson = base64urlEncode(data: Data(#"{"alg":"\#(marker)" \#(marker)}"#.utf8))
+        let mistypedClaim = base64urlEncode(data: Data(#"{"exp":"\#(marker)"}"#.utf8))
+        // Not a JSON header (InvalidJson), a JSON syntax error (InvalidJson), two parts
+        // (InvalidFormat), a padded signature (InvalidBase64), a mistyped `exp` (InvalidClaim,
+        // RFC 7519 §4.1.4).
+        let notJson = "\(marker).\(marker).\(marker)"
+        let syntax = "\(badJson).\(marker).c2ln"
+        let twoParts = "\(header).\(marker)"
+        let padded = "\(header).\(marker).\(marker)=="
+        let claim = "\(header).\(mistypedClaim).c2ln"
+        var errors: [Error] = []
+        func expectFailure(_ call: () throws -> Any) {
+            do {
+                _ = try call()
+                XCTFail("the call succeeded; the marker test needs a failing call")
+            } catch { errors.append(error) }
+        }
+        for token in [notJson, syntax, twoParts] {
+            expectFailure { try decodeProtectedHeaderUnverified(token: token) }
+        }
+        for token in [notJson, syntax, twoParts, padded] {
+            expectFailure { try decodeJwsUnverified(jws: token) }
+        }
+        for token in [notJson, syntax, twoParts, padded, claim] {
+            expectFailure { try decodeJwtUnverified(token: token) }
+        }
+        XCTAssertEqual(errors.count, 12)
+        for error in errors {
+            XCTAssertTrue(error is PolyjoseError, "not a PolyjoseError: \(type(of: error))")
+            for form in [String(describing: error), String(reflecting: error), error.localizedDescription] {
+                XCTAssertFalse(form.contains(marker), "the marker leaked into an error: \(form)")
+                XCTAssertFalse(form.contains("POLYJOSEMARKER"), "the decoded marker leaked into an error: \(form)")
+            }
+        }
+    }
+
     /// ADR 0030 §5, ADR 0034 §8: `errorCodes()` equals the inventory's codes, in order
     /// (bindings/api-inventory.txt, itself checked against `polyjose::Error::CODES`).
     func testErrorCodesEqualTheInventory() throws {

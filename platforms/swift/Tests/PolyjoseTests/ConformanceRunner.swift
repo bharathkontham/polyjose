@@ -461,6 +461,24 @@ extension ConformanceRunner {
             if let index = verified.keyIndex { out["key_index"] = .number(Double(index)) }
         case "jwt.issue":
             try jwtIssue(input, expect, text, out)
+        case "util.decode_protected_header":
+            // decodeProtectedHeaderUnverified(token) (ADR 0069 §1; RFC 7515 §7.1, RFC 7516 §7.1):
+            // `header` = the returned JSON text, parsed.
+            let token = try str(input["token"], "token")
+            out["header"] = try parseOutput(try lib { try decodeProtectedHeaderUnverified(token: token) }, "the decoded header")
+        case "util.decode_jws":
+            // decodeJwsUnverified(jws) (ADR 0069 §1; RFC 7515 §7.1): `protected` = protectedHeader
+            // parsed, `payload_b64u` = the payload.
+            let jws = try str(input["jws"], "jws")
+            let decoded = try lib { try decodeJwsUnverified(jws: jws) }
+            out["protected"] = try parseOutput(decoded.protectedHeader, "the decoded protected header")
+            out["payload_b64u"] = .string(base64urlEncode(data: decoded.payload))
+        case "util.decode_jwt":
+            // decodeJwtUnverified(token) (ADR 0069 §1; RFC 7519 §7.2): `header` and `claims`, each parsed.
+            let token = try str(input["token"], "token")
+            let decoded = try lib { try decodeJwtUnverified(token: token) }
+            out["header"] = try parseOutput(decoded.header, "the decoded header")
+            out["claims"] = try parseOutput(decoded.claims, "the decoded claims")
         default:
             throw HarnessError("operation `\(vector.operation)` is not implemented by the Swift runner; a vector is never skipped")
         }
