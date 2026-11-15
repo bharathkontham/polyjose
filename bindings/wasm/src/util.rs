@@ -49,9 +49,11 @@ pub fn base64url_decode(text: String) -> Result<Uint8Array, JsValue> {
     Ok(Uint8Array::from(&bytes[..]))
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the protected header of a compact JWS (3 parts) or JWE (5 parts) without verifying or
-/// decrypting it (ADR 0069 §1-§2; RFC 7515 §7.1, RFC 7516 §7.1). This doesn't check the
-/// signature; don't trust these values until you verify the token. Returns the header's JSON
+/// decrypting it (ADR 0069 §1-§2, §4; RFC 7515 §7.1, RFC 7516 §7.1). Returns the header's JSON
 /// text.
 ///
 /// The token embeds base64url(payload) (ADR 0049 §4): it is taken by value and wiped on return.
@@ -65,9 +67,12 @@ pub fn decode_protected_header_unverified(token: String) -> Result<JsString, JsV
     Ok(JsString::from(header.as_str()))
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the protected header and the payload of a compact JWS without verifying it
-/// (ADR 0069 §1-§2; RFC 7515 §7.1). This doesn't check the signature; don't trust these values
-/// until you verify the JWS with `jwsVerifyCompact`. Returns `{ protectedHeader, payload }`.
+/// (ADR 0069 §1-§2, §4; RFC 7515 §7.1). Verify the JWS with `jwsVerifyCompact`. Returns
+/// `{ protectedHeader, payload }`.
 ///
 /// The JWS is taken by value and wiped on return; the payload is copied into the `Uint8Array`
 /// from the surface's zeroizing buffer (ADR 0069 §5, ADR 0030 §7.2).
@@ -78,9 +83,12 @@ pub fn decode_jws_unverified(jws: String) -> Result<Object, JsValue> {
     write::jws_unverified(decoded)
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the header and the claims of a compact signed JWT without verifying or validating it
-/// (ADR 0069 §1-§2; RFC 7519 §7.2). This doesn't check the signature; don't trust these values
-/// until you verify the token with `jwtVerify`. Returns `{ header, claims }`.
+/// (ADR 0069 §1-§2, §4; RFC 7519 §7.2). Verify the token with `jwtVerify`. Returns
+/// `{ header, claims }`.
 #[wasm_bindgen(js_name = decodeJwtUnverified)]
 pub fn decode_jwt_unverified(token: String) -> Result<Object, JsValue> {
     let token = Zeroizing::new(token);

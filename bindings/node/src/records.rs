@@ -562,8 +562,9 @@ impl<'env> ToJs<'env> for surface::JwtNestedVerified {
 // ------------------------------------------------------------------------------------------------
 
 /// A compact JWS read without verifying it: the result of `decodeJwsUnverified` (ADR 0069 §1,
-/// §4; RFC 7515 §7.1). The signature isn't checked; don't trust these values until you verify
-/// the JWS with `jwsVerifyCompact`. It has no `alg` and no `signatureIndex`, unlike
+/// §4; RFC 7515 §7.1). This doesn't check the signature: anyone can write these values, so
+/// don't use them for authorization or trust decisions until you verify the token. Verify it with
+/// `jwsVerifyCompact`. It has no `alg` and no `signatureIndex`, unlike
 /// [`JwsVerified`].
 #[napi(object, object_from_js = false)]
 pub struct JwsUnverified<'env> {
@@ -587,8 +588,9 @@ impl<'env> ToJs<'env> for surface::JwsUnverified {
 }
 
 /// A compact signed JWT read without verifying or validating it: the result of
-/// `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). The signature isn't checked; don't
-/// trust these values until you verify the token with `jwtVerify`. It has no `alg`, `keyIndex`
+/// `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). This doesn't check the signature:
+/// anyone can write these values, so don't use them for authorization or trust decisions until
+/// you verify the token. Verify it with `jwtVerify`. It has no `alg`, `keyIndex`
 /// or `kid`, unlike [`JwtVerified`].
 #[napi(object, object_from_js = false)]
 pub struct JwtUnverified<'env> {

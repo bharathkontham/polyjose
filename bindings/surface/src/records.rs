@@ -615,7 +615,8 @@ impl fmt::Debug for JwtNestedVerified {
 
 /// A compact JWS read without verifying it: the result of
 /// [`decode_jws_unverified`](crate::util::decode_jws_unverified) (ADR 0069 §1, §4; RFC 7515
-/// §7.1). The signature isn't checked; don't trust these values until you verify the JWS with
+/// §7.1). This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token. Verify it with
 /// [`jws_verify_compact`](crate::jws::jws_verify_compact).
 ///
 /// A distinct record from [`JwsVerified`], with no `alg` and no `signature_index`: the `alg` is
@@ -642,7 +643,8 @@ impl fmt::Debug for JwsUnverified {
 
 /// A compact signed JWT read without verifying or validating it: the result of
 /// [`decode_jwt_unverified`](crate::util::decode_jwt_unverified) (ADR 0069 §1, §4; RFC 7519
-/// §7.2). The signature isn't checked; don't trust these values until you verify the token with
+/// §7.2). This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token. Verify it with
 /// [`jwt_verify`](crate::jwt::jwt_verify).
 ///
 /// No claim was validated: it may be expired or for another audience.

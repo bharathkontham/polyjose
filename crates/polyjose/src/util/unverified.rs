@@ -19,8 +19,10 @@ const MAX_INPUT_LEN: usize = VerifyOptions::DEFAULT_MAX_INPUT_LEN;
 
 /// A compact JWS read without verifying it: its JWS Protected Header and
 /// its JWS Payload, as [`decode_jws_unverified`] returns them (ADR 0069
-/// §1, §4). The signature isn't checked; don't trust these values until
-/// you verify the JWS with [`jws::verify_compact`](crate::jws::verify_compact).
+/// §1, §4). This doesn't check the signature: anyone can write these
+/// values, so don't use them for authorization or trust decisions until
+/// you verify the token. Verify it with
+/// [`jws::verify_compact`](crate::jws::verify_compact).
 ///
 /// See the [`util` module docs](crate::util#unverified-decode) for using a
 /// `kid` (RFC 8725 §3.10).
@@ -59,8 +61,9 @@ impl fmt::Debug for UnverifiedJws {
 
 /// A compact signed JWT read without verifying or validating it: its JWS
 /// Protected Header and its JWT Claims Set, as [`decode_jwt_unverified`]
-/// returns them (ADR 0069 §1, §4). The signature isn't checked; don't
-/// trust these values until you verify the token with
+/// returns them (ADR 0069 §1, §4). This doesn't check the signature:
+/// anyone can write these values, so don't use them for authorization or
+/// trust decisions until you verify the token. Verify it with
 /// [`jwt::verify`](crate::jwt::verify).
 ///
 /// No claim was validated: the token may be expired, not yet valid, or
@@ -95,10 +98,13 @@ impl fmt::Debug for UnverifiedJwt {
     }
 }
 
+/// This doesn't check the signature: anyone can write these values, so
+/// don't use them for authorization or trust decisions until you verify
+/// the token.
+///
 /// Reads the JOSE Protected Header of a compact JWS or JWE without
-/// verifying or decrypting anything (ADR 0069 §1–§2; RFC 7515 §5.2 steps
-/// 1–3, §7.1; RFC 7516 §5.2 steps 1–3, §7.1). This doesn't check the
-/// signature; don't trust these values until you verify the token with
+/// verifying or decrypting anything (ADR 0069 §1–§2, §4; RFC 7515 §5.2
+/// steps 1–3, §7.1; RFC 7516 §5.2 steps 1–3, §7.1). Verify the token with
 /// [`jwt::verify`](crate::jwt::verify) or
 /// [`jws::verify_compact`](crate::jws::verify_compact).
 ///
@@ -136,12 +142,19 @@ impl fmt::Debug for UnverifiedJwt {
 ///   or `crit` is malformed ([`Header::from_json`]; RFC 7515 §4.1.11,
 ///   RFC 7516 §4.1.13).
 ///
+/// A JSON Serialization (RFC 7515 §7.2, RFC 7516 §7.2) is not read. JSON
+/// text is [`Error::InvalidFormat`] by the part count, except when it
+/// happens to contain exactly two or four `.`: its first part then starts
+/// with `{`, which is not base64url, so it is [`Error::InvalidBase64`].
+///
 /// [`JwkSet`]: crate::jwk::JwkSet
 /// [`Keys::Set`]: crate::jwt::Keys::Set
 pub fn decode_protected_header_unverified(token: &str) -> Result<Header> {
     // ADR 0026 §7: the input limit, before any parsing.
     if token.len() > MAX_INPUT_LEN {
-        return Err(Error::InvalidFormat("compact token exceeds max_input_len"));
+        return Err(Error::InvalidFormat(
+            "compact token exceeds the 1 MiB input limit",
+        ));
     }
     // RFC 7515 §7.1 (three parts, two '.') or RFC 7516 §7.1 (five parts,
     // four '.'); the shape only, the other parts are not decoded.
@@ -159,10 +172,13 @@ pub fn decode_protected_header_unverified(token: &str) -> Result<Header> {
     Header::from_json(&json)
 }
 
+/// This doesn't check the signature: anyone can write these values, so
+/// don't use them for authorization or trust decisions until you verify
+/// the token.
+///
 /// Reads the protected header and the payload of a compact JWS without
-/// verifying it (ADR 0069 §1–§3; RFC 7515 §5.2 steps 1–4 and 6–7, §7.1).
-/// This doesn't check the signature; don't trust these values until you
-/// verify the JWS with [`jws::verify_compact`](crate::jws::verify_compact).
+/// verifying it (ADR 0069 §1–§4; RFC 7515 §5.2 steps 1–4 and 6–7, §7.1).
+/// Verify the JWS with [`jws::verify_compact`](crate::jws::verify_compact).
 ///
 /// Sanitise a `kid` before using it in a lookup, and take keys from your
 /// own configuration, not from `jku` or `x5u` (RFC 8725 §3.10).
@@ -170,7 +186,8 @@ pub fn decode_protected_header_unverified(token: &str) -> Result<Header> {
 /// It runs exactly steps 1–5 of ADR 0048, the same code
 /// [`jws::verify_compact`](crate::jws::verify_compact) runs, and stops
 /// there: it succeeds exactly when verification would get past step 5,
-/// and fails with the same code otherwise. Steps 6a–6e (`crit`
+/// and fails with the same code otherwise, except a JSON serialization,
+/// which is always `InvalidFormat`. Steps 6a–6e (`crit`
 /// understood, `alg` known, `alg` allowed, key binding, the signature) are
 /// skipped, so `alg: none` (ADR 0007), an unknown `alg` and an unknown
 /// `crit` entry (RFC 7515 §4.1.11) are returned as data. The signature
@@ -230,10 +247,13 @@ pub fn decode_jws_unverified(jws: &str) -> Result<UnverifiedJws> {
     Ok(UnverifiedJws { protected, payload })
 }
 
+/// This doesn't check the signature: anyone can write these values, so
+/// don't use them for authorization or trust decisions until you verify
+/// the token.
+///
 /// Reads the header and the claims of a compact signed JWT without
-/// verifying or validating it (ADR 0069 §1–§2; RFC 7519 §7.2 steps 1–6 and
-/// 10, without the signature). This doesn't check the signature; don't
-/// trust these values until you verify the token with
+/// verifying or validating it (ADR 0069 §1–§2, §4; RFC 7519 §7.2 steps 1–6
+/// and 10, without the signature). Verify the token with
 /// [`jwt::verify`](crate::jwt::verify).
 ///
 /// No claim is validated: an expired token, a token for another audience
@@ -247,7 +267,9 @@ pub fn decode_jws_unverified(jws: &str) -> Result<UnverifiedJws> {
 ///
 /// In order:
 ///
-/// 1. [`decode_jws_unverified`]: steps 1–5 of ADR 0048. A five-part token
+/// 1. [`decode_jws_unverified`]: steps 1–5 of ADR 0048, with the same
+///    code as verification, except a JSON serialization, which is always
+///    `InvalidFormat`. A five-part token
 ///    (a nested JWT, RFC 7519 §5.2) is [`Error::InvalidFormat`]; its outer
 ///    header can be read with [`decode_protected_header_unverified`].
 /// 2. The rules of ADR 0027 §9 J1 that need no policy: `b64: false`

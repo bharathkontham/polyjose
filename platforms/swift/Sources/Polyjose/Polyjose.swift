@@ -1321,8 +1321,9 @@ public func FfiConverterTypeJwsSigner_lower(_ value: JwsSigner) -> RustBuffer {
 
 /**
  * A compact JWS read without verifying it, the result of `decodeJwsUnverified` (ADR 0069 §1,
- * §4; RFC 7515 §7.1). The signature isn't checked; don't trust these values until you verify
- * the JWS with `jwsVerifyCompact`.
+ * §4; RFC 7515 §7.1). This doesn't check the signature: anyone can write these values, so
+ * don't use them for authorization or trust decisions until you verify the token. Verify it with
+ * `jwsVerifyCompact`.
  *
  * A distinct record from `JwsVerified`, with no `alg` and no `signatureIndex`: the `alg` is
  * inside `protected_header`, unchecked, and may be `none` or unknown (ADR 0069 §4).
@@ -1772,8 +1773,9 @@ public func FfiConverterTypeJwtSignOptions_lower(_ value: JwtSignOptions) -> Rus
 
 /**
  * A compact signed JWT read without verifying or validating it, the result of
- * `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). The signature isn't checked; don't
- * trust these values until you verify the token with `jwtVerify`.
+ * `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). This doesn't check the signature:
+ * anyone can write these values, so don't use them for authorization or trust decisions until
+ * you verify the token. Verify it with `jwtVerify`.
  *
  * No claim was validated: it may be expired or for another audience. A distinct record from
  * `JwtVerified`, with no `alg`, `keyIndex` or `kid` (ADR 0069 §4).
@@ -3373,9 +3375,11 @@ public func base64urlEncode(data: Data) -> String  {
 })
 }
 /**
+ * This doesn't check the signature: anyone can write these values, so don't use them for
+ * authorization or trust decisions until you verify the token.
+ *
  * Reads the protected header and the payload of a compact JWS without verifying it
- * (ADR 0069 §1–§3; RFC 7515 §7.1). This doesn't check the signature; don't trust these values
- * until you verify the JWS with `jwsVerifyCompact`.
+ * (ADR 0069 §1–§4; RFC 7515 §7.1). Verify the JWS with `jwsVerifyCompact`.
  *
  * Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
  * from `jku` or `x5u` (RFC 8725 §3.10).
@@ -3401,9 +3405,11 @@ public func decodeJwsUnverified(jws: String)throws  -> JwsUnverified  {
 })
 }
 /**
+ * This doesn't check the signature: anyone can write these values, so don't use them for
+ * authorization or trust decisions until you verify the token.
+ *
  * Reads the header and the claims of a compact signed JWT without verifying or validating it,
- * as JSON text (ADR 0069 §1–§2; RFC 7519 §7.2). This doesn't check the signature; don't trust
- * these values until you verify the token with `jwtVerify`.
+ * as JSON text (ADR 0069 §1–§2, §4; RFC 7519 §7.2). Verify the token with `jwtVerify`.
  *
  * No claim is validated: no `exp`, `nbf`, `iat`, `iss`, `sub`, `aud` or `typ` check, and no
  * clock. After reading `iss` to choose a key set, verify with that issuer in `issuers`
@@ -3426,10 +3432,12 @@ public func decodeJwtUnverified(token: String)throws  -> JwtUnverified  {
 })
 }
 /**
+ * This doesn't check the signature: anyone can write these values, so don't use them for
+ * authorization or trust decisions until you verify the token.
+ *
  * Reads the JOSE Protected Header of a compact JWS (3 parts) or JWE (5 parts) without verifying
- * or decrypting anything, as JSON text (ADR 0069 §1–§2; RFC 7515 §7.1, RFC 7516 §7.1). This
- * doesn't check the signature; don't trust these values until you verify the token with
- * `jwtVerify` or `jwsVerifyCompact`.
+ * or decrypting anything, as JSON text (ADR 0069 §1–§2, §4; RFC 7515 §7.1, RFC 7516 §7.1).
+ * Verify the token with `jwtVerify` or `jwsVerifyCompact`.
  *
  * Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
  * from `jku` or `x5u` (RFC 8725 §3.10). A JWK Set already selects by `kid` during
@@ -3577,13 +3585,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_polyjose_ffi_checksum_func_base64url_encode() != 34656) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_decode_jws_unverified() != 28416) {
+    if (uniffi_polyjose_ffi_checksum_func_decode_jws_unverified() != 50746) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_decode_jwt_unverified() != 65124) {
+    if (uniffi_polyjose_ffi_checksum_func_decode_jwt_unverified() != 48654) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_polyjose_ffi_checksum_func_decode_protected_header_unverified() != 4537) {
+    if (uniffi_polyjose_ffi_checksum_func_decode_protected_header_unverified() != 43718) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_error_codes() != 22914) {

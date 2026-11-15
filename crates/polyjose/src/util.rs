@@ -34,11 +34,14 @@
 //!
 //! # Unverified decode
 //!
+//! This doesn't check the signature: anyone can write these values, so
+//! don't use them for authorization or trust decisions until you verify
+//! the token.
+//!
 //! [`decode_protected_header_unverified`], [`decode_jws_unverified`] and
 //! [`decode_jwt_unverified`] (ADR 0069) read a compact token's protected
 //! header, a compact JWS's payload, or a compact JWT's claims, without
-//! verifying anything. They don't check the signature; don't trust these
-//! values until you verify the token with [`jwt::verify`] or
+//! verifying anything. Verify the token with [`jwt::verify`] or
 //! [`jws::verify_compact`].
 //!
 //! - `kid`, `jku`, `x5u` (RFC 8725 §3.10): sanitise a `kid` before using
@@ -52,8 +55,10 @@
 //!   (ADR 0029).
 //!
 //! What they check is exactly what verification checks before anything
-//! cryptographic (ADR 0069 §2), with the same error codes, so the same
-//! token gives the same result on every platform:
+//! cryptographic (ADR 0069 §2), with the same error codes, except a JSON
+//! serialization, which the JWS and JWT decodes always report as
+//! `InvalidFormat`. The same token gives the same result on every
+//! platform:
 //!
 //! | utility | checks | skips |
 //! |---|---|---|
