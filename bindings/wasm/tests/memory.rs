@@ -379,7 +379,11 @@ const KNOWN: &[Known] = &[
     known("jwsVerifyJson(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
     known("jwsVerifyJson(HS512)", "payload (base64url)", r(4, 0, 0), r(2, 0, 0), HASH_INPUT),
     known("jwtDecryptNested", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
+    // aes key-schedule copy, carried by the inner Header's stale padding
+    known("jwtDecryptNested", "key-encryption k", r(0, 0, 0), r(0, 6, 0), AES_KEY),
     known("jwtDecryptNestedWithJwks", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
+    // aes key-schedule copy, carried by the inner Header's stale padding
+    known("jwtDecryptNestedWithJwks", "key-encryption k", r(0, 0, 0), r(0, 6, 0), AES_KEY),
     known("jwtEncryptNested(A128KW + A128GCM)", "key-encryption k", r(0, 0, 0), r(1, 1, 0), AES_KEY),
     known("jwtSign(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
     known("jwtVerify(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
