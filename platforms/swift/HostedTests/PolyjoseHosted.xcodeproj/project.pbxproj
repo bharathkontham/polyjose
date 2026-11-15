@@ -1,0 +1,434 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		3D38F58554DD6ECACCD05E69 /* PolyjoseHostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C38C3F19355BC36AFF1F62 /* PolyjoseHostApp.swift */; };
+		A7838303498CF15BF7D55620 /* AppleKeyHostedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CA94B7237CC146957E75BB3 /* AppleKeyHostedTests.swift */; };
+		BEB83D062158DBC7F106277B /* Polyjose in Frameworks */ = {isa = PBXBuildFile; productRef = C51BE3336358D22A527D73E1 /* Polyjose */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		8D8ACBCBB2DDBCC19EDC9D13 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D38DA25D1FB809489466F6EE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1C104564099B8CEB25CDBABA;
+			remoteInfo = PolyjoseHostApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0CA94B7237CC146957E75BB3 /* AppleKeyHostedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleKeyHostedTests.swift; sourceTree = "<group>"; };
+		12CA6893A498F1EF1BAA95B2 /* PolyjoseHostApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PolyjoseHostApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		45C38C3F19355BC36AFF1F62 /* PolyjoseHostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolyjoseHostApp.swift; sourceTree = "<group>"; };
+		B6E9D19005A0D44EFC09A377 /* feature-hardware-backed-keys-t03-swift */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "feature-hardware-backed-keys-t03-swift"; path = ../../..; sourceTree = SOURCE_ROOT; };
+		C216684B79E8A9D2682D7D22 /* PolyjoseHostedTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PolyjoseHostedTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		177F7977D1444E51AB0E534C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BEB83D062158DBC7F106277B /* Polyjose in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		072DB3DFF97BA60B3FB30C40 /* HostApp */ = {
+			isa = PBXGroup;
+			children = (
+				45C38C3F19355BC36AFF1F62 /* PolyjoseHostApp.swift */,
+			);
+			path = HostApp;
+			sourceTree = "<group>";
+		};
+		1FDF81E662B4575BDFF16C5F = {
+			isa = PBXGroup;
+			children = (
+				072DB3DFF97BA60B3FB30C40 /* HostApp */,
+				335CDBAE2A9FAADB9E57E735 /* Packages */,
+				80EDED55215A7B2BFB095558 /* Tests */,
+				91E72AA0830287DEE857210F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		335CDBAE2A9FAADB9E57E735 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				B6E9D19005A0D44EFC09A377 /* feature-hardware-backed-keys-t03-swift */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		80EDED55215A7B2BFB095558 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				0CA94B7237CC146957E75BB3 /* AppleKeyHostedTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		91E72AA0830287DEE857210F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				12CA6893A498F1EF1BAA95B2 /* PolyjoseHostApp.app */,
+				C216684B79E8A9D2682D7D22 /* PolyjoseHostedTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1C104564099B8CEB25CDBABA /* PolyjoseHostApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EBE79AECD5A3C5AA9C4CBC5B /* Build configuration list for PBXNativeTarget "PolyjoseHostApp" */;
+			buildPhases = (
+				8BBD7C24A9918495B7211BF6 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PolyjoseHostApp;
+			packageProductDependencies = (
+			);
+			productName = PolyjoseHostApp;
+			productReference = 12CA6893A498F1EF1BAA95B2 /* PolyjoseHostApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B48079A108D3FC3F6831F101 /* PolyjoseHostedTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7337F89A6B5A346C6747B1A9 /* Build configuration list for PBXNativeTarget "PolyjoseHostedTests" */;
+			buildPhases = (
+				0F9974E8AF2F9B9EC2F82FFF /* Sources */,
+				177F7977D1444E51AB0E534C /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1F889E202E3B1D8928600A56 /* PBXTargetDependency */,
+			);
+			name = PolyjoseHostedTests;
+			packageProductDependencies = (
+				C51BE3336358D22A527D73E1 /* Polyjose */,
+			);
+			productName = PolyjoseHostedTests;
+			productReference = C216684B79E8A9D2682D7D22 /* PolyjoseHostedTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		D38DA25D1FB809489466F6EE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					1C104564099B8CEB25CDBABA = {
+						ProvisioningStyle = Automatic;
+					};
+					B48079A108D3FC3F6831F101 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 4E8B432037E6394F485934BF /* Build configuration list for PBXProject "PolyjoseHosted" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 1FDF81E662B4575BDFF16C5F;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				393C89DCD7D9A3C7102DE28D /* XCLocalSwiftPackageReference "../../.." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 91E72AA0830287DEE857210F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1C104564099B8CEB25CDBABA /* PolyjoseHostApp */,
+				B48079A108D3FC3F6831F101 /* PolyjoseHostedTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0F9974E8AF2F9B9EC2F82FFF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7838303498CF15BF7D55620 /* AppleKeyHostedTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8BBD7C24A9918495B7211BF6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3D38F58554DD6ECACCD05E69 /* PolyjoseHostApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1F889E202E3B1D8928600A56 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1C104564099B8CEB25CDBABA /* PolyjoseHostApp */;
+			targetProxy = 8D8ACBCBB2DDBCC19EDC9D13 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		281C34D673DC2CB38F43EF06 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		365A2D7602760BF0A698980C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		4AFD707310D55F670C25928F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.polyjose.hosted.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PolyjoseHostApp.app/PolyjoseHostApp";
+			};
+			name = Release;
+		};
+		6CE95E224C4A71C272038514 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.polyjose.hosted.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PolyjoseHostApp.app/PolyjoseHostApp";
+			};
+			name = Debug;
+		};
+		B8E3179F4BBA4A934DEA2478 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.polyjose.hosted.app;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		BEF75BCD1B3B1666FB07CA08 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.polyjose.hosted.app;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4E8B432037E6394F485934BF /* Build configuration list for PBXProject "PolyjoseHosted" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				365A2D7602760BF0A698980C /* Debug */,
+				281C34D673DC2CB38F43EF06 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7337F89A6B5A346C6747B1A9 /* Build configuration list for PBXNativeTarget "PolyjoseHostedTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6CE95E224C4A71C272038514 /* Debug */,
+				4AFD707310D55F670C25928F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EBE79AECD5A3C5AA9C4CBC5B /* Build configuration list for PBXNativeTarget "PolyjoseHostApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BEF75BCD1B3B1666FB07CA08 /* Debug */,
+				B8E3179F4BBA4A934DEA2478 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		393C89DCD7D9A3C7102DE28D /* XCLocalSwiftPackageReference "../../.." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C51BE3336358D22A527D73E1 /* Polyjose */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Polyjose;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = D38DA25D1FB809489466F6EE /* Project object */;
+}
