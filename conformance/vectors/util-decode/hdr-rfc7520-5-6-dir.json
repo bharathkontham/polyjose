@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7520 §5.6",
+  "description": "The header peek of the compact JWE (five parts, RFC 7516 §7.1) returns the §5.6.3 header {\"alg\":\"dir\",...,\"enc\":\"A128GCM\"}, without decrypting anything",
+  "operation": "util.decode_protected_header",
+  "input": {
+    "token": "eyJhbGciOiJkaXIiLCJraWQiOiI3N2M3ZTJiOC02ZTEzLTQ1Y2YtODY3Mi02MTdiNWI0NTI0M2EiLCJlbmMiOiJBMTI4R0NNIn0..refa467QzzKx6QAB.JW_i_f52hww_ELQPGaYyeAB6HYGcR559l9TYnSovc23XJoBcW29rHP8yZOZG7YhLpT1bjFuvZPjQS-m0IFtVcXkZXdH_lr_FrdYt9HRUYkshtrMmIUAyGmUnd9zMDB2n0cRDIHAzFVeJUDxkUwVAE7_YGRPdcqMyiBoCO-FBdE-Nceb4h3-FtBP-c_BIwCPTjb9o0SbdcdREEMJMyZBH8ySWMVi1gPD9yxi-aQpGbSv_F9N4IZAxscj5g-NJsUPbjk29-s7LJAGb15wEBtXphVCgyy53CoIKLHHeJHXex45Uz9aKZSRSInZI-wjsY0yu3cT4_aQ3i1o-tiE-F8Ios61EKgyIQ4CWao8PFMj8TTnp.vbb32Xvllea2OtmHAdccRQ"
+  },
+  "expect": {
+    "ok": true,
+    "header": {
+      "alg": "dir",
+      "kid": "77c7e2b8-6e13-45cf-8672-617b5b45243a",
+      "enc": "A128GCM"
+    }
+  }
+}

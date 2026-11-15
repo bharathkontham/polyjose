@@ -1,0 +1,15 @@
+{
+  "source": "RFC 7516 App. A.2",
+  "description": "The header peek of the compact JWE (five parts, RFC 7516 §7.1) returns the A.2.1 header {\"alg\":\"RSA1_5\",\"enc\":\"A128CBC-HS256\"}, an alg polyjose does not decrypt, without decrypting anything",
+  "operation": "util.decode_protected_header",
+  "input": {
+    "token": "eyJhbGciOiJSU0ExXzUiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0.UGhIOguC7IuEvf_NPVaXsGMoLOmwvc1GyqlIKOK1nN94nHPoltGRhWhw7Zx0-kFm1NJn8LE9XShH59_i8J0PH5ZZyNfGy2xGdULU7sHNF6Gp2vPLgNZ__deLKxGHZ7PcHALUzoOegEI-8E66jX2E4zyJKx-YxzZIItRzC5hlRirb6Y5Cl_p-ko3YvkkysZIFNPccxRU7qve1WYPxqbb2Yw8kZqa2rMWI5ng8OtvzlV7elprCbuPhcCdZ6XDP0_F8rkXds2vE4X-ncOIM8hAYHHi29NX0mcKiRaD0-D-ljQTP-cFPgwCp6X-nZZd9OHBv-B3oWh2TbqmScqXMR4gp_A.AxY8DCtDaGlsbGljb3RoZQ.KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY.9hH0vgRfYgPnAHOd8stkvw"
+  },
+  "expect": {
+    "ok": true,
+    "header": {
+      "alg": "RSA1_5",
+      "enc": "A128CBC-HS256"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "source": "RFC 7515 App. A.3",
+  "description": "Decoding the A.3 ES256 JWS unverified returns its header {\"alg\":\"ES256\"} and the A.3.1 payload octets",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q"
+  },
+  "expect": {
+    "ok": true,
+    "protected": {
+      "alg": "ES256"
+    },
+    "payload_b64u": "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ"
+  }
+}

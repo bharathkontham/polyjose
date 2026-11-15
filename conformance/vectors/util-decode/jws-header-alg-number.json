@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A registered header parameter of the wrong type (alg a number, RFC 7515 §4.1.1) is InvalidHeader at ADR 0048 step 3",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOjI1Nn0.aGVsbG8.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

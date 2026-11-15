@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "The text of a flattened JWS JSON Serialization (RFC 7515 §7.2.2) is InvalidFormat: only the compact form is decoded (ADR 0069 §2)",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "{\"payload\":\"aGVsbG8\",\"protected\":\"eyJhbGciOiJIUzI1NiJ9\",\"signature\":\"c2lnbmF0dXJl\"}"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

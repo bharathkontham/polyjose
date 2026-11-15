@@ -1,0 +1,20 @@
+{
+  "source": "polyjose",
+  "description": "No typ policy runs: an explicitly typed token (typ at+jwt) that default validation refuses (RFC 8725 §3.12) decodes (ADR 0069 §2)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImF0K2p3dCIsImtpZCI6ImsxIn0.eyJzdWIiOiJhbGljZSIsImNsaWVudF9pZCI6ImMxIn0.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": true,
+    "header": {
+      "alg": "ES256",
+      "typ": "at+jwt",
+      "kid": "k1"
+    },
+    "claims": {
+      "sub": "alice",
+      "client_id": "c1"
+    }
+  }
+}

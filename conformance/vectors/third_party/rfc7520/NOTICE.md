@@ -20,6 +20,7 @@ directories listed below, are converted from:
 | `conformance/vectors/jwe/negative-structure/` | §5.1, §5.2 (the RSA1_5 and RSA-OAEP refusals); §5.6, §5.8 inputs |
 | `conformance/vectors/jwe/negative-crypto/` | §5.3–§5.7, §5.13 inputs |
 | `conformance/vectors/jwe/negative-json/` | §5.10, §5.11 inputs |
+| `conformance/vectors/util-decode/` | §4.1, §4.3, §4.4, §4.5 and §5.1, §5.3, §5.4, §5.6, §5.8 inputs (`jws-rfc7520-*`, `hdr-rfc7520-*`) |
 
 In `jws/`, every key, header, payload, signature and serialization in a
 vector is copied octet for octet from the RFC's figures; each vector's

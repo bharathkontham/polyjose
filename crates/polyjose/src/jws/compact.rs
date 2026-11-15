@@ -18,7 +18,10 @@
 //! | 6a–6c | `allowed_alg`: `crit` understood, `alg` known, `alg` allowed (ADR 0026 §2 steps 5–7) | as in the [module table](crate::jws) |
 //! | 6d–6e | `verify_with_key` over the received header encoding: key binding, then the signature (RFC 7515 §5.2 steps 5, 8; ADR 0026 §2 steps 8–9) | as in the [module table](crate::jws) |
 //!
-//! Verification is split at the key: [`precheck_compact`] runs steps 1–6c
+//! Steps 1–5 are one function, [`parse_compact`], the only compact
+//! parser: verification and [`crate::util::decode_jws_unverified`] both
+//! run it (ADR 0069 §3). Verification is split at the key:
+//! [`precheck_compact`] runs steps 1–6c
 //! once, without a key, and returns a [`CompactPrechecked`];
 //! [`finish_compact`] runs steps 6d–6e on it for one key, and may be called
 //! again with another. [`verify_compact`] is the two in sequence. The JWT
@@ -270,33 +273,71 @@ impl fmt::Debug for CompactPrechecked<'_> {
     }
 }
 
-/// Runs ADR 0026 §2 steps 1–7 on a compact JWS (RFC 7515 §5.2 steps 1–7,
-/// §7.1), in the order ADR 0048 clarifies, without a key: everything
-/// [`verify_compact`] checks before key binding. The JWT layer reads the
-/// protected header and chooses candidate keys in between (ADR 0027 §9,
-/// ADR 0029 §1), then calls [`finish_compact`] per candidate.
+/// A compact JWS that passed steps 1–5 of ADR 0048 (RFC 7515 §5.2 steps
+/// 1–4 and 6–7, §7.1), and nothing more: no `crit` understanding, no `alg`
+/// check, no key, no signature. Only [`parse_compact`] builds one.
 ///
-/// No signature is computed or checked here, and no key is touched.
+/// [`precheck_compact`] continues from it to steps 6a–6c for verification;
+/// [`crate::util::decode_jws_unverified`] stops here (ADR 0069 §3).
+pub(crate) struct ParsedCompact<'t> {
+    /// The received `BASE64URL(UTF8(JWS Protected Header))`, for the
+    /// signing input (RFC 7515 §5.2 step 8).
+    protected_b64: &'t str,
+    /// The received payload part, as it appears in the token.
+    payload_part: &'t str,
+    /// The JOSE Header, which passed the whole-header structure rules
+    /// (step 5).
+    header: JoseHeader,
+    /// The decoded JWS Signature (step 2).
+    signature: Vec<u8>,
+    /// The JWS Payload (step 4).
+    payload: PrecheckedPayload<'t>,
+}
+
+impl ParsedCompact<'_> {
+    /// The JWS Protected Header, which is the whole JOSE Header in this
+    /// serialization (RFC 7515 §7.1), and the JWS Payload as owned octets
+    /// wiped on drop (ADR 0049 §4): moved when it was base64url-decoded,
+    /// copied from the token otherwise (`b64: false`, RFC 7797 §3; a
+    /// detached payload, RFC 7515 Appendix F). The signature is dropped.
+    pub(crate) fn into_header_and_payload(self) -> (Header, Zeroizing<Vec<u8>>) {
+        let payload = match self.payload {
+            PrecheckedPayload::Decoded(decoded) => decoded,
+            PrecheckedPayload::Borrowed(octets) => Zeroizing::new(octets.to_vec()),
+        };
+        (self.header.into_union(), payload)
+    }
+}
+
+/// Runs steps 1–5 of ADR 0048 on a compact JWS (RFC 7515 §5.2, §7.1):
+/// everything verification checks before `crit` understanding, the `alg`
+/// and the key. This is the one compact parser: [`precheck_compact`] (and
+/// so every compact and JWT verification) and
+/// [`crate::util::decode_jws_unverified`] both run it (ADR 0069 §3).
+///
+/// - `max_input_len` is the step 1 limit on the serialized JWS
+///   (ADR 0026 §7).
+/// - `detached_payload` is the payload supplied separately
+///   (RFC 7515 Appendix F); the payload part must then be empty.
 ///
 /// # Errors
 ///
-/// Exactly [`verify_compact`]'s steps 1–6c, with the same codes:
+/// Exactly [`verify_compact`]'s steps 1–5, in that order:
 /// [`Error::InvalidFormat`], [`Error::InvalidBase64`],
-/// [`Error::InvalidJson`], [`Error::InvalidHeader`],
-/// [`Error::UnknownCritical`], [`Error::UnsupportedAlgorithm`],
-/// [`Error::AlgorithmNotAllowed`].
-pub(crate) fn precheck_compact<'t>(
+/// [`Error::InvalidJson`], [`Error::InvalidHeader`].
+pub(crate) fn parse_compact<'t>(
     jws: &'t str,
-    opts: &VerifyOptions<'t>,
-) -> Result<CompactPrechecked<'t>> {
+    max_input_len: usize,
+    detached_payload: Option<&'t [u8]>,
+) -> Result<ParsedCompact<'t>> {
     // Step 1 (ADR 0048; the limit is ADR 0026 §7): the serialized JWS
     // only, not a detached payload, before any parsing.
-    if jws.len() > opts.max_input_len {
+    if jws.len() > max_input_len {
         return Err(Error::InvalidFormat("compact JWS exceeds max_input_len"));
     }
     // Step 1, the shape (RFC 7515 §5.2 step 1, §7.1; Appendix F).
     let (protected_b64, payload_part, signature_b64) = split(jws)?;
-    if opts.detached_payload.is_some() && !payload_part.is_empty() {
+    if detached_payload.is_some() && !payload_part.is_empty() {
         return Err(Error::InvalidFormat(
             "compact payload part must be empty with a detached payload",
         ));
@@ -316,7 +357,7 @@ pub(crate) fn precheck_compact<'t>(
     let b64 = protected.b64 != Some(false);
     // The decoded payload may be secret: wiped on drop (ADR 0049 §4).
     // Otherwise it is the caller's octets, borrowed.
-    let payload = match opts.detached_payload {
+    let payload = match detached_payload {
         Some(detached) => PrecheckedPayload::Borrowed(detached),
         None if b64 => PrecheckedPayload::Decoded(Zeroizing::new(b64url_decode(payload_part)?)),
         None => PrecheckedPayload::Borrowed(payload_part.as_bytes()),
@@ -324,6 +365,46 @@ pub(crate) fn precheck_compact<'t>(
     // Step 5, header structure (RFC 7515 §5.2 step 4, §7.1: the protected
     // header is the whole JOSE Header).
     let header = JoseHeader::new(Some(protected), None)?;
+    Ok(ParsedCompact {
+        protected_b64,
+        payload_part,
+        header,
+        signature,
+        payload,
+    })
+}
+
+/// Runs ADR 0026 §2 steps 1–7 on a compact JWS (RFC 7515 §5.2 steps 1–7,
+/// §7.1), in the order ADR 0048 clarifies, without a key: everything
+/// [`verify_compact`] checks before key binding. The JWT layer reads the
+/// protected header and chooses candidate keys in between (ADR 0027 §9,
+/// ADR 0029 §1), then calls [`finish_compact`] per candidate.
+///
+/// Steps 1–5 are [`parse_compact`], shared with the unverified decode
+/// (ADR 0069 §3); steps 6a–6c follow here.
+///
+/// No signature is computed or checked here, and no key is touched.
+///
+/// # Errors
+///
+/// Exactly [`verify_compact`]'s steps 1–6c, with the same codes:
+/// [`Error::InvalidFormat`], [`Error::InvalidBase64`],
+/// [`Error::InvalidJson`], [`Error::InvalidHeader`],
+/// [`Error::UnknownCritical`], [`Error::UnsupportedAlgorithm`],
+/// [`Error::AlgorithmNotAllowed`].
+pub(crate) fn precheck_compact<'t>(
+    jws: &'t str,
+    opts: &VerifyOptions<'t>,
+) -> Result<CompactPrechecked<'t>> {
+    // Steps 1-5 (ADR 0048): limit, shape, base64url, header JSON and
+    // types, payload, header structure.
+    let ParsedCompact {
+        protected_b64,
+        payload_part,
+        header,
+        signature,
+        payload,
+    } = parse_compact(jws, opts.max_input_len, opts.detached_payload)?;
     // ADR 0026 §2 steps 5-7 (module table steps 6a-6c): crit understood,
     // alg known, alg allowed. No key yet.
     let alg = allowed_alg(&header, opts)?;

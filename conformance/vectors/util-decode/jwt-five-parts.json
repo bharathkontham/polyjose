@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A five-part compact JWE (RFC 7516 §7.1; the RFC 7516 A.3 JWE) is InvalidFormat for JWT decode: a nested JWT's inner claims are not read (ADR 0069 §2)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0.6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ.AxY8DCtDaGlsbGljb3RoZQ.KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY.U0m_YmjN04DJvceFICbCVQ"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

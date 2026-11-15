@@ -6,6 +6,11 @@ All notable changes to polyjose are documented in this file. The format is based
 
 ## [Unreleased]
 
+### Added
+
+- **Unverified decode utilities** (ADR 0069). `polyjose::util::decode_protected_header_unverified` reads the protected header of a compact JWS or JWE, `decode_jws_unverified` reads a compact JWS's protected header and payload, and `decode_jwt_unverified` reads a compact JWT's header and claims. None of them checks the signature, so don't trust their values until you verify the token. They take only the token: no key, options or allow-list. They return `Header`, `UnverifiedJws` and `UnverifiedJwt`; the two structs are new types, not `jws::Verified` or `jwt::VerifiedJwt`, with no conversion between them. Parsing, the 1 MiB input limit and the error codes are verification's own up to the signature (ADR 0048 steps 1–5), so `none`, an unknown `alg` and an unknown `crit` entry are returned as data, and the JWT decode runs no `typ`, time or claim-value checks. The binding surface adds `decode_protected_header_unverified`, `decode_jws_unverified` and `decode_jwt_unverified` with the records `JwsUnverified` and `JwtUnverified`, and `bindings/api-inventory.txt` lists them. The conformance vectors add the operations `util.decode_protected_header`, `util.decode_jws` and `util.decode_jwt`.
+- **Changed security stance.** polyjose used to offer no way to read a token without verifying it. It now does, and the rule is that nothing unverified looks verified: the names say `unverified`, the results are their own types, and verification is unchanged (`none`, unknown `alg` and unknown `crit` are still refused there).
+
 ## [0.2.0] - 2026-11-11
 
 RSA private keys: RSA signing, RSA-OAEP-256 decryption and RSA private-key import, in the Rust crate and in every binding. This is a minor release because, on 0.x, behaviour changes to the public API bump the minor version: inputs that 0.1 refused now work, some error codes changed, and the Rust RSA key type has a new name. No binding function, type or signature changed (`bindings/api-inventory.txt` is the same as in 0.1.2).

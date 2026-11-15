@@ -144,21 +144,7 @@ pub(crate) fn check_jwt_header(
     }
     match layer {
         Layer::Signed => {
-            // RFC 7797 §7: "JSON Web Tokens MUST NOT use "b64" with a
-            // "false" value", even when `crit` lists it (ADR 0027 §6).
-            if protected.b64 == Some(false) {
-                return Err(Error::InvalidHeader("b64"));
-            }
-            // ADR 0027 §5, §7: `cty: JWT` on a JWS would nest a JWS in a
-            // JWS (RFC 7519 §5.2), which is not supported. Any other `cty`
-            // is ignored.
-            if protected
-                .cty
-                .as_deref()
-                .is_some_and(|cty| media_type_eq(cty, JWT))
-            {
-                return Err(Error::InvalidHeader("cty"));
-            }
+            check_signed_layer_structure(protected)?;
             check_typ(protected.typ.as_deref(), p.typ_mode())
         }
         Layer::Outer => {
@@ -182,6 +168,39 @@ pub(crate) fn check_jwt_header(
             }
         }
     }
+}
+
+/// The part of J1 (ADR 0027 §9) for [`Layer::Signed`] that needs no
+/// policy, in this order:
+///
+/// 1. `b64: false` → [`Error::InvalidHeader`]: "JSON Web Tokens MUST NOT
+///    use "b64" with a "false" value" (RFC 7797 §7; ADR 0027 §6).
+/// 2. `cty` equal to `JWT` ([`media_type_eq`], RFC 7515 §4.1.10) →
+///    `InvalidHeader`: a JWS nested in a JWS (RFC 7519 §5.2), which is not
+///    supported (ADR 0027 §5, §7). Any other `cty` is ignored.
+///
+/// [`check_jwt_header`] runs it before the `typ` policy; the unverified
+/// JWT decode runs it alone (ADR 0069 §2).
+///
+/// # Errors
+///
+/// [`Error::InvalidHeader`] when either rule fails.
+pub(crate) fn check_signed_layer_structure(protected: &Header) -> Result<()> {
+    // RFC 7797 §7: "JSON Web Tokens MUST NOT use "b64" with a "false"
+    // value", even when `crit` lists it (ADR 0027 §6).
+    if protected.b64 == Some(false) {
+        return Err(Error::InvalidHeader("b64"));
+    }
+    // ADR 0027 §5, §7: `cty: JWT` on a JWS would nest a JWS in a JWS
+    // (RFC 7519 §5.2), which is not supported. Any other `cty` is ignored.
+    if protected
+        .cty
+        .as_deref()
+        .is_some_and(|cty| media_type_eq(cty, JWT))
+    {
+        return Err(Error::InvalidHeader("cty"));
+    }
+    Ok(())
 }
 
 /// The `typ` policy of ADR 0027 §5 on the `typ` of one layer.

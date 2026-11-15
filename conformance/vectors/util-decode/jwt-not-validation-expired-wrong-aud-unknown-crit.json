@@ -1,0 +1,27 @@
+{
+  "source": "polyjose",
+  "description": "Decode is not validation: a JWT with exp in 1970, an aud for another API and an unknown crit entry decodes, header and claims as data (PRD 0004 AC 7; ADR 0069 §2)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImNyaXQiOlsidXJuOmV4YW1wbGU6ZmxhZyJdLCJ1cm46ZXhhbXBsZTpmbGFnIjp0cnVlfQ.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwic3ViIjoiYWxpY2UiLCJhdWQiOiJodHRwczovL25vdC10aGlzLWFwaS5leGFtcGxlIiwiZXhwIjoxLCJuYmYiOjAsImlhdCI6MH0.ydjxSJTiMozMWZHaUrW9zawltYDrk9NXQPf_pvdqQcI"
+  },
+  "expect": {
+    "ok": true,
+    "header": {
+      "alg": "HS256",
+      "typ": "JWT",
+      "crit": [
+        "urn:example:flag"
+      ],
+      "urn:example:flag": true
+    },
+    "claims": {
+      "iss": "https://issuer.example",
+      "sub": "alice",
+      "aud": "https://not-this-api.example",
+      "exp": 1,
+      "nbf": 0,
+      "iat": 0
+    }
+  }
+}

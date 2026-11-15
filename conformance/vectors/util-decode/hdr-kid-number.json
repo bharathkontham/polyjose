@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A mistyped registered parameter, kid a number (RFC 7515 §4.1.4: a string), is InvalidHeader",
+  "operation": "util.decode_protected_header",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6N30.e30.c2ln"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

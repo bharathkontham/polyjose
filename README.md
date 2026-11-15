@@ -22,7 +22,7 @@ Each platform name links to its get-started page on [polyjose.dev](https://polyj
 ## Principles
 - **Pure Rust crypto.** No OpenSSL, `ring` or `aws-lc`; `cargo deny` enforces it ([deny.toml](https://github.com/bharathkontham/polyjose/blob/main/deny.toml)).
 - **RFC-compliant.** Covers RFCs 7515–7520, 7638, 7797, 8037, 8725, 8812 and 9864, tested against the RFCs' own test vectors.
-- **Misuse-resistant.** Verify and decrypt require an explicit algorithm allow-list, `none` is never accepted, and secrets are zeroized.
+- **Misuse-resistant.** Verify and decrypt require an explicit algorithm allow-list, `none` is never accepted, and secrets are zeroized. Reading a token without verifying it is possible only through the `_unverified` decode utilities, which return their own result types, never a verified one.
 - **One behaviour everywhere.** Every binding runs the same conformance vectors ([conformance/](https://github.com/bharathkontham/polyjose/tree/main/conformance)).
 
 ## Built on

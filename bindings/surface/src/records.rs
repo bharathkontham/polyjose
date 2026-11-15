@@ -609,6 +609,64 @@ impl fmt::Debug for JwtNestedVerified {
     }
 }
 
+// ------------------------------------------------------------------------------------------------
+// Utilities: unverified decode (ADR 0069)
+// ------------------------------------------------------------------------------------------------
+
+/// A compact JWS read without verifying it: the result of
+/// [`decode_jws_unverified`](crate::util::decode_jws_unverified) (ADR 0069 §1, §4; RFC 7515
+/// §7.1). The signature isn't checked; don't trust these values until you verify the JWS with
+/// [`jws_verify_compact`](crate::jws::jws_verify_compact).
+///
+/// A distinct record from [`JwsVerified`], with no `alg` and no `signature_index`: the `alg` is
+/// inside `protected_header`, unchecked, and may be `none` or unknown (ADR 0069 §4).
+pub struct JwsUnverified {
+    /// The JWS Protected Header, the whole JOSE Header of a compact JWS (RFC 7515 §7.1), as the
+    /// core serializes it. Unverified.
+    pub protected_header: String,
+    /// The JWS Payload (RFC 7515 §2): base64url-decoded, the payload part's octets when `b64` is
+    /// `false` (RFC 7797 §3), or empty when detached (RFC 7515 Appendix F). Unverified, and
+    /// wiped on drop like every JWS payload (ADR 0049 §4, ADR 0069 §5).
+    pub payload: SecretBytes,
+}
+
+/// Redacts the payload and prints the header's length only (ADR 0030 §7.5, ADR 0069 §5).
+impl fmt::Debug for JwsUnverified {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JwsUnverified")
+            .field("protected_header_len", &self.protected_header.len())
+            .field("payload", &self.payload)
+            .finish()
+    }
+}
+
+/// A compact signed JWT read without verifying or validating it: the result of
+/// [`decode_jwt_unverified`](crate::util::decode_jwt_unverified) (ADR 0069 §1, §4; RFC 7519
+/// §7.2). The signature isn't checked; don't trust these values until you verify the token with
+/// [`jwt_verify`](crate::jwt::jwt_verify).
+///
+/// No claim was validated: it may be expired or for another audience.
+///
+/// A distinct record from [`JwtVerified`], with no `alg`, `key_index` or `kid` (ADR 0069 §4).
+#[derive(Clone, PartialEq, Eq)]
+pub struct JwtUnverified {
+    /// The JWS Protected Header, as the core serializes it (RFC 7519 §5). Unverified.
+    pub header: String,
+    /// The JWT Claims Set as the core serializes it, registered claims first (ADR 0027 §1).
+    /// Parsed and type-checked, not validated. Unverified.
+    pub claims: String,
+}
+
+/// Prints the claims' and header's lengths only, as [`JwtVerified`] does (ADR 0049 §4).
+impl fmt::Debug for JwtUnverified {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JwtUnverified")
+            .field("header_len", &self.header.len())
+            .field("claims_len", &self.claims.len())
+            .finish()
+    }
+}
+
 /// The length of an optional JSON text, which `Debug` prints in its place.
 fn json_len(value: &Option<String>) -> Option<usize> {
     value.as_ref().map(String::len)
@@ -998,6 +1056,16 @@ mod tests {
             inner,
             outer_header: json().unwrap_or_default(),
             recipient_index: 0,
+        });
+
+        // ADR 0069 §5: the unverified records redact the same way.
+        assert_no_marker(&JwsUnverified {
+            protected_header: json().unwrap_or_default(),
+            payload: secret_bytes(),
+        });
+        assert_no_marker(&JwtUnverified {
+            header: json().unwrap_or_default(),
+            claims: format!(r#"{{"sub":"{MARKER}"}}"#),
         });
     }
 }
