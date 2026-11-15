@@ -178,7 +178,8 @@ skip_case stdin 0 'fixture skip test ran'
 fixture_append scripts/tests/fixture/skip.sh 'read -r line && echo "read stdin: $line"'
 rc=0
 (cd "$case_dir" && PATH="$scratch/bin-${case_dir##*/}:$PATH" "${BASH:-bash}" scripts/test-all.sh tooling) \
-  <<<"caller input" >"$scratch/out" 2>&1 || rc=$?
+  <<<"caller input" >"$scratch/out.raw" 2>&1 || rc=$?
+strip_times
 check "a negative test reading stdin still runs" 0 "^  $step: PASS$"
 check_absent "a negative test gets no stdin from the caller" '^read stdin:'
 
