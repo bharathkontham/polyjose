@@ -21,12 +21,13 @@ gen=$src/Polyjose.swift
 mkdir -p "$base/$src" || lib_die "could not create $base/$src"
 cp "$repo/$src"/*.swift "$base/$src/" || lib_die "could not copy $src"
 
-ops=$(inventory_count op) records=$(inventory_count record) fields=$(inventory_count field) codes=$(inventory_count code)
+ops=$(inventory_count op swift) records=$(inventory_count record swift) fields=$(inventory_count field swift) codes=$(inventory_count code)
+ifaces=$(inventory_count interface swift) methods=$(inventory_count method swift) enums=$(inventory_count enum swift) cases=$(inventory_count case swift)
 
 new_case pass
 run_check swift
 check_last_line "the Swift API matches the inventory" 0 \
-  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases)"
 
 new_case renamed-op
 edit $gen 'public func jwkToPublic(jwk: String)' 'public func jwkToPublicKey(jwk: String)'
@@ -230,7 +231,7 @@ extension JwsVerified { static func helper() {}; final private class Hidden {} }
 infix operator <~>: AdditionPrecedence'
 run_check swift
 check_last_line "declarations with modifiers but no public or open do not count" 0 \
-  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases)"
 
 # B01: an attribute whose arguments span lines, the declaration on the closing line.
 
@@ -347,7 +348,7 @@ extension Int { @available(iOS 16,
   *) func internalTwo() {} }'
 run_check swift
 check_last_line "non-public declarations after multi-line attributes do not count" 0 \
-  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases)"
 
 new_case non-public-forms
 append $src/Extra.swift 'extension JwsVerified { func helper() {}; internal var opened: Bool { false } }
@@ -356,7 +357,7 @@ private let openSesame = 1
 fileprivate struct Plain {}'
 run_check swift
 check_last_line "internal, private and fileprivate declarations, also on one line, do not count" 0 \
-  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases)"
 
 # F05: a protocol conformance is public API too. Only the generated `Sendable` ones and the three
 # printing conformances of Redaction.swift (ADR 0065) are allowed. An extension header may span
@@ -444,7 +445,7 @@ edit $src/Redaction.swift \
     private var helper: Int { 0 }'
 run_check swift
 check_last_line "the printing conformances and members on a listed record in Redaction.swift pass, also under a header over lines" 0 \
-  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases)"
 
 new_case redaction-member-other-type
 append $src/Redaction.swift 'extension JwsSigner: CustomStringConvertible {
@@ -523,6 +524,90 @@ fileprivate enum Plain3: Error { case a }
 extension Int { func internalOnly() {} }'
 run_check swift
 check_last_line "conformances of non-public types do not count" 0 \
-  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes)"
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases)"
+
+# --- Platform-key interface, error enum and host types (feature 0025 T02; ADR 0071 §5) -------------
+
+new_case renamed-method
+edit $gen '    func decryptKey(alg: String, encryptedKey: Data) throws  -> Data' '    func decrypt(alg: String, encryptedKey: Data) throws  -> Data'
+run_check swift
+check_diffs "a renamed protocol requirement fails as missing and extra" \
+  'missing from swift (in the inventory): method PlatformKey.decryptKey' \
+  'extra in swift (not in the inventory): method PlatformKey.decrypt'
+
+new_case enum-case-payload
+edit $gen '    case NotFound
+' '    case NotFound(reason: String)
+'
+run_check swift
+check "a case of the interface's error enum with a payload fails" 1 \
+  'case PlatformKeyError\.NotFound\(reason: String\) has a payload' '^check-binding-api: swift: FAIL$'
+
+new_case generated-extra-protocol
+# (The generated file ends without a newline, after a comment.)
+append $gen '
+public protocol Extra: AnyObject {}'
+run_check swift
+check_diffs "an extra generated protocol is an extra interface" 'extra in swift (not in the inventory): interface Extra'
+
+host_type='public final class AppleKey: PlatformKey, @unchecked Sendable {
+    public enum Protection { case secureEnclave, keychain }
+    public let protection: Protection = .keychain
+    public init(tag: String) {}
+    public static func delete(tag: String) {}
+    public func publicJwk() throws -> String { "" }
+    public func algorithms() throws -> [String] { [] }
+    public func sign(alg: String, signingInput: Data) throws -> Data { Data() }
+    public func agree(peerPublicKey: Data) throws -> Data { Data() }
+    public func decryptKey(alg: String, encryptedKey: Data) throws -> Data { Data() }
+    private func helper() {}
+}'
+host_list='type AppleKey
+  member Protection
+  member protection
+  member init
+  member delete
+  member publicJwk
+  member algorithms
+  member sign
+  member agree
+  member decryptKey'
+
+new_case host-type-unlisted
+append $src/AppleKey.swift "import Foundation
+$host_type"
+run_check swift
+check "an extra public Swift type that is not listed still fails" 1 \
+  'AppleKey\.swift:2: public class AppleKey is neither an operation, a record nor the error type \(nor a host type listed in scripts/check-binding-api\.d/swift\.host-types\)' \
+  '^check-binding-api: swift: FAIL$'
+
+new_case host-type-listed
+append $src/AppleKey.swift "import Foundation
+$host_type"
+append scripts/check-binding-api.d/swift.host-types "$host_list"
+run_check swift
+check_last_line "a listed host type with exactly its public members passes" 0 \
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases, 1 host types, 9 host members)"
+
+new_case host-member-unlisted
+append $src/AppleKey.swift "import Foundation
+${host_type/private func helper/public func helper}"
+append scripts/check-binding-api.d/swift.host-types "$host_list"
+run_check swift
+check_diffs "a public member of a listed host type that is not listed fails" \
+  'extra in swift (not in the inventory): hostmember AppleKey.helper'
+
+new_case host-type-missing
+append scripts/check-binding-api.d/swift.host-types "$host_list"
+run_check swift
+check "a listed host type the sources lack fails" 1 \
+  '^  missing from swift \(in the inventory\): hosttype AppleKey$' \
+  '^  missing from swift \(in the inventory\): hostmember AppleKey\.sign$' '^check-binding-api: swift: FAIL '
+
+new_case host-list-malformed
+append scripts/check-binding-api.d/swift.host-types '  member orphan'
+run_check swift
+check "a malformed host-type list fails the mode" 1 \
+  'swift\.host-types:[0-9]+: member outside a type: member orphan' '^check-binding-api: swift: FAIL$'
 
 finish

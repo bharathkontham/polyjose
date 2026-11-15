@@ -39,7 +39,7 @@ gh attestation verify <asset> --repo bharathkontham/polyjose
 
 ## 3. Pre-release checklist
 
-Before the tag (items 1–6) and before Gate 3 (item 7):
+Before the tag (items 1–6) and before Gate 3 (items 7–8):
 
 1. [ ] The candidate run (step 2 below) is green, at the release PR head, and less than about 90 days old.
 2. [ ] `scripts/fuzz.sh --seconds 600` reports no crash. `jws` and `jwe` get far fewer execs per second, so also give those two a longer budget, for example `scripts/fuzz.sh --seconds 3600 jws jwe`.
@@ -48,6 +48,7 @@ Before the tag (items 1–6) and before Gate 3 (item 7):
 5. [ ] An orchestrator short check of `publish.yml` (secrets, pins, gating, inputs, permissions). Needed only when `publish.yml` or `scripts/release/` changed since the last release.
 6. [ ] Version and changelog: `scripts/release/check-version.sh X.Y.Z --notes "$(mktemp)"` passes.
 7. [ ] The tag run is green and the draft holds every asset (step 5 below).
+8. [ ] Only when the release changes platform-key code (`PlatformKey`, `AppleKey`, `AndroidKeystoreKey`, or the core's platform-key paths): the device runbooks `platforms/swift/DEVICE-TESTS.md` and `platforms/android/DEVICE-TESTS.md` have been run on real devices for this release.
 
 ## 4. Release steps
 

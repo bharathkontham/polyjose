@@ -759,6 +759,15 @@ ADR 0042).
   crates to wipe secret scalars and signing keys.
 - **Audit status:** no public independent audit found.
 
+## Platform key services
+
+With a platform-held key (`PlatformKey`, ADR 0070), the private-key operation is performed by the
+operating system's key service, not by a crate: the Apple Security framework (with the Secure
+Enclave) on Apple platforms, and the Android Keystore (with StrongBox) on Android. They are part of
+the operating system, not dependencies of polyjose, so `scripts/check-deps.sh` does not check this
+section. polyjose has not reviewed them; [AUDITS.md](AUDITS.md#platform-key-services) names what the
+vendors publish.
+
 ## Binding frameworks
 
 The language bindings are built with these frameworks. They are not dependencies of the core

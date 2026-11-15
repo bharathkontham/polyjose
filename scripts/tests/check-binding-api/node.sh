@@ -93,7 +93,7 @@ n_codes=$(awk 'END { print NR }' "$scratch/codes")
 node_case pass
 run_check node
 check_last_line "the package's declarations match the inventory" 0 \
-  "check-binding-api: node: PASS ($(inventory_count op) operations, $(inventory_count record) records, $(inventory_count field) fields, $n_codes codes)"
+  "check-binding-api: node: PASS ($(inventory_count op node) operations, $(inventory_count record node) records, $(inventory_count field node) fields, $n_codes codes)"
 
 # --- A stale build -----------------------------------------------------------------------------------
 
@@ -119,6 +119,15 @@ run_check node
 check_diffs "one renamed binding.d.ts export fails as missing and extra" \
   'missing from node (in the inventory): op jwtVerifyWithJwks' \
   'extra in node (not in the inventory): op jwtVerifyJwks'
+
+# ADR 0071 §5: the platform-key operations are Kotlin and Swift only (`only surface kotlin swift`).
+node_case platform-key-op
+edit $pkg/binding.d.ts 'export declare function jwtVerifyWithJwks(' 'export declare function jwtDecryptNestedWithPlatformKey(): void
+export declare function jwtVerifyWithJwks('
+fresh
+run_check node
+check_diffs "a binding.d.ts export named like a Kotlin/Swift-only platform-key operation fails" \
+  'extra in node (not in the inventory): op jwtDecryptNestedWithPlatformKey'
 
 node_case renamed-field
 edit $pkg/binding.d.ts '  keyUse?:' '  keyUsage?:'

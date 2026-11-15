@@ -21,6 +21,19 @@
 #        parameter must also be a `public var` of the struct, and each `public var` a parameter;
 #      - the codes are the `case <Code>(` lines of `public enum PolyjoseError` (depth 1), in order,
 #        and the enum must have the exported `public func code() -> String` (ADR 0030 §5);
+#      - in the generated Polyjose.swift, an interface is a `public protocol <Name>` at depth 0,
+#        with the `func <name>(` requirements of its body as methods (ADR 0071 §5: a foreign
+#        interface host code implements). The `open class <Name>Impl` UniFFI generates beside each
+#        such protocol, the wrapper of a Rust-side implementation that polyjose never returns,
+#        belongs to the interface and is not reported;
+#      - in the generated Polyjose.swift, an enum is any other `public enum <Name>` at depth 0, with
+#        its `case <Name>` lines (depth 1) as cases; a case with a payload fails the mode (the
+#        error an interface throws has none, ADR 0071 §1);
+#      - a hand-written public type (any file but Polyjose.swift) listed in swift.host-types
+#        (MODE_HOST_TYPES, see scripts/check-binding-api.sh) is a `hosttype`, whatever its kind
+#        (class, struct, enum, protocol, actor), and its public or open members of depth 1 are
+#        `hostmember`s by name: `func`, `var`, `let`, `subscript`, nested types, `init` (any
+#        initializer) and, of an enum, its `case`s; an unlisted one fails as below;
 #      - a `public` member of an extension (depth 1) of any type but UniFFI's converters fails the
 #        mode: the inventory has no form for hand-written members yet, so adding one is a review
 #        decision that extends the inventory and this mode together. The one exception is the
@@ -47,7 +60,8 @@
 # (ADR 0030 §5: Swift's is PolyjoseError), whose cases are the codes. Adding a name here is a review
 # decision, like an inventory change.
 
-MODE_KINDS="op record field code"
+MODE_KINDS="op record field code interface method enum case"
+MODE_HOST_TYPES=1
 SWIFT_FRAMEWORK_PREFIX="FfiConverter"
 SWIFT_FRAMEWORK="uniffiEnsurePolyjoseFfiInitialized"
 SWIFT_ERROR="PolyjoseError"
@@ -99,6 +113,7 @@ AWK
   cat >"$mode_scratch/swift.awk" <<'AWK'
 BEGIN {
   n = split(framework, t, " "); for (i = 1; i <= n; i++) plumbing[t[i]] = 1
+  n = split(host_types, t, " "); for (i = 1; i <= n; i++) host[t[i]] = 1
   n = split(gen_conformances, t, " "); for (i = 1; i <= n; i++) gen_conf[t[i]] = 1
   n = split(redacted_records, t, " "); for (i = 1; i <= n; i++) redacted[t[i]] = 1
   n = split(redaction_members, t, " ")
@@ -195,6 +210,27 @@ function extension_header(h, at,    t, list, n, i, p) {
     print "error " at ": conformance " block_name ": " p " is not allowed (only " gen_conformances " in " gen_file ", and " redaction_protocols " on " redacted_records " in " redaction_file ", ADR 0065)"
   }
 }
+# A public or open member of a listed host type (depth 1), by name; an enum's cases, which are as
+# public as the enum, too.
+function host_member(text,    m, list, n, i) {
+  if (host_is_enum && text ~ /^(indirect[ \t]+)?case[ \t]/) {
+    m = text; sub(/^(indirect[ \t]+)?case[ \t]+/, "", m); sub(/[{;].*$/, "", m)
+    n = split(m, list, ",")
+    for (i = 1; i <= n; i++) { m = trim(list[i]); sub(/[^A-Za-z0-9_].*/, "", m); if (m != "") print "hostmember " block_name "." m }
+    return
+  }
+  if (text !~ /^(public|open)[ \t]/) return
+  m = text; sub(/^(public|open)[ \t]+/, "", m)
+  while (match(m, /^(static|class|final|override|convenience|required|nonisolated|mutating|nonmutating|dynamic|lazy|weak|unowned|indirect|optional|distributed)([ \t]*\([^()]*\))?[ \t]+/)) m = substr(m, RLENGTH + 1)
+  if (m ~ /^init[ \t]*[?!]?[ \t]*[(<]/) { print "hostmember " block_name ".init"; return }
+  if (m ~ /^subscript[ \t]*[(<]/) { print "hostmember " block_name ".subscript"; return }
+  if (m ~ /^(func|var|let|struct|class|enum|protocol|actor|typealias)[ \t]/) {
+    sub(/^[a-z]+[ \t]+/, "", m); sub(/[^A-Za-z0-9_].*/, "", m)
+    if (m != "") print "hostmember " block_name "." m
+    return
+  }
+  print "error " where() ": public member of " block_name " this mode cannot read: " text
+}
 # One piece of a line: the text up to and including its first `{`, `}` or `;`, or the rest of the
 # line (see the main rule below).
 function piece(line) {
@@ -221,28 +257,51 @@ function piece(line) {
   if (depth == 0 && decl ~ /^(public|open)[ \t]/) {
     access = decl; sub(/[ \t].*/, "", access)
     rest = decl; sub(/^(public|open)[ \t]+/, "", rest)
+    # Modifiers after the access keyword (`public final class X` is a class X).
+    while (match(rest, /^(final|indirect|nonisolated|distributed)([ \t]*\([^()]*\))?[ \t]+/)) rest = substr(rest, RLENGTH + 1)
     kind = rest; sub(/[ \t].*/, "", kind)
     name = rest; sub(/^[a-z]+[ \t]+/, "", name); sub(/[^A-Za-z0-9_].*/, "", name)
     framework_item = (index(name, prefix) == 1 || (name in plumbing))
-    if (kind == "func") {
+    generated = (file() == gen_file)
+    new_block = ""
+    if (!generated && kind != "func" && kind != "extension" && (name in host)) {
+      print "hosttype " name; new_block = "host"; host_is_enum = (kind == "enum")
+    } else if (kind == "func") {
       if (!framework_item) print "op " name
     } else if (kind == "struct") {
       if (!framework_item) { print "record " name; records[name] = 1 }
     } else if (kind == "enum" && name == error_type) {
       seen_error = 1
+    } else if (generated && kind == "protocol" && !framework_item) {
+      print "interface " name; protocols[name] = 1; new_block = "protocol"
+    } else if (generated && kind == "enum" && !framework_item) {
+      print "enum " name; new_block = "enum"
+    } else if (generated && kind == "class" && name ~ /.Impl$/ && (substr(name, 1, length(name) - 4) in protocols)) {
+      new_block = "companion"
     } else if (!framework_item) {
-      print "error " where() ": " access " " kind " " name " is neither an operation, a record nor the error type"
+      print "error " where() ": " access " " kind " " name " is neither an operation, a record nor the error type" (generated ? "" : " (nor a host type listed in scripts/check-binding-api.d/swift.host-types)")
     }
   }
   if (depth == 0) {
     block_kind = ""; block_name = ""; redaction_ext = 0
-    if (decl ~ /^public[ \t]+struct[ \t]/ || decl ~ /^public[ \t]+enum[ \t]/) { block_kind = "type"; block_name = name }
+    if (new_block != "" && decl ~ /^(public|open)[ \t]/) { block_kind = new_block; block_name = name }
+    else if (decl ~ /^public[ \t]+struct[ \t]/ || decl ~ /^public[ \t]+enum[ \t]/) { block_kind = "type"; block_name = name }
+    new_block = ""
     if (decl ~ /^(public[ \t]+)?extension[ \t]/) {
       if (decl ~ /\{$/) extension_header(decl, where())
       else { header_open = 1; header = decl; header_at = where() }
     }
   }
   if (depth == 1 && block_name != "") {
+    if (block_kind == "protocol" && text ~ /^func[ \t]+[A-Za-z_]/) {
+      m = text; sub(/^func[ \t]+/, "", m); sub(/[^A-Za-z0-9_].*/, "", m); print "method " block_name "." m
+    }
+    if (block_kind == "enum" && text ~ /^case[ \t]+[A-Za-z0-9_]+/) {
+      c = text; sub(/^case[ \t]+/, "", c)
+      if (c ~ /^[A-Za-z0-9_]+[ \t]*$/) print "case " block_name "." c
+      else print "error " where() ": case " block_name "." c " has a payload or a value, which the inventory cannot express (ADR 0071 §1)"
+    }
+    if (block_kind == "host") host_member(text)
     if (block_kind == "type" && block_name == error_type && text ~ /^case[ \t]+[A-Za-z0-9_]+/) {
       code = text; sub(/^case[ \t]+/, "", code); sub(/[^A-Za-z0-9_].*/, "", code); print "code " code
     }
@@ -299,6 +358,7 @@ END {
 }
 AWK
   awk -v framework="$SWIFT_FRAMEWORK" -v prefix="$SWIFT_FRAMEWORK_PREFIX" -v error_type="$SWIFT_ERROR" \
+    -v host_types="$(sed -n 's/^hosttype //p' "$host_types" | tr '\n' ' ')" \
     -v gen_file="$SWIFT_GENERATED_FILE" -v gen_conformances="$SWIFT_GENERATED_CONFORMANCES" \
     -v redaction_file="$SWIFT_REDACTION_FILE" -v redacted_records="$SWIFT_REDACTED_RECORDS" \
     -v redaction_members="$SWIFT_REDACTION_MEMBERS" \

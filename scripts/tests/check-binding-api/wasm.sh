@@ -32,7 +32,7 @@ for f in api types normalize backend error-codes; do
   echo "// \$f" >"\$src/\$f.js"; echo "export {};" >"\$src/\$f.d.ts"
   cp "\$src/\$f.js" "\$src/\$f.d.ts" "\$pkg/facade/"
 done
-awk '\$1 == "op" { printf "export function %s(): void;\n", \$2 }' "\$here/bindings/api-inventory.txt" >"\$pkg/polyjose_wasm.d.ts"
+awk '\$1 == "op" && \$3 != "only" { printf "export function %s(): void;\n", \$2 }' "\$here/bindings/api-inventory.txt" >"\$pkg/polyjose_wasm.d.ts"
 echo "export function initSync(m: unknown): void;" >>"\$pkg/polyjose_wasm.d.ts"
 echo "export default function __wbg_init(): Promise<void>;" >>"\$pkg/polyjose_wasm.d.ts"
 ${3:-}
@@ -90,6 +90,12 @@ check_diffs "a glue without an inventory operation fails as missing" 'missing fr
 new_stub_case extra-op 0 'echo "export function jwkPeek(): void;" >>"$pkg/polyjose_wasm.d.ts"'
 run_check wasm
 check_diffs "a glue with an extra function fails as extra" 'extra in wasm (not in the inventory): op jwkPeek'
+
+# ADR 0071 §5: the platform-key operations are Kotlin and Swift only (`only surface kotlin swift`).
+new_stub_case platform-key-op 0 'echo "export function jweDecryptCompactWithPlatformKey(): void;" >>"$pkg/polyjose_wasm.d.ts"'
+run_check wasm
+check_diffs "a glue function named like a Kotlin/Swift-only platform-key operation fails" \
+  'extra in wasm (not in the inventory): op jweDecryptCompactWithPlatformKey'
 
 new_stub_case facade-modified 0 'echo "// tampered" >>"$pkg/facade/api.js"'
 run_check wasm

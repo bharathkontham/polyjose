@@ -25,7 +25,10 @@
 //! - [`jws`]: `jws_sign_*`, `jws_verify_*` (RFC 7515);
 //! - [`jwe`]: `jwe_encrypt_*`, `jwe_decrypt_*` (RFC 7516, RFC 7518);
 //! - [`jwt`]: `jwt_sign`, `jwt_verify*`, `jwt_encrypt_nested`, `jwt_decrypt_nested*`
-//!   (RFC 7519, RFC 8725, RFC 9068).
+//!   (RFC 7519, RFC 8725, RFC 9068);
+//! - [`platform_key`]: the [`PlatformKey`](platform_key::PlatformKey) trait that the six
+//!   `…_with_platform_key` operations of [`jws`], [`jwe`] and [`jwt`] take, for a key the
+//!   platform holds (ADR 0071 §5; on Kotlin and Swift only).
 //!
 //! The options and results are in [`records`]. Keys, headers and claims are JSON text, parsed and
 //! written by the core's own I-JSON code (no serde, ADR 0016). Algorithm, curve, hash and format
@@ -60,6 +63,7 @@ pub mod jwk;
 pub mod jws;
 pub mod jwt;
 pub mod keys;
+pub mod platform_key;
 pub mod records;
 pub mod secret;
 pub mod util;
