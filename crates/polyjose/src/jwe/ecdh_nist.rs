@@ -312,13 +312,13 @@ mod tests {
             match crv {
                 EcCurve::P256 => SecretKey::<p256::NistP256>::from_slice(&d)
                     .ok()
-                    .map(RecipientKey::P256Secret),
+                    .map(|k| RecipientKey::P256Secret(Box::new(k))),
                 EcCurve::P384 => SecretKey::<p384::NistP384>::from_slice(&d)
                     .ok()
-                    .map(RecipientKey::P384Secret),
+                    .map(|k| RecipientKey::P384Secret(Box::new(k))),
                 EcCurve::P521 => SecretKey::<p521::NistP521>::from_slice(&d)
                     .ok()
-                    .map(RecipientKey::P521Secret),
+                    .map(|k| RecipientKey::P521Secret(Box::new(k))),
                 EcCurve::Secp256k1 => None,
             }
         }
