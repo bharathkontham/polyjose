@@ -1341,7 +1341,7 @@ mod tests {
             let Ok(RecipientKey::X25519Secret(secret)) = bound else {
                 panic!("Bob's private key did not bind for ECDH-ES decrypt");
             };
-            assert_eq!(PublicKey::from(&secret).to_bytes(), hex32(BOB_PUBLIC));
+            assert_eq!(PublicKey::from(&*secret).to_bytes(), hex32(BOB_PUBLIC));
             assert_eq!(
                 jwk(ALICE_PRIVATE).err(),
                 Some(Error::InvalidKey(X25519_PRIVATE_MISMATCH))
