@@ -6,9 +6,9 @@ All notable changes to polyjose are documented in this file. The format is based
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-11-15
+## [0.3.0] - 2026-11-16
 
-Unverified decode utilities, and prebuilt Apple binaries for Apple silicon only. This is a minor release because, on 0.x, a breaking change bumps the minor version: every binding adds three functions and two types, and the Node.js, JVM and Swift packages no longer ship x86_64 macOS (and iOS Simulator) binaries. Nothing else in the public API changed, and verification and decryption behave as in 0.2.0.
+Unverified decode utilities, and prebuilt Apple binaries for Apple silicon only. This is a minor release because, on 0.x, a breaking change bumps the minor version: every binding adds three functions and two types, and the Node.js, JVM and Swift packages no longer ship x86_64 macOS (and iOS Simulator) binaries. Nothing else in the public API changed, and verification and decryption return the same results as in 0.2.0.
 
 ### Added
 
@@ -26,9 +26,9 @@ Every prebuilt Apple binary is now arm64 (Apple silicon) only (ADR 0073). The Ru
 - **JVM: no `darwin-x86-64` native** (ADR 0073 §2). `dev.polyjose:polyjose-jvm` carries four host natives, and its only macOS native is `darwin-aarch64`. An x86_64 JVM on macOS (an Intel Mac, or an x64 JDK under Rosetta 2) has no native in the jar. Stay on 0.2.x.
 - **Swift: no x86_64 in the macOS and iOS Simulator libraries** (ADR 0073 §2). The XCFramework's libraries are now `macos-arm64` and `ios-arm64-simulator`, in place of `macos-arm64_x86_64` and `ios-arm64_x86_64-simulator`. A build that includes x86_64 (a universal macOS app, `swift build --arch x86_64`, or a generic `iOS Simulator` destination) fails to link with `Undefined symbols for architecture x86_64` (measured with Xcode 27.2). Set `EXCLUDED_ARCHS = x86_64` for macOS and `EXCLUDED_ARCHS[sdk=iphonesimulator*] = x86_64` for the iOS Simulator in your app target's build settings, or stay on 0.2.x. `rust-toolchain.toml` no longer installs the two x86_64 Apple targets.
 
-### Security
+### Fixed
 
-- **Known residue in `@polyjose/wasm`:** in the release build, nested-JWT decryption with `A128KW` (`jwtDecryptNested`, `jwtDecryptNestedWithJwks`) leaves six stale 8-byte fragments of the key-encryption key in WebAssembly linear memory after the call. They come from the key schedule of `aes` 0.9.4, which doesn't wipe its stack frame; a code-layout change in this release made them visible to polyjose's memory scan, which now records them as known. No newer `aes` release fixes this yet. The fix belongs upstream, and polyjose will take it when one ships.
+- **JWE decryption no longer leaves copies of EC (P-256, P-384, P-521) or X25519 recipient private keys in memory** ([#31](https://github.com/bharathkontham/polyjose/issues/31)). The internal recipient key type is now boxed, so moving it copies no key bytes. The WASM memory tests found the copies, and they now also scan EC keys in their in-memory forms. In the release build of `@polyjose/wasm` no fragment of the recipient key remains. A debug build still shows one 8-byte fragment of an X25519 key, from `x25519-dalek`'s own Diffie-Hellman stack frames. The same change also removes the stray fragments of the A128KW key-encryption key that nested-JWT decryption (`jwtDecryptNested`, `jwtDecryptNestedWithJwks`) used to leave in the release build.
 
 ### API by platform
 
