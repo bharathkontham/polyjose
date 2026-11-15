@@ -15,7 +15,7 @@ src=bindings/surface/src
 new_case pass
 run_check surface
 check_last_line "the surface matches the inventory" 0 \
-  'check-binding-api: surface: PASS (32 operations, 13 records, 74 fields)'
+  'check-binding-api: surface: PASS (35 operations, 15 records, 78 fields)'
 
 # --- Operations --------------------------------------------------------------------------------------
 
