@@ -1,6 +1,6 @@
 /**
  * The napi-rs backend of `@polyjose/node` (ADR 0031 §1-§2, `bindings/js/BACKEND.md`; packaging as
- * superseded by the feature 0017 ADR: one package that ships the addon of all eight targets).
+ * superseded by ADR 0066: one package that ships the addon of all seven targets, ADR 0073 §2).
  *
  * The native addon `polyjose.<platform>.node` already is the backend contract: one function per
  * ADR 0030 §4 operation, camelCase, in the ADR's argument order, rejecting with an `Error` whose
@@ -23,7 +23,7 @@
  *      by name, pointing at `@polyjose/wasm`, which runs everywhere.
  *   2. `addon-sha256.json`, in the package directory, maps each shipped platform to its addon's
  *      SHA-256 (FIPS 180-4). It is generated, never hand-edited: `scripts/addon-hashes.sh`, run by
- *      `scripts/build.sh` for a local build and by `scripts/pack-main.sh` over the eight addons the
+ *      `scripts/build.sh` for a local build and by `scripts/pack-main.sh` over the seven addons the
  *      package ships. No map, a malformed one, or no entry for this host refuses the load: nothing
  *      is trusted by default.
  *   3. It reads `polyjose.<platform>.node` from the package directory once, hashes those bytes with
@@ -114,11 +114,12 @@ const PINS = "addon-sha256.json";
 const REFUSED = "ERR_POLYJOSE_ADDON_REFUSED";
 
 /**
- * The eight platforms whose addon this package ships (ADR 0031 §2's targets): the only keys a map
- * may have. `test/loader.test.ts` checks them against package.json's `napi.targets` and `files`.
+ * The seven platforms whose addon this package ships (ADR 0031 §2's targets as amended by ADR 0073
+ * §2: macOS on Apple silicon only): the only keys a map may have. Any other detected platform, an
+ * Intel Mac's included, gets the refusal of step 1. `test/loader.test.ts` checks them against
+ * package.json's `napi.targets` and `files`.
  */
 export const PLATFORMS = [
-  "darwin-x64",
   "darwin-arm64",
   "linux-x64-gnu",
   "linux-arm64-gnu",
@@ -140,9 +141,10 @@ function refuse(reason: string): never {
 
 /**
  * Step 1: this host's platform name, napi-rs's (`napi build --platform` names the addon after it):
- * `darwin-x64|arm64`, `win32-x64|arm64-msvc`, `linux-x64|arm64-gnu|musl`. Any other platform or
- * architecture is `<platform>-<arch>`, which `PLATFORMS` does not list. On Linux it reads
- * /usr/bin/ldd and may take a process report (`isMusl`); it refuses when it cannot tell the libc.
+ * `darwin-<arch>`, `win32-<arch>-msvc`, `linux-<arch>-gnu|musl` for x64 and arm64. Any other
+ * platform or architecture is `<platform>-<arch>`. The loader refuses a name that `PLATFORMS` does
+ * not list. On Linux it reads /usr/bin/ldd and may take a process report (`isMusl`); it refuses
+ * when it cannot tell the libc.
  */
 export function detectPlatform(host: PlatformHost, fs: TextReader): string {
   const { platform, arch } = host;

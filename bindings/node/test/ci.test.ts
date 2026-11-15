@@ -7,8 +7,8 @@
 //     registry upload and no OIDC (`id-token`), and does not depend on PR or event context;
 //   - every action is pinned to a full commit SHA with its release tag (ci.yml's convention,
 //     ADR 0037 §1);
-//   - its prebuild matrix is exactly the eight napi targets of package.json (ADR 0031 §2), each
-//     built by scripts/ci-build.sh and its addon uploaded with a stable artifact name (packed into
+//   - its prebuild matrix is exactly the seven napi targets of package.json (ADR 0031 §2, ADR 0073
+//     §2), each built by scripts/ci-build.sh and its addon uploaded with a stable artifact name (packed into
 //     the one @polyjose/node tarball by scripts/pack-main.sh, feature 0017), plus the Node 22, 24
 //     and 26 runs and the parity job (ADR 0034 §5);
 //   - scripts/ci-build.sh and scripts/pack-main.sh never publish (Gate 3, ADR 0011);
@@ -73,7 +73,7 @@ const manylinuxImages: Readonly<Record<string, string>> = {
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
-/** package.json `napi.targets`: the eight Rust targets of ADR 0031 §2. */
+/** package.json `napi.targets`: the seven Rust targets of ADR 0031 §2 as amended by ADR 0073 §2. */
 function napiTargets(): string[] {
   const pkg: unknown = JSON.parse(read(path.join(pkgDir, "package.json")));
   assert.ok(isRecord(pkg) && isRecord(pkg["napi"]), "package.json has a napi section");
@@ -307,7 +307,7 @@ test("every action in binding-node.yml is pinned to a full commit SHA with its r
   }
 });
 
-test("binding-node.yml builds the eight napi targets with ci-build.sh and uploads stable artifacts", () => {
+test("binding-node.yml builds the seven napi targets with ci-build.sh and uploads stable artifacts", () => {
   const { src, lines } = workflow();
   const prebuild = jobBlock(lines, "prebuild");
   const include = prebuild.find((l) => l.text === "include:");
@@ -756,7 +756,10 @@ test("the README points to the docs page that states the glibc floor (F04)", () 
   // package page (owner, 2026-11-09: READMEs are for using the package), whose own test
   // (polyjose-docs tests/data/reference.test.mjs) checks they are stated there.
   const readme = read(path.join(pkgDir, "README.md")).replace(/\s+/g, " ");
-  assert.ok(readme.includes("Prebuilt for macOS, Linux (glibc and musl) and Windows"), "the platform line");
+  assert.ok(
+    readme.includes("Prebuilt for macOS on Apple silicon (arm64), Linux (glibc and musl, x64 and arm64) and Windows (x64 and arm64)"),
+    "the platform line (macOS is arm64 only, ADR 0073 §2)",
+  );
   assert.ok(readme.includes("https://polyjose.dev/reference/node/"), "the link to platform support");
   assert.ok(!readme.includes("Linux glibc floor"), "the floor table is on the docs site, not here");
 });

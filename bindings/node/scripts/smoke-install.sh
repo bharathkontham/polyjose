@@ -3,7 +3,7 @@
 # `node`): installs that one tarball into a temporary directory, offline and hermetic, then loads
 # @polyjose/node by name twice, as ES modules (`import`) and as CommonJS (`require`, require(esm),
 # Node >= 22.12, ADR 0031 §3), and round-trips a compact ES256 JWS each time (RFC 7515 §7.1,
-# RFC 7518 §3.4). binding-node.yml's smoke job runs it on each of the eight targets over the
+# RFC 7518 §3.4). binding-node.yml's smoke job runs it on each of the seven targets over the
 # release tarball; locally it runs over pack.sh's dist/npm/ tarball on the Mac.
 #
 # Usage: scripts/smoke-install.sh <polyjose-node-<version>.tgz> [<platform>]

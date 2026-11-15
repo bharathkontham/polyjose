@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Packs @polyjose/node, polyjose's one npm package for Node.js, into <out-dir> with the given
 # prebuilt addons inside it and an addon-sha256.json that pins exactly those addons (feature 0017;
-# feature 0007 F07; ADR 0031 §2 and §4 as superseded by ADR 0066, ADR 0020 §4, ADR 0011). Shared
-# by scripts/pack.sh (the two darwin addons a Mac builds) and by .github/workflows/binding-node.yml's
-# pack-main job (the eight addons of the prebuild jobs, --all-platforms: the release package), so
-# the local and the release package are packed the same way.
+# feature 0007 F07; ADR 0031 §2 and §4 as superseded by ADR 0066, ADR 0020 §4, ADR 0011, ADR 0073
+# §2). Shared by scripts/pack.sh (the darwin-arm64 addon an Apple-silicon Mac builds) and by
+# .github/workflows/binding-node.yml's pack-main job (the seven addons of the prebuild jobs,
+# --all-platforms: the release package), so the local and the release package are packed the same
+# way.
 #
 # Usage: scripts/pack-main.sh [--all-platforms] <out-dir> <polyjose.<platform>.node>...
 #   --all-platforms  require an addon for every polyjose.<platform>.node that package.json
-#                    `files` lists (the eight shipped targets)
+#                    `files` lists (the seven shipped targets)
 #
 # The package's JavaScript must already be built (scripts/build.sh: facade/, index.js, backend.js
 # and their declarations). Steps:
@@ -62,7 +63,6 @@ print(v)' "$@"
 # is scripts/ci-build.sh's, package.json napi.targets and the addons of package.json files.
 triple_of() {
   case $1 in
-    darwin-x64) echo x86_64-apple-darwin ;;
     darwin-arm64) echo aarch64-apple-darwin ;;
     linux-x64-gnu) echo x86_64-unknown-linux-gnu ;;
     linux-arm64-gnu) echo aarch64-unknown-linux-gnu ;;

@@ -76,9 +76,8 @@ const thisFile = url.fileURLToPath((import.meta as unknown as { url: string }).u
 /** bindings/node: this file is bindings/node/dist/loader.test.js. */
 const pkgDir = path.resolve(path.dirname(thisFile), "..");
 
-/** The eight prebuilds polyjose ships inside @polyjose/node (ADR 0031 §2, 0017): Rust target → platform. */
+/** The seven prebuilds polyjose ships inside @polyjose/node (ADR 0031 §2, 0066, 0073 §2): Rust target → platform. */
 const SHIPPED: Readonly<Record<string, string>> = {
-  "x86_64-apple-darwin": "darwin-x64",
   "aarch64-apple-darwin": "darwin-arm64",
   "x86_64-unknown-linux-gnu": "linux-x64-gnu",
   "aarch64-unknown-linux-gnu": "linux-arm64-gnu",
@@ -131,7 +130,7 @@ test("no generated napi loader is built or shipped: package.json files lists no 
   assert.ok(!pkg.files.some((f) => /binding\./.test(f)), "files lists no binding.*");
 });
 
-test("PLATFORMS is the eight shipped platforms of package.json's napi.targets", () => {
+test("PLATFORMS is the seven shipped platforms of package.json's napi.targets", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as {
     napi: { targets: string[] };
     files: string[];
@@ -204,9 +203,8 @@ function refusal(fn: () => unknown): string {
   assert.fail("expected a refusal");
 }
 
-test("detectPlatform: darwin and Windows msvc, x64 and arm64", () => {
+test("detectPlatform: darwin arm64 and Windows msvc, x64 and arm64", () => {
   for (const [platform, arch, want] of [
-    ["darwin", "x64", "darwin-x64"],
     ["darwin", "arm64", "darwin-arm64"],
     ["win32", "x64", "win32-x64-msvc"],
     ["win32", "arm64", "win32-arm64-msvc"],
@@ -538,7 +536,7 @@ test("F07: build.sh pinned exactly the host addon's SHA-256 in addon-sha256.json
 
 test("F07: no addon-sha256.json, one without this platform, or a malformed one: nothing loads", () => {
   const pins = JSON.parse(fs.readFileSync(path.join(pkgDir, PINS), "utf8")) as Record<string, string>;
-  const other = hostPlatform === "darwin-x64" ? "darwin-arm64" : "darwin-x64";
+  const other = PLATFORMS.find((p) => p !== hostPlatform) ?? "?";
   const cases: [string, string | null, RegExp][] = [
     ["no map", null, /addon-sha256\.json is missing/],
     ["another platform only", JSON.stringify({ [other]: "0".repeat(64) }), new RegExp(`no pinned SHA-256 for ${hostPlatform}`)],
@@ -574,6 +572,29 @@ test("an unsupported platform is refused by name, pointing at @polyjose/wasm", (
     const outcome = importInChild(site.pkg, {}, preload);
     refused(outcome, /freebsd-/, "freebsd");
     assert.match(outcome.error ?? "", /@polyjose\/wasm/, "names the WASM package");
+    for (const p of PLATFORMS) assert.ok((outcome.error ?? "").includes(p), `lists ${p}`);
+  });
+});
+
+// ADR 0073 §2: macOS addons are Apple silicon only. An Intel Mac (or an x64 Node under Rosetta 2)
+// is named darwin-x64 and gets the same refusal as any other unshipped platform (ADR 0066 §2), with
+// no Intel-specific branch; darwin-arm64 stays a shipped platform.
+test("an Intel Mac (darwin x64) is refused by name, pointing at @polyjose/wasm; darwin-arm64 is shipped", () => {
+  const intel = fakeHost("darwin", "x64", null);
+  assert.equal(detectPlatform(intel.host, intel.fs), "darwin-x64");
+  assert.deepEqual(intel.reads, [], "no libc probe off Linux");
+  assert.ok(!PLATFORMS.includes("darwin-x64" as never), "darwin-x64 is not shipped");
+  assert.ok(PLATFORMS.includes("darwin-arm64"), "darwin-arm64 is shipped");
+  withSite({ addon: true }, (site) => {
+    const preload = path.join(site.root, "fake-intel-mac.mjs");
+    fs.writeFileSync(
+      preload,
+      'Object.defineProperty(process, "platform", { value: "darwin" });\n' +
+        'Object.defineProperty(process, "arch", { value: "x64" });\n',
+    );
+    const outcome = importInChild(site.pkg, {}, preload);
+    refused(outcome, /there is no native addon for darwin-x64 /, "darwin-x64");
+    assert.match(outcome.error ?? "", /use @polyjose\/wasm/, "names the WASM package");
     for (const p of PLATFORMS) assert.ok((outcome.error ?? "").includes(p), `lists ${p}`);
   });
 });

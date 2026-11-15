@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Builds and tests one @polyjose/node prebuild (feature 0007 T05, feature 0017; ADR 0031 §2,
-# ADR 0034 §2, ADR 0037 §1). .github/workflows/binding-node.yml runs it once per napi target on a native runner;
+# ADR 0034 §2, ADR 0037 §1, ADR 0073 §2). .github/workflows/binding-node.yml runs it once per napi target on a native runner;
 # locally it runs for the host (aarch64-apple-darwin on the owner's Mac).
 #
 # Usage: scripts/ci-build.sh <target> [<label>]
 #   target  a Rust target of package.json `napi.targets` (the table below). It must be this host's
 #           platform: the suite loads the addon it builds, so a cross-built addon cannot be tested
-#           here (an x86_64-apple-darwin addon does not load on an Apple-silicon Mac without
-#           Rosetta).
+#           here.
 #   label   the results-file suffix (default: <target>), a CI matrix label of ADR 0034 §2: the
 #           file is target/conformance/node-<label>.json and its `runner` stays `node`. The
 #           Node-version runs pass x86_64-unknown-linux-gnu-node<N>, so each writes its own file.
@@ -30,7 +29,7 @@
 #      for the two *-unknown-linux-gnu targets that it requires no GLIBC_ symbol version above the
 #      floor, 2.28 (scripts/glibc-floor.sh; review-code.md SF-2);
 #   4. leaves the tested addon, polyjose.<platform>.node, in bindings/node: binding-node.yml uploads
-#      it as artifact addon-<target>, and its pack-main job packs all eight into the one
+#      it as artifact addon-<target>, and its pack-main job packs all seven into the one
 #      @polyjose/node tarball (scripts/pack-main.sh). Since feature 0017 there is no platform
 #      package to pack here.
 #
@@ -53,7 +52,6 @@ cargo metadata --locked --format-version 1 >/dev/null
 # <Rust target>) platform=<napi --platform suffix>. test/ci.test.ts checks that this table is
 # exactly package.json napi.targets, the addons package.json files lists, and scripts/pack-main.sh's.
 case $target in
-  x86_64-apple-darwin) platform=darwin-x64 ;;
   aarch64-apple-darwin) platform=darwin-arm64 ;;
   x86_64-unknown-linux-gnu) platform=linux-x64-gnu ;;
   aarch64-unknown-linux-gnu) platform=linux-arm64-gnu ;;
