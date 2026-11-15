@@ -1,4 +1,5 @@
-//! base64url (RFC 4648 §5, no padding) helpers used throughout JOSE.
+//! base64url (RFC 4648 §5, no padding) helpers used throughout JOSE, and the
+//! unverified decode utilities (ADR 0069, [below](#unverified-decode)).
 //!
 //! JOSE serializes every binary value as "Base64url Encoding": the URL- and
 //! filename-safe alphabet of RFC 4648 §5 "with all trailing '=' characters
@@ -30,8 +31,122 @@
 //! public parameter, not a second copy, so private-key PEM bodies get the
 //! same constant-time treatment. JOSE values themselves are always
 //! base64url.
+//!
+//! # Unverified decode
+//!
+//! This doesn't check the signature: anyone can write these values, so
+//! don't use them for authorization or trust decisions until you verify
+//! the token.
+//!
+//! [`decode_protected_header_unverified`], [`decode_jws_unverified`] and
+//! [`decode_jwt_unverified`] (ADR 0069) read a compact token's protected
+//! header, a compact JWS's payload, or a compact JWT's claims, without
+//! verifying anything. Verify the token with [`jwt::verify`] or
+//! [`jws::verify_compact`].
+//!
+//! - `kid`, `jku`, `x5u` (RFC 8725 §3.10): sanitise a `kid` before using
+//!   it in a lookup, and take keys from your own configuration, not from a
+//!   `jku` or `x5u` URL in the token.
+//! - `iss` (RFC 8725 §3.8): if you read `iss` to choose an issuer's key
+//!   set, verify with that issuer required ([`Policy::issuer`]), so the
+//!   keys are bound to the issuer the verified token names.
+//! - Choosing a key by `kid` needs no peek: pass the issuer's [`JwkSet`]
+//!   as [`Keys::Set`], and verification selects candidates by `kid`
+//!   (ADR 0029).
+//!
+//! What they check is exactly what verification checks before anything
+//! cryptographic (ADR 0069 §2), with the same error codes, except a JSON
+//! serialization, which the JWS and JWT decodes always report as
+//! `InvalidFormat`. The same token gives the same result on every
+//! platform:
+//!
+//! | utility | checks | skips |
+//! |---|---|---|
+//! | [`decode_protected_header_unverified`] | 1 MiB input limit; 3 parts (JWS, RFC 7515 §7.1) or 5 (JWE, RFC 7516 §7.1); the first part's strict base64url, I-JSON and parameter types ([`Header::from_json`]) | every other part |
+//! | [`decode_jws_unverified`] | steps 1–5 of ADR 0048, the code [`jws::verify_compact`] runs ([`crate::jws`] module table) | steps 6a–6e: `crit` understood, `alg` known, `alg` allowed, key binding, signature |
+//! | [`decode_jwt_unverified`] | as [`decode_jws_unverified`], then `b64: false` and `cty: JWT` refused (RFC 7797 §7; ADR 0027 §9 J1), then the Claims Set parsed ([`Claims::from_json`], RFC 7519 §7.2 step 10) | the `typ` policy, `exp`, `nbf`, `iat`, `iss`, `sub`, `aud`; there is no clock |
+//!
+//! `alg: none`, an unknown `alg` and an unknown `crit` entry are returned
+//! as data (ADR 0007: `none` is parsed for diagnostics, never verifiable).
+//! Verification still refuses them (RFC 7515 §4.1.11; RFC 8725 §3.1–§3.2).
+//!
+//! The limits are fixed: the 1 MiB input limit of ADR 0026 §7
+//! ([`VerifyOptions::DEFAULT_MAX_INPUT_LEN`]) and the default JSON limits
+//! ([`json::Limits::DEFAULT`](crate::json::Limits::DEFAULT)). No error
+//! message contains any part of the input.
+//!
+//! The results are their own types, [`UnverifiedJws`] and
+//! [`UnverifiedJwt`]: they have no top-level `alg`, and no conversion to or
+//! from [`jws::Verified`] or [`VerifiedJwt`](crate::jwt::VerifiedJwt)
+//! exists, so an unverified result can't be passed where a verified one is
+//! expected (ADR 0069 §4):
+//!
+//! ```compile_fail,E0308
+//! fn authorize(_: polyjose::jwt::VerifiedJwt) {}
+//!
+//! let token = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9.";
+//! let unverified = polyjose::util::decode_jwt_unverified(token).unwrap();
+//! authorize(unverified); // UnverifiedJwt is not a VerifiedJwt
+//! ```
+//!
+//! ```compile_fail,E0277
+//! let token = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9.";
+//! let unverified = polyjose::util::decode_jwt_unverified(token).unwrap();
+//! let _: polyjose::jwt::VerifiedJwt = unverified.into(); // no From/Into
+//! ```
+//!
+//! ```compile_fail,E0308
+//! fn use_payload(_: polyjose::jws::Verified) {}
+//!
+//! let jws = "eyJhbGciOiJub25lIn0.cGF5bG9hZA.";
+//! let unverified = polyjose::util::decode_jws_unverified(jws).unwrap();
+//! use_payload(unverified); // UnverifiedJws is not a jws::Verified
+//! ```
+//!
+//! ```compile_fail,E0277
+//! let jws = "eyJhbGciOiJub25lIn0.cGF5bG9hZA.";
+//! let unverified = polyjose::util::decode_jws_unverified(jws).unwrap();
+//! let _: polyjose::jws::Verified = unverified.into(); // no From/Into
+//! ```
+//!
+//! The same calls with the unverified types compile:
+//!
+//! ```
+//! use polyjose::util::{UnverifiedJws, UnverifiedJwt};
+//!
+//! fn show_claims(_: UnverifiedJwt) {}
+//! fn show_payload(_: UnverifiedJws) {}
+//!
+//! let token = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9.";
+//! show_claims(polyjose::util::decode_jwt_unverified(token)?);
+//! let jws = "eyJhbGciOiJub25lIn0.cGF5bG9hZA.";
+//! show_payload(polyjose::util::decode_jws_unverified(jws)?);
+//! # Ok::<(), polyjose::Error>(())
+//! ```
+//!
+//! [`jwt::verify`]: crate::jwt::verify
+//! [`jws::verify_compact`]: crate::jws::verify_compact
+//! [`jws::Verified`]: crate::jws::Verified
+//! [`Policy::issuer`]: crate::jwt::Policy::issuer
+//! [`JwkSet`]: crate::jwk::JwkSet
+//! [`Keys::Set`]: crate::jwt::Keys::Set
+//! [`VerifyOptions::DEFAULT_MAX_INPUT_LEN`]: crate::jws::VerifyOptions::DEFAULT_MAX_INPUT_LEN
+//! [`decode_protected_header_unverified`]: crate::util::decode_protected_header_unverified
+//! [`decode_jws_unverified`]: crate::util::decode_jws_unverified
+//! [`decode_jwt_unverified`]: crate::util::decode_jwt_unverified
+//! [`UnverifiedJws`]: crate::util::UnverifiedJws
+//! [`UnverifiedJwt`]: crate::util::UnverifiedJwt
+//! [`Header::from_json`]: crate::header::Header::from_json
+//! [`Claims::from_json`]: crate::jwt::Claims::from_json
+//!
 use subtle::{Choice, ConstantTimeEq};
 use zeroize::Zeroizing;
+
+mod unverified;
+pub use unverified::{
+    UnverifiedJws, UnverifiedJwt, decode_jws_unverified, decode_jwt_unverified,
+    decode_protected_header_unverified,
+};
 
 /// Encodes bytes as unpadded base64url (RFC 7515 §2, RFC 4648 §5).
 ///

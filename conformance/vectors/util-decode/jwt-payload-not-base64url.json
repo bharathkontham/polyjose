@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A JWT payload part that is not strict base64url (a trailing '=') is InvalidBase64 (RFC 7515 §2; ADR 0048 step 4)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhIn0=.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

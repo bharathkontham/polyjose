@@ -11,8 +11,10 @@ accepted (RFC 8725).
 npm install @polyjose/node
 ```
 
-Prebuilt for macOS, Linux (glibc and musl) and Windows, see the docs for
-[platform support](https://polyjose.dev/reference/node/). Needs Node.js 22.12 or later.
+Prebuilt for macOS on Apple silicon (arm64), Linux (glibc and musl, x64 and arm64) and Windows
+(x64 and arm64), see the docs for [platform support](https://polyjose.dev/reference/node/). On any
+other platform, an Intel Mac included, the import refuses to load and names `@polyjose/wasm`,
+which has the same API. Needs Node.js 22.12 or later.
 
 ## Import
 

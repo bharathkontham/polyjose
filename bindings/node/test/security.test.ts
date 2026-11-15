@@ -13,6 +13,9 @@ import {
   PolyjoseError,
   base64urlDecode,
   base64urlEncode,
+  decodeJwsUnverified,
+  decodeJwtUnverified,
+  decodeProtectedHeaderUnverified,
   jweDecryptCompact,
   jweEncryptCompact,
   jwkFromDer,
@@ -219,6 +222,47 @@ test("a failing call of every family keeps the secrets that hold a marker out of
     "DecryptionFailed",
     secrets,
   );
+});
+
+test("a failing unverified decode keeps a JWS payload that holds a marker out of the error (ADR 0069 §5)", async () => {
+  const b64 = async (text: string): Promise<string> => base64urlEncode(ascii(text));
+  /** A JWS payload segment whose octets hold the marker (RFC 7515 §7.1). */
+  const payload = await b64(`payload holding ${MARKER_32}`);
+  const hs256 = await b64('{"alg":"HS256"}');
+  const sig = await b64("signature");
+  // Every form the payload takes: the marker, the segment and the whole token's middle.
+  const secrets = [MARKER_32, payload, `${hs256}.${payload}`];
+
+  // The JWS steps of ADR 0048, each failing after the payload was read or with it in the input.
+  await rejectsWithoutSecrets("decodeJwsUnverified padded signature", () => decodeJwsUnverified(`${hs256}.${payload}.${sig}=`), "InvalidBase64", secrets);
+  const algNumber = await b64('{"alg":1}');
+  await rejectsWithoutSecrets("decodeJwsUnverified mistyped alg", () => decodeJwsUnverified(`${algNumber}.${payload}.${sig}`), "InvalidHeader", secrets);
+  await rejectsWithoutSecrets("decodeJwsUnverified two parts", () => decodeJwsUnverified(`${hs256}.${payload}`), "InvalidFormat", secrets);
+  await rejectsWithoutSecrets("decodeJwsUnverified payload not base64url", () => decodeJwsUnverified(`${hs256}.${payload}+.${sig}`), "InvalidBase64", secrets);
+
+  // JWT decode: claims that hold the marker but are not an object, or mistype a registered claim.
+  const claimsString = await b64(JSON.stringify(`claims ${MARKER_32}`));
+  await rejectsWithoutSecrets("decodeJwtUnverified claims not an object", () => decodeJwtUnverified(`${hs256}.${claimsString}.${sig}`), "InvalidJson", [...secrets, claimsString]);
+  const expMarker = await b64(JSON.stringify({ sub: MARKER_32, exp: MARKER_32 }));
+  await rejectsWithoutSecrets("decodeJwtUnverified mistyped exp", () => decodeJwtUnverified(`${hs256}.${expMarker}.${sig}`), "InvalidClaim", [...secrets, expMarker]);
+  const b64False = await b64('{"alg":"HS256","b64":false,"crit":["b64"]}');
+  await rejectsWithoutSecrets("decodeJwtUnverified b64 false", () => decodeJwtUnverified(`${b64False}.${payload}.${sig}`), "InvalidHeader", secrets);
+
+  // The header peek: a header that holds the marker and is not JSON, and six parts.
+  const headerMarker = await b64(`{"alg":"${MARKER_32}"`);
+  await rejectsWithoutSecrets("decodeProtectedHeaderUnverified header not JSON", () => decodeProtectedHeaderUnverified(`${headerMarker}.${payload}.${sig}`), "InvalidJson", [...secrets, headerMarker]);
+  await rejectsWithoutSecrets("decodeProtectedHeaderUnverified six parts", () => decodeProtectedHeaderUnverified(`${hs256}.${payload}.a.b.c.${sig}`), "InvalidFormat", secrets);
+});
+
+test("decodeJwsUnverified resolves with a fresh payload each time, and changing one leaves the next decode unchanged", async () => {
+  const text = `payload holding ${MARKER_32}`;
+  const token = `${await base64urlEncode(ascii('{"alg":"HS256"}'))}.${await base64urlEncode(ascii(text))}.c2ln`;
+  const first = await decodeJwsUnverified(token);
+  assert.deepEqual(first.payload, ascii(text));
+  first.payload.fill(0);
+  const second = await decodeJwsUnverified(token);
+  assert.deepEqual(second.payload, ascii(text));
+  assert.notEqual(first.payload.buffer, second.payload.buffer);
 });
 
 // --- Off the JS thread (ADR 0031 §2, research §3) -------------------------------------------------------

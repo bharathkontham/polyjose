@@ -775,6 +775,59 @@ fn jwt_decrypt_nested_with_jwks_reports_the_member_and_rejects_an_expired_inner_
     );
 }
 
+// --- Unverified decode (ADR 0069; RFC 7515 §7.1, RFC 7516 §7.1, RFC 7519 §7.2) ----------------
+
+#[test]
+fn decode_protected_header_unverified_reads_a_jws_and_a_jwe_and_rejects_four_parts() {
+    // RFC 7515 Appendix A.1.1 and RFC 7516 Appendix A.3.1: the headers, as the core serializes them.
+    assert_eq!(
+        value(&polyjose_ffi::util::decode_protected_header_unverified(s(RFC7515_A1_JWS)).unwrap()),
+        value(r#"{"typ":"JWT","alg":"HS256"}"#)
+    );
+    assert_eq!(
+        value(&polyjose_ffi::util::decode_protected_header_unverified(s(RFC7516_A3_JWE)).unwrap()),
+        value(r#"{"alg":"A128KW","enc":"A128CBC-HS256"}"#)
+    );
+    assert_fails!(
+        polyjose_ffi::util::decode_protected_header_unverified(s("eyJhbGciOiJub25lIn0.a.b.c")),
+        InvalidFormat
+    );
+}
+
+#[test]
+fn decode_jws_unverified_returns_the_rfc7515_a1_header_and_payload_and_rejects_two_parts() {
+    let decoded = polyjose_ffi::util::decode_jws_unverified(s(RFC7515_A1_JWS)).unwrap();
+    assert_eq!(
+        value(&decoded.protected_header),
+        value(r#"{"typ":"JWT","alg":"HS256"}"#)
+    );
+    assert_eq!(decoded.payload, a1_payload());
+    assert_fails!(
+        polyjose_ffi::util::decode_jws_unverified(s("eyJhbGciOiJub25lIn0.cA")),
+        InvalidFormat
+    );
+}
+
+#[test]
+fn decode_jwt_unverified_returns_the_rfc7519_3_1_claims_and_rejects_a_mistyped_exp() {
+    // RFC 7519 §3.1: expired since 2011 and still decoded, since nothing is validated.
+    let decoded = polyjose_ffi::util::decode_jwt_unverified(s(RFC7519_3_1_JWT)).unwrap();
+    assert_eq!(
+        value(&decoded.header),
+        value(r#"{"typ":"JWT","alg":"HS256"}"#)
+    );
+    assert_eq!(
+        value(&decoded.claims),
+        value(r#"{"iss":"joe","exp":1300819380,"http://example.com/is_root":true}"#)
+    );
+    // RFC 7519 §4.1.4: `exp` is a NumericDate, so a string is InvalidClaim.
+    let claims = polyjose_ffi::util::base64url_encode(br#"{"exp":"x"}"#.to_vec());
+    assert_fails!(
+        polyjose_ffi::util::decode_jwt_unverified(format!("eyJhbGciOiJub25lIn0.{claims}.")),
+        InvalidClaim
+    );
+}
+
 // --- No input in errors (ADR 0030 §5) ---------------------------------------------------------
 
 /// A distinctive value standing in for key material (the surface's marker style).
@@ -862,4 +915,50 @@ fn no_failing_export_puts_a_marked_private_member_into_its_error() {
         "jwe_encrypt_compact",
         jwe_encrypt_compact(MARKER.as_bytes().to_vec(), a3_encrypt_options(None, 2)),
     );
+}
+
+#[test]
+fn no_failing_decode_utility_puts_the_token_into_its_error() {
+    use polyjose_ffi::util::{
+        decode_jws_unverified, decode_jwt_unverified, decode_protected_header_unverified,
+    };
+    let marked_b64 = polyjose_ffi::util::base64url_encode(MARKER.as_bytes().to_vec());
+    let header = polyjose_ffi::util::base64url_encode(br#"{"alg":"HS256"}"#.to_vec());
+    let marked_header = polyjose_ffi::util::base64url_encode(
+        format!(r#"{{"alg":"{MARKER}" {MARKER}}}"#).into_bytes(),
+    );
+    let marked_claims =
+        polyjose_ffi::util::base64url_encode(format!(r#"{{"exp":"{MARKER}"}}"#).into_bytes());
+    // The marker as raw parts (InvalidBase64), inside a header next to a JSON syntax error
+    // (InvalidJson), in a token of two parts (InvalidFormat), in a padded signature
+    // (InvalidBase64) and inside a mistyped claim (InvalidClaim).
+    let raw = format!("{MARKER}.{marked_b64}.{MARKER}");
+    let bad_json = format!("{marked_header}.{marked_b64}.c2ln");
+    let two_parts = format!("{header}.{marked_b64}");
+    let padded_signature = format!("{header}.{marked_b64}.{MARKER}==");
+    let mistyped_claim = format!("{header}.{marked_claims}.c2ln");
+    for token in [&raw, &bad_json, &two_parts] {
+        assert_no_marker(
+            "decode_protected_header_unverified",
+            decode_protected_header_unverified(token.clone()),
+        );
+    }
+    for token in [&raw, &bad_json, &two_parts, &padded_signature] {
+        assert_no_marker(
+            "decode_jws_unverified",
+            decode_jws_unverified(token.clone()),
+        );
+    }
+    for token in [
+        &raw,
+        &bad_json,
+        &two_parts,
+        &padded_signature,
+        &mistyped_claim,
+    ] {
+        assert_no_marker(
+            "decode_jwt_unverified",
+            decode_jwt_unverified(token.clone()),
+        );
+    }
 }

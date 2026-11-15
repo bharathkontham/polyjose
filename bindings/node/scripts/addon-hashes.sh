@@ -5,11 +5,11 @@
 # SHA-256 is the one this map pins for the host, so the map is generated here and never edited.
 #
 # Usage: scripts/addon-hashes.sh <out.json> <addon>...
-#   each <addon> is a `polyjose.<platform>.node` file that package.json `files` lists (the eight
-#   shipped addons, feature 0017); each platform at most once.
+#   each <addon> is a `polyjose.<platform>.node` file that package.json `files` lists (the seven
+#   shipped addons, ADR 0066, ADR 0073 §2); each platform at most once.
 #
 # Run by scripts/build.sh for the addons of a local build, and by scripts/pack-main.sh over exactly
-# the addons it packs (all eight in binding-node.yml's pack-main job, the release package).
+# the addons it packs (all seven in binding-node.yml's pack-main job, the release package).
 # Hashing and JSON are Node's (node:crypto, node:fs), the same on macOS, Linux and Git Bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."

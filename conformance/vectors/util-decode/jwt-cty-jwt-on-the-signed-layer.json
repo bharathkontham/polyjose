@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "cty JWT on a JWS would nest a JWS in a JWS (RFC 7519 §5.2), which is not supported: InvalidHeader (ADR 0027 §9 J1)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsImN0eSI6IkpXVCJ9.eyJzdWIiOiJhIn0.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

@@ -67,10 +67,12 @@ import type {
   JwkSet,
   JwsSigner,
   JwsSignOptions,
+  JwsUnverified,
   JwsVerified,
   JwsVerifyOptions,
   JwtNestedVerified,
   JwtSignOptions,
+  JwtUnverified,
   JwtVerified,
   JwtVerifyOptions,
   KeyFormat,
@@ -109,6 +111,62 @@ export interface PolyjoseApi {
   base64urlEncode(bytes: Uint8Array): Promise<string>;
   /** Strict, canonical base64url decoding (RFC 4648 §5, §3.5). */
   base64urlDecode(text: string): Promise<Uint8Array>;
+  /**
+   * This doesn't check the signature: anyone can write these values, so don't use them for
+   * authorization or trust decisions until you verify the token. Verify it with `jwtVerify` or
+   * `jwsVerifyCompact`.
+   *
+   * Reads the protected header of a compact JWS (3 parts, RFC 7515 §7.1) or JWE (5 parts,
+   * RFC 7516 §7.1) without verifying or decrypting anything (ADR 0069 §1–§2). Only the first part
+   * is read, so for a nested JWT this is the outer JWE's header. It runs the same strict checks
+   * as verify: at most 1 MiB, strict base64url, one I-JSON object with no duplicate member, and
+   * the registered parameter types.
+   *
+   * Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
+   * from `jku` or `x5u` (RFC 8725 §3.10). After reading `iss` to choose a key set, verify with
+   * that issuer in `issuers` (RFC 8725 §3.8). A JWK Set already selects by `kid` in
+   * `jwtVerifyWithJwks` (ADR 0029).
+   *
+   * Rejects with `InvalidFormat` (over 1 MiB, not 3 or 5 parts), `InvalidBase64`, `InvalidJson`
+   * or `InvalidHeader`.
+   */
+  decodeProtectedHeaderUnverified(token: string): Promise<JsonObject>;
+  /**
+   * This doesn't check the signature: anyone can write these values, so don't use them for
+   * authorization or trust decisions until you verify the token. Verify it with `jwsVerifyCompact`.
+   *
+   * Reads the protected header and the payload of a compact JWS without verifying it
+   * (ADR 0069 §1–§2; RFC 7515 §7.1). It runs exactly verify's parsing steps and nothing after
+   * them, so `alg: "none"`, an unknown `alg` and an unknown `crit` entry come back as data. A
+   * `b64: false` payload is the payload part's octets (RFC 7797 §3); a detached payload is empty
+   * (RFC 7515 Appendix F). The JWS JSON serialization is not accepted.
+   *
+   * Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
+   * from `jku` or `x5u` (RFC 8725 §3.10).
+   *
+   * Rejects with `InvalidFormat` (over 1 MiB, not 3 parts, a JSON serialization),
+   * `InvalidBase64`, `InvalidJson` or `InvalidHeader`.
+   */
+  decodeJwsUnverified(jws: string): Promise<JwsUnverified>;
+  /**
+   * This doesn't check the signature: anyone can write these values, so don't use them for
+   * authorization or trust decisions until you verify the token. Verify it with `jwtVerify`.
+   *
+   * Reads the header and the claims of a compact signed JWT without verifying or validating it
+   * (ADR 0069 §1–§2; RFC 7519 §7.2). Registered claims are type-checked, but none is validated:
+   * there is no `exp`, `nbf`, `iat`, `iss`, `sub`, `aud` or `typ` check and no clock.
+   *
+   * After reading `iss` to choose a key set, verify with that issuer in `issuers`
+   * (RFC 8725 §3.8). Sanitise a `kid` before using it in a lookup, and take keys from your own
+   * configuration, not from `jku` or `x5u` (RFC 8725 §3.10). A JWK Set already selects by `kid`
+   * in `jwtVerifyWithJwks` (ADR 0029).
+   *
+   * Rejects as `decodeJwsUnverified` does, plus `InvalidHeader` for `b64: false` or `cty: "JWT"`
+   * (RFC 7797 §7, RFC 7519 §5.2), `InvalidJson` for claims that are not one JSON object, and
+   * `InvalidClaim` for a mistyped registered claim. A five-part token (a nested JWT) is
+   * `InvalidFormat`.
+   */
+  decodeJwtUnverified(token: string): Promise<JwtUnverified>;
 
   /** Validates a JWK (RFC 7517 §4, RFC 7518 §6, RFC 8037 §2) and returns the core's serialization. */
   jwkParse(jwk: Jwk): Promise<JwkObject>;
@@ -416,6 +474,21 @@ function jwtNestedVerified(v: unknown, at: string): JwtNestedVerified {
   };
 }
 
+/** The headers and claims are JSON text from the backend, parsed here and nowhere else (ADR 0030 §2). */
+function jwsUnverified(v: unknown, at: string): JwsUnverified {
+  return {
+    protectedHeader: outObject(member(v, "protectedHeader", at), `${at}.protectedHeader`),
+    payload: outBytes(member(v, "payload", at), `${at}.payload`),
+  };
+}
+
+function jwtUnverified(v: unknown, at: string): JwtUnverified {
+  return {
+    header: outObject(member(v, "header", at), `${at}.header`),
+    claims: outObject(member(v, "claims", at), `${at}.claims`),
+  };
+}
+
 const jwk = (v: unknown, at: string): JwkObject => outObject(v, at) as JwkObject;
 
 // --- errors -------------------------------------------------------------------------------
@@ -623,6 +696,31 @@ export function createApi(backend: Backend): PolyjoseApi {
           return () => b.base64urlDecode(text);
         },
         (r) => outBytes(r, "base64urlDecode"),
+      ),
+    // ADR 0069 §1: the token only, no key, options or allow-list; the core does every check.
+    decodeProtectedHeaderUnverified: (token) =>
+      run(
+        () => {
+          const t = str(token, "decodeProtectedHeaderUnverified: token");
+          return () => b.decodeProtectedHeaderUnverified(t);
+        },
+        (r) => outObject(r, "decodeProtectedHeaderUnverified"),
+      ),
+    decodeJwsUnverified: (jws) =>
+      run(
+        () => {
+          const t = str(jws, "decodeJwsUnverified: jws");
+          return () => b.decodeJwsUnverified(t);
+        },
+        (r) => jwsUnverified(r, "decodeJwsUnverified"),
+      ),
+    decodeJwtUnverified: (token) =>
+      run(
+        () => {
+          const t = str(token, "decodeJwtUnverified: token");
+          return () => b.decodeJwtUnverified(t);
+        },
+        (r) => jwtUnverified(r, "decodeJwtUnverified"),
       ),
 
     jwkParse: (key) =>

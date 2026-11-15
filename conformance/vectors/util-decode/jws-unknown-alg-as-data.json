@@ -1,0 +1,16 @@
+{
+  "source": "polyjose",
+  "description": "An unknown alg is returned as data, not UnsupportedAlgorithm: decode stops after ADR 0048 step 5 (ADR 0069 §2, R8)",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJYUzk5OSIsImtpZCI6ImsxIn0.aGVsbG8.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": true,
+    "protected": {
+      "alg": "XS999",
+      "kid": "k1"
+    },
+    "payload_b64u": "aGVsbG8"
+  }
+}

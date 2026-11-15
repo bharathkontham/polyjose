@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "crit listing a parameter the header lacks (RFC 7515 §4.1.11) is InvalidHeader at ADR 0048 step 5, before any crit-understanding check",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImNyaXQiOlsidXJuOmV4YW1wbGU6ZmxhZyJdfQ.aGVsbG8.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

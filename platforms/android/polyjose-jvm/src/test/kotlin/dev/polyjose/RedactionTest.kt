@@ -25,6 +25,7 @@ class RedactionTest {
             "JwsSigner.key" to (JwsSigner(key = MARKED_KEY) to KEY_BYTES),
             "JweRecipient.key" to (JweRecipient(alg = "A256KW", key = MARKED_KEY) to KEY_BYTES),
             "JwsVerified.payload" to (JwsVerified(alg = "HS256", payload = MARKED_BYTES, signatureIndex = 0u) to MARKED_BYTES.size),
+            "JwsUnverified.payload" to (JwsUnverified(protectedHeader = """{"alg":"none"}""", payload = MARKED_BYTES) to MARKED_BYTES.size),
             "JweDecrypted.plaintext" to (JweDecrypted(plaintext = MARKED_BYTES, header = "{}", recipientIndex = 0u) to MARKED_BYTES.size),
             "JweDecrypted.aad" to (JweDecrypted(plaintext = byteArrayOf(), header = "{}", aad = MARKED_BYTES, recipientIndex = 0u) to MARKED_BYTES.size),
             "JweEncryptOptions.aad" to (JweEncryptOptions(enc = "A256GCM", recipients = emptyList(), aad = MARKED_BYTES) to MARKED_BYTES.size),
@@ -60,6 +61,10 @@ class RedactionTest {
             JwsVerified(alg = "ES256", payload = byteArrayOf(1, 2, 3, 4), protectedHeader = """{"alg":"ES256"}""", signatureIndex = 2u).toString(),
         )
         assertEquals(
+            "JwsUnverified(protectedHeader={\"alg\":\"none\"}, payload=<redacted, 4 bytes>)",
+            JwsUnverified(protectedHeader = """{"alg":"none"}""", payload = byteArrayOf(1, 2, 3, 4)).toString(),
+        )
+        assertEquals(
             "JweDecrypted(plaintext=<redacted, 0 bytes>, header={\"enc\":\"A256GCM\"}, protectedHeader=p, sharedUnprotectedHeader=null, recipientHeader=r, aad=null, recipientIndex=1)",
             JweDecrypted(plaintext = byteArrayOf(), header = """{"enc":"A256GCM"}""", protectedHeader = "p", recipientHeader = "r", recipientIndex = 1u).toString(),
         )
@@ -89,6 +94,12 @@ class RedactionTest {
         assertNoMarker("jwsVerifyCompact", verified.toString())
         assertTrue(verified.toString().contains("payload=<redacted, ${MARKED_BYTES.size} bytes>"), verified.toString())
 
+        // ADR 0069 §5: the payload of an unverified decode is redacted like a verified one.
+        val decoded = decodeJwsUnverified(token)
+        assertNoMarker("decodeJwsUnverified", decoded.toString())
+        assertEquals("JwsUnverified(protectedHeader={\"alg\":\"HS256\"}, payload=<redacted, ${MARKED_BYTES.size} bytes>)", decoded.toString())
+        assertTrue(decoded.payload.contentEquals(MARKED_BYTES))
+
         val kek = jwkGenerateOct(32u)
         val options = JweEncryptOptions(enc = "A256GCM", recipients = listOf(JweRecipient(alg = "A256KW", key = kek)), aad = MARKED_BYTES)
         val jwe = jweEncryptJson(MARKED_BYTES, options, "flattened")
@@ -109,6 +120,9 @@ class RedactionTest {
         assertTrue(verified.toString().contains("claims=$claims"), verified.toString())
         val nested = JwtNestedVerified(inner = verified, outerHeader = "{}", recipientIndex = 0u)
         assertTrue(nested.toString().contains(MARKER), nested.toString())
+        // ADR 0069 §5, ADR 0065 §3: nor does an unverified decode's claims.
+        val decoded = decodeJwtUnverified(jwt)
+        assertTrue(decoded.toString().contains("claims=$claims"), decoded.toString())
     }
 
     private fun assertNoMarker(what: String, printed: String) {
@@ -127,7 +141,7 @@ class RedactionTest {
 
         /** ADR 0065 decision 1, with ADR 0030 §7's other record fields (there are none; F05 log). */
         val ADR_0065_FIELDS = setOf(
-            "JwsSigner.key", "JweRecipient.key", "JwsVerified.payload", "JweDecrypted.plaintext",
+            "JwsSigner.key", "JweRecipient.key", "JwsVerified.payload", "JwsUnverified.payload", "JweDecrypted.plaintext",
             "JweDecrypted.aad", "JweEncryptOptions.aad", "JwsVerifyOptions.detachedPayload",
         )
     }

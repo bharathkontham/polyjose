@@ -10,7 +10,7 @@ import org.junit.Test
  * so a secret field prints as `<redacted, N bytes>` and the other fields print unchanged.
  */
 class RedactionInstrumentedTest {
-    /** A real JWS verify result (RFC 7515 §5.2) and the signer that made it. */
+    /** A real JWS verify result (RFC 7515 §5.2), its unverified decode, and the signer that made it. */
     @Test
     fun aSecretFieldIsRedactedOnAndroid() {
         val payload = "payload $MARKER".toByteArray()
@@ -25,6 +25,10 @@ class RedactionInstrumentedTest {
                 "unprotectedHeader=null, signatureIndex=0)",
             printed,
         )
+        // ADR 0069 §5: the payload of an unverified decode of the same token.
+        val decoded = decodeJwsUnverified(token).toString()
+        assertFalse("the payload is printed: $decoded", decoded.contains(MARKER))
+        assertEquals("JwsUnverified(protectedHeader={\"alg\":\"HS256\"}, payload=<redacted, ${payload.size} bytes>)", decoded)
         val signer = JwsSigner(key = """{"kty":"oct","k":"$MARKER"}""")
         assertEquals(
             "JwsSigner(key=<redacted, ${signer.key.toByteArray().size} bytes>, protectedHeader=null, protectedB64u=null, unprotectedHeader=null)",

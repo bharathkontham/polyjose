@@ -1,0 +1,16 @@
+{
+  "source": "RFC 7520 §4.5.3, Figure 41",
+  "description": "The §4.5 detached-content compact JWS (header..signature, RFC 7515 Appendix F) decodes with the Figure 37 header and an empty payload",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImtpZCI6IjAxOGMwYWU1LTRkOWItNDcxYi1iZmQ2LWVlZjMxNGJjNzAzNyJ9..s0h6KThzkfBBBkLspW1h84VsJZFTsPPqMDA7g1Md7p0"
+  },
+  "expect": {
+    "ok": true,
+    "protected": {
+      "alg": "HS256",
+      "kid": "018c0ae5-4d9b-471b-bfd6-eef314bc7037"
+    },
+    "payload_b64u": ""
+  }
+}

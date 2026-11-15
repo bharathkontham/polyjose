@@ -28,6 +28,12 @@ op version
 op errorCodes
 op base64urlEncode
 op base64urlDecode
+# The unverified decode utilities (ADR 0069, amending ADR 0030 §4): token in, no key, no options,
+# no allow-list. They don't check the signature; verify before trusting. decodeProtectedHeaderUnverified
+# returns the header JSON text; the other two return JwsUnverified and JwtUnverified (Records).
+op decodeProtectedHeaderUnverified
+op decodeJwsUnverified
+op decodeJwtUnverified
 
 ## JWK (RFC 7517, RFC 7518 §6, RFC 7638, RFC 9278, RFC 8037)
 op jwkParse
@@ -171,6 +177,16 @@ record JwtNestedVerified
   field inner
   field outerHeader
   field recipientIndex
+
+# The results of decodeJwsUnverified and decodeJwtUnverified (Utilities, ADR 0069 §1, §4): distinct
+# records with no alg, never a JwsVerified or JwtVerified. payload is secret (ADR 0069 §5).
+record JwsUnverified
+  field protectedHeader
+  field payload
+
+record JwtUnverified
+  field header
+  field claims
 
 ## Error codes (ADR 0030 §5): polyjose::Error::CODES, in the core's order: NoMatchingKey
 ## (ADR 0029 §4), then MultipleMatchingKeys (ADR 0054 §5), last.

@@ -1,12 +1,13 @@
-//! The utility exports (ADR 0030 §4, "Utilities"). Each is a type conversion and one surface
-//! call (ADR 0030 §1, "the adapter test").
+//! The utility exports (ADR 0030 §4, "Utilities"), with the unverified decode utilities
+//! (ADR 0069). Each is a type conversion and one surface call (ADR 0030 §1, "the adapter test").
 
-use js_sys::{JsString, Uint8Array};
+use js_sys::{JsString, Object, Uint8Array};
 use polyjose_surface::util;
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroizing;
 
 use crate::error::polyjose_error;
+use crate::write;
 
 /// The polyjose crate version, e.g. `0.1.0` (ADR 0030 §4). Synchronous (BACKEND.md).
 #[wasm_bindgen(js_name = version)]
@@ -46,4 +47,51 @@ pub fn base64url_decode(text: String) -> Result<Uint8Array, JsValue> {
     let text = Zeroizing::new(text);
     let bytes = Zeroizing::new(util::base64url_decode(&text).map_err(polyjose_error)?);
     Ok(Uint8Array::from(&bytes[..]))
+}
+
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
+/// Reads the protected header of a compact JWS (3 parts) or JWE (5 parts) without verifying or
+/// decrypting it (ADR 0069 §1-§2, §4; RFC 7515 §7.1, RFC 7516 §7.1). Returns the header's JSON
+/// text.
+///
+/// The token embeds base64url(payload) (ADR 0049 §4): it is taken by value and wiped on return.
+/// The header text is copied into the JS string from a zeroizing buffer, as the Node adapter does
+/// with every string result.
+#[wasm_bindgen(js_name = decodeProtectedHeaderUnverified)]
+pub fn decode_protected_header_unverified(token: String) -> Result<JsString, JsValue> {
+    let token = Zeroizing::new(token);
+    let header =
+        Zeroizing::new(util::decode_protected_header_unverified(&token).map_err(polyjose_error)?);
+    Ok(JsString::from(header.as_str()))
+}
+
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
+/// Reads the protected header and the payload of a compact JWS without verifying it
+/// (ADR 0069 §1-§2, §4; RFC 7515 §7.1). Verify the JWS with `jwsVerifyCompact`. Returns
+/// `{ protectedHeader, payload }`.
+///
+/// The JWS is taken by value and wiped on return; the payload is copied into the `Uint8Array`
+/// from the surface's zeroizing buffer (ADR 0069 §5, ADR 0030 §7.2).
+#[wasm_bindgen(js_name = decodeJwsUnverified)]
+pub fn decode_jws_unverified(jws: String) -> Result<Object, JsValue> {
+    let jws = Zeroizing::new(jws);
+    let decoded = util::decode_jws_unverified(&jws).map_err(polyjose_error)?;
+    write::jws_unverified(decoded)
+}
+
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
+/// Reads the header and the claims of a compact signed JWT without verifying or validating it
+/// (ADR 0069 §1-§2, §4; RFC 7519 §7.2). Verify the token with `jwtVerify`. Returns
+/// `{ header, claims }`.
+#[wasm_bindgen(js_name = decodeJwtUnverified)]
+pub fn decode_jwt_unverified(token: String) -> Result<Object, JsValue> {
+    let token = Zeroizing::new(token);
+    let decoded = util::decode_jwt_unverified(&token).map_err(polyjose_error)?;
+    write::jwt_unverified(decoded)
 }

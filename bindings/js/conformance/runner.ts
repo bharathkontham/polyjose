@@ -388,6 +388,24 @@ const OPERATIONS: Readonly<Record<string, Handler>> = {
   "b64url.decode": async (api, input, _expect, _text, out) => {
     out["bytes_hex"] = hexEncode(await lib(api, () => api.base64urlDecode(str(input["b64u"]))));
   },
+  // util.decode_protected_header → decodeProtectedHeaderUnverified(token) (ADR 0069 §1-§2;
+  // RFC 7515 §7.1, RFC 7516 §7.1). The token is a string, passed exactly as written.
+  "util.decode_protected_header": async (api, input, _expect, _text, out) => {
+    out["header"] = await lib(api, () => api.decodeProtectedHeaderUnverified(str(input["token"])));
+  },
+  // util.decode_jws → decodeJwsUnverified(jws): `protected` = protectedHeader, `payload_b64u` =
+  // base64url(payload) (ADR 0069 §2; RFC 7515 §7.1, RFC 7797 §3).
+  "util.decode_jws": async (api, input, _expect, _text, out) => {
+    const decoded = await lib(api, () => api.decodeJwsUnverified(str(input["jws"])));
+    out["protected"] = decoded.protectedHeader;
+    out["payload_b64u"] = await encode(api, decoded.payload);
+  },
+  // util.decode_jwt → decodeJwtUnverified(token): `header` and `claims` (ADR 0069 §2; RFC 7519 §7.2).
+  "util.decode_jwt": async (api, input, _expect, _text, out) => {
+    const decoded = await lib(api, () => api.decodeJwtUnverified(str(input["token"])));
+    out["header"] = decoded.header;
+    out["claims"] = decoded.claims;
+  },
   // jwk.thumbprint → jwkThumbprint + jwkThumbprintUri (RFC 7638 §3, §3.4, RFC 9278 §3). The
   // vector's hash is passed as given and an absent one as undefined, the core default (ADR 0054
   // §9): the core parses the name (§8.2), so there is no runner table and a name the core

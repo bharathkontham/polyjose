@@ -109,9 +109,15 @@ Printing a result redacts its secret fields, but reading a field gives the secre
 
 ### Static linking
 
-The XCFramework holds static libraries (ADR 0032), so polyjose's Rust code, with its own copy of the Rust standard library, is linked into your app's binary. This has two consequences:
+The XCFramework holds static libraries (ADR 0032), so polyjose's Rust code, with its own copy of the Rust standard library, is linked into your app's binary. This has three consequences:
 - **Another Rust static library in the same app can clash with it.** Both define `rust_eh_personality` and Rust standard library symbols, so the link can fail with duplicate-symbol errors. A dynamic-framework variant, which avoids this, is in the backlog.
-- **Generic watchOS Simulator builds need `EXCLUDED_ARCHS`.** The watchOS Simulator library is arm64 only, but a generic simulator destination (`generic/platform=watchOS Simulator`) also builds x86_64, which then fails to link. Either set `EXCLUDED_ARCHS[sdk=watchsimulator*] = x86_64` in your target's build settings, or build for a concrete watch simulator (`-destination 'platform=watchOS Simulator,name=<device>'`). Limit the setting to `watchsimulator*`: the iOS Simulator library includes x86_64, which an Intel Mac needs.
+- **Generic watchOS Simulator builds need `EXCLUDED_ARCHS`.** The watchOS Simulator library is arm64 only, but a generic simulator destination (`generic/platform=watchOS Simulator`) also builds x86_64, which then fails to link. Either set `EXCLUDED_ARCHS[sdk=watchsimulator*] = x86_64` in your target's build settings, or build for a concrete watch simulator (`-destination 'platform=watchOS Simulator,name=<device>'`).
+- **The macOS and iOS Simulator libraries are arm64 (Apple silicon) only (ADR 0073), so a build that includes x86_64 needs `EXCLUDED_ARCHS`.** Measured with Xcode 27.2 and `POLYJOSE_LOCAL_XCFRAMEWORK=1`:
+  - `swift build --arch x86_64` of a package that depends on `Polyjose` fails to link: `ld: warning: ignoring file '…/libpolyjose_ffi.a(…)': found architecture 'arm64', required architecture 'x86_64'`, then `Undefined symbols for architecture x86_64` and `ld: symbol(s) not found for architecture x86_64`.
+  - A macOS app built with `ARCHS="arm64 x86_64"` (a universal build) fails to link with the same errors.
+  - The same macOS build with `EXCLUDED_ARCHS = x86_64`, set in the app target's build settings or passed to `xcodebuild`, succeeds and produces an arm64 app.
+  - An iOS app built for `generic/platform=iOS Simulator` also builds x86_64, and fails to link with the same errors.
+  - The same iOS Simulator build with `EXCLUDED_ARCHS[sdk=iphonesimulator*] = x86_64` in the app target's build settings succeeds and produces an arm64 app. Passed on the `xcodebuild` command line instead, that conditional setting was not applied, and the link failed with the same errors.
 
 ### OS minimums
 
@@ -120,8 +126,8 @@ The deployment targets of the XCFramework and of `Package.swift`'s `platforms:` 
 | Platform | Minimum | XCFramework library |
 |---|---|---|
 | iOS and iPadOS | 16.0 | `ios-arm64` |
-| iOS Simulator | 16.0 | `ios-arm64_x86_64-simulator` |
-| macOS | 13.0 | `macos-arm64_x86_64` |
+| iOS Simulator | 16.0 | `ios-arm64-simulator` (arm64 only) |
+| macOS | 13.0 | `macos-arm64` (arm64 only: Apple silicon Macs) |
 | watchOS | 9.0 (see the note) | `watchos-arm64_arm64_32` |
 | watchOS Simulator | 9.0 | `watchos-arm64-simulator` |
 
@@ -134,7 +140,7 @@ So an app can keep a watchOS deployment target as low as 9: older releases use t
 ## Building from source
 
 How the Swift package is built, tested and packaged:
-- `scripts/build-xcframework.sh` builds `build/PolyjoseFFI.xcframework` (gitignored), a static XCFramework with 5 libraries: iOS, iOS Simulator (arm64 + x86_64), macOS (arm64 + x86_64), watchOS (arm64 + arm64_32) and watchOS Simulator (ADR 0032).
+- `scripts/build-xcframework.sh` builds `build/PolyjoseFFI.xcframework` (gitignored), a static XCFramework with 5 libraries: iOS (`ios-arm64`), iOS Simulator (`ios-arm64-simulator`, arm64), macOS (`macos-arm64`, arm64), watchOS (`watchos-arm64_arm64_32`, arm64 + arm64_32) and watchOS Simulator (`watchos-arm64-simulator`, arm64) (ADR 0032, ADR 0073). No x86_64 library is built.
   - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `-Zbuild-std`. Install it with `rustup toolchain install "$(cat platforms/swift/nightly-toolchain)" --profile minimal --component rust-src`.
   - Without that nightly the script makes a development build: the watchOS library is arm64 only, `PolyjoseFFI.xcframework/polyjose-build.txt` says `arm64_32: missing`, and the build must not be released. `--release` fails instead.
   - Deployment minimums: see [OS minimums](https://github.com/bharathkontham/polyjose/blob/main/platforms/swift/README.md#os-minimums).

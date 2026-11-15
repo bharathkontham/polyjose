@@ -29,6 +29,10 @@ const SECRET_INPUTS: &[(&str, &[&str])] = &[
     ("error_codes", &[]),
     ("base64url_encode", &["data"]),
     ("base64url_decode", &["text"]),
+    // util: the token to decode is not secret-bearing, as for verify (ADR 0069 §5)
+    ("decode_protected_header_unverified", &[]),
+    ("decode_jws_unverified", &[]),
+    ("decode_jwt_unverified", &[]),
     // jwk
     ("jwk_parse", &["jwk"]),
     ("jwk_to_public", &["jwk"]),

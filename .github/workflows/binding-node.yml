@@ -1,11 +1,12 @@
 # @polyjose/node prebuilds and package (feature 0007 T05, feature 0017; ADR 0031 §2 as superseded
-# by ADR 0066, ADR 0034 §2 and §5, ADR 0037 §1).
+# by ADR 0066 and ADR 0073 §2, ADR 0034 §2 and §5, ADR 0037 §1).
 #
-# Builds and tests the addon for each of the eight napi targets of bindings/node/package.json on a
+# Builds and tests the addon for each of the seven napi targets of bindings/node/package.json on a
 # native runner, runs the suite on Node 22, 24 and 26 on linux-x64 and the compiled tests on Node
 # 22.12.0 (the engines floor), checks conformance parity over every results file, packs the one
-# @polyjose/node tarball with all eight addons inside, and smoke-installs that tarball on each of
-# the eight targets. All of the build logic is in bindings/node/scripts/ci-build.sh, so a local run
+# @polyjose/node tarball with all seven addons inside, and smoke-installs that tarball on each of
+# the seven targets. macOS is Apple silicon only (ADR 0073 §2): no job runs on an Intel macOS
+# runner. All of the build logic is in bindings/node/scripts/ci-build.sh, so a local run
 # (`scripts/ci-build.sh aarch64-apple-darwin`) and a CI run check the same things.
 #
 # When it runs (ADR 0044; owner, 2026-11-07): never on PRs, pushes or a schedule. It has two
@@ -20,11 +21,11 @@
 #     (review-security.md I6). test/ci.test.ts rejects any inputs expression in a run: block;
 #   - nothing reads PR or event context, only `matrix.*`;
 #   - artifact names are fixed: addon-<target> (the tested addon, polyjose.<platform>.node),
-#     npm-node (the one package, packed by the pack-main job with all eight addons inside, so its
+#     npm-node (the one package, packed by the pack-main job with all seven addons inside, so its
 #     addon-sha256.json pins each shipped addon; feature 0007 F07, feature 0017) and
 #     conformance-node-<label> (target/conformance/node-<label>.json), ADR 0037 §1. Only npm-node
 #     matches release.yml's npm-* pattern;
-#   - the smoke job installs that one tarball on each of the eight targets, checks the platform the
+#   - the smoke job installs that one tarball on each of the seven targets, checks the platform the
 #     loader detects there, and round-trips a JWS through the installed package (ESM and CJS);
 #   - every job sets its own least-privilege `permissions` (contents: read, or none);
 #   - no workflow-level concurrency group: inside a called workflow, github.workflow is the
@@ -105,10 +106,10 @@ jobs:
           esac
 
   # One job per napi target (ADR 0031 §2), each on a runner of that platform, because the suite
-  # loads the addon it builds. darwin-x64 builds on macos-15-intel (macos-13 is retired, ADR 0037
-  # §1). The Linux targets build inside a container started with `docker run` on the matching
-  # Linux runner: JavaScript actions do not run in Alpine containers on arm64 runners, so the
-  # Linux jobs check out, upload and download on the runner and only build inside the container.
+  # loads the addon it builds. The one macOS target is darwin-arm64 (ADR 0073 §2). The Linux
+  # targets build inside a container started with `docker run` on the matching Linux runner:
+  # JavaScript actions do not run in Alpine containers on arm64 runners, so the Linux jobs check
+  # out, upload and download on the runner and only build inside the container.
   # musl builds in Alpine (`image`), gnu in manylinux_2_28 (`manylinux`, the glibc floor, above).
   prebuild:
     name: prebuild (${{ matrix.target }})
@@ -119,7 +120,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: x86_64-apple-darwin, platform: darwin-x64, os: macos-15-intel }
           - { target: aarch64-apple-darwin, platform: darwin-arm64, os: macos-latest }
           - { target: x86_64-unknown-linux-gnu, platform: linux-x64-gnu, os: ubuntu-latest, manylinux: "quay.io/pypa/manylinux_2_28_x86_64@sha256:ae830e2ecbf4568743f8b760920cd7483538375b6b242a9fb02b5b2ad0245f68" }
           - { target: aarch64-unknown-linux-gnu, platform: linux-arm64-gnu, os: ubuntu-24.04-arm, manylinux: "quay.io/pypa/manylinux_2_28_aarch64@sha256:6c4f9b6d9453bb47b21b4c1e4f04f3c662584f60f4ed8455f4561a336ff19414" }
@@ -262,7 +262,7 @@ jobs:
             '
 
       # The addon the suite above loaded and ci-build.sh checked against its pin (feature 0017): the
-      # pack-main job packs the eight of them into the one package.
+      # pack-main job packs the seven of them into the one package.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: addon-${{ matrix.target }}
@@ -413,7 +413,7 @@ jobs:
         run: |
           missing=0
           for label in \
-            x86_64-apple-darwin aarch64-apple-darwin \
+            aarch64-apple-darwin \
             x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
             x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
             x86_64-pc-windows-msvc aarch64-pc-windows-msvc \
@@ -427,13 +427,13 @@ jobs:
       - name: conformance parity
         run: scripts/conformance-parity.sh
 
-  # The one package, @polyjose/node, packed once with the eight addons above inside it
+  # The one package, @polyjose/node, packed once with the seven addons above inside it
   # (scripts/pack-main.sh --all-platforms): its addon-sha256.json pins the SHA-256 of each addon it
   # holds (feature 0007 F07, feature 0017), so it loads on every target and only with those addons,
-  # and its THIRD-PARTY-NOTICES.txt covers the crates of all eight targets. The JavaScript is built
+  # and its THIRD-PARTY-NOTICES.txt covers the crates of all seven targets. The JavaScript is built
   # here by scripts/build.sh; the host addon that build also makes is not packed.
   pack-main:
-    name: pack @polyjose/node (all eight addons)
+    name: pack @polyjose/node (all seven addons)
     needs: [prebuild]
     permissions:
       contents: read
@@ -463,7 +463,7 @@ jobs:
           path: target/ci-addons
           merge-multiple: true
 
-      - name: scripts/build.sh, then scripts/pack-main.sh over the eight addons
+      - name: scripts/build.sh, then scripts/pack-main.sh over the seven addons
         run: |
           ls -l target/ci-addons
           bindings/node/scripts/build.sh
@@ -479,7 +479,7 @@ jobs:
           if-no-files-found: error
 
   # The packed tarball as a user installs it (bindings/node/scripts/smoke-install.sh), on each of
-  # the eight targets: the one tarball, offline, then the platform the loader detects (it must be
+  # the seven targets: the one tarball, offline, then the platform the loader detects (it must be
   # the matrix's), an import and a require by name, and a JWS round-trip each. The musl targets run
   # inside the prebuild's Alpine image (bash added; Node, with its npm, comes with the image).
   smoke:
@@ -491,7 +491,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: darwin-x64, os: macos-15-intel }
           - { platform: darwin-arm64, os: macos-latest }
           - { platform: linux-x64-gnu, os: ubuntu-latest }
           - { platform: linux-arm64-gnu, os: ubuntu-24.04-arm }

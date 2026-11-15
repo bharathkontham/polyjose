@@ -10,8 +10,8 @@
 #   crate/polyjose-<v>.crate        `cargo package -p polyjose --locked` (in tag mode packaged at
 #                                   the tag with --no-verify, equal to the candidate's except
 #                                   .cargo_vcs_info.json)
-#   npm/*.tgz                       @polyjose/node, with the 8 addons inside, and @polyjose/wasm
-#                                   (binding-node.yml, binding-wasm.yml; feature 0017)
+#   npm/*.tgz                       @polyjose/node, with the 7 addons inside, and @polyjose/wasm
+#                                   (binding-node.yml, binding-wasm.yml; feature 0017, ADR 0073 §2)
 #   maven-repo/                     the Gradle build-local repository (binding-android.yml)
 #   apple/                          PolyjoseFFI.xcframework.zip and .zip.sha256 (binding-apple.yml)
 # <out-dir> must not exist or be empty. It receives exactly the assets of ADR 0037 §3:
@@ -29,9 +29,10 @@
 #     (META-INF/polyjose/THIRD-PARTY-NOTICES.txt) and the XCFramework zip
 #     (PolyjoseFFI.xcframework/THIRD-PARTY-NOTICES.txt). The .crate is source only, with no
 #     third-party code in it, so it carries none (ADR 0020 §4 covers binary packages);
-#   - @polyjose/node holds exactly the 8 addons package.json `files` lists (package/polyjose.<platform>.node),
-#     and its addon-sha256.json pins exactly those 8 platforms, each to the SHA-256 of the addon it
-#     holds (feature 0007 F07: the package loads only those);
+#   - @polyjose/node holds exactly the 7 addons package.json `files` lists
+#     (package/polyjose.<platform>.node; macOS is darwin-arm64 only, ADR 0073 §2), and its
+#     addon-sha256.json pins exactly those 7 platforms, each to the SHA-256 of the addon it holds
+#     (feature 0007 F07: the package loads only those);
 #   - the XCFramework's .sha256 file is the zip's SHA-256 (the SPM checksum is SHA-256 of the zip);
 #   - the Maven repository holds exactly dev/polyjose/polyjose/<v>/ and
 #     dev/polyjose/polyjose-jvm/<v>/ (plus Gradle's maven-metadata.xml files, left out of the
@@ -96,7 +97,7 @@ for f in json.load(open(sys.argv[1], encoding="utf-8"))["files"]:
     m = re.fullmatch(r"polyjose\.([a-z0-9-]+)\.node", f)
     if m:
         print(m.group(1))' "$repo/bindings/node/package.json" | sort)
-[ "$(printf '%s\n' "$platforms" | grep -c .)" -eq 8 ] || rel_die "bindings/node/package.json files does not list 8 addons"
+[ "$(printf '%s\n' "$platforms" | grep -c .)" -eq 7 ] || rel_die "bindings/node/package.json files does not list 7 addons"
 want_npm=$(printf '%s\n' "polyjose-node-$v.tgz" "polyjose-wasm-$v.tgz" | sort)
 have_npm=$(names "$in/npm")
 [ "$have_npm" = "$want_npm" ] || rel_die "npm/ holds:
@@ -121,8 +122,8 @@ for f in $want_npm; do
   cp "$in/npm/$f" "$out/"
   echo "  ok   $f ($want $v, THIRD-PARTY-NOTICES.txt)"
 done
-# @polyjose/node holds the 8 addons, and addon-sha256.json pins each by its SHA-256 (feature 0007
-# F07, feature 0017).
+# @polyjose/node holds the 7 addons, and addon-sha256.json pins each by its SHA-256 (feature 0007
+# F07, feature 0017, ADR 0073 §2).
 want_addons=$(for p in $platforms; do echo "package/polyjose.$p.node"; done | sort)
 have_addons=$(tar -tzf "$out/polyjose-node-$v.tgz" | grep -E '^package/[^/]*\.node$' | sort || true)
 [ "$have_addons" = "$want_addons" ] || rel_die "polyjose-node-$v.tgz holds the addons:
@@ -139,9 +140,9 @@ done | sort >"$work/addons.txt"
 python3 -I -c 'import json, sys
 pins = json.load(open(sys.argv[1], encoding="utf-8"))
 print("\n".join(f"{k} {pins[k]}" for k in sorted(pins)))' "$work/main/package/addon-sha256.json" >"$work/pins.txt"
-cmp -s "$work/addons.txt" "$work/pins.txt" || rel_die "@polyjose/node's addon-sha256.json does not pin exactly the 8 addons it holds:
+cmp -s "$work/addons.txt" "$work/pins.txt" || rel_die "@polyjose/node's addon-sha256.json does not pin exactly the 7 addons it holds:
 $(diff "$work/pins.txt" "$work/addons.txt" || true)"
-echo "  ok   polyjose-node-$v.tgz holds the 8 addons; addon-sha256.json pins each by its SHA-256"
+echo "  ok   polyjose-node-$v.tgz holds the 7 addons; addon-sha256.json pins each by its SHA-256"
 
 # --- Apple --------------------------------------------------------------------------------------------
 echo "==> $me: XCFramework"

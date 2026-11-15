@@ -53,7 +53,7 @@ function inventoryOps(): string[] {
 /** Every inventory operation, plus the facade's PolyjoseError and ERROR_CODES (BACKEND.md). */
 function expectedExports(): string[] {
   const ops = inventoryOps();
-  assert.equal(ops.length, 32, "ADR 0030 §4 has 32 operations");
+  assert.equal(ops.length, 35, "ADR 0030 §4 has 32 operations, and ADR 0069 adds 3");
   return [...ops, "ERROR_CODES", "PolyjoseError"].sort();
 }
 
@@ -145,7 +145,7 @@ test("package.json is the ADR 0031 ESM package with compiled output only (ADR 00
   ]) {
     assert.ok(files.includes(required), `files lists ${required}`);
   }
-  // Feature 0017: the eight addons ship in this package, each named in the allow-list.
+  // ADR 0066, 0073 §2: the seven addons ship in this package, each named in the allow-list.
   const addons = platformDirs(pkg).map((dir) => `polyjose.${dir}.node`);
   for (const addon of addons) assert.ok(files.includes(addon), `files lists ${addon}`);
   for (const entry of files) {
@@ -180,7 +180,7 @@ function platformOf(triple: string): { dir: string; os: string; cpu: string; lib
   return { dir: `linux-${cpu}-${libc}`, os: "linux", cpu, libc: libc === "gnu" ? "glibc" : "musl" };
 }
 
-test("napi.targets are the eight targets of ADR 0031 §2", () => {
+test("napi.targets are the seven targets of ADR 0031 §2 as amended by ADR 0073 §2", () => {
   const pkg = record(readJson(path.join(pkgDir, "package.json")), "package.json");
   const targets = record(pkg["napi"], "napi")["targets"];
   assert.ok(Array.isArray(targets));
@@ -191,12 +191,11 @@ test("napi.targets are the eight targets of ADR 0031 §2", () => {
       "aarch64-pc-windows-msvc",
       "aarch64-unknown-linux-gnu",
       "aarch64-unknown-linux-musl",
-      "x86_64-apple-darwin",
       "x86_64-pc-windows-msvc",
       "x86_64-unknown-linux-gnu",
       "x86_64-unknown-linux-musl",
     ],
-    "the eight targets of ADR 0031 §2",
+    "the seven targets (macOS on Apple silicon only, ADR 0073 §2)",
   );
 });
 

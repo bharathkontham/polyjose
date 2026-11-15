@@ -237,8 +237,8 @@ jobs:
           # --no-verify: no third-party build script runs next to the token (see the package step).
           cargo publish -p polyjose --locked --no-verify
 
-  # 2. npm: @polyjose/node (the 8 addons inside it, feature 0017), then @polyjose/wasm, each the
-  # draft's tarball (scripts/release/npm-publish.sh).
+  # 2. npm: @polyjose/node (the 7 addons inside it, feature 0017, ADR 0073 §2), then
+  # @polyjose/wasm, each the draft's tarball (scripts/release/npm-publish.sh).
   npm:
     name: npm
     needs: [assets, crates]

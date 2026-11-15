@@ -1320,6 +1320,87 @@ public func FfiConverterTypeJwsSigner_lower(_ value: JwsSigner) -> RustBuffer {
 
 
 /**
+ * A compact JWS read without verifying it, the result of `decodeJwsUnverified` (ADR 0069 §1,
+ * §4; RFC 7515 §7.1). This doesn't check the signature: anyone can write these values, so
+ * don't use them for authorization or trust decisions until you verify the token. Verify it with
+ * `jwsVerifyCompact`.
+ *
+ * A distinct record from `JwsVerified`, with no `alg` and no `signatureIndex`: the `alg` is
+ * inside `protected_header`, unchecked, and may be `none` or unknown (ADR 0069 §4).
+ */
+public struct JwsUnverified: Equatable, Hashable {
+    /**
+     * The JWS Protected Header, the whole JOSE Header of a compact JWS (RFC 7515 §7.1), as the
+     * core serializes it. Unverified.
+     */
+    public var protectedHeader: String
+    /**
+     * The JWS Payload (RFC 7515 §2): base64url-decoded, the payload part's octets when `b64` is
+     * `false` (RFC 7797 §3), or empty when detached (RFC 7515 Appendix F). Unverified. Treated
+     * as secret (ADR 0049 §4, ADR 0069 §5).
+     */
+    public var payload: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The JWS Protected Header, the whole JOSE Header of a compact JWS (RFC 7515 §7.1), as the
+         * core serializes it. Unverified.
+         */protectedHeader: String, 
+        /**
+         * The JWS Payload (RFC 7515 §2): base64url-decoded, the payload part's octets when `b64` is
+         * `false` (RFC 7797 §3), or empty when detached (RFC 7515 Appendix F). Unverified. Treated
+         * as secret (ADR 0049 §4, ADR 0069 §5).
+         */payload: Data) {
+        self.protectedHeader = protectedHeader
+        self.payload = payload
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension JwsUnverified: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeJwsUnverified: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> JwsUnverified {
+        return
+            try JwsUnverified(
+                protectedHeader: FfiConverterString.read(from: &buf), 
+                payload: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: JwsUnverified, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.protectedHeader, into: &buf)
+        FfiConverterData.write(value.payload, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeJwsUnverified_lift(_ buf: RustBuffer) throws -> JwsUnverified {
+    return try FfiConverterTypeJwsUnverified.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeJwsUnverified_lower(_ value: JwsUnverified) -> RustBuffer {
+    return FfiConverterTypeJwsUnverified.lower(value)
+}
+
+
+/**
  * A verified JWS (RFC 7515 §5.2).
  */
 public struct JwsVerified: Equatable, Hashable {
@@ -1687,6 +1768,83 @@ public func FfiConverterTypeJwtSignOptions_lift(_ buf: RustBuffer) throws -> Jwt
 #endif
 public func FfiConverterTypeJwtSignOptions_lower(_ value: JwtSignOptions) -> RustBuffer {
     return FfiConverterTypeJwtSignOptions.lower(value)
+}
+
+
+/**
+ * A compact signed JWT read without verifying or validating it, the result of
+ * `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). This doesn't check the signature:
+ * anyone can write these values, so don't use them for authorization or trust decisions until
+ * you verify the token. Verify it with `jwtVerify`.
+ *
+ * No claim was validated: it may be expired or for another audience. A distinct record from
+ * `JwtVerified`, with no `alg`, `keyIndex` or `kid` (ADR 0069 §4).
+ */
+public struct JwtUnverified: Equatable, Hashable {
+    /**
+     * The JWS Protected Header, as the core serializes it (RFC 7519 §5). Unverified.
+     */
+    public var header: String
+    /**
+     * The JWT Claims Set as the core serializes it, registered claims first (ADR 0027 §1).
+     * Parsed and type-checked, not validated. Unverified.
+     */
+    public var claims: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The JWS Protected Header, as the core serializes it (RFC 7519 §5). Unverified.
+         */header: String, 
+        /**
+         * The JWT Claims Set as the core serializes it, registered claims first (ADR 0027 §1).
+         * Parsed and type-checked, not validated. Unverified.
+         */claims: String) {
+        self.header = header
+        self.claims = claims
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension JwtUnverified: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeJwtUnverified: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> JwtUnverified {
+        return
+            try JwtUnverified(
+                header: FfiConverterString.read(from: &buf), 
+                claims: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: JwtUnverified, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.header, into: &buf)
+        FfiConverterString.write(value.claims, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeJwtUnverified_lift(_ buf: RustBuffer) throws -> JwtUnverified {
+    return try FfiConverterTypeJwtUnverified.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeJwtUnverified_lower(_ value: JwtUnverified) -> RustBuffer {
+    return FfiConverterTypeJwtUnverified.lower(value)
 }
 
 
@@ -3217,6 +3375,90 @@ public func base64urlEncode(data: Data) -> String  {
 })
 }
 /**
+ * This doesn't check the signature: anyone can write these values, so don't use them for
+ * authorization or trust decisions until you verify the token.
+ *
+ * Reads the protected header and the payload of a compact JWS without verifying it
+ * (ADR 0069 §1–§4; RFC 7515 §7.1). Verify the JWS with `jwsVerifyCompact`.
+ *
+ * Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
+ * from `jku` or `x5u` (RFC 8725 §3.10).
+ *
+ * The core runs exactly verification's steps 1–5 (ADR 0048) and nothing after them, so
+ * `alg: none`, an unknown `alg` and an unknown `crit` entry come back as data in
+ * `protectedHeader`. A `b64: false` payload is the payload part's octets (RFC 7797 §3), and a
+ * detached payload is empty (RFC 7515 Appendix F). The payload is treated as secret: printing
+ * the record redacts it (ADR 0065, ADR 0069 §5).
+ *
+ * # Errors
+ *
+ * `InvalidFormat` (over 1 MiB, not 3 parts, a JSON serialization), `InvalidBase64`,
+ * `InvalidJson`, `InvalidHeader`, as the core decides, with verification's own code for each
+ * step. No error message contains any part of the JWS (ADR 0030 §5).
+ */
+public func decodeJwsUnverified(jws: String)throws  -> JwsUnverified  {
+    return try  FfiConverterTypeJwsUnverified_lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_decode_jws_unverified(
+        FfiConverterString.lower(jws),uniffiCallStatus
+    )
+})
+}
+/**
+ * This doesn't check the signature: anyone can write these values, so don't use them for
+ * authorization or trust decisions until you verify the token.
+ *
+ * Reads the header and the claims of a compact signed JWT without verifying or validating it,
+ * as JSON text (ADR 0069 §1–§2, §4; RFC 7519 §7.2). Verify the token with `jwtVerify`.
+ *
+ * No claim is validated: no `exp`, `nbf`, `iat`, `iss`, `sub`, `aud` or `typ` check, and no
+ * clock. After reading `iss` to choose a key set, verify with that issuer in `issuers`
+ * (RFC 8725 §3.8); sanitise a `kid` before using it in a lookup, and take keys from your own
+ * configuration, not from `jku` or `x5u` (RFC 8725 §3.10).
+ *
+ * # Errors
+ *
+ * Those of `decodeJwsUnverified`, plus `InvalidHeader` for `b64: false` or `cty: JWT`
+ * (RFC 7797 §7, RFC 7519 §5.2), `InvalidJson` for claims that are not one JSON object, and
+ * `InvalidClaim` for a mistyped registered claim. A five-part token is `InvalidFormat`. No error
+ * message contains any part of the token (ADR 0030 §5).
+ */
+public func decodeJwtUnverified(token: String)throws  -> JwtUnverified  {
+    return try  FfiConverterTypeJwtUnverified_lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_decode_jwt_unverified(
+        FfiConverterString.lower(token),uniffiCallStatus
+    )
+})
+}
+/**
+ * This doesn't check the signature: anyone can write these values, so don't use them for
+ * authorization or trust decisions until you verify the token.
+ *
+ * Reads the JOSE Protected Header of a compact JWS (3 parts) or JWE (5 parts) without verifying
+ * or decrypting anything, as JSON text (ADR 0069 §1–§2, §4; RFC 7515 §7.1, RFC 7516 §7.1).
+ * Verify the token with `jwtVerify` or `jwsVerifyCompact`.
+ *
+ * Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
+ * from `jku` or `x5u` (RFC 8725 §3.10). A JWK Set already selects by `kid` during
+ * `jwtVerifyWithJwks` (ADR 0029). Only the first part is read; for a nested JWT that is the
+ * outer JWE's header.
+ *
+ * # Errors
+ *
+ * `InvalidFormat` (over 1 MiB, not 3 or 5 parts), `InvalidBase64`, `InvalidJson`,
+ * `InvalidHeader`, as the core decides. No error message contains any part of the token
+ * (ADR 0030 §5).
+ */
+public func decodeProtectedHeaderUnverified(token: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_decode_protected_header_unverified(
+        FfiConverterString.lower(token),uniffiCallStatus
+    )
+})
+}
+/**
  * Every stable error code, in the core's order: equal to `polyjose::Error::CODES` and to the
  * codes of [`PolyjoseError`] (ADR 0030 §5). Bindings test their code set against it.
  */
@@ -3341,6 +3583,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_base64url_encode() != 34656) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_func_decode_jws_unverified() != 50746) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_func_decode_jwt_unverified() != 48654) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_func_decode_protected_header_unverified() != 43718) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_error_codes() != 22914) {

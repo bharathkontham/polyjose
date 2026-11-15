@@ -5,13 +5,13 @@
 #   2. the addon and its declarations: napi build --platform --release --no-js --dts binding.d.ts
 #      (polyjose.<platform>.node, binding.d.ts). --no-js: no napi-rs loader is generated, since
 #      backend.js loads the pinned addon itself (feature 0017); extra arguments go to napi build,
-#      e.g. `scripts/build.sh --target x86_64-apple-darwin`. Cargo gets `--locked` (after `--`,
+#      e.g. `scripts/build.sh --target <Rust target>`. Cargo gets `--locked` (after `--`,
 #      which napi build hands to cargo build and to its own cargo metadata), so the addon is built
 #      from the committed Cargo.lock only (review-code.md SF-3);
 #   3. addon-sha256.json: scripts/addon-hashes.sh over every polyjose.<platform>.node in the tree
-#      (the host's, plus the other darwin addon while scripts/pack.sh runs), the addon hash pin that
-#      backend.js checks before it loads anything (feature 0007 F07); the packed package gets its
-#      own map from scripts/pack-main.sh over exactly the addons it ships;
+#      (the host's), the addon hash pin that backend.js checks before it loads anything (feature
+#      0007 F07); the packed package gets its own map from scripts/pack-main.sh over exactly the
+#      addons it ships;
 #   4. facade/: the compiled facade (.js and the generated .d.ts) copied from bindings/js/dist/src;
 #   5. tsc: src/*.ts to the package root (index.js, backend.js and their .d.ts), then test/*.ts to
 #      dist/.

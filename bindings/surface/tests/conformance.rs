@@ -666,6 +666,9 @@ fn execute(vector: &Value) -> Result<Outcome, String> {
         "jwe.decrypt" => jwe_decrypt(input, &mut out),
         "jwt.validate" => jwt_validate(input, &mut out),
         "jwt.issue" => jwt_issue(input, expect, &mut out),
+        "util.decode_protected_header" => util_decode_protected_header(input, &mut out),
+        "util.decode_jws" => util_decode_jws(input, &mut out),
+        "util.decode_jwt" => util_decode_jwt(input, &mut out),
         other => {
             return Err(format!(
                 "operation `{other}` is not implemented by the rust-surface runner; a vector is \
@@ -846,6 +849,44 @@ fn jws_verify(input: &Object, out: &mut Object) -> Step<()> {
     );
     out.insert("alg", verified.alg.as_str());
     out.insert("signature_index", index(verified.signature_index));
+    Ok(())
+}
+
+/// `util.decode_protected_header` → `decode_protected_header_unverified(token)` (ADR 0069 §1):
+/// `header` = the returned JSON text, parsed.
+fn util_decode_protected_header(input: &Object, out: &mut Object) -> Step<()> {
+    let header = util::decode_protected_header_unverified(str_of(input, "token"))?;
+    out.insert("header", parse_output(&header, "the decoded header")?);
+    Ok(())
+}
+
+/// `util.decode_jws` → `decode_jws_unverified(jws)` (ADR 0069 §1): `protected` =
+/// `JwsUnverified.protected_header` parsed, `payload_b64u` = `JwsUnverified.payload`.
+fn util_decode_jws(input: &Object, out: &mut Object) -> Step<()> {
+    let decoded = util::decode_jws_unverified(str_of(input, "jws"))?;
+    out.insert(
+        "protected",
+        parse_output(&decoded.protected_header, "the decoded protected header")?,
+    );
+    out.insert(
+        "payload_b64u",
+        util::base64url_encode(decoded.payload.as_bytes()),
+    );
+    Ok(())
+}
+
+/// `util.decode_jwt` → `decode_jwt_unverified(token)` (ADR 0069 §1): `header` and `claims` =
+/// `JwtUnverified.header` and `.claims`, parsed.
+fn util_decode_jwt(input: &Object, out: &mut Object) -> Step<()> {
+    let decoded = util::decode_jwt_unverified(str_of(input, "token"))?;
+    out.insert(
+        "header",
+        parse_output(&decoded.header, "the decoded header")?,
+    );
+    out.insert(
+        "claims",
+        parse_output(&decoded.claims, "the decoded claims")?,
+    );
     Ok(())
 }
 

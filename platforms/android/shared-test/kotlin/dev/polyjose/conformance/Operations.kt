@@ -13,6 +13,9 @@ import dev.polyjose.JwtVerifyOptions
 import dev.polyjose.PolyjoseException
 import dev.polyjose.base64urlDecode
 import dev.polyjose.base64urlEncode
+import dev.polyjose.decodeJwsUnverified
+import dev.polyjose.decodeJwtUnverified
+import dev.polyjose.decodeProtectedHeaderUnverified
 import dev.polyjose.jweDecryptCompact
 import dev.polyjose.jweDecryptJson
 import dev.polyjose.jweEncryptCompact
@@ -255,6 +258,26 @@ internal object Operations {
         },
         // jwt.issue → jwtSign, then jwtEncryptNested with `encrypt` (RFC 7519 §7.1; ADR 0027 §7-§8).
         "jwt.issue" to { input, expect, text, out -> jwtIssue(input, expect, text, out) },
+
+        // util.decode_protected_header → decodeProtectedHeaderUnverified(token) (ADR 0069 §1; RFC 7515
+        // §7.1, RFC 7516 §7.1): `header` = the returned JSON text, parsed.
+        "util.decode_protected_header" to { input, _, _, out ->
+            out["header"] = parseOutput(lib { decodeProtectedHeaderUnverified(str(input["token"])) }, "the decoded header")
+        },
+        // util.decode_jws → decodeJwsUnverified(jws) (ADR 0069 §1; RFC 7515 §7.1): `protected` =
+        // protectedHeader parsed, `payload_b64u` = the payload.
+        "util.decode_jws" to { input, _, _, out ->
+            val decoded = lib { decodeJwsUnverified(str(input["jws"])) }
+            out["protected"] = parseOutput(decoded.protectedHeader, "the decoded protected header")
+            out["payload_b64u"] = base64urlEncode(decoded.payload)
+        },
+        // util.decode_jwt → decodeJwtUnverified(token) (ADR 0069 §1; RFC 7519 §7.2): `header` and
+        // `claims`, each parsed.
+        "util.decode_jwt" to { input, _, _, out ->
+            val decoded = lib { decodeJwtUnverified(str(input["token"])) }
+            out["header"] = parseOutput(decoded.header, "the decoded header")
+            out["claims"] = parseOutput(decoded.claims, "the decoded claims")
+        },
     )
 
     private fun jwsSign(input: Obj, expect: Obj, text: JsonText, out: Out) {

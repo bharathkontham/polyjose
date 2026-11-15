@@ -108,7 +108,7 @@ pub(crate) mod tests {
     /// are wiped too. `ToJs for String` and the JWT records move every string into a `Zeroizing`
     /// owner and copy it into V8 from the borrow, so no task hands napi an owned `String`
     /// (`no_task_resolves_with_an_owned_string`).
-    const NON_SECRET_TASKS: [&str; 14] = [
+    const NON_SECRET_TASKS: [&str; 16] = [
         "JwkToPublicTask",
         "JwkThumbprintTask",
         "JwkThumbprintUriTask",
@@ -125,15 +125,21 @@ pub(crate) mod tests {
         "JwtVerifyWithJwksTask",
         "JwtDecryptNestedTask",
         "JwtDecryptNestedWithJwksTask",
+        // The unverified decode's header and JWT results: headers and claims, plain as above
+        // (ADR 0069 §5), wiped by the adapter all the same.
+        "DecodeProtectedHeaderUnverifiedTask",
+        "DecodeJwtUnverifiedTask",
     ];
 
     /// The result types a secret-output task may resolve through: each builds its JS value by
     /// copying from a borrow (`env.create_string`, `Uint8ArraySlice::copy_from`).
-    const SECRET_OUTPUTS: [&str; 4] = [
+    const SECRET_OUTPUTS: [&str; 5] = [
         "SecretString",
         "SecretBytes",
         "surface::JwsVerified",
         "surface::JweDecrypted",
+        // Its payload is secret (ADR 0069 §5).
+        "surface::JwsUnverified",
     ];
 
     /// `(task name, result type)` of every `surface_task!` in the crate.
@@ -397,8 +403,8 @@ pub(crate) mod tests {
     #[test]
     fn secret_outputs_never_resolve_as_a_plain_string() {
         let tasks = declared_tasks();
-        // 31 operations plus the test task of task.rs; version and errorCodes are synchronous.
-        assert_eq!(tasks.len(), 32, "{tasks:?}");
+        // 34 operations plus the test task of task.rs; version and errorCodes are synchronous.
+        assert_eq!(tasks.len(), 35, "{tasks:?}");
         for (name, out) in &tasks {
             if NON_SECRET_TASKS.contains(&name.as_str()) {
                 continue;
@@ -493,7 +499,9 @@ pub(crate) mod tests {
                 "JwsVerified",
                 "JweDecrypted",
                 "JwtVerified",
-                "JwtNestedVerified"
+                "JwtNestedVerified",
+                "JwsUnverified",
+                "JwtUnverified"
             ]
         );
         for (name, fields) in &outputs {

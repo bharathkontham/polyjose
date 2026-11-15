@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Six parts is neither a compact JWS nor a compact JWE: InvalidFormat (ADR 0069 §2)",
+  "operation": "util.decode_protected_header",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIn0.a.b.c.d.e"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

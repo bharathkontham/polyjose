@@ -557,6 +557,62 @@ impl<'env> ToJs<'env> for surface::JwtNestedVerified {
     }
 }
 
+// ------------------------------------------------------------------------------------------------
+// Utilities: unverified decode (ADR 0069)
+// ------------------------------------------------------------------------------------------------
+
+/// A compact JWS read without verifying it: the result of `decodeJwsUnverified` (ADR 0069 §1,
+/// §4; RFC 7515 §7.1). This doesn't check the signature: anyone can write these values, so
+/// don't use them for authorization or trust decisions until you verify the token. Verify it with
+/// `jwsVerifyCompact`. It has no `alg` and no `signatureIndex`, unlike
+/// [`JwsVerified`].
+#[napi(object, object_from_js = false)]
+pub struct JwsUnverified<'env> {
+    /// The JWS Protected Header as JSON text (RFC 7515 §7.1).
+    pub protected_header: JsString<'env>,
+    /// The payload octets, copied from the surface's zeroizing buffer (ADR 0069 §5,
+    /// ADR 0030 §7.2).
+    pub payload: Uint8ArraySlice<'env>,
+}
+
+impl<'env> ToJs<'env> for surface::JwsUnverified {
+    type Js = JwsUnverified<'env>;
+
+    fn to_js(self, env: &'env Env) -> napi::Result<JwsUnverified<'env>> {
+        let protected_header = Zeroizing::new(self.protected_header);
+        Ok(JwsUnverified {
+            payload: Uint8ArraySlice::copy_from(env, self.payload.as_bytes())?,
+            protected_header: js_string(env, &protected_header)?,
+        })
+    }
+}
+
+/// A compact signed JWT read without verifying or validating it: the result of
+/// `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). This doesn't check the signature:
+/// anyone can write these values, so don't use them for authorization or trust decisions until
+/// you verify the token. Verify it with `jwtVerify`. It has no `alg`, `keyIndex`
+/// or `kid`, unlike [`JwtVerified`].
+#[napi(object, object_from_js = false)]
+pub struct JwtUnverified<'env> {
+    /// The JWS Protected Header as JSON text (RFC 7519 §5).
+    pub header: JsString<'env>,
+    /// The claims as the core's JSON serialization (ADR 0027 §1), not validated.
+    pub claims: JsString<'env>,
+}
+
+impl<'env> ToJs<'env> for surface::JwtUnverified {
+    type Js = JwtUnverified<'env>;
+
+    fn to_js(self, env: &'env Env) -> napi::Result<JwtUnverified<'env>> {
+        let header = Zeroizing::new(self.header);
+        let claims = Zeroizing::new(self.claims);
+        Ok(JwtUnverified {
+            header: js_string(env, &header)?,
+            claims: js_string(env, &claims)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

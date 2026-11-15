@@ -8,7 +8,7 @@ import XCTest
 /// `String(describing:)`, `String(reflecting:)`, `print`, `debugPrint` and `dump`. The secret
 /// fields are the ones ADR 0030 §7 lists as secret-bearing: private JWKs and PBES2 passwords
 /// (`JwsSigner.key`, `JweRecipient.key`), JWS payloads (`JwsVerified.payload`,
-/// `JwsVerifyOptions.detachedPayload`, ADR 0049 §4), JWE plaintext (`JweDecrypted.plaintext`) and
+/// `JwsUnverified.payload`, `JwsVerifyOptions.detachedPayload`, ADR 0049 §4, ADR 0069 §5), JWE plaintext (`JweDecrypted.plaintext`) and
 /// `aad` (`JweDecrypted.aad`, `JweEncryptOptions.aad`, ADR 0050 §4). JWT claims are not redacted
 /// (ADR 0058 decision 2, ADR 0065 §3).
 final class RedactionTests: XCTestCase {
@@ -78,6 +78,11 @@ final class RedactionTests: XCTestCase {
         assertRedacted(verified, showing: ["payload: \(Self.dataBytes)"])
     }
 
+    func testJwsUnverifiedPayloadIsRedacted() {
+        let decoded = JwsUnverified(protectedHeader: #"{"alg":"none"}"#, payload: Self.markerBytes)
+        assertRedacted(decoded, showing: ["payload: \(Self.dataBytes)"])
+    }
+
     func testJweDecryptedPlaintextAndAadAreRedacted() {
         let decrypted = JweDecrypted(
             plaintext: Self.markerBytes, header: #"{"alg":"dir","enc":"A256GCM"}"#, aad: Self.markerBytes,
@@ -114,6 +119,11 @@ final class RedactionTests: XCTestCase {
         XCTAssertEqual(verified.payload, Self.markerBytes)
         assertRedacted(verified, showing: ["payload: \(Self.dataBytes)"])
 
+        // ADR 0069 §5: the payload of an unverified decode of the same token.
+        let decoded = try decodeJwsUnverified(jws: token)
+        XCTAssertEqual(decoded.payload, Self.markerBytes)
+        assertRedacted(decoded, showing: ["payload: \(Self.dataBytes)"])
+
         let jwe = try jweEncryptJson(
             plaintext: Self.markerBytes,
             options: JweEncryptOptions(enc: "A256GCM", recipients: [JweRecipient(alg: "dir", key: key)], aad: Self.markerBytes),
@@ -147,6 +157,13 @@ final class RedactionTests: XCTestCase {
         XCTAssertEqual(
             String(reflecting: verified),
             #"Polyjose.JwsVerified(alg: "HS256", payload: \#(Self.dataBytes), protectedHeader: nil, unprotectedHeader: nil, signatureIndex: 3)"#)
+        let decoded = JwsUnverified(protectedHeader: #"{"alg":"none"}"#, payload: Self.markerBytes)
+        XCTAssertEqual(
+            String(describing: decoded),
+            #"JwsUnverified(protectedHeader: "{\"alg\":\"none\"}", payload: \#(Self.dataBytes))"#)
+        XCTAssertEqual(
+            String(reflecting: decoded),
+            #"Polyjose.JwsUnverified(protectedHeader: "{\"alg\":\"none\"}", payload: \#(Self.dataBytes))"#)
     }
 
     /// The Mirror keeps every field, in declaration order, with the secret ones replaced by their
@@ -170,6 +187,24 @@ final class RedactionTests: XCTestCase {
         XCTAssertTrue(dumped.contains("- recipientIndex: 2\n"), dumped)
     }
 
+    /// `JwsUnverified`'s Mirror (ADR 0065 §2, ADR 0069 §5): both fields in order, the payload a
+    /// redacted form with no byte children, the header printed as is.
+    func testJwsUnverifiedMirrorHasNoPayloadBytes() {
+        let decoded = JwsUnverified(protectedHeader: #"{"alg":"none"}"#, payload: Self.markerBytes)
+        let mirror = Mirror(reflecting: decoded)
+        XCTAssertEqual(mirror.displayStyle, .struct)
+        XCTAssertEqual(mirror.children.map { $0.label ?? "" }, ["protectedHeader", "payload"])
+        for child in mirror.children where child.label == "payload" {
+            XCTAssertFalse(child.value is Data, "payload is a Data child")
+            XCTAssertEqual(String(describing: child.value), Self.dataBytes)
+            XCTAssertTrue(Mirror(reflecting: child.value).children.isEmpty)
+        }
+        var dumped = ""
+        dump(decoded, to: &dumped)
+        XCTAssertTrue(dumped.contains("- payload: \(Self.dataBytes)\n"), dumped)
+        XCTAssertTrue(dumpedBytes(dumped).isEmpty, dumped)
+    }
+
     /// The README's wipe of a returned `Data` (ADR 0030 §7.4) compiles and zeroes the field.
     func testReadmeWipeZeroesTheField() {
         var verified = JwsVerified(alg: "HS256", payload: Data(Self.markerBytes), signatureIndex: 0)
@@ -181,5 +216,8 @@ final class RedactionTests: XCTestCase {
     func testJwtClaimsAreNotRedacted() {
         let verified = JwtVerified(claims: #"{"sub":"\#(Self.marker)"}"#, header: "{}", alg: "HS256")
         XCTAssertTrue(String(describing: verified).contains(Self.marker))
+        // ADR 0065 §3, ADR 0069 §5: nor are an unverified decode's claims.
+        let decoded = JwtUnverified(header: "{}", claims: #"{"sub":"\#(Self.marker)"}"#)
+        XCTAssertTrue(String(describing: decoded).contains(Self.marker))
     }
 }

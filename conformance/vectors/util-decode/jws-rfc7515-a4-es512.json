@@ -1,0 +1,15 @@
+{
+  "source": "RFC 7515 App. A.4",
+  "description": "Decoding the A.4 ES512 JWS unverified returns its header {\"alg\":\"ES512\"} and the A.4.1 payload \"Payload\"",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJFUzUxMiJ9.UGF5bG9hZA.AdwMgeerwtHoh-l192l60hp9wAHZFVJbLfD_UxMi70cwnZOYaRI1bKPWROc-mZZqwqT2SI-KGDKB34XO0aw_7XdtAG8GaSwFKdCAPZgoXD2YBJZCPEX3xKpRwcdOO8KpEHwJjyqOgzDO7iKvU8vcnwNrmxYbSW9ERBXukOXolLzeO_Jn"
+  },
+  "expect": {
+    "ok": true,
+    "protected": {
+      "alg": "ES512"
+    },
+    "payload_b64u": "UGF5bG9hZA"
+  }
+}

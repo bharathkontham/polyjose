@@ -379,7 +379,11 @@ const KNOWN: &[Known] = &[
     known("jwsVerifyJson(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
     known("jwsVerifyJson(HS512)", "payload (base64url)", r(4, 0, 0), r(2, 0, 0), HASH_INPUT),
     known("jwtDecryptNested", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
+    // aes key-schedule copy, carried by the inner Header's stale padding
+    known("jwtDecryptNested", "key-encryption k", r(0, 0, 0), r(0, 6, 0), AES_KEY),
     known("jwtDecryptNestedWithJwks", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
+    // aes key-schedule copy, carried by the inner Header's stale padding
+    known("jwtDecryptNestedWithJwks", "key-encryption k", r(0, 0, 0), r(0, 6, 0), AES_KEY),
     known("jwtEncryptNested(A128KW + A128GCM)", "key-encryption k", r(0, 0, 0), r(1, 1, 0), AES_KEY),
     known("jwtSign(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
     known("jwtVerify(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
@@ -1122,6 +1126,37 @@ fn jws_sign_and_verify() {
     ]);
     let (m, _) = measure(|| ok(jws::jws_verify_compact(s(&token), s(&key), &policy)));
     r.check("jwsVerifyCompact(HS512, detached)", &m, &all);
+    r.finish();
+}
+
+/// The unverified JWS decode (ADR 0069 §5): the payload is secret like every JWS payload, so the
+/// token (which embeds it as base64url) and the decoded octets leave no copy, and the result's
+/// `Uint8Array` is copied from the surface's wiping buffer (ADR 0030 §7.2). The signing call is
+/// setup and is not measured.
+#[wasm_bindgen_test]
+fn jws_decode_unverified() {
+    let mut r = Report::new();
+    for alg in ["HS256", "ES256"] {
+        let key = if alg == "HS256" {
+            oct(32).0
+        } else {
+            p256_jwk()
+        };
+        let payload = payload();
+        let options = object(&[("protectedHeader", protected(alg))]);
+        let token = js(jws::jws_sign_compact(
+            b(&payload.raw.bytes),
+            s(&key),
+            &options,
+        ));
+        let (m, out) = measure(|| ok(util::decode_jws_unverified(s(&token))));
+        assert!(bytes_equal(&get(&out, "payload"), &payload.raw.bytes));
+        r.check(
+            &format!("decodeJwsUnverified({alg})"),
+            &m,
+            &[&payload.raw, &payload.text],
+        );
+    }
     r.finish();
 }
 

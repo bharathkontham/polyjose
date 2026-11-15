@@ -41,6 +41,9 @@
 //!   the first error, a JWK or JWK Set import error included, being the
 //!   outcome; claims compared as JSON values; and an issued token checked
 //!   exactly, or by validating it with `validate`;
+//! - for `util.decode_protected_header`, `util.decode_jws` and
+//!   `util.decode_jwt` (ADR 0069), one call with the token as given; the
+//!   header and claims compared as JSON values, the payload as base64url;
 //! - a success expectation lists exactly the outputs, so an optional one
 //!   (`key_index`) can't be left out unnoticed;
 //! - a vector whose optional top-level `features` names a cargo feature
@@ -73,7 +76,7 @@ use polyjose::jwk::{EcCurve, Jwk, JwkSelector, JwkSet, KeyAlg, KeyUse, OkpCurve,
 use polyjose::jws::{self, ProtectedHeader, SignOptions, Signer, VerifyOptions};
 use polyjose::jwt::{self, Claims, FixedClock, IssueOptions, Keys, Policy, VerifiedJwt};
 use polyjose::keys::{JoseAlg, KeyFormat, KeySpec, generate, generate_for};
-use polyjose::util::{b64url_decode, b64url_encode};
+use polyjose::util::{self, b64url_decode, b64url_encode};
 // The vector-set digest's SHA-256 (ADR 0060 §5): the `sha2` crate called
 // directly as a test oracle, never polyjose's API under test.
 use sha2::{Digest, Sha256};
@@ -146,6 +149,9 @@ const OPERATIONS: &[&str] = &[
     "jwe.decrypt",
     "jwt.validate",
     "jwt.issue",
+    "util.decode_protected_header",
+    "util.decode_jws",
+    "util.decode_jwt",
 ];
 
 /// `$defs/hex/pattern`: lowercase hex, two digits per octet.
@@ -873,6 +879,48 @@ const JWT_ISSUE_VALIDATED: Shape = Shape {
     rules: &[],
 };
 
+// ADR 0069: the unverified decode utilities, token in (any string,
+// malformed tokens are under test). The header peek reads a compact JWS or
+// JWE (RFC 7515 §7.1, RFC 7516 §7.1); the JWS decode runs ADR 0048 steps
+// 1–5 only; the JWT decode adds J1's policy-free rules and the claims
+// parse (RFC 7519 §7.2 step 10).
+const UTIL_DECODE_PROTECTED_HEADER_INPUT: Shape = Shape {
+    def: "util_decode_protected_header_input",
+    members: &[req("token", Kind::String)],
+    rules: &[],
+};
+/// The header as the library serializes it, compared as a JSON value.
+const UTIL_DECODE_PROTECTED_HEADER_OK: Shape = Shape {
+    def: "util_decode_protected_header_ok",
+    members: &[req("header", Kind::Object)],
+    rules: &[],
+};
+const UTIL_DECODE_JWS_INPUT: Shape = Shape {
+    def: "util_decode_jws_input",
+    members: &[req("jws", Kind::String)],
+    rules: &[],
+};
+/// The JWS Protected Header (a JSON value) and the payload octets.
+const UTIL_DECODE_JWS_OK: Shape = Shape {
+    def: "util_decode_jws_ok",
+    members: &[
+        req("protected", Kind::Object),
+        req("payload_b64u", Kind::Base64url),
+    ],
+    rules: &[],
+};
+const UTIL_DECODE_JWT_INPUT: Shape = Shape {
+    def: "util_decode_jwt_input",
+    members: &[req("token", Kind::String)],
+    rules: &[],
+};
+/// The header and the Claims Set, each compared as a JSON value.
+const UTIL_DECODE_JWT_OK: Shape = Shape {
+    def: "util_decode_jwt_ok",
+    members: &[req("header", Kind::Object), req("claims", Kind::Object)],
+    rules: &[],
+};
+
 /// The operations this runner implements.
 const SPECS: &[OpSpec] = &[
     OpSpec {
@@ -981,6 +1029,24 @@ const SPECS: &[OpSpec] = &[
         name: "jwt.issue",
         input: &JWT_ISSUE_INPUT,
         ok: &[&JWT_ISSUE_EXACT, &JWT_ISSUE_VALIDATED],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "util.decode_protected_header",
+        input: &UTIL_DECODE_PROTECTED_HEADER_INPUT,
+        ok: &[&UTIL_DECODE_PROTECTED_HEADER_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "util.decode_jws",
+        input: &UTIL_DECODE_JWS_INPUT,
+        ok: &[&UTIL_DECODE_JWS_OK],
+        can_fail: true,
+    },
+    OpSpec {
+        name: "util.decode_jwt",
+        input: &UTIL_DECODE_JWT_INPUT,
+        ok: &[&UTIL_DECODE_JWT_OK],
         can_fail: true,
     },
 ];
@@ -2723,6 +2789,55 @@ fn run_jwks_select(input: &Object, out: &mut Object) -> Result<(), Error> {
     Ok(())
 }
 
+/// A header as the library serializes it ([`Header::to_object`]), for
+/// comparison as a JSON value.
+fn header_value(header: &Header) -> Result<Value, String> {
+    header
+        .to_object()
+        .map(Value::from)
+        .map_err(|e| format!("the decoded header does not serialize: {}", e.code()))
+}
+
+/// `util.decode_protected_header`, `util.decode_jws` and `util.decode_jwt`
+/// (ADR 0069): one call each, with the token exactly as given. Headers and
+/// claims are written as the library serializes them, the payload as
+/// canonical base64url.
+fn run_util_decode(
+    operation: &str,
+    input: &Object,
+    out: &mut Object,
+) -> Result<Result<(), Error>, String> {
+    match operation {
+        "util.decode_protected_header" => {
+            let header = match util::decode_protected_header_unverified(input_str(input, "token")) {
+                Ok(header) => header,
+                Err(e) => return Ok(Err(e)),
+            };
+            out.insert("header", header_value(&header)?);
+        }
+        "util.decode_jws" => {
+            let decoded = match util::decode_jws_unverified(input_str(input, "jws")) {
+                Ok(decoded) => decoded,
+                Err(e) => return Ok(Err(e)),
+            };
+            out.insert("protected", header_value(&decoded.protected)?);
+            out.insert("payload_b64u", b64url_encode(&decoded.payload));
+        }
+        _ => {
+            let decoded = match util::decode_jwt_unverified(input_str(input, "token")) {
+                Ok(decoded) => decoded,
+                Err(e) => return Ok(Err(e)),
+            };
+            out.insert("header", header_value(&decoded.header)?);
+            let claims = json::parse(decoded.claims.to_json().as_bytes()).map_err(|e| {
+                format!("the decoded claims do not serialize as JSON: {}", e.code())
+            })?;
+            out.insert("claims", claims);
+        }
+    }
+    Ok(Ok(()))
+}
+
 /// Runs the operation through the public API: the success outputs, or the
 /// library's error.
 fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
@@ -2822,6 +2937,11 @@ fn execute(vector: &Vector) -> Result<Result<Object, Error>, String> {
         }
         "jwt.issue" => {
             if let Err(e) = run_jwt_issue(input, &vector.expect, &mut out)? {
+                return Ok(Err(e));
+            }
+        }
+        "util.decode_protected_header" | "util.decode_jws" | "util.decode_jwt" => {
+            if let Err(e) = run_util_decode(&vector.operation, input, &mut out)? {
                 return Ok(Err(e));
             }
         }
@@ -7481,16 +7601,18 @@ fn jwt_issue_mismatches_fail() {
 }
 
 /// The JWT vectors the binding-readiness rule covers: everything under
-/// `jwt/`, and any `jwt.*` vector elsewhere.
+/// `jwt/` and `util-decode/`, and any `jwt.*` or `util.*` vector elsewhere.
 fn needs_jwt_binding_readiness(relative: &Path, text: &str) -> bool {
+    // The `util.*` decode vectors (ADR 0069) carry headers and claims as
+    // JSON objects, so they follow the JWT number rule too.
     let jwt_dir = relative
         .components()
         .next()
-        .is_some_and(|c| c.as_os_str() == "jwt");
+        .is_some_and(|c| c.as_os_str() == "jwt" || c.as_os_str() == "util-decode");
     let jwt_operation = parse_vector_file(text.as_bytes()).is_ok_and(|v| {
         v.get("operation")
             .and_then(Value::as_str)
-            .is_some_and(|op| op.starts_with("jwt."))
+            .is_some_and(|op| op.starts_with("jwt.") || op.starts_with("util."))
     });
     jwt_dir || jwt_operation
 }

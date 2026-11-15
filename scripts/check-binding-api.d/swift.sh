@@ -55,7 +55,7 @@ SWIFT_ERROR="PolyjoseError"
 SWIFT_GENERATED_FILE="Polyjose.swift"
 SWIFT_GENERATED_CONFORMANCES="Sendable"
 SWIFT_REDACTION_FILE="Redaction.swift"
-SWIFT_REDACTED_RECORDS="JweDecrypted JweEncryptOptions JweRecipient JwsSigner JwsVerified JwsVerifyOptions"
+SWIFT_REDACTED_RECORDS="JweDecrypted JweEncryptOptions JweRecipient JwsSigner JwsUnverified JwsVerified JwsVerifyOptions"
 # Each printing protocol, with its one member's name and type.
 SWIFT_REDACTION_MEMBERS="CustomStringConvertible:description:String CustomDebugStringConvertible:debugDescription:String CustomReflectable:customMirror:Mirror"
 

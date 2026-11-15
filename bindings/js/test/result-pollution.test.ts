@@ -28,7 +28,7 @@ function inventoryResultRecords(): Map<string, { name: string; optional: boolean
     const rec = /^record (\w+)$/.exec(line);
     if (rec !== null) {
       const name = rec[1] ?? "";
-      current = /(Verified|Decrypted)$/.test(name) ? [] : undefined;
+      current = /(Verified|Unverified|Decrypted)$/.test(name) ? [] : undefined;
       if (current !== undefined) records.set(name, current);
       continue;
     }
@@ -97,6 +97,8 @@ const USES: Readonly<Record<string, readonly { op: Operation; call: (api: Api) =
     { op: "jwtDecryptNested", call: (a) => a["jwtDecryptNested"]!("t", KEY, DECRYPT, KEY, VERIFY) },
     { op: "jwtDecryptNestedWithJwks", call: (a) => a["jwtDecryptNestedWithJwks"]!("t", KEY, DECRYPT, JWKS, VERIFY) },
   ],
+  JwsUnverified: [{ op: "decodeJwsUnverified", call: (a) => a["decodeJwsUnverified"]!("a.b.c") }],
+  JwtUnverified: [{ op: "decodeJwtUnverified", call: (a) => a["decodeJwtUnverified"]!("a.b.c") }],
 };
 
 const RESULTS = inventoryResultRecords();

@@ -1,0 +1,15 @@
+{
+  "source": "RFC 7516 App. A.3",
+  "description": "The header peek of the compact JWE (five parts, RFC 7516 §7.1) returns the A.3.1 header {\"alg\":\"A128KW\",\"enc\":\"A128CBC-HS256\"}, without decrypting anything",
+  "operation": "util.decode_protected_header",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0.6KB707dM9YTIgHtLvtgWQ8mKwboJW3of9locizkDTHzBC2IlrT1oOQ.AxY8DCtDaGlsbGljb3RoZQ.KDlTtXchhZTGufMYmOYGS4HffxPSUrfmqCHXaI9wOGY.U0m_YmjN04DJvceFICbCVQ"
+  },
+  "expect": {
+    "ok": true,
+    "header": {
+      "alg": "A128KW",
+      "enc": "A128CBC-HS256"
+    }
+  }
+}

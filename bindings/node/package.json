@@ -26,7 +26,6 @@
     "backend.d.ts",
     "facade/*.js",
     "facade/*.d.ts",
-    "polyjose.darwin-x64.node",
     "polyjose.darwin-arm64.node",
     "polyjose.linux-x64-gnu.node",
     "polyjose.linux-arm64-gnu.node",
@@ -42,7 +41,6 @@
   "napi": {
     "binaryName": "polyjose",
     "targets": [
-      "x86_64-apple-darwin",
       "aarch64-apple-darwin",
       "x86_64-unknown-linux-gnu",
       "aarch64-unknown-linux-gnu",

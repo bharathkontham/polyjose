@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A padded signature part is not strict base64url (RFC 7515 §2): InvalidBase64 at ADR 0048 step 2, although the signature is never checked",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiJ9.aGVsbG8.c2lnbmF0dXJl="
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

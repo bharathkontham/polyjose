@@ -11,10 +11,12 @@
 # Rust crate (cargo's fingerprints), and only the XCFramework itself is reassembled.
 #
 # The 5 libraries (ADR 0032 §1, without the tvOS and visionOS libraries: owner decision
-# 2026-11-08, feature 0012); two Rust targets are merged with lipo where a library has two:
-#   macos-arm64_x86_64          aarch64-apple-darwin + x86_64-apple-darwin
+# 2026-11-08, feature 0012). Every macOS and simulator library is arm64 only, with no x86_64
+# (Apple silicon only, ADR 0073 §2); the watchOS device library merges its two Rust targets with
+# lipo:
+#   macos-arm64                 aarch64-apple-darwin
 #   ios-arm64                   aarch64-apple-ios
-#   ios-arm64_x86_64-simulator  aarch64-apple-ios-sim + x86_64-apple-ios
+#   ios-arm64-simulator         aarch64-apple-ios-sim
 #   watchos-arm64_arm64_32      aarch64-apple-watchos + arm64_32-apple-watchos
 #   watchos-arm64-simulator     aarch64-apple-watchos-sim
 # Every target is tier 2 on the stable toolchain of rust-toolchain.toml (the aarch64 watchOS
@@ -183,10 +185,8 @@ add_library() {
 
 core_start="$SECONDS"
 a_macos_arm64="$(build_target aarch64-apple-darwin stable)"
-a_macos_x86_64="$(build_target x86_64-apple-darwin stable)"
 a_ios="$(build_target aarch64-apple-ios stable)"
 a_ios_sim_arm64="$(build_target aarch64-apple-ios-sim stable)"
-a_ios_sim_x86_64="$(build_target x86_64-apple-ios stable)"
 core_seconds=$((SECONDS - core_start))
 
 extra_start="$SECONDS"
@@ -217,9 +217,9 @@ cp "$stage/generated/PolyjoseFFI.h" "$headers/PolyjoseFFI/PolyjoseFFI.h"
 cp "$stage/generated/PolyjoseFFI.modulemap" "$headers/PolyjoseFFI/module.modulemap"
 gen_seconds=$((SECONDS - gen_start))
 
-add_library macos-arm64_x86_64 "$a_macos_arm64" "$a_macos_x86_64"
+add_library macos-arm64 "$a_macos_arm64"
 add_library ios-arm64 "$a_ios"
-add_library ios-arm64_x86_64-simulator "$a_ios_sim_arm64" "$a_ios_sim_x86_64"
+add_library ios-arm64-simulator "$a_ios_sim_arm64"
 if [ "$with_arm64_32" = 1 ]; then
   add_library watchos-arm64_arm64_32 "$a_watchos_arm64" "$a_watchos_arm64_32"
 else

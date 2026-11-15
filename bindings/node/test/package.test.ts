@@ -1,21 +1,20 @@
 // The packed @polyjose/node tarball (feature 0007 T04, feature 0017; ADR 0031 §4, ADR 0020 §4,
-// ADR 0011), run with `node --test` by scripts/pack.sh right after it writes it to dist/npm/.
-// test.sh does not run this file: packing builds the darwin-x64 addon too, which the host suite
-// does not need.
+// ADR 0011, ADR 0073 §2), run with `node --test` by scripts/pack.sh right after it writes it to
+// dist/npm/. test.sh does not run this file: packing builds the release profile and regenerates
+// the notices, which the host suite does not need.
 //
 // It checks what would be published, read back from the tarball itself (`tar`):
 //   - pack.sh, pack-main.sh and build.sh never publish: no `npm publish`, `napi pre-publish`;
 //   - the tarball holds exactly package.json plus the `files` of package.json that the Mac build
-//     has (the two darwin addons of the eight), compiled output only, with the sourceMappingURL
-//     comments removed (the maps are not shipped);
-//   - each addon is a Mach-O for its CPU, byte-equal to the build's;
-//   - THIRD-PARTY-NOTICES.txt is the one scripts/third-party-notices.sh generates for the two
-//     darwin targets together, and names napi and the crypto crates, not wasm-bindgen;
+//     has (the darwin-arm64 addon of the seven; macOS is Apple silicon only, ADR 0073 §2),
+//     compiled output only, with the sourceMappingURL comments removed (the maps are not shipped);
+//   - the addon is a Mach-O for its CPU, byte-equal to the build's;
+//   - THIRD-PARTY-NOTICES.txt is the one scripts/third-party-notices.sh generates for the
+//     darwin-arm64 target, and names napi and the crypto crates, not wasm-bindgen;
 //   - every package.json version equals the workspace version;
-//   - addon-sha256.json pins exactly the two addons in the tarball, by their SHA-256 (F07);
+//   - addon-sha256.json pins exactly the addon in the tarball, by its SHA-256 (F07);
 //   - installing the tarball alone into a temporary directory, offline, gives a package that
-//     `import`s by name and round-trips jwsSignCompact and jwsVerifyCompact. The darwin-x64 addon
-//     cannot run on an Apple-silicon Mac without Rosetta, so it is checked by contents only.
+//     `import`s by name and round-trips jwsSignCompact and jwsVerifyCompact.
 import { assert, fs, os, path, test } from "../../js/dist/node/builtins.js";
 import type * as Api from "@polyjose/node";
 
@@ -64,10 +63,9 @@ const pkgDir = path.resolve(path.dirname(thisFile), "..");
 const repo = path.resolve(pkgDir, "..", "..");
 const outDir = path.join(pkgDir, "dist", "npm");
 
-/** The darwin addons pack.sh builds on this Mac, with their Rust target and Mach-O CPU. */
+/** The darwin addon pack.sh builds on this Mac, with its Rust target and Mach-O CPU (ADR 0073 §2). */
 const PLATFORMS = [
   { name: "darwin-arm64", triple: "aarch64-apple-darwin", arch: "arm64", cputype: 0x0100000c },
-  { name: "darwin-x64", triple: "x86_64-apple-darwin", arch: "x64", cputype: 0x01000007 },
 ] as const;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -134,7 +132,7 @@ function withScratch(fn: (scratch: string[]) => void | Promise<void>): () => Pro
 /**
  * The files of package.json `files`, expanded against the built package: a literal name stays
  * as it is (LICENSE, README.md and THIRD-PARTY-NOTICES.txt are added at pack time), except the
- * addons, of which a Mac packs the two darwin ones only; `dir/*.ext` names every file of dir/
+ * addons, of which a Mac packs the darwin-arm64 one only; `dir/*.ext` names every file of dir/
  * ending in .ext. npm always adds package.json.
  */
 function expectedMainFiles(): string[] {
@@ -223,8 +221,10 @@ test("the tarball holds exactly package.json and the files list: compiled output
   assert.deepEqual(
     list.filter((f) => f.endsWith(".node")),
     PLATFORMS.map((p) => `polyjose.${p.name}.node`).sort(),
-    "the two darwin addons",
+    "the darwin-arm64 addon",
   );
+  // ADR 0073 §2: no Intel macOS addon is packed, built or listed.
+  assert.ok(!list.includes("polyjose.darwin-x64.node"), "no polyjose.darwin-x64.node in the tarball");
 });
 
 test(
@@ -246,7 +246,7 @@ test(
 );
 
 test(
-  "each addon in the tarball is a Mach-O dylib for its CPU, byte-equal to the build's",
+  "the addon in the tarball is a Mach-O dylib for its CPU, byte-equal to the build's",
   withScratch((scratch) => {
     const dir = extract(mainTgz, scratch);
     for (const p of PLATFORMS) {
@@ -275,8 +275,8 @@ test(
     );
     assert.equal(notices, fs.readFileSync(fresh, "utf8"), "generated, not edited");
     assert.ok(notices.startsWith("THIRD-PARTY NOTICES\n\nArtifact: polyjose-node "), "header");
-    const triples = PLATFORMS.map((p) => p.triple).sort();
-    assert.ok(notices.includes(`\nTargets: ${triples.join(", ")}\n`), "both darwin targets");
+    // One --target: third-party-notices.sh writes "Target: <triple>" (its "Targets:" line is for several).
+    assert.ok(notices.includes(`\nTarget: ${PLATFORMS[0].triple}\n`), "the darwin-arm64 target");
     // The crate list: "<name> <version>  <license>" lines between the "Third-party crates" rules.
     const crates = notices
       .split("\n")
@@ -289,7 +289,7 @@ test(
 );
 
 test(
-  "the tarball's addon-sha256.json pins exactly the two darwin addons it holds (F07)",
+  "the tarball's addon-sha256.json pins exactly the darwin-arm64 addon it holds (F07)",
   withScratch((scratch) => {
     const dir = extract(mainTgz, scratch);
     const pins = readJson(path.join(dir, "addon-sha256.json"));
@@ -325,7 +325,7 @@ test(
   withScratch(async (scratch) => {
     const platform = PLATFORMS.find((p) => host.platform === "darwin" && host.arch === p.arch);
     const hostName = `${host.platform}-${host.arch}`;
-    assert.ok(platform !== undefined, `the host (${hostName}) is one of the darwin targets pack.sh builds`);
+    assert.ok(platform !== undefined, `the host (${hostName}) is the darwin target pack.sh builds`);
     const dir = fsb.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-node-install-")));
     scratch.push(dir);
     const manifest = { name: "polyjose-node-smoke", version: "0.0.0", private: true, type: "module" };
