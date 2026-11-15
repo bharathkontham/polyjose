@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The npm step of publish.yml (feature 0012 H3; ADR 0038 §1 step 2): publishes the draft's 2 npm
-# tarballs as they are, never a fresh pack, in this order: @polyjose/node (which ships the 8
-# native addons inside it since 0.1.2, feature 0017, ADR 0066), then @polyjose/wasm. Until 0.1.1
+# tarballs as they are, never a fresh pack, in this order: @polyjose/node (which ships the 7
+# native addons inside it: one package since 0.1.2, feature 0017, ADR 0066; macOS arm64 only,
+# ADR 0073 §2), then @polyjose/wasm. Until 0.1.1
 # there were 10 packages (the 8 @polyjose/node-<platform> ones too; decisions.md, 2026-11-08, H3);
 # they are no longer published, and the owner deprecates them by hand (RELEASING.md).
 #
