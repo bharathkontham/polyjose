@@ -1,0 +1,15 @@
+{
+  "source": "RFC 7515 App. A.5",
+  "description": "The A.5 Unsecured JWS decodes as data with alg \"none\" (ADR 0007: parsed for diagnostics); jws.verify still refuses it (a5-none-compact-verify-not-allowed.json)",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ."
+  },
+  "expect": {
+    "ok": true,
+    "protected": {
+      "alg": "none"
+    },
+    "payload_b64u": "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ"
+  }
+}

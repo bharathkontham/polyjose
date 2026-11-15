@@ -59,6 +59,9 @@ The five members below are required, `features` and `features_absent` are option
 | `jwe.decrypt` | `jwe`, `key`, `allowed_algs`, `allowed_enc`, and optionally `understood_crit`, `max_input_len`, `max_recipients`, `max_pbes2_count`, `max_decompressed_len` ([below](#jwedecrypt)) | `plaintext_b64u`, `recipient` | yes |
 | `jwt.validate` | `token`, `now`, `allowed_algs`, exactly one of `key` or `jwks`, and optionally `policy`, `decrypt` ([below](#jwtvalidate)) | `claims`, `alg`, and `key_index` exactly when the input has `jwks` | yes |
 | `jwt.issue` | `claims`, `alg`, `key`, and optionally `typ`, `encrypt`, `validate` ([below](#jwtissue)) | `token` (exact), or nothing (the runner validates the token itself) | yes |
+| `util.decode_protected_header` | `token` (any string) ([below](#utildecode_protected_header-utildecode_jws-utildecode_jwt)) | `header` (a JSON object) | yes |
+| `util.decode_jws` | `jws` (any string) ([below](#utildecode_protected_header-utildecode_jws-utildecode_jwt)) | `protected` (a JSON object), `payload_b64u` | yes |
+| `util.decode_jwt` | `token` (any string) ([below](#utildecode_protected_header-utildecode_jws-utildecode_jwt)) | `header`, `claims` (JSON objects) | yes |
 
 `schema.json` may also reserve an operation for a later feature: its name is in the `operation` enum, but its input and output members are defined only by the feature that implements it, which adds them to `schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails. No operation is reserved today.
 
@@ -347,6 +350,18 @@ Expect one of:
 - **`{ "ok": true }`**: the runner checks the token itself. It must have three compact parts (a JWS, RFC 7515 §7.1), or five with `encrypt` (a JWE, RFC 7516 §7.1); then it must validate with `validate`, with the `alg` it was issued with, giving back the issued `claims` (compared as a JSON value). Any failure there, including a `validate` the library refuses, fails the vector. `validate` is required, unless `encrypt` is set: a recipient whose private key the vector does not hold can only be checked by shape.
 - **`{ "ok": false, "error": <code> }`**, with no `validate`.
 
+## `util.decode_protected_header`, `util.decode_jws`, `util.decode_jwt`
+
+The unverified decode utilities of ADR 0069: each reads a compact token without checking its signature, takes only the token, and has no options, so a vector has exactly one input member. The token is passed to the library exactly as written (malformed tokens are under test), and a JSON serialization under test is given as its text, a string.
+
+| Operation | What it runs | Expect when `ok` is true |
+|---|---|---|
+| `util.decode_protected_header` | the 1 MiB limit (ADR 0026 §7), exactly 3 parts (compact JWS, RFC 7515 §7.1) or 5 (compact JWE, RFC 7516 §7.1), then the first part only: strict base64url, I-JSON, parameter types (ADR 0069 §2) | `header` |
+| `util.decode_jws` | exactly ADR 0048 steps 1–5, verification's own code, and nothing after them: `none`, an unknown `alg` and an unknown `crit` entry are data. A detached payload decodes as empty, a `b64: false` payload as the payload part's octets. A JSON serialization is `InvalidFormat` | `protected`, `payload_b64u` |
+| `util.decode_jwt` | `util.decode_jws`, then `b64: false` and a signed-layer `cty: JWT` are `InvalidHeader` (ADR 0027 §9 J1, without the `typ` policy), then the Claims Set is parsed (RFC 7519 §7.2 step 10). No time or claim-value check and no clock. Five parts is `InvalidFormat` | `header`, `claims` |
+
+`header`, `protected` and `claims` are the library's serialization, parsed and compared as JSON values, like `jwt.validate`'s `claims`: member order is ignored and numbers are compared as doubles. `payload_b64u` is the payload octets as canonical base64url. Or `{ "ok": false, "error": <code> }`, where the code is one of `InvalidFormat`, `InvalidBase64`, `InvalidJson`, `InvalidHeader` and `InvalidClaim`.
+
 ## Rules for `jwt.*` runners
 
 - **The clock.** A runner builds a fixed clock from `now` (in Rust, `FixedClock(now)`; in each binding, its validate call's `now` option, ADR 0028 §4) and never reads its platform's clock. The Rust runner's `jwt_runner_never_reads_the_wall_clock` checks its own source for it.
@@ -388,7 +403,7 @@ Every vector under `jws-*/`, `third_party/**/jws/`, `jwe/` and `keys/`, and ever
 - octets are base64url strings (`*_b64u`), never `*_hex` or raw bytes, and every one a runner decodes is canonical;
 - in a `keys.*` vector, every base64url member (`x`, `y`, `d`, `n`, `e`, `k`) of a `jwk` object is canonical.
 
-Every vector under `jwt/`, and every `jwt.*` vector anywhere, must be readable the same way; `jwt_vectors_are_binding_ready` checks it. It uses only strings, booleans, `null`, objects, arrays and numbers of magnitude at most 2^53 − 1 (9007199254740991, the NumericDate range, ADR 0027 §2), which every binding holds exactly, JavaScript's doubles included:
+Every vector under `jwt/` and `util-decode/`, and every `jwt.*` or `util.*` vector anywhere, must be readable the same way; `jwt_vectors_are_binding_ready` checks it. It uses only strings, booleans, `null`, objects, arrays and numbers of magnitude at most 2^53 − 1 (9007199254740991, the NumericDate range, ADR 0027 §2), which every binding holds exactly, JavaScript's doubles included:
 
 - an integer is written plainly (`1300819380`, `-100`; never `1300819380.0` or `1.3e9`), so a binding reads `now` and every count as an integer;
 - a non-integral value (a fractional NumericDate, RFC 7519 §2, in expected `claims`) is a plain decimal (`1300819380.5`), no exponent;
@@ -417,15 +432,15 @@ Every runner (the Rust reference run, the Rust surface run and each binding's) r
 
 Which operation families each platform's runner runs today. A cell that isn't "runs" is reported as SKIPPED with that reason in the test report, never as passing (pipeline rule 9).
 
-| Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jwks.select`, `jws.*` | `keys.*` | `jwt.*` |
-|---|---|---|---|---|
-| Rust | `crates/polyjose/tests/conformance.rs` | runs | runs | runs |
-| Rust surface | `bindings/surface/tests/conformance.rs` (`polyjose-surface`, ADR 0030) | runs | runs | runs |
-| WASM | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/wasm` (0006): `wasm-node`, `wasm-chrome` (wasm-bindgen-test) and `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` (the packed tarball) | runs | runs | runs |
-| Node | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/node` (0007): `node` | runs | runs | runs |
-| Kotlin (JVM) | `platforms/android/shared-test/kotlin` (`dev.polyjose.conformance`), hosted by `polyjose-jvm`'s `ConformanceTest` | runs | runs | runs |
-| Kotlin (Android) | the same runner, hosted by `:polyjose`'s `ConformanceInstrumentedTest` on the emulator (`platforms/android/scripts/run-instrumented.sh`) | runs | runs | runs |
-| Swift (iOS) | `platforms/swift/Tests/PolyjoseTests/ConformanceRunner.swift` (0009): `swift-macos` on the macOS host, `swift-ios-sim` on the iOS 27.2 Simulator | runs | runs | runs |
+| Platform | Runner | `b64url.*`, `jwk.thumbprint`, `jwks.select`, `jws.*` | `keys.*` | `jwt.*` | `util.*` |
+|---|---|---|---|---|---|
+| Rust | `crates/polyjose/tests/conformance.rs` | runs | runs | runs | runs |
+| Rust surface | `bindings/surface/tests/conformance.rs` (`polyjose-surface`, ADR 0030) | runs | runs | runs | runs |
+| WASM | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/wasm` (0006): `wasm-node`, `wasm-chrome` (wasm-bindgen-test) and `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` (the packed tarball) | runs | runs | runs | 0026 T02 |
+| Node | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/node` (0007): `node` | runs | runs | runs | 0026 T02 |
+| Kotlin (JVM) | `platforms/android/shared-test/kotlin` (`dev.polyjose.conformance`), hosted by `polyjose-jvm`'s `ConformanceTest` | runs | runs | runs | 0026 T03 |
+| Kotlin (Android) | the same runner, hosted by `:polyjose`'s `ConformanceInstrumentedTest` on the emulator (`platforms/android/scripts/run-instrumented.sh`) | runs | runs | runs | 0026 T03 |
+| Swift (iOS) | `platforms/swift/Tests/PolyjoseTests/ConformanceRunner.swift` (0009): `swift-macos` on the macOS host, `swift-ios-sim` on the iOS 27.2 Simulator | runs | runs | runs | 0026 T03 |
 
 `jwks.select`, and `jwk.thumbprint`'s optional `hash`, run through the surface (`rust-surface`, 0013 T14) and in every binding runner above (the shared JS runner, the Kotlin runner and the Swift runner implement both).
 
@@ -577,6 +592,9 @@ How each vector `operation` maps to the ADR 0030 operations. Names are the surfa
 | `jwt.validate`, with `decrypt` | `key`: `jwt_decrypt_nested(token, decrypt.key, JweDecryptOptions { allowed_algs: decrypt.allowed_algs, allowed_enc: decrypt.allowed_enc, max_pbes2_count: decrypt.max_pbes2_count }, key, options)`; `jwks`: `jwt_decrypt_nested_with_jwks(…, jwks, options)`. Beyond the two allow-lists, `decrypt` sets **only** `max_pbes2_count` (when present); every other `JweDecryptOptions` field stays unset, so the core default applies. | as above, from `JwtNestedVerified.inner` |
 | `jwt.validate` options | `JwtVerifyOptions` from `now`, `allowed_algs` and `policy`, member by member (the table below) | |
 | `jwt.issue` | `jwt_sign(claims, key, JwtSignOptions { alg, … })`, where `typ` absent sets nothing (the default `JWT`), a string sets `typ`, and `null` sets `omit_typ: true` (note 3). `access_token` and `header` are never set: an access token's `typ` comes as the string `at+jwt`. With `encrypt`: then `jwt_encrypt_nested(<the signed JWT>, JweEncryptOptions { enc: encrypt.enc, recipients: [JweRecipient { alg: encrypt.alg, key: encrypt.key }] })`. | `token` (exact), or the `{ "ok": true }` checks (note 10); with `validate`, the token also validates as for `jwt.validate` |
+| `util.decode_protected_header` | `decode_protected_header_unverified(token)` | `header` = the returned JSON text, parsed |
+| `util.decode_jws` | `decode_jws_unverified(jws)` | `protected` = `JwsUnverified.protected_header`, parsed; `payload_b64u` = `JwsUnverified.payload` |
+| `util.decode_jwt` | `decode_jwt_unverified(token)` | `header` = `JwtUnverified.header` and `claims` = `JwtUnverified.claims`, each parsed (numbers as doubles, note 1) |
 
 `policy` → `JwtVerifyOptions`, for `jwt.validate` and `jwt.issue`'s `validate`:
 

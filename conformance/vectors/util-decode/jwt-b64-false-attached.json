@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A JWT must not use b64 false (RFC 7797 §7), even listed in crit: the attached b64 false JWS is InvalidHeader for JWT decode (ADR 0027 §9 J1)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19.$1,000 to Bob.BHNzb2tpoxNimmqm7-qjcNAnfagPcZC6DYpC6_4mYuI"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidHeader"
+  }
+}

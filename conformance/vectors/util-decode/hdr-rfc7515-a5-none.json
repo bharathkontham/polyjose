@@ -1,0 +1,14 @@
+{
+  "source": "RFC 7515 App. A.5",
+  "description": "The header peek of the A.5 Unsecured JWS returns {\"alg\":\"none\"} as data",
+  "operation": "util.decode_protected_header",
+  "input": {
+    "token": "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ."
+  },
+  "expect": {
+    "ok": true,
+    "header": {
+      "alg": "none"
+    }
+  }
+}

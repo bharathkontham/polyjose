@@ -8,8 +8,8 @@
 
 use polyjose_surface::records::{
     JweDecryptOptions, JweDecrypted, JweEncryptOptions, JweRecipient, JwkSelector, JwsSignOptions,
-    JwsSigner, JwsVerified, JwsVerifyOptions, JwtNestedVerified, JwtSignOptions, JwtVerified,
-    JwtVerifyOptions,
+    JwsSigner, JwsUnverified, JwsVerified, JwsVerifyOptions, JwtNestedVerified, JwtSignOptions,
+    JwtUnverified, JwtVerified, JwtVerifyOptions,
 };
 use polyjose_surface::{
     SecretBytes, SecretString, SurfaceError, SurfaceResult, jwe, jwk, jws, jwt, keys, util,
@@ -54,6 +54,25 @@ fn utilities() {
     let err: SurfaceError = util::base64url_decode("Zm9vYmFy==").unwrap_err();
     assert_eq!(err.code(), "InvalidBase64");
     assert!(codes.contains(&err.code()));
+
+    // The unverified decode utilities (0026 T01, ADR 0069 §1): token in, header JSON or a record
+    // out. T02 and T03 code against these shapes.
+    let header: SurfaceResult<String> = util::decode_protected_header_unverified(A1_JWS);
+    assert_eq!(header.unwrap(), r#"{"alg":"HS256","typ":"JWT"}"#);
+    let jws: SurfaceResult<JwsUnverified> = util::decode_jws_unverified(A1_JWS);
+    let jws = jws.unwrap();
+    let (_, _): (&String, &SecretBytes) = (&jws.protected_header, &jws.payload);
+    let jwt: SurfaceResult<JwtUnverified> = util::decode_jwt_unverified(A1_JWS);
+    let jwt = jwt.unwrap();
+    let (_, _): (&String, &String) = (&jwt.header, &jwt.claims);
+    let JwsUnverified {
+        protected_header: _,
+        payload: _,
+    } = jws;
+    let JwtUnverified {
+        header: _,
+        claims: _,
+    } = jwt;
 }
 
 // --- JWK (T06) --------------------------------------------------------------------------------
@@ -168,6 +187,7 @@ fn every_secret_field_and_output_is_zeroize_on_drop() {
     // Payloads, plaintext and aad, in both directions (ADR 0030 §7, ADR 0049 §4, ADR 0050 §4).
     assert_zeroizing(|o: &JwsVerifyOptions| &o.detached_payload);
     assert_zeroizing(|v: &JwsVerified| &v.payload);
+    assert_zeroizing(|v: &JwsUnverified| &v.payload);
     assert_zeroizing(|o: &JweEncryptOptions| &o.aad);
     assert_zeroizing(|d: &JweDecrypted| &d.plaintext);
     assert_zeroizing(|d: &JweDecrypted| &d.aad);

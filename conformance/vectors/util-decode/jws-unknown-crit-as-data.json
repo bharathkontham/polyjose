@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "A crit entry polyjose does not understand is returned as data, not UnknownCritical (RFC 7515 §4.1.11 is a verify rule; ADR 0069 §2, R8)",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImNyaXQiOlsidXJuOmV4YW1wbGU6ZmxhZyJdLCJ1cm46ZXhhbXBsZTpmbGFnIjp0cnVlfQ.aGVsbG8.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": true,
+    "protected": {
+      "alg": "HS256",
+      "crit": [
+        "urn:example:flag"
+      ],
+      "urn:example:flag": true
+    },
+    "payload_b64u": "aGVsbG8"
+  }
+}

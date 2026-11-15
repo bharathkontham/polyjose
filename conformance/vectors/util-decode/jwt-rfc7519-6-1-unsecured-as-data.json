@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7519 §6.1",
+  "description": "The §6.1 Unsecured JWT decodes as data with alg \"none\" and the §6.1 claims; jwt.validate still refuses it (6-1-unsecured-not-allowed.json)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJub25lIn0.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ."
+  },
+  "expect": {
+    "ok": true,
+    "header": {
+      "alg": "none"
+    },
+    "claims": {
+      "iss": "joe",
+      "exp": 1300819380,
+      "http://example.com/is_root": true
+    }
+  }
+}

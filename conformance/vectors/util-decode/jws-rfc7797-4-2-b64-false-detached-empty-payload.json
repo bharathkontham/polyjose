@@ -1,0 +1,19 @@
+{
+  "source": "RFC 7797 §4.2",
+  "description": "The §4.2 detached compact JWS with b64 false decodes with its header {\"alg\":\"HS256\",\"b64\":false,\"crit\":[\"b64\"]} and an empty payload (RFC 7797 §3, RFC 7515 Appendix F)",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..A5dxf2s96_n5FLueVuW1Z_vh161FwXZC4YLPff6dmDY"
+  },
+  "expect": {
+    "ok": true,
+    "protected": {
+      "alg": "HS256",
+      "b64": false,
+      "crit": [
+        "b64"
+      ]
+    },
+    "payload_b64u": ""
+  }
+}

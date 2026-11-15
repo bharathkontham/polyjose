@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "polyjose conformance vector",
-  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. A vector may list in \"features\" the polyjose cargo features it needs, and in \"features_absent\" those it must run without (ADR 0056); a runner where a needed one is not enabled, or an absent one is, reports the vector SKIPPED with the feature names, and never counts it as passing. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* and jwe.* operations give octets as canonical base64url (members ending in _b64u), the form JOSE fields natively have; the codec is not under test there. The keys.* operations give keys as PEM text, JWK objects and DER as canonical base64url (der_b64u), never hex. jwks.select gives a JWK Set and a selector as JSON objects and expects the selected key as a JWK object, compared as a JSON value. The jwt.* operations give tokens as text, keys as JWK and JWK Set objects, and the time as integer seconds (now); a runner builds a fixed clock from now and never reads its platform's clock (ADR 0028).",
+  "description": "One file under conformance/vectors/ holds exactly one vector. Every platform runner (Rust, WASM, Node, Kotlin, Swift) must reject a file that does not match this schema, and must fail (never skip) a vector whose operation it does not implement. A vector may list in \"features\" the polyjose cargo features it needs, and in \"features_absent\" those it must run without (ADR 0056); a runner where a needed one is not enabled, or an absent one is, reports the vector SKIPPED with the feature names, and never counts it as passing. Operations without an input/expect definition here are reserved for the features that will define them; until then no runner implements them, so a vector using one fails. Bytes under test of the codec operations (b64url.*, jwk.thumbprint) are given in lowercase hex, never base64url, so the codec is not checked against itself. The jws.* and jwe.* operations give octets as canonical base64url (members ending in _b64u), the form JOSE fields natively have; the codec is not under test there. The keys.* operations give keys as PEM text, JWK objects and DER as canonical base64url (der_b64u), never hex. jwks.select gives a JWK Set and a selector as JSON objects and expects the selected key as a JWK object, compared as a JSON value. The jwt.* operations give tokens as text, keys as JWK and JWK Set objects, and the time as integer seconds (now); a runner builds a fixed clock from now and never reads its platform's clock (ADR 0028). The util.decode_* operations (ADR 0069) give a token as text and expect headers and claims as JSON objects, compared as JSON values, and a JWS payload as canonical base64url (payload_b64u); they read without verifying, and their results are never a trust decision.",
   "type": "object",
   "required": ["source", "description", "operation", "input", "expect"],
   "additionalProperties": false,
@@ -33,7 +33,10 @@
         "jwe.encrypt",
         "jwe.decrypt",
         "jwt.validate",
-        "jwt.issue"
+        "jwt.issue",
+        "util.decode_protected_header",
+        "util.decode_jws",
+        "util.decode_jwt"
       ]
     },
     "input": {
@@ -351,6 +354,57 @@
             "oneOf": [
               { "$ref": "#/$defs/jwt_issue_exact" },
               { "$ref": "#/$defs/jwt_issue_validated" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "util.decode_protected_header" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/util_decode_protected_header_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/util_decode_protected_header_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "util.decode_jws" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/util_decode_jws_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/util_decode_jws_ok" },
+              { "$ref": "#/$defs/failure" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["operation"],
+        "properties": { "operation": { "const": "util.decode_jwt" } }
+      },
+      "then": {
+        "properties": {
+          "input": { "$ref": "#/$defs/util_decode_jwt_input" },
+          "expect": {
+            "oneOf": [
+              { "$ref": "#/$defs/util_decode_jwt_ok" },
               { "$ref": "#/$defs/failure" }
             ]
           }
@@ -1211,6 +1265,74 @@
       "additionalProperties": false,
       "properties": {
         "ok": { "const": true }
+      }
+    },
+    "util_decode_protected_header_input": {
+      "description": "Read the JOSE Protected Header of a compact JWS (3 parts, RFC 7515 §7.1) or compact JWE (5 parts, RFC 7516 §7.1) without verifying or decrypting anything (ADR 0069 §2): the 1 MiB limit, the part count, then the first part only.",
+      "type": "object",
+      "required": ["token"],
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "description": "The token as given, any string: malformed tokens are under test.",
+          "type": "string"
+        }
+      }
+    },
+    "util_decode_protected_header_ok": {
+      "description": "The header, as the library serializes it, parsed and compared as a JSON value (member order ignored, numbers as doubles).",
+      "type": "object",
+      "required": ["ok", "header"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "header": { "type": "object" }
+      }
+    },
+    "util_decode_jws_input": {
+      "description": "Decode a compact JWS without verifying it (ADR 0069 §2): exactly steps 1-5 of ADR 0048, nothing after them, so alg none, an unknown alg and an unknown crit entry are data. A JSON serialization, given as its text, is InvalidFormat.",
+      "type": "object",
+      "required": ["jws"],
+      "additionalProperties": false,
+      "properties": {
+        "jws": {
+          "description": "The JWS as given, any string (a compact JWS, or the text of a JSON serialization under test).",
+          "type": "string"
+        }
+      }
+    },
+    "util_decode_jws_ok": {
+      "description": "The JWS Protected Header (compared as a JSON value) and the JWS Payload octets: base64url-decoded, raw when b64 is false (RFC 7797 §3), empty when detached (RFC 7515 Appendix F).",
+      "type": "object",
+      "required": ["ok", "protected", "payload_b64u"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "protected": { "type": "object" },
+        "payload_b64u": { "$ref": "#/$defs/base64url" }
+      }
+    },
+    "util_decode_jwt_input": {
+      "description": "Decode a compact signed JWT without verifying or validating it (ADR 0069 §2): util.decode_jws, then b64 false and a signed-layer cty JWT are InvalidHeader, then the Claims Set is parsed (RFC 7519 §7.2 step 10). No typ, time or claim-value check, and no clock.",
+      "type": "object",
+      "required": ["token"],
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "description": "The token as given, any string: malformed tokens are under test.",
+          "type": "string"
+        }
+      }
+    },
+    "util_decode_jwt_ok": {
+      "description": "The JWS Protected Header and the JWT Claims Set, each as the library serializes it, parsed and compared as a JSON value (member order ignored, numbers as doubles).",
+      "type": "object",
+      "required": ["ok", "header", "claims"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "header": { "type": "object" },
+        "claims": { "type": "object" }
       }
     }
   }

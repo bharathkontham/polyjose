@@ -150,6 +150,9 @@ pub use json::{sign_flattened, sign_general, verify_json};
 // (ADR 0026 §2–§3, ADR 0027 §9, ADR 0029 §4).
 pub(crate) use alg::{FAMILIES, Families};
 pub(crate) use compact::{CompactPrechecked, finish_compact, precheck_compact};
+// The one compact parser, steps 1–5 of ADR 0048, shared by verification
+// and `util::decode_jws_unverified` (ADR 0069 §3).
+pub(crate) use compact::parse_compact;
 pub(crate) use process::furthest;
 
 /// A JWS Protected Header together with its exact base64url encoding,

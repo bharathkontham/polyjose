@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A Claims Set that is a JSON array, not an object, is InvalidJson (RFC 7519 §7.2 step 10)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiJ9.WyJzdWIiLCJhbGljZSJd.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

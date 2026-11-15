@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "Four parts is neither a compact JWS (3, RFC 7515 §7.1) nor a compact JWE (5, RFC 7516 §7.1): InvalidFormat",
+  "operation": "util.decode_protected_header",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJlbmMiOiJBMTI4R0NNIn0.a.b.c"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

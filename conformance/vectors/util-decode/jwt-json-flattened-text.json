@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "The text of a flattened JWS JSON Serialization is InvalidFormat for JWT decode: a JWT is compact (RFC 7519 §1, §7.2 step 1)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "{\"payload\":\"aGVsbG8\",\"protected\":\"eyJhbGciOiJIUzI1NiJ9\",\"signature\":\"c2lnbmF0dXJl\"}"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidFormat"
+  }
+}

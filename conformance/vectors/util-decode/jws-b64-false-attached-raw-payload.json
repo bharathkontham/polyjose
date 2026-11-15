@@ -1,0 +1,19 @@
+{
+  "source": "polyjose",
+  "description": "An attached b64 false compact JWS (RFC 7797 §5.2: printable ASCII without '.'), HS256 with the RFC 7515 A.1 key, decodes to the payload part's octets \"$1,000 to Bob\" as they are (RFC 7797 §3)",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19.$1,000 to Bob.BHNzb2tpoxNimmqm7-qjcNAnfagPcZC6DYpC6_4mYuI"
+  },
+  "expect": {
+    "ok": true,
+    "protected": {
+      "alg": "HS256",
+      "b64": false,
+      "crit": [
+        "b64"
+      ]
+    },
+    "payload_b64u": "JDEsMDAwIHRvIEJvYg"
+  }
+}

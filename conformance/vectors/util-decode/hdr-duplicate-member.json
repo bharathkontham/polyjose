@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A protected header with a duplicate member name is InvalidJson (RFC 7516 §5.2 step 4; ADR 0041 §1)",
+  "operation": "util.decode_protected_header",
+  "input": {
+    "token": "eyJhbGciOiJBMTI4S1ciLCJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIn0.a.b.c.d"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidJson"
+  }
+}

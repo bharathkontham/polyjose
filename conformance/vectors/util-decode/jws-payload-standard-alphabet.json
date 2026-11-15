@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A payload part in the standard base64 alphabet ('+', '/') is not base64url (RFC 7515 §2, §5.2 step 6): InvalidBase64 at ADR 0048 step 4",
+  "operation": "util.decode_jws",
+  "input": {
+    "jws": "eyJhbGciOiJIUzI1NiJ9.ab+/.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidBase64"
+  }
+}

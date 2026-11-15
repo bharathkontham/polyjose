@@ -1,0 +1,12 @@
+{
+  "source": "polyjose",
+  "description": "A registered claim of the wrong type, \"exp\":\"x\" (RFC 7519 §4.1.4: a NumericDate), is InvalidClaim, although no time check runs (ADR 0027 §1-§2)",
+  "operation": "util.decode_jwt",
+  "input": {
+    "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhIiwiZXhwIjoieCJ9.c2lnbmF0dXJl"
+  },
+  "expect": {
+    "ok": false,
+    "error": "InvalidClaim"
+  }
+}
