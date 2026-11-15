@@ -24,7 +24,7 @@
 // - zip: "DEF" (RFC 7516 §4.1.3): the bindings build without polyjose's `deflate` feature.
 // - Unencoded payloads, b64: false (RFC 7797): jose rejects them in the compact form (research.md
 //   §2.1), and this suite tests the compact serializations only.
-import { assert, test } from "../../bindings/js/dist/node/builtins.js";
+import { assert, fs, path, process, test } from "../../bindings/js/dist/node/builtins.js";
 import * as pj from "../../bindings/node/index.js";
 import type { JwkObject } from "../../bindings/node/index.js";
 import * as jose from "jose";
@@ -286,4 +286,53 @@ for (const alg of ["HS256", "ES256"]) {
     assert.equal(out.alg, alg);
     await polyjoseRejects(pj.jwtVerify(token, asPj(verifyJwk), { ...options, now: NOW + 3600 }), "TokenExpired");
   });
+}
+
+// --- Unverified decode (ADR 0069, ADR 0035) ----------------------------------------------------
+// polyjose's decodeProtectedHeaderUnverified and decodeJwtUnverified agree with jose's
+// decodeProtectedHeader and decodeJwt on the RFC tokens of conformance/vectors/util-decode/: every
+// vector whose source is an RFC and that decodes. Neither library checks a signature here.
+
+interface DecodeVector {
+  source: string;
+  operation: string;
+  input: { token?: string; jws?: string };
+  expect: { ok: boolean };
+}
+
+const UTIL_DECODE = path.resolve(process.cwd(), "../../conformance/vectors/util-decode");
+const RFC_DECODES = fs
+  .readdirSync(UTIL_DECODE, { withFileTypes: true })
+  .filter((e) => e.isFile() && e.name.endsWith(".json"))
+  .map((e) => e.name)
+  .sort()
+  .map((name) => ({ name, v: JSON.parse(fs.readFileSync(path.join(UTIL_DECODE, name), "utf8")) as DecodeVector }))
+  .filter(({ v }) => v.source.startsWith("RFC ") && v.expect.ok);
+
+test("the RFC decode vectors cover JWS and JWE headers and JWTs", () => {
+  const ops = RFC_DECODES.map(({ v }) => v.operation);
+  for (const op of ["util.decode_protected_header", "util.decode_jws", "util.decode_jwt"]) {
+    assert.ok(ops.includes(op), `${op} has RFC vectors`);
+  }
+  const fiveParts = RFC_DECODES.filter(({ v }) => (v.input.token ?? v.input.jws ?? "").split(".").length === 5);
+  assert.ok(fiveParts.length > 0, "compact JWE headers are among them");
+});
+
+for (const { name, v } of RFC_DECODES) {
+  const token = v.input.token ?? v.input.jws ?? "";
+  test(`decodeProtectedHeaderUnverified deep-equals jose.decodeProtectedHeader: ${name}`, async () => {
+    assert.deepEqual(await pj.decodeProtectedHeaderUnverified(token), jose.decodeProtectedHeader(token));
+  });
+  if (v.operation === "util.decode_jws") {
+    test(`decodeJwsUnverified's protectedHeader deep-equals jose.decodeProtectedHeader: ${name}`, async () => {
+      assert.deepEqual((await pj.decodeJwsUnverified(token)).protectedHeader, jose.decodeProtectedHeader(token));
+    });
+  }
+  if (v.operation === "util.decode_jwt") {
+    test(`decodeJwtUnverified's claims deep-equal jose.decodeJwt: ${name}`, async () => {
+      const decoded = await pj.decodeJwtUnverified(token);
+      assert.deepEqual(decoded.claims, jose.decodeJwt(token));
+      assert.deepEqual(decoded.header, jose.decodeProtectedHeader(token));
+    });
+  }
 }

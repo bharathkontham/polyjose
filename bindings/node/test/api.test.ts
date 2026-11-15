@@ -53,7 +53,7 @@ function inventoryOps(): string[] {
 /** Every inventory operation, plus the facade's PolyjoseError and ERROR_CODES (BACKEND.md). */
 function expectedExports(): string[] {
   const ops = inventoryOps();
-  assert.equal(ops.length, 32, "ADR 0030 §4 has 32 operations");
+  assert.equal(ops.length, 35, "ADR 0030 §4 has 32 operations, and ADR 0069 adds 3");
   return [...ops, "ERROR_CODES", "PolyjoseError"].sort();
 }
 

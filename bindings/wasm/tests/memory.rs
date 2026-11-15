@@ -1125,6 +1125,37 @@ fn jws_sign_and_verify() {
     r.finish();
 }
 
+/// The unverified JWS decode (ADR 0069 §5): the payload is secret like every JWS payload, so the
+/// token (which embeds it as base64url) and the decoded octets leave no copy, and the result's
+/// `Uint8Array` is copied from the surface's wiping buffer (ADR 0030 §7.2). The signing call is
+/// setup and is not measured.
+#[wasm_bindgen_test]
+fn jws_decode_unverified() {
+    let mut r = Report::new();
+    for alg in ["HS256", "ES256"] {
+        let key = if alg == "HS256" {
+            oct(32).0
+        } else {
+            p256_jwk()
+        };
+        let payload = payload();
+        let options = object(&[("protectedHeader", protected(alg))]);
+        let token = js(jws::jws_sign_compact(
+            b(&payload.raw.bytes),
+            s(&key),
+            &options,
+        ));
+        let (m, out) = measure(|| ok(util::decode_jws_unverified(s(&token))));
+        assert!(bytes_equal(&get(&out, "payload"), &payload.raw.bytes));
+        r.check(
+            &format!("decodeJwsUnverified({alg})"),
+            &m,
+            &[&payload.raw, &payload.text],
+        );
+    }
+    r.finish();
+}
+
 // --- JWE --------------------------------------------------------------------------------------
 
 /// One JWE recipient and the key that decrypts for it.

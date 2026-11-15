@@ -364,6 +364,15 @@ fn run_exports(f: &Fixture) -> (Results, Errors) {
                 &f.jwt_options,
             ),
         ),
+        // ADR 0069: the unverified decode records (`payload`, `claims`).
+        (
+            "decodeJwsUnverified",
+            util::decode_jws_unverified(f.jws_compact.clone()),
+        ),
+        (
+            "decodeJwtUnverified",
+            util::decode_jwt_unverified(f.jwt.clone()),
+        ),
     ];
     let errors = vec![
         (
@@ -682,6 +691,27 @@ fn byte_results_are_fresh_arrays_never_an_input_or_linear_memory() {
     let b = util::base64url_decode("AAECAwQFBgcICQ".into()).unwrap();
     assert_eq!(a.to_vec(), (0u8..10).collect::<Vec<_>>());
     fresh(&a, &[&b], "base64urlDecode");
+
+    // ADR 0069 §5: the unverified JWS payload too.
+    let token = String::from(
+        jws::jws_sign_compact(
+            payload.clone(),
+            HS256_KEY.into(),
+            &bare(&[("protectedHeader", r#"{"alg":"HS256"}"#.into())]),
+        )
+        .unwrap(),
+    );
+    let decoded = |token: String| -> Uint8Array {
+        Reflect::get(
+            &util::decode_jws_unverified(token).unwrap(),
+            &JsValue::from_str("payload"),
+        )
+        .unwrap()
+        .unchecked_into()
+    };
+    let (a, b) = (decoded(token.clone()), decoded(token));
+    assert_eq!(a.to_vec(), payload);
+    fresh(&a, &[&b], "decodeJwsUnverified");
 
     let jwk = String::from(keys::jwk_generate_okp("Ed25519").unwrap());
     let a = keys::jwk_to_der(jwk.clone(), "pkcs8").unwrap();

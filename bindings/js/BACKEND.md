@@ -46,6 +46,9 @@
 | `errorCodes` | – | string[] |
 | `base64urlEncode` | bytes | string |
 | `base64urlDecode` | text | bytes |
+| `decodeProtectedHeaderUnverified` | token | header |
+| `decodeJwsUnverified` | jws | `{ protectedHeader, payload }` |
+| `decodeJwtUnverified` | token | `{ header, claims }` |
 | `jwkParse` | jwk | jwk |
 | `jwkToPublic` | jwk | jwk |
 | `jwkThumbprint` | jwk, hash (a string or `undefined`) | string |

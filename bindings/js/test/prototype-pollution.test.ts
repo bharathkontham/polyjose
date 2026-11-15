@@ -263,7 +263,7 @@ function inventoryInputRecords(): Map<string, string[]> {
     const rec = /^record (\w+)$/.exec(line);
     if (rec !== null) {
       const name = rec[1] ?? "";
-      current = /(Verified|Decrypted)$/.test(name) ? undefined : [];
+      current = /(Verified|Unverified|Decrypted)$/.test(name) ? undefined : [];
       if (current !== undefined) records.set(name, current);
       continue;
     }

@@ -70,8 +70,9 @@ test(`every conformance vector passes through @polyjose/node; results in target/
     assert.match(r.reason ?? "", /^feature:/, `${r.id}: a skip is only ever for a feature the build lacks`);
   }
   // ADR 0054 §9: jwksSelect and the optional thumbprint hash run through the real adapter, every
-  // vector of both directories passing (none of them needs a feature).
-  for (const dir of ["jwks-select/", "jwk-thumbprint/"]) {
+  // vector of both directories passing (none of them needs a feature). ADR 0069: so do the
+  // unverified decodes.
+  for (const dir of ["jwks-select/", "jwk-thumbprint/", "util-decode/"]) {
     const ran = report.results.filter((r) => r.id.startsWith(dir));
     assert.ok(ran.length > 0, `the ${dir} vectors ran`);
     assert.deepEqual(

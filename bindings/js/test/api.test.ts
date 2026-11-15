@@ -187,6 +187,63 @@ test("JwtVerified: claims and header parsed; keyIndex 0 kept, absent keyIndex le
   assert.equal(nestedSet.inner.keyIndex, 3);
 });
 
+test("the unverified decodes pass the token only and parse the backend's JSON text (ADR 0069 §1, ADR 0030 §2)", async () => {
+  const payload = new Uint8Array([0x7b, 0x7d]);
+  const fake = fakeBackend({
+    handlers: {
+      decodeProtectedHeaderUnverified: () => '{"alg":"none","kid":"k"}',
+      decodeJwsUnverified: () => ({ protectedHeader: '{"alg":"HS256","crit":["x"],"x":1}', payload }),
+      decodeJwtUnverified: () => ({ header: '{"alg":"HS256"}', claims: '{"sub":"a","exp":1300819380}' }),
+    },
+  });
+  const api = createApi(fake.backend);
+  assert.deepEqual(await api.decodeProtectedHeaderUnverified("a.b.c"), { alg: "none", kid: "k" });
+  const jws = await api.decodeJwsUnverified("d.e.f");
+  assert.deepEqual(jws, { protectedHeader: { alg: "HS256", crit: ["x"], x: 1 }, payload });
+  assert.deepEqual(Object.keys(jws), ["protectedHeader", "payload"]);
+  const jwt = await api.decodeJwtUnverified("g.h.i");
+  assert.deepEqual(jwt, { header: { alg: "HS256" }, claims: { sub: "a", exp: 1300819380 } });
+  assert.deepEqual(Object.keys(jwt), ["header", "claims"]);
+  // One backend call each, with the token as the only argument.
+  assert.deepEqual(fake.of("decodeProtectedHeaderUnverified").map((c) => c.args), [["a.b.c"]]);
+  assert.deepEqual(fake.of("decodeJwsUnverified").map((c) => c.args), [["d.e.f"]]);
+  assert.deepEqual(fake.of("decodeJwtUnverified").map((c) => c.args), [["g.h.i"]]);
+  assert.equal(fake.calls.length, 3);
+});
+
+test("the unverified decodes reject a non-string token with a TypeError before the backend, and map core codes", async () => {
+  const fake = fakeBackend({
+    handlers: {
+      decodeJwtUnverified: () => {
+        throw coded("InvalidClaim", "invalid claim");
+      },
+    },
+  });
+  const api = createApi(fake.backend);
+  const loose = api as unknown as Record<string, (x: unknown) => Promise<unknown>>;
+  for (const op of ["decodeProtectedHeaderUnverified", "decodeJwsUnverified", "decodeJwtUnverified"]) {
+    for (const bad of [undefined, null, 1, new Uint8Array(1), { token: "a.b.c" }]) {
+      await assert.rejects(loose[op]!(bad), TypeError, `${op}(${String(bad)})`);
+    }
+  }
+  assert.equal(fake.calls.length, 0);
+  await assert.rejects(api.decodeJwtUnverified("a.b.c"), (e: unknown) => e instanceof PolyjoseError && e.code === "InvalidClaim");
+});
+
+test("an unverified decode result that is not a JSON object is a TypeError", async () => {
+  const fake = fakeBackend({
+    handlers: {
+      decodeProtectedHeaderUnverified: () => "[1]",
+      decodeJwsUnverified: () => ({ protectedHeader: "{}", payload: "not bytes" }),
+      decodeJwtUnverified: () => ({ header: "{}", claims: "null" }),
+    },
+  });
+  const api = createApi(fake.backend);
+  await assert.rejects(api.decodeProtectedHeaderUnverified("a.b.c"), TypeError);
+  await assert.rejects(api.decodeJwsUnverified("a.b.c"), TypeError);
+  await assert.rejects(api.decodeJwtUnverified("a.b.c"), TypeError);
+});
+
 test("a backend result of the wrong type is a TypeError, not a silent pass", async () => {
   const fake = fakeBackend({ handlers: { jwkParse: () => 42, jwkToDer: () => "not bytes", jwkToPublic: () => "[1]" } });
   const api = createApi(fake.backend);
