@@ -2231,12 +2231,21 @@ fn jwks_select_maps_the_selector_member_by_member() {
 }
 
 #[wasm_bindgen_test]
-fn error_codes_end_with_multiple_matching_keys() {
-    // ADR 0054 §5: appended last, after NoMatchingKey, at index 16 of `Error::CODES`.
+fn error_codes_end_with_multiple_matching_keys_then_the_platform_key_codes() {
+    // ADR 0054 §5: MultipleMatchingKeys after NoMatchingKey, at index 16 of `Error::CODES`;
+    // ADR 0071 §6: then the three platform-key codes, which WASM lists and never raises.
     let codes = util::error_codes();
-    assert_eq!(codes.len(), 17);
+    assert_eq!(codes.len(), 20);
     assert_eq!(codes[15], "NoMatchingKey");
     assert_eq!(codes[16], "MultipleMatchingKeys");
+    assert_eq!(
+        codes[17..],
+        [
+            "KeyNotFound",
+            "UserAuthenticationRequired",
+            "PlatformKeyFailed"
+        ]
+    );
 }
 
 #[wasm_bindgen_test]

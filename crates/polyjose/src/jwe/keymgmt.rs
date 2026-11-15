@@ -20,6 +20,7 @@ use super::{aes_gcm_kw, aes_kw, dir, ecdh_es, pbes2, rsa_oaep};
 use crate::header::Header;
 use crate::json::Object;
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
+use crate::platform_key::{DecryptKind, PlatformKey};
 use crate::{Error, Result};
 
 /// The key management modes of RFC 7516 §2: how the CEK is determined.
@@ -184,6 +185,36 @@ pub(crate) fn decrypt_key(
         }
         A::RsaOaep256 => rsa_oaep::decrypt_key(alg, key, enc, header, encrypted_key, policy),
         A::Unknown(_) => Err(Error::UnsupportedAlgorithm),
+    }
+}
+
+/// [`decrypt_key`] with a platform-held key bound as `kind` (ADR 0071
+/// §4): ECDH-ES and ECDH-ES+A*KW on its curve, or RSA-OAEP-256. Only the
+/// private-key step is the key's; everything else is the family's own
+/// code.
+///
+/// # Errors
+///
+/// [`Error::KeyNotFound`] or [`Error::UserAuthenticationRequired`] from
+/// the key, which `core` reports as themselves; anything else, which
+/// `core` reports as [`Error::DecryptionFailed`].
+pub(crate) fn decrypt_key_with_platform(
+    alg: &KeyMgmtAlg,
+    kind: DecryptKind,
+    key: &dyn PlatformKey,
+    enc: &ContentEncAlg,
+    header: &Header,
+    encrypted_key: &[u8],
+) -> Result<Cek> {
+    use KeyMgmtAlg as A;
+    match (alg, kind) {
+        (A::EcdhEs | A::EcdhEsA128KW | A::EcdhEsA192KW | A::EcdhEsA256KW, DecryptKind::Ec(crv)) => {
+            ecdh_es::decrypt_key_with_platform(alg, crv, key, enc, header, encrypted_key)
+        }
+        (A::RsaOaep256, DecryptKind::Rsa) => {
+            rsa_oaep::decrypt_key_with_platform(alg, key, enc, encrypted_key)
+        }
+        _ => Err(Error::DecryptionFailed),
     }
 }
 

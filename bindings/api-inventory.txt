@@ -189,7 +189,9 @@ record JwtUnverified
   field claims
 
 ## Error codes (ADR 0030 §5): polyjose::Error::CODES, in the core's order: NoMatchingKey
-## (ADR 0029 §4), then MultipleMatchingKeys (ADR 0054 §5), last.
+## (ADR 0029 §4), then MultipleMatchingKeys (ADR 0054 §5), then the platform-key codes
+## KeyNotFound, UserAuthenticationRequired, PlatformKeyFailed (ADR 0071 §6), last. Node and WASM
+## list the three and never raise them.
 code InvalidBase64
 code InvalidJson
 code InvalidHeader
@@ -207,3 +209,6 @@ code RandomnessUnavailable
 code InvalidFormat
 code NoMatchingKey
 code MultipleMatchingKeys
+code KeyNotFound
+code UserAuthenticationRequired
+code PlatformKeyFailed

@@ -34,6 +34,9 @@ pub mod jwt;
 /// Key generation and PEM/DER key import and export (RFC 7468, RFC 5958,
 /// RFC 5280 §4.1, RFC 5915, RFC 8410, RFC 8017 App. A.1.1).
 pub mod keys;
+/// Platform-held keys: the OS performs the private-key step (ADR 0070,
+/// ADR 0071; RFC 7515 §5.1, RFC 7516 §5.2).
+pub mod platform_key;
 mod rng;
 #[cfg(feature = "insecure-test-vectors")]
 pub use rng::insecure_test_vectors;
@@ -49,6 +52,7 @@ mod test_support;
 pub mod util;
 
 pub use error::{Error, Result};
+pub use platform_key::{PlatformKey, PlatformKeyError};
 
 /// The crate README's examples (`README.md`, the crates.io page), compiled
 /// and run as doctests so they can't drift from the API. Exists only under

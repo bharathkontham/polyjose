@@ -472,7 +472,10 @@
         "RandomnessUnavailable",
         "InvalidFormat",
         "NoMatchingKey",
-        "MultipleMatchingKeys"
+        "MultipleMatchingKeys",
+        "KeyNotFound",
+        "UserAuthenticationRequired",
+        "PlatformKeyFailed"
       ]
     },
     "failure": {

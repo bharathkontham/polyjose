@@ -71,10 +71,12 @@ pub use claims::{Audience, Claims};
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub use clock::SystemClock;
 pub use clock::{Clock, FixedClock};
-pub use nested::{VerifiedNestedJwt, decrypt_nested, encrypt_nested};
+pub use nested::{
+    VerifiedNestedJwt, decrypt_nested, decrypt_nested_with_platform_key, encrypt_nested,
+};
 pub use numeric_date::NumericDate;
 pub use policy::{Policy, TypMode};
-pub use sign::{IssueOptions, sign};
+pub use sign::{IssueOptions, sign, sign_with_platform_key};
 pub use verify::{Keys, VerifiedJwt, verify};
 
 #[cfg(test)]

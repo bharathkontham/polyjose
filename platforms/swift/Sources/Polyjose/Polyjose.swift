@@ -2328,6 +2328,38 @@ enum PolyjoseError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError 
          * stable: match on `code()` (ADR 0030 §5).
          */detail: String
     )
+    /**
+     * A platform-held key is gone: none under that name, or the platform has permanently
+     * invalidated it; the private-key step of RFC 7515 §5.1 or RFC 7516 §5.2 cannot run
+     * (ADR 0071 §6). Create or enrol a new key.
+     */
+    case KeyNotFound(
+        /**
+         * The core's human-readable message (`polyjose::Error`'s `Display`). Not
+         * stable: match on `code()` (ADR 0030 §5).
+         */detail: String
+    )
+    /**
+     * A platform-held key needs the user to authenticate, and they have not, cancelled, or
+     * cannot (ADR 0071 §4, §6). Prompt, then retry.
+     */
+    case UserAuthenticationRequired(
+        /**
+         * The core's human-readable message (`polyjose::Error`'s `Display`). Not
+         * stable: match on `code()` (ADR 0030 §5).
+         */detail: String
+    )
+    /**
+     * Any other failure of a platform-held key while signing, including a signature that did
+     * not verify against its public JWK (RFC 7515 §5.2 step 8 on our own output; ADR 0071 §3,
+     * §6). Decryption reports `DecryptionFailed` instead (RFC 7516 §11.5).
+     */
+    case PlatformKeyFailed(
+        /**
+         * The core's human-readable message (`polyjose::Error`'s `Display`). Not
+         * stable: match on `code()` (ADR 0030 §5).
+         */detail: String
+    )
 
     
     /**
@@ -2433,6 +2465,15 @@ public struct FfiConverterTypePolyjoseError: FfiConverterRustBuffer {
         case 17: return .MultipleMatchingKeys(
             detail: try FfiConverterString.read(from: &buf)
             )
+        case 18: return .KeyNotFound(
+            detail: try FfiConverterString.read(from: &buf)
+            )
+        case 19: return .UserAuthenticationRequired(
+            detail: try FfiConverterString.read(from: &buf)
+            )
+        case 20: return .PlatformKeyFailed(
+            detail: try FfiConverterString.read(from: &buf)
+            )
 
          default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2527,6 +2568,21 @@ public struct FfiConverterTypePolyjoseError: FfiConverterRustBuffer {
         
         case let .MultipleMatchingKeys(detail):
             writeInt(&buf, Int32(17))
+            FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .KeyNotFound(detail):
+            writeInt(&buf, Int32(18))
+            FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .UserAuthenticationRequired(detail):
+            writeInt(&buf, Int32(19))
+            FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .PlatformKeyFailed(detail):
+            writeInt(&buf, Int32(20))
             FfiConverterString.write(detail, into: &buf)
             
         }

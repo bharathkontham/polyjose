@@ -141,8 +141,13 @@ mod rsa;
 #[cfg(test)]
 mod wycheproof_jose;
 
-pub use compact::{sign_compact, verify_compact};
-pub use json::{sign_flattened, sign_general, verify_json};
+pub use compact::{sign_compact, sign_compact_with_platform_key, verify_compact};
+pub use json::{
+    sign_flattened, sign_flattened_with_platform_key, sign_general, sign_general_with_platform_key,
+    verify_json,
+};
+
+pub(crate) use compact::sign_compact_with_platform_view;
 
 // Crate-internal seams for the JWT layer (feature 0004): verifying a
 // compact JWS against a JWK Set runs steps 1–7 once, chooses the candidate
@@ -354,6 +359,60 @@ impl fmt::Debug for Signer<'_> {
             .field("protected", &self.protected)
             .field("unprotected", &self.unprotected)
             .field("key", self.key)
+            .finish()
+    }
+}
+
+/// One signature to compute with a platform-held key in the JWS JSON
+/// Serialization (RFC 7515 §7.2.1): the key and the JWS Protected and
+/// Unprotected Headers, with the same header rules as [`Signer`]
+/// (RFC 7515 §5.2 step 4, §4.1.11; RFC 7797 §3).
+///
+/// Used by [`sign_flattened_with_platform_key`] and
+/// [`sign_general_with_platform_key`] (ADR 0071 §2). `Debug` prints the
+/// headers and the key's type only, never anything the key holds
+/// (ADR 0071 §7).
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct PlatformSigner<'a> {
+    /// The JWS Protected Header, if any (RFC 7515 §7.2.1 `protected`).
+    pub protected: Option<ProtectedHeader>,
+    /// The JWS Unprotected Header, if any (RFC 7515 §7.2.1 `header`).
+    pub unprotected: Option<Header>,
+    /// The platform key that computes the signature (ADR 0071 §1).
+    pub key: &'a dyn crate::PlatformKey,
+}
+
+impl<'a> PlatformSigner<'a> {
+    /// A signer with `key` and no headers yet (RFC 7515 §7.2.1: both
+    /// headers are optional).
+    pub fn new(key: &'a dyn crate::PlatformKey) -> Self {
+        Self {
+            protected: None,
+            unprotected: None,
+            key,
+        }
+    }
+
+    /// Sets the JWS Protected Header (RFC 7515 §7.2.1 `protected`).
+    pub fn protected(mut self, protected: ProtectedHeader) -> Self {
+        self.protected = Some(protected);
+        self
+    }
+
+    /// Sets the JWS Unprotected Header (RFC 7515 §7.2.1 `header`).
+    pub fn unprotected(mut self, unprotected: Header) -> Self {
+        self.unprotected = Some(unprotected);
+        self
+    }
+}
+
+impl fmt::Debug for PlatformSigner<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlatformSigner")
+            .field("protected", &self.protected)
+            .field("unprotected", &self.unprotected)
+            .field("key", &format_args!("<platform key>"))
             .finish()
     }
 }

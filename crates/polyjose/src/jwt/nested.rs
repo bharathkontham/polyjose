@@ -8,10 +8,10 @@ use crate::error::{Error, Result};
 use crate::header::Header;
 use crate::json::{self, Value};
 use crate::jwa::SigningAlg;
-#[cfg(doc)]
 use crate::jwe::Decrypted;
-use crate::jwe::{DecryptPolicy, Encryptor, decrypt_compact};
+use crate::jwe::{DecryptPolicy, Encryptor, decrypt_compact, decrypt_compact_with_platform_key};
 use crate::jwk::Jwk;
+use crate::platform_key::PlatformKey;
 use crate::util::b64url_decode;
 
 use super::typ::{JWT, Layer, check_jwt_header, media_type_eq};
@@ -348,6 +348,53 @@ pub fn decrypt_nested(
     keys: Keys<'_>,
     policy: &Policy<'_>,
 ) -> Result<VerifiedNestedJwt> {
+    decrypt_nested_with(
+        token,
+        |token| decrypt_compact(token, decrypt_key, decrypt_policy),
+        keys,
+        policy,
+    )
+}
+
+/// [`decrypt_nested`] with the outer JWE decrypted by a platform-held key
+/// (RFC 7519 §11.2; ADR 0071 §2, §4). The inner JWT is verified as by
+/// [`decrypt_nested`], with `keys`: one public JWK ([`Keys::One`]) or a
+/// JWK Set ([`Keys::Set`]).
+///
+/// The outer layer is decrypted by
+/// [`decrypt_compact_with_platform_key`](crate::jwe::decrypt_compact_with_platform_key):
+/// ECDH-ES or ECDH-ES+A128KW/A192KW/A256KW on P-256, P-384 or P-521
+/// (RFC 7518 §4.6), or RSA-OAEP-256 (RFC 7518 §4.3).
+///
+/// # Errors
+///
+/// As [`decrypt_nested`], with the JWE errors of
+/// [`decrypt_compact_with_platform_key`](crate::jwe::decrypt_compact_with_platform_key)
+/// for the outer layer, including [`Error::KeyNotFound`] and
+/// [`Error::UserAuthenticationRequired`] from the key.
+pub fn decrypt_nested_with_platform_key(
+    token: &str,
+    decrypt_key: &dyn PlatformKey,
+    decrypt_policy: &DecryptPolicy,
+    keys: Keys<'_>,
+    policy: &Policy<'_>,
+) -> Result<VerifiedNestedJwt> {
+    decrypt_nested_with(
+        token,
+        |token| decrypt_compact_with_platform_key(token, decrypt_key, decrypt_policy),
+        keys,
+        policy,
+    )
+}
+
+/// The steps of [`decrypt_nested`], with step 2's JWE decryption done by
+/// `decrypt`.
+fn decrypt_nested_with(
+    token: &str,
+    decrypt: impl FnOnce(&str) -> Result<Decrypted>,
+    keys: Keys<'_>,
+    policy: &Policy<'_>,
+) -> Result<VerifiedNestedJwt> {
     // Step 1 (ADR 0027 §6): compact only. The compact parser below would
     // reject a JSON JWE too, but by its dots it could call one
     // InvalidBase64; the shape is the stable answer.
@@ -356,7 +403,7 @@ pub fn decrypt_nested(
     }
 
     // Step 2: the 0003 JWE error contract, five parts first.
-    let decrypted = decrypt_compact(token, decrypt_key, decrypt_policy)?;
+    let decrypted = decrypt(token)?;
 
     // N1 (ADR 0027 §7, ADR 0050 §3): from the protected header only. A
     // compact JWE always has one and never has the unprotected parts;

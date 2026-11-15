@@ -122,6 +122,17 @@ polyjose_error! {
     /// Two or more keys of the caller's JWK Set match the `jwks_select` selector; RFC 7517 §5.1
     /// gives a set's order no meaning, so none is chosen (RFC 7517 §4.5; ADR 0054 §4, §5).
     MultipleMatchingKeys,
+    /// A platform-held key is gone: none under that name, or the platform has permanently
+    /// invalidated it; the private-key step of RFC 7515 §5.1 or RFC 7516 §5.2 cannot run
+    /// (ADR 0071 §6). Create or enrol a new key.
+    KeyNotFound,
+    /// A platform-held key needs the user to authenticate, and they have not, cancelled, or
+    /// cannot (ADR 0071 §4, §6). Prompt, then retry.
+    UserAuthenticationRequired,
+    /// Any other failure of a platform-held key while signing, including a signature that did
+    /// not verify against its public JWK (RFC 7515 §5.2 step 8 on our own output; ADR 0071 §3,
+    /// §6). Decryption reports `DecryptionFailed` instead (RFC 7516 §11.5).
+    PlatformKeyFailed,
 }
 
 /// Compares two code lists in a `const` context (`==` on `&str` is not `const`).
@@ -148,7 +159,8 @@ const fn same_codes(a: &[&str], b: &[&str]) -> bool {
 }
 
 // The build fails unless the variants are exactly the core's codes, in the core's order
-// (MultipleMatchingKeys last, ADR 0054 §5): a code the core adds, renames or reorders must be mirrored here first
+// (MultipleMatchingKeys after NoMatchingKey, ADR 0054 §5; the three platform-key codes last,
+// ADR 0071 §6): a code the core adds, renames or reorders must be mirrored here first
 // (ADR 0030 §5, §8). This is what makes the wildcard arm of `From<SurfaceError>` unreachable.
 const _: () = assert!(
     same_codes(&PolyjoseError::CODES, polyjose::Error::CODES),
@@ -202,13 +214,24 @@ mod tests {
             Error::InvalidFormat("compact JWS must have three parts"),
             Error::NoMatchingKey,
             Error::MultipleMatchingKeys,
+            Error::KeyNotFound,
+            Error::UserAuthenticationRequired,
+            Error::PlatformKeyFailed,
         ]
     }
 
     #[test]
     fn the_adapter_code_list_is_the_core_list_in_core_order() {
         assert_eq!(PolyjoseError::CODES, polyjose::Error::CODES);
-        assert_eq!(PolyjoseError::CODES.last(), Some(&"MultipleMatchingKeys"));
+        assert_eq!(
+            &PolyjoseError::CODES[16..],
+            [
+                "MultipleMatchingKeys",
+                "KeyNotFound",
+                "UserAuthenticationRequired",
+                "PlatformKeyFailed"
+            ]
+        );
     }
 
     #[test]
@@ -243,5 +266,14 @@ mod tests {
         assert!(matches!(e, PolyjoseError::NoMatchingKey { .. }));
         let e = PolyjoseError::from(SurfaceError::from(Error::MultipleMatchingKeys));
         assert!(matches!(e, PolyjoseError::MultipleMatchingKeys { .. }));
+        let e = PolyjoseError::from(SurfaceError::from(Error::KeyNotFound));
+        assert!(matches!(e, PolyjoseError::KeyNotFound { .. }));
+        let e = PolyjoseError::from(SurfaceError::from(Error::UserAuthenticationRequired));
+        assert!(matches!(
+            e,
+            PolyjoseError::UserAuthenticationRequired { .. }
+        ));
+        let e = PolyjoseError::from(SurfaceError::from(Error::PlatformKeyFailed));
+        assert!(matches!(e, PolyjoseError::PlatformKeyFailed { .. }));
     }
 }
