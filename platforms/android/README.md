@@ -91,6 +91,96 @@ try {
 Printing a result redacts its secret fields, but reading a field gives the secret: never log
 `verified.payload`, `decrypted.plaintext` or a key.
 
+## Platform keys: the Android Keystore (AAR only)
+
+`AndroidKeystoreKey` is a private key held by the Android Keystore (the TEE, or StrongBox), which
+signs or decrypts for polyjose and never leaves the platform (ADR 0072 §2). It implements the
+`PlatformKey` interface; pass it to the `…WithPlatformKey` operations. Only the private-key step
+runs in the Keystore: allow-lists, key binding, `epk` checks, the KDF, content decryption and a
+pure-Rust verify of every signature stay in polyjose. The class is in the Android AAR only; the
+desktop JVM jar has the `PlatformKey` interface and no key class.
+
+```kotlin
+// Off the main thread: a key that needs the user may block while a prompt is up.
+val key = AndroidKeystoreKey.generate("signing-key", "ES256")
+val token = jwsSignCompactWithPlatformKey(
+    "hello".toByteArray(), key, JwsSignOptions(protectedHeader = """{"alg":"ES256"}"""),
+)
+val again = AndroidKeystoreKey.open("signing-key", "ES256") // same publicJwk(), later or in another process
+println(again) // "AndroidKeystoreKey(securityLevel=…)": no alias, no key
+AndroidKeystoreKey.delete("signing-key")
+```
+
+- `generate(alias, algorithm, strongBox, userAuthentication, keySize, authorizer)` creates the key;
+  it refuses an alias that already holds one (`PlatformKeyFailed`; delete it first) and leaves no
+  key behind when it fails. `open(alias, algorithm, authorizer)` finds it again and checks through
+  `KeyInfo` that it permits the algorithm. `delete(alias)` removes it.
+- `publicJwk()` returns the public JWK as JSON text (encrypt to it, verify with it);
+  `algorithms()` the one algorithm the key serves (for `ECDH-ES`, the whole ECDH-ES family);
+  `securityLevel` where the key lives, read from `KeyInfo`, never from the request:
+  `StrongBox`, `TrustedEnvironment`, `Software`, `SecureHardware` (below API 31, where the
+  platform can't say which) or `Unknown`.
+- One algorithm per key: one purpose, exactly that algorithm's digest and padding, never
+  `DIGEST_NONE` or raw RSA, RSA public exponent 65537. `keySize` is the RSA modulus (2048, the
+  default, 3072 or 4096) or the ECDH-ES curve (256, the default, 384 or 521).
+
+| Algorithm | Keystore (TEE), from API | StrongBox, from API |
+|---|---|---|
+| ES256 | 23 | 28 |
+| ES384, ES512 | 23 | not possible |
+| RS256, PS256 | 23 | 28, 2048 bits only |
+| RS384, RS512, PS384, PS512 | 23 | not possible |
+| `ECDH-ES` (and `+A128KW`, `+A192KW`, `+A256KW`), P-256 | 31 | 31 |
+| `ECDH-ES` family, P-384, P-521 | 31 | not possible |
+| RSA-OAEP-256 | 34 | 34, 2048 bits; not verified on a StrongBox device |
+
+Below the level, or where the table says "not possible", `generate` and `open` throw
+`UnsupportedAlgorithm`; nothing fails later at first use. minSdk stays 23. RSA-OAEP-256 never falls
+back to MGF1-SHA-1: on API 35+ its keys are created with `setMgf1Digests(SHA-256)`, and a key
+without user authentication is checked before `generate` returns (polyjose encrypts a random
+32-byte content key to it and the Keystore decrypts it; on failure the key is deleted and the
+result is `UnsupportedAlgorithm`). A key with user authentication can't be checked that way, so
+try an unauthenticated key on a device first.
+
+**StrongBox** (`strongBox`), never a silent downgrade:
+- `Off` (the default): the TEE; StrongBox is never asked for.
+- `Preferred`: StrongBox when the device has it and it can serve the algorithm, else the TEE;
+  `securityLevel` says which.
+- `Required`: StrongBox or nothing. No StrongBox on the device is `PlatformKeyFailed`; an algorithm
+  StrongBox can't serve is `UnsupportedAlgorithm`.
+
+**User authentication** (`userAuthentication`; the device needs a secure lock screen):
+- Time-bound, `UserAuthentication(validitySeconds > 0, allowDeviceCredential)`: the app shows its
+  own `BiometricPrompt` (or the credential screen); the key then works for that many seconds.
+  Outside that window a call fails with `UserAuthenticationRequired`. Every key kind.
+- Per use, `UserAuthentication(0, allowDeviceCredential)`: signing and RSA-OAEP-256 keys, API 28+.
+  Each operation is handed, initialised, to the `PlatformKeyAuthorizer` passed to `generate` or
+  `open`, which returns once the user has authenticated it. polyjose ships
+  `BiometricPromptAuthorizer(context, title, negativeButtonText, allowDeviceCredential, subtitle)`,
+  on the framework's `android.hardware.biometrics.BiometricPrompt` (no AndroidX); the app declares
+  `android.permission.USE_BIOMETRIC`. ECDH-ES keys are time-bound only, so per use on an ECDH-ES key
+  is `UnsupportedAlgorithm`.
+- `allowDeviceCredential` lets the PIN, pattern or password stand in for a strong biometric. Below
+  API 30 the platform decides it (a time-bound key admits the credential, a per-use key doesn't),
+  and asking for the other choice there is `UnsupportedAlgorithm`.
+
+**Off the main thread.** A sign or decrypt call on a key that needs the user blocks its thread
+while the prompt is up. `BiometricPromptAuthorizer.authorize` throws `IllegalStateException` on the
+main thread, before showing anything, because waiting for the prompt there would deadlock.
+
+**Errors** (`PolyjoseException.code()`):
+
+| Code | When |
+|---|---|
+| `KeyNotFound` | No key under the alias, the key was deleted, or the platform invalidated it (`KeyPermanentlyInvalidatedException`: the lock screen was removed or reset, or biometrics changed). Create a new key |
+| `UserAuthenticationRequired` | The user has not authenticated (outside the time-bound window), or cancelled or failed the prompt. Prompt, then retry |
+| `PlatformKeyFailed` | Any other platform failure when generating, opening or signing, including `Required` without StrongBox |
+| `DecryptionFailed` | Any other failure while decrypting, a wrong or tampered encrypted key included (RFC 7516 §11.5) |
+| `UnsupportedAlgorithm` | The algorithm, key size, backend or authentication mode can't be served at this API level |
+| `KeyAlgorithmMismatch` | `open` with an algorithm the key doesn't permit, or the key used for another family |
+
+No platform message, alias or key is ever part of a polyjose error or of the key's printed form.
+
 ## Documentation
 
 - Getting started on Android and the JVM: <https://polyjose.dev/start/android/>
@@ -125,7 +215,9 @@ workspace: `source /Users/bharath/bharathwork/joserust/.toolchain-env.sh`.
 ./gradlew :polyjose-jvm:test        # JVM tests through JNA and the host library
 ./gradlew :polyjose:assembleDebug   # the AAR (builds all four ABIs with cargo-ndk)
 scripts/run-instrumented.sh         # the instrumented suite on an emulator (see Tests)
-./test.sh                           # what `scripts/test-all.sh android` runs: both of the above
+./gradlew :polyjose:lintRelease     # Android lint at minSdk 23 (NewApi and every other error fails)
+scripts/check-artifacts.sh          # AAR, jar, APK and publication checks (16 KB alignment, 5 MB limit)
+./test.sh                           # what `scripts/test-all.sh android` runs: all of the above
 ```
 
 From the repository root, `scripts/check-binding-api.sh kotlin` checks the generated Kotlin's
@@ -158,7 +250,14 @@ date. The modules depend on these tasks; nothing generated is committed.
 - `:polyjose` androidTest (JUnit 4, AndroidJUnitRunner) runs on an emulator:
   `ConformanceInstrumentedTest` (runner `android-emulator`), `SecurityInstrumentedTest` (the
   marker test for the JWS family, ADR 0030 §5; two generated keys differ, ADR 0005) and
-  `RedactionInstrumentedTest` (ADR 0065 on the device). The
+  `RedactionInstrumentedTest` (ADR 0065 on the device), `PlatformKeyInstrumentedTest` (the
+  `PlatformKey` callback with software keys), and the Keystore tests of `AndroidKeystoreKey`:
+  `AndroidKeystoreKeyTest` (every TEE row of the algorithm table, fixed parameters, reuse,
+  StrongBox, the RSA-OAEP-256 self-test, printing), `AndroidKeystoreKeyTableTest` (the API-level
+  table, the authentication limits and the error mapping, as pure functions) and
+  `AndroidKeystoreKeyAuthTest` (user authentication; it needs a secure lock screen, see below).
+  An emulator's Keystore is software: a pass proves function, not hardware. A real device is
+  [DEVICE-TESTS.md](DEVICE-TESTS.md). The
   `conformanceAssets` task copies `conformance/vectors/` and `conformance/schema.json` byte for byte
   into the test APK's assets under `conformance/`; the device hashes the bytes it parses for
   `vectors_digest` (ADR 0060), so a bundle that differs from the checkout fails parity.
@@ -175,7 +274,11 @@ date. The modules depend on these tasks; nothing generated is committed.
 2. It runs `./gradlew :polyjose:connectedDebugAndroidTest` on that serial and judges the run by the
    JUnit XML under `polyjose/build/outputs/androidTest-results/connected/` (AGP can exit 0 when the
    instrumentation crashed): a failure, an error, a skipped test or a missing file fails it.
-3. The test writes the results document to the test app's files dir and to AGP's additional test
+3. On an emulator it started, and only there, it sets a lock PIN (`adb shell locksettings`) for
+   `AndroidKeystoreKeyAuthTest` and clears it on exit, also on failure. On an emulator it didn't
+   start, that class is excluded and the live check is reported
+   `SKIPPED (no secure lock screen on the AVD)`.
+4. The test writes the results document to the test app's files dir and to AGP's additional test
    output dir, which AGP pulls before it uninstalls the test APK; the script copies it to
    `target/conformance/android-emulator.json` at the repository root (ADR 0034 §2).
 

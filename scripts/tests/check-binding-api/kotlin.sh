@@ -39,6 +39,9 @@ cp "$scratch/kotlin/dev/polyjose/polyjose_ffi.kt" "$base/$gen" || lib_die "could
 hand=platforms/android/polyjose/src/main/kotlin/dev/polyjose
 mkdir -p "$base/$hand" || lib_die "mkdir"
 list=scripts/check-binding-api.d/kotlin.host-types
+# The cases start from the list's header only, with no hand-written class in the polyjose module,
+# so they don't depend on the real classes (feature 0025 T04), which the mode's own run checks.
+grep '^#' "$repo/$list" >"$base/$list" || lib_die "could not write the empty host-type list"
 
 # kotlin_check: run_check kotlin on the case's generated file.
 kotlin_check() {

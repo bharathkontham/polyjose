@@ -14,6 +14,15 @@
 #    is ready for Gradle: sys.boot_completed = 1, init.svc.bootanim = stopped (when the property
 #    exists) and `pm path android` answers (pending_readiness; feature 0008 F02). Each of those
 #    adb shell calls is bounded to 10 s by timeout/gtimeout where available (F06).
+#    Lock PIN (feature 0025 T04): on an emulator this script started, and only there, it sets a
+#    lock PIN with `adb shell locksettings set-pin` after the boot (first clearing one a killed
+#    run may have left), so the user-authentication tests of AndroidKeystoreKeyAuthTest can create
+#    keys that need a secure lock screen. The PIN is cleared (`locksettings clear --old`) when the
+#    script exits, also on an error or an interrupt, before the emulator is stopped. On a running
+#    emulator, or when the PIN can't be set, that class is excluded (runner argument notClass) and
+#    the live check is reported `SKIPPED (no secure lock screen on the AVD)`.
+#    AndroidKeystoreKeyDeviceTest (manual steps of DEVICE-TESTS.md, a person answers a prompt) is
+#    always excluded.
 # 2. One Gradle call with ANDROID_SERIAL=<serial>:
 #      ./gradlew --no-daemon --continue :polyjose:connectedDebugAndroidTest \
 #        :sample-minified:connectedReleaseAndroidTest
@@ -24,8 +33,11 @@
 #    when the instrumentation crashed, feature 0008 T04), by the same rules for each task's XML
 #    under <module>/build/outputs/androidTest-results/connected/: FAIL when it is missing, names no
 #    test, has a failure, an error or a skipped test, or lacks a required test case. Required:
-#    ConformanceInstrumentedTest.everyVectorRunsOnTheEmulator for :polyjose, and the three
-#    R8ProbeTest cases for :sample-minified. Gradle's exit status must be 0 as well.
+#    ConformanceInstrumentedTest.everyVectorRunsOnTheEmulator for :polyjose, the Keystore cases of
+#    AndroidKeystoreKeyTest and AndroidKeystoreKeyTableTest (and of AndroidKeystoreKeyAuthTest when
+#    the PIN was set), and the three R8ProbeTest cases for :sample-minified. Gradle's exit status
+#    must be 0 as well. The lines the Keystore tests log (tag polyjose-t04: the device, the security
+#    level the Keystore reports, the RSA-OAEP-256 result) are printed after the run.
 # 4. The results document: the test writes it to the test app's files dir and to AGP's additional
 #    test output dir on the device, which AGP pulls to
 #    polyjose/build/outputs/connected_android_test_additional_output/ before it uninstalls the test
@@ -62,8 +74,18 @@ r8_xml_dir=$android_dir/sample-minified/build/outputs/androidTest-results/connec
 pulled_dir=$outputs/connected_android_test_additional_output
 
 # The emulator this script started (its serial and PID) and its log dir, removed on exit.
-serial="" started_pid="" work=""
+serial="" started_pid="" work="" pin_set=""
+# The lock PIN this script sets on an emulator it started (see the header); not a secret.
+lock_pin=4580
 cleanup() {
+  if [ -n "$pin_set" ]; then
+    if "$adb" -s "$serial" shell locksettings clear --old "$lock_pin" >/dev/null 2>&1; then
+      echo "android-emulator: cleared the lock PIN this script set on $serial"
+    else
+      echo "android-emulator: could not clear the lock PIN this script set on $serial"
+    fi
+    pin_set=""
+  fi
   if [ -n "$started_pid" ]; then
     echo "android-emulator: stopping the emulator this script started ($serial)"
     "$adb" -s "$serial" emu kill >/dev/null 2>&1
@@ -194,12 +216,31 @@ main() {
     echo "android: 16 KB page-size runtime: SKIPPED (the device has ${page_size:-unknown}-byte pages; 16 KB alignment is checked statically)"
   fi
 
+  # The lock PIN, only on the emulator this script started (see the header).
+  auth_class=dev.polyjose.AndroidKeystoreKeyAuthTest
+  excluded=dev.polyjose.AndroidKeystoreKeyDeviceTest
+  if [ -n "$started_pid" ]; then
+    "$adb" -s "$serial" shell locksettings clear --old "$lock_pin" >/dev/null 2>&1
+    if "$adb" -s "$serial" shell locksettings set-pin "$lock_pin" >/dev/null 2>&1; then
+      pin_set=1
+      echo "android-emulator: set a lock PIN on $serial (cleared on exit) for ${auth_class##*.}"
+    fi
+  fi
+  if [ -z "$pin_set" ]; then
+    excluded=$excluded,$auth_class
+    echo "android-emulator: user-authentication live check: SKIPPED (no secure lock screen on the AVD)"
+  fi
+  runner_args="-Pandroid.testInstrumentationRunnerArguments.notClass=$excluded"
+  [ -z "$started_pid" ] || "$adb" -s "$serial" logcat -c >/dev/null 2>&1
+
   rm -rf "$xml_dir" "$r8_xml_dir" "$pulled_dir"
   tasks=":polyjose:connectedDebugAndroidTest :sample-minified:connectedReleaseAndroidTest"
-  echo "==> android: ./gradlew --continue $tasks (ANDROID_SERIAL=$serial)"
-  # shellcheck disable=SC2086 # $tasks is two task names
-  ANDROID_SERIAL=$serial ./gradlew --no-daemon --continue $tasks
+  echo "==> android: ./gradlew --continue $tasks $runner_args (ANDROID_SERIAL=$serial)"
+  # shellcheck disable=SC2086 # $tasks is two task names; $runner_args is one argument
+  ANDROID_SERIAL=$serial ./gradlew --no-daemon --continue $tasks $runner_args
   gradle_rc=$?
+  echo "android-emulator: Keystore test log (polyjose-t04; an emulator's keys are software, not hardware evidence):"
+  "$adb" -s "$serial" logcat -d -s polyjose-t04:I 2>/dev/null | grep ' polyjose-t04: ' | sed 's/^.* polyjose-t04: /    /'
 
   # judge_xml <label> <dir> <classname> <test case>...: the JUnit XML rules of the header for one
   # task's results. Prints the counts and every problem; returns 1 on any problem.
@@ -222,8 +263,31 @@ main() {
     return "$bad"
   }
 
+  # has_cases <dir> <classname> <test case>...: each case is in the JUnit XML (its counts and
+  # failures are judged by judge_xml on the same files).
+  has_cases() {
+    local dir=$1 class=$2 name bad=0; shift 2
+    for name in "$@"; do
+      if ! find "$dir" -type f -name 'TEST-*.xml' -exec cat {} + 2>/dev/null |
+        grep -q "<testcase name=\"$name\" classname=\"$class\""; then
+        echo "android-emulator: the JUnit XML has no ${class##*.}.$name"; bad=1
+      fi
+    done
+    return "$bad"
+  }
+
   failed=0
   judge_xml android-emulator "$xml_dir" dev.polyjose.ConformanceInstrumentedTest everyVectorRunsOnTheEmulator || failed=1
+  has_cases "$xml_dir" dev.polyjose.AndroidKeystoreKeyTest everySigningRowSignsAndVerifies everyEcdhRowDecrypts \
+    rsaOaep256DecryptsAndATamperedKeyIsDecryptionFailed aFailingSelfTestDeletesTheKeyAndIsUnsupportedAlgorithm \
+    strongBoxIsNeverASilentDowngrade || failed=1
+  has_cases "$xml_dir" dev.polyjose.AndroidKeystoreKeyTableTest everyAlgorithmApiLevelAndBackendMatchesTheTable \
+    throwablesMapToTheThreeOutcomes || failed=1
+  if [ -n "$pin_set" ]; then
+    has_cases "$xml_dir" "$auth_class" aTimeBoundKeyWithoutAuthenticationIsUserAuthenticationRequired \
+      aTimeBoundKeyHasThePlatformsTimeBoundParameters aPerUseKeyHandsTheAuthorizerAnInitialisedCryptoObject || failed=1
+    echo "android-emulator: user-authentication live check: run (lock PIN set by this script)"
+  fi
   if judge_xml "android-r8" "$r8_xml_dir" dev.polyjose.sample.R8ProbeTest theLibraryLoadsAndReportsItsVersion \
     anEs256RoundTripReturnsThePayload anInvalidJwkIsReportedByItsCode; then
     echo "android-r8: the minified :sample-minified release passed R8ProbeTest (consumer-rules.pro, ADR 0033 §2)"
