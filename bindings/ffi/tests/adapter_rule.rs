@@ -54,11 +54,15 @@ const SECRET_INPUTS: &[(&str, &[&str])] = &[
     ("jws_sign_general", &["payload", "signers"]),
     ("jws_verify_compact", &["key", "options"]),
     ("jws_verify_json", &["key", "options"]),
+    // the platform key is a host object: Rust never sees its private key (ADR 0071 §5)
+    ("jws_sign_compact_with_platform_key", &["payload"]),
     // jwe: `options` of encrypt holds the recipient keys and the aad
     ("jwe_encrypt_compact", &["plaintext", "options"]),
     ("jwe_encrypt_json", &["plaintext", "options"]),
     ("jwe_decrypt_compact", &["key"]),
     ("jwe_decrypt_json", &["key"]),
+    ("jwe_decrypt_compact_with_platform_key", &[]),
+    ("jwe_decrypt_json_with_platform_key", &[]),
     // jwt: the signed JWT to encrypt is JWE plaintext
     ("jwt_sign", &["claims", "key"]),
     ("jwt_verify", &["key"]),
@@ -66,6 +70,9 @@ const SECRET_INPUTS: &[(&str, &[&str])] = &[
     ("jwt_encrypt_nested", &["signed_jwt", "options"]),
     ("jwt_decrypt_nested", &["decrypt_key", "key"]),
     ("jwt_decrypt_nested_with_jwks", &["decrypt_key", "jwks"]),
+    ("jwt_sign_with_platform_key", &["claims"]),
+    ("jwt_decrypt_nested_with_platform_key", &["key"]),
+    ("jwt_decrypt_nested_with_platform_key_and_jwks", &["jwks"]),
 ];
 
 /// One exported function: its source file, parameter names and body.
@@ -118,8 +125,8 @@ fn squash(text: &str) -> String {
 }
 
 /// The argument a leading statement converts, if it is one of the allowed conversions: a move
-/// into `Zeroizing`, a `From` conversion into a surface record, or the element-wise conversion of
-/// a list of records.
+/// into `Zeroizing`, a `From` conversion into a surface record, the element-wise conversion of
+/// a list of records, or the wrapping of a host platform key as the surface trait (ADR 0071 §5).
 fn converted_argument(statement: &str) -> Option<String> {
     let s = squash(statement);
     let rest = s.strip_prefix("let")?;
@@ -128,6 +135,7 @@ fn converted_argument(statement: &str) -> Option<String> {
     let allowed = [
         format!("Zeroizing::new({name})"),
         format!("{name}.into_iter().map(Into::into).collect()"),
+        format!("HostKey({name})"),
     ];
     let is_from = rhs.starts_with("surface::") && rhs.ends_with(&format!("::from({name})"));
     (allowed.contains(&rhs.to_owned()) || is_from).then_some(name)
@@ -219,6 +227,7 @@ fn the_scan_rejects_a_body_that_does_more_than_convert() {
         "let options = surface::JwsVerifyOptions::default()",
         "let n = 3",
         "let alg = String::from(\"HS256\")",
+        "let key = HostKey(other)",
     ] {
         assert_eq!(converted_argument(statement), None, "{statement} accepted");
     }
@@ -232,6 +241,10 @@ fn the_scan_rejects_a_body_that_does_more_than_convert() {
         )
         .as_deref(),
         Some("signers")
+    );
+    assert_eq!(
+        converted_argument("let key = HostKey(key)").as_deref(),
+        Some("key")
     );
 }
 

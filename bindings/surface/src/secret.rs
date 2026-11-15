@@ -80,6 +80,13 @@ impl SecretBytes {
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    /// Moves the buffer out into the core's owner, still wiped on drop and without a copy: Z and
+    /// the CEK a [`PlatformKey`](crate::platform_key::PlatformKey) returns go to the core this
+    /// way (ADR 0071 §8).
+    pub(crate) fn into_zeroizing(self) -> Zeroizing<Vec<u8>> {
+        self.0
+    }
 }
 
 /// Takes ownership without copying.

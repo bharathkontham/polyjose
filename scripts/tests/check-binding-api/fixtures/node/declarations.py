@@ -32,16 +32,26 @@ def die(message):
 
 
 def read_inventory(path):
-    """The inventory's ops (in order) and records, each a (name, [(field, kind)]) pair, where kind
-    is "required", "optional" or "flag" (the format in the inventory's header)."""
+    """The inventory's ops (in order) and records that exist in node, each a (name, [(field,
+    kind)]) pair, where kind is "required", "optional" or "flag" (the format in the inventory's
+    header). An entry marked `only <mode>...` without node, with its fields, is left out, and so are
+    the interfaces and enums, which no JS binding has (ADR 0071 §5)."""
     ops, records = [], []
+    skipping = False
     with open(path, encoding="utf-8") as f:
         for number, raw in enumerate(f, 1):
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
             words = line.split()
+            only = words[words.index("only") + 1:] if "only" in words else None
+            if only is not None:
+                words = words[:words.index("only")]
             kind, rest = words[0], " ".join(words[1:])
+            if kind in ("op", "record", "interface", "enum"):
+                skipping = kind in ("interface", "enum") or (only is not None and "node" not in only)
+            if kind in ("method", "case") or skipping:
+                continue
             if kind == "op":
                 ops.append(rest)
             elif kind == "record":

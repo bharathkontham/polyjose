@@ -59,7 +59,7 @@ new_case pass
 use_js_modules
 run_check js
 check_last_line "the facade's declarations match the inventory" 0 \
-  "check-binding-api: js: PASS ($(inventory_count op) operations, $(inventory_count record) records, $(inventory_count field) fields, $n_codes codes)"
+  "check-binding-api: js: PASS ($(inventory_count op js) operations, $(inventory_count record js) records, $(inventory_count field js) fields, $n_codes codes)"
 dist_ok=1
 [ ! -e "$case_dir/bindings/js/dist" ] || dist_ok=0
 report "the declarations are built in the mode's scratch directory, not bindings/js/dist" "$dist_ok" \
@@ -74,6 +74,16 @@ edit $api '  jwkToDer(jwk: Jwk, format: KeyFormat): Promise<Uint8Array>;' \
   jwkPeek?(jwk: Jwk): Promise<string>;'
 run_check js
 check_diffs "an extra PolyjoseApi member fails" 'extra in js (not in the inventory): op jwkPeek'
+
+# ADR 0071 §5: the platform-key operations are Kotlin and Swift only (`only surface kotlin swift`).
+new_case platform-key-op
+use_js_modules
+edit $api '  jwkToDer(jwk: Jwk, format: KeyFormat): Promise<Uint8Array>;' \
+  '  jwkToDer(jwk: Jwk, format: KeyFormat): Promise<Uint8Array>;
+  jwsSignCompactWithPlatformKey?(payload: Uint8Array): Promise<string>;'
+run_check js
+check_diffs "a facade member named like a Kotlin/Swift-only platform-key operation fails" \
+  'extra in js (not in the inventory): op jwsSignCompactWithPlatformKey'
 
 new_case renamed-op
 use_js_modules

@@ -59,7 +59,7 @@ new_case unknown-keyword
 edit $inv 'op version' 'operation version'
 run_check surface
 check "an unknown keyword fails with its line number" 1 \
-  '^  bindings/api-inventory\.txt:[0-9]+: unknown entry \(op, record, field or code\): operation version$' \
+  '^  bindings/api-inventory\.txt:[0-9]+: unknown entry \(op, record, field, interface, method, enum, case or code\): operation version$' \
   'is malformed'
 
 new_case bad-op-name
@@ -106,5 +106,28 @@ new_case no-inventory
 rm "$case_dir/$inv"
 run_check surface
 check "a missing inventory fails, it never skips" 1 'bindings/api-inventory\.txt missing' 'inventory: FAIL'
+
+# --- `only`, interfaces and enums (feature 0025 T02; ADR 0071 §5) -----------------------------------
+
+new_case only-unknown-mode
+edit $inv 'op jwsSignCompactWithPlatformKey only surface kotlin swift' 'op jwsSignCompactWithPlatformKey only surface kotlin swfit'
+run_check surface
+check "only naming a mode that does not exist fails" 1 'only names swfit, which is not a mode' '^check-binding-api: inventory: FAIL$'
+
+new_case only-on-a-member
+edit $inv '  method sign' '  method sign only kotlin'
+run_check surface
+check "a method cannot carry its own only marker" 1 \
+  'api-inventory\.txt:[0-9]+: method entries cannot be marked only' '^check-binding-api: inventory: FAIL$'
+
+new_case only-empty
+edit $inv 'op jwtSignWithPlatformKey only surface kotlin swift' 'op jwtSignWithPlatformKey only'
+run_check surface
+check "only with no mode fails" 1 'api-inventory\.txt:[0-9]+: only needs at least one mode' '^check-binding-api: inventory: FAIL$'
+
+new_case method-outside-interface
+edit $inv '  case NotFound' '  method notFound'
+run_check surface
+check "a method outside an interface fails" 1 'api-inventory\.txt:[0-9]+: method outside an interface' '^check-binding-api: inventory: FAIL$'
 
 finish

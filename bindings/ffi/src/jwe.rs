@@ -26,10 +26,13 @@
 //!   them without `unsafe`. Callers should wipe the `ByteArray`/`Data` they receive (ADR 0030
 //!   §7.4).
 
+use std::sync::Arc;
+
 use polyjose_surface::records as surface;
 use zeroize::Zeroizing;
 
 use crate::PolyjoseError;
+use crate::platform_key::{HostKey, PlatformKey};
 use crate::records::{JweDecryptOptions, JweDecrypted, JweEncryptOptions};
 
 /// Encrypts `plaintext` into a JWE Compact Serialization, for exactly one recipient (ADR 0030
@@ -99,6 +102,35 @@ pub fn jwe_decrypt_compact(
     Ok(polyjose_surface::jwe::jwe_decrypt_compact(&token, &key, &options)?.into())
 }
 
+/// Decrypts the JWE Compact Serialization `token` with the host's platform key (ADR 0071 §5;
+/// RFC 7516 §5.2, §7.1): `jwe_decrypt_compact` with the private-key step done by `key`.
+///
+/// The `alg` and `enc` must be in the allow-lists before `key` is touched (RFC 8725 §3.1). A
+/// platform key serves `ECDH-ES` and `ECDH-ES+A128KW`, `+A192KW`, `+A256KW` on P-256, P-384 and
+/// P-521 (`key.agree` with the validated `epk`, RFC 7518 §4.6) and `RSA-OAEP-256`
+/// (`key.decryptKey`, RFC 7518 §4.3).
+///
+/// # Errors
+///
+/// `AlgorithmNotAllowed` for an empty allow-list or an `alg`/`enc` outside it, with no call to
+/// `key`; `UnsupportedAlgorithm` for an `alg` a platform key may not serve; `KeyAlgorithmMismatch`
+/// for an `alg` the key is not bound to; `KeyNotFound` and `UserAuthenticationRequired` from the
+/// key; `DecryptionFailed` for every other failure, of the key (any other exception included) or
+/// of the JWE (RFC 7516 §11.5, ADR 0071 §4).
+#[uniffi::export]
+pub fn jwe_decrypt_compact_with_platform_key(
+    token: String,
+    key: Arc<dyn PlatformKey>,
+    options: JweDecryptOptions,
+) -> Result<JweDecrypted, PolyjoseError> {
+    let key = HostKey(key);
+    let options = surface::JweDecryptOptions::from(options);
+    Ok(
+        polyjose_surface::jwe::jwe_decrypt_compact_with_platform_key(&token, &key, &options)?
+            .into(),
+    )
+}
+
 /// Decrypts the flattened or general JWE JSON Serialization `jwe` with `key`; the result names
 /// the first recipient that decrypts (ADR 0030 §4; RFC 7516 §5.2, §7.2.1).
 ///
@@ -119,4 +151,26 @@ pub fn jwe_decrypt_json(
     let key = Zeroizing::new(key);
     let options = surface::JweDecryptOptions::from(options);
     Ok(polyjose_surface::jwe::jwe_decrypt_json(&jwe, &key, &options)?.into())
+}
+
+/// Decrypts the flattened or general JWE JSON Serialization `jwe` with the host's platform key
+/// (ADR 0071 §5; RFC 7516 §5.2, §7.2): `jwe_decrypt_json` with the private-key step done by `key`.
+///
+/// `key` is called at most once per recipient whose `alg` passes the checks, in order, bounded by
+/// `max_recipients`; `KeyNotFound` or `UserAuthenticationRequired` stops at once, so a cancelled
+/// prompt is not followed by another (ADR 0071 §4).
+///
+/// # Errors
+///
+/// Those of [`jwe_decrypt_compact_with_platform_key`], plus `InvalidFormat` as for
+/// [`jwe_decrypt_json`].
+#[uniffi::export]
+pub fn jwe_decrypt_json_with_platform_key(
+    jwe: String,
+    key: Arc<dyn PlatformKey>,
+    options: JweDecryptOptions,
+) -> Result<JweDecrypted, PolyjoseError> {
+    let key = HostKey(key);
+    let options = surface::JweDecryptOptions::from(options);
+    Ok(polyjose_surface::jwe::jwe_decrypt_json_with_platform_key(&jwe, &key, &options)?.into())
 }

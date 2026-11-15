@@ -25,10 +25,13 @@
 //! leaves the copies of any record `String` field. Claims are usually not secret; carry secrets
 //! in a JWE payload instead.
 
+use std::sync::Arc;
+
 use polyjose_surface::records as surface;
 use zeroize::Zeroizing;
 
 use crate::PolyjoseError;
+use crate::platform_key::{HostKey, PlatformKey};
 use crate::records::{
     JweDecryptOptions, JweEncryptOptions, JwtNestedVerified, JwtSignOptions, JwtVerified,
     JwtVerifyOptions,
@@ -54,6 +57,28 @@ pub fn jwt_sign(
     let key = Zeroizing::new(key);
     let options = surface::JwtSignOptions::from(options);
     Ok(polyjose_surface::jwt::jwt_sign(&claims, &key, &options)?)
+}
+
+/// Signs the JWT Claims Set `claims` (JSON text) with the host's platform key into a compact JWS
+/// (ADR 0071 §5; RFC 7519 §7.1): `jwt_sign` with the private-key step done by `key`. The header
+/// holds `alg`, `typ`, the public JWK's `kid`, then the `header` members (ADR 0027 §8).
+///
+/// # Errors
+///
+/// The claims and `options` errors of `jwt_sign`, then those of
+/// [`jws_sign_compact_with_platform_key`](crate::jws::jws_sign_compact_with_platform_key).
+#[uniffi::export]
+pub fn jwt_sign_with_platform_key(
+    claims: String,
+    key: Arc<dyn PlatformKey>,
+    options: JwtSignOptions,
+) -> Result<String, PolyjoseError> {
+    let claims = Zeroizing::new(claims);
+    let key = HostKey(key);
+    let options = surface::JwtSignOptions::from(options);
+    Ok(polyjose_surface::jwt::jwt_sign_with_platform_key(
+        &claims, &key, &options,
+    )?)
 }
 
 /// Verifies and validates the signed JWT `token` with `key` (ADR 0030 §4; RFC 7519 §7.2,
@@ -181,4 +206,64 @@ pub fn jwt_decrypt_nested_with_jwks(
         &options,
     )?
     .into())
+}
+
+/// Decrypts the nested JWT `token` with the host's platform key, then verifies and validates the
+/// inner JWT with `key` (ADR 0071 §5; RFC 7519 §5.2, §7.2 step 8; RFC 8725 §3.3):
+/// `jwt_decrypt_nested` with the outer JWE's private-key step done by `decrypt_key`.
+///
+/// # Errors
+///
+/// Those of [`jwt_decrypt_nested`], with the outer JWE's errors those of
+/// [`jwe_decrypt_compact_with_platform_key`](crate::jwe::jwe_decrypt_compact_with_platform_key).
+#[uniffi::export]
+pub fn jwt_decrypt_nested_with_platform_key(
+    token: String,
+    decrypt_key: Arc<dyn PlatformKey>,
+    decrypt_options: JweDecryptOptions,
+    key: String,
+    options: JwtVerifyOptions,
+) -> Result<JwtNestedVerified, PolyjoseError> {
+    let decrypt_key = HostKey(decrypt_key);
+    let key = Zeroizing::new(key);
+    let decrypt_options = surface::JweDecryptOptions::from(decrypt_options);
+    let options = surface::JwtVerifyOptions::from(options);
+    Ok(polyjose_surface::jwt::jwt_decrypt_nested_with_platform_key(
+        &token,
+        &decrypt_key,
+        &decrypt_options,
+        &key,
+        &options,
+    )?
+    .into())
+}
+
+/// Decrypts the nested JWT `token` with the host's platform key, then verifies and validates the
+/// inner JWT against the JWK Set `jwks` (ADR 0071 §5; RFC 7519 §5.2, §7.2 step 8; ADR 0029).
+///
+/// # Errors
+///
+/// Those of [`jwt_decrypt_nested_with_platform_key`], plus `NoMatchingKey` (ADR 0029 §4).
+#[uniffi::export]
+pub fn jwt_decrypt_nested_with_platform_key_and_jwks(
+    token: String,
+    decrypt_key: Arc<dyn PlatformKey>,
+    decrypt_options: JweDecryptOptions,
+    jwks: String,
+    options: JwtVerifyOptions,
+) -> Result<JwtNestedVerified, PolyjoseError> {
+    let decrypt_key = HostKey(decrypt_key);
+    let jwks = Zeroizing::new(jwks);
+    let decrypt_options = surface::JweDecryptOptions::from(decrypt_options);
+    let options = surface::JwtVerifyOptions::from(options);
+    Ok(
+        polyjose_surface::jwt::jwt_decrypt_nested_with_platform_key_and_jwks(
+            &token,
+            &decrypt_key,
+            &decrypt_options,
+            &jwks,
+            &options,
+        )?
+        .into(),
+    )
 }

@@ -17,8 +17,26 @@
 #
 # Each mode derives its binding's names in the inventory's normal form, one per line:
 #   op <name> | record <Name> | field <Name>.<name>[?|=false] | code <Code>
-# The derived set must equal the inventory's, restricted to the kinds the mode checks; codes are
-# also compared in order. A name derived twice fails (the bindings are flat namespaces).
+#   | interface <Name> | method <Name>.<name> | enum <Name> | case <Name>.<Case>
+#   | hosttype <Name> | hostmember <Name>.<name>
+# The derived set must equal the inventory's, restricted to the kinds the mode checks and to the
+# entries that exist in the mode's binding (an entry marked `only <mode>...` in the inventory is
+# expected only in those modes, ADR 0071 §5); codes are also compared in order. A name derived
+# twice fails (the bindings are flat namespaces); a host member is derived once per name, so
+# overloads share a line.
+#
+# Host-type lists (ADR 0071 §5, feature 0025 T02). A mode that sets MODE_HOST_TYPES=1 allows
+# hand-written public types beside the generated API (the platform-key classes AppleKey and
+# AndroidKeystoreKey) only when they are listed, with their public members, in its own file
+# scripts/check-binding-api.d/<mode>.host-types, in this format (blank lines and '#' comment
+# lines ignored, leading whitespace is layout, as in the inventory):
+#   type <Name>        a hand-written public type (UpperCamel); the member lines below belong to it
+#   member <name>      one of its public members, by name: a function, property, initializer
+#                      (`init`, Kotlin `constructor`) or nested type; overloads share one line
+# The list becomes `hosttype <Name>` and `hostmember <Name>.<name>` lines that the mode's derived
+# set must match exactly: an unlisted hand-written public type or member fails the mode, and so
+# does a listed one the sources lack. Adding a type to a list is a review decision, like an
+# inventory change. A mode file that reads a list says in its header which declarations it reports.
 #
 # Output and exit status. Per mode: `check-binding-api: <mode>: PASS (...)`, or the differences
 # and `check-binding-api: <mode>: FAIL`. A mode whose inputs are missing (no source tree, no node)
@@ -37,8 +55,13 @@
 #   mode_expect (optional)                 a filter from the inventory's lines (stdin) to what this
 #                                          binding must show (stdout), for host idiom such as JS
 #                                          optional flags
+#   MODE_HOST_TYPES=1 (optional)           the mode reads its host-type list (above); the kinds
+#                                          hosttype and hostmember are then checked too
 # Helpers: $repo (the repository root), $mode_scratch (an empty directory of the mode's own),
-# skip, mode_fail, and the awk function file $camel_awk (`camel("key_use")` = "keyUse").
+# skip, mode_fail, the awk function file $camel_awk (`camel("key_use")` = "keyUse"),
+# $mode_inventory (the inventory's entries that exist in this mode's binding, in normal form,
+# without the `only` marker), and, for a mode with MODE_HOST_TYPES, $host_types: its list in
+# normal form (hosttype/hostmember lines).
 #
 # Runs on macOS /bin/bash 3.2 and Linux bash 5; needs only awk, sed, sort and comm (a mode may need
 # more, and skips without it).
@@ -71,7 +94,86 @@ AWK
 # --- The inventory ---------------------------------------------------------------------------------
 
 # inventory_lines: the inventory in normal form on stdout, or its format errors on stderr (exit 1).
+# An entry that exists in some bindings only keeps its marker, normalized: `<line> only <mode>...`
+# (an op, record, interface or enum line; its fields, methods or cases inherit it).
 inventory_lines() {
+  awk '
+    function bad(msg) { printf "%s:%d: %s\n", FILENAME, FNR, msg > "/dev/stderr"; errors++ }
+    function once(key) { if (key in seen) { bad("duplicate entry: " key); return 0 } seen[key] = 1; return 1 }
+    function emit(entry, marker) { print entry (marker == "" ? "" : " only " marker) }
+    # Splits `<name> only <mode>...` into rest and only; a marker on another kind is an error.
+    function marker(may,    n, w, i, at) {
+      only = ""
+      if (!match(rest, /[ \t]only([ \t]|$)/)) return 1
+      if (!may) { bad(kind " entries cannot be marked only (they inherit it, or exist on every binding): " line); return 0 }
+      at = RSTART + RLENGTH
+      n = split(substr(rest, at), w, /[ \t]+/)
+      rest = substr(rest, 1, RSTART - 1); sub(/[ \t]+$/, "", rest)
+      for (i = 1; i <= n; i++) if (w[i] != "") {
+        if (w[i] !~ /^[a-z0-9][a-z0-9-]*$/) { bad("only needs mode names: " line); return 0 }
+        only = only (only == "" ? "" : " ") w[i]
+      }
+      if (only == "") { bad("only needs at least one mode: " line); return 0 }
+      return 1
+    }
+    { sub(/\r$/, ""); line = $0; sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line) }
+    line == "" || line ~ /^#/ { next }
+    {
+      kind = line; sub(/[ \t].*/, "", kind)
+      rest = substr(line, length(kind) + 1); sub(/^[ \t]+/, "", rest)
+    }
+    kind == "op" {
+      if (!marker(1)) next
+      if (rest !~ /^[a-z][A-Za-z0-9]*$/) { bad("op needs a camelCase name: " line); next }
+      if (once("op " rest)) emit("op " rest, only)
+      next
+    }
+    kind == "record" || kind == "interface" || kind == "enum" {
+      parent = ""; parent_kind = ""
+      if (!marker(1)) next
+      if (rest !~ /^[A-Z][A-Za-z0-9]*$/) { bad(kind " needs an UpperCamel name: " line); next }
+      parent = rest; parent_kind = kind; parent_only = only
+      if (once(kind " " rest)) emit(kind " " rest, only)
+      next
+    }
+    kind == "field" {
+      if (!marker(0)) next
+      if (parent_kind != "record") { bad("field outside a record: " line); next }
+      suffix = ""
+      if (rest ~ /^[a-z][A-Za-z0-9]*\?$/) { suffix = "?"; sub(/\?$/, "", rest) }
+      else if (rest ~ /^[a-z][A-Za-z0-9]*[ \t]*=[ \t]*false$/) { suffix = "=false"; sub(/[ \t]*=.*$/, "", rest) }
+      else if (rest !~ /^[a-z][A-Za-z0-9]*$/) { bad("field needs a camelCase name, then ? or = false: " line); next }
+      if (once("field " parent "." rest)) emit("field " parent "." rest suffix, parent_only)
+      next
+    }
+    kind == "method" {
+      if (!marker(0)) next
+      if (parent_kind != "interface") { bad("method outside an interface: " line); next }
+      if (rest !~ /^[a-z][A-Za-z0-9]*$/) { bad("method needs a camelCase name: " line); next }
+      if (once("method " parent "." rest)) emit("method " parent "." rest, parent_only)
+      next
+    }
+    kind == "case" {
+      if (!marker(0)) next
+      if (parent_kind != "enum") { bad("case outside an enum: " line); next }
+      if (rest !~ /^[A-Z][A-Za-z0-9]*$/) { bad("case needs an UpperCamel name: " line); next }
+      if (once("case " parent "." rest)) emit("case " parent "." rest, parent_only)
+      next
+    }
+    kind == "code" {
+      if (!marker(0)) next
+      if (rest !~ /^[A-Z][A-Za-z0-9]*$/) { bad("code needs an UpperCamel name: " line); next }
+      if (once("code " rest)) print "code " rest
+      next
+    }
+    { bad("unknown entry (op, record, field, interface, method, enum, case or code): " line) }
+    END { exit errors > 0 }
+  ' "$inventory"
+}
+
+# host_type_lines <file>: a host-type list (see the header) in normal form on stdout, or its
+# format errors on stderr (exit 1).
+host_type_lines() {
   awk '
     function bad(msg) { printf "%s:%d: %s\n", FILENAME, FNR, msg > "/dev/stderr"; errors++ }
     function once(key) { if (key in seen) { bad("duplicate entry: " key); return 0 } seen[key] = 1; return 1 }
@@ -81,34 +183,35 @@ inventory_lines() {
       kind = line; sub(/[ \t].*/, "", kind)
       rest = substr(line, length(kind) + 1); sub(/^[ \t]+/, "", rest)
     }
-    kind == "op" {
-      if (rest !~ /^[a-z][A-Za-z0-9]*$/) { bad("op needs a camelCase name: " line); next }
-      if (once("op " rest)) print "op " rest
+    kind == "type" {
+      type = ""
+      if (rest !~ /^[A-Z][A-Za-z0-9]*$/) { bad("type needs an UpperCamel name: " line); next }
+      type = rest
+      if (once("hosttype " rest)) print "hosttype " rest
       next
     }
-    kind == "record" {
-      if (rest !~ /^[A-Z][A-Za-z0-9]*$/) { bad("record needs an UpperCamel name: " line); record = ""; next }
-      record = rest
-      if (once("record " rest)) print "record " rest
+    kind == "member" {
+      if (type == "") { bad("member outside a type: " line); next }
+      if (rest !~ /^[A-Za-z_][A-Za-z0-9_]*$/) { bad("member needs a name: " line); next }
+      if (once("hostmember " type "." rest)) print "hostmember " type "." rest
       next
     }
-    kind == "field" {
-      if (record == "") { bad("field outside a record: " line); next }
-      suffix = ""
-      if (rest ~ /^[a-z][A-Za-z0-9]*\?$/) { suffix = "?"; sub(/\?$/, "", rest) }
-      else if (rest ~ /^[a-z][A-Za-z0-9]*[ \t]*=[ \t]*false$/) { suffix = "=false"; sub(/[ \t]*=.*$/, "", rest) }
-      else if (rest !~ /^[a-z][A-Za-z0-9]*$/) { bad("field needs a camelCase name, then ? or = false: " line); next }
-      if (once("field " record "." rest)) print "field " record "." rest suffix
-      next
-    }
-    kind == "code" {
-      if (rest !~ /^[A-Z][A-Za-z0-9]*$/) { bad("code needs an UpperCamel name: " line); next }
-      if (once("code " rest)) print "code " rest
-      next
-    }
-    { bad("unknown entry (op, record, field or code): " line) }
+    { bad("unknown entry (type or member): " line) }
     END { exit errors > 0 }
-  ' "$inventory"
+  ' "$1"
+}
+
+# for_mode <mode>: the inventory lines (stdin) that exist in <mode>'s binding, without the marker.
+for_mode() {
+  awk -v mode="$1" '
+    / only / {
+      n = split(substr($0, index($0, " only ") + 6), m, " "); keep = 0
+      for (i = 1; i <= n; i++) if (m[i] == mode) keep = 1
+      if (keep) print substr($0, 1, index($0, " only ") - 1)
+      next
+    }
+    { print }
+  '
 }
 
 # core_codes: polyjose::Error::CODES in order, one per line (see the header).
@@ -135,6 +238,11 @@ check_inventory() {
     echo "$me: no Error::CODES block (pub const CODES: &'static [&'static str] = &[...];) in ${core_error_rs#"$repo"/}"
     return 1
   fi
+  # A mode named by `only` must exist, so a misspelt mode cannot hide an entry from every check.
+  sed -n 's/.* only //p' "$scratch/inventory" | tr ' ' '\n' | sort -u >"$scratch/only-modes"
+  while IFS= read -r m; do
+    [ -f "$modes_dir/$m.sh" ] || { echo "$me: ${inventory#"$repo"/}: only names $m, which is not a mode (scripts/check-binding-api.d/$m.sh)"; ok=0; }
+  done <"$scratch/only-modes"
   sed -n 's/^code //p' "$scratch/inventory" >"$scratch/inventory-codes"
   if ! cmp -s "$scratch/inventory-codes" "$scratch/core-codes"; then
     echo "$me: the inventory's error codes differ from polyjose::Error::CODES (same codes, same order; ADR 0030 §5)"
@@ -182,27 +290,50 @@ run_mode() {
   mode_scratch=$scratch/mode-$mode
   mkdir "$mode_scratch" || { echo "$me: $mode: could not create a scratch directory"; return 1; }
   (
-    MODE_KINDS=""
+    MODE_KINDS="" MODE_HOST_TYPES=""
     # shellcheck source=/dev/null # the mode files are found at run time
     . "$modes_dir/$mode.sh" || mode_fail "could not source scripts/check-binding-api.d/$mode.sh"
     [ -n "$MODE_KINDS" ] || mode_fail "scripts/check-binding-api.d/$mode.sh sets no MODE_KINDS"
+    mode_inventory=$mode_scratch/inventory.all
+    for_mode "$mode" <"$scratch/inventory" >"$mode_inventory"
+    host_types=$mode_scratch/host-types
+    : >"$host_types"
+    if [ -n "$MODE_HOST_TYPES" ]; then
+      list=$modes_dir/$mode.host-types
+      [ -f "$list" ] || mode_fail "MODE_HOST_TYPES is set, but scripts/check-binding-api.d/$mode.host-types is missing"
+      if ! host_type_lines "$list" >"$host_types" 2>"$mode_scratch/host-types.err"; then
+        echo "$me: $mode: scripts/check-binding-api.d/$mode.host-types is malformed:"; sed "s|^$repo/|  |" "$mode_scratch/host-types.err"
+        echo "$me: $mode: FAIL"; exit 1
+      fi
+      MODE_KINDS="$MODE_KINDS hosttype hostmember"
+    fi
     declare -F mode_derive >/dev/null || mode_fail "scripts/check-binding-api.d/$mode.sh defines no mode_derive"
     mode_derive "$mode_scratch/derived" || mode_fail "mode_derive failed"
     [ -f "$mode_scratch/derived" ] || mode_fail "mode_derive wrote nothing"
     if grep -q '^error ' "$mode_scratch/derived"; then
       sed -n "s/^error /$me: $mode: /p" "$mode_scratch/derived"; echo "$me: $mode: FAIL"; exit 1
     fi
-    bad=$(grep -Ev '^(op [a-z][A-Za-z0-9]*|record [A-Z][A-Za-z0-9]*|field [A-Z][A-Za-z0-9]*\.[a-z][A-Za-z0-9]*(\?|=false)?|code [A-Z][A-Za-z0-9]*)$' "$mode_scratch/derived")
+    bad=$(grep -Ev '^(op [a-z][A-Za-z0-9]*|record [A-Z][A-Za-z0-9]*|field [A-Z][A-Za-z0-9]*\.[a-z][A-Za-z0-9]*(\?|=false)?|code [A-Z][A-Za-z0-9]*|interface [A-Z][A-Za-z0-9]*|method [A-Z][A-Za-z0-9]*\.[a-z][A-Za-z0-9]*|enum [A-Z][A-Za-z0-9]*|case [A-Z][A-Za-z0-9]*\.[A-Z][A-Za-z0-9]*|hosttype [A-Z][A-Za-z0-9]*|hostmember [A-Z][A-Za-z0-9]*\.[A-Za-z_][A-Za-z0-9_]*)$' "$mode_scratch/derived")
     [ -z "$bad" ] || mode_fail "derived lines not in the normal form: $bad"
-    kinds_filter "$MODE_KINDS" <"$scratch/inventory" >"$mode_scratch/inventory"
+    kinds_filter "$MODE_KINDS" <"$mode_inventory" >"$mode_scratch/inventory"
     if declare -F mode_expect >/dev/null; then
       mode_expect <"$mode_scratch/inventory" >"$mode_scratch/expected" || mode_fail "mode_expect failed"
     else
       cp "$mode_scratch/inventory" "$mode_scratch/expected"
     fi
+    cat "$host_types" >>"$mode_scratch/expected"
+    # Overloads share a host member line (see the header).
+    awk '$1 != "hostmember" || !seen[$0]++' "$mode_scratch/derived" >"$mode_scratch/derived.once"
+    mv "$mode_scratch/derived.once" "$mode_scratch/derived"
     kinds_filter "$MODE_KINDS" <"$mode_scratch/derived" >"$mode_scratch/derived.kinds"
     if compare "$mode_scratch/expected" "$mode_scratch/derived.kinds"; then
-      counts=$(awk '{ n[$1]++ } END { printf "%d operations, %d records, %d fields", n["op"], n["record"], n["field"]; if (n["code"]) printf ", %d codes", n["code"] }' "$mode_scratch/derived.kinds")
+      counts=$(awk '{ n[$1]++ } END {
+        printf "%d operations, %d records, %d fields", n["op"], n["record"], n["field"]
+        if (n["code"]) printf ", %d codes", n["code"]
+        if (n["interface"]) printf ", %d interfaces, %d methods", n["interface"], n["method"]
+        if (n["enum"]) printf ", %d enums, %d cases", n["enum"], n["case"]
+        if (n["hosttype"]) printf ", %d host types, %d host members", n["hosttype"], n["hostmember"]
+      }' "$mode_scratch/derived.kinds")
       echo "$me: $mode: PASS ($counts)"
     else
       echo "$me: $mode: FAIL (bindings/api-inventory.txt is the 0.1.0 API; changing it is Gate 2, ADR 0030 §8)"

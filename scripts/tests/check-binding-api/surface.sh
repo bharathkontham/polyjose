@@ -15,7 +15,7 @@ src=bindings/surface/src
 new_case pass
 run_check surface
 check_last_line "the surface matches the inventory" 0 \
-  'check-binding-api: surface: PASS (35 operations, 15 records, 78 fields)'
+  "check-binding-api: surface: PASS ($(inventory_count op surface) operations, $(inventory_count record surface) records, $(inventory_count field surface) fields, $(inventory_count interface surface) interfaces, $(inventory_count method surface) methods, $(inventory_count enum surface) enums, $(inventory_count case surface) cases)"
 
 # --- Operations --------------------------------------------------------------------------------------
 
@@ -132,7 +132,10 @@ pub enum Form {
     Flattened,
 }'
 run_check surface
-check_diffs "an extra public enum fails like a record" 'extra in surface (not in the inventory): record Form'
+check_diffs "an extra public enum fails as an enum with its cases" \
+  'extra in surface (not in the inventory): enum Form' \
+  'extra in surface (not in the inventory): case Form.General' \
+  'extra in surface (not in the inventory): case Form.Flattened'
 
 new_case inline-module
 append $src/util.rs '
@@ -166,5 +169,31 @@ run_check surface
 check_last_line "without bindings/surface/src the mode is SKIPPED with the reason" 0 \
   'SKIPPED (surface: bindings/surface/src missing)'
 check_absent "a skipped mode is not reported as passing" 'PASS'
+
+# --- The platform-key trait and its error enum (feature 0025 T02; ADR 0071 §5) ---------------------
+
+new_case renamed-trait-method
+edit $src/platform_key.rs '    fn algorithms(&self) -> Result<Vec<String>, PlatformKeyError>;' \
+  '    fn algorithm_list(&self) -> Result<Vec<String>, PlatformKeyError>;'
+run_check surface
+check_diffs "a renamed trait method fails as missing and extra" \
+  'missing from surface (in the inventory): method PlatformKey.algorithms' \
+  'extra in surface (not in the inventory): method PlatformKey.algorithmList'
+
+new_case enum-variant-payload
+edit $src/platform_key.rs '    NotFound,' '    NotFound(u8),'
+run_check surface
+check "a variant with a payload fails" 1 'enum variant with a payload or value' '^check-binding-api: surface: FAIL$'
+
+new_case extra-trait
+append $src/util.rs '
+/// Not in the inventory.
+pub trait Probe {
+    fn probe(&self);
+}'
+run_check surface
+check_diffs "an extra public trait fails as an interface with its methods" \
+  'extra in surface (not in the inventory): interface Probe' \
+  'extra in surface (not in the inventory): method Probe.probe'
 
 finish

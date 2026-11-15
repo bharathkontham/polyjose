@@ -6,6 +6,7 @@
 //! tested next to each operation (T06–T09) and in the conformance run (T11); this file only pins
 //! the shape, plus the four utilities, which T01 implements.
 
+use polyjose_surface::platform_key::{PlatformKey, PlatformKeyError};
 use polyjose_surface::records::{
     JweDecryptOptions, JweDecrypted, JweEncryptOptions, JweRecipient, JwkSelector, JwsSignOptions,
     JwsSigner, JwsUnverified, JwsVerified, JwsVerifyOptions, JwtNestedVerified, JwtSignOptions,
@@ -165,6 +166,59 @@ fn jwt_operations() {
         jwt::jwt_decrypt_nested_with_jwks("a.b.c.d.e", OCT, &decrypt, &jwks, &verify);
 }
 
+/// A platform key that is never there (ADR 0071 §5), to pin the six operations' shapes.
+struct Missing;
+
+impl PlatformKey for Missing {
+    fn public_jwk(&self) -> Result<String, PlatformKeyError> {
+        Err(PlatformKeyError::NotFound)
+    }
+    fn algorithms(&self) -> Result<Vec<String>, PlatformKeyError> {
+        Err(PlatformKeyError::NotFound)
+    }
+    fn sign(&self, _: &str, _: &[u8]) -> Result<Vec<u8>, PlatformKeyError> {
+        Err(PlatformKeyError::NotFound)
+    }
+    fn agree(&self, _: &[u8]) -> Result<SecretBytes, PlatformKeyError> {
+        Err(PlatformKeyError::NotFound)
+    }
+    fn decrypt_key(&self, _: &str, _: &[u8]) -> Result<SecretBytes, PlatformKeyError> {
+        Err(PlatformKeyError::NotFound)
+    }
+}
+
+#[test]
+fn platform_key_operations() {
+    // ADR 0071 §5: the key kind is chosen by which function is called; the records are reused.
+    let key: &dyn PlatformKey = &Missing;
+    let sign = JwsSignOptions {
+        protected_header: Some(r#"{"alg":"ES256"}"#.to_owned()),
+        ..JwsSignOptions::default()
+    };
+    let r: SurfaceResult<String> = jws::jws_sign_compact_with_platform_key(b"p", key, &sign);
+    assert_eq!(r.unwrap_err().code(), "KeyNotFound");
+    let r: SurfaceResult<String> =
+        jwt::jwt_sign_with_platform_key("{}", key, &JwtSignOptions::new("ES256".to_owned()));
+    assert_eq!(r.unwrap_err().code(), "KeyNotFound");
+
+    let decrypt = JweDecryptOptions::new(list(&["ECDH-ES"]), list(&["A256GCM"]));
+    let _: SurfaceResult<JweDecrypted> =
+        jwe::jwe_decrypt_compact_with_platform_key("a.b.c.d.e", key, &decrypt);
+    let _: SurfaceResult<JweDecrypted> =
+        jwe::jwe_decrypt_json_with_platform_key("{}", key, &decrypt);
+    let verify = JwtVerifyOptions::new(list(&["ES256"]));
+    let jwks = format!(r#"{{"keys":[{OCT}]}}"#);
+    let _: SurfaceResult<JwtNestedVerified> =
+        jwt::jwt_decrypt_nested_with_platform_key("a.b.c.d.e", key, &decrypt, OCT, &verify);
+    let _: SurfaceResult<JwtNestedVerified> = jwt::jwt_decrypt_nested_with_platform_key_and_jwks(
+        "a.b.c.d.e",
+        key,
+        &decrypt,
+        &jwks,
+        &verify,
+    );
+}
+
 // --- Secret-bearing fields wipe on drop (ADR 0030 §7) -----------------------------------------
 
 /// Compiles only if the field `field` projects to wipes itself on drop. Nothing is constructed or
@@ -177,6 +231,14 @@ fn assert_zeroizing<R, T: ZeroizeOnDrop>(field: fn(&R) -> &T) {
 /// As [`assert_zeroizing`], for the success type of an operation.
 fn assert_zeroizing_output<A, T: ZeroizeOnDrop>(operation: fn(A) -> SurfaceResult<T>) {
     let _ = operation;
+}
+
+/// As [`assert_zeroizing`], for the success type of a [`PlatformKey`] method: what the host
+/// returns is in a zeroizing owner from the statement that receives it (ADR 0071 §8).
+fn assert_zeroizing_callback<A, T: ZeroizeOnDrop>(
+    method: fn(&dyn PlatformKey, A) -> Result<T, PlatformKeyError>,
+) {
+    let _ = method;
 }
 
 #[test]
@@ -204,4 +266,7 @@ fn every_secret_field_and_output_is_zeroize_on_drop() {
     assert_zeroizing_output(|(der, format): (&[u8], &str)| keys::jwk_from_der(der, format));
     assert_zeroizing_output(|(jwk, format): (&str, &str)| keys::jwk_to_pem(jwk, format));
     assert_zeroizing_output(|(jwk, format): (&str, &str)| keys::jwk_to_der(jwk, format));
+    // Z and the CEK a platform key returns (ADR 0071 §8).
+    assert_zeroizing_callback(|key, peer: &[u8]| key.agree(peer));
+    assert_zeroizing_callback(|key, (alg, ek): (&str, &[u8])| key.decrypt_key(alg, ek));
 }

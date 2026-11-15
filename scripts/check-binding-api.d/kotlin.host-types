@@ -1,0 +1,9 @@
+# Hand-written public Kotlin types of the Android AAR and the JVM jar, with their public members
+# (scripts/check-binding-api.sh, "Host-type lists"; ADR 0071 §5). The kotlin mode fails on any
+# hand-written public type or member not listed here, and on a listed one the sources lack.
+#
+#   type <Name>      a public type
+#     member <name>  one of its public members (fun, val, var, constructor, nested type)
+#
+# None yet: feature 0025 T04 adds AndroidKeystoreKey (ADR 0072 §2). Adding a type is a review
+# decision, like an inventory change.
