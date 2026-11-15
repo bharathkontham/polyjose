@@ -927,6 +927,9 @@ fn execute(vector: &JsValue) -> Result<Outcome, String> {
         "jwe.decrypt" => jwe_decrypt(&input, &mut out),
         "jwt.validate" => jwt_validate(&input, &mut out),
         "jwt.issue" => jwt_issue(&input, &expect, &mut out),
+        "util.decode_protected_header" => util_decode_protected_header(&input, &mut out),
+        "util.decode_jws" => util_decode_jws(&input, &mut out),
+        "util.decode_jwt" => util_decode_jwt(&input, &mut out),
         other => {
             return Err(format!(
                 "operation `{other}` is not implemented by the WASM runner; a vector is never \
@@ -952,6 +955,47 @@ fn b64url_encode(input: &JsValue, out: &mut Out) -> Step<()> {
 fn b64url_decode(input: &JsValue, out: &mut Out) -> Step<()> {
     let bytes = lib(util::base64url_decode(str_of(input, "b64u")?))?;
     out.set("bytes_hex", hex_encode(&bytes.to_vec()));
+    Ok(())
+}
+
+/// `util.decode_protected_header` → `decodeProtectedHeaderUnverified(token)` (ADR 0069 §1-§2;
+/// RFC 7515 §7.1, RFC 7516 §7.1). The token is a string, passed exactly as written; the header's
+/// JSON text is parsed and compared as a JSON value.
+fn util_decode_protected_header(input: &JsValue, out: &mut Out) -> Step<()> {
+    let header = String::from(lib(util::decode_protected_header_unverified(str_of(
+        input, "token",
+    )?))?);
+    out.set("header", parse_output(&header, "the decoded header")?);
+    Ok(())
+}
+
+/// `util.decode_jws` → `decodeJwsUnverified(jws)`: `protected` = `protectedHeader`, parsed;
+/// `payload_b64u` = base64url(`payload`) (ADR 0069 §2; RFC 7515 §7.1, RFC 7797 §3).
+fn util_decode_jws(input: &JsValue, out: &mut Out) -> Step<()> {
+    let decoded: JsValue = lib(util::decode_jws_unverified(str_of(input, "jws")?))?.into();
+    out.set(
+        "protected",
+        parse_output(
+            &result_string(&decoded, "protectedHeader")?,
+            "the decoded protected header",
+        )?,
+    );
+    out.set("payload_b64u", encode(result_bytes(&decoded, "payload")?));
+    Ok(())
+}
+
+/// `util.decode_jwt` → `decodeJwtUnverified(token)`: `header` and `claims`, each parsed
+/// (ADR 0069 §2; RFC 7519 §7.2).
+fn util_decode_jwt(input: &JsValue, out: &mut Out) -> Step<()> {
+    let decoded: JsValue = lib(util::decode_jwt_unverified(str_of(input, "token")?))?.into();
+    out.set(
+        "header",
+        parse_output(&result_string(&decoded, "header")?, "the decoded header")?,
+    );
+    out.set(
+        "claims",
+        parse_output(&result_string(&decoded, "claims")?, "the decoded claims")?,
+    );
     Ok(())
 }
 

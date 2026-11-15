@@ -1,11 +1,13 @@
 //! The utility operations (ADR 0030 §4, "Utilities"): `version`, `errorCodes`,
-//! `base64urlEncode`, `base64urlDecode`.
+//! `base64urlEncode`, `base64urlDecode`, and the unverified decode utilities (ADR 0069):
+//! `decodeProtectedHeaderUnverified`, `decodeJwsUnverified`, `decodeJwtUnverified`.
 //!
-//! `version` and `errorCodes` are synchronous (`bindings/js/BACKEND.md`); the base64url pair are
-//! `AsyncTask`s like every other operation (ADR 0031 §2).
+//! `version` and `errorCodes` are synchronous (`bindings/js/BACKEND.md`); the others are
+//! `AsyncTask`s like every other operation (ADR 0031 §2, ADR 0069 E1).
 
 use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
+use polyjose_surface::records as surface;
 use polyjose_surface::{SecretBytes, SecretString};
 use zeroize::Zeroizing;
 
@@ -58,6 +60,62 @@ surface_task! {
 pub fn base64url_decode(text: String) -> AsyncTask<Base64urlDecodeTask> {
     AsyncTask::new(Base64urlDecodeTask {
         text: Zeroizing::new(text),
+    })
+}
+
+surface_task! {
+    /// `decodeProtectedHeaderUnverified`: the protected header of a compact JWS or JWE, read
+    /// without verifying or decrypting (ADR 0069 §1-§2; RFC 7515 §7.1, RFC 7516 §7.1). The token
+    /// embeds base64url(payload) (ADR 0049 §4), so it is held in a zeroizing owner.
+    DecodeProtectedHeaderUnverifiedTask { token: Zeroizing<String> } -> String
+        = |t| polyjose_surface::util::decode_protected_header_unverified(&t.token)
+}
+
+/// Reads the protected header of a compact JWS (3 parts) or JWE (5 parts) without verifying or
+/// decrypting it (ADR 0069 §1-§2; RFC 7515 §7.1, RFC 7516 §7.1). This doesn't check the
+/// signature; don't trust these values until you verify the token. Resolves to the header's
+/// JSON text.
+#[napi]
+pub fn decode_protected_header_unverified(
+    token: String,
+) -> AsyncTask<DecodeProtectedHeaderUnverifiedTask> {
+    AsyncTask::new(DecodeProtectedHeaderUnverifiedTask {
+        token: Zeroizing::new(token),
+    })
+}
+
+surface_task! {
+    /// `decodeJwsUnverified`: the protected header and payload of a compact JWS, read without
+    /// verifying (ADR 0069 §1-§2; RFC 7515 §7.1). The payload stays in the surface's
+    /// `SecretBytes` until `resolve` copies it into JS memory (ADR 0069 §5, ADR 0030 §7.2).
+    DecodeJwsUnverifiedTask { jws: Zeroizing<String> } -> surface::JwsUnverified
+        = |t| polyjose_surface::util::decode_jws_unverified(&t.jws)
+}
+
+/// Reads the protected header and the payload of a compact JWS without verifying it
+/// (ADR 0069 §1-§2; RFC 7515 §7.1). This doesn't check the signature; don't trust these values
+/// until you verify the JWS with `jwsVerifyCompact`. Resolves to `{ protectedHeader, payload }`.
+#[napi]
+pub fn decode_jws_unverified(jws: String) -> AsyncTask<DecodeJwsUnverifiedTask> {
+    AsyncTask::new(DecodeJwsUnverifiedTask {
+        jws: Zeroizing::new(jws),
+    })
+}
+
+surface_task! {
+    /// `decodeJwtUnverified`: the header and claims of a compact signed JWT, read without
+    /// verifying or validating (ADR 0069 §1-§2; RFC 7519 §7.2).
+    DecodeJwtUnverifiedTask { token: Zeroizing<String> } -> surface::JwtUnverified
+        = |t| polyjose_surface::util::decode_jwt_unverified(&t.token)
+}
+
+/// Reads the header and the claims of a compact signed JWT without verifying or validating it
+/// (ADR 0069 §1-§2; RFC 7519 §7.2). This doesn't check the signature; don't trust these values
+/// until you verify the token with `jwtVerify`. Resolves to `{ header, claims }`.
+#[napi]
+pub fn decode_jwt_unverified(token: String) -> AsyncTask<DecodeJwtUnverifiedTask> {
+    AsyncTask::new(DecodeJwtUnverifiedTask {
+        token: Zeroizing::new(token),
     })
 }
 
@@ -142,5 +200,70 @@ mod tests {
             text: Zeroizing::new(String::new()),
         };
         wipes_on_drop(&decode.text);
+        let header = DecodeProtectedHeaderUnverifiedTask {
+            token: Zeroizing::new(String::new()),
+        };
+        wipes_on_drop(&header.token);
+        let jws = DecodeJwsUnverifiedTask {
+            jws: Zeroizing::new(String::new()),
+        };
+        wipes_on_drop(&jws.jws);
+        let jwt = DecodeJwtUnverifiedTask {
+            token: Zeroizing::new(String::new()),
+        };
+        wipes_on_drop(&jwt.token);
+    }
+
+    /// RFC 7515 Appendix A.1's JWS, which is also an RFC 7519 §3.1-style JWT (ADR 0069 §2). Its
+    /// header comes back in the core's member order, registered members first.
+    const RFC7515_A1: &str = "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
+    #[test]
+    fn unverified_decodes_reproduce_rfc7515_appendix_a1() {
+        let mut header = DecodeProtectedHeaderUnverifiedTask {
+            token: Zeroizing::new(RFC7515_A1.to_owned()),
+        };
+        assert_eq!(
+            header.compute().unwrap().unwrap(),
+            r#"{"alg":"HS256","typ":"JWT"}"#
+        );
+        let mut jws = DecodeJwsUnverifiedTask {
+            jws: Zeroizing::new(RFC7515_A1.to_owned()),
+        };
+        let decoded = jws.compute().unwrap().unwrap();
+        assert_eq!(decoded.protected_header, r#"{"alg":"HS256","typ":"JWT"}"#);
+        // RFC 7515 A.1.1: the payload octets, CRLFs included.
+        assert_eq!(
+            decoded.payload.as_bytes(),
+            b"{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}"
+        );
+        let mut jwt = DecodeJwtUnverifiedTask {
+            token: Zeroizing::new(RFC7515_A1.to_owned()),
+        };
+        let decoded = jwt.compute().unwrap().unwrap();
+        assert_eq!(decoded.header, r#"{"alg":"HS256","typ":"JWT"}"#);
+        assert_eq!(
+            decoded.claims,
+            r#"{"iss":"joe","exp":1300819380,"http://example.com/is_root":true}"#
+        );
+    }
+
+    #[test]
+    fn unverified_decode_failures_carry_the_core_codes() {
+        let mut header = DecodeProtectedHeaderUnverifiedTask {
+            token: Zeroizing::new("a.b".to_owned()),
+        };
+        assert_eq!(
+            header.compute().unwrap().unwrap_err().code(),
+            "InvalidFormat"
+        );
+        let mut jws = DecodeJwsUnverifiedTask {
+            jws: Zeroizing::new("eyJ=.cA.c2ln".to_owned()),
+        };
+        assert_eq!(jws.compute().unwrap().unwrap_err().code(), "InvalidBase64");
+        let mut jwt = DecodeJwtUnverifiedTask {
+            token: Zeroizing::new("a.b.c.d.e".to_owned()),
+        };
+        assert_eq!(jwt.compute().unwrap().unwrap_err().code(), "InvalidFormat");
     }
 }

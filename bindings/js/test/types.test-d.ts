@@ -6,10 +6,13 @@ import type {
   Backend,
   ErrorCode,
   JweDecrypted,
+  JsonObject,
   JwkObject,
+  JwsUnverified,
   JwsVerified,
   JwsVerifyOptions,
   JwtNestedVerified,
+  JwtUnverified,
   JwtVerified,
   JwtVerifyOptions,
   PolyjoseApi,
@@ -98,4 +101,38 @@ export async function usage(): Promise<void> {
   }
   const first: ErrorCode = ERROR_CODES[0];
   void first;
+}
+
+// The unverified decode utilities (ADR 0069 §4, PRD 0004 AC 8): their records are not the
+// verified ones, so code that takes a verified result doesn't compile with an unverified one.
+declare function useVerifiedJwt(jwt: JwtVerified): void;
+declare function useVerifiedJws(jws: JwsVerified): void;
+
+export async function unverifiedUsage(): Promise<void> {
+  const api: PolyjoseApi = createApi(backend);
+  const header: JsonObject = await api.decodeProtectedHeaderUnverified("a.b.c");
+  void header;
+  const jws: JwsUnverified = await api.decodeJwsUnverified("a.b.c");
+  const protectedHeader: JsonObject = jws.protectedHeader;
+  const payload: Uint8Array = jws.payload;
+  void protectedHeader;
+  void payload;
+  const jwt: JwtUnverified = await api.decodeJwtUnverified("a.b.c");
+  const claims: JsonObject = jwt.claims;
+  void claims;
+
+  // @ts-expect-error a JwtUnverified is not a JwtVerified (it has no alg).
+  const asVerifiedJwt: JwtVerified = jwt;
+  void asVerifiedJwt;
+  // @ts-expect-error nor can it be passed where a JwtVerified is expected.
+  useVerifiedJwt(jwt);
+  // @ts-expect-error a JwsUnverified is not a JwsVerified (no alg, no signatureIndex).
+  const asVerifiedJws: JwsVerified = jws;
+  void asVerifiedJws;
+  // @ts-expect-error nor can it be passed where a JwsVerified is expected.
+  useVerifiedJws(jws);
+  // @ts-expect-error the decode takes the token only: no key, options or allow-list.
+  await api.decodeJwtUnverified("a.b.c", { allowedAlgs: ["HS256"] });
+  // @ts-expect-error the token is a string.
+  await api.decodeJwsUnverified(new Uint8Array());
 }

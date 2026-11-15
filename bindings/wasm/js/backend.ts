@@ -37,8 +37,10 @@
 import type {
   Backend,
   BackendJweDecrypted,
+  BackendJwsUnverified,
   BackendJwsVerified,
   BackendJwtNestedVerified,
+  BackendJwtUnverified,
   BackendJwtVerified,
 } from "./facade/backend.js";
 import init, * as glue from "./polyjose_wasm.js";
@@ -172,6 +174,9 @@ const operations: Operations = {
 
   base64urlEncode: (bytes) => glue.base64urlEncode(bytes),
   base64urlDecode: (text) => glue.base64urlDecode(text),
+  decodeProtectedHeaderUnverified: (token) => glue.decodeProtectedHeaderUnverified(token),
+  decodeJwsUnverified: (jws) => glue.decodeJwsUnverified(jws) as BackendJwsUnverified,
+  decodeJwtUnverified: (token) => glue.decodeJwtUnverified(token) as BackendJwtUnverified,
 
   jwkParse: (jwk) => glue.jwkParse(jwk),
   jwkToPublic: (jwk) => glue.jwkToPublic(jwk),

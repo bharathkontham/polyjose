@@ -496,3 +496,23 @@ test("the runner, schema check and scanner import nothing Node-only (they also r
     assert.doesNotMatch(source, /\bprocess\.|\brequire\(|getBuiltinModule/, file);
   }
 });
+
+test("util.decode_* map to the three unverified decodes: the token as written, headers, claims and payload_b64u out", async () => {
+  const fake = toyBackend({
+    decodeProtectedHeaderUnverified: () => '{"alg":"RSA1_5","enc":"A128GCM"}',
+    decodeJwsUnverified: () => ({ protectedHeader: '{"alg":"none"}', payload: new Uint8Array([0xfb]) }),
+    decodeJwtUnverified: (() => {
+      throw coded("InvalidClaim", "invalid claim");
+    }) as never,
+  });
+  const files = [
+    vector("h.json", { operation: "util.decode_protected_header", input: { token: "a.b.c.d.e" }, expect: { ok: true, header: { alg: "RSA1_5", enc: "A128GCM" } } }),
+    vector("s.json", { operation: "util.decode_jws", input: { jws: "x.y." }, expect: { ok: true, protected: { alg: "none" }, payload_b64u: "-w" } }),
+    vector("t.json", { operation: "util.decode_jwt", input: { token: " a.b.c" }, expect: { ok: false, error: "InvalidClaim" } }),
+    vector("w.json", { operation: "util.decode_jws", input: { jws: "x.y." }, expect: { ok: true, protected: { alg: "HS256" }, payload_b64u: "-w" } }),
+  ];
+  const results = await run(files, fake);
+  assert.deepEqual(results.map((r) => r.status), ["pass", "pass", "pass", "fail"]);
+  assert.deepEqual(fake.of("decodeProtectedHeaderUnverified").map((c) => c.args), [["a.b.c.d.e"]]);
+  assert.deepEqual(fake.of("decodeJwtUnverified").map((c) => c.args), [[" a.b.c"]]);
+});

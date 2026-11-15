@@ -304,6 +304,20 @@ test("every record the raw backend resolves with is made of own data properties 
     ["inner", "outerHeader", "recipientIndex"],
     { inner: [...JWT_VERIFIED, "keyIndex"] },
   );
+
+  // ADR 0069: the unverified decode records, read from the same tokens.
+  const header = await backend.decodeProtectedHeaderUnverified(compactJws);
+  assert.equal(typeof header, "string");
+  assert.deepEqual(json(header as string), { alg: "HS256" });
+  const jws = await backend.decodeJwsUnverified(compactJws);
+  ownDataRecord("decodeJwsUnverified", jws, ["protectedHeader", "payload"]);
+  assert.deepEqual(Object.keys(jws).sort(), ["payload", "protectedHeader"]);
+  assert.ok(jws.payload instanceof Uint8Array && !Buffer.isBuffer(jws.payload), "a plain Uint8Array, not a pooled Buffer");
+  assert.deepEqual([...jws.payload], [...payload]);
+  const jwt = await backend.decodeJwtUnverified(signed);
+  ownDataRecord("decodeJwtUnverified", jwt, ["header", "claims"]);
+  assert.deepEqual(Object.keys(jwt).sort(), ["claims", "header"]);
+  assert.deepEqual(json(jwt.claims), { sub: "a", exp: now + 60 });
 });
 
 test("the facade reads every field of those records (it reads own members only, 0013 F09)", async () => {

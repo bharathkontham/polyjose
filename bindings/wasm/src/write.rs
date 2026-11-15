@@ -2,7 +2,7 @@
 //! ADR 0030 §2, §4).
 //!
 //! - **Secrets out** (ADR 0030 §7.2, ADR 0031 §3): secret members (`JwsVerified.payload`,
-//!   `JweDecrypted.plaintext` and `aad`) become a `Uint8Array` copied straight from the surface's
+//!   `JwsUnverified.payload`, `JweDecrypted.plaintext` and `aad`) become a `Uint8Array` copied straight from the surface's
 //!   borrowed, zeroizing buffer, and the result is consumed here so that buffer is wiped as soon
 //!   as the object exists (measured: no copy left in wasm memory, 0006 research §3).
 //! - **Absent optional members are left out** (BACKEND.md: "may be absent"), never written as
@@ -23,7 +23,9 @@
 //!   adapter's `TypeError` (ADR 0031 §3) instead of returning a result without that member.
 
 use js_sys::{Object, Reflect, Uint8Array};
-use polyjose_surface::records::{JweDecrypted, JwsVerified, JwtNestedVerified, JwtVerified};
+use polyjose_surface::records::{
+    JweDecrypted, JwsUnverified, JwsVerified, JwtNestedVerified, JwtUnverified, JwtVerified,
+};
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::error::type_error;
@@ -119,5 +121,23 @@ pub(crate) fn jwt_nested_verified(v: JwtNestedVerified) -> Result<Object, JsValu
     o.set("inner", &inner)?;
     o.str("outerHeader", &v.outer_header)?;
     o.u32("recipientIndex", v.recipient_index)?;
+    Ok(o.0)
+}
+
+/// `{ protectedHeader, payload }` (ADR 0069 §1, §4; RFC 7515 §7.1). The payload is secret
+/// (ADR 0069 §5): copied from the surface's borrowed `SecretBytes`, which is wiped when `v` drops
+/// at the end of this call.
+pub(crate) fn jws_unverified(v: JwsUnverified) -> Result<Object, JsValue> {
+    let o = Out::new();
+    o.str("protectedHeader", &v.protected_header)?;
+    o.bytes("payload", v.payload.as_bytes())?;
+    Ok(o.0)
+}
+
+/// `{ header, claims }` (ADR 0069 §1, §4; RFC 7519 §7.2).
+pub(crate) fn jwt_unverified(v: JwtUnverified) -> Result<Object, JsValue> {
+    let o = Out::new();
+    o.str("header", &v.header)?;
+    o.str("claims", &v.claims)?;
     Ok(o.0)
 }

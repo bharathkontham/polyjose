@@ -238,3 +238,36 @@ export interface JwtNestedVerified {
   outerHeader: JsonObject;
   recipientIndex: number;
 }
+
+/**
+ * A compact JWS read by `decodeJwsUnverified` (ADR 0069 §1, §4; RFC 7515 §7.1). The signature
+ * isn't checked; don't trust these values until you verify the JWS with `jwsVerifyCompact`.
+ *
+ * A separate record from {@link JwsVerified}: it has no `alg` and no `signatureIndex`, so it
+ * can't be passed where a `JwsVerified` is expected. The `alg` is inside `protectedHeader`,
+ * unchecked, and may be `none` or a name the core doesn't know.
+ */
+export interface JwsUnverified {
+  /** The JWS Protected Header, the whole JOSE Header of a compact JWS (RFC 7515 §7.1). */
+  protectedHeader: JsonObject;
+  /**
+   * The JWS Payload (RFC 7515 §2): base64url-decoded, the payload part's octets when `b64` is
+   * `false` (RFC 7797 §3), or empty when detached (RFC 7515 Appendix F).
+   */
+  payload: Uint8Array;
+}
+
+/**
+ * A compact signed JWT read by `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). The
+ * signature isn't checked and no claim is validated; don't trust these values until you verify
+ * the token with `jwtVerify`.
+ *
+ * A separate record from {@link JwtVerified}: it has no `alg`, `keyIndex` or `kid`, so it can't
+ * be passed where a `JwtVerified` is expected.
+ */
+export interface JwtUnverified {
+  /** The JWS Protected Header (RFC 7519 §5). */
+  header: JsonObject;
+  /** The JWT Claims Set, parsed and type-checked, not validated (RFC 7519 §4, §7.2 step 10). */
+  claims: JsonObject;
+}
