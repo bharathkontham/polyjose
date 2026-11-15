@@ -52,9 +52,10 @@ use crate::util::{b64url_decode, b64url_encode};
 
 use super::alg::{FAMILIES, Families};
 use super::process::{
-    JoseHeader, common_b64, furthest, prepare_sign, signing_input_from_part, verify_signature,
+    JoseHeader, SignReady, common_b64, furthest, prepare_platform_sign, prepare_sign,
+    signing_input_from_part, verify_signature,
 };
-use super::{ProtectedHeader, SignOptions, Signer, Verified, VerifyOptions};
+use super::{PlatformSigner, ProtectedHeader, SignOptions, Signer, Verified, VerifyOptions};
 
 /// The members of one signature object (RFC 7515 §7.2.1), which the
 /// flattened syntax puts at the top level instead of `signatures`
@@ -81,6 +82,22 @@ pub fn sign_flattened(signer: &Signer<'_>, payload: &[u8], opts: &SignOptions) -
     sign_flattened_with(&FAMILIES, signer, payload, opts)
 }
 
+/// [`sign_flattened`] with a platform-held key (ADR 0071 §2–§3).
+///
+/// The serialization is that of [`sign_flattened`]; the key's part is
+/// that of [`sign_compact_with_platform_key`](super::sign_compact_with_platform_key).
+///
+/// # Errors
+///
+/// As [`sign_general_with_platform_key`] with one signer.
+pub fn sign_flattened_with_platform_key(
+    signer: &PlatformSigner<'_>,
+    payload: &[u8],
+    opts: &SignOptions,
+) -> Result<String> {
+    flattened(&FAMILIES, core::slice::from_ref(signer), payload, opts)
+}
+
 /// [`sign_flattened`] with the signature primitives taken from `families`.
 pub(crate) fn sign_flattened_with(
     families: &Families,
@@ -88,7 +105,17 @@ pub(crate) fn sign_flattened_with(
     payload: &[u8],
     opts: &SignOptions,
 ) -> Result<String> {
-    let (payload, mut signed) = sign_all(families, core::slice::from_ref(signer), payload, opts)?;
+    flattened(families, core::slice::from_ref(signer), payload, opts)
+}
+
+/// The flattened JWS of the one signer in `signer` (RFC 7515 §7.2.2).
+fn flattened<S: SignerParts>(
+    families: &Families,
+    signer: &[S],
+    payload: &[u8],
+    opts: &SignOptions,
+) -> Result<String> {
+    let (payload, mut signed) = sign_all(families, signer, payload, opts)?;
     let mut jws = Object::new();
     if let Some(payload) = payload {
         jws.insert("payload", payload);
@@ -129,10 +156,51 @@ pub fn sign_general(signers: &[Signer<'_>], payload: &[u8], opts: &SignOptions) 
     sign_general_with(&FAMILIES, signers, payload, opts)
 }
 
+/// [`sign_general`] with platform-held keys, one per signer (ADR 0071
+/// §2–§3).
+///
+/// The serialization and the order of checks are those of
+/// [`sign_general`]: each step runs over every signer before the next, so
+/// every signer's header, `alg` and key binding are checked, reading each
+/// key's public side, before any signature is computed.
+///
+/// # Errors
+///
+/// For each signer, in order, the first failing check decides:
+///
+/// - [`Error::InvalidFormat`], [`Error::InvalidHeader`],
+///   [`Error::UnknownCritical`], [`Error::UnsupportedAlgorithm`],
+///   [`Error::AlgorithmNotAllowed`] as for [`sign_general`], with no call
+///   to any key;
+/// - then the key errors of
+///   [`sign_compact_with_platform_key`](super::sign_compact_with_platform_key):
+///   [`Error::UnsupportedAlgorithm`], [`Error::KeyNotFound`],
+///   [`Error::UserAuthenticationRequired`], [`Error::PlatformKeyFailed`],
+///   [`Error::InvalidKey`], [`Error::KeyAlgorithmMismatch`];
+/// - [`Error::InvalidFormat`] for the RFC 7797 §5.3 payload rule;
+/// - then, signer by signer, the errors of the signing call.
+pub fn sign_general_with_platform_key(
+    signers: &[PlatformSigner<'_>],
+    payload: &[u8],
+    opts: &SignOptions,
+) -> Result<String> {
+    general(&FAMILIES, signers, payload, opts)
+}
+
 /// [`sign_general`] with the signature primitives taken from `families`.
 pub(crate) fn sign_general_with(
     families: &Families,
     signers: &[Signer<'_>],
+    payload: &[u8],
+    opts: &SignOptions,
+) -> Result<String> {
+    general(families, signers, payload, opts)
+}
+
+/// The general JWS of `signers` (RFC 7515 §7.2.1).
+fn general<S: SignerParts>(
+    families: &Families,
+    signers: &[S],
     payload: &[u8],
     opts: &SignOptions,
 ) -> Result<String> {
@@ -186,9 +254,9 @@ impl SignedEntry<'_> {
 /// §5.2 step 4) and `b64` agreement (RFC 7797 §3); then steps 5–8 per
 /// signer, in order (`prepare_sign`); then the payload rule of RFC 7797
 /// §5.3; then the signatures themselves.
-fn sign_all<'s>(
+fn sign_all<'s, S: SignerParts>(
     families: &Families,
-    signers: &'s [Signer<'_>],
+    signers: &'s [S],
     payload: &[u8],
     opts: &SignOptions,
 ) -> Result<(Option<Value>, Vec<SignedEntry<'s>>)> {
@@ -202,13 +270,12 @@ fn sign_all<'s>(
     let mut unprotected_members = Vec::with_capacity(signers.len());
     for signer in signers {
         let members = signer
-            .unprotected
-            .as_ref()
+            .unprotected()
             .map(Header::to_object)
             .transpose()?
             .filter(|members| !members.is_empty());
-        let protected = signer.protected.as_ref().map(|p| p.header().clone());
-        headers.push(JoseHeader::new(protected, signer.unprotected.clone())?);
+        let protected = signer.protected().map(|p| p.header().clone());
+        headers.push(JoseHeader::new(protected, signer.unprotected().cloned())?);
         unprotected_members.push(members);
     }
     let b64 = common_b64(&headers)?;
@@ -216,7 +283,7 @@ fn sign_all<'s>(
     let ready = headers
         .iter()
         .zip(signers)
-        .map(|(header, signer)| prepare_sign(header, signer.key))
+        .map(|(header, signer)| signer.prepare(header))
         .collect::<Result<Vec<_>>>()?;
     // RFC 7797 §5.3: with `b64: false` the payload member is the payload
     // itself, a JSON string, so it must be UTF-8. Detached content is not
@@ -236,7 +303,7 @@ fn sign_all<'s>(
     // RFC 7515 §5.1 steps 5-7, signer by signer.
     let mut entries = Vec::with_capacity(signers.len());
     for ((signer, ready), header) in signers.iter().zip(&ready).zip(unprotected_members) {
-        let protected = signer.protected.as_ref().map(ProtectedHeader::encoded);
+        let protected = signer.protected().map(ProtectedHeader::encoded);
         let input = signing_input_from_part(protected.unwrap_or(""), payload_part);
         let signature = b64url_encode(&ready.sign(families, &input)?);
         entries.push(SignedEntry {
@@ -254,6 +321,41 @@ fn sign_all<'s>(
         (false, None, text) => Some(Value::from(text.unwrap_or_default())),
     };
     Ok((payload_member, entries))
+}
+
+/// What [`sign_all`] needs of a signer: its two headers (RFC 7515
+/// §7.2.1) and steps 5–8 of ADR 0026 §2 for its key.
+trait SignerParts {
+    /// The JWS Protected Header, if any.
+    fn protected(&self) -> Option<&ProtectedHeader>;
+    /// The JWS Unprotected Header, if any.
+    fn unprotected(&self) -> Option<&Header>;
+    /// Steps 5–8 for this signer's key under `header`.
+    fn prepare(&self, header: &JoseHeader) -> Result<SignReady<'_>>;
+}
+
+impl SignerParts for Signer<'_> {
+    fn protected(&self) -> Option<&ProtectedHeader> {
+        self.protected.as_ref()
+    }
+    fn unprotected(&self) -> Option<&Header> {
+        self.unprotected.as_ref()
+    }
+    fn prepare(&self, header: &JoseHeader) -> Result<SignReady<'_>> {
+        prepare_sign(header, self.key)
+    }
+}
+
+impl SignerParts for PlatformSigner<'_> {
+    fn protected(&self) -> Option<&ProtectedHeader> {
+        self.protected.as_ref()
+    }
+    fn unprotected(&self) -> Option<&Header> {
+        self.unprotected.as_ref()
+    }
+    fn prepare(&self, header: &JoseHeader) -> Result<SignReady<'_>> {
+        prepare_platform_sign(header, self.key, None)
+    }
 }
 
 /// Verifies a JWS in the JSON Serialization, flattened (RFC 7515 §7.2.2)

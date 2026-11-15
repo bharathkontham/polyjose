@@ -97,6 +97,9 @@ mod tests {
             Error::InvalidFormat("compact JWS must have three parts"),
             Error::NoMatchingKey,
             Error::MultipleMatchingKeys,
+            Error::KeyNotFound,
+            Error::UserAuthenticationRequired,
+            Error::PlatformKeyFailed,
         ]
     }
 

@@ -147,6 +147,26 @@ pub(crate) mod rsa_oaep_unwraps {
     }
 }
 
+/// Substitute CEKs drawn by RSA-OAEP-256 for a platform key
+/// (`jwe/rsa_oaep.rs`, feature 0025): ticked right after the draw, so a
+/// fake key that reads it in `decrypt_key` shows the draw came first
+/// (RFC 7516 §11.5, ADR 0071 §4).
+pub(crate) mod rsa_oaep_substitutes {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn tick() {
+        COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    pub(crate) fn get() -> u64 {
+        COUNT.with(Cell::get)
+    }
+}
+
 /// Content decryptions run by JWE (`jwe/content.rs`, feature 0020): with
 /// [`rsa_oaep_unwraps`], it shows that a malformed RSA-OAEP-256 Encrypted
 /// Key still reaches the content decryption (RFC 7516 §11.5).

@@ -16,6 +16,7 @@ use crate::header::Header;
 use crate::insecure_test_vectors::FixedRng;
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
 use crate::jwk::Jwk;
+use crate::platform_key::PlatformKey;
 use crate::{Error, Result};
 
 /// What [`decrypt_compact`] and
@@ -656,6 +657,60 @@ pub fn decrypt_compact(token: &str, key: &Jwk, policy: &DecryptPolicy) -> Result
 pub fn decrypt_json(jwe: &str, key: &Jwk, policy: &DecryptPolicy) -> Result<Decrypted> {
     let parts = json::parse(jwe, policy)?;
     pipeline::decrypt(parts, key, policy)
+}
+
+/// [`decrypt_compact`] with a platform-held key (RFC 7516 §5.2, §7.1;
+/// ADR 0071 §2, §4). The platform performs only the private-key step:
+/// ECDH (RFC 7518 §4.6) or RSA-OAEP-256 decryption of the Encrypted Key
+/// (RFC 7518 §4.3). See [`crate::platform_key`].
+///
+/// In order, before the key is called at all: the format, header and
+/// `crit` checks; `enc` and `zip` supported; the recipient's `alg`
+/// supported and, with `enc`, in `policy` (RFC 8725 §3.1); an `alg` a
+/// platform key serves (ECDH-ES, ECDH-ES+A128KW/A192KW/A256KW,
+/// RSA-OAEP-256). Then the key's public side is read once, the key is
+/// bound to the `alg` (RFC 8725 §3.1) and its `kid` compared. Then, for
+/// ECDH-ES, the `epk` is validated before `agree` (RFC 7518 §4.6.1.1,
+/// RFC 8725 §3.4); for RSA-OAEP-256 the substitute CEK is drawn before
+/// `decrypt_key` (RFC 7516 §11.5).
+///
+/// # Errors
+///
+/// As [`decrypt_compact`], where [`Error::UnsupportedAlgorithm`] also
+/// covers an `alg` no platform key serves (A*KW, A*GCMKW, `dir`, PBES2)
+/// and an X25519 key; plus [`Error::KeyNotFound`] and
+/// [`Error::UserAuthenticationRequired`] from the key, and
+/// [`Error::InvalidKey`] (or another JWK import error) for a public JWK
+/// that does not import or holds a private member. Every other failure of
+/// the key, a malformed result included, is [`Error::DecryptionFailed`].
+pub fn decrypt_compact_with_platform_key(
+    token: &str,
+    key: &dyn PlatformKey,
+    policy: &DecryptPolicy,
+) -> Result<Decrypted> {
+    let parts = compact::parse(token, policy)?;
+    pipeline::decrypt_with_platform_key(parts, key, policy)
+}
+
+/// [`decrypt_json`] with a platform-held key (RFC 7516 §5.2, §7.2;
+/// ADR 0071 §2, §4), general or flattened.
+///
+/// The key is called at most once per recipient that passes the checks
+/// of [`decrypt_compact_with_platform_key`], in order, so at most
+/// [`DecryptPolicy::max_recipients`] times; [`Error::KeyNotFound`] or
+/// [`Error::UserAuthenticationRequired`] ends the call at once, so a
+/// cancelled prompt is not followed by another.
+///
+/// # Errors
+///
+/// As [`decrypt_compact_with_platform_key`].
+pub fn decrypt_json_with_platform_key(
+    jwe: &str,
+    key: &dyn PlatformKey,
+    policy: &DecryptPolicy,
+) -> Result<Decrypted> {
+    let parts = json::parse(jwe, policy)?;
+    pipeline::decrypt_with_platform_key(parts, key, policy)
 }
 
 #[cfg(test)]

@@ -126,6 +126,9 @@ final class SecurityTests: XCTestCase {
         case .InvalidFormat: return "InvalidFormat"
         case .NoMatchingKey: return "NoMatchingKey"
         case .MultipleMatchingKeys: return "MultipleMatchingKeys"
+        case .KeyNotFound: return "KeyNotFound"
+        case .UserAuthenticationRequired: return "UserAuthenticationRequired"
+        case .PlatformKeyFailed: return "PlatformKeyFailed"
         }
     }
 
@@ -136,6 +139,8 @@ final class SecurityTests: XCTestCase {
         .UnknownCritical(detail: ""), .TokenExpired(detail: ""), .TokenNotYetValid(detail: ""),
         .InvalidClaim(detail: ""), .RandomnessUnavailable(detail: ""), .InvalidFormat(detail: ""),
         .NoMatchingKey(detail: ""), .MultipleMatchingKeys(detail: ""),
+        .KeyNotFound(detail: ""), .UserAuthenticationRequired(detail: ""),
+        .PlatformKeyFailed(detail: ""),
     ]
 
     /// ADR 0030 §5, ADR 0032 §3: every case's exported `code()` is its own name, and the cases are

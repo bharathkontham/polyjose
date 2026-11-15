@@ -29,6 +29,7 @@ use super::random::RandomSource;
 use crate::header::Header;
 use crate::json::Object;
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
+use crate::platform_key::{PlatformKey, PlatformKeyError};
 use crate::rng::{CryptoRngAdapter, fill_random};
 use crate::{Error, Result};
 
@@ -183,12 +184,67 @@ pub(super) fn decrypt_key(
         Ok(plaintext) => plaintext,
         Err(_) => &[],
     };
-    let valid = Choice::from(u8::from(decrypted.len() == cek_len));
+    select(&mut cek, decrypted);
+    Ok(Cek::new(cek))
+}
+
+/// [`decrypt_key`] for a platform-held RSA key (ADR 0071 §4; RFC 7516
+/// §11.5, ADR 0067 §5): the same three steps, with step 2, the
+/// RSAES-OAEP-DECRYPT itself, done by [`PlatformKey::decrypt_key`].
+///
+/// 1. The random substitute CEK of the `enc` length is drawn **before**
+///    the key is called, whatever the input.
+/// 2. The key decrypts the Encrypted Key. Its CEK is held in `Zeroizing`
+///    from the call on.
+/// 3. The returned CEK replaces the substitute only if it is exactly the
+///    `enc` length, selected byte by byte with `subtle` as in
+///    [`decrypt_key`]. `Failed`, a wrong length or a wrong CEK leave the
+///    substitute (or a CEK that fails the tag), so the failure shows only
+///    as the content decryption's [`Error::DecryptionFailed`], by the same
+///    path and with the same error as a tampered ciphertext.
+///
+/// # Errors
+///
+/// [`Error::KeyNotFound`] or [`Error::UserAuthenticationRequired`] when
+/// the key reports one: ADR 0071 §4 lets an implementation return them
+/// only for conditions that do not depend on the ciphertext.
+/// [`Error::UnsupportedAlgorithm`] for an `alg` other than RSA-OAEP-256 or
+/// an unknown `enc`, and [`Error::RandomnessUnavailable`] if the OS CSPRNG
+/// cannot supply the substitute; `core` reports both as
+/// [`Error::DecryptionFailed`].
+pub(super) fn decrypt_key_with_platform(
+    alg: &KeyMgmtAlg,
+    key: &dyn PlatformKey,
+    enc: &ContentEncAlg,
+    encrypted_key: &[u8],
+) -> Result<Cek> {
+    if *alg != KeyMgmtAlg::RsaOaep256 {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    let cek_len = cek_len(enc)?;
+    // RFC 7516 §11.5: the substitute, drawn before the key is called.
+    let mut cek = Zeroizing::new(vec![0u8; cek_len]);
+    fill_random(&mut cek)?;
+    #[cfg(test)]
+    crate::test_counters::rsa_oaep_substitutes::tick();
+    let decrypted = match key.decrypt_key(alg.as_str(), encrypted_key) {
+        Ok(cek) => cek,
+        Err(PlatformKeyError::Failed) => Zeroizing::new(Vec::new()),
+        Err(other) => return Err(Error::from(other)),
+    };
+    select(&mut cek, &decrypted);
+    Ok(Cek::new(cek))
+}
+
+/// Replaces `cek` with `decrypted` exactly when it has `cek`'s length,
+/// octet by octet with `subtle`, so no branch depends on whether the
+/// decryption succeeded (RFC 7516 §11.5, ADR 0067 §5).
+fn select(cek: &mut [u8], decrypted: &[u8]) {
+    let valid = Choice::from(u8::from(decrypted.len() == cek.len()));
     for (index, byte) in cek.iter_mut().enumerate() {
         let candidate = decrypted.get(index).copied().unwrap_or(0);
         byte.conditional_assign(&candidate, valid);
     }
-    Ok(Cek::new(cek))
 }
 
 /// RSAES-OAEP-DECRYPT (RFC 8017 §7.1.2) with SHA-256, MGF1-SHA-256 and the
@@ -826,5 +882,121 @@ mod tests {
         // 42 decrypted, 54 rejected with the empty label, 40 with a label,
         // and 2 groups of keys under 2048 bits refused at import.
         assert_eq!((decrypted, rejected, labelled, small), (42, 54, 40, 2));
+    }
+
+    mod platform {
+        //! [`decrypt_key_with_platform`] (ADR 0071 §4; RFC 7516 §11.5).
+
+        use std::sync::Mutex;
+
+        use super::*;
+        use crate::platform_key::PlatformKeyError;
+        use crate::test_counters::rsa_oaep_substitutes;
+
+        /// A key whose `decrypt_key` notes how many substitutes this
+        /// thread had drawn when it was called, then returns `result`.
+        struct Recording {
+            result: core::result::Result<Vec<u8>, PlatformKeyError>,
+            drawn_at_call: Mutex<Vec<u64>>,
+        }
+
+        impl Recording {
+            fn new(result: core::result::Result<Vec<u8>, PlatformKeyError>) -> Self {
+                Recording {
+                    result,
+                    drawn_at_call: Mutex::new(Vec::new()),
+                }
+            }
+        }
+
+        impl PlatformKey for Recording {
+            fn public_jwk(&self) -> core::result::Result<String, PlatformKeyError> {
+                Err(PlatformKeyError::Failed)
+            }
+            fn algorithms(&self) -> core::result::Result<Vec<String>, PlatformKeyError> {
+                Err(PlatformKeyError::Failed)
+            }
+            fn sign(&self, _: &str, _: &[u8]) -> core::result::Result<Vec<u8>, PlatformKeyError> {
+                Err(PlatformKeyError::Failed)
+            }
+            fn agree(
+                &self,
+                _: &[u8],
+            ) -> core::result::Result<Zeroizing<Vec<u8>>, PlatformKeyError> {
+                Err(PlatformKeyError::Failed)
+            }
+            fn decrypt_key(
+                &self,
+                _: &str,
+                _: &[u8],
+            ) -> core::result::Result<Zeroizing<Vec<u8>>, PlatformKeyError> {
+                self.drawn_at_call
+                    .lock()
+                    .unwrap()
+                    .push(rsa_oaep_substitutes::get());
+                self.result.clone().map(Zeroizing::new)
+            }
+        }
+
+        fn run(key: &Recording) -> Result<Cek> {
+            decrypt_key_with_platform(
+                &KeyMgmtAlg::RsaOaep256,
+                key,
+                &ContentEncAlg::A128GCM,
+                &[7; 256],
+            )
+        }
+
+        #[test]
+        fn the_substitute_is_drawn_before_the_key_is_called() {
+            // RFC 7516 §11.5: "substitute a randomly generated CEK", drawn
+            // whatever the input, before the Encrypted Key is looked at.
+            for result in [
+                Ok(vec![1; 16]),
+                Ok(vec![1; 15]),
+                Err(PlatformKeyError::Failed),
+                Err(PlatformKeyError::NotFound),
+                Err(PlatformKeyError::UserAuthenticationRequired),
+            ] {
+                let key = Recording::new(result.clone());
+                let before = rsa_oaep_substitutes::get();
+                let _ = run(&key);
+                assert_eq!(
+                    *key.drawn_at_call.lock().unwrap(),
+                    [before + 1],
+                    "{result:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn only_a_cek_of_the_enc_length_replaces_the_substitute() {
+            let cek = |key: &Recording| run(key).map(|c| c.as_bytes().to_vec());
+            assert_eq!(cek(&Recording::new(Ok(vec![1; 16]))), Ok(vec![1; 16]));
+            // A wrong length or Failed leaves the 16 random octets: never
+            // the returned value, never an error (RFC 7516 §11.5).
+            for result in [
+                Ok(vec![1; 15]),
+                Ok(vec![1; 17]),
+                Ok(Vec::new()),
+                Err(PlatformKeyError::Failed),
+            ] {
+                let got = cek(&Recording::new(result.clone())).unwrap();
+                assert_eq!(got.len(), 16, "{result:?}");
+                assert_ne!(got, vec![1; 16], "{result:?}");
+            }
+            // The two errors ADR 0071 §4 reports as themselves.
+            assert_eq!(
+                run(&Recording::new(Err(PlatformKeyError::NotFound))).err(),
+                Some(Error::KeyNotFound)
+            );
+            assert_eq!(
+                run(&Recording::new(Err(
+                    PlatformKeyError::UserAuthenticationRequired
+                )))
+                .err(),
+                Some(Error::UserAuthenticationRequired)
+            );
+        }
     }
 }

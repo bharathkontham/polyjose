@@ -29,6 +29,8 @@
 //!   checks again where it builds the key (ADR 0007). `d` is only borrowed
 //!   from its wiped-on-drop buffer, and the curve crate's `SigningKey`
 //!   wipes its scalar on drop.
+//! - **Platform keys (ADR 0071 §3).** A platform key returns an ASN.1 DER
+//!   `Ecdsa-Sig-Value`; [`der_to_fixed`] turns it into the JWS form.
 
 use crate::error::{Error, Result};
 use crate::jwa::SigningAlg;
@@ -98,6 +100,43 @@ pub(crate) fn verify(
         EcCurve::P384 => p384_ops::verify(x, y, signing_input, signature),
         EcCurve::P521 => p521_ops::verify(x, y, signing_input, signature),
         EcCurve::Secp256k1 => k256_ops::verify(x, y, signing_input, signature),
+    }
+}
+
+/// Converts a platform key's ECDSA signature, an ASN.1 DER
+/// `Ecdsa-Sig-Value ::= SEQUENCE { r INTEGER, s INTEGER }` (RFC 3279
+/// §2.2.3, SEC 1 v2 §C.5), to the JWS Signature of
+/// `alg`: R ‖ S, each exactly the field size, 64, 96 or 132 octets for
+/// ES256, ES384, ES512 (RFC 7518 §3.4 steps 2–3), with S in low form
+/// (ADR 0026 §5).
+///
+/// Parsed with polyjose's strict DER reader (`keys::der`; X.690 §10):
+/// definite lengths in the fewest octets, minimal non-negative INTEGERs,
+/// the SEQUENCE tag and nothing after it or after `s`. The curve crate's
+/// `Signature::from_scalars` then requires 0 < r, s < n, and
+/// `normalize_s` gives the low-S twin; no scalar arithmetic is done here
+/// (ADR 0071 §3).
+///
+/// # Errors
+///
+/// [`Error::InvalidSignature`] for anything but such a value (BER, a
+/// wrong tag, trailing octets, a negative or non-minimal INTEGER, r or s
+/// zero, at least n, or longer than the field), and
+/// [`Error::KeyAlgorithmMismatch`] for an `alg` other than ES256, ES384 or
+/// ES512 (a platform key serves no other ECDSA algorithm, ADR 0071 §2).
+pub(crate) fn der_to_fixed(alg: &SigningAlg, der: &[u8]) -> Result<Vec<u8>> {
+    let invalid = |_| Error::InvalidSignature;
+    let mut outer = crate::keys::der::Reader::new(der).map_err(invalid)?;
+    let mut value = outer.sequence().map_err(invalid)?;
+    outer.finish().map_err(invalid)?;
+    let r = value.unsigned_integer().map_err(invalid)?;
+    let s = value.unsigned_integer().map_err(invalid)?;
+    value.finish().map_err(invalid)?;
+    match alg {
+        SigningAlg::ES256 => p256_ops::fixed_from_scalars(r, s),
+        SigningAlg::ES384 => p384_ops::fixed_from_scalars(r, s),
+        SigningAlg::ES512 => p521_ops::fixed_from_scalars(r, s),
+        _ => Err(Error::KeyAlgorithmMismatch),
     }
 }
 
@@ -189,6 +228,39 @@ macro_rules! curve_ops {
                     .try_sign_with_rng(rng, signing_input)
                     .map_err(|_| Error::RandomnessUnavailable)?;
                 Ok(signature.normalize_s().to_bytes().to_vec())
+            }
+
+            /// R ‖ S for the DER magnitudes `r` and `s` (minimal,
+            /// big-endian, as `keys::der` returns them): each left-padded
+            /// to the field size (RFC 7518 §3.4 step 2), checked to be in
+            /// [1, n − 1] by `Signature::from_scalars` (SEC 1 v2 §4.1.4
+            /// step 1), and S normalized to low form (ADR 0026 §5).
+            ///
+            /// # Errors
+            ///
+            /// [`Error::InvalidSignature`] for a magnitude longer than the
+            /// field, or r or s outside [1, n − 1].
+            #[allow(dead_code, reason = "ES256K has no platform-key path (ADR 0071 §2)")]
+            pub(crate) fn fixed_from_scalars(r: &[u8], s: &[u8]) -> Result<Vec<u8>> {
+                let signature = Signature::from_scalars(padded(r)?, padded(s)?)
+                    .map_err(|_| Error::InvalidSignature)?;
+                Ok(signature.normalize_s().to_bytes().to_vec())
+            }
+
+            /// `magnitude` left-padded with zeros to the field size
+            /// (I2OSP, RFC 8017 §4.1, as RFC 7518 §3.4 step 2 requires).
+            #[allow(dead_code, reason = "ES256K has no platform-key path (ADR 0071 §2)")]
+            fn padded(magnitude: &[u8]) -> Result<FieldBytes> {
+                let mut field = FieldBytes::default();
+                let start = field
+                    .len()
+                    .checked_sub(magnitude.len())
+                    .ok_or(Error::InvalidSignature)?;
+                field
+                    .get_mut(start..)
+                    .ok_or(Error::InvalidSignature)?
+                    .copy_from_slice(magnitude);
+                Ok(field)
             }
 
             /// The public key at (`x`, `y`) (RFC 7518 §6.2.1.2–§6.2.1.3):
@@ -1067,6 +1139,251 @@ mod tests {
             let (s, high_s) = run("ecdsa_secp256k1_sha256_p1363", A::ES256K, SECP256K1);
             assert_eq!(s, summary(252, 167));
             assert!(high_s > 0, "no high-S valid test exercised");
+        }
+    }
+
+    mod der_to_fixed {
+        //! The platform-key converter [`der_to_fixed`] (ADR 0071 §3): a
+        //! strict DER `Ecdsa-Sig-Value` (RFC 3279 §2.2.3, X.690 §10) to
+        //! fixed-width R‖S with low S (RFC 7518 §3.4, ADR 0026 §5).
+
+        use super::*;
+        use crate::keys::der::Reader;
+
+        /// The raw DER `r` and `s` magnitudes of `der`, as the converter
+        /// reads them.
+        fn magnitudes(der: &[u8]) -> (Vec<u8>, Vec<u8>) {
+            let mut outer = Reader::new(der).unwrap();
+            let mut value = outer.sequence().unwrap();
+            let r = value.unsigned_integer().unwrap().to_vec();
+            let s = value.unsigned_integer().unwrap().to_vec();
+            (r, s)
+        }
+
+        fn padded(magnitude: &[u8], len: usize) -> Vec<u8> {
+            let mut out = vec![0; len - magnitude.len()];
+            out.extend_from_slice(magnitude);
+            out
+        }
+
+        #[test]
+        fn output_is_fixed_width_low_s_and_verifies() {
+            // RFC 7518 §3.4: 64, 96, 132 octets, whatever the DER lengths.
+            for alg in [A::ES256, A::ES384, A::ES512] {
+                let key = private_key(&alg);
+                let field = signature_len(&alg) / 2;
+                let mut high = 0;
+                for i in 0..64u8 {
+                    let input = [b"der-to-fixed ".as_slice(), &[i]].concat();
+                    let rs = sign(&alg, &key, &input).unwrap();
+                    let (low, twin) = low_s_and_twin(&alg, &rs);
+                    assert!(low);
+                    // The DER of the low-S signature and of its high-S twin.
+                    for (form, expect_change) in [(rs.clone(), false), (twin.clone(), true)] {
+                        let fixed = der_to_fixed(&alg, &der_long(&form)).unwrap();
+                        assert_eq!(fixed.len(), 2 * field, "{alg}");
+                        assert_eq!(fixed, rs, "{alg}: S not normalized to the low form");
+                        high += usize::from(expect_change && form != rs);
+                        verify(&alg, &key, &input, &fixed).unwrap();
+                    }
+                }
+                assert_eq!(high, 64, "{alg}");
+            }
+        }
+
+        /// [`der`] with the long length form where the body needs it
+        /// (P-521, X.690 §8.1.3.5).
+        fn der_long(rs: &[u8]) -> Vec<u8> {
+            let (r, s) = rs.split_at(rs.len() / 2);
+            let int = |v: &[u8]| {
+                let v: Vec<u8> = v.iter().copied().skip_while(|&b| b == 0).collect();
+                let v = if v.is_empty() { vec![0] } else { v };
+                let pad = v[0] >= 0x80;
+                let mut out = vec![0x02, u8::try_from(v.len() + usize::from(pad)).unwrap()];
+                if pad {
+                    out.push(0);
+                }
+                out.extend(v);
+                out
+            };
+            let body = [int(r), int(s)].concat();
+            let len = u8::try_from(body.len()).unwrap();
+            let head = if len >= 0x80 {
+                vec![0x30, 0x81, len]
+            } else {
+                vec![0x30, len]
+            };
+            [head, body].concat()
+        }
+
+        #[test]
+        fn non_strict_der_is_rejected() {
+            let alg = A::ES256;
+            let key = private_key(&alg);
+            let rs = sign(&alg, &key, b"strict").unwrap();
+            let good = der_long(&rs);
+            assert!(der_to_fixed(&alg, &good).is_ok());
+            let (r, s) = magnitudes(&good);
+            let int = |v: &[u8]| [vec![0x02, u8::try_from(v.len()).unwrap()], v.to_vec()].concat();
+            let seq =
+                |body: Vec<u8>| [vec![0x30, u8::try_from(body.len()).unwrap()], body].concat();
+            let n = hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+            let mut cases: Vec<(&str, Vec<u8>)> = vec![
+                ("trailing octet", [good.clone(), vec![0]].concat()),
+                (
+                    "octet after s",
+                    seq([int(&r), int(&s), vec![0x05, 0x00]].concat()),
+                ),
+                ("wrong outer tag", [vec![0x31], good[1..].to_vec()].concat()),
+                (
+                    "wrong inner tag",
+                    seq([vec![0x04], int(&r)[1..].to_vec(), int(&s)].concat()),
+                ),
+                (
+                    "indefinite length",
+                    [vec![0x30, 0x80], good[2..].to_vec(), vec![0, 0]].concat(),
+                ),
+                (
+                    "long length form for a short body",
+                    [vec![0x30, 0x81], good[1..].to_vec()].concat(),
+                ),
+                (
+                    "non-minimal r",
+                    seq([int(&[[0u8].as_slice(), &[0u8], &r].concat()), int(&s)].concat()),
+                ),
+                ("r zero", seq([int(&[0]), int(&s)].concat())),
+                ("s zero", seq([int(&r), int(&[0])].concat())),
+                (
+                    "r equal to n",
+                    seq([int(&[[0u8].as_slice(), &n].concat()), int(&s)].concat()),
+                ),
+                ("negative s", seq([int(&r), int(&[0x80, 1])].concat())),
+                (
+                    "r longer than the field",
+                    seq([int(&[[1u8].as_slice(), &padded(&r, 32)].concat()), int(&s)].concat()),
+                ),
+                ("only r", seq(int(&r))),
+                ("empty", Vec::new()),
+                ("raw R||S", rs.clone()),
+            ];
+            cases.push((
+                "length past the input",
+                [vec![0x30, 0x7f], good[2..].to_vec()].concat(),
+            ));
+            for (what, input) in cases {
+                assert_eq!(
+                    der_to_fixed(&alg, &input),
+                    Err(Error::InvalidSignature),
+                    "{what}"
+                );
+            }
+            // No ECDSA algorithm but these three has a platform-key path.
+            assert_eq!(
+                der_to_fixed(&A::ES256K, &good),
+                Err(Error::KeyAlgorithmMismatch)
+            );
+            assert_eq!(
+                der_to_fixed(&A::RS256, &good),
+                Err(Error::KeyAlgorithmMismatch)
+            );
+        }
+
+        mod wycheproof {
+            //! Wycheproof's ASN.1 `ecdsa_*_test` suites (ADR 0008 layer 1)
+            //! through [`der_to_fixed`] and then the family's `verify`: a
+            //! test is accepted only if the converter accepts its DER and
+            //! the converted signature verifies. Every signature that is
+            //! not a strict DER `Ecdsa-Sig-Value` (BER lengths,
+            //! non-minimal INTEGERs, trailing octets, wrong tags, r or s
+            //! zero or at least n) is rejected by the converter itself.
+
+            use super::super::*;
+            use super::magnitudes;
+            use crate::test_support::wycheproof::{self, Deviation, Expected, Outcome, Summary};
+
+            const P256: &[Deviation] = &[];
+            const P384: &[Deviation] = &[];
+            const P521: &[Deviation] = &[];
+
+            /// The Wycheproof flags of a signature that is not a strict
+            /// DER `Ecdsa-Sig-Value` or whose r or s is out of range: the
+            /// converter itself must refuse every such test (X.690 §10,
+            /// SEC 1 v2 §4.1.4 step 1). `ModifiedInteger` is not here: it
+            /// includes r replaced by n − r, a well-formed in-range value
+            /// that only `verify` can refuse (its negations are refused by
+            /// the converter as negative INTEGERs).
+            const NOT_STRICT_DER: &[&str] = &[
+                "BerEncodedSignature",
+                "InvalidEncoding",
+                "InvalidTypesInSignature",
+                "MissingZero",
+                "IntegerOverflow",
+                "RangeCheck",
+            ];
+
+            /// Runs `suite`, returning the summary, the number of `invalid`
+            /// tests the converter itself refused, and the number of valid
+            /// high-S signatures converted to low S and accepted.
+            fn run(
+                suite: &str,
+                alg: SigningAlg,
+                deviations: &[Deviation],
+            ) -> (Summary, usize, usize) {
+                let suite = wycheproof::load(suite);
+                let field = signature_len(&alg) / 2;
+                let (mut by_converter, mut high_s) = (0, 0);
+                let summary = wycheproof::assert_conforms(&suite, deviations, |group, test| {
+                    let (msg, sig) = test.signature();
+                    let key = Jwk::from_json(group.verification_jwk().as_bytes()).unwrap();
+                    let fixed = der_to_fixed(&alg, sig);
+                    match &fixed {
+                        Ok(fixed) => {
+                            assert_eq!(fixed.len(), 2 * field, "tcId {}", test.tc_id);
+                            let (r, s) = magnitudes(sig);
+                            let raw = [super::padded(&r, field), super::padded(&s, field)].concat();
+                            if test.result == Expected::Valid && raw != *fixed {
+                                high_s += 1;
+                            }
+                        }
+                        Err(e) => {
+                            assert_eq!(*e, Error::InvalidSignature, "tcId {}", test.tc_id);
+                            by_converter += usize::from(test.result == Expected::Invalid);
+                        }
+                    }
+                    if NOT_STRICT_DER.iter().any(|flag| test.has_flag(flag)) {
+                        assert!(
+                            fixed.is_err(),
+                            "tcId {}: converted {:?}",
+                            test.tc_id,
+                            test.flags
+                        );
+                    }
+                    let result = fixed.and_then(|fixed| verify(&alg, &key, msg, &fixed));
+                    Outcome::of(&result)
+                });
+                (summary, by_converter, high_s)
+            }
+
+            #[test]
+            fn p256() {
+                let (s, by_converter, high_s) = run("ecdsa_secp256r1_sha256", A::ES256, P256);
+                assert_eq!((s.tests, s.accepted, s.deviations), (484, 174, 0));
+                assert!(by_converter > 0 && high_s > 0, "{by_converter} {high_s}");
+            }
+
+            #[test]
+            fn p384() {
+                let (s, by_converter, high_s) = run("ecdsa_secp384r1_sha384", A::ES384, P384);
+                assert_eq!((s.tests, s.accepted, s.deviations), (504, 194, 0));
+                assert!(by_converter > 0 && high_s > 0, "{by_converter} {high_s}");
+            }
+
+            #[test]
+            fn p521() {
+                let (s, by_converter, high_s) = run("ecdsa_secp521r1_sha512", A::ES512, P521);
+                assert_eq!((s.tests, s.accepted, s.deviations), (542, 232, 0));
+                assert!(by_converter > 0 && high_s > 0, "{by_converter} {high_s}");
+            }
         }
     }
 }

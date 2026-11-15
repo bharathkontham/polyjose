@@ -7,7 +7,8 @@ use crate::header::Header;
 use crate::json::{Object, Value};
 use crate::jwa::SigningAlg;
 use crate::jwk::Jwk;
-use crate::jws::{ProtectedHeader, SignOptions, sign_compact};
+use crate::jws::{ProtectedHeader, SignOptions, sign_compact, sign_compact_with_platform_view};
+use crate::platform_key::{self, PlatformKey, PublicView};
 use crate::util::b64url_encode;
 
 use super::Claims;
@@ -299,6 +300,54 @@ pub fn sign(claims: &Claims, opts: &IssueOptions, key: &Jwk) -> Result<String> {
     // ADR 0049 §4: they may be secret, so they are wiped on drop.
     let payload = Zeroizing::new(claims.to_json());
     sign_compact(&protected, payload.as_bytes(), key, &SignOptions::new())
+}
+
+/// [`sign`] with a platform-held key (RFC 7519 §7.1; ADR 0071 §2–§3).
+///
+/// The header and payload are built as for [`sign`], with `kid` copied
+/// from the key's public JWK when it has one (ADR 0027 §8). The signature
+/// comes from
+/// [`sign_compact_with_platform_key`](crate::jws::sign_compact_with_platform_key):
+/// the platform signs, polyjose converts an ES\* DER signature to R‖S
+/// (RFC 7518 §3.4) and verifies every signature against the public JWK
+/// before returning the token (ADR 0071 §3).
+///
+/// # Errors
+///
+/// In this order:
+///
+/// - [`Error::UnsupportedAlgorithm`] for an unknown algorithm and
+///   [`Error::AlgorithmNotAllowed`] for `none`, as for [`sign`]; then
+///   [`Error::UnsupportedAlgorithm`] for an algorithm no platform key
+///   serves (EdDSA, ES256K, HS\*; ADR 0071 §2). No call to the key yet.
+/// - [`Error::KeyNotFound`], [`Error::UserAuthenticationRequired`],
+///   [`Error::PlatformKeyFailed`] from reading the key's public side;
+///   [`Error::InvalidKey`] (or another JWK import error) for a public JWK
+///   that does not import or holds a private member.
+/// - [`Error::KeyAlgorithmMismatch`] when the key is not bound to the
+///   algorithm (RFC 8725 §3.1).
+/// - [`Error::KeyNotFound`], [`Error::UserAuthenticationRequired`] or
+///   [`Error::PlatformKeyFailed`] from the signature itself.
+pub fn sign_with_platform_key(
+    claims: &Claims,
+    opts: &IssueOptions,
+    key: &dyn PlatformKey,
+) -> Result<String> {
+    check_issuable(&opts.alg)?;
+    if !platform_key::serves_signing(&opts.alg) {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    // Read once per call (ADR 0071 §2): the `kid` here, binding below.
+    let view = PublicView::read(key, Error::PlatformKeyFailed)?;
+    let protected = opts.protected_header(view.jwk.kid())?;
+    let payload = Zeroizing::new(claims.to_json());
+    sign_compact_with_platform_view(
+        &protected,
+        payload.as_bytes(),
+        key,
+        view,
+        &SignOptions::new(),
+    )
 }
 
 #[cfg(test)]

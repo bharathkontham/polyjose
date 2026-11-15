@@ -175,6 +175,11 @@ pub(crate) enum Schema {
     /// `ecdsa_p1363_verify_schema_v1.json` (`EcdsaP1363Verify`): ECDSA with
     /// the `R || S` signature encoding that JWS uses (RFC 7518 §3.4).
     EcdsaP1363Verify,
+    /// `ecdsa_verify_schema_v1.json` (`EcdsaVerify`): ECDSA with the ASN.1
+    /// DER `Ecdsa-Sig-Value` encoding (RFC 3279 §2.2.3), the form a platform
+    /// key returns (ADR 0071 §3). Groups and tests as for
+    /// [`Schema::EcdsaP1363Verify`].
+    EcdsaVerify,
     /// `eddsa_verify_schema_v1.json` (`EddsaVerify`): Ed25519, RFC 8032 §5.1.
     EddsaVerify,
     /// `json_web_signature_schema_v1.json` (`JsonWebSignature`): whole JWS
@@ -229,6 +234,7 @@ impl Schema {
             Schema::RsassaPkcs1Verify => "RsassaPkcs1Verify",
             Schema::RsassaPssVerify => "RsassaPssVerify",
             Schema::EcdsaP1363Verify => "EcdsaP1363Verify",
+            Schema::EcdsaVerify => "EcdsaVerify",
             Schema::EddsaVerify => "EddsaVerify",
             Schema::JsonWebSignature => "JsonWebSignature",
             Schema::Aead => "AeadTest",
@@ -251,6 +257,7 @@ impl Schema {
             Schema::RsassaPkcs1Verify => "rsassa_pkcs1_verify_schema_v1.json",
             Schema::RsassaPssVerify => "rsassa_pss_verify_schema_v1.json",
             Schema::EcdsaP1363Verify => "ecdsa_p1363_verify_schema_v1.json",
+            Schema::EcdsaVerify => "ecdsa_verify_schema_v1.json",
             Schema::EddsaVerify => "eddsa_verify_schema_v1.json",
             Schema::JsonWebSignature => "json_web_signature_schema_v1.json",
             Schema::Aead => "aead_test_schema_v1.json",
@@ -374,6 +381,11 @@ const SUITES: &[(&str, Schema, Option<&str>)] = &[
         Schema::EcdsaP1363Verify,
         Some("ECDSA"),
     ),
+    // ASN.1 DER ECDSA, for the platform-key DER → R‖S converter (feature
+    // 0025, ADR 0071 §3).
+    ("ecdsa_secp256r1_sha256", Schema::EcdsaVerify, Some("ECDSA")),
+    ("ecdsa_secp384r1_sha384", Schema::EcdsaVerify, Some("ECDSA")),
+    ("ecdsa_secp521r1_sha512", Schema::EcdsaVerify, Some("ECDSA")),
     ("ed25519", Schema::EddsaVerify, Some("EDDSA")),
     ("json_web_signature", Schema::JsonWebSignature, None),
     // JWE (feature 0003).
@@ -1520,7 +1532,7 @@ fn parse_group(schema: Schema, raw: RawGroup) -> Result<Group, String> {
                 && raw.public_key_jwk.is_some()
                 && is_rsa(&public_key)
         }
-        Schema::EcdsaP1363Verify => raw.sha.is_some() && is_ec(&public_key),
+        Schema::EcdsaP1363Verify | Schema::EcdsaVerify => raw.sha.is_some() && is_ec(&public_key),
         Schema::EddsaVerify => is_eddsa(&public_key),
         Schema::JsonWebSignature => {
             jws_keys.is_some() && public_key.is_none() && key_jwk.is_none() && no_jwe_params
@@ -1633,6 +1645,7 @@ impl Schema {
             Schema::RsassaPkcs1Verify
             | Schema::RsassaPssVerify
             | Schema::EcdsaP1363Verify
+            | Schema::EcdsaVerify
             | Schema::EddsaVerify
             | Schema::RsassaPkcs1Generate => (&["msg", "sig"], &[]),
             Schema::RsaesOaepDecrypt => (&["msg", "ct", "label"], &[]),
@@ -1738,6 +1751,7 @@ fn parse_test(schema: Schema, raw: RawTest) -> Result<Test, String> {
         Schema::RsassaPkcs1Verify
         | Schema::RsassaPssVerify
         | Schema::EcdsaP1363Verify
+        | Schema::EcdsaVerify
         | Schema::EddsaVerify
         | Schema::RsassaPkcs1Generate => Input::Signature {
             msg: hex_member(msg, "msg")?,
@@ -2029,9 +2043,19 @@ mod tests {
         }
     }
 
+    /// The ECDSA suites in the JWS R‖S encoding (RFC 7518 §3.4), without
+    /// the ASN.1 DER ones added for the platform-key converter (feature
+    /// 0025), which `jws::ecdsa`'s converter tests check.
+    fn p1363_names() -> Vec<&'static str> {
+        names("ecdsa_")
+            .into_iter()
+            .filter(|name| name.ends_with("_p1363"))
+            .collect()
+    }
+
     #[test]
     fn ecdsa_p1363_suites_have_points_and_nine_groups_without_a_jwk() {
-        let names = names("ecdsa_");
+        let names = p1363_names();
         assert_eq!(names.len(), 4);
         for (name, curve, field_bytes) in [
             ("ecdsa_secp256r1_sha256_p1363", "secp256r1", 32),
@@ -2570,7 +2594,7 @@ mod tests {
         for name in names("rsa_signature_")
             .into_iter()
             .chain(names("rsa_pss_"))
-            .chain(names("ecdsa_"))
+            .chain(p1363_names())
             .chain(names("ed25519"))
         {
             let suite = load(name);

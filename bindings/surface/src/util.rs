@@ -156,10 +156,17 @@ mod tests {
     #[test]
     fn error_codes_are_the_core_codes_in_core_order() {
         assert_eq!(error_codes(), polyjose::Error::CODES);
-        // ADR 0054 §5: `MultipleMatchingKeys` is appended right after `NoMatchingKey`.
+        // ADR 0054 §5: `MultipleMatchingKeys` is appended right after `NoMatchingKey`; ADR 0071
+        // §6: the three platform-key codes follow, last.
         assert_eq!(
-            error_codes()[error_codes().len() - 2..],
-            ["NoMatchingKey", "MultipleMatchingKeys"]
+            error_codes()[error_codes().len() - 5..],
+            [
+                "NoMatchingKey",
+                "MultipleMatchingKeys",
+                "KeyNotFound",
+                "UserAuthenticationRequired",
+                "PlatformKeyFailed"
+            ]
         );
         assert!(error_codes().contains(&"InvalidFormat"));
     }

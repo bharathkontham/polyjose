@@ -2,9 +2,10 @@
 
 - Upstream: https://github.com/C2SP/wycheproof
 - Commit: `d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9` (2026-10-23, "go.mod: bump go directive to 1.27.3")
-- Vendored: 49 files from `testvectors_v1/` plus the repository `LICENSE`, byte for byte, on 2026-11-06
-  (25 for JWS in feature 0002, 17 for JWE in feature 0003) and 2026-11-10 (7 for RSA signing and
-  RSA-OAEP-256 decryption in feature 0020),
+- Vendored: 52 files from `testvectors_v1/` plus the repository `LICENSE`, byte for byte, on 2026-11-06
+  (25 for JWS in feature 0002, 17 for JWE in feature 0003), 2026-11-10 (7 for RSA signing and
+  RSA-OAEP-256 decryption in feature 0020) and 2026-11-15 (3 ASN.1 DER ECDSA files for the
+  platform-key DER → R‖S converter in feature 0025),
   from `https://raw.githubusercontent.com/C2SP/wycheproof/<commit>/testvectors_v1/<file>`.
 - License: Apache-2.0. See `LICENSE` in this directory. The files are unmodified.
 
@@ -39,6 +40,9 @@ lists the `tcId` in its deviation list with an RFC or ADR reason.
 | `ecdsa_secp256r1_sha256_p1363_test.json` | 242550 | `c60de693930e386c3a5472d08081623ef8504decc54b38ac01ec6b2a2575c986` |
 | `ecdsa_secp384r1_sha384_p1363_test.json` | 283550 | `e27344bf6daae75fa19663620883809f91c79fc4b4420eff9eae8036b34476be` |
 | `ecdsa_secp521r1_sha512_p1363_test.json` | 360316 | `d294cbe0485dff0a2c53f6b363103ddb81c444e7e5ee44df56549ea92b873840` |
+| `ecdsa_secp256r1_sha256_test.json` | 327156 | `182db4f3e230f6f9fa9f800d2a614dede30284b8e8438bbfe1171905402e9332` |
+| `ecdsa_secp384r1_sha384_test.json` | 375442 | `8a5b3ae1760975143414811f13588c24d951d9d8c904195087ba327591dfe9cc` |
+| `ecdsa_secp521r1_sha512_test.json` | 455046 | `0fa3bb09a2319242253028b53d555fb8ec2081d891271321205cdaeabb3eef3e` |
 | `ed25519_test.json` | 172628 | `ea80ffebac085e21cb9d3e903e7fa2b448d96702da5b31f061d0b83b430b74b3` |
 | `hmac_sha256_test.json` | 69111 | `2d201cfa61d1bf95e6f5d07d96634b4a348b31e8eaa277ad7c8d09677b7a743f` |
 | `hmac_sha384_test.json` | 78567 | `28b9776e979dd755d852ca471043ea6cedce8b15f7a28abdf6ea9efd982b43c0` |
