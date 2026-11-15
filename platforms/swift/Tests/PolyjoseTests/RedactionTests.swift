@@ -187,6 +187,24 @@ final class RedactionTests: XCTestCase {
         XCTAssertTrue(dumped.contains("- recipientIndex: 2\n"), dumped)
     }
 
+    /// `JwsUnverified`'s Mirror (ADR 0065 §2, ADR 0069 §5): both fields in order, the payload a
+    /// redacted form with no byte children, the header printed as is.
+    func testJwsUnverifiedMirrorHasNoPayloadBytes() {
+        let decoded = JwsUnverified(protectedHeader: #"{"alg":"none"}"#, payload: Self.markerBytes)
+        let mirror = Mirror(reflecting: decoded)
+        XCTAssertEqual(mirror.displayStyle, .struct)
+        XCTAssertEqual(mirror.children.map { $0.label ?? "" }, ["protectedHeader", "payload"])
+        for child in mirror.children where child.label == "payload" {
+            XCTAssertFalse(child.value is Data, "payload is a Data child")
+            XCTAssertEqual(String(describing: child.value), Self.dataBytes)
+            XCTAssertTrue(Mirror(reflecting: child.value).children.isEmpty)
+        }
+        var dumped = ""
+        dump(decoded, to: &dumped)
+        XCTAssertTrue(dumped.contains("- payload: \(Self.dataBytes)\n"), dumped)
+        XCTAssertTrue(dumpedBytes(dumped).isEmpty, dumped)
+    }
+
     /// The README's wipe of a returned `Data` (ADR 0030 §7.4) compiles and zeroes the field.
     func testReadmeWipeZeroesTheField() {
         var verified = JwsVerified(alg: "HS256", payload: Data(Self.markerBytes), signatureIndex: 0)
