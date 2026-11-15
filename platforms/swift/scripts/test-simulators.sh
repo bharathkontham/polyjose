@@ -31,6 +31,23 @@
 #        bundled vector bytes (ADR 0060 §2, §5), equals the ADR 0060 §4 shell reference over this
 #        checkout's conformance/vectors/, so the iOS test bundle matches the checkout byte for byte.
 #        scripts/conformance-parity.sh then compares the file with rust-core.json.
+#   4. The hosted AppleKey tests (ADR 0072 §6.1; feature 0025 T03) on the same simulator: the
+#      committed Xcode project platforms/swift/HostedTests/PolyjoseHosted.xcodeproj, a minimal host
+#      app with a test bundle hosted in it that links the local Polyjose package, so its tests can
+#      store Keychain keys. Never with CODE_SIGNING_ALLOWED=NO: that removes the simulated
+#      entitlement Xcode signs into the app, and every Keychain call is then -34018 (measured).
+#      Two `xcodebuild test` invocations, sharing a state directory (POLYJOSE_HOSTED_STATE) and told
+#      their run by POLYJOSE_HOSTED_PHASE:
+#      - run 1, every test but testRun2*: generates a Secure Enclave ES256 key, a Keychain ES384 key
+#        and a Keychain RS256 key under fixed tags, records their public JWKs and leaves the keys;
+#      - run 2, testRun2* only, in a new process: opens each by tag, compares the public JWK, signs,
+#        deletes, and checks that `open` is then KeyNotFound.
+#      The Keychain tests must pass in both runs. The Secure Enclave tests pass in both, or skip in
+#      both when SecureEnclave.isAvailable is false there; the script then prints
+#      `secure-enclave: simulator (host pass-through), not hardware evidence` or
+#      `secure-enclave: SKIPPED (SecureEnclave.isAvailable is false on the simulator)` (ADR 0072
+#      §6.2). The tests of keys that prompt skip off-device ("needs a device and a person");
+#      platforms/swift/DEVICE-TESTS.md runs them on an iPhone.
 #
 # Simulator hygiene (a shared machine): the script creates one simulator device with
 # `xcrun simctl create`, uses it by UDID, and on exit (also on failure or interrupt) shuts it down
@@ -107,11 +124,13 @@ tail -1 "$logs/test-simulator-lib.log"
 
 # xcb <log name> <xcodebuild arguments...>: runs xcodebuild on the root package with the local
 # XCFramework, its output in $logs/<log name>.log; on failure prints the log's errors and fails.
+# With xcb_project set (a project and scheme), it runs that project instead.
+xcb_project=()
 xcb() {
   local name=$1 rc=0
   shift
-  POLYJOSE_LOCAL_XCFRAMEWORK=1 xcodebuild -scheme polyjose -derivedDataPath "$derived" "$@" \
-    >"$logs/$name.log" 2>&1 || rc=$?
+  if [ "${#xcb_project[@]}" -eq 0 ]; then set -- -scheme polyjose -derivedDataPath "$derived" "$@"; else set -- "${xcb_project[@]}" "$@"; fi
+  POLYJOSE_LOCAL_XCFRAMEWORK=1 xcodebuild "$@" >"$logs/$name.log" 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "$me: xcodebuild ($name) exited $rc; errors (full log: $logs/$name.log):"
     grep -E 'error:|\*\* .* FAILED \*\*|Testing failed|Test Case .* failed' "$logs/$name.log" | head -50 || true
@@ -166,6 +185,36 @@ else
   }
   mv "$extracted" "$results"
   echo "$me: wrote $results (vectors_digest $digest, equal to the checkout's)"
+
+  echo "==> $me: hosted AppleKey tests, two runs on the same simulator (platforms/swift/HostedTests)"
+  hosted_class=PolyjoseHostedTests.AppleKeyHostedTests
+  hosted_tests=PolyjoseHostedTests/AppleKeyHostedTests
+  xcb_project=(-project "$root/platforms/swift/HostedTests/PolyjoseHosted.xcodeproj" -scheme PolyjoseHosted
+    -derivedDataPath "$work/DerivedData-hosted")
+  export TEST_RUNNER_POLYJOSE_HOSTED_STATE="$work/hosted-state"
+  mkdir -p "$TEST_RUNNER_POLYJOSE_HOSTED_STATE"
+  hosted_destination=(-destination "platform=iOS Simulator,id=$udid" -parallel-testing-enabled NO)
+  TEST_RUNNER_POLYJOSE_HOSTED_PHASE=1 xcb hosted-run1 test "${hosted_destination[@]}" \
+    -skip-testing:"$hosted_tests/testRun2SecureEnclave" -skip-testing:"$hosted_tests/testRun2Keychain"
+  TEST_RUNNER_POLYJOSE_HOSTED_PHASE=2 xcb hosted-run2 test "${hosted_destination[@]}" \
+    -only-testing:"$hosted_tests/testRun2SecureEnclave" -only-testing:"$hosted_tests/testRun2Keychain"
+  for run in 1 2; do
+    got=$(test_case_result "$logs/hosted-run$run.log" "$hosted_class" "testRun${run}Keychain")
+    [ "$got" = passed ] || { echo "$me: hosted run $run: testRun${run}Keychain $got, not passed (log: $logs/hosted-run$run.log)"; exit 1; }
+  done
+  se1=$(test_case_result "$logs/hosted-run1.log" "$hosted_class" testRun1SecureEnclave)
+  se2=$(test_case_result "$logs/hosted-run2.log" "$hosted_class" testRun2SecureEnclave)
+  echo "$me: hosted runs: Keychain ES384 and RS256 generated, found by tag from a second process, used and deleted; Secure Enclave ES256: $se1, $se2"
+  if [ "$se1" = passed ] && [ "$se2" = passed ]; then
+    echo "secure-enclave: simulator (host pass-through), not hardware evidence"
+  elif [ "$se1" = skipped ] && [ "$se2" = skipped ]; then
+    echo "secure-enclave: SKIPPED (SecureEnclave.isAvailable is false on the simulator)"
+  else
+    echo "$me: the Secure Enclave hosted tests must pass, or skip, in both runs"; exit 1
+  fi
+  for test in testDeviceUserPresence testDeviceBiometryCurrentSet testDeviceReusedContext; do
+    echo "  $test: $(test_case_result "$logs/hosted-run1.log" "$hosted_class" "$test") (needs a device and a person: platforms/swift/DEVICE-TESTS.md)"
+  done
   echo "$me: PASS"
 fi
 completed=1; exit 0

@@ -3,7 +3,8 @@
 # 0009 T03), on fixtures only: no simulator, no xcodebuild. Run first by test-simulators.sh.
 #   - sim_runtime_available / sim_iphone_type over `xcrun simctl list runtimes -j` documents;
 #   - vectors_digest_reference on the ADR 0060 §4 worked example;
-#   - extract_results: exactly one marked line, its payload written byte for byte with one LF.
+#   - extract_results: exactly one marked line, its payload written byte for byte with one LF;
+#   - test_case_result: passed, failed, skipped or missing, per test method of an xcodebuild log.
 # Prints one line per case and `test-simulator-lib.sh: N/N passed`; exits 1 on any failure.
 # Needs plutil and shasum (macOS). Bash 3.2 compatible.
 set -euo pipefail
@@ -96,6 +97,18 @@ printf '%s{"a":"x/y&z\\\\"}\n' "$m" >"$tmp/meta.log"
 extract_results "$tmp/meta.log" "$m" "$tmp/meta.json" || true
 printf '{"a":"x/y&z\\\\"}\n' >"$tmp/meta.expected"
 check "slashes, ampersands and backslashes are kept" cmp -s "$tmp/meta.json" "$tmp/meta.expected"
+
+c=PolyjoseHostedTests.AppleKeyHostedTests
+printf "%s\n" "Test Suite 'AppleKeyHostedTests' started" \
+  "Test Case '-[$c testRun1Keychain]' started." "Test Case '-[$c testRun1Keychain]' passed (0.108 seconds)." \
+  "Test Case '-[$c testRun1SecureEnclave]' skipped (0.001 seconds)." \
+  "Test Case '-[$c testRun1KeychainX]' failed (0.1 seconds)." \
+  "  Test Case '-[$c testRun2Keychain]' passed (0.1 seconds)." >"$tmp/xcodebuild.log"
+check "test_case_result: passed" test "$(test_case_result "$tmp/xcodebuild.log" "$c" testRun1Keychain)" = passed
+check "test_case_result: skipped" test "$(test_case_result "$tmp/xcodebuild.log" "$c" testRun1SecureEnclave)" = skipped
+check "test_case_result: a longer method name is another test" test "$(test_case_result "$tmp/xcodebuild.log" "$c" testRun1KeychainX)" = failed
+check "test_case_result: missing (a result not at the start of a line does not count)" \
+  test "$(test_case_result "$tmp/xcodebuild.log" "$c" testRun2Keychain)" = missing
 
 echo "test-simulator-lib.sh: $pass/$total passed"
 completed=1; exit "$((pass != total))"

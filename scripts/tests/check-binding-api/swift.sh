@@ -20,6 +20,15 @@ gen=$src/Polyjose.swift
 # lib.sh copies the inputs of the other modes; this mode also reads the Swift sources.
 mkdir -p "$base/$src" || lib_die "could not create $base/$src"
 cp "$repo/$src"/*.swift "$base/$src/" || lib_die "could not copy $src"
+# The checkout's host types (feature 0025 T03: AppleKey.swift, listed in swift.host-types) are
+# checked once, in the case checkout-host-types; every other case starts from a base without them,
+# so the host-type fixtures below add their own.
+list=scripts/check-binding-api.d/swift.host-types
+host_types=$(grep -c '^[[:space:]]*type ' "$repo/$list" || true) host_members=$(grep -c '^[[:space:]]*member ' "$repo/$list" || true)
+checkout="$scratch/checkout"
+cp -R "$base" "$checkout" || lib_die "could not copy the base"
+rm -f "$base/$src/AppleKey.swift"
+grep -Ev '^[[:space:]]*(type|member) ' "$repo/$list" >"$base/$list" || lib_die "could not write $list"
 
 ops=$(inventory_count op swift) records=$(inventory_count record swift) fields=$(inventory_count field swift) codes=$(inventory_count code)
 ifaces=$(inventory_count interface swift) methods=$(inventory_count method swift) enums=$(inventory_count enum swift) cases=$(inventory_count case swift)
@@ -28,6 +37,11 @@ new_case pass
 run_check swift
 check_last_line "the Swift API matches the inventory" 0 \
   "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases)"
+
+new_case checkout-host-types "$checkout"
+run_check swift
+check_last_line "the checkout's Swift API, with its host types, matches the inventory and swift.host-types" 0 \
+  "check-binding-api: swift: PASS ($ops operations, $records records, $fields fields, $codes codes, $ifaces interfaces, $methods methods, $enums enums, $cases cases, $host_types host types, $host_members host members)"
 
 new_case renamed-op
 edit $gen 'public func jwkToPublic(jwk: String)' 'public func jwkToPublicKey(jwk: String)'

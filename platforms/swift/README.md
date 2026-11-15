@@ -97,6 +97,70 @@ decrypted.plaintext.resetBytes(in: decrypted.plaintext.indices)  // wipe secret 
 Printing a result redacts its secret fields, but reading a field gives the secret: never log
 `verified.payload`, `decrypted.plaintext` or a key.
 
+## Platform keys: `AppleKey`
+
+`AppleKey` is a private key held by the Apple platform. polyjose asks it for one private-key step
+at a time (a signature, an ECDH shared secret or an RSA-OAEP-256 decryption) through the Security
+framework (`SecKey`) and never sees the private key. Every JOSE check stays in polyjose.
+
+```swift
+// Once: create a Secure Enclave key under a tag of your choice.
+let key = try AppleKey.generate(tag: "com.example.signing", algorithm: "ES256", protection: .secureEnclave)
+let publicJwk = try key.publicJwk()  // give this to the verifier
+
+// Later, also in a new process: find it again by its tag, and sign.
+let signer = try AppleKey.open(tag: "com.example.signing", algorithm: "ES256")
+let token = try jwtSignWithPlatformKey(claims: #"{"sub":"user-123"}"#, key: signer, options: JwtSignOptions(alg: "ES256"))
+```
+
+Decrypt with `jweDecryptCompactWithPlatformKey`, `jweDecryptJsonWithPlatformKey` or
+`jwtDecryptNestedWithPlatformKey`, after encrypting to `publicJwk()`. `AppleKey(secKey:algorithm:)`
+wraps a private `SecKey` your app created itself, and `AppleKey.delete(tag:)` deletes a key.
+
+**Two protections.** `protection` is where the key lives, as the platform reports it:
+
+| `protection` | Signing | Decryption |
+|---|---|---|
+| `.secureEnclave` | ES256 | ECDH-ES, ECDH-ES+A128KW/A192KW/A256KW on P-256 |
+| `.keychain` | ES256, ES384, ES512; RS256/384/512 and PS256/384/512 (2048, 3072 or 4096 bits) | ECDH-ES family on P-256, P-384, P-521; RSA-OAEP-256 |
+
+- `.secureEnclave` is the only hardware-bound protection.
+- `.keychain` keys are stored and protected by the OS, not hardware-bound; on iOS, code that
+  holds the key reference can export the private key.
+- There is no fallback to a software key: `.secureEnclave` with any other algorithm is
+  `UnsupportedAlgorithm`, and so is `.secureEnclave` when `SecureEnclave.isAvailable` is false,
+  which `generate` checks first.
+
+**One algorithm per key.** A key is bound to the one algorithm you name: a signing algorithm,
+`RSA-OAEP-256`, or `ECDH-ES`, which also serves the three `ECDH-ES+A*KW` algorithms. Use
+`keySizeInBits:` for an RSA size or an ECDH curve (256, 384 or 521). Generated keys are
+`ThisDeviceOnly` and never synchronizable; `access:` sets the accessibility and optional
+`.userPresence`, `.biometryAny`, `.biometryCurrentSet` or `.devicePasscode` flags, and can pass an
+`LAContext`.
+
+**Off the main thread.** The calls are synchronous. A key with an `access` flag makes the system
+show a prompt during the call, so call it off the main thread.
+
+**macOS.** A permanent key needs a signed app with a keychain entitlement (Apple's rule): an
+unsigned binary, such as `swift test`, gets `PlatformKeyFailed` from `generate`.
+
+**Errors** (`PolyjoseError.code()`), with fixed text: no platform message, tag or key is included.
+
+| Code | When |
+|---|---|
+| `KeyNotFound` | No key under that tag |
+| `UserAuthenticationRequired` | The user has not authenticated, cancelled, or can't (lockout) |
+| `PlatformKeyFailed` | Any other platform failure while creating, finding or signing |
+| `DecryptionFailed` | Any other failure while decrypting (RFC 7516 §11.5) |
+| `UnsupportedAlgorithm` | An algorithm or size the protection can't serve |
+| `KeyAlgorithmMismatch` | A key that can't do the algorithm, or a call for another algorithm |
+| `InvalidKey` | `AppleKey(secKey:algorithm:)` given a public key |
+
+**Printing** an `AppleKey` shows its type and `protection` only, never the tag or the key.
+
+**watchOS** has no biometry: `LAError.Code.biometryLockout` doesn't exist there, so it is left out
+of the error mapping on watchOS.
+
 ## Documentation
 
 - Getting started in Swift: <https://polyjose.dev/start/swift/>

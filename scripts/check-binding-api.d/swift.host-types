@@ -6,5 +6,23 @@
 #   type <Name>      a public type
 #     member <name>  one of its public members (func, var, let, init, subscript, nested type, case)
 #
-# None yet: feature 0025 T03 adds AppleKey (ADR 0072 §1). Adding a type is a review decision, like
-# an inventory change.
+# Adding a type is a review decision, like an inventory change.
+
+# AppleKey (ADR 0072 §1, feature 0025 T03): the members of ADR 0072 §1, the three PlatformKey
+# methods its conformance needs, its two nested types and the three printing members (ADR 0071 §7).
+type AppleKey
+  member Protection
+  member Access
+  member generate
+  member open
+  member delete
+  member init
+  member publicJwk
+  member algorithms
+  member protection
+  member sign
+  member agree
+  member decryptKey
+  member description
+  member debugDescription
+  member customMirror

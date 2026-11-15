@@ -62,3 +62,14 @@ extract_results() {
   [ "$count" = 1 ] || { echo "found $count lines starting with \"$marker\" in $log, expected one"; return 1; }
   awk -v m="$marker" 'index($0, m) == 1 { printf "%s\n", substr($0, length(m) + 1) }' "$log" >"$out"
 }
+
+# test_case_result <log> <class> <method>: prints how XCTest reported `-[<class> <method>]` in an
+# xcodebuild log, `passed`, `failed` or `skipped` (the last report, if there are several), or
+# `missing` when the log has no result line for it. <class> is module-qualified
+# (`PolyjoseHostedTests.AppleKeyHostedTests`).
+test_case_result() {
+  local log=$1 class=$2 method=$3
+  awk -v want="Test Case '-[$class $method]' " '
+    index($0, want) == 1 { rest = substr($0, length(want) + 1); split(rest, w, " "); r = w[1] }
+    END { print (r == "passed" || r == "failed" || r == "skipped") ? r : "missing" }' "$log"
+}
