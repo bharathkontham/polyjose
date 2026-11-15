@@ -108,6 +108,7 @@ class PatchTest {
             "JweEncryptOptions" to listOf("aad"),
             "JweRecipient" to listOf("key"),
             "JwsSigner" to listOf("key"),
+            "JwsUnverified" to listOf("payload"),
             "JwsVerified" to listOf("payload"),
             "JwsVerifyOptions" to listOf("detachedPayload"),
         )

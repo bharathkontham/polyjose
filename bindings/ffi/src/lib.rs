@@ -8,7 +8,8 @@
 //! - [`error`]: [`PolyjoseError`], one variant per stable code, with the exported `code()` and
 //!   `Display` (ADR 0030 §5);
 //! - [`records`]: the `uniffi::Record` mirrors of the surface records (ADR 0030 §3);
-//! - [`util`]: `version`, `error_codes`, `base64url_encode`, `base64url_decode`;
+//! - [`util`]: `version`, `error_codes`, `base64url_encode`, `base64url_decode` and the
+//!   unverified decode utilities of ADR 0069;
 //! - [`jwk`], [`keys`], [`jws`], [`jwe`], [`jwt`]: the operations (feature 0013 T12).
 //!
 //! The Kotlin and Swift sources are generated from the built library by the separate

@@ -2,18 +2,19 @@
 // superseding the printing residual of ADR 0030 §3 and §7). The generated Polyjose.swift is left
 // as UniFFI writes it (ADR 0032 §4); these are the "few hand-written extension members" ADR 0030
 // §1 allows, and scripts/check-binding-api.sh (swift mode) allows exactly these three
-// conformances, with exactly their three members, on exactly these six records.
+// conformances, with exactly their three members, on exactly these seven records.
 //
 // The secret fields are the ones ADR 0030 §7 lists as secret-bearing:
 // - private JWKs and PBES2 passwords: `JwsSigner.key`, `JweRecipient.key` (RFC 7517 §4,
 //   RFC 7518 §4.8);
-// - JWS payloads, treated as secret: `JwsVerified.payload`, `JwsVerifyOptions.detachedPayload`
-//   (RFC 7515 §2 and Appendix F; ADR 0049 §4);
+// - JWS payloads, treated as secret: `JwsVerified.payload`, `JwsUnverified.payload`,
+//   `JwsVerifyOptions.detachedPayload` (RFC 7515 §2 and Appendix F; ADR 0049 §4, ADR 0069 §5);
 // - JWE plaintext: `JweDecrypted.plaintext` (RFC 7516 §5.2 step 16);
 // - `aad`: `JweDecrypted.aad`, `JweEncryptOptions.aad` (RFC 7516 §7.2.1; ADR 0050 §4).
 // `JweEncryptOptions.recipients` prints each `JweRecipient` through its own redacted forms.
 // Not secret, so printed as before: `JweRecipient.apu`/`apv` (public party information,
-// RFC 7518 §4.6.1.2-§4.6.1.3), every header, and JWT claims (ADR 0058 decision 2, ADR 0065 §3).
+// RFC 7518 §4.6.1.2-§4.6.1.3), every header, and JWT claims, `JwtUnverified`'s included
+// (ADR 0058 decision 2, ADR 0065 §3).
 
 import Foundation
 
@@ -95,6 +96,21 @@ extension JwsVerified: CustomStringConvertible, CustomDebugStringConvertible, Cu
             ("protectedHeader", protectedHeader as Any),
             ("unprotectedHeader", unprotectedHeader as Any),
             ("signatureIndex", signatureIndex),
+        ]
+    }
+}
+
+extension JwsUnverified: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    public var description: String { printed(Self.self, debug: false, printedFields) }
+    public var debugDescription: String { printed(Self.self, debug: true, printedFields) }
+    public var customMirror: Mirror { mirror(self, printedFields) }
+
+    /// `payload`, the JWS Payload of an unverified decode (RFC 7515 §2), is treated as secret
+    /// (ADR 0049 §4, ADR 0069 §5) and redacted.
+    private var printedFields: [(String, Any)] {
+        [
+            ("protectedHeader", protectedHeader),
+            ("payload", Redacted(payload)),
         ]
     }
 }
