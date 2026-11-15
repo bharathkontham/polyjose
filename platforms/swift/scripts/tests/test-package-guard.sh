@@ -103,9 +103,9 @@ check "an XCFramework missing a library (watchos-arm64-simulator) is refused" \
   "[ $rc -eq 1 ] && log_has 'watchos-arm64-simulator'"
 
 fake_xcframework "$xcf" "$release_libraries" "$(stamp_for present)"
-rm -f "$xcf/macos-arm64_x86_64/libpolyjose_ffi.a"
+rm -f "$xcf/macos-arm64/libpolyjose_ffi.a"
 run_package --allow-dev --xcframework "$xcf" --out-dir "$out"
-check "a library whose archive is missing is refused" "[ $rc -eq 1 ] && log_has 'macos-arm64_x86_64'"
+check "a library whose archive is missing is refused" "[ $rc -eq 1 ] && log_has 'macos-arm64/'"
 check "the refusals left the output directory as it was" untouched
 
 # --- One crate set on every Apple target (ADR 0032 §6, ADR 0020 §4) ---------------------------
@@ -139,16 +139,16 @@ check "that refusal leaves the output directory as it was, too" untouched
 same_out="$scratch/same-out"
 run_package_fake_cargo x86_64-unknown-linux-gnu --allow-dev --xcframework "$xcf" --out-dir "$same_out"
 check "identical crate sets on all Apple targets do not trip the check" \
-  "[ $rc -eq 0 ] && log_has 'same crate set on all 8 Apple targets'"
+  "[ $rc -eq 0 ] && log_has 'same crate set on all 6 Apple targets'"
 [ "$rc" -eq 0 ] || show_log
 check "identical crate sets are packaged" "[ -s '$same_out/PolyjoseFFI.xcframework.zip' ]"
 # The Rust targets of the 5 libraries (ADR 0032 §1), each of which package.sh must compare.
 missing_targets=""
-for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim \
-  x86_64-apple-ios aarch64-apple-watchos aarch64-apple-watchos-sim arm64_32-apple-watchos; do
+for t in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-watchos \
+  aarch64-apple-watchos-sim arm64_32-apple-watchos; do
   grep -qxF "tree $t" "$fake_cargo_log" || missing_targets="$missing_targets $t"
 done
-check "package.sh ran cargo tree for each of the 8 Apple targets" "[ -z '$missing_targets' ]"
+check "package.sh ran cargo tree for each of the 6 Apple targets" "[ -z '$missing_targets' ]"
 [ -z "$missing_targets" ] || echo "    | no cargo tree for:$missing_targets"
 
 # 5 incompressible libraries of 5.2 MB each: about 26 MB zipped, over the 25,000,000-byte stop.
