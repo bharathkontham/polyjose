@@ -437,9 +437,11 @@ jobs=$(block "jobs:" 0 | keys 2 | tr '\n' ' ' | sed 's/ $//')
 job_block=$(block "jobs:" 0)
 if [ "$(echo "$jobs" | wc -w | tr -d ' ')" != 1 ]; then
   bad "one job" "expected exactly one job, got: $jobs"
-elif ! printf '%s\n' "$job_block" | grep -qE '^    runs-on: (macos-[0-9a-z.-]+|xcode-[0-9]+)$'; then
+# A here-string, not `printf | grep -q`: under pipefail grep -q's early exit can fail printf with
+# SIGPIPE (`printf: write error: Broken pipe`) when the machine is loaded (STATE.md Known flaky).
+elif ! grep -qE '^    runs-on: (macos-[0-9a-z.-]+|xcode-[0-9]+)$' <<<"$job_block"; then
   bad "one job" "the job must run on a macOS runner"
-elif ! printf '%s\n' "$job_block" | grep -qE '^    timeout-minutes: [0-9]+$'; then
+elif ! grep -qE '^    timeout-minutes: [0-9]+$' <<<"$job_block"; then
   bad "one job" "the job needs a timeout-minutes"
 else
   ok "one job: $jobs on macOS, with a timeout"

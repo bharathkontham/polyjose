@@ -7,7 +7,10 @@
 #      backend.js loads the pinned addon itself (feature 0017); extra arguments go to napi build,
 #      e.g. `scripts/build.sh --target <Rust target>`. Cargo gets `--locked` (after `--`,
 #      which napi build hands to cargo build and to its own cargo metadata), so the addon is built
-#      from the committed Cargo.lock only (review-code.md SF-3);
+#      from the committed Cargo.lock only (review-code.md SF-3). Under scripts/test-all.sh
+#      (POLYJOSE_ADDON_REUSE=1, never set by CI, pack.sh or a release path), the addon is reused
+#      instead when scripts/addon-reuse.sh finds its inputs unchanged since the build it recorded
+#      and the addon still the one recorded and pinned; POLYJOSE_FORCE_REBUILD=1 always builds;
 #   3. addon-sha256.json: scripts/addon-hashes.sh over every polyjose.<platform>.node in the tree
 #      (the host's), the addon hash pin that backend.js checks before it loads anything (feature
 #      0007 F07); the packed package gets its own map from scripts/pack-main.sh over exactly the
@@ -35,10 +38,21 @@ echo "==> @polyjose/node build: the shared facade (bindings/js)"
 echo "==> @polyjose/node build: napi build --platform --release --no-js $*"
 # A binding.cjs from a build before feature 0017 would be stale output; nothing loads it now.
 rm -f binding.cjs
-"$napi" build --platform --release --no-js --dts binding.d.ts "$@" -- --locked
+reuse=${POLYJOSE_ADDON_REUSE:-}
+if [ "$reuse" = 1 ] && scripts/addon-reuse.sh check "$@"; then
+  # The same bytes as a fresh build; newer than their sources, as one (check-binding-api.d/node.sh).
+  touch polyjose.*.node binding.d.ts
+else
+  [ "$reuse" != 1 ] || reuse=build
+  rm -f addon-inputs.sha256
+  "$napi" build --platform --release --no-js --dts binding.d.ts "$@" -- --locked
+fi
 
 echo "==> @polyjose/node build: addon-sha256.json (scripts/addon-hashes.sh)"
 scripts/addon-hashes.sh addon-sha256.json polyjose.*.node
+if [ "$reuse" = build ]; then
+  scripts/addon-reuse.sh save "$@" || echo "addon-reuse: could not record the addon's inputs; the next build compiles the addon again"
+fi
 
 echo "==> @polyjose/node build: facade/ (compiled .js and .d.ts of bindings/js/dist/src)"
 rm -rf facade

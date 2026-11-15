@@ -58,7 +58,8 @@ print(v)' "$@"
 }
 
 echo "==> @polyjose/node pack: build aarch64-apple-darwin (host)"
-scripts/build.sh
+# Always a fresh napi build: a package is never packed from a reused addon (scripts/addon-reuse.sh).
+POLYJOSE_ADDON_REUSE=0 scripts/build.sh
 
 version=$(json_field package.json version)
 rm -rf "$out"
