@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The assembly job of .github/workflows/binding-android.yml (feature 0008 T05; ADR 0033 §4,
-# ADR 0020 §4, ADR 0037 §1): the release AAR and the five-platform JVM jar from the libraries the
+# ADR 0020 §4, ADR 0037 §1): the release AAR and the four-platform JVM jar from the libraries the
 # host-natives matrix built and tested, checked by feature 0008 T04's scripts/check-artifacts.sh.
 # Nothing is published or signed: the only repository is the file repository build/repo. Run
 # ci-android-sdk.sh first (NDK, build-tools, cargo-ndk).
@@ -12,8 +12,8 @@
 # (such as the conformance-* folders next to them locally) are ignored.
 #
 # 1. Each folder must be a JNA prefix of the jar holding exactly that platform's library (file(1)).
-#    The prefixes this host builds itself (on macOS both darwin ones, ADR 0033 §4; elsewhere the
-#    host's) are rebuilt by Gradle and not passed in, since the jar build rejects a platform it
+#    The prefix this host builds itself (its own; nothing is cross-built, ADR 0073 §2) is rebuilt
+#    by Gradle and not passed in, since the jar build rejects a platform it
 #    gets twice; step 3 compares the rebuilt library with the CI one. Every other prefix is passed
 #    to the jar build with -Ppolyjose.jvmNativesDir (T04's hook in polyjose-jvm/build.gradle.kts).
 # 2. `./gradlew --no-daemon :polyjose:assembleRelease :polyjose-jvm:jar
@@ -22,14 +22,14 @@
 #    jar's libraries and Polyjose-Native-Platforms, the APK, the POMs, no Central configuration).
 #    The notices (feature 0008 F01): the jar's thirdPartyNotices task writes one file over the
 #    union of the crate trees of every platform in the jar (scripts/third-party-notices.sh with a
-#    --target per platform; 75 crates for the five today: the Linux libraries add linux-raw-sys,
+#    --target per platform; 75 crates for the four today: the Linux libraries add linux-raw-sys,
 #    the Windows one windows-link and windows-sys). The task and check-artifacts.sh both fail,
 #    naming the target and the crates, when a library in the jar compiles a crate the shipped
 #    file does not list or its target is not in the file's Targets: line.
 # 3. The jar must carry what CI tested, byte for byte: each passed-in library, and each library
 #    this host rebuilt for a prefix CI also built (printing both SHA-256s; a mismatch fails, as
 #    the jar would ship a library the host-natives tests never loaded). With --require-all, all
-#    five platforms and no Polyjose-Native-Platforms-Missing attribute.
+#    four platforms and no Polyjose-Native-Platforms-Missing attribute.
 # 3a. The AAR's libraries (feature 0008 F05, review S4 option (a)): with --jni-libs <dir>, the
 #    emulator job's android-jnilibs artifact (ci-emulator.sh step 6): <abi>/libpolyjose_ffi.so for
 #    the four ABIs and a SHA256SUMS of exactly those four, recorded from the test APK the device
@@ -74,7 +74,7 @@ command -v unzip >/dev/null 2>&1 || ci_die "unzip not found"
 
 host=$(ci_host_prefix)
 [ -n "$host" ] || ci_die "polyjose builds no JVM library on $(uname -s) $(uname -m)"
-case $host in darwin-*) built_here="darwin-aarch64 darwin-x86-64" ;; *) built_here=$host ;; esac
+built_here=$host
 
 version=$(awk '/^\[/{t=($0=="[workspace.package]")} t&&/^version *=/{gsub(/.*= *"|".*/,"");print;exit}' "$ci_repo/Cargo.toml")
 [ -n "$version" ] || ci_die "no [workspace.package] version in Cargo.toml"
@@ -186,7 +186,7 @@ if [ "$require_all" = 1 ]; then
   if grep -q '^Polyjose-Native-Platforms-Missing:' "$work/META-INF/MANIFEST.MF"; then
     fail "--require-all: the manifest has Polyjose-Native-Platforms-Missing"
   fi
-  echo "ci-assemble-jar: jar: all five platforms, no Polyjose-Native-Platforms-Missing"
+  echo "ci-assemble-jar: jar: all four platforms, no Polyjose-Native-Platforms-Missing"
 fi
 
 # 4. Outputs.

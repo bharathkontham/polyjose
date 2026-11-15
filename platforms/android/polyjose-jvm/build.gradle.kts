@@ -23,19 +23,13 @@ val repoRoot: File = rootDir.resolve("../..").canonicalFile
 /** The root project's build directory, where its Rust tasks write (root build.gradle.kts). */
 val sharedBuild: Directory = isolated.rootProject.projectDirectory.dir("build")
 
-/** cargo's target directory: `CARGO_TARGET_DIR` when set (relative to the workspace), else `target`. */
-val cargoTargetDir: File =
-    providers.environmentVariable("CARGO_TARGET_DIR").orNull
-        ?.let { repoRoot.resolve(it) }
-        ?: repoRoot.resolve("target")
-
 /**
- * The five host platforms of the release jar: JNA resource prefix to Rust target triple
- * (ADR 0033 §3a, §4).
+ * The four host platforms of the release jar: JNA resource prefix to Rust target triple
+ * (ADR 0033 §3a, §4; ADR 0073 §2). macOS is Apple silicon only: no x86_64 macOS library is built
+ * or packed, and a `polyjose.jvmNativesDir` folder for any prefix not listed here is refused below.
  */
 val jnaPlatforms: Map<String, String> = sortedMapOf(
     "darwin-aarch64" to "aarch64-apple-darwin",
-    "darwin-x86-64" to "x86_64-apple-darwin",
     "linux-aarch64" to "aarch64-unknown-linux-gnu",
     "linux-x86-64" to "x86_64-unknown-linux-gnu",
     "win32-x86-64" to "x86_64-pc-windows-msvc",
@@ -51,7 +45,10 @@ fun libraryName(prefix: String): String = when {
 val osName: String = System.getProperty("os.name").lowercase()
 val osArch: String = System.getProperty("os.arch").lowercase()
 
-/** This host's JNA prefix (the root project's assembleJvmNatives copies its library), or null. */
+/**
+ * This host's JNA prefix (the root project's assembleJvmNatives copies its library), or null.
+ * Every platform of the jar builds on its own native host; nothing is cross-built (ADR 0073 §2).
+ */
 val hostPrefix: String? = run {
     val os = when {
         osName.startsWith("mac") -> "darwin"
@@ -66,13 +63,6 @@ val hostPrefix: String? = run {
     }
     "$os-$arch".takeIf { os != null && arch != null && it in jnaPlatforms }
 }
-
-/**
- * The other platforms this host cross-builds: on macOS the other darwin architecture (both build
- * on one Mac, ADR 0033 §4). Linux and Windows libraries come from native CI runners.
- */
-val crossPrefixes: List<String> =
-    if (osName.startsWith("mac")) listOf("darwin-aarch64", "darwin-x86-64").filter { it != hostPrefix } else emptyList()
 
 /**
  * Libraries built elsewhere (the CI host-natives matrix, feature 0008 T05): `-Ppolyjose.jvmNativesDir=<dir>`
@@ -92,39 +82,10 @@ val extraPrefixes: List<String> = extraNativesDir?.let { dir ->
 
 /** Every platform the jar carries, sorted: the Polyjose-Native-Platforms manifest attribute. */
 val jarPlatforms: List<String> = run {
-    val all = listOfNotNull(hostPrefix) + crossPrefixes + extraPrefixes
+    val all = listOfNotNull(hostPrefix) + extraPrefixes
     val twice = all.groupBy { it }.filterValues { it.size > 1 }.keys
     if (twice.isNotEmpty()) throw GradleException("polyjose.jvmNativesDir: $twice are built on this host as well")
     all.sorted()
-}
-
-/**
- * Everything cargo reads to build polyjose-ffi (as the root project's rustLibraryInputs): the
- * workspace manifest, lock file and toolchain pin, and the core, surface and adapter crates.
- */
-val rustLibraryInputs: FileCollection = files(
-    repoRoot.resolve("Cargo.toml"),
-    repoRoot.resolve("Cargo.lock"),
-    repoRoot.resolve("rust-toolchain.toml"),
-    listOf("crates/polyjose", "bindings/surface", "bindings/ffi").map { crate ->
-        fileTree(repoRoot.resolve(crate)) { include("Cargo.toml", "build.rs", "src/**") }
-    },
-)
-
-/** `cargo build --release --lib -p polyjose-ffi --target <triple>` for each cross-built platform. */
-val cargoCrossBuilds: Map<String, TaskProvider<Exec>> = crossPrefixes.associateWith { prefix ->
-    val triple = jnaPlatforms.getValue(prefix)
-    val name = prefix.split("-").joinToString("") { part -> part.replaceFirstChar { it.uppercase() } }
-    tasks.register<Exec>("cargoBuild$name") {
-        group = "rust"
-        description = "Cross-builds the polyjose-ffi cdylib for $triple ($prefix in the jar, ADR 0033 §4)."
-        inputs.files(rustLibraryInputs).withPropertyName("rustSources").withPathSensitivity(PathSensitivity.RELATIVE)
-        outputs.file(cargoTargetDir.resolve("$triple/release/${libraryName(prefix)}")).withPropertyName("library")
-        workingDir(repoRoot)
-        // `-p polyjose-ffi` alone, as cargoHostBuild: uniffi's `cli` feature never reaches the
-        // library. `--locked`, as cargoHostBuild: a stale Cargo.lock fails instead of re-resolving.
-        commandLine("cargo", "build", "--locked", "--release", "--lib", "-p", "polyjose-ffi", "--target", triple)
-    }
 }
 
 /** The jar's native libraries in JNA's layout, `build/jar-natives/<prefix>/<library>`. */
@@ -132,7 +93,6 @@ val assembleJarNatives = tasks.register<Sync>("assembleJarNatives") {
     description = "Lays out every host library the jar carries under its JNA prefix (ADR 0033 §4)."
     duplicatesStrategy = DuplicatesStrategy.FAIL
     from(files(sharedBuild.dir("jvm-natives")).builtBy(":assembleJvmNatives"))
-    cargoCrossBuilds.forEach { (prefix, build) -> from(build) { into(prefix) } }
     extraPrefixes.forEach { prefix -> from(extraNativesDir!!.resolve(prefix)) { into(prefix) } }
     into(layout.buildDirectory.dir("jar-natives"))
 }
@@ -140,7 +100,7 @@ val assembleJarNatives = tasks.register<Sync>("assembleJarNatives") {
 // dev.polyjose.PolyjoseNativeHashes: the SHA-256 of each library in build/jar-natives, the exact
 // files the jar packs, compiled into the jar's classes; PolyjoseNativeLoader loads a library only
 // when its hash matches (feature 0008 F05, security audit M1). So the classes, and the tests that
-// run them, depend on every library the jar carries (on macOS the cross-built darwin one too).
+// run them, depend on every library the jar carries.
 val nativeHashes = tasks.register<NativeHashes>("nativeHashes") {
     description = "Generates PolyjoseNativeHashes from the libraries the jar packs (feature 0008 F05)."
     natives.from(assembleJarNatives)
@@ -148,7 +108,7 @@ val nativeHashes = tasks.register<NativeHashes>("nativeHashes") {
 }
 
 // META-INF/polyjose/THIRD-PARTY-NOTICES.txt (ADR 0020 §4, ADR 0033 §4): one file over the union of
-// the crate trees of every platform in the jar (header `Targets:`; 75 crates for all five; feature
+// the crate trees of every platform in the jar (header `Targets:`; 75 crates for all four; feature
 // 0008 F01). The task fails closed, naming them, if the header does not name exactly the jar's
 // targets, a platform's library compiles a crate the file does not list, or the file lists a crate
 // no platform compiles (ThirdPartyNotices).
@@ -202,7 +162,7 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
     // The host library under its JNA prefix (<prefix>/libpolyjose_ffi.*), which JNA loads from the
-    // classpath (ADR 0033 §3a); the tests need no cross-built library.
+    // classpath (ADR 0033 §3a).
     testRuntimeOnly(files(sharedBuild.dir("jvm-natives")).builtBy(":assembleJvmNatives"))
     // Parses the conformance vectors (0008 research §3); test only, never in the jar.
     testImplementation(libs.org.json)

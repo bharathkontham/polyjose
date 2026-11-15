@@ -7,7 +7,8 @@
 #   - fail closed: a crate that breaks the license policy in any one target's tree (GPL, no
 #     license expression, Unlicense alone) fails the whole run, naming the crate and its target;
 #     an unknown target, `all` or an empty --target fails it too; nothing is written or replaced;
-#   - the real workspace: polyjose-ffi over the five host targets of the JVM jar (feature 0008)
+#   - the real workspace: polyjose-ffi over the four host targets of the JVM jar (feature 0008,
+#     ADR 0073 §2)
 #     lists exactly the union of their cargo trees.
 #
 # Offline (cargo --offline): run `cargo fetch --locked` first if the registry cache is cold.
@@ -176,20 +177,19 @@ else fail "an empty --target is a usage error (exit $rc)"; show_log; fi
 
 # ---------------------------------------------------------------------------------------------
 # The real workspace: polyjose-ffi in the JVM jar of feature 0008, one host library per target.
-jvm_targets="aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
-x86_64-pc-windows-msvc"
+jvm_targets="aarch64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-msvc"
 out="$scratch/ffi-jvm.txt"
 set --
 for t in $jvm_targets; do set -- "$@" --target "$t"; done
 run_notices "$out" -p polyjose-ffi "$@"
-if [ "$rc" -eq 0 ] && [ -s "$out" ]; then pass "polyjose-ffi, five JVM host targets: the run succeeds"
-else fail "polyjose-ffi, five JVM host targets: the run fails (exit $rc)"; show_log; fi
+if [ "$rc" -eq 0 ] && [ -s "$out" ]; then pass "polyjose-ffi, four JVM host targets: the run succeeds"
+else fail "polyjose-ffi, four JVM host targets: the run fails (exit $rc)"; show_log; fi
 if [ -s "$out" ]; then
   for t in $jvm_targets; do tree_crates polyjose-ffi "$t"; done | sort -u >"$scratch/want.txt"
   headings "$out" >"$scratch/got.txt"
   n=$(wc -l <"$scratch/want.txt" | tr -d ' ')
   if [ -s "$scratch/want.txt" ] && cmp -s "$scratch/got.txt" "$scratch/want.txt"; then
-    pass "polyjose-ffi JVM: exactly the union of the five cargo trees ($n crates)"
+    pass "polyjose-ffi JVM: exactly the union of the four cargo trees ($n crates)"
   else
     fail "polyjose-ffi JVM: crate sections differ from the union of the cargo trees (< notices, > union)"
     diff "$scratch/got.txt" "$scratch/want.txt" | sed 's/^/    | /'
@@ -197,7 +197,7 @@ if [ -s "$out" ]; then
   expect_text "polyjose-ffi JVM: the third-party count is the union's" "$out" "Third-party crates ($n)"
   # shellcheck disable=SC2086 # a word list
   sorted=$(printf '%s\n' $jvm_targets | sort | awk '{ printf "%s%s", sep, $0; sep = ", " }')
-  expect_text "polyjose-ffi JVM: the header names the five targets, sorted" "$out" "Targets: $sorted"
+  expect_text "polyjose-ffi JVM: the header names the four targets, sorted" "$out" "Targets: $sorted"
   expect_once "polyjose-ffi JVM: framework and crypto crates once each" "$out" uniffi uniffi_core p256 rsa
 fi
 

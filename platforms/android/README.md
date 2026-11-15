@@ -108,7 +108,7 @@ source set (package `dev.polyjose`) is compiled into two artifacts:
 | Module | Artifact | Natives |
 |---|---|---|
 | `:polyjose` | Android AAR `dev.polyjose:polyjose` (minSdk 23, compileSdk 36) | `jni/<abi>/libpolyjose_ffi.so` for arm64-v8a, armeabi-v7a, x86_64, x86 |
-| `:polyjose-jvm` | desktop JVM jar `dev.polyjose:polyjose-jvm` | host libraries under JNA's resource prefixes (`darwin-aarch64/`, …) |
+| `:polyjose-jvm` | desktop JVM jar `dev.polyjose:polyjose-jvm` | host libraries under JNA's resource prefixes: `darwin-aarch64/`, `linux-aarch64/`, `linux-x86-64/`, `win32-x86-64/`. The macOS library is Apple silicon only (ADR 0073); a local build packs only this host's library |
 
 The UniFFI adapter itself (`bindings/ffi`, its `uniffi.toml` and the `polyjose-uniffi-bindgen`
 package) belongs to feature 0013; nothing here edits it.
