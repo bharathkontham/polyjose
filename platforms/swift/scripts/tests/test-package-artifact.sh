@@ -39,7 +39,7 @@ out="$scratch/out"
 run_package $allow --out-dir "$out"
 check "package.sh succeeds on the built XCFramework" "[ $rc -eq 0 ]"
 if [ "$rc" -ne 0 ]; then show_log; finish; exit 1; fi
-check "it checked that every Apple target gives the same crate set" "log_has 'same crate set on all 8 Apple targets'"
+check "it checked that every Apple target gives the same crate set" "log_has 'same crate set on all 6 Apple targets'"
 
 zip="$out/PolyjoseFFI.xcframework.zip"
 check "the output directory holds exactly the zip, its .sha256 and the stanza" \

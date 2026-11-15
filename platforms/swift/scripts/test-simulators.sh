@@ -18,7 +18,8 @@
 #   3. The iOS Simulator run (ADR 0046 §2): `xcodebuild test -scheme polyjose` on a disposable
 #      iPhone simulator on the iOS 27.2 runtime (com.apple.CoreSimulator.SimRuntime.iOS-27-2), with
 #      POLYJOSE_LOCAL_XCFRAMEWORK=1. The destination is that device's UDID, never a generic one
-#      (a generic simulator destination links x86_64, ADR 0032 §5). Every XCTest must pass, and the
+#      (a generic simulator destination also builds x86_64, which the arm64-only iOS Simulator
+#      library lacks: ADR 0032 §5, ADR 0073 §2). Every XCTest must pass, and the
 #      conformance test's results document becomes target/conformance/swift-ios-sim.json
 #      (ADR 0034 §2: an off-host run hands its results to the host-side driver):
 #      - the document is the one line of the test output that starts with

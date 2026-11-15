@@ -78,11 +78,12 @@ done
 
 zip_name=PolyjoseFFI.xcframework.zip
 max_zip_bytes=25000000
-# The Rust targets of the 5 libraries (ADR 0032 §1; build-xcframework.sh builds them).
-apple_targets="aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
-x86_64-apple-ios aarch64-apple-watchos aarch64-apple-watchos-sim arm64_32-apple-watchos"
+# The Rust targets of the 5 libraries (ADR 0032 §1, arm64 only for macOS and the iOS Simulator,
+# ADR 0073 §2; build-xcframework.sh builds them).
+apple_targets="aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-watchos
+aarch64-apple-watchos-sim arm64_32-apple-watchos"
 notices_target=aarch64-apple-ios
-release_libraries="ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64 watchos-arm64-simulator
+release_libraries="ios-arm64 ios-arm64-simulator macos-arm64 watchos-arm64-simulator
 watchos-arm64_arm64_32"
 
 # --- The build stamp: refuse a development build (ADR 0032 §1) --------------------------------
