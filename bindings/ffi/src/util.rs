@@ -63,10 +63,12 @@ pub fn base64url_decode(text: String) -> Result<Vec<u8>, PolyjoseError> {
     Ok(polyjose_surface::util::base64url_decode(&text)?)
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the JOSE Protected Header of a compact JWS (3 parts) or JWE (5 parts) without verifying
-/// or decrypting anything, as JSON text (ADR 0069 §1–§2; RFC 7515 §7.1, RFC 7516 §7.1). This
-/// doesn't check the signature; don't trust these values until you verify the token with
-/// `jwtVerify` or `jwsVerifyCompact`.
+/// or decrypting anything, as JSON text (ADR 0069 §1–§2, §4; RFC 7515 §7.1, RFC 7516 §7.1).
+/// Verify the token with `jwtVerify` or `jwsVerifyCompact`.
 ///
 /// Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
 /// from `jku` or `x5u` (RFC 8725 §3.10). A JWK Set already selects by `kid` during
@@ -85,9 +87,11 @@ pub fn decode_protected_header_unverified(token: String) -> Result<String, Polyj
     )?)
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the protected header and the payload of a compact JWS without verifying it
-/// (ADR 0069 §1–§3; RFC 7515 §7.1). This doesn't check the signature; don't trust these values
-/// until you verify the JWS with `jwsVerifyCompact`.
+/// (ADR 0069 §1–§4; RFC 7515 §7.1). Verify the JWS with `jwsVerifyCompact`.
 ///
 /// Sanitise a `kid` before using it in a lookup, and take keys from your own configuration, not
 /// from `jku` or `x5u` (RFC 8725 §3.10).
@@ -108,9 +112,11 @@ pub fn decode_jws_unverified(jws: String) -> Result<JwsUnverified, PolyjoseError
     Ok(polyjose_surface::util::decode_jws_unverified(&jws)?.into())
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the header and the claims of a compact signed JWT without verifying or validating it,
-/// as JSON text (ADR 0069 §1–§2; RFC 7519 §7.2). This doesn't check the signature; don't trust
-/// these values until you verify the token with `jwtVerify`.
+/// as JSON text (ADR 0069 §1–§2, §4; RFC 7519 §7.2). Verify the token with `jwtVerify`.
 ///
 /// No claim is validated: no `exp`, `nbf`, `iat`, `iss`, `sub`, `aud` or `typ` check, and no
 /// clock. After reading `iss` to choose a key set, verify with that issuer in `issuers`

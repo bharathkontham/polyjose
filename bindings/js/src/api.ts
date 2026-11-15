@@ -112,8 +112,9 @@ export interface PolyjoseApi {
   /** Strict, canonical base64url decoding (RFC 4648 §5, §3.5). */
   base64urlDecode(text: string): Promise<Uint8Array>;
   /**
-   * This doesn't check the signature; don't trust these values until you verify the token with
-   * `jwtVerify` or `jwsVerifyCompact`.
+   * This doesn't check the signature: anyone can write these values, so don't use them for
+   * authorization or trust decisions until you verify the token. Verify it with `jwtVerify` or
+   * `jwsVerifyCompact`.
    *
    * Reads the protected header of a compact JWS (3 parts, RFC 7515 §7.1) or JWE (5 parts,
    * RFC 7516 §7.1) without verifying or decrypting anything (ADR 0069 §1–§2). Only the first part
@@ -131,8 +132,8 @@ export interface PolyjoseApi {
    */
   decodeProtectedHeaderUnverified(token: string): Promise<JsonObject>;
   /**
-   * This doesn't check the signature; don't trust these values until you verify the JWS with
-   * `jwsVerifyCompact`.
+   * This doesn't check the signature: anyone can write these values, so don't use them for
+   * authorization or trust decisions until you verify the token. Verify it with `jwsVerifyCompact`.
    *
    * Reads the protected header and the payload of a compact JWS without verifying it
    * (ADR 0069 §1–§2; RFC 7515 §7.1). It runs exactly verify's parsing steps and nothing after
@@ -148,8 +149,8 @@ export interface PolyjoseApi {
    */
   decodeJwsUnverified(jws: string): Promise<JwsUnverified>;
   /**
-   * This doesn't check the signature; don't trust these values until you verify the token with
-   * `jwtVerify`.
+   * This doesn't check the signature: anyone can write these values, so don't use them for
+   * authorization or trust decisions until you verify the token. Verify it with `jwtVerify`.
    *
    * Reads the header and the claims of a compact signed JWT without verifying or validating it
    * (ADR 0069 §1–§2; RFC 7519 §7.2). Registered claims are type-checked, but none is validated:

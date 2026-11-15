@@ -240,8 +240,9 @@ export interface JwtNestedVerified {
 }
 
 /**
- * A compact JWS read by `decodeJwsUnverified` (ADR 0069 §1, §4; RFC 7515 §7.1). The signature
- * isn't checked; don't trust these values until you verify the JWS with `jwsVerifyCompact`.
+ * A compact JWS read by `decodeJwsUnverified` (ADR 0069 §1, §4; RFC 7515 §7.1). This doesn't
+ * check the signature: anyone can write these values, so don't use them for authorization or
+ * trust decisions until you verify the token. Verify it with `jwsVerifyCompact`.
  *
  * A separate record from {@link JwsVerified}: it has no `alg` and no `signatureIndex`, so it
  * can't be passed where a `JwsVerified` is expected. The `alg` is inside `protectedHeader`,
@@ -258,9 +259,10 @@ export interface JwsUnverified {
 }
 
 /**
- * A compact signed JWT read by `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). The
- * signature isn't checked and no claim is validated; don't trust these values until you verify
- * the token with `jwtVerify`.
+ * A compact signed JWT read by `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). This
+ * doesn't check the signature: anyone can write these values, so don't use them for
+ * authorization or trust decisions until you verify the token. No claim is validated. Verify it
+ * with `jwtVerify`.
  *
  * A separate record from {@link JwtVerified}: it has no `alg`, `keyIndex` or `kid`, so it can't
  * be passed where a `JwtVerified` is expected.

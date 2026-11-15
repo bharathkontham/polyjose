@@ -2,9 +2,10 @@
 //! ADR 0030 §2, §4).
 //!
 //! - **Secrets out** (ADR 0030 §7.2, ADR 0031 §3): secret members (`JwsVerified.payload`,
-//!   `JwsUnverified.payload`, `JweDecrypted.plaintext` and `aad`) become a `Uint8Array` copied straight from the surface's
-//!   borrowed, zeroizing buffer, and the result is consumed here so that buffer is wiped as soon
-//!   as the object exists (measured: no copy left in wasm memory, 0006 research §3).
+//!   `JwsUnverified.payload`, `JweDecrypted.plaintext` and `aad`) become a `Uint8Array` copied
+//!   straight from the surface's borrowed, zeroizing buffer, and the result is consumed here so
+//!   that buffer is wiped as soon as the object exists (measured: no copy left in wasm memory,
+//!   0006 research §3).
 //! - **Absent optional members are left out** (BACKEND.md: "may be absent"), never written as
 //!   `null`. JSON-valued members (headers, claims) are the core's JSON text; the facade parses
 //!   them (ADR 0030 §2).

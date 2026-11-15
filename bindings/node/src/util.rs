@@ -71,10 +71,12 @@ surface_task! {
         = |t| polyjose_surface::util::decode_protected_header_unverified(&t.token)
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the protected header of a compact JWS (3 parts) or JWE (5 parts) without verifying or
-/// decrypting it (ADR 0069 §1-§2; RFC 7515 §7.1, RFC 7516 §7.1). This doesn't check the
-/// signature; don't trust these values until you verify the token. Resolves to the header's
-/// JSON text.
+/// decrypting it (ADR 0069 §1-§2, §4; RFC 7515 §7.1, RFC 7516 §7.1). Resolves to the header's JSON
+/// text.
 #[napi]
 pub fn decode_protected_header_unverified(
     token: String,
@@ -92,9 +94,12 @@ surface_task! {
         = |t| polyjose_surface::util::decode_jws_unverified(&t.jws)
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the protected header and the payload of a compact JWS without verifying it
-/// (ADR 0069 §1-§2; RFC 7515 §7.1). This doesn't check the signature; don't trust these values
-/// until you verify the JWS with `jwsVerifyCompact`. Resolves to `{ protectedHeader, payload }`.
+/// (ADR 0069 §1-§2, §4; RFC 7515 §7.1). Verify the JWS with `jwsVerifyCompact`. Resolves to
+/// `{ protectedHeader, payload }`.
 #[napi]
 pub fn decode_jws_unverified(jws: String) -> AsyncTask<DecodeJwsUnverifiedTask> {
     AsyncTask::new(DecodeJwsUnverifiedTask {
@@ -109,9 +114,12 @@ surface_task! {
         = |t| polyjose_surface::util::decode_jwt_unverified(&t.token)
 }
 
+/// This doesn't check the signature: anyone can write these values, so don't use them for
+/// authorization or trust decisions until you verify the token.
+///
 /// Reads the header and the claims of a compact signed JWT without verifying or validating it
-/// (ADR 0069 §1-§2; RFC 7519 §7.2). This doesn't check the signature; don't trust these values
-/// until you verify the token with `jwtVerify`. Resolves to `{ header, claims }`.
+/// (ADR 0069 §1-§2, §4; RFC 7519 §7.2). Verify the token with `jwtVerify`. Resolves to
+/// `{ header, claims }`.
 #[napi]
 pub fn decode_jwt_unverified(token: String) -> AsyncTask<DecodeJwtUnverifiedTask> {
     AsyncTask::new(DecodeJwtUnverifiedTask {

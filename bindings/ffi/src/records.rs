@@ -499,8 +499,9 @@ impl From<surface::JwtNestedVerified> for JwtNestedVerified {
 // ------------------------------------------------------------------------------------------------
 
 /// A compact JWS read without verifying it, the result of `decodeJwsUnverified` (ADR 0069 §1,
-/// §4; RFC 7515 §7.1). The signature isn't checked; don't trust these values until you verify
-/// the JWS with `jwsVerifyCompact`.
+/// §4; RFC 7515 §7.1). This doesn't check the signature: anyone can write these values, so
+/// don't use them for authorization or trust decisions until you verify the token. Verify it with
+/// `jwsVerifyCompact`.
 ///
 /// A distinct record from `JwsVerified`, with no `alg` and no `signatureIndex`: the `alg` is
 /// inside `protected_header`, unchecked, and may be `none` or unknown (ADR 0069 §4).
@@ -525,8 +526,9 @@ impl From<surface::JwsUnverified> for JwsUnverified {
 }
 
 /// A compact signed JWT read without verifying or validating it, the result of
-/// `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). The signature isn't checked; don't
-/// trust these values until you verify the token with `jwtVerify`.
+/// `decodeJwtUnverified` (ADR 0069 §1, §4; RFC 7519 §7.2). This doesn't check the signature:
+/// anyone can write these values, so don't use them for authorization or trust decisions until
+/// you verify the token. Verify it with `jwtVerify`.
 ///
 /// No claim was validated: it may be expired or for another audience. A distinct record from
 /// `JwtVerified`, with no `alg`, `keyIndex` or `kid` (ADR 0069 §4).
