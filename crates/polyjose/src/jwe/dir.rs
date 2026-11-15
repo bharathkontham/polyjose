@@ -104,7 +104,9 @@ mod tests {
     use crate::rng::insecure_test_vectors::FixedRng;
 
     fn sym(len: usize) -> RecipientKey {
-        RecipientKey::Symmetric(Zeroizing::new((0..len).map(|i| i as u8).collect()))
+        RecipientKey::Symmetric(Box::new(Zeroizing::new(
+            (0..len).map(|i| i as u8).collect(),
+        )))
     }
 
     fn policy() -> DecryptPolicy {
@@ -139,7 +141,7 @@ mod tests {
             let result = encrypt_key(&dir, &sym(len), &enc, None, &options, &mut rng);
             assert_eq!(result.map(|_| ()), Err(Error::InvalidKey(DIR_KEY_SIZE)));
         }
-        let password = RecipientKey::Password(Zeroizing::new(vec![0; 16]));
+        let password = RecipientKey::Password(Box::new(Zeroizing::new(vec![0; 16])));
         let result = encrypt_key(&dir, &password, &enc, None, &options, &mut rng);
         assert_eq!(result.map(|_| ()), Err(Error::KeyAlgorithmMismatch));
         let cek = Cek::from_slice(&[0; 16]);
@@ -177,7 +179,7 @@ mod tests {
         let p = policy();
         let enc = ContentEncAlg::A128GCM;
         let dir = KeyMgmtAlg::Dir;
-        let password = RecipientKey::Password(Zeroizing::new(vec![0; 16]));
+        let password = RecipientKey::Password(Box::new(Zeroizing::new(vec![0; 16])));
         let unknown = ContentEncAlg::from("A128CTR");
         let cases: [(&KeyMgmtAlg, &RecipientKey, &ContentEncAlg, &[u8]); 6] = [
             (&dir, &sym(16), &enc, &[0]),               // non-empty encrypted key
