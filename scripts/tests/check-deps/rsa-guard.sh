@@ -32,6 +32,9 @@ set -euo pipefail
 export LC_ALL=C
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
+# Each case has its own copy and is judged only by expect_pass/expect_fail, so the gate runs
+# concurrently (lib.sh concurrent_cases; CHECK_DEPS_TEST_JOBS=1 runs them one at a time).
+concurrent_cases
 
 # Every FAIL line of a source case comes from check 9.
 src_fail='^FAIL: RSA private-key or signing use'
