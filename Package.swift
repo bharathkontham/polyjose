@@ -30,7 +30,7 @@ let ffiTarget: Target =
     : .binaryTarget(
         name: "PolyjoseFFI",
         // Set by each release PR (see the header).
-        url: "https://github.com/bharathkontham/polyjose/releases/download/v0.3.0/PolyjoseFFI.xcframework.zip",
+        url: "https://github.com/bharathkontham/polyjose/releases/download/v0.4.0/PolyjoseFFI.xcframework.zip",
         checksum: "148108eb58d1704a444fbe2fed2b18891245d43e59266c4eff8470b0665b4198"
     )
 
