@@ -1217,7 +1217,7 @@ mod tests {
         );
         assert!(matches!(result, Err(Error::InvalidKey(_))));
         // Not an ECDH-ES public key, or not an ECDH-ES alg.
-        let symmetric = RecipientKey::Symmetric(Zeroizing::new(vec![0; 16]));
+        let symmetric = RecipientKey::Symmetric(Box::new(Zeroizing::new(vec![0; 16])));
         let result = encrypt_key(
             &A::EcdhEs,
             &symmetric,

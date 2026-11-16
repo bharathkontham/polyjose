@@ -278,10 +278,7 @@ mod tests {
 
     #[test]
     fn rsa1_5_is_unsupported_and_rsa_oaep_256_needs_an_rsa_private_key() {
-        let key = RecipientKey::RsaPublic {
-            n: vec![0xC1; 256],
-            e: vec![1, 0, 1],
-        };
+        let key = RecipientKey::rsa_public(vec![0xC1; 256], vec![1, 0, 1]);
         let policy = DecryptPolicy::new(&[KeyMgmtAlg::RsaOaep256], &[ContentEncAlg::A128GCM])
             .unwrap_or_else(|e| panic!("{e}"));
         let enc = ContentEncAlg::A128GCM;

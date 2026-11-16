@@ -6,7 +6,9 @@
 //! DER and PEM imports and exports, the PBES2 password, and the private JWKs that the exports
 //! generate or return. Then the whole `wasm_bindgen::memory()` buffer is scanned for each secret
 //! in the forms it takes there: the raw octets, and the base64url text of a JWK member or a token
-//! segment (RFC 7515 §2, RFC 7517 §4). The adapter's claim (ADR 0030 §7.1–§7.3, `src/lib.rs`) is
+//! segment (RFC 7515 §2, RFC 7517 §4), and for a JWE recipient's EC private key also the
+//! little-endian and Montgomery forms the curve crates hold it in (`scalarLe`, `scalarMont`;
+//! issue #31). The adapter's claim (ADR 0030 §7.1–§7.3, `src/lib.rs`) is
 //! **no copy on the Rust heap**. Every exception is an entry of [`KNOWN`], with its exact count
 //! and its reason. Anything else fails the test, a copy on the shadow stack included, and so does
 //! a known exception that no longer occurs.
@@ -157,6 +159,30 @@ export function pem(label, der) {
 export function pemBody(text) {
   return text.split("\n").filter((l) => l !== "" && !l.startsWith("-----")).join("\n");
 }
+// An EC private scalar `d` (big-endian, RFC 7518 §6.2.2.1) as the primitives hold it in linear
+// memory, which is little-endian. elliptic-curve 0.14's SecretKey (all three curves) and p256
+// 0.14's Scalar hold a crypto-bigint 0.7 Uint, limbs least significant first: the bytes of `d`
+// reversed. p384's and p521's Scalar (primefield 0.14, a NonZeroScalar's content) hold the
+// Montgomery form d·R mod n, with R = 2^(64·limbs): cpubits 0.1 makes the limb 64-bit on wasm32.
+// Both forms are cut to the length of `d`, so the zero top bytes of a longer Uint (P-521: U576)
+// are not part of them. Issue #31 checked both against the bytes of each type in a wasm32 build
+// (a P-521 SecretKey is 72 bytes). The orders n are the curve crates' ORDER_HEX.
+const EC_ORDERS = {
+  "P-256": 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n,
+  "P-384": 0xffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973n,
+  "P-521": 0x01fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409n,
+};
+export function scalarLe(d) { return Uint8Array.from(d).reverse(); }
+export function scalarMont(d, crv) {
+  const n = EC_ORDERS[crv];
+  const limbs = BigInt(Math.ceil(n.toString(16).length / 16));
+  let v = 0n;
+  for (const x of d) v = (v << 8n) | BigInt(x);
+  v = (v << (64n * limbs)) % n;
+  const out = new Uint8Array(d.length);
+  for (let i = 0; i < out.length; i++) { out[i] = Number(v & 0xffn); v >>= 8n; }
+  return out;
+}
 export function bytesEqual(a, b) {
   return a instanceof Uint8Array && a.length === b.length && a.every((x, i) => x === b[i]);
 }
@@ -208,6 +234,10 @@ extern "C" {
     fn pem(label: &str, der: &Uint8Array) -> JsValue;
     #[wasm_bindgen(js_name = pemBody)]
     fn pem_body(text: &JsValue) -> JsValue;
+    #[wasm_bindgen(js_name = scalarLe)]
+    fn scalar_le(d: &Uint8Array) -> Uint8Array;
+    #[wasm_bindgen(js_name = scalarMont)]
+    fn scalar_mont(d: &Uint8Array, crv: &str) -> Uint8Array;
     #[wasm_bindgen(js_name = bytesEqual)]
     fn bytes_equal(a: &JsValue, b: &Uint8Array) -> bool;
     fn snapshot(memory: &JsValue) -> Uint8Array;
@@ -286,6 +316,9 @@ const CIPHER_BLOCKS: &str = "decrypted AES-GCM or AES-CBC blocks (audit L3 measu
     A128CBC-HS256 case on the package)";
 const EC_SCALAR: &str = "scalar temporaries of EC key generation (audit L3: P-256 `d`, 16 of \
     32 bytes)";
+const X25519_SCALAR: &str = "the X25519 scalar in x25519-dalek's Diffie-Hellman frames (issue #31: \
+    a bare `StaticSecret::diffie_hellman` leaves such 8-byte windows; the recipient key itself is \
+    boxed and moves copy no key bytes)";
 
 /// Every exception to "no copy", measured with the commands of the module doc (dev:
 /// `bindings/wasm/test.sh`; release: the package's opt-level z, without wasm-opt). Entries are
@@ -302,6 +335,8 @@ const KNOWN: &[Known] = &[
     // On the heap: output token content (RFC 7516 §7.2.1), not residue.
     known("jweEncryptJson(A128KW + A128CBC-HS256, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
     known("jweEncryptJson(A256GCMKW + A256GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
+    known("jweEncryptJson(ECDH-ES + A128GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
+    known("jweEncryptJson(ECDH-ES + A192GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
     known("jweEncryptJson(ECDH-ES + A256GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
     known("jweEncryptJson(ECDH-ES+A128KW + A128GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
     known("jweEncryptJson(PBES2-HS256+A128KW + A128GCM, aad)", "aad (base64url)", r(0, 0, 1), r(0, 0, 1), JWE_JSON_AAD),
@@ -318,7 +353,10 @@ const KNOWN: &[Known] = &[
     known("jweDecryptCompact(A128KW + A128CBC-HS256)", "k", r(0, 0, 0), r(1, 1, 0), AES_KEY),
     known("jweDecryptCompact(A128KW + A128CBC-HS256)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(A256GCMKW + A256GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
+    known("jweDecryptCompact(ECDH-ES + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
+    known("jweDecryptCompact(ECDH-ES + A192GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(ECDH-ES + A256GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
+    known("jweDecryptCompact(ECDH-ES + A256GCM)", "private key", r(0, 1, 0), r(0, 0, 0), X25519_SCALAR),
     known("jweDecryptCompact(ECDH-ES+A128KW + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(PBES2-HS256+A128KW + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(dir + A128CBC-HS256)", "k", r(0, 0, 0), r(0, 3, 0), AES_KEY),
@@ -329,7 +367,10 @@ const KNOWN: &[Known] = &[
     known("jweDecryptJson(A128KW + A128CBC-HS256, aad)", "k", r(0, 0, 0), r(1, 1, 0), AES_KEY),
     known("jweDecryptJson(A128KW + A128CBC-HS256, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(A256GCMKW + A256GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
+    known("jweDecryptJson(ECDH-ES + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
+    known("jweDecryptJson(ECDH-ES + A192GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(ECDH-ES + A256GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
+    known("jweDecryptJson(ECDH-ES + A256GCM, aad)", "private key", r(0, 1, 0), r(0, 0, 0), X25519_SCALAR),
     known("jweDecryptJson(ECDH-ES+A128KW + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(PBES2-HS256+A128KW + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(dir + A128CBC-HS256, aad)", "k", r(0, 0, 0), r(0, 3, 0), AES_KEY),
@@ -378,13 +419,7 @@ const KNOWN: &[Known] = &[
     known("jwsVerifyJson(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
     known("jwsVerifyJson(HS512)", "payload (base64url)", r(4, 0, 0), r(2, 0, 0), HASH_INPUT),
     known("jwtDecryptNested", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    // aes key-schedule copy, carried by the inner Header's stale padding (6)
-    // 0025 T01 shifted the nested decrypt path 0x450 deeper: 3 more aes key-schedule fragments survive
-    known("jwtDecryptNested", "key-encryption k", r(0, 0, 0), r(0, 9, 0), AES_KEY),
     known("jwtDecryptNestedWithJwks", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    // aes key-schedule copy, carried by the inner Header's stale padding (6)
-    // 0025 T01 shifted the nested decrypt path 0x450 deeper: 3 more aes key-schedule fragments survive
-    known("jwtDecryptNestedWithJwks", "key-encryption k", r(0, 0, 0), r(0, 9, 0), AES_KEY),
     known("jwtEncryptNested(A128KW + A128GCM)", "key-encryption k", r(0, 0, 0), r(1, 1, 0), AES_KEY),
     known("jwtSign(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
     known("jwtVerify(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
@@ -1173,6 +1208,20 @@ struct Recipient {
     key: JsValue,
     /// The decryption key's private member.
     private: Octets,
+    /// An EC private key's other forms in linear memory ([`ec_scalar_forms`]).
+    forms: Vec<Secret>,
+}
+
+/// The forms an EC private scalar `d` takes in wasm linear memory besides its serialized bytes
+/// (`scalarLe` and `scalarMont` in the JS half: elliptic-curve 0.14 `SecretKey`, and the curve's
+/// `Scalar` inside a `NonZeroScalar`), so that a copy of the key the core moves or a primitive
+/// computes with is seen too. P-256's `Scalar` holds `d` as its `SecretKey` does.
+fn ec_scalar_forms(crv: &str, d: &Uint8Array) -> Vec<Secret> {
+    let mut forms = vec![Secret::new("private key (little-endian)", scalar_le(d))];
+    if crv != "P-256" {
+        forms.push(Secret::new("private key (Montgomery)", scalar_mont(d, crv)));
+    }
+    forms
 }
 
 fn recipients() -> Vec<Recipient> {
@@ -1186,10 +1235,15 @@ fn recipients() -> Vec<Recipient> {
             record: object(&members),
             key,
             private,
+            forms: Vec::new(),
         }
     };
     let ecdh = |alg: &'static str, enc: &'static str, key: JsValue| {
         let private = self::private(&key, "d");
+        let forms = match member(&key, "crv").as_string().as_deref() {
+            Some(crv @ ("P-256" | "P-384" | "P-521")) => ec_scalar_forms(crv, &private.raw.bytes),
+            _ => Vec::new(), // X25519: StaticSecret holds `d` as its serialized bytes (RFC 7748 §5)
+        };
         let public = JsValue::from(ok(jwk::jwk_to_public(s(&key))));
         let record = object(&[("alg", JsValue::from_str(alg)), ("key", public)]);
         Recipient {
@@ -1198,6 +1252,7 @@ fn recipients() -> Vec<Recipient> {
             record,
             key,
             private,
+            forms,
         }
     };
     vec![
@@ -1209,6 +1264,8 @@ fn recipients() -> Vec<Recipient> {
         symmetric("PBES2-HS256+A128KW", "A128GCM", 24, &[("p2c", 1000.into())]),
         ecdh("ECDH-ES+A128KW", "A128GCM", p256_jwk()),
         ecdh("ECDH-ES", "A256GCM", js(keys::jwk_generate_okp("X25519"))),
+        ecdh("ECDH-ES", "A192GCM", js(keys::jwk_generate_ec("P-384"))),
+        ecdh("ECDH-ES", "A128GCM", js(keys::jwk_generate_ec("P-521"))),
     ]
 }
 
@@ -1229,12 +1286,13 @@ fn jwe_encrypt_and_decrypt() {
         ]);
         let (m, token) =
             measure(|| ok(jwe::jwe_encrypt_compact(b(&plaintext.raw.bytes), &options)));
-        let all = [
+        let mut all = vec![
             &plaintext.raw,
             &plaintext.text,
             &to.private.raw,
             &to.private.text,
         ];
+        all.extend(&to.forms);
         r.check(&format!("jweEncryptCompact({case})"), &m, &all);
 
         let token = JsValue::from_str(&token); // ciphertext only: a public result
@@ -1257,7 +1315,7 @@ fn jwe_encrypt_and_decrypt() {
                 "flattened",
             ))
         });
-        let all = [
+        let mut all = vec![
             &plaintext.raw,
             &plaintext.text,
             &aad.raw,
@@ -1265,6 +1323,7 @@ fn jwe_encrypt_and_decrypt() {
             &to.private.raw,
             &to.private.text,
         ];
+        all.extend(&to.forms);
         r.check(&format!("jweEncryptJson({case}, aad)"), &m, &all);
 
         let token = JsValue::from_str(&token);

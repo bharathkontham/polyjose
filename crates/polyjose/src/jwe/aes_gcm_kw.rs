@@ -207,7 +207,9 @@ mod tests {
         [(A::A128GCMKW, 16), (A::A192GCMKW, 24), (A::A256GCMKW, 32)];
 
     fn sym(len: usize) -> RecipientKey {
-        RecipientKey::Symmetric(Zeroizing::new((0..len).map(|i| i as u8 ^ 0xA5).collect()))
+        RecipientKey::Symmetric(Box::new(Zeroizing::new(
+            (0..len).map(|i| i as u8 ^ 0xA5).collect(),
+        )))
     }
 
     fn cek(enc: &ContentEncAlg) -> Cek {
@@ -367,7 +369,7 @@ mod tests {
                 );
                 assert_eq!(rng.remaining(), 12, "{alg}: drew before refusing");
             }
-            let password = RecipientKey::Password(Zeroizing::new(vec![0; *kek_len]));
+            let password = RecipientKey::Password(Box::new(Zeroizing::new(vec![0; *kek_len])));
             let result = encrypt_key(
                 alg,
                 &password,
@@ -573,7 +575,7 @@ mod tests {
             decrypt_key(&alg, &kek, &enc, &h, &flipped, &p).map(|_| ()),
             Err(Error::DecryptionFailed)
         );
-        let other_kek = RecipientKey::Symmetric(Zeroizing::new(vec![0x11; 16]));
+        let other_kek = RecipientKey::Symmetric(Box::new(Zeroizing::new(vec![0x11; 16])));
         assert_eq!(
             decrypt_key(&alg, &other_kek, &enc, &h, &a.encrypted_key, &p).map(|_| ()),
             Err(Error::DecryptionFailed)
@@ -621,7 +623,7 @@ mod tests {
         let out = wrap(&A::A128GCMKW, &sym(16), &enc, &mut OsRandom);
         let h = header(Some(param(&out, "iv")), Some(param(&out, "tag")));
         let p = policy(&A::A128GCMKW, &enc);
-        let password = RecipientKey::Password(Zeroizing::new(vec![0; 16]));
+        let password = RecipientKey::Password(Box::new(Zeroizing::new(vec![0; 16])));
         let unknown = ContentEncAlg::from("A128CTR");
         let cases: [(KeyMgmtAlg, RecipientKey, &ContentEncAlg, &str); 6] = [
             (A::A128GCMKW, sym(32), &enc, "256-bit KEK for A128GCMKW"),

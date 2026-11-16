@@ -13,6 +13,13 @@ All notable changes to polyjose are documented in this file. The format is based
 - **Swift: `AppleKey`** (ADR 0072 §1): a `PlatformKey` over a Secure Enclave or Apple Keychain key (Keychain keys are stored and protected by the OS, not hardware-bound).
 - **Kotlin (Android): `AndroidKeystoreKey`** (ADR 0072 §2): a `PlatformKey` over an Android Keystore key, optionally in StrongBox.
 - **Three error codes** (ADR 0071 §6), appended after `MultipleMatchingKeys` on every binding: `KeyNotFound` (no usable key, or the platform invalidated it), `UserAuthenticationRequired` (the user has not authenticated or cancelled) and `PlatformKeyFailed` (any other platform-key failure while signing, including a signature that did not verify). Their messages are fixed text. Node and WASM list them and never raise them; `bindings/api-inventory.txt` and `conformance/schema.json` carry them.
+
+## [0.3.0] - 2026-11-16
+
+Unverified decode utilities, and prebuilt Apple binaries for Apple silicon only. This is a minor release because, on 0.x, a breaking change bumps the minor version: every binding adds three functions and two types, and the Node.js, JVM and Swift packages no longer ship x86_64 macOS (and iOS Simulator) binaries. Nothing else in the public API changed, and verification and decryption return the same results as in 0.2.0.
+
+### Added
+
 - **Unverified decode utilities** (ADR 0069). `polyjose::util::decode_protected_header_unverified` reads the protected header of a compact JWS or JWE, `decode_jws_unverified` reads a compact JWS's protected header and payload, and `decode_jwt_unverified` reads a compact JWT's header and claims. They don't check the signature: anyone can write these values, so don't use them for authorization or trust decisions until you verify the token. They take only the token: no key, options or allow-list. They return `Header`, `UnverifiedJws` and `UnverifiedJwt`; the two structs are new types, not `jws::Verified` or `jwt::VerifiedJwt`, with no conversion between them. Parsing, the 1 MiB input limit and the error codes are verification's own up to the signature (ADR 0048 steps 1–5), so `none`, an unknown `alg` and an unknown `crit` entry are returned as data, and the JWT decode runs no `typ`, time or claim-value checks. The binding surface adds `decode_protected_header_unverified`, `decode_jws_unverified` and `decode_jwt_unverified` with the records `JwsUnverified` and `JwtUnverified`, and `bindings/api-inventory.txt` lists them. The conformance vectors add the operations `util.decode_protected_header`, `util.decode_jws` and `util.decode_jwt`.
 
 ### Changed
@@ -26,6 +33,20 @@ Every prebuilt Apple binary is now arm64 (Apple silicon) only (ADR 0073). The Ru
 - **Node: no `darwin-x64` addon** (ADR 0073 §2). `@polyjose/node` ships seven addons. On an Intel Mac, or with an x64 Node under Rosetta 2 on an Apple silicon Mac, loading fails with `ERR_POLYJOSE_ADDON_REFUSED`. Use `@polyjose/wasm` or an arm64 Node, or stay on 0.2.x.
 - **JVM: no `darwin-x86-64` native** (ADR 0073 §2). `dev.polyjose:polyjose-jvm` carries four host natives, and its only macOS native is `darwin-aarch64`. An x86_64 JVM on macOS (an Intel Mac, or an x64 JDK under Rosetta 2) has no native in the jar. Stay on 0.2.x.
 - **Swift: no x86_64 in the macOS and iOS Simulator libraries** (ADR 0073 §2). The XCFramework's libraries are now `macos-arm64` and `ios-arm64-simulator`, in place of `macos-arm64_x86_64` and `ios-arm64_x86_64-simulator`. A build that includes x86_64 (a universal macOS app, `swift build --arch x86_64`, or a generic `iOS Simulator` destination) fails to link with `Undefined symbols for architecture x86_64` (measured with Xcode 27.2). Set `EXCLUDED_ARCHS = x86_64` for macOS and `EXCLUDED_ARCHS[sdk=iphonesimulator*] = x86_64` for the iOS Simulator in your app target's build settings, or stay on 0.2.x. `rust-toolchain.toml` no longer installs the two x86_64 Apple targets.
+
+### Fixed
+
+- **JWE decryption no longer leaves copies of EC (P-256, P-384, P-521) or X25519 recipient private keys in memory** ([#31](https://github.com/bharathkontham/polyjose/issues/31)). The internal recipient key type is now boxed, so moving it copies no key bytes. The WASM memory tests found the copies, and they now also scan EC keys in their in-memory forms. In the release build of `@polyjose/wasm` no fragment of the recipient key remains. A debug build still shows one 8-byte fragment of an X25519 key, from `x25519-dalek`'s own Diffie-Hellman stack frames. The same change also removes the stray fragments of the A128KW key-encryption key that nested-JWT decryption (`jwtDecryptNested`, `jwtDecryptNestedWithJwks`) used to leave in the release build.
+
+### API by platform
+
+Every binding adds the three unverified decode functions and the two result types (`bindings/api-inventory.txt`). No existing function, type or signature changed.
+
+- **Rust (`polyjose`):** `util::decode_protected_header_unverified`, `util::decode_jws_unverified` and `util::decode_jwt_unverified`, with the result types `util::UnverifiedJws` and `util::UnverifiedJwt`.
+- **Node.js (`@polyjose/node`):** `decodeProtectedHeaderUnverified(token)`, `decodeJwsUnverified(jws)` and `decodeJwtUnverified(token)`, returning a header object, `JwsUnverified` and `JwtUnverified`. The package ships seven addons; `darwin-x64` is gone (see Removed).
+- **Web (`@polyjose/wasm`):** the same three functions and two types as `@polyjose/node`.
+- **Android and the JVM (`dev.polyjose:polyjose`, `polyjose-jvm`):** `decodeProtectedHeaderUnverified`, `decodeJwsUnverified` and `decodeJwtUnverified`, with the records `JwsUnverified` and `JwtUnverified`. `polyjose-jvm` has no `darwin-x86-64` native (see Removed).
+- **Swift (`Polyjose`):** `decodeProtectedHeaderUnverified(token:)`, `decodeJwsUnverified(jws:)` and `decodeJwtUnverified(token:)`, with the structs `JwsUnverified` and `JwtUnverified`. The XCFramework's macOS and iOS Simulator libraries are arm64 only (see Removed). `Package.swift` points at the 0.3.0 XCFramework.
 
 ## [0.2.0] - 2026-11-11
 

@@ -109,7 +109,8 @@ fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 fixture_append bindings/wasm/test.sh 'read -r line && echo "read stdin: $line"'
 writes_own_results bindings/wasm/test.sh wasm
 rc=0
-(cd "$case_dir" && "${BASH:-bash}" scripts/test-all.sh wasm) <<<"caller input" >"$scratch/out" 2>&1 || rc=$?
+(cd "$case_dir" && "${BASH:-bash}" scripts/test-all.sh wasm) <<<"caller input" >"$scratch/out.raw" 2>&1 || rc=$?
+strip_times
 check "a script reading stdin still runs" 0 '^  wasm: PASS$'
 check_absent "a script gets no stdin from the caller" '^read stdin:'
 
