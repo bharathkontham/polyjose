@@ -141,6 +141,18 @@ wraps a private `SecKey` your app created itself, and `AppleKey.delete(tag:)` de
 **Off the main thread.** The calls are synchronous. A key with an `access` flag makes the system
 show a prompt during the call, so call it off the main thread.
 
+**Face ID needs `NSFaceIDUsageDescription`.** An app whose `AppleKey` access control can use
+biometry (`.biometryCurrentSet`, `.biometryAny`, or `.userPresence` where Face ID is used) must set
+`NSFaceIDUsageDescription` in its Info.plist: Apple's documentation says the key "is required if
+your app uses APIs that access Face ID"
+([`NSFaceIDUsageDescription`](https://developer.apple.com/documentation/bundleresources/information-property-list/nsfaceidusagedescription)). With a generated Info.plist, set
+the build setting `INFOPLIST_KEY_NSFaceIDUsageDescription`. Without the key, iOS terminated the
+app when a `.biometryCurrentSet` key signed, on an iPhone 16 with iOS 27.0.1: "attempted to access
+privacy-sensitive data without a usage description. The app's Info.plist must contain an
+NSFaceIDUsageDescription key". On that device, the first Face ID use showed a one-time iOS prompt asking
+whether the app may use Face ID, before the Face ID prompt itself, and the `.biometryCurrentSet`
+prompt offered Face ID only, with no passcode fallback.
+
 **macOS.** A permanent key needs a signed app with a keychain entitlement (Apple's rule): an
 unsigned binary, such as `swift test`, gets `PlatformKeyFailed` from `generate`.
 

@@ -39,6 +39,12 @@ The project signs the host app `dev.polyjose.hosted.app` and the test bundle
 available to your team, change both in `platforms/swift/HostedTests/project.yml` and in the
 project (or regenerate it with `xcodegen generate`), and don't commit that change.
 
+The host app sets `NSFaceIDUsageDescription` (the build setting
+`INFOPLIST_KEY_NSFaceIDUsageDescription` in `project.yml` and the project), which Apple requires of
+an app that uses Face ID. Without it, step 3 crashes the host app with "attempted to access
+privacy-sensitive data without a usage description. The app's Info.plist must contain an
+NSFaceIDUsageDescription key".
+
 ## 1. Keys that persist (no prompt)
 
 The same two runs as `platforms/swift/scripts/test-simulators.sh`, on the device. Run 1 generates a
@@ -95,9 +101,12 @@ The test passes whatever you do; the answers are in its `POLYJOSE-DEVICE` lines.
 hosted -only-testing:$T/testDeviceBiometryCurrentSet
 ```
 
-A prompt appears: **authenticate with Face ID or Touch ID** (not the passcode). Expected:
+On the first Face ID use, iOS asks once whether the app may use Face ID: **allow it**. Then a
+prompt appears: **authenticate with Face ID or Touch ID** (not the passcode). Expected:
 `POLYJOSE-DEVICE biometryCurrentSet: signed`. Record the line and whether the prompt offered the
-passcode.
+passcode (on an iPhone 16 with iOS 27.0.1 it offered Face ID only). If the host app crashes with
+"attempted to access privacy-sensitive data without a usage description", the built app lacks
+`NSFaceIDUsageDescription`: see "What you need".
 
 ## 4. One `LAContext` for two signatures
 
