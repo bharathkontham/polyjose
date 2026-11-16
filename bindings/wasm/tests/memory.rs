@@ -316,9 +316,6 @@ const CIPHER_BLOCKS: &str = "decrypted AES-GCM or AES-CBC blocks (audit L3 measu
     A128CBC-HS256 case on the package)";
 const EC_SCALAR: &str = "scalar temporaries of EC key generation (audit L3: P-256 `d`, 16 of \
     32 bytes)";
-const X25519_SCALAR: &str = "the X25519 scalar in x25519-dalek's Diffie-Hellman frames (issue #31: \
-    a bare `StaticSecret::diffie_hellman` leaves such 8-byte windows; the recipient key itself is \
-    boxed and moves copy no key bytes)";
 
 /// Every exception to "no copy", measured with the commands of the module doc (dev:
 /// `bindings/wasm/test.sh`; release: the package's opt-level z, without wasm-opt). Entries are
@@ -356,7 +353,6 @@ const KNOWN: &[Known] = &[
     known("jweDecryptCompact(ECDH-ES + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(ECDH-ES + A192GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(ECDH-ES + A256GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
-    known("jweDecryptCompact(ECDH-ES + A256GCM)", "private key", r(0, 1, 0), r(0, 0, 0), X25519_SCALAR),
     known("jweDecryptCompact(ECDH-ES+A128KW + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(PBES2-HS256+A128KW + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(dir + A128CBC-HS256)", "k", r(0, 0, 0), r(0, 3, 0), AES_KEY),
@@ -370,7 +366,6 @@ const KNOWN: &[Known] = &[
     known("jweDecryptJson(ECDH-ES + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(ECDH-ES + A192GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(ECDH-ES + A256GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
-    known("jweDecryptJson(ECDH-ES + A256GCM, aad)", "private key", r(0, 1, 0), r(0, 0, 0), X25519_SCALAR),
     known("jweDecryptJson(ECDH-ES+A128KW + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(PBES2-HS256+A128KW + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(dir + A128CBC-HS256, aad)", "k", r(0, 0, 0), r(0, 3, 0), AES_KEY),
