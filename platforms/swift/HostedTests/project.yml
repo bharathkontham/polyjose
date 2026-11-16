@@ -31,6 +31,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.polyjose.hosted.app
         GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        # Apple: required if the app uses APIs that access Face ID; without it iOS terminated the
+        # app at testDeviceBiometryCurrentSet (iPhone 16, iOS 27.0.1).
+        INFOPLIST_KEY_NSFaceIDUsageDescription: "The polyjose test app uses Face ID to test keys that need biometric authentication."
         TARGETED_DEVICE_FAMILY: "1"
   PolyjoseHostedTests:
     type: bundle.unit-test
