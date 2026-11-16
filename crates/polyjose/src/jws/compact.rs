@@ -56,9 +56,11 @@ use crate::util::{b64url_decode, b64url_encode};
 
 use super::alg::{FAMILIES, Families};
 use super::process::{
-    JoseHeader, allowed_alg, prepare_sign, signing_input, signing_input_from_part, verify_with_key,
+    JoseHeader, SignReady, allowed_alg, prepare_platform_sign, prepare_sign, signing_input,
+    signing_input_from_part, verify_with_key,
 };
 use super::{ProtectedHeader, SignOptions, Verified, VerifyOptions};
+use crate::platform_key::{PlatformKey, PublicView};
 
 /// Signs `payload` in the JWS Compact Serialization (RFC 7515 §5.1, §7.1):
 /// `BASE64URL(UTF8(JWS Protected Header)) '.' BASE64URL(JWS Payload) '.'
@@ -101,6 +103,63 @@ pub fn sign_compact(
     sign_compact_with(&FAMILIES, protected, payload, key, opts)
 }
 
+/// [`sign_compact`] with a platform-held key (ADR 0071 §2–§3): the
+/// platform computes the signature, polyjose does everything else.
+///
+/// The header, `crit`, `b64` and payload rules are those of
+/// [`sign_compact`]. Before the key is called, `alg` must be one a
+/// platform key serves (ES256, ES384, ES512, RS256, RS384, RS512, PS256,
+/// PS384, PS512; RFC 7518 §3.3–§3.5) and the key must be bound to it
+/// (RFC 8725 §3.1). After it returns, an ES\* signature is converted from
+/// DER to R‖S with low S (RFC 7518 §3.4, ADR 0026 §5), and every
+/// signature is verified against the key's public JWK before the JWS is
+/// returned (ADR 0071 §3). See [`crate::platform_key`].
+///
+/// # Errors
+///
+/// In this order:
+///
+/// - [`Error::InvalidHeader`], [`Error::UnknownCritical`],
+///   [`Error::UnsupportedAlgorithm`] (`alg` unknown),
+///   [`Error::AlgorithmNotAllowed`] (`none`), as for [`sign_compact`],
+///   with no call to the key.
+/// - [`Error::UnsupportedAlgorithm`]: an `alg` no platform key serves
+///   (EdDSA, ES256K, HS\*), with no call to the key.
+/// - [`Error::KeyNotFound`], [`Error::UserAuthenticationRequired`],
+///   [`Error::PlatformKeyFailed`] from reading the key's public side;
+///   [`Error::InvalidKey`] (or another JWK import error) for a public JWK
+///   that does not import or holds a private member.
+/// - [`Error::KeyAlgorithmMismatch`]: key binding failed.
+/// - [`Error::InvalidFormat`]: the RFC 7797 §5.2 payload rule.
+/// - [`Error::KeyNotFound`], [`Error::UserAuthenticationRequired`] from
+///   the signing call; [`Error::PlatformKeyFailed`] for any other failure,
+///   a malformed signature or one that does not verify.
+pub fn sign_compact_with_platform_key(
+    protected: &ProtectedHeader,
+    payload: &[u8],
+    key: &dyn PlatformKey,
+    opts: &SignOptions,
+) -> Result<String> {
+    sign_compact_prepared(&FAMILIES, protected, payload, opts, |header| {
+        prepare_platform_sign(header, key, None)
+    })
+}
+
+/// [`sign_compact_with_platform_key`] with the key's public side already
+/// read (by `jwt::sign_with_platform_key`, which needs its `kid` first), so
+/// it is read once per call (ADR 0071 §2).
+pub(crate) fn sign_compact_with_platform_view(
+    protected: &ProtectedHeader,
+    payload: &[u8],
+    key: &dyn PlatformKey,
+    view: PublicView,
+    opts: &SignOptions,
+) -> Result<String> {
+    sign_compact_prepared(&FAMILIES, protected, payload, opts, |header| {
+        prepare_platform_sign(header, key, Some(view))
+    })
+}
+
 /// [`sign_compact`] with the signature primitives taken from `families`.
 pub(crate) fn sign_compact_with(
     families: &Families,
@@ -109,10 +168,24 @@ pub(crate) fn sign_compact_with(
     key: &Jwk,
     opts: &SignOptions,
 ) -> Result<String> {
+    sign_compact_prepared(families, protected, payload, opts, |header| {
+        prepare_sign(header, key)
+    })
+}
+
+/// The compact signing steps, with steps 5–8 (ADR 0026 §2) done by
+/// `prepare` for the key at hand.
+fn sign_compact_prepared<'k>(
+    families: &Families,
+    protected: &ProtectedHeader,
+    payload: &[u8],
+    opts: &SignOptions,
+    prepare: impl FnOnce(&JoseHeader) -> Result<SignReady<'k>>,
+) -> Result<String> {
     // Step 4 (RFC 7515 §7.1: the protected header is the whole JOSE
     // Header), then steps 5-8 (ADR 0026 §2).
     let header = JoseHeader::new(Some(protected.header().clone()), None)?;
-    let ready = prepare_sign(&header, key)?;
+    let ready = prepare(&header)?;
     let b64 = header.b64();
     // RFC 7797 §5.2, ADR 0026 §4: an attached unencoded payload is a part
     // of the serialization, so it may hold no '.' and only %x20-7E.

@@ -21,6 +21,7 @@ use polyjose::jwt::{
 
 use crate::error::SurfaceResult;
 use crate::jwe::{decrypt_policy, encryptor};
+use crate::platform_key::{CoreKey, PlatformKey};
 use crate::records::{
     JweDecryptOptions, JweEncryptOptions, JwtNestedVerified, JwtSignOptions, JwtVerified,
     JwtVerifyOptions, algs, apply, apply_flag, strs, to_usize, try_apply,
@@ -49,6 +50,28 @@ pub fn jwt_sign(claims: &str, key: &str, options: &JwtSignOptions) -> SurfaceRes
     let claims = Claims::from_json(claims.as_bytes())?;
     let issue = issue_options(options)?;
     Ok(jwt::sign(&claims, &issue, &key)?)
+}
+
+/// Signs the JWT Claims Set `claims` (JSON text) with the platform-held `key` into a compact JWS
+/// (ADR 0071 §5; RFC 7519 §7.1): [`jwt_sign`] with the private-key step done by `key`.
+///
+/// The steps run as for [`jwt_sign`], without the key import: parse `claims`, build the core
+/// `IssueOptions` from `options`, then the core's [`jwt::sign_with_platform_key`], which reads
+/// the key's public JWK and algorithms once (its `kid` goes in the header, ADR 0027 §8), binds
+/// `alg` to them, signs and verifies the signature before it returns the token (ADR 0071 §3).
+///
+/// # Errors
+///
+/// The claims and `options` errors of [`jwt_sign`], then those of
+/// [`jws_sign_compact_with_platform_key`](crate::jws::jws_sign_compact_with_platform_key).
+pub fn jwt_sign_with_platform_key(
+    claims: &str,
+    key: &dyn PlatformKey,
+    options: &JwtSignOptions,
+) -> SurfaceResult<String> {
+    let claims = Claims::from_json(claims.as_bytes())?;
+    let issue = issue_options(options)?;
+    Ok(jwt::sign_with_platform_key(&claims, &issue, &CoreKey(key))?)
 }
 
 /// Verifies and validates the signed JWT `token` with one `key` (ADR 0030 §4; RFC 7519 §7.2,
@@ -187,6 +210,71 @@ pub fn jwt_decrypt_nested_with_jwks(
         jwt::decrypt_nested(
             token,
             &decrypt_key,
+            &decrypt_policy,
+            Keys::Set(&set),
+            policy,
+        )
+    })?;
+    Ok(nested_verified(v)?)
+}
+
+/// Decrypts the nested JWT `token` with the platform-held `decrypt_key`, then verifies and
+/// validates the inner JWT with one `key` (ADR 0071 §5; RFC 7519 §5.2, §7.2 step 8; RFC 8725
+/// §3.3): [`jwt_decrypt_nested`] with the outer JWE's private-key step done by `decrypt_key`.
+///
+/// The steps run as for [`jwt_decrypt_nested`], without the decrypt key import: build the JWE
+/// policy from `decrypt_options`, import `key`, build the JWT policy from `options`, then the
+/// core's [`jwt::decrypt_nested_with_platform_key`]. So every option is checked before the token
+/// is read or the platform key is called.
+///
+/// # Errors
+///
+/// As [`jwt_decrypt_nested`], with the outer JWE's errors those of
+/// [`jwe_decrypt_compact_with_platform_key`](crate::jwe::jwe_decrypt_compact_with_platform_key).
+pub fn jwt_decrypt_nested_with_platform_key(
+    token: &str,
+    decrypt_key: &dyn PlatformKey,
+    decrypt_options: &JweDecryptOptions,
+    key: &str,
+    options: &JwtVerifyOptions,
+) -> SurfaceResult<JwtNestedVerified> {
+    let decrypt_policy = decrypt_policy(decrypt_options)?;
+    let key = Jwk::from_json(key.as_bytes())?;
+    let v = with_policy(options, |policy| {
+        jwt::decrypt_nested_with_platform_key(
+            token,
+            &CoreKey(decrypt_key),
+            &decrypt_policy,
+            Keys::One(&key),
+            policy,
+        )
+    })?;
+    Ok(nested_verified(v)?)
+}
+
+/// Decrypts the nested JWT `token` with the platform-held `decrypt_key`, then verifies and
+/// validates the inner JWT against the JWK Set `jwks` (ADR 0071 §5; RFC 7519 §5.2, §7.2 step 8;
+/// ADR 0029).
+///
+/// As [`jwt_decrypt_nested_with_platform_key`], with the set imported as for
+/// [`jwt_verify_with_jwks`].
+///
+/// # Errors
+///
+/// As [`jwt_decrypt_nested_with_platform_key`], plus `NoMatchingKey` (ADR 0029 §4).
+pub fn jwt_decrypt_nested_with_platform_key_and_jwks(
+    token: &str,
+    decrypt_key: &dyn PlatformKey,
+    decrypt_options: &JweDecryptOptions,
+    jwks: &str,
+    options: &JwtVerifyOptions,
+) -> SurfaceResult<JwtNestedVerified> {
+    let decrypt_policy = decrypt_policy(decrypt_options)?;
+    let set = JwkSet::from_json(jwks.as_bytes())?;
+    let v = with_policy(options, |policy| {
+        jwt::decrypt_nested_with_platform_key(
+            token,
+            &CoreKey(decrypt_key),
             &decrypt_policy,
             Keys::Set(&set),
             policy,

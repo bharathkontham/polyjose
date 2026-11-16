@@ -25,3 +25,8 @@ zeroize.workspace = true
 # tree, which ADR 0030 §1 and bindings/deps-allowlist/surface.txt govern, is unchanged.
 [dev-dependencies]
 sha2.workspace = true
+# Test-only oracle, never shipped (ADR 0016 §5): the software PlatformKey of
+# tests/platform_key_ops.rs computes the ECDH shared secret Z with `p256::ecdh` (RFC 7518 §4.6.2),
+# the step a platform key performs (ADR 0071 §4). The core already depends on the same pinned crate
+# (ADR 0002), so the normal tree is unchanged.
+p256.workspace = true

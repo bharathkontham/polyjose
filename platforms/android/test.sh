@@ -11,7 +11,13 @@
 #    scripts/ci-lib.sh (audit M2), before any `./gradlew`.
 # 1. `./gradlew :polyjose-jvm:test`: the generated Kotlin on the host JVM through JNA and the host
 #    library (ADR 0033 §5). Always runs when its toolchain exists.
-# 2. `scripts/run-instrumented.sh` (feature 0008 T03): the instrumented suite on an emulator
+# 2. With an Android SDK (ANDROID_HOME or ANDROID_SDK_ROOT): `./gradlew :polyjose:lintRelease`
+#    (Android lint of the AAR at minSdk 23; any error fails, NewApi included: the Keystore classes
+#    of feature 0025 T04 call API 28-35 methods behind version checks), then
+#    `scripts/check-artifacts.sh` (the AAR, jar, APK and publication checks: 16 KB alignment, the
+#    5 MB AAR limit, the POM's dependencies). Without an SDK they are NOT RUN, and the instrumented
+#    script below waives its runner (no-android-sdk).
+# 3. `scripts/run-instrumented.sh` (feature 0008 T03): the instrumented suite on an emulator
 #    (polyjose-api36), runner `android-emulator`, and in the same Gradle call the R8
 #    consumer-rules proof, :sample-minified's minified release test (ADR 0033 §2). Its output and
 #    exit status are this script's.
@@ -51,6 +57,15 @@ if ! have cargo; then echo "SKIPPED (cargo missing: the JVM tests build polyjose
 
 echo "==> android: ./gradlew :polyjose-jvm:test"
 ./gradlew --no-daemon :polyjose-jvm:test || { echo "android: :polyjose-jvm:test FAILED"; exit 1; }
+
+if [ -n "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}" ]; then
+  echo "==> android: ./gradlew :polyjose:lintRelease"
+  ./gradlew --no-daemon :polyjose:lintRelease || { echo "android: :polyjose:lintRelease FAILED"; exit 1; }
+  echo "==> android: scripts/check-artifacts.sh"
+  scripts/check-artifacts.sh || { echo "android: scripts/check-artifacts.sh FAILED"; exit 1; }
+else
+  echo "android: lint and scripts/check-artifacts.sh: NOT RUN (no Android SDK: neither ANDROID_HOME nor ANDROID_SDK_ROOT is set)"
+fi
 
 instrumented=scripts/run-instrumented.sh
 if [ ! -f "$instrumented" ] || [ -L "$instrumented" ] || [ ! -x "$instrumented" ]; then

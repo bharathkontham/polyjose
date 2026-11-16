@@ -21,7 +21,17 @@
 #   field <name>           a required field
 #   field <name>?          an optional field: absent means the core default (Rust Option)
 #   field <name> = false   a flag: absent means false (Rust bool)
+#   interface <Name>       an interface host code implements (ADR 0071 §5: Kotlin `interface`, Swift
+#                          `protocol`, a Rust trait in the surface); the method lines below belong to it
+#   method <name>          a method of that interface
+#   enum <Name>            an error type without payload that host code throws from an interface
+#                          (Kotlin `<Name>` with Error replaced by Exception, as UniFFI names it); the
+#                          case lines below belong to it
+#   case <Case>            one of its cases (UpperCamel, as Rust, Swift and Kotlin spell them)
 #   code <Code>            an error code (ADR 0030 §5)
+# An op, record, interface or enum line may end in `only <mode>...`: the entry, with its fields,
+# methods or cases, exists only in those modes' bindings (scripts/check-binding-api.d/<mode>.sh), and
+# every other mode must not have it. Codes are on every binding.
 
 ## Utilities (ADR 0030 §4; RFC 4648 §5)
 op version
@@ -76,6 +86,30 @@ op jwtVerifyWithJwks
 op jwtEncryptNested
 op jwtDecryptNested
 op jwtDecryptNestedWithJwks
+
+## Platform-held keys (ADR 0071 §5; feature 0025): Kotlin and Swift only, and the Rust surface that
+## defines them. Node, WASM and the JS facade must not have them. A host object implementing
+## PlatformKey is the key; the kind of key is chosen by which function is called. The operations reuse
+## the records below. The hand-written classes that implement PlatformKey (AppleKey, AndroidKeystoreKey,
+## ADR 0072) are host types, listed in scripts/check-binding-api.d/<mode>.host-types.
+op jwsSignCompactWithPlatformKey only surface kotlin swift
+op jwtSignWithPlatformKey only surface kotlin swift
+op jweDecryptCompactWithPlatformKey only surface kotlin swift
+op jweDecryptJsonWithPlatformKey only surface kotlin swift
+op jwtDecryptNestedWithPlatformKey only surface kotlin swift
+op jwtDecryptNestedWithPlatformKeyAndJwks only surface kotlin swift
+
+interface PlatformKey only surface kotlin swift
+  method publicJwk
+  method algorithms
+  method sign
+  method agree
+  method decryptKey
+
+enum PlatformKeyError only surface kotlin swift
+  case NotFound
+  case UserAuthenticationRequired
+  case Failed
 
 ## Records (ADR 0030 §3, §4)
 record JwkSelector
@@ -189,7 +223,9 @@ record JwtUnverified
   field claims
 
 ## Error codes (ADR 0030 §5): polyjose::Error::CODES, in the core's order: NoMatchingKey
-## (ADR 0029 §4), then MultipleMatchingKeys (ADR 0054 §5), last.
+## (ADR 0029 §4), then MultipleMatchingKeys (ADR 0054 §5), then the platform-key codes
+## KeyNotFound, UserAuthenticationRequired, PlatformKeyFailed (ADR 0071 §6), last. Node and WASM
+## list the three and never raise them.
 code InvalidBase64
 code InvalidJson
 code InvalidHeader
@@ -207,3 +243,6 @@ code RandomnessUnavailable
 code InvalidFormat
 code NoMatchingKey
 code MultipleMatchingKeys
+code KeyNotFound
+code UserAuthenticationRequired
+code PlatformKeyFailed

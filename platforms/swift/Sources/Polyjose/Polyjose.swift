@@ -460,7 +460,13 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 
 
 // Public interface members begin here.
-
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+private let IDX_CALLBACK_FREE: Int32 = 0
+// Callback return codes
+private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
+private let UNIFFI_CALLBACK_ERROR: Int32 = 1
+private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -581,6 +587,416 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
         writeBytes(&buf, value)
     }
 }
+
+
+
+
+/**
+ * A private key held by the platform, implemented by host code, which performs one private-key
+ * step for polyjose and never exports the key (ADR 0070, ADR 0071 §1, §5). Kotlin:
+ * `interface PlatformKey`; Swift: `protocol PlatformKey`.
+ *
+ * The contract is the core's `polyjose::PlatformKey`: see its documentation, in particular the
+ * error contract of ADR 0071 §4. A method is called at most once per signature or recipient,
+ * on the caller's thread, and may block (for example while a system prompt is shown).
+ */
+public protocol PlatformKey: AnyObject, Sendable {
+    
+    /**
+     * The key's public JWK as JSON text, public members only (RFC 7517 §4; RFC 7518 §6.2.1,
+     * §6.3.1). A private member is `InvalidKey` (ADR 0071 §2).
+     */
+    func publicJwk() throws  -> String
+    
+    /**
+     * The JOSE algorithm names the key may be used with, all of its family, for example
+     * `["ES256"]` or `["RSA-OAEP-256"]` (RFC 7518 §3.1, §4.1; RFC 8725 §3.1).
+     */
+    func algorithms() throws  -> [String]
+    
+    /**
+     * Signs the JWS Signing Input (RFC 7515 §5.1 step 5) with `alg`, hashing it itself: the
+     * ASN.1 DER `Ecdsa-Sig-Value` for ES256/ES384/ES512 (RFC 3279 §2.2.3), which is what
+     * `java.security.Signature` and `SecKeyCreateSignature` return; the signature octets for
+     * RS\* and PS\* (RFC 7518 §3.3, §3.5). polyjose verifies the result before it is used.
+     */
+    func sign(alg: String, signingInput: Data) throws  -> Data
+    
+    /**
+     * ECDH with the validated JWE `epk`, an uncompressed SEC 1 point `0x04 ‖ X ‖ Y`; returns Z,
+     * the x-coordinate of the shared point: 32, 48 or 66 octets (RFC 7518 §4.6.2).
+     */
+    func agree(peerPublicKey: Data) throws  -> Data
+    
+    /**
+     * RSAES-OAEP-256 decryption of the JWE Encrypted Key (RFC 7518 §4.3: SHA-256, MGF1 with
+     * SHA-256, empty label); returns the CEK. Every failure must be `Failed` (RFC 7516 §11.5).
+     */
+    func decryptKey(alg: String, encryptedKey: Data) throws  -> Data
+    
+}
+/**
+ * A private key held by the platform, implemented by host code, which performs one private-key
+ * step for polyjose and never exports the key (ADR 0070, ADR 0071 §1, §5). Kotlin:
+ * `interface PlatformKey`; Swift: `protocol PlatformKey`.
+ *
+ * The contract is the core's `polyjose::PlatformKey`: see its documentation, in particular the
+ * error contract of ADR 0071 §4. A method is called at most once per signature or recipient,
+ * on the caller's thread, and may block (for example while a system prompt is shown).
+ */
+open class PlatformKeyImpl: PlatformKey, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_polyjose_ffi_fn_clone_platformkey(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_polyjose_ffi_fn_free_platformkey(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * The key's public JWK as JSON text, public members only (RFC 7517 §4; RFC 7518 §6.2.1,
+     * §6.3.1). A private member is `InvalidKey` (ADR 0071 §2).
+     */
+open func publicJwk()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePlatformKeyError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_method_platformkey_public_jwk(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * The JOSE algorithm names the key may be used with, all of its family, for example
+     * `["ES256"]` or `["RSA-OAEP-256"]` (RFC 7518 §3.1, §4.1; RFC 8725 §3.1).
+     */
+open func algorithms()throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypePlatformKeyError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_method_platformkey_algorithms(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Signs the JWS Signing Input (RFC 7515 §5.1 step 5) with `alg`, hashing it itself: the
+     * ASN.1 DER `Ecdsa-Sig-Value` for ES256/ES384/ES512 (RFC 3279 §2.2.3), which is what
+     * `java.security.Signature` and `SecKeyCreateSignature` return; the signature octets for
+     * RS\* and PS\* (RFC 7518 §3.3, §3.5). polyjose verifies the result before it is used.
+     */
+open func sign(alg: String, signingInput: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypePlatformKeyError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_method_platformkey_sign(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(alg),
+        FfiConverterData.lower(signingInput),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * ECDH with the validated JWE `epk`, an uncompressed SEC 1 point `0x04 ‖ X ‖ Y`; returns Z,
+     * the x-coordinate of the shared point: 32, 48 or 66 octets (RFC 7518 §4.6.2).
+     */
+open func agree(peerPublicKey: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypePlatformKeyError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_method_platformkey_agree(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(peerPublicKey),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * RSAES-OAEP-256 decryption of the JWE Encrypted Key (RFC 7518 §4.3: SHA-256, MGF1 with
+     * SHA-256, empty label); returns the CEK. Every failure must be `Failed` (RFC 7516 §11.5).
+     */
+open func decryptKey(alg: String, encryptedKey: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypePlatformKeyError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_method_platformkey_decrypt_key(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(alg),
+        FfiConverterData.lower(encryptedKey),uniffiCallStatus
+    )
+})
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfacePlatformKey {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfacePlatformKey = UniffiVTableCallbackInterfacePlatformKey(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypePlatformKey.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface PlatformKey: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypePlatformKey.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface PlatformKey: handle missing in uniffiClone")
+            }
+        },
+        publicJwk: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> String in
+                guard let uniffiObj = try? FfiConverterTypePlatformKey.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.publicJwk(
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypePlatformKeyError_lower
+            )
+        },
+        algorithms: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> [String] in
+                guard let uniffiObj = try? FfiConverterTypePlatformKey.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.algorithms(
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterSequenceString.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypePlatformKeyError_lower
+            )
+        },
+        sign: { (
+            uniffiHandle: UInt64,
+            alg: RustBuffer,
+            signingInput: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Data in
+                guard let uniffiObj = try? FfiConverterTypePlatformKey.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.sign(
+                     alg: try FfiConverterString.lift(alg),
+                     signingInput: try FfiConverterData.lift(signingInput)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypePlatformKeyError_lower
+            )
+        },
+        agree: { (
+            uniffiHandle: UInt64,
+            peerPublicKey: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Data in
+                guard let uniffiObj = try? FfiConverterTypePlatformKey.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.agree(
+                     peerPublicKey: try FfiConverterData.lift(peerPublicKey)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypePlatformKeyError_lower
+            )
+        },
+        decryptKey: { (
+            uniffiHandle: UInt64,
+            alg: RustBuffer,
+            encryptedKey: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Data in
+                guard let uniffiObj = try? FfiConverterTypePlatformKey.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.decryptKey(
+                     alg: try FfiConverterString.lift(alg),
+                     encryptedKey: try FfiConverterData.lift(encryptedKey)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypePlatformKeyError_lower
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfacePlatformKey> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfacePlatformKey>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitPlatformKey() {
+    uniffi_polyjose_ffi_fn_init_callback_vtable_platformkey(UniffiCallbackInterfacePlatformKey.vtablePtr)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePlatformKey: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<PlatformKey>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = PlatformKey
+
+    public static func lift(_ handle: UInt64) throws -> PlatformKey {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return PlatformKeyImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: PlatformKey) -> UInt64 {
+         if let rustImpl = value as? PlatformKeyImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PlatformKey {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: PlatformKey, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePlatformKey_lift(_ handle: UInt64) throws -> PlatformKey {
+    return try FfiConverterTypePlatformKey.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePlatformKey_lower(_ value: PlatformKey) -> UInt64 {
+    return FfiConverterTypePlatformKey.lower(value)
+}
+
+
 
 
 /**
@@ -2153,6 +2569,111 @@ public func FfiConverterTypeJwtVerifyOptions_lower(_ value: JwtVerifyOptions) ->
 
 
 /**
+ * Why a [`PlatformKey`] could not perform an operation (ADR 0071 §1, §5, §6). Kotlin throws it
+ * as `PlatformKeyException` (`NotFound`, `UserAuthenticationRequired`, `Failed`), Swift as
+ * `PlatformKeyError` (`.notFound`, `.userAuthenticationRequired`, `.failed`).
+ *
+ * No variant has a payload, so no host text, tag or alias can reach a polyjose error. (It is not
+ * a UniFFI `flat_error`: UniFFI cannot lift a flat error from a foreign method.)
+ */
+public 
+enum PlatformKeyError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    /**
+     * No usable key: none under that name, or the platform has permanently invalidated it.
+     * Reported as `KeyNotFound`. Only for a condition that does not depend on the input
+     * (ADR 0071 §4).
+     */
+    case NotFound
+    /**
+     * The key needs the user to authenticate, and they have not, cancelled, or cannot. Reported
+     * as `UserAuthenticationRequired`. Only for a condition that does not depend on the input
+     * (ADR 0071 §4).
+     */
+    case UserAuthenticationRequired
+    /**
+     * Any other failure, a padding error included. Reported as `PlatformKeyFailed` when signing
+     * and `DecryptionFailed` when decrypting (RFC 7516 §11.5).
+     */
+    case Failed
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension PlatformKeyError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePlatformKeyError: FfiConverterRustBuffer {
+    typealias SwiftType = PlatformKeyError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PlatformKeyError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .NotFound
+        case 2: return .UserAuthenticationRequired
+        case 3: return .Failed
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PlatformKeyError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case .NotFound:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .UserAuthenticationRequired:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .Failed:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePlatformKeyError_lift(_ buf: RustBuffer) throws -> PlatformKeyError {
+    return try FfiConverterTypePlatformKeyError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePlatformKeyError_lower(_ value: PlatformKeyError) -> RustBuffer {
+    return FfiConverterTypePlatformKeyError.lower(value)
+}
+
+
+/**
  * The error every polyjose call throws in Kotlin (`PolyjoseException`) and Swift
  * (`PolyjoseError`): one variant per stable core code (ADR 0030 §5, option E1).
  *
@@ -2328,6 +2849,38 @@ enum PolyjoseError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError 
          * stable: match on `code()` (ADR 0030 §5).
          */detail: String
     )
+    /**
+     * A platform-held key is gone: none under that name, or the platform has permanently
+     * invalidated it; the private-key step of RFC 7515 §5.1 or RFC 7516 §5.2 cannot run
+     * (ADR 0071 §6). Create or enrol a new key.
+     */
+    case KeyNotFound(
+        /**
+         * The core's human-readable message (`polyjose::Error`'s `Display`). Not
+         * stable: match on `code()` (ADR 0030 §5).
+         */detail: String
+    )
+    /**
+     * A platform-held key needs the user to authenticate, and they have not, cancelled, or
+     * cannot (ADR 0071 §4, §6). Prompt, then retry.
+     */
+    case UserAuthenticationRequired(
+        /**
+         * The core's human-readable message (`polyjose::Error`'s `Display`). Not
+         * stable: match on `code()` (ADR 0030 §5).
+         */detail: String
+    )
+    /**
+     * Any other failure of a platform-held key while signing, including a signature that did
+     * not verify against its public JWK (RFC 7515 §5.2 step 8 on our own output; ADR 0071 §3,
+     * §6). Decryption reports `DecryptionFailed` instead (RFC 7516 §11.5).
+     */
+    case PlatformKeyFailed(
+        /**
+         * The core's human-readable message (`polyjose::Error`'s `Display`). Not
+         * stable: match on `code()` (ADR 0030 §5).
+         */detail: String
+    )
 
     
     /**
@@ -2433,6 +2986,15 @@ public struct FfiConverterTypePolyjoseError: FfiConverterRustBuffer {
         case 17: return .MultipleMatchingKeys(
             detail: try FfiConverterString.read(from: &buf)
             )
+        case 18: return .KeyNotFound(
+            detail: try FfiConverterString.read(from: &buf)
+            )
+        case 19: return .UserAuthenticationRequired(
+            detail: try FfiConverterString.read(from: &buf)
+            )
+        case 20: return .PlatformKeyFailed(
+            detail: try FfiConverterString.read(from: &buf)
+            )
 
          default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2527,6 +3089,21 @@ public struct FfiConverterTypePolyjoseError: FfiConverterRustBuffer {
         
         case let .MultipleMatchingKeys(detail):
             writeInt(&buf, Int32(17))
+            FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .KeyNotFound(detail):
+            writeInt(&buf, Int32(18))
+            FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .UserAuthenticationRequired(detail):
+            writeInt(&buf, Int32(19))
+            FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .PlatformKeyFailed(detail):
+            writeInt(&buf, Int32(20))
             FfiConverterString.write(detail, into: &buf)
             
         }
@@ -2767,6 +3344,33 @@ public func jweDecryptCompact(token: String, key: String, options: JweDecryptOpt
 })
 }
 /**
+ * Decrypts the JWE Compact Serialization `token` with the host's platform key (ADR 0071 §5;
+ * RFC 7516 §5.2, §7.1): `jwe_decrypt_compact` with the private-key step done by `key`.
+ *
+ * The `alg` and `enc` must be in the allow-lists before `key` is touched (RFC 8725 §3.1). A
+ * platform key serves `ECDH-ES` and `ECDH-ES+A128KW`, `+A192KW`, `+A256KW` on P-256, P-384 and
+ * P-521 (`key.agree` with the validated `epk`, RFC 7518 §4.6) and `RSA-OAEP-256`
+ * (`key.decryptKey`, RFC 7518 §4.3).
+ *
+ * # Errors
+ *
+ * `AlgorithmNotAllowed` for an empty allow-list or an `alg`/`enc` outside it, with no call to
+ * `key`; `UnsupportedAlgorithm` for an `alg` a platform key may not serve; `KeyAlgorithmMismatch`
+ * for an `alg` the key is not bound to; `KeyNotFound` and `UserAuthenticationRequired` from the
+ * key; `DecryptionFailed` for every other failure, of the key (any other exception included) or
+ * of the JWE (RFC 7516 §11.5, ADR 0071 §4).
+ */
+public func jweDecryptCompactWithPlatformKey(token: String, key: PlatformKey, options: JweDecryptOptions)throws  -> JweDecrypted  {
+    return try  FfiConverterTypeJweDecrypted_lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_jwe_decrypt_compact_with_platform_key(
+        FfiConverterString.lower(token),
+        FfiConverterTypePlatformKey_lower(key),
+        FfiConverterTypeJweDecryptOptions_lower(options),uniffiCallStatus
+    )
+})
+}
+/**
  * Decrypts the flattened or general JWE JSON Serialization `jwe` with `key`; the result names
  * the first recipient that decrypts (ADR 0030 §4; RFC 7516 §5.2, §7.2.1).
  *
@@ -2785,6 +3389,29 @@ public func jweDecryptJson(jwe: String, key: String, options: JweDecryptOptions)
     uniffi_polyjose_ffi_fn_func_jwe_decrypt_json(
         FfiConverterString.lower(jwe),
         FfiConverterString.lower(key),
+        FfiConverterTypeJweDecryptOptions_lower(options),uniffiCallStatus
+    )
+})
+}
+/**
+ * Decrypts the flattened or general JWE JSON Serialization `jwe` with the host's platform key
+ * (ADR 0071 §5; RFC 7516 §5.2, §7.2): `jwe_decrypt_json` with the private-key step done by `key`.
+ *
+ * `key` is called at most once per recipient whose `alg` passes the checks, in order, bounded by
+ * `max_recipients`; `KeyNotFound` or `UserAuthenticationRequired` stops at once, so a cancelled
+ * prompt is not followed by another (ADR 0071 §4).
+ *
+ * # Errors
+ *
+ * Those of [`jwe_decrypt_compact_with_platform_key`], plus `InvalidFormat` as for
+ * [`jwe_decrypt_json`].
+ */
+public func jweDecryptJsonWithPlatformKey(jwe: String, key: PlatformKey, options: JweDecryptOptions)throws  -> JweDecrypted  {
+    return try  FfiConverterTypeJweDecrypted_lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_jwe_decrypt_json_with_platform_key(
+        FfiConverterString.lower(jwe),
+        FfiConverterTypePlatformKey_lower(key),
         FfiConverterTypeJweDecryptOptions_lower(options),uniffiCallStatus
     )
 })
@@ -2974,6 +3601,33 @@ public func jwsSignCompact(payload: Data, key: String, options: JwsSignOptions)t
 })
 }
 /**
+ * Signs `payload` with the host's platform key into a JWS Compact Serialization (ADR 0071 §5;
+ * RFC 7515 §5.1, §7.1): `jws_sign_compact` with the private-key step done by `key`.
+ *
+ * `options` are those of `jws_sign_compact`. The `alg` must be ES256, ES384, ES512, RS256,
+ * RS384, RS512, PS256, PS384 or PS512, bound to `key` by its `algorithms()` and public JWK
+ * (RFC 8725 §3.1). polyjose calls `key.sign` once and verifies the signature against the public
+ * JWK before it returns the token (ADR 0071 §3).
+ *
+ * # Errors
+ *
+ * `InvalidHeader` for both or neither header form (ADR 0030 §4); `UnsupportedAlgorithm` for an
+ * `alg` a platform key may not serve; `InvalidKey` for a public JWK that does not import or holds
+ * a private member; `KeyAlgorithmMismatch` for an `alg` the key is not bound to; `KeyNotFound`
+ * and `UserAuthenticationRequired` from the key; `PlatformKeyFailed` for any other failure of the
+ * key, any other exception it throws and a signature that does not verify (ADR 0071 §3, §6).
+ */
+public func jwsSignCompactWithPlatformKey(payload: Data, key: PlatformKey, options: JwsSignOptions)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_jws_sign_compact_with_platform_key(
+        FfiConverterData.lower(payload),
+        FfiConverterTypePlatformKey_lower(key),
+        FfiConverterTypeJwsSignOptions_lower(options),uniffiCallStatus
+    )
+})
+}
+/**
  * Signs `payload` with `signer` into a flattened JWS JSON Serialization (ADR 0030 §4; RFC 7515
  * §7.2.2). `detached` leaves the `payload` member out (RFC 7515 Appendix F).
  *
@@ -3105,6 +3759,48 @@ public func jwtDecryptNestedWithJwks(token: String, decryptKey: String, decryptO
 })
 }
 /**
+ * Decrypts the nested JWT `token` with the host's platform key, then verifies and validates the
+ * inner JWT with `key` (ADR 0071 §5; RFC 7519 §5.2, §7.2 step 8; RFC 8725 §3.3):
+ * `jwt_decrypt_nested` with the outer JWE's private-key step done by `decrypt_key`.
+ *
+ * # Errors
+ *
+ * Those of [`jwt_decrypt_nested`], with the outer JWE's errors those of
+ * [`jwe_decrypt_compact_with_platform_key`](crate::jwe::jwe_decrypt_compact_with_platform_key).
+ */
+public func jwtDecryptNestedWithPlatformKey(token: String, decryptKey: PlatformKey, decryptOptions: JweDecryptOptions, key: String, options: JwtVerifyOptions)throws  -> JwtNestedVerified  {
+    return try  FfiConverterTypeJwtNestedVerified_lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_jwt_decrypt_nested_with_platform_key(
+        FfiConverterString.lower(token),
+        FfiConverterTypePlatformKey_lower(decryptKey),
+        FfiConverterTypeJweDecryptOptions_lower(decryptOptions),
+        FfiConverterString.lower(key),
+        FfiConverterTypeJwtVerifyOptions_lower(options),uniffiCallStatus
+    )
+})
+}
+/**
+ * Decrypts the nested JWT `token` with the host's platform key, then verifies and validates the
+ * inner JWT against the JWK Set `jwks` (ADR 0071 §5; RFC 7519 §5.2, §7.2 step 8; ADR 0029).
+ *
+ * # Errors
+ *
+ * Those of [`jwt_decrypt_nested_with_platform_key`], plus `NoMatchingKey` (ADR 0029 §4).
+ */
+public func jwtDecryptNestedWithPlatformKeyAndJwks(token: String, decryptKey: PlatformKey, decryptOptions: JweDecryptOptions, jwks: String, options: JwtVerifyOptions)throws  -> JwtNestedVerified  {
+    return try  FfiConverterTypeJwtNestedVerified_lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_jwt_decrypt_nested_with_platform_key_and_jwks(
+        FfiConverterString.lower(token),
+        FfiConverterTypePlatformKey_lower(decryptKey),
+        FfiConverterTypeJweDecryptOptions_lower(decryptOptions),
+        FfiConverterString.lower(jwks),
+        FfiConverterTypeJwtVerifyOptions_lower(options),uniffiCallStatus
+    )
+})
+}
+/**
  * Encrypts the signed JWT `signed_jwt` into a compact JWE for exactly one recipient, with
  * `cty: "JWT"` set by the core (ADR 0030 §4; RFC 7519 §5.2, §11.2).
  *
@@ -3143,6 +3839,26 @@ public func jwtSign(claims: String, key: String, options: JwtSignOptions)throws 
     uniffi_polyjose_ffi_fn_func_jwt_sign(
         FfiConverterString.lower(claims),
         FfiConverterString.lower(key),
+        FfiConverterTypeJwtSignOptions_lower(options),uniffiCallStatus
+    )
+})
+}
+/**
+ * Signs the JWT Claims Set `claims` (JSON text) with the host's platform key into a compact JWS
+ * (ADR 0071 §5; RFC 7519 §7.1): `jwt_sign` with the private-key step done by `key`. The header
+ * holds `alg`, `typ`, the public JWK's `kid`, then the `header` members (ADR 0027 §8).
+ *
+ * # Errors
+ *
+ * The claims and `options` errors of `jwt_sign`, then those of
+ * [`jws_sign_compact_with_platform_key`](crate::jws::jws_sign_compact_with_platform_key).
+ */
+public func jwtSignWithPlatformKey(claims: String, key: PlatformKey, options: JwtSignOptions)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePolyjoseError_lift) {
+        uniffiCallStatus in
+    uniffi_polyjose_ffi_fn_func_jwt_sign_with_platform_key(
+        FfiConverterString.lower(claims),
+        FfiConverterTypePlatformKey_lower(key),
         FfiConverterTypeJwtSignOptions_lower(options),uniffiCallStatus
     )
 })
@@ -3498,7 +4214,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_polyjose_ffi_checksum_func_jwe_decrypt_compact() != 13762) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_polyjose_ffi_checksum_func_jwe_decrypt_compact_with_platform_key() != 64647) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_polyjose_ffi_checksum_func_jwe_decrypt_json() != 61561) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_func_jwe_decrypt_json_with_platform_key() != 290) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwe_encrypt_compact() != 51989) {
@@ -3525,6 +4247,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_polyjose_ffi_checksum_func_jws_sign_compact() != 12754) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_polyjose_ffi_checksum_func_jws_sign_compact_with_platform_key() != 58538) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_polyjose_ffi_checksum_func_jws_sign_flattened() != 13329) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3543,10 +4268,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_polyjose_ffi_checksum_func_jwt_decrypt_nested_with_jwks() != 60785) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_polyjose_ffi_checksum_func_jwt_decrypt_nested_with_platform_key() != 32704) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_func_jwt_decrypt_nested_with_platform_key_and_jwks() != 57665) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_polyjose_ffi_checksum_func_jwt_encrypt_nested() != 53654) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwt_sign() != 39872) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_func_jwt_sign_with_platform_key() != 24627) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_polyjose_ffi_checksum_func_jwt_verify() != 65260) {
@@ -3600,7 +4334,23 @@ private let initializationResult: InitializationResult = {
     if (uniffi_polyjose_ffi_checksum_func_version() != 48428) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_polyjose_ffi_checksum_method_platformkey_public_jwk() != 21257) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_method_platformkey_algorithms() != 12894) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_method_platformkey_sign() != 2825) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_method_platformkey_agree() != 59172) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_polyjose_ffi_checksum_method_platformkey_decrypt_key() != 65085) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
+    uniffiCallbackInitPlatformKey()
     return InitializationResult.ok
 }()
 

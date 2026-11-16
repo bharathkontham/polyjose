@@ -60,11 +60,21 @@ print("\n".join(codes))
 ' "$base/crates/polyjose/src/error.rs" || lib_die "could not read Error::CODES from the copy"
 }
 
-# inventory_count <kind>: the number of <kind> entries (op, record, field, code) in the base's
-# inventory. Leading whitespace is layout and '#' starts a comment line (the inventory's format).
+# inventory_count <kind> [<mode>]: the number of <kind> entries (op, record, field, interface,
+# method, enum, case, code) in the base's inventory; with <mode>, only those that exist in that
+# mode's binding: an op, record, interface or enum marked `only <mode>...` without it is left out,
+# with its fields, methods or cases. Leading whitespace is layout and '#' starts a comment line (the
+# inventory's format).
 inventory_count() {
-  awk -v kind="$1" '$1 == kind { n++ } END { print n + 0 }' "$base/bindings/api-inventory.txt" \
-    || lib_die "could not count the inventory's $1 entries"
+  awk -v kind="$1" -v mode="${2:-}" '
+    $1 ~ /^#/ { next }
+    $1 == "op" || $1 == "record" || $1 == "interface" || $1 == "enum" {
+      keep = 1
+      for (i = 3; i <= NF; i++) if ($i == "only") { keep = (mode == ""); for (j = i + 1; j <= NF; j++) if ($j == mode) keep = 1 }
+    }
+    $1 == kind && keep { n++ }
+    END { print n + 0 }
+  ' "$base/bindings/api-inventory.txt" || lib_die "could not count the inventory's $1 entries"
 }
 
 # js_modules: a bindings/js/node_modules whose tsc runs here, set up on first use (needs node, npm).

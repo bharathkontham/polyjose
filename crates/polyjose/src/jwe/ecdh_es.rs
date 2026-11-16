@@ -56,6 +56,7 @@ use crate::header::Header;
 use crate::json::{Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
 use crate::jwk::{EcCurve, EcKey, Jwk, KeyMaterial, KeyType, OkpCurve};
+use crate::platform_key::{self, PlatformKey};
 use crate::util::{b64url_decode, b64url_encode};
 use crate::{Error, Result};
 
@@ -265,16 +266,48 @@ pub(super) fn decrypt_key(
     encrypted_key: &[u8],
     _policy: &DecryptPolicy,
 ) -> Result<Cek> {
-    unwrap_cek(alg, key, enc, header, encrypted_key).map_err(|_| Error::DecryptionFailed)
+    unwrap_cek(alg, enc, header, encrypted_key, |epk| {
+        agree_with_epk(key, epk)
+    })
+    .map_err(|_| Error::DecryptionFailed)
 }
 
-/// [`decrypt_key`] with the detailed error, which is never shown.
-fn unwrap_cek(
+/// [`decrypt_key`] for a platform-held key on the NIST curve `crv`
+/// (ADR 0071 §4; RFC 7518 §4.6).
+///
+/// Every step is that of [`decrypt_key`], in the same order, except the
+/// agreement itself ([`agree_with_platform`]): the `epk` is validated
+/// exactly as for a JWK before the key is called, and Z must be exactly
+/// the field size. The Concat KDF (RFC 7518 §4.6.2), the AES key unwrap
+/// and the CEK length check are unchanged.
+///
+/// # Errors
+///
+/// [`Error::KeyNotFound`] or [`Error::UserAuthenticationRequired`] from
+/// [`PlatformKey::agree`]; [`Error::DecryptionFailed`] for everything
+/// else, whatever the cause (RFC 7516 §11.4–§11.5).
+pub(super) fn decrypt_key_with_platform(
     alg: &KeyMgmtAlg,
-    key: &RecipientKey,
+    crv: EcCurve,
+    key: &dyn PlatformKey,
     enc: &ContentEncAlg,
     header: &Header,
     encrypted_key: &[u8],
+) -> Result<Cek> {
+    unwrap_cek(alg, enc, header, encrypted_key, |epk| {
+        agree_with_platform(crv, key, epk)
+    })
+    .map_err(platform_key::conceal)
+}
+
+/// [`decrypt_key`] with the detailed error, which is never shown, and the
+/// `epk` validation and agreement done by `agree`.
+fn unwrap_cek(
+    alg: &KeyMgmtAlg,
+    enc: &ContentEncAlg,
+    header: &Header,
+    encrypted_key: &[u8],
+    agree: impl FnOnce(&Object) -> Result<Zeroizing<Vec<u8>>>,
 ) -> Result<Cek> {
     let derivation = derivation(alg, enc)?;
     let cek_len = cek_len(enc)?;
@@ -287,7 +320,7 @@ fn unwrap_cek(
     let apu = party_info(header.apu.as_deref())?;
     let apv = party_info(header.apv.as_deref())?;
     let epk = header.epk.as_ref().ok_or(Error::DecryptionFailed)?;
-    let z = agree_with_epk(key, epk)?;
+    let z = agree(epk)?;
     let derived = concat_kdf::derive(
         &z,
         derivation.alg_id,
@@ -350,7 +383,14 @@ fn agree_with_imported_epk(
     // must be of the recipient's family and on its curve. Checked on the
     // raw `kty` and `crv`, before import, so a wrong-family or wrong-curve
     // epk never reaches point decoding, the on-curve check or an agreement.
-    if !raw_epk_is_on_recipient_curve(key, epk) {
+    let curve = match key {
+        RecipientKey::P256Secret(_) => (KeyType::Ec.as_str(), EcCurve::P256.as_str()),
+        RecipientKey::P384Secret(_) => (KeyType::Ec.as_str(), EcCurve::P384.as_str()),
+        RecipientKey::P521Secret(_) => (KeyType::Ec.as_str(), EcCurve::P521.as_str()),
+        RecipientKey::X25519Secret(_) => (KeyType::Okp.as_str(), OkpCurve::X25519.as_str()),
+        _ => return Err(Error::DecryptionFailed),
+    };
+    if !raw_epk_is_on_curve(curve, epk) {
         return Err(Error::DecryptionFailed);
     }
     // ADR 0041 §4: the JWK import checks (lengths, on-curve, identity).
@@ -380,26 +420,75 @@ fn agree_with_imported_epk(
     }
 }
 
-/// Whether the raw `epk` object's `kty` and `crv` are exactly those of the
-/// recipient's private `key` (RFC 7518 §4.6: the agreement is on the
+/// Whether the raw `epk` object's `kty` and `crv` are exactly the
+/// recipient's, `(kty, crv)` (RFC 7518 §4.6: the agreement is on the
 /// recipient's curve; RFC 8725 §3.4; 0003 code review #4).
 ///
 /// Both members must be JSON strings equal, octet for octet, to the
 /// registered names (RFC 7517 §4.1 and RFC 7518 §6.2.1.1 for `EC`,
 /// RFC 8037 §2 for `OKP`), which is how [`Jwk::from_object`] reads them, so
 /// every `epk` refused here would also have failed import or the curve
-/// match after it. A `key` that is not an ECDH-ES private key matches
-/// nothing.
-fn raw_epk_is_on_recipient_curve(key: &RecipientKey, epk: &Object) -> bool {
-    let (kty, crv) = match key {
-        RecipientKey::P256Secret(_) => (KeyType::Ec.as_str(), EcCurve::P256.as_str()),
-        RecipientKey::P384Secret(_) => (KeyType::Ec.as_str(), EcCurve::P384.as_str()),
-        RecipientKey::P521Secret(_) => (KeyType::Ec.as_str(), EcCurve::P521.as_str()),
-        RecipientKey::X25519Secret(_) => (KeyType::Okp.as_str(), OkpCurve::X25519.as_str()),
-        _ => return false,
-    };
+/// match after it. A key that is not an ECDH-ES private key never reaches
+/// here.
+fn raw_epk_is_on_curve((kty, crv): (&str, &str), epk: &Object) -> bool {
     let member = |name| epk.get(name).and_then(Value::as_str);
     member("kty") == Some(kty) && member("crv") == Some(crv)
+}
+
+/// [`agree_with_epk`] for a platform-held key on the NIST curve `crv`
+/// (ADR 0071 §4): the same `epk` checks, in the same order, before the key
+/// is called, then [`PlatformKey::agree`] on the validated point.
+///
+/// 1. no private member (RFC 7518 §4.6.1.1), on the raw object;
+/// 2. `kty` `EC` and the recipient's `crv`, on the raw object (RFC 7518
+///    §4.6, RFC 8725 §3.4);
+/// 3. JWK import (ADR 0041 §4: lengths, on-curve, not the identity), and
+///    the curve crate's own SEC 1 decoding of `0x04 ‖ x ‖ y` once more;
+/// 4. the call, with exactly that uncompressed point (SEC 1 v2 §2.3.3);
+/// 5. Z, held in `Zeroizing` from the call on, must be exactly the field
+///    size (RFC 7518 §4.6.2: Z is the x-coordinate of the shared point,
+///    `EcCurve::coordinate_len` octets).
+///
+/// # Errors
+///
+/// [`Error::DecryptionFailed`] for an `epk` that fails a check (no call is
+/// made), for `Failed` and for a Z of the wrong length;
+/// [`Error::KeyNotFound`] / [`Error::UserAuthenticationRequired`] from
+/// the key.
+fn agree_with_platform(
+    crv: EcCurve,
+    key: &dyn PlatformKey,
+    epk: &Object,
+) -> Result<Zeroizing<Vec<u8>>> {
+    if PRIVATE_MEMBERS.iter().any(|name| epk.contains(name)) {
+        return Err(Error::DecryptionFailed);
+    }
+    let field = match crv {
+        EcCurve::P256 | EcCurve::P384 | EcCurve::P521 => crv.coordinate_len(),
+        EcCurve::Secp256k1 => return Err(Error::DecryptionFailed),
+    };
+    if !raw_epk_is_on_curve((KeyType::Ec.as_str(), crv.as_str()), epk) {
+        return Err(Error::DecryptionFailed);
+    }
+    let epk = Jwk::from_object(epk).map_err(|_| Error::DecryptionFailed)?;
+    let point = match epk.material() {
+        KeyMaterial::Ec(e) if e.crv() == crv => [&[0x04][..], e.x(), e.y()].concat(),
+        _ => return Err(Error::DecryptionFailed),
+    };
+    let on_curve = match crv {
+        EcCurve::P256 => p256::PublicKey::from_sec1_bytes(&point).is_ok(),
+        EcCurve::P384 => p384::PublicKey::from_sec1_bytes(&point).is_ok(),
+        EcCurve::P521 => p521::PublicKey::from_sec1_bytes(&point).is_ok(),
+        EcCurve::Secp256k1 => false,
+    };
+    if !on_curve {
+        return Err(Error::DecryptionFailed);
+    }
+    let z = key.agree(&point).map_err(platform_key::decrypt_error)?;
+    if z.len() != field {
+        return Err(Error::DecryptionFailed);
+    }
+    Ok(z)
 }
 
 /// Z of the recipient's `secret` and the imported `epk` on the same NIST

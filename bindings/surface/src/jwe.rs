@@ -13,6 +13,7 @@ use polyjose::jwk::Jwk;
 use zeroize::Zeroizing;
 
 use crate::error::SurfaceResult;
+use crate::platform_key::{CoreKey, PlatformKey};
 use crate::records::{
     JweDecryptOptions, JweDecrypted, JweEncryptOptions, JweRecipient, algs, apply, apply_flag,
     strs, to_usize, try_apply,
@@ -183,6 +184,61 @@ pub fn jwe_decrypt_json(
     let key = Jwk::from_json(key.as_bytes())?;
     let policy = decrypt_policy(options)?;
     Ok(decrypted(jwe::decrypt_json(jwe, &key, &policy)?)?)
+}
+
+/// Decrypts the JWE Compact Serialization `token` with the platform-held `key` (ADR 0071 §5;
+/// RFC 7516 §5.2, §7.1): [`jwe_decrypt_compact`] with the private-key step done by `key`.
+///
+/// The `alg` must be in `options.allowed_algs` and the `enc` in `options.allowed_enc` before the
+/// key is touched (RFC 8725 §3.1). A platform key serves `ECDH-ES` and `ECDH-ES+A128KW`,
+/// `+A192KW`, `+A256KW` on P-256, P-384 and P-521, through [`PlatformKey::agree`] with the
+/// validated `epk` (RFC 7518 §4.6), and `RSA-OAEP-256` through [`PlatformKey::decrypt_key`]
+/// (RFC 7518 §4.3), with the RFC 7516 §11.5 substitute CEK drawn before the call (ADR 0071 §4).
+///
+/// # Errors
+///
+/// The policy, then every error of `polyjose::jwe::decrypt_compact_with_platform_key`. Notably:
+/// `AlgorithmNotAllowed` as for [`jwe_decrypt_compact`], with no call to the key;
+/// `UnsupportedAlgorithm` for an `alg` a platform key may not serve; `KeyAlgorithmMismatch` for
+/// an `alg` the key is not bound to; `KeyNotFound` and `UserAuthenticationRequired` from the key;
+/// and `DecryptionFailed` for every other failure, of the key or of the JWE (RFC 7516 §11.5,
+/// ADR 0007, ADR 0071 §4).
+pub fn jwe_decrypt_compact_with_platform_key(
+    token: &str,
+    key: &dyn PlatformKey,
+    options: &JweDecryptOptions,
+) -> SurfaceResult<JweDecrypted> {
+    let policy = decrypt_policy(options)?;
+    Ok(decrypted(jwe::decrypt_compact_with_platform_key(
+        token,
+        &CoreKey(key),
+        &policy,
+    )?)?)
+}
+
+/// Decrypts the flattened or general JWE JSON Serialization `jwe` with the platform-held `key`
+/// (ADR 0071 §5; RFC 7516 §5.2, §7.2): [`jwe_decrypt_json`] with the private-key step done by
+/// `key`.
+///
+/// The key is called at most once per recipient whose `alg` passes the checks, in order, and
+/// never for more than `max_recipients`; `KeyNotFound` or `UserAuthenticationRequired` stops at
+/// once, so a cancelled prompt is not followed by another (ADR 0071 §4).
+///
+/// # Errors
+///
+/// As [`jwe_decrypt_compact_with_platform_key`], plus `InvalidFormat` as for
+/// [`jwe_decrypt_json`].
+pub fn jwe_decrypt_json_with_platform_key(
+    jwe: &str,
+    key: &dyn PlatformKey,
+    options: &JweDecryptOptions,
+) -> SurfaceResult<JweDecrypted> {
+    let policy = decrypt_policy(options)?;
+    Ok(decrypted(jwe::decrypt_json_with_platform_key(
+        jwe,
+        &CoreKey(key),
+        &policy,
+    )?)?)
 }
 
 /// The core [`DecryptPolicy`] for `options` (ADR 0030 §3).

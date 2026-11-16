@@ -247,6 +247,38 @@ pub enum Error {
     /// [`Error::NoMatchingKey`] (ADR 0029 §4). Neither the selector nor
     /// any key is echoed.
     MultipleMatchingKeys,
+
+    /// A platform-held key ([`crate::PlatformKey`]) is not usable: there is
+    /// no key under that name, or the platform has permanently invalidated
+    /// it (ADR 0071 §6). An app creates or enrols a new key.
+    ///
+    /// Raised only for [`crate::PlatformKeyError::NotFound`]. The private
+    /// key is needed to sign (RFC 7515 §5.1 step 5) or to determine the
+    /// CEK (RFC 7516 §5.2 steps 9–10), so neither can proceed. No platform
+    /// text, tag or alias is included.
+    KeyNotFound,
+
+    /// A platform-held key needs the user to authenticate, and they have
+    /// not, cancelled, or cannot (ADR 0071 §6). An app prompts, then
+    /// retries.
+    ///
+    /// Raised only for [`crate::PlatformKeyError::UserAuthenticationRequired`].
+    /// On decryption it is reported as itself, not as
+    /// [`Error::DecryptionFailed`], because an implementation may return it
+    /// only for a condition that does not depend on the ciphertext
+    /// (ADR 0071 §4; RFC 7516 §11.5 concerns ciphertext-dependent
+    /// failures). No platform text is included.
+    UserAuthenticationRequired,
+
+    /// Any other failure of a platform-held key while signing (ADR 0071
+    /// §6), including a signature that did not verify against the key's
+    /// public JWK before it was returned (ADR 0071 §3; RFC 7515 §5.2
+    /// step 8 run on our own output). Retrying may not help.
+    ///
+    /// Decryption never raises it: there, every other failure is
+    /// [`Error::DecryptionFailed`] (RFC 7516 §11.5, ADR 0071 §4). No
+    /// platform text is included.
+    PlatformKeyFailed,
 }
 
 impl Error {
@@ -272,6 +304,9 @@ impl Error {
         "InvalidFormat",
         "NoMatchingKey",
         "MultipleMatchingKeys",
+        "KeyNotFound",
+        "UserAuthenticationRequired",
+        "PlatformKeyFailed",
     ];
 
     /// The stable, cross-platform code for this error (ADR 0007).
@@ -297,6 +332,9 @@ impl Error {
             Error::InvalidFormat(_) => "InvalidFormat",
             Error::NoMatchingKey => "NoMatchingKey",
             Error::MultipleMatchingKeys => "MultipleMatchingKeys",
+            Error::KeyNotFound => "KeyNotFound",
+            Error::UserAuthenticationRequired => "UserAuthenticationRequired",
+            Error::PlatformKeyFailed => "PlatformKeyFailed",
         }
     }
 }
@@ -327,6 +365,9 @@ impl core::fmt::Display for Error {
             Error::InvalidFormat(detail) => write!(f, "invalid format: {detail}"),
             Error::NoMatchingKey => f.write_str("no matching key"),
             Error::MultipleMatchingKeys => f.write_str("several keys match"),
+            Error::KeyNotFound => f.write_str("platform key not found"),
+            Error::UserAuthenticationRequired => f.write_str("user authentication required"),
+            Error::PlatformKeyFailed => f.write_str("platform key operation failed"),
         }
     }
 }
@@ -367,6 +408,9 @@ mod tests {
             Error::InvalidFormat("compact JWS must have three parts"),
             Error::NoMatchingKey,
             Error::MultipleMatchingKeys,
+            Error::KeyNotFound,
+            Error::UserAuthenticationRequired,
+            Error::PlatformKeyFailed,
         ]
     }
 
@@ -390,6 +434,9 @@ mod tests {
             Error::InvalidFormat(_) => 14,
             Error::NoMatchingKey => 15,
             Error::MultipleMatchingKeys => 16,
+            Error::KeyNotFound => 17,
+            Error::UserAuthenticationRequired => 18,
+            Error::PlatformKeyFailed => 19,
         }
     }
 
@@ -415,6 +462,9 @@ mod tests {
             "InvalidFormat",
             "NoMatchingKey",
             "MultipleMatchingKeys",
+            "KeyNotFound",
+            "UserAuthenticationRequired",
+            "PlatformKeyFailed",
         ];
         let actual: Vec<&str> = one_of_each().iter().map(Error::code).collect();
         assert_eq!(actual, expected);
@@ -424,7 +474,7 @@ mod tests {
     fn multiple_matching_keys_is_appended_last() {
         // ADR 0054 §5: a new code is appended, so every released index
         // keeps its meaning.
-        assert_eq!(Error::CODES.len(), 17);
+        assert!(Error::CODES.len() >= 17);
         assert_eq!(Error::CODES[15], "NoMatchingKey");
         assert_eq!(Error::CODES[16], "MultipleMatchingKeys");
         assert_eq!(Error::MultipleMatchingKeys.code(), "MultipleMatchingKeys");
@@ -436,6 +486,33 @@ mod tests {
             format!("{:?}", Error::MultipleMatchingKeys),
             "MultipleMatchingKeys"
         );
+    }
+
+    #[test]
+    fn platform_key_codes_are_appended_last_in_order() {
+        // ADR 0071 §6: after MultipleMatchingKeys, in this order, so every
+        // released index keeps its meaning.
+        assert_eq!(Error::CODES.len(), 20);
+        assert_eq!(Error::CODES[16], "MultipleMatchingKeys");
+        assert_eq!(
+            &Error::CODES[17..],
+            [
+                "KeyNotFound",
+                "UserAuthenticationRequired",
+                "PlatformKeyFailed"
+            ]
+        );
+        for (e, debug) in [
+            (Error::KeyNotFound, "KeyNotFound"),
+            (
+                Error::UserAuthenticationRequired,
+                "UserAuthenticationRequired",
+            ),
+            (Error::PlatformKeyFailed, "PlatformKeyFailed"),
+        ] {
+            assert_eq!(format!("{e:?}"), debug);
+            assert!(std::error::Error::source(&e).is_none());
+        }
     }
 
     #[test]
@@ -485,6 +562,9 @@ mod tests {
             "invalid format: compact JWS must have three parts",
             "no matching key",
             "several keys match",
+            "platform key not found",
+            "user authentication required",
+            "platform key operation failed",
         ];
         let actual: Vec<String> = one_of_each().iter().map(Error::to_string).collect();
         assert_eq!(actual, expected);

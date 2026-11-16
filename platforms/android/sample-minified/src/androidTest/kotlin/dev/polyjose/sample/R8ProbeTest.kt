@@ -30,4 +30,20 @@ class R8ProbeTest {
     fun anInvalidJwkIsReportedByItsCode() {
         assertEquals("InvalidJson", R8Probe.invalidJwkCode())
     }
+
+    /**
+     * An app class implementing `PlatformKey`, renamed by R8, is called back from Rust and signs
+     * an ES256 JWS that verifies (ADR 0071 §5, RFC 7515 §7.1).
+     */
+    @Test
+    fun anAppPlatformKeySignsAfterMinification() {
+        val payload = "polyjose R8 platform key".toByteArray()
+        assertArrayEquals(payload, R8Probe.platformKeyRoundTrip(payload))
+    }
+
+    /** A `PlatformKeyException` thrown by an app class reaches Rust and comes back as KeyNotFound. */
+    @Test
+    fun anAppPlatformKeyErrorIsReportedByItsCode() {
+        assertEquals("KeyNotFound", R8Probe.platformKeyNotFoundCode())
+    }
 }

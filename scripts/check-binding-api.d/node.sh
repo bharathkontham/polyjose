@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034,SC2154 # sourced by scripts/check-binding-api.sh, which reads MODE_KINDS
-# and sets repo and mode_scratch
+# and sets repo, mode_scratch and mode_inventory
 # Mode "node" of scripts/check-binding-api.sh: the @polyjose/node package, bindings/node (feature
 # 0007 T03; ADR 0030 §2, §4, §8; ADR 0031 §2; ADR 0047). It reads the declarations the package
 # build generates (bindings/node/scripts/build.sh; all git-ignored), as text:
@@ -11,8 +11,9 @@
 #      as in the js mode, mode_expect reads the inventory's `= false` fields as optional;
 #   2. the package's public index.d.ts (tsc output of src/index.ts): the names it exports (the
 #      `export declare const` list, `export declare function`, `export { ... } from`) must be the
-#      inventory's operations plus the host idiom of NODE_INDEX_IDIOM, and it must re-export the
-#      facade's records (`export type * from "./facade/api.js"`; their names are the js mode's,
+#      inventory's operations that exist in node (none marked `only` other modes) plus the host
+#      idiom of NODE_INDEX_IDIOM, and it must re-export the facade's records
+#      (`export type * from "./facade/api.js"`; their names are the js mode's,
 #      checked on the same bindings/js sources). A difference is reported as an `error` line that
 #      names index.d.ts;
 #   3. the error codes, in order: the ERROR_CODES tuple of facade/error-codes.d.ts, the copy of the
@@ -155,7 +156,7 @@ AWK
   sed -n 's/^value //p' "$mode_scratch/index" | sort >"$mode_scratch/index.values"
   sort "$mode_scratch/index.values" | uniq -d | sed 's/^/error index.d.ts: exports twice: /' >>"$out"
   {
-    awk '{ sub(/\r$/, "") } $1 == "op" { print $2 }' "$repo/bindings/api-inventory.txt"
+    sed -n 's/^op //p' "$mode_inventory"
     printf '%s\n' "$NODE_INDEX_IDIOM" | tr ' ' '\n'
   } | sort -u >"$mode_scratch/index.expected"
   sort -u "$mode_scratch/index.values" >"$mode_scratch/index.values.u"

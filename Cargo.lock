@@ -1112,6 +1112,7 @@ dependencies = [
 name = "polyjose-ffi"
 version = "0.3.0"
 dependencies = [
+ "p256",
  "polyjose",
  "polyjose-surface",
  "uniffi",
@@ -1133,6 +1134,7 @@ dependencies = [
 name = "polyjose-surface"
 version = "0.3.0"
 dependencies = [
+ "p256",
  "polyjose",
  "sha2",
  "zeroize",

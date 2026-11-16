@@ -103,7 +103,7 @@ mod api;
 
 pub use api::{
     DecryptPolicy, Decrypted, Encryptor, JsonForm, Recipient, Serialization, decrypt_compact,
-    decrypt_json,
+    decrypt_compact_with_platform_key, decrypt_json, decrypt_json_with_platform_key,
 };
 
 // The JWE `key_ops` table, for JWK Set selection (ADR 0054 §2 item 4).

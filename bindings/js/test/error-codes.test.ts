@@ -34,13 +34,19 @@ test("the generated file is what the generator renders from error.rs now", () =>
   assert.equal(generated, renderErrorCodes(parseErrorCodes(source)));
 });
 
-test("MultipleMatchingKeys (ADR 0054 §5) comes right after NoMatchingKey, last", () => {
-  assert.deepEqual(ERROR_CODES.slice(-2), ["NoMatchingKey", "MultipleMatchingKeys"]);
+test("MultipleMatchingKeys (ADR 0054 §5) comes right after NoMatchingKey, then the platform-key codes (ADR 0071 §6), last", () => {
+  assert.deepEqual(ERROR_CODES.slice(-5), [
+    "NoMatchingKey",
+    "MultipleMatchingKeys",
+    "KeyNotFound",
+    "UserAuthenticationRequired",
+    "PlatformKeyFailed",
+  ]);
 });
 
 test("a code added to the core changes the parsed list", () => {
   const source = fs.readFileSync(ERROR_RS, "utf8");
-  const extended = source.replace('"MultipleMatchingKeys",', '"MultipleMatchingKeys",\n        "SomethingNew",');
+  const extended = source.replace('"PlatformKeyFailed",', '"PlatformKeyFailed",\n        "SomethingNew",');
   const parsed = parseErrorCodes(extended);
   assert.equal(parsed.at(-1), "SomethingNew");
   assert.notDeepEqual(parsed, [...ERROR_CODES]);

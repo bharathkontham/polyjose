@@ -1,0 +1,28 @@
+# Hand-written public Swift types of the module Polyjose (platforms/swift/Sources/Polyjose, any file
+# but the generated Polyjose.swift), with their public members (scripts/check-binding-api.sh,
+# "Host-type lists"; ADR 0071 §5). The swift mode fails on any hand-written public type or member
+# not listed here, and on a listed one the sources lack.
+#
+#   type <Name>      a public type
+#     member <name>  one of its public members (func, var, let, init, subscript, nested type, case)
+#
+# Adding a type is a review decision, like an inventory change.
+
+# AppleKey (ADR 0072 §1, feature 0025 T03): the members of ADR 0072 §1, the three PlatformKey
+# methods its conformance needs, its two nested types and the three printing members (ADR 0071 §7).
+type AppleKey
+  member Protection
+  member Access
+  member generate
+  member open
+  member delete
+  member init
+  member publicJwk
+  member algorithms
+  member protection
+  member sign
+  member agree
+  member decryptKey
+  member description
+  member debugDescription
+  member customMirror

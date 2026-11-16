@@ -19,9 +19,10 @@ fixture_mode() {
   printf '%s\n' "$2" >"$case_dir/scripts/check-binding-api.d/$1.sh" || lib_die "could not write mode $1"
 }
 
-# A fixture mode that derives the inventory's own operations and codes, so it passes.
+# A fixture mode that derives the inventory's own operations and codes that exist in its binding
+# ($mode_inventory: without the entries marked `only` other modes), so it passes.
 echo_mode='MODE_KINDS="op code"
-mode_derive() { grep -E "^(op|code) " "$repo/bindings/api-inventory.txt" >"$1"; }'
+mode_derive() { grep -E "^(op|code) " "$mode_inventory" >"$1"; }'
 
 # The counts are the inventory's operations and the core's codes (lib.sh), so the case does not
 # change when the API grows.
@@ -30,7 +31,7 @@ new_case new-mode-file
 fixture_mode kotlin "$echo_mode"
 run_check kotlin
 check_last_line "a new mode file is a mode, without editing the main script" 0 \
-  "check-binding-api: kotlin: PASS ($(inventory_count op) operations, 0 records, 0 fields, $n_codes codes)"
+  "check-binding-api: kotlin: PASS ($(inventory_count op kotlin) operations, 0 records, 0 fields, $n_codes codes)"
 
 # only_modes <mode>...: removes every other mode file from the copy. The real tree gains a mode file
 # per binding feature, so a case that runs every mode keeps only the real ones it controls.
@@ -114,7 +115,7 @@ check "one failing mode fails the run; the others still run" 1 \
 new_case code-order
 fixture_mode kotlin 'MODE_KINDS="op code"
 mode_derive() {
-  grep -E "^op " "$repo/bindings/api-inventory.txt" >"$1"
+  grep -E "^op " "$repo/bindings/api-inventory.txt" | sed "s/ only .*//" >"$1"
   grep -E "^code " "$repo/bindings/api-inventory.txt" | sed -n "2p" >>"$1"
   grep -E "^code " "$repo/bindings/api-inventory.txt" | sed "2d" >>"$1"
 }'

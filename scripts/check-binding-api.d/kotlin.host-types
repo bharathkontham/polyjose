@@ -1,0 +1,34 @@
+# Hand-written public Kotlin types of the Android AAR and the JVM jar, with their public members
+# (scripts/check-binding-api.sh, "Host-type lists"; ADR 0071 §5). The kotlin mode fails on any
+# hand-written public type or member not listed here, and on a listed one the sources lack.
+#
+#   type <Name>      a public type
+#     member <name>  one of its public members (fun, val, var, constructor, nested type)
+#
+# Adding a type is a review decision, like an inventory change.
+
+# The Android Keystore platform key, in the AAR only (feature 0025 T04; ADR 0072 §2). The
+# PlatformKey methods, toString, and the nested option and level types (their own members are
+# not listed).
+type AndroidKeystoreKey
+  member generate
+  member open
+  member delete
+  member publicJwk
+  member algorithms
+  member sign
+  member agree
+  member decryptKey
+  member securityLevel
+  member toString
+  member StrongBox
+  member SecurityLevel
+  member UserAuthentication
+
+# The per-use authentication hook and its BiometricPrompt implementation (ADR 0072 §4).
+type PlatformKeyAuthorizer
+  member authorize
+
+type BiometricPromptAuthorizer
+  member constructor
+  member authorize

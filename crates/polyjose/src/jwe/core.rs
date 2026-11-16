@@ -50,6 +50,7 @@ use crate::header::Header;
 use crate::json::{self, Object, Value};
 use crate::jwa::{ContentEncAlg, KeyMgmtAlg};
 use crate::jwk::Jwk;
+use crate::platform_key::{self, DecryptKind, PlatformKey, Session};
 use crate::util::{b64url_decode, b64url_encode};
 use crate::{Error, Result};
 
@@ -296,6 +297,22 @@ fn candidate(
     key: &Jwk,
     policy: &DecryptPolicy,
 ) -> Result<(KeyMgmtAlg, RecipientKey)> {
+    let alg = screened(header, enc, policy)?;
+    let recipient_key = RecipientKey::from_jwk(key, &alg, enc, Direction::Decrypt)?;
+    if !kid_matches(key, header.kid.as_deref()) {
+        return Err(Error::KeyAlgorithmMismatch);
+    }
+    Ok((alg, recipient_key))
+}
+
+/// Steps 1 and 2 of [`candidate`], which need no key: the recipient's
+/// `alg`, if it is implemented for decryption and both it and `enc` are
+/// in the policy (RFC 8725 §3.1).
+///
+/// # Errors
+///
+/// [`Error::UnsupportedAlgorithm`], then [`Error::AlgorithmNotAllowed`].
+fn screened(header: &Header, enc: &ContentEncAlg, policy: &DecryptPolicy) -> Result<KeyMgmtAlg> {
     let alg = KeyMgmtAlg::from(header.alg.as_deref().unwrap_or_default());
     if !keymgmt::supported(&alg, Direction::Decrypt) {
         return Err(Error::UnsupportedAlgorithm);
@@ -303,11 +320,63 @@ fn candidate(
     if !policy.allowed_algs.contains(&alg) || !policy.allowed_enc.contains(enc) {
         return Err(Error::AlgorithmNotAllowed);
     }
-    let recipient_key = RecipientKey::from_jwk(key, &alg, enc, Direction::Decrypt)?;
-    if !kid_matches(key, header.kid.as_deref()) {
-        return Err(Error::KeyAlgorithmMismatch);
+    Ok(alg)
+}
+
+/// Whether one recipient is a candidate for a platform key (ADR 0071
+/// §2), as [`candidate`] for a JWK, in this order:
+///
+/// 1. support and allow-list ([`screened`]), with no call to the key;
+/// 2. an `alg` a platform key may serve: ECDH-ES, ECDH-ES+A*KW,
+///    RSA-OAEP-256 → else [`Error::UnsupportedAlgorithm`] (A*KW, A*GCMKW,
+///    `dir` and PBES2 are symmetric, ADR 0070 §2), with no call to the
+///    key;
+/// 3. the key's public side, read once per call
+///    ([`Session::view`]); its errors end the whole decryption, so this
+///    step returns them as the outer `Err`;
+/// 4. key binding ([`PublicView::bind_key_mgmt`](crate::platform_key::PublicView::bind_key_mgmt):
+///    an X25519 key is [`Error::UnsupportedAlgorithm`], anything else
+///    unbound [`Error::KeyAlgorithmMismatch`]);
+/// 5. **`kid`**, as for a JWK (RFC 7516 §4.1.6), on the public JWK.
+///
+/// The inner `Err` ranks like a [`candidate`] error.
+fn platform_candidate(
+    header: &Header,
+    enc: &ContentEncAlg,
+    session: &mut Session<'_>,
+    policy: &DecryptPolicy,
+) -> Result<Result<(KeyMgmtAlg, DecryptKind)>> {
+    let alg = match screened(header, enc, policy) {
+        Ok(alg) if platform_key::serves_key_mgmt(&alg) => alg,
+        Ok(_) => return Ok(Err(Error::UnsupportedAlgorithm)),
+        Err(e) => return Ok(Err(e)),
+    };
+    let view = session.view()?;
+    let kind = match view.bind_key_mgmt(&alg) {
+        Ok(kind) => kind,
+        Err(e) => return Ok(Err(e)),
+    };
+    if !kid_matches(&view.jwk, header.kid.as_deref()) {
+        return Ok(Err(Error::KeyAlgorithmMismatch));
     }
-    Ok((alg, recipient_key))
+    Ok(Ok((alg, kind)))
+}
+
+/// A candidate recipient's key: a bound JWK, or a bound platform key
+/// (ADR 0071 §4).
+enum Bound {
+    /// The JWK, bound by [`RecipientKey::from_jwk`].
+    Jwk(RecipientKey),
+    /// The platform key of the call, bound to this recipient's `alg`.
+    Platform(DecryptKind),
+}
+
+/// The key a decrypt call uses.
+enum CallKey<'k> {
+    /// A JWK.
+    Jwk(&'k Jwk),
+    /// A platform key, with its public side read at most once.
+    Platform(Session<'k>),
 }
 
 /// RFC 7516 §5.2 steps 6–17 for one candidate recipient: key management,
@@ -321,7 +390,8 @@ fn candidate(
 )]
 fn decrypt_recipient(
     alg: &KeyMgmtAlg,
-    key: &RecipientKey,
+    key: &Bound,
+    platform: Option<&dyn PlatformKey>,
     enc: &ContentEncAlg,
     header: &Header,
     encrypted_key: &[u8],
@@ -332,8 +402,19 @@ fn decrypt_recipient(
     pbes2_budget: &mut pbes2::Budget,
 ) -> Result<Zeroizing<Vec<u8>>> {
     let failed = |_| Error::DecryptionFailed;
-    let cek = keymgmt::decrypt_key(alg, key, enc, header, encrypted_key, policy, pbes2_budget)
-        .map_err(failed)?;
+    // ADR 0071 §4: a platform key's NotFound and UserAuthenticationRequired
+    // are reported as themselves (`conceal`); every other key management
+    // failure, and every one on the JWK path, is DecryptionFailed.
+    let cek = match (key, platform) {
+        (Bound::Jwk(key), _) => {
+            keymgmt::decrypt_key(alg, key, enc, header, encrypted_key, policy, pbes2_budget)
+        }
+        (Bound::Platform(kind), Some(platform)) => {
+            keymgmt::decrypt_key_with_platform(alg, *kind, platform, enc, header, encrypted_key)
+        }
+        (Bound::Platform(_), None) => Err(Error::DecryptionFailed),
+    }
+    .map_err(platform_key::conceal)?;
     let plaintext = content::decrypt(enc, &cek, &parts.iv, aad, &parts.ciphertext, &parts.tag)
         .map_err(failed)?;
     if inflate {
@@ -370,6 +451,36 @@ fn decrypt_recipient(
 /// When every candidate fails, [`Error::DecryptionFailed`], a unit value
 /// with no detail and no source, whatever the cause.
 pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Result<Decrypted> {
+    decrypt_any(parts, CallKey::Jwk(key), policy)
+}
+
+/// [`decrypt`] with a platform-held key (ADR 0071 §2, §4).
+///
+/// The same steps, with [`platform_candidate`] in step 3: an `alg` outside
+/// the policy, or one no platform key serves, never reaches the key, not
+/// even its public side, which is read once, for the first recipient that
+/// gets that far. In step 4 the key is called at most once per candidate
+/// (so at most `max_recipients` times), in order, and
+/// [`Error::KeyNotFound`] or [`Error::UserAuthenticationRequired`] ends the
+/// call at once, so a cancelled prompt is not followed by another.
+///
+/// # Errors
+///
+/// As [`decrypt`]; plus, from the key's public side,
+/// [`Error::KeyNotFound`], [`Error::UserAuthenticationRequired`],
+/// [`Error::DecryptionFailed`] (for `Failed`) or a JWK import error
+/// ([`Error::InvalidKey`]); and [`Error::KeyNotFound`] or
+/// [`Error::UserAuthenticationRequired`] from `agree` or `decrypt_key`.
+pub(crate) fn decrypt_with_platform_key(
+    parts: JweParts,
+    key: &dyn PlatformKey,
+    policy: &DecryptPolicy,
+) -> Result<Decrypted> {
+    decrypt_any(parts, CallKey::Platform(Session::decrypting(key)), policy)
+}
+
+/// [`decrypt`] for either kind of key.
+fn decrypt_any(parts: JweParts, mut key: CallKey<'_>, policy: &DecryptPolicy) -> Result<Decrypted> {
     let headers = jose_headers(&parts, policy)?;
     let enc = headers[0].content_enc_alg()?;
     let inflate = check_zip(parts.protected.as_ref().and_then(|p| p.zip.as_deref()))?;
@@ -377,8 +488,14 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
     let mut best: Option<Error> = None;
     let mut candidates = Vec::new();
     for (index, header) in headers.iter().enumerate() {
-        match candidate(header, &enc, key, policy) {
-            Ok((alg, recipient_key)) => candidates.push((index, alg, recipient_key)),
+        let outcome = match &mut key {
+            CallKey::Jwk(jwk) => candidate(header, &enc, jwk, policy)
+                .map(|(alg, recipient_key)| (alg, Bound::Jwk(recipient_key))),
+            CallKey::Platform(session) => platform_candidate(header, &enc, session, policy)?
+                .map(|(alg, kind)| (alg, Bound::Platform(kind))),
+        };
+        match outcome {
+            Ok((alg, bound)) => candidates.push((index, alg, bound)),
             Err(e) => {
                 if best.as_ref().is_none_or(|b| rank(&e) > rank(b)) {
                     best = Some(e);
@@ -386,6 +503,10 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
             }
         }
     }
+    let platform = match &key {
+        CallKey::Jwk(_) => None,
+        CallKey::Platform(session) => Some(session.key),
+    };
     if candidates.is_empty() {
         return Err(best.unwrap_or(Error::DecryptionFailed));
     }
@@ -401,6 +522,7 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
         let result = decrypt_recipient(
             alg,
             recipient_key,
+            platform,
             &enc,
             header,
             &recipient.encrypted_key,
@@ -410,6 +532,12 @@ pub(crate) fn decrypt(parts: JweParts, key: &Jwk, policy: &DecryptPolicy) -> Res
             policy,
             &mut pbes2_budget,
         );
+        // ADR 0071 §4: stop at once, so no second prompt follows.
+        if let Err(e) = &result
+            && platform_key::stops_decryption(e)
+        {
+            return Err(e.clone());
+        }
         if let Ok(plaintext) = result {
             let index = *index;
             let mut parts = parts;

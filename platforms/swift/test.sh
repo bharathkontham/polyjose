@@ -27,7 +27,8 @@
 #      (contents, notices, checksum, binaryTarget stanza, a consumer `swift run`), each into its own
 #      temporary directory, so dist/apple/ is not written;
 #   5. platforms/swift/scripts/test-simulators.sh, when it exists (feature 0009 T03: the iOS
-#      Simulator run, swift-ios-sim).
+#      Simulator run, swift-ios-sim; feature 0025 T03: the hosted AppleKey tests,
+#      platforms/swift/HostedTests, on the same simulator).
 #
 # Not on macOS, or without swift, the suite cannot run: it prints `SKIPPED (<reason>)` as its last
 # line and exits 0, which scripts/test-all.sh reports as SKIPPED, never as passing.

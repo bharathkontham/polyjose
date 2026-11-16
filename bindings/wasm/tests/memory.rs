@@ -316,9 +316,6 @@ const CIPHER_BLOCKS: &str = "decrypted AES-GCM or AES-CBC blocks (audit L3 measu
     A128CBC-HS256 case on the package)";
 const EC_SCALAR: &str = "scalar temporaries of EC key generation (audit L3: P-256 `d`, 16 of \
     32 bytes)";
-const X25519_SCALAR: &str = "the X25519 scalar in x25519-dalek's Diffie-Hellman frames (issue #31: \
-    a bare `StaticSecret::diffie_hellman` leaves such 8-byte windows; the recipient key itself is \
-    boxed and moves copy no key bytes)";
 
 /// Every exception to "no copy", measured with the commands of the module doc (dev:
 /// `bindings/wasm/test.sh`; release: the package's opt-level z, without wasm-opt). Entries are
@@ -356,7 +353,6 @@ const KNOWN: &[Known] = &[
     known("jweDecryptCompact(ECDH-ES + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(ECDH-ES + A192GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(ECDH-ES + A256GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
-    known("jweDecryptCompact(ECDH-ES + A256GCM)", "private key", r(0, 1, 0), r(0, 0, 0), X25519_SCALAR),
     known("jweDecryptCompact(ECDH-ES+A128KW + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(PBES2-HS256+A128KW + A128GCM)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptCompact(dir + A128CBC-HS256)", "k", r(0, 0, 0), r(0, 3, 0), AES_KEY),
@@ -370,7 +366,6 @@ const KNOWN: &[Known] = &[
     known("jweDecryptJson(ECDH-ES + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(ECDH-ES + A192GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(ECDH-ES + A256GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
-    known("jweDecryptJson(ECDH-ES + A256GCM, aad)", "private key", r(0, 1, 0), r(0, 0, 0), X25519_SCALAR),
     known("jweDecryptJson(ECDH-ES+A128KW + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(PBES2-HS256+A128KW + A128GCM, aad)", "plaintext", r(2, 0, 0), r(0, 0, 0), CIPHER_BLOCKS),
     known("jweDecryptJson(dir + A128CBC-HS256, aad)", "k", r(0, 0, 0), r(0, 3, 0), AES_KEY),
@@ -390,19 +385,21 @@ const KNOWN: &[Known] = &[
     known("jwkGenerateForAlg(ES256)", "private key", r(0, 0, 0), r(0, 1, 0), EC_SCALAR),
     known("jwkThumbprint(oct, SHA-256)", "k (base64url)", r(0, 0, 0), r(1, 0, 0), HASH_INPUT),
     known("jwkThumbprintUri(oct, SHA-512)", "k (base64url)", r(2, 1, 0), r(2, 0, 0), HASH_INPUT),
-    known("jwsSignCompact(ES256)", "payload (base64url)", r(0, 0, 0), r(0, 1, 0), HASH_INPUT),
     known("jwsSignCompact(EdDSA)", "payload (base64url)", r(1, 4, 0), r(0, 2, 0), HASH_INPUT),
     known("jwsSignCompact(HS256)", "k", r(0, 0, 0), r(1, 0, 0), HMAC_KEY),
     known("jwsSignCompact(HS256)", "payload (base64url)", r(0, 3, 0), r(0, 2, 0), HASH_INPUT),
     known("jwsSignCompact(HS384)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    known("jwsSignCompact(HS384)", "payload (base64url)", r(3, 1, 0), r(1, 1, 0), HASH_INPUT),
+    // 0025 T01 shifted the sign path 0x60 deeper: the 4th copy of the 0x130-stride block-buffer series keeps a window
+    known("jwsSignCompact(HS384)", "payload (base64url)", r(3, 2, 0), r(1, 1, 0), HASH_INPUT),
     known("jwsSignCompact(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    known("jwsSignCompact(HS512)", "payload (base64url)", r(3, 0, 0), r(1, 1, 0), HASH_INPUT),
+    // 0025 T01 shifted the sign path 0x60 deeper: the 4th copy of the 0x130-stride block-buffer series keeps a window
+    known("jwsSignCompact(HS512)", "payload (base64url)", r(3, 1, 0), r(1, 1, 0), HASH_INPUT),
     known("jwsSignCompact(HS512, detached)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    known("jwsSignCompact(HS512, detached)", "payload (base64url)", r(3, 0, 0), r(1, 1, 0), HASH_INPUT),
+    // 0025 T01 shifted the sign path 0x60 deeper: the 4th copy of the 0x130-stride block-buffer series keeps a window
+    known("jwsSignCompact(HS512, detached)", "payload (base64url)", r(3, 1, 0), r(1, 1, 0), HASH_INPUT),
     known("jwsSignFlattened(HS512)", "k", r(0, 0, 0), r(0, 1, 0), HMAC_KEY),
-    known("jwsSignFlattened(HS512)", "payload (base64url)", r(3, 0, 0), r(1, 1, 0), HASH_INPUT),
-    known("jwsSignGeneral(HS512, ES256)", "payload (base64url)", r(0, 0, 0), r(0, 1, 0), HASH_INPUT),
+    // 0025 T01 shifted the sign path 0x60 deeper: the 4th copy of the 0x130-stride block-buffer series keeps a window
+    known("jwsSignFlattened(HS512)", "payload (base64url)", r(3, 1, 0), r(1, 1, 0), HASH_INPUT),
     known("jwsVerifyCompact(ES256)", "payload (base64url)", r(0, 2, 0), r(0, 1, 0), HASH_INPUT),
     known("jwsVerifyCompact(EdDSA)", "payload (base64url)", r(0, 4, 0), r(0, 4, 0), HASH_INPUT),
     known("jwsVerifyCompact(HS256)", "k", r(0, 0, 0), r(1, 0, 0), HMAC_KEY),

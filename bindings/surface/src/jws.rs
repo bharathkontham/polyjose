@@ -18,6 +18,7 @@ use polyjose::jwk::Jwk;
 use polyjose::jws::{ProtectedHeader, SignOptions, Signer, Verified, VerifyOptions};
 
 use crate::error::SurfaceResult;
+use crate::platform_key::{CoreKey, PlatformKey};
 use crate::records::{
     JwsSignOptions, JwsSigner, JwsVerified, JwsVerifyOptions, algs, apply, apply_flag, to_usize,
 };
@@ -62,6 +63,42 @@ pub fn jws_sign_compact(
         &protected,
         payload,
         &key,
+        &sign_options(options.detached),
+    )?)
+}
+
+/// Signs `payload` with the platform-held `key` into a JWS Compact Serialization (ADR 0071 §5;
+/// RFC 7515 §5.1, §7.1): [`jws_sign_compact`] with the private-key step done by `key`.
+///
+/// `options` work as for [`jws_sign_compact`]: exactly one of `protected_header` and
+/// `protected_b64u`, whose `alg` must be one a platform key may serve (ES256, ES384, ES512,
+/// RS256, RS384, RS512, PS256, PS384, PS512; ADR 0071 §2). The core reads `key`'s public JWK and
+/// algorithms once, binds the `alg` to them, calls [`PlatformKey::sign`] once, converts an ES\*
+/// DER result to R‖S (RFC 7518 §3.4) and verifies the signature before it returns the token
+/// (ADR 0071 §3).
+///
+/// # Errors
+///
+/// The header, then every error of `polyjose::jws::sign_compact_with_platform_key`:
+/// `InvalidHeader` for the header-form misuse; `UnsupportedAlgorithm` for an `alg` a platform key
+/// may not serve; `InvalidKey` for a public JWK that does not import or holds a private member;
+/// `KeyAlgorithmMismatch` for an `alg` the key is not bound to (RFC 8725 §3.1); `KeyNotFound` and
+/// `UserAuthenticationRequired` from the key; `PlatformKeyFailed` for any other failure of the
+/// key, a signature that is malformed or does not verify included (ADR 0071 §3, §6).
+pub fn jws_sign_compact_with_platform_key(
+    payload: &[u8],
+    key: &dyn PlatformKey,
+    options: &JwsSignOptions,
+) -> SurfaceResult<String> {
+    let protected = protected_header(
+        options.protected_header.as_deref(),
+        options.protected_b64u.as_deref(),
+    )?
+    .ok_or(Error::InvalidHeader(NO_PROTECTED_HEADER))?;
+    Ok(polyjose::jws::sign_compact_with_platform_key(
+        &protected,
+        payload,
+        &CoreKey(key),
         &sign_options(options.detached),
     )?)
 }

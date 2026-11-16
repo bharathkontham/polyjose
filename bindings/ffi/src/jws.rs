@@ -24,10 +24,13 @@
 //!   Callers should wipe the `ByteArray`/`Data` they receive (ADR 0030 §7.4). The signed
 //!   serializations are the surface's plain `String`s (they are the transmitted token).
 
+use std::sync::Arc;
+
 use polyjose_surface::records as surface;
 use zeroize::Zeroizing;
 
 use crate::PolyjoseError;
+use crate::platform_key::{HostKey, PlatformKey};
 use crate::records::{JwsSignOptions, JwsSigner, JwsVerified, JwsVerifyOptions};
 
 /// Signs `payload` with `key` into a JWS Compact Serialization (ADR 0030 §4; RFC 7515 §5.1,
@@ -53,6 +56,35 @@ pub fn jws_sign_compact(
     let key = Zeroizing::new(key);
     let options = surface::JwsSignOptions::from(options);
     Ok(polyjose_surface::jws::jws_sign_compact(
+        &payload, &key, &options,
+    )?)
+}
+
+/// Signs `payload` with the host's platform key into a JWS Compact Serialization (ADR 0071 §5;
+/// RFC 7515 §5.1, §7.1): `jws_sign_compact` with the private-key step done by `key`.
+///
+/// `options` are those of `jws_sign_compact`. The `alg` must be ES256, ES384, ES512, RS256,
+/// RS384, RS512, PS256, PS384 or PS512, bound to `key` by its `algorithms()` and public JWK
+/// (RFC 8725 §3.1). polyjose calls `key.sign` once and verifies the signature against the public
+/// JWK before it returns the token (ADR 0071 §3).
+///
+/// # Errors
+///
+/// `InvalidHeader` for both or neither header form (ADR 0030 §4); `UnsupportedAlgorithm` for an
+/// `alg` a platform key may not serve; `InvalidKey` for a public JWK that does not import or holds
+/// a private member; `KeyAlgorithmMismatch` for an `alg` the key is not bound to; `KeyNotFound`
+/// and `UserAuthenticationRequired` from the key; `PlatformKeyFailed` for any other failure of the
+/// key, any other exception it throws and a signature that does not verify (ADR 0071 §3, §6).
+#[uniffi::export]
+pub fn jws_sign_compact_with_platform_key(
+    payload: Vec<u8>,
+    key: Arc<dyn PlatformKey>,
+    options: JwsSignOptions,
+) -> Result<String, PolyjoseError> {
+    let payload = Zeroizing::new(payload);
+    let key = HostKey(key);
+    let options = surface::JwsSignOptions::from(options);
+    Ok(polyjose_surface::jws::jws_sign_compact_with_platform_key(
         &payload, &key, &options,
     )?)
 }

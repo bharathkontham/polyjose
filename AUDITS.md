@@ -43,6 +43,27 @@ notes say where that applies. Every other crate in the tree is listed in [CREDIT
 | `x25519-dalek` | 3.0.0 | None known | Quarkslab's 2019 dalek review covered this crate only marginally. |
 | `zeroize` | 1.9.1 | None known | |
 
+## Platform key services
+
+With a platform-held key (`PlatformKey`, ADR 0070), the operating system's key service performs
+the private-key operation: a signature, an ECDH agreement or an RSA-OAEP-256 decryption. These
+services are the Apple Security framework with the Secure Enclave, and the Android Keystore with
+StrongBox, or any key service an app wraps itself (a smart card, a KMS).
+
+**polyjose has not reviewed them**, and the audit rule for primitive crates above can't be applied
+to them. Their constant-time and side-channel behaviour is the platform's. What the vendors
+publish:
+
+- **Apple:** [Apple Platform Security: Secure Enclave](https://support.apple.com/guide/security/sec59b0b31ff/web)
+  and [Protecting keys with the Secure Enclave](https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave).
+- **Android:** [Hardware-backed Keystore](https://source.android.com/docs/security/features/keystore)
+  and the [Android keystore system](https://developer.android.com/privacy-and-security/keystore).
+
+What polyjose does instead (ADR 0070 §5): it verifies every signature a platform key returns
+against the key's public JWK, in pure Rust, before it returns a token; a wrong Z or content key
+fails the pure-Rust key unwrap or tag check and never yields a plaintext; and it reports where a
+key lives only from the platform's own answer.
+
 ## How polyjose closes the gaps
 
 - It runs the RFC test vectors, and Wycheproof where it applies, against the exact versions above,

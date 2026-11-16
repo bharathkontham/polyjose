@@ -42,7 +42,9 @@
 //! ```
 
 mod api;
-mod der;
+// Also read by `jws::ecdsa` for a platform key's DER `Ecdsa-Sig-Value`
+// (ADR 0071 §3).
+pub(crate) mod der;
 mod ec;
 pub(crate) mod generate;
 mod jwk_build;

@@ -51,8 +51,9 @@ use crate::jwa::SigningAlg;
 use crate::jwk::Jwk;
 use crate::util::b64url_encode;
 
-use super::VerifyOptions;
-use super::alg::{Families, Operation, bind_key};
+use super::alg::{FAMILIES, Families, Operation, bind_key};
+use super::{VerifyOptions, ecdsa};
+use crate::platform_key::{self, PlatformKey, PublicView};
 
 /// The `crit` extensions polyjose understands: only `b64` (RFC 7797 §6;
 /// RFC 7515 §4.1.11; ADR 0007).
@@ -352,11 +353,23 @@ pub(crate) fn verify_signature(
 
 /// A signature that passed steps 5–8 for signing and may be computed.
 ///
-/// Only [`prepare_sign`] builds one, so a family's `sign` is never reached
-/// without key binding.
+/// Only [`prepare_sign`] and [`prepare_platform_sign`] build one, so
+/// neither a family's `sign` nor a platform key is reached without key
+/// binding.
 pub(crate) struct SignReady<'k> {
     alg: SigningAlg,
-    key: &'k Jwk,
+    key: ReadyKey<'k>,
+}
+
+/// The key a [`SignReady`] signs with.
+enum ReadyKey<'k> {
+    /// A private JWK, through the `Families` table.
+    Jwk(&'k Jwk),
+    /// A platform key and its public side, read once (ADR 0071 §2).
+    Platform {
+        key: &'k dyn PlatformKey,
+        view: Box<PublicView>,
+    },
 }
 
 impl SignReady<'_> {
@@ -373,8 +386,24 @@ impl SignReady<'_> {
     ///
     /// The family's: [`Error::InvalidKey`], or
     /// [`Error::RandomnessUnavailable`] for ECDSA.
+    ///
+    /// A platform key bypasses `families` for its signature, which
+    /// [`platform_key::sign_checked`] converts and verifies with the real
+    /// family verify ([`FAMILIES`]), always (ADR 0071 §3):
+    /// [`Error::KeyNotFound`], [`Error::UserAuthenticationRequired`] or
+    /// [`Error::PlatformKeyFailed`].
     pub(crate) fn sign(&self, families: &Families, signing_input: &[u8]) -> Result<Vec<u8>> {
-        (families.sign)(&self.alg, self.key, signing_input)
+        match &self.key {
+            ReadyKey::Jwk(key) => (families.sign)(&self.alg, key, signing_input),
+            ReadyKey::Platform { key, view } => platform_key::sign_checked(
+                &self.alg,
+                *key,
+                view,
+                signing_input,
+                ecdsa::der_to_fixed,
+                FAMILIES.verify,
+            ),
+        }
     }
 }
 
@@ -398,7 +427,50 @@ pub(crate) fn prepare_sign<'k>(header: &JoseHeader, key: &'k Jwk) -> Result<Sign
         return Err(Error::AlgorithmNotAllowed);
     }
     bind_key(&alg, key, Operation::Sign)?;
-    Ok(SignReady { alg, key })
+    Ok(SignReady {
+        alg,
+        key: ReadyKey::Jwk(key),
+    })
+}
+
+/// [`prepare_sign`] for a platform key (ADR 0071 §2), in this order:
+///
+/// 5–7. As [`prepare_sign`]: [`Error::UnknownCritical`],
+///    [`Error::UnsupportedAlgorithm`], [`Error::AlgorithmNotAllowed`]
+///    (`none`), before the key is called.
+/// 8a. [`Error::UnsupportedAlgorithm`] for an `alg` no platform key
+///    serves (EdDSA, ES256K, HS\*; ADR 0071 §2), before the key is called.
+/// 8b. The key's public side, `view` if the caller already read it, else
+///    read now ([`PublicView::read`]): [`Error::KeyNotFound`],
+///    [`Error::UserAuthenticationRequired`], [`Error::PlatformKeyFailed`],
+///    or an import error ([`Error::InvalidKey`] for a private member, an
+///    off-curve point or a short RSA modulus).
+/// 8c. Key binding ([`PublicView::bind_signing`]; RFC 8725 §3.1):
+///    [`Error::KeyAlgorithmMismatch`].
+pub(crate) fn prepare_platform_sign<'k>(
+    header: &JoseHeader,
+    key: &'k dyn PlatformKey,
+    view: Option<PublicView>,
+) -> Result<SignReady<'k>> {
+    let alg = understood_alg(header)?;
+    if alg == SigningAlg::None {
+        return Err(Error::AlgorithmNotAllowed);
+    }
+    if !platform_key::serves_signing(&alg) {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    let view = match view {
+        Some(view) => view,
+        None => PublicView::read(key, Error::PlatformKeyFailed)?,
+    };
+    view.bind_signing(&alg)?;
+    Ok(SignReady {
+        alg,
+        key: ReadyKey::Platform {
+            key,
+            view: Box::new(view),
+        },
+    })
 }
 
 /// How far a signature got through steps 5–9 before failing, for
