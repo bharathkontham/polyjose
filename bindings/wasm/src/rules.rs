@@ -313,15 +313,41 @@ fn no_unsafe_and_no_logging() {
     assert!(lib.contains("#![forbid(unsafe_code)]"));
 }
 
-#[test]
-fn every_inventory_operation_is_exported_once() {
+/// The `op` names of bindings/api-inventory.txt (ADR 0030 §4) that exist in the WASM binding. A line
+/// is `op <name> [only <mode>...]`; an op whose `only` modes exclude `wasm` exists only in those
+/// modes' bindings (ADR 0071 §5), so it is skipped, as `scripts/check-binding-api.sh wasm` does.
+fn inventory_ops() -> BTreeSet<String> {
     let inventory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../api-inventory.txt");
     let inventory = fs::read_to_string(inventory).unwrap_or_else(|e| unreachable!("{e}"));
-    let ops: BTreeSet<String> = inventory
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("op "))
-        .map(|op| op.trim().to_owned())
-        .collect();
+    let mut ops = BTreeSet::new();
+    for line in inventory.lines() {
+        let Some(rest) = line.trim().strip_prefix("op ") else {
+            continue;
+        };
+        let mut words = rest.split_whitespace();
+        let name = words.next().unwrap_or_default();
+        let modes: Vec<&str> = match words.next() {
+            None => vec!["wasm"],
+            Some("only") => words.collect(),
+            Some(other) => unreachable!("api-inventory.txt: `op {name} {other}`: expected `only`"),
+        };
+        assert!(
+            !modes.is_empty(),
+            "api-inventory.txt: `op {name} only` names no mode"
+        );
+        if modes.contains(&"wasm") {
+            assert!(
+                ops.insert(name.to_owned()),
+                "api-inventory.txt: `op {name}` twice"
+            );
+        }
+    }
+    ops
+}
+
+#[test]
+fn every_inventory_operation_is_exported_once() {
+    let ops = inventory_ops();
     let mut exported = BTreeSet::new();
     for e in exports() {
         assert!(
