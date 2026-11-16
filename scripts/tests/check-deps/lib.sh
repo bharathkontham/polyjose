@@ -66,6 +66,15 @@ case_jobs=1
 q_head=0
 q_tail=0
 concurrent_cases() {
+  # Only this file's finish judges the pending runs and only its EXIT trap waits for them; a helper
+  # that redefines either (scripts/tests/test-all/lib.sh redefines both) would let cases go
+  # unjudged, so this mode refuses to start under it.
+  declare -f finish >"$scratch/finish.def" || lib_die "could not read the finish function"
+  trap -p EXIT >"$scratch/exit.trap" || lib_die "could not read the EXIT trap"
+  grep -qF 'judge_oldest' "$scratch/finish.def" \
+    || lib_die "concurrent_cases needs scripts/tests/check-deps/lib.sh's finish, which judges the pending cases; this test redefines finish"
+  grep -qF 'rc=$?; wait; ' "$scratch/exit.trap" \
+    || lib_die "concurrent_cases needs scripts/tests/check-deps/lib.sh's EXIT trap, which waits for the pending cases; this test replaces it"
   case_jobs=${CHECK_DEPS_TEST_JOBS:-4}
   case $case_jobs in '' | 0 | *[!0-9]*) lib_die "CHECK_DEPS_TEST_JOBS must be a positive integer, not '$case_jobs'" ;; esac
 }
