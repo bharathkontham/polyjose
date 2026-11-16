@@ -180,6 +180,135 @@ final class AppleKeyHostedTests: XCTestCase {
         for fixture in Self.keychain { try openSignAndDelete(fixture, in: directory) }
     }
 
+    // MARK: - A key the app stored itself (feature 0025 B04): found by tag, or wrapped as a SecKey
+
+    static let claims = #"{"iss":"joe","sub":"existing-key"}"#
+
+    /// A permanent private key the app makes itself with `SecKeyCreateRandomKey`, as an iOS app
+    /// would: its own `kSecAttrApplicationTag` (the tag string's UTF-8 bytes), no polyjose call.
+    /// `extra` adds private-key attributes; `top` adds top-level ones (for example the token).
+    static func appKey(tag: String, type: CFString, bits: Int, extra: [CFString: Any] = [:], top: [CFString: Any] = [:]) throws -> SecKey {
+        _ = SecItemDelete([kSecClass: kSecClassKey, kSecAttrApplicationTag: Data(tag.utf8)] as CFDictionary)
+        var privateAttributes: [CFString: Any] = [kSecAttrIsPermanent: true, kSecAttrApplicationTag: Data(tag.utf8)]
+        privateAttributes.merge(extra) { $1 }
+        var attributes: [CFString: Any] = [kSecAttrKeyType: type, kSecAttrKeySizeInBits: bits, kSecPrivateKeyAttrs: privateAttributes]
+        attributes.merge(top) { $1 }
+        var error: Unmanaged<CFError>?
+        let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error)
+        let code = error.map { CFErrorGetCode($0.takeRetainedValue()) } ?? 0
+        return try XCTUnwrap(key, "SecKeyCreateRandomKey failed with code \(code)")
+    }
+
+    /// `jwtSignWithPlatformKey`, verified with the key's public JWK alone (RFC 7519 §7.1, §7.2).
+    func signsAJwt(_ key: AppleKey, _ alg: String, file: StaticString = #filePath, line: UInt = #line) throws {
+        let jwt = try jwtSignWithPlatformKey(claims: Self.claims, key: key, options: JwtSignOptions(alg: alg))
+        let options = JwtVerifyOptions(allowedAlgs: [alg], now: 1_700_000_000, allowMissingExp: true)
+        XCTAssertEqual(try jwtVerify(token: jwt, key: try key.publicJwk(), options: options).claims, Self.claims, alg, file: file, line: line)
+    }
+
+    /// A JWE and a nested JWT (RFC 7519 §5.2) encrypted to the public JWK only, as a server would
+    /// (RFC 7516 §5.1), then decrypted by `key`. The inner JWT is signed by `signer`.
+    func decryptsAJweAndANestedJwt(_ key: AppleKey, _ alg: String, signer: AppleKey, file: StaticString = #filePath, line: UInt = #line) throws {
+        let encrypt = JweEncryptOptions(enc: "A256GCM", recipients: [JweRecipient(alg: alg, key: try key.publicJwk())])
+        let decrypt = JweDecryptOptions(allowedAlgs: [alg], allowedEnc: ["A256GCM"])
+        let jwe = try jweEncryptCompact(plaintext: Self.payload, options: encrypt)
+        XCTAssertEqual(try jweDecryptCompactWithPlatformKey(token: jwe, key: key, options: decrypt).plaintext, Self.payload, alg, file: file, line: line)
+        let signerAlg = try XCTUnwrap(try signer.algorithms().first)
+        let signed = try jwtSignWithPlatformKey(claims: Self.claims, key: signer, options: JwtSignOptions(alg: signerAlg))
+        let nested = try jwtEncryptNested(signedJwt: signed, options: encrypt)
+        let verified = try jwtDecryptNestedWithPlatformKey(
+            token: nested, decryptKey: key, decryptOptions: decrypt, key: try signer.publicJwk(),
+            options: JwtVerifyOptions(allowedAlgs: [signerAlg], now: 1_700_000_000, allowMissingExp: true))
+        XCTAssertEqual(verified.inner.claims, Self.claims, alg, file: file, line: line)
+    }
+
+    /// A Keychain P-256 key the app stored: `open(tag:algorithm:)` finds it for ES256 and for
+    /// ECDH-ES (a software key has no purpose of its own), `AppleKey(secKey:algorithm:)` wraps the
+    /// same `SecKey`, another curve or type is `KeyAlgorithmMismatch`, and `delete(tag:)` removes it.
+    func testAnExistingKeychainEcKeyOpensByTag() throws {
+        let tag = "dev.polyjose.\(Self.marker).existing-ec"
+        let secKey = try Self.appKey(tag: tag, type: kSecAttrKeyTypeECSECPrimeRandom, bits: 256)
+        let opened = try AppleKey.open(tag: tag, algorithm: "ES256")
+        XCTAssertEqual(opened.protection, .keychain)
+        try signsAJwt(opened, "ES256")
+        let wrapped = try AppleKey(secKey: secKey, algorithm: "ES256")
+        XCTAssertEqual(try wrapped.publicJwk(), try opened.publicJwk())
+        try signsAJwt(wrapped, "ES256")
+        try decryptsAJweAndANestedJwt(try AppleKey.open(tag: tag, algorithm: "ECDH-ES"), "ECDH-ES", signer: opened)
+        try decryptsAJweAndANestedJwt(try AppleKey(secKey: secKey, algorithm: "ECDH-ES"), "ECDH-ES+A256KW", signer: wrapped)
+        for other in ["ES384", "RS256", "RSA-OAEP-256"] {
+            XCTAssertEqual(polyjoseCode("P-256 key as \(other)") { try AppleKey.open(tag: tag, algorithm: other) }, "KeyAlgorithmMismatch", other)
+        }
+        XCTAssertEqual(polyjoseCode("ECDH-ES+A256KW name") { try AppleKey.open(tag: tag, algorithm: "ECDH-ES+A256KW") }, "UnsupportedAlgorithm")
+        try AppleKey.delete(tag: tag)
+        XCTAssertEqual(polyjoseCode("open after delete") { try AppleKey.open(tag: tag, algorithm: "ES256") }, "KeyNotFound")
+    }
+
+    /// A Keychain RSA-2048 key the app stored opens as RS256, PS256 and RSA-OAEP-256. `open` doesn't
+    /// read `kSecAttrCanSign` or `kSecAttrCanDecrypt`, and a software key stored with either set to
+    /// false still signed and decrypted (measured on the iOS 27.2 simulator, 2026-11-16).
+    func testAnExistingKeychainRsaKeyOpensByTag() throws {
+        let tag = "dev.polyjose.\(Self.marker).existing-rsa"
+        let secKey = try Self.appKey(tag: tag, type: kSecAttrKeyTypeRSA, bits: 2048)
+        for alg in ["RS256", "PS256"] { try signsAJwt(try AppleKey.open(tag: tag, algorithm: alg), alg) }
+        let signer = try AppleKey(secKey: secKey, algorithm: "PS256")
+        try decryptsAJweAndANestedJwt(try AppleKey.open(tag: tag, algorithm: "RSA-OAEP-256"), "RSA-OAEP-256", signer: signer)
+        XCTAssertEqual(polyjoseCode("RSA key as ES256") { try AppleKey.open(tag: tag, algorithm: "ES256") }, "KeyAlgorithmMismatch")
+        try AppleKey.delete(tag: tag)
+
+        let noSign = "dev.polyjose.\(Self.marker).existing-rsa-nosign"
+        _ = try Self.appKey(tag: noSign, type: kSecAttrKeyTypeRSA, bits: 2048, extra: [kSecAttrCanSign: false])
+        let noSignOutcome = Self.openOutcome(tag: noSign, algorithm: "RS256")
+        let noDecrypt = "dev.polyjose.\(Self.marker).existing-rsa-nodecrypt"
+        _ = try Self.appKey(tag: noDecrypt, type: kSecAttrKeyTypeRSA, bits: 2048, extra: [kSecAttrCanDecrypt: false])
+        let noDecryptOutcome = Self.openOutcome(tag: noDecrypt, algorithm: "RSA-OAEP-256")
+        print("POLYJOSE-EXISTING kSecAttrCanSign=false as RS256: \(noSignOutcome); kSecAttrCanDecrypt=false as RSA-OAEP-256: \(noDecryptOutcome)")
+        try AppleKey.delete(tag: noSign)
+        try AppleKey.delete(tag: noDecrypt)
+        XCTAssertEqual(noSignOutcome, "opened, signed")
+        XCTAssertEqual(noDecryptOutcome, "opened, decrypted")
+    }
+
+    /// `open` for the printed outcome: `opened`, then `signed` or `decrypted` when the key works,
+    /// or the polyjose code of the first failing step.
+    static func openOutcome(tag: String, algorithm: String) -> String {
+        do {
+            let key = try AppleKey.open(tag: tag, algorithm: algorithm)
+            if algorithm == "RSA-OAEP-256" {
+                let encrypt = JweEncryptOptions(enc: "A256GCM", recipients: [JweRecipient(alg: algorithm, key: try key.publicJwk())])
+                let jwe = try jweEncryptCompact(plaintext: payload, options: encrypt)
+                _ = try jweDecryptCompactWithPlatformKey(token: jwe, key: key, options: JweDecryptOptions(allowedAlgs: [algorithm], allowedEnc: ["A256GCM"]))
+                return "opened, decrypted"
+            }
+            _ = try jwtSignWithPlatformKey(claims: claims, key: key, options: JwtSignOptions(alg: algorithm))
+            return "opened, signed"
+        } catch let error as PolyjoseError {
+            return error.code()
+        } catch {
+            return "unexpected error type"
+        }
+    }
+
+    /// A Secure Enclave P-256 key the app stored (`kSecAttrTokenIDSecureEnclave`,
+    /// `.privateKeyUsage`) opens by tag with `protection` `.secureEnclave`, for ES256 and ECDH-ES.
+    func testAnExistingSecureEnclaveKeyOpensByTag() throws {
+        try requireSecureEnclave()
+        let tag = "dev.polyjose.\(Self.marker).existing-se"
+        let control = try XCTUnwrap(SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, .privateKeyUsage, nil))
+        let secKey = try Self.appKey(
+            tag: tag, type: kSecAttrKeyTypeECSECPrimeRandom, bits: 256, extra: [kSecAttrAccessControl: control],
+            top: [kSecAttrTokenID: kSecAttrTokenIDSecureEnclave])
+        let opened = try AppleKey.open(tag: tag, algorithm: "ES256")
+        XCTAssertEqual(opened.protection, .secureEnclave)
+        try signsAJwt(opened, "ES256")
+        let wrapped = try AppleKey(secKey: secKey, algorithm: "ES256")
+        XCTAssertEqual(wrapped.protection, .secureEnclave)
+        try signsAJwt(wrapped, "ES256")
+        try decryptsAJweAndANestedJwt(try AppleKey.open(tag: tag, algorithm: "ECDH-ES"), "ECDH-ES", signer: opened)
+        try AppleKey.delete(tag: tag)
+        XCTAssertEqual(polyjoseCode("open after delete") { try AppleKey.open(tag: tag, algorithm: "ES256") }, "KeyNotFound")
+    }
+
     // MARK: - Keys that prompt (ADR 0072 §4): on a device, with a person (DEVICE-TESTS.md)
 
     func requireDevice() throws {
