@@ -149,7 +149,7 @@ unsigned binary, such as `swift test`, gets `PlatformKeyFailed` from `generate`.
 | Code | When |
 |---|---|
 | `KeyNotFound` | No key under that tag |
-| `UserAuthenticationRequired` | The user has not authenticated, cancelled, or can't (lockout) |
+| `UserAuthenticationRequired` | The user has not authenticated, cancelled, or can't: biometry locked out, not available or not enrolled, or no passcode set. The same on Android; prompt, then retry |
 | `PlatformKeyFailed` | Any other platform failure while creating, finding or signing |
 | `DecryptionFailed` | Any other failure while decrypting (RFC 7516 §11.5) |
 | `UnsupportedAlgorithm` | An algorithm or size the protection can't serve |
@@ -158,8 +158,8 @@ unsigned binary, such as `swift test`, gets `PlatformKeyFailed` from `generate`.
 
 **Printing** an `AppleKey` shows its type and `protection` only, never the tag or the key.
 
-**watchOS** has no biometry: `LAError.Code.biometryLockout` doesn't exist there, so it is left out
-of the error mapping on watchOS.
+**watchOS** has no biometry: `LAError.Code.biometryLockout`, `.biometryNotAvailable` and
+`.biometryNotEnrolled` don't exist there, so they are left out of the error mapping on watchOS.
 
 ## Documentation
 

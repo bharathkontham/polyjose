@@ -294,6 +294,9 @@ final class AppleKeyTests: XCTestCase {
             (LAErrorDomain, LAError.Code.systemCancel.rawValue, .UserAuthenticationRequired, "UserAuthenticationRequired"),
             (LAErrorDomain, LAError.Code.authenticationFailed.rawValue, .UserAuthenticationRequired, "UserAuthenticationRequired"),
             (LAErrorDomain, LAError.Code.notInteractive.rawValue, .UserAuthenticationRequired, "UserAuthenticationRequired"),
+            // The user can't authenticate (ADR 0071 §6): no passcode, or chose the fallback.
+            (LAErrorDomain, LAError.Code.passcodeNotSet.rawValue, .UserAuthenticationRequired, "UserAuthenticationRequired"),
+            (LAErrorDomain, LAError.Code.userFallback.rawValue, .UserAuthenticationRequired, "UserAuthenticationRequired"),
             // Any other status or code, including the RSA-OAEP padding failure (errSecParam,
             // measured) and the missing-entitlement status: never one of the first two (ADR 0071 §4).
             (NSOSStatusErrorDomain, Int(errSecParam), .Failed, "PlatformKeyFailed"),
@@ -301,14 +304,15 @@ final class AppleKeyTests: XCTestCase {
             (NSOSStatusErrorDomain, Int(errSecDecode), .Failed, "PlatformKeyFailed"),
             (NSOSStatusErrorDomain, -67712, .Failed, "PlatformKeyFailed"),
             (NSOSStatusErrorDomain, 0, .Failed, "PlatformKeyFailed"),
-            (LAErrorDomain, LAError.Code.passcodeNotSet.rawValue, .Failed, "PlatformKeyFailed"),
+            (LAErrorDomain, LAError.Code.invalidContext.rawValue, .Failed, "PlatformKeyFailed"),
             (LAErrorDomain, Int(errSecItemNotFound), .Failed, "PlatformKeyFailed"),
             (NSCocoaErrorDomain, Int(errSecItemNotFound), .Failed, "PlatformKeyFailed"),
             ("dev.polyjose.test", LAError.Code.userCancel.rawValue, .Failed, "PlatformKeyFailed"),
         ]
         #if !os(watchOS)  // no biometry on watchOS
         table.append((LAErrorDomain, LAError.Code.biometryLockout.rawValue, .UserAuthenticationRequired, "UserAuthenticationRequired"))
-        table.append((LAErrorDomain, LAError.Code.biometryNotAvailable.rawValue, .Failed, "PlatformKeyFailed"))
+        table.append((LAErrorDomain, LAError.Code.biometryNotAvailable.rawValue, .UserAuthenticationRequired, "UserAuthenticationRequired"))
+        table.append((LAErrorDomain, LAError.Code.biometryNotEnrolled.rawValue, .UserAuthenticationRequired, "UserAuthenticationRequired"))
         #endif
         for (domain, code, expected, polyjoseCode) in table {
             let mapped = AppleKey.platformKeyError(domain: domain, code: code)
