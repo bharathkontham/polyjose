@@ -37,36 +37,66 @@ pub(crate) enum Direction {
 /// Secret variants wipe their bytes on drop (`Zeroizing`, and the
 /// `ZeroizeOnDrop` secret types of `p256`/`p384`/`p521` and
 /// `x25519-dalek`). `Debug` prints the variant name only.
+///
+/// Every variant holds one `Box`, so a `RecipientKey` is a tag and a
+/// pointer (issue #31, measured by `bindings/wasm/tests/memory.rs`). A
+/// `RecipientKey` is moved by value out of [`RecipientKey::from_jwk`], into
+/// the decrypt candidate list (a `Vec`, on the heap) and through
+/// `jwe::core`'s candidate steps (RFC 7516 §5.2), and each move copies the
+/// whole enum:
+///
+/// - an inline secret (a `SecretKey` scalar, a `StaticSecret`) left a copy
+///   in every dead stack slot it passed through, which no drop reaches;
+/// - a small variant in a large enum leaves the rest of the enum's bytes
+///   uninitialized, and a move copies those too: they held stale stack
+///   bytes, among them scalar copies from the curve crate's dead frames,
+///   which the copy into the candidate list carried onto the heap.
+///
+/// Boxed, the key's one copy is on the heap, its type wipes it on drop,
+/// and a move copies no key bytes and too few stale bytes to carry one.
 pub(crate) enum RecipientKey {
     /// `dir`, A*KW, A*GCMKW: the symmetric key `k` (RFC 7518 §6.4).
-    Symmetric(Zeroizing<Vec<u8>>),
+    Symmetric(Box<Zeroizing<Vec<u8>>>),
     /// PBES2: the password, carried as an `oct` key's `k` (RFC 7518 §4.8).
-    Password(Zeroizing<Vec<u8>>),
+    Password(Box<Zeroizing<Vec<u8>>>),
     /// RSA-OAEP-256 encryption: the validated modulus and public exponent,
     /// big-endian (RFC 7518 §6.3.1, §4.3).
-    RsaPublic { n: Vec<u8>, e: Vec<u8> },
+    RsaPublic(Box<RsaPublicParts>),
     /// RSA-OAEP-256 decryption: the validated RSA private JWK key (RFC 7518
     /// §6.3.2, §4.3; ADR 0067), whose private members wipe on drop.
-    RsaPrivate(RsaKey),
+    RsaPrivate(Box<RsaKey>),
     /// ECDH-ES on P-256 (RFC 7518 §4.6): the recipient's public key.
-    P256Public(p256::PublicKey),
-    /// ECDH-ES on P-256: our private key.
-    P256Secret(p256::SecretKey),
+    P256Public(Box<p256::PublicKey>),
+    /// ECDH-ES on P-256 (RFC 7518 §4.6, §6.2.2.1): our private key.
+    P256Secret(Box<p256::SecretKey>),
     /// ECDH-ES on P-384: the recipient's public key.
-    P384Public(p384::PublicKey),
-    /// ECDH-ES on P-384: our private key.
-    P384Secret(p384::SecretKey),
+    P384Public(Box<p384::PublicKey>),
+    /// ECDH-ES on P-384 (RFC 7518 §4.6, §6.2.2.1): our private key.
+    P384Secret(Box<p384::SecretKey>),
     /// ECDH-ES on P-521: the recipient's public key.
-    P521Public(p521::PublicKey),
-    /// ECDH-ES on P-521: our private key.
-    P521Secret(p521::SecretKey),
+    P521Public(Box<p521::PublicKey>),
+    /// ECDH-ES on P-521 (RFC 7518 §4.6, §6.2.2.1): our private key.
+    P521Secret(Box<p521::SecretKey>),
     /// ECDH-ES on X25519 (RFC 8037 §3.2): the recipient's public key.
-    X25519Public(x25519_dalek::PublicKey),
-    /// ECDH-ES on X25519: our private key.
-    X25519Secret(x25519_dalek::StaticSecret),
+    X25519Public(Box<x25519_dalek::PublicKey>),
+    /// ECDH-ES on X25519 (RFC 8037 §3.2, RFC 7518 §4.6): our private key;
+    /// `StaticSecret` wipes it on drop (`zeroize` feature).
+    X25519Secret(Box<x25519_dalek::StaticSecret>),
+}
+
+/// The public half of [`RecipientKey::RsaPublic`]: the modulus `n` and
+/// public exponent `e`, big-endian (RFC 7518 §6.3.1).
+pub(crate) struct RsaPublicParts {
+    pub(crate) n: Vec<u8>,
+    pub(crate) e: Vec<u8>,
 }
 
 impl RecipientKey {
+    /// [`RecipientKey::RsaPublic`] of `n` and `e`.
+    pub(crate) fn rsa_public(n: Vec<u8>, e: Vec<u8>) -> Self {
+        Self::RsaPublic(Box::new(RsaPublicParts { n, e }))
+    }
+
     /// Binds `jwk` to `alg` (with `enc`, which fixes the `dir` key length,
     /// RFC 7518 §4.5) for `direction`, before any cryptography runs.
     ///
@@ -234,7 +264,7 @@ fn oct_key(
     match alg {
         KeyMgmtAlg::Pbes2Hs256A128KW
         | KeyMgmtAlg::Pbes2Hs384A192KW
-        | KeyMgmtAlg::Pbes2Hs512A256KW => Ok(RecipientKey::Password(k())),
+        | KeyMgmtAlg::Pbes2Hs512A256KW => Ok(RecipientKey::Password(Box::new(k()))),
         KeyMgmtAlg::Dir => {
             // RFC 7518 §4.5: the key is used directly as the CEK, so on
             // encrypt it must be exactly the CEK length of `enc`.
@@ -243,10 +273,10 @@ fn oct_key(
                     "dir key length must equal the enc key length",
                 ));
             }
-            Ok(RecipientKey::Symmetric(k()))
+            Ok(RecipientKey::Symmetric(Box::new(k())))
         }
         _ => match wrapping_key_len(alg) {
-            Some(len) if key.len() == len => Ok(RecipientKey::Symmetric(k())),
+            Some(len) if key.len() == len => Ok(RecipientKey::Symmetric(Box::new(k()))),
             Some(_) => Err(unusable(
                 direction,
                 "AES key wrap key length does not match alg",
@@ -278,13 +308,13 @@ fn ec_key(key: &EcKey, direction: Direction) -> Result<RecipientKey> {
             let point = [&[0x04][..], key.x(), key.y()].concat();
             match key.crv() {
                 EcCurve::P256 => p256::PublicKey::from_sec1_bytes(&point)
-                    .map(RecipientKey::P256Public)
+                    .map(|k| RecipientKey::P256Public(Box::new(k)))
                     .map_err(|_| unusable()),
                 EcCurve::P384 => p384::PublicKey::from_sec1_bytes(&point)
-                    .map(RecipientKey::P384Public)
+                    .map(|k| RecipientKey::P384Public(Box::new(k)))
                     .map_err(|_| unusable()),
                 EcCurve::P521 => p521::PublicKey::from_sec1_bytes(&point)
-                    .map(RecipientKey::P521Public)
+                    .map(|k| RecipientKey::P521Public(Box::new(k)))
                     .map_err(|_| unusable()),
                 _ => Err(Error::KeyAlgorithmMismatch),
             }
@@ -308,10 +338,11 @@ fn ec_key(key: &EcKey, direction: Direction) -> Result<RecipientKey> {
 }
 
 /// `SecretKey::from_bytes` on `d`, exactly the field length
-/// (RFC 7518 §6.2.2.1). The result wipes itself on drop.
-fn secret<C: Curve>(d: &[u8]) -> Option<SecretKey<C>> {
+/// (RFC 7518 §6.2.2.1), boxed for [`RecipientKey`]. The result wipes
+/// itself on drop.
+fn secret<C: Curve>(d: &[u8]) -> Option<Box<SecretKey<C>>> {
     let d = <&FieldBytes<C>>::try_from(d).ok()?;
-    SecretKey::<C>::from_bytes(d).ok()
+    SecretKey::<C>::from_bytes(d).ok().map(Box::new)
 }
 
 /// Detail for an X25519 key of the wrong length (not expected: import
@@ -337,16 +368,18 @@ fn okp_key(key: &OkpKey, direction: Direction) -> Result<RecipientKey> {
     match direction {
         Direction::Encrypt => {
             let x = <[u8; 32]>::try_from(key.x()).map_err(|_| unusable())?;
-            Ok(RecipientKey::X25519Public(x25519_dalek::PublicKey::from(x)))
+            Ok(RecipientKey::X25519Public(Box::new(
+                x25519_dalek::PublicKey::from(x),
+            )))
         }
         Direction::Decrypt => {
             let d = key.d().ok_or(Error::KeyAlgorithmMismatch)?;
             // The copy is wiped when it goes out of scope; the
             // `StaticSecret` wipes its own on drop (`zeroize` feature).
             let d = Zeroizing::new(<[u8; 32]>::try_from(d).map_err(|_| unusable())?);
-            Ok(RecipientKey::X25519Secret(
+            Ok(RecipientKey::X25519Secret(Box::new(
                 x25519_dalek::StaticSecret::from(*d),
-            ))
+            )))
         }
     }
 }
@@ -363,13 +396,12 @@ fn rsa_key(key: &RsaKey, direction: Direction) -> Result<RecipientKey> {
     match direction {
         // RFC 7518 §4.3: encrypting needs the public key; a private key
         // encrypts to its own public part.
-        Direction::Encrypt => Ok(RecipientKey::RsaPublic {
-            n: key.n().to_vec(),
-            e: key.e().to_vec(),
-        }),
+        Direction::Encrypt => Ok(RecipientKey::rsa_public(key.n().to_vec(), key.e().to_vec())),
         // Decrypting needs the private key (ADR 0067): a public key is not
         // a candidate for the recipient.
-        Direction::Decrypt if key.is_private() => Ok(RecipientKey::RsaPrivate(key.clone())),
+        Direction::Decrypt if key.is_private() => {
+            Ok(RecipientKey::RsaPrivate(Box::new(key.clone())))
+        }
         Direction::Decrypt => Err(Error::KeyAlgorithmMismatch),
     }
 }
@@ -402,7 +434,7 @@ impl fmt::Debug for RecipientKey {
         let name = match self {
             RecipientKey::Symmetric(_) => "Symmetric",
             RecipientKey::Password(_) => "Password",
-            RecipientKey::RsaPublic { .. } => "RsaPublic",
+            RecipientKey::RsaPublic(_) => "RsaPublic",
             RecipientKey::RsaPrivate(_) => "RsaPrivate",
             RecipientKey::P256Public(_) => "P256Public",
             RecipientKey::P256Secret(_) => "P256Secret",
@@ -502,9 +534,9 @@ mod tests {
             0xe6, 0x55,
         ];
         let symmetric = RecipientKey::from_jwk(&key, &A::A128KW, &GCM128, Encrypt);
-        assert!(matches!(symmetric, Ok(RecipientKey::Symmetric(ref s)) if **s == k));
+        assert!(matches!(symmetric, Ok(RecipientKey::Symmetric(ref s)) if ***s == k));
         let password = RecipientKey::from_jwk(&key, &A::Pbes2Hs256A128KW, &GCM128, Decrypt);
-        assert!(matches!(password, Ok(RecipientKey::Password(ref p)) if **p == k));
+        assert!(matches!(password, Ok(RecipientKey::Password(ref p)) if ***p == k));
     }
 
     #[test]
@@ -571,11 +603,23 @@ mod tests {
         }
     }
 
+    /// Issue #31: a move of a `RecipientKey` copies a tag and a pointer, so
+    /// no variant may hold its key inline (see the type's doc).
+    #[test]
+    fn a_recipient_key_is_a_tag_and_a_pointer() {
+        assert!(
+            core::mem::size_of::<RecipientKey>() <= 2 * core::mem::size_of::<usize>(),
+            "RecipientKey is {} bytes: a variant holds its key inline",
+            core::mem::size_of::<RecipientKey>()
+        );
+    }
+
     #[test]
     fn debug_names_the_variant_only() {
-        let key = RecipientKey::Symmetric(Zeroizing::new(vec![0xC5; 16]));
+        let key = RecipientKey::Symmetric(Box::new(Zeroizing::new(vec![0xC5; 16])));
         assert_eq!(format!("{key:?}"), "RecipientKey::Symmetric(<redacted>)");
-        let key = RecipientKey::X25519Secret(x25519_dalek::StaticSecret::from([0xC5; 32]));
+        let key =
+            RecipientKey::X25519Secret(Box::new(x25519_dalek::StaticSecret::from([0xC5; 32])));
         let debug = format!("{key:?}");
         assert_eq!(debug, "RecipientKey::X25519Secret(<redacted>)");
         assert!(!debug.contains("197"));
@@ -752,7 +796,7 @@ mod tests {
             };
             assert_eq!(secret.to_bytes()[..], d[..], "{alg}");
             // RFC 7748 §6.1: Bob's private key gives Bob's public key.
-            let public = x25519_dalek::PublicKey::from(&secret);
+            let public = x25519_dalek::PublicKey::from(&*secret);
             assert_eq!(public.as_bytes()[..], x[..], "{alg}");
         }
     }
@@ -791,7 +835,7 @@ mod tests {
         let bound = RecipientKey::from_jwk(&key, &A::RsaOaep256, &GCM128, Encrypt);
         assert!(matches!(
             bound,
-            Ok(RecipientKey::RsaPublic { ref n, ref e }) if n == material.n() && *e == [1, 0, 1]
+            Ok(RecipientKey::RsaPublic(ref k)) if k.n == material.n() && k.e == [1, 0, 1]
         ));
     }
 
@@ -822,7 +866,7 @@ mod tests {
         ));
         assert!(matches!(
             RecipientKey::from_jwk(&private, &A::RsaOaep256, &GCM128, Encrypt),
-            Ok(RecipientKey::RsaPublic { ref n, ref e }) if n == material.n() && *e == [1, 0, 1]
+            Ok(RecipientKey::RsaPublic(ref k)) if k.n == material.n() && k.e == [1, 0, 1]
         ));
         // RFC 7517 §4.3: `unwrapKey` is the decrypting key operation.
         assert_eq!(
@@ -1097,9 +1141,9 @@ mod tests {
             RecipientKey::from_jwk(&symmetric, &A::Pbes2Hs256A128KW, &GCM128, Decrypt),
             RecipientKey::from_jwk(&rsa(""), &A::RsaOaep256, &GCM128, Encrypt),
             RecipientKey::from_jwk(&x25519_private(""), &A::EcdhEs, &GCM128, Encrypt),
-            Ok(RecipientKey::X25519Secret(
+            Ok(RecipientKey::X25519Secret(Box::new(
                 x25519_dalek::StaticSecret::from(marker),
-            )),
+            ))),
         ];
         let mut keys: Vec<RecipientKey> = keys
             .into_iter()

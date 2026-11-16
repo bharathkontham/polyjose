@@ -158,12 +158,22 @@ rust_fixtures() {
 }
 
 # run_test_all <platform>...: runs the copy's test-all.sh under this test's bash, with the case's
-# cargo stub first on PATH if rust_fixtures made one; sets $rc and leaves its output in $scratch/out.
+# cargo stub first on PATH if rust_fixtures made one; sets $rc and leaves its output in
+# $scratch/out.raw and, with the wall time that ends each step's summary line removed (exactly
+# ` (<n>s)`, ` (<n>m<nn>s)` or ` (<n>h<nn>m<nn>s)`; timing.sh checks it), in $scratch/out, which
+# check and the other helpers read.
 run_test_all() {
   local path=$PATH bin="$scratch/bin-${case_dir##*/}"
   [ -d "$bin" ] && path="$bin:$PATH"
   rc=0
-  (cd "$case_dir" && PATH=$path "${BASH:-bash}" scripts/test-all.sh "$@") </dev/null >"$scratch/out" 2>&1 || rc=$?
+  (cd "$case_dir" && PATH=$path "${BASH:-bash}" scripts/test-all.sh "$@") </dev/null >"$scratch/out.raw" 2>&1 || rc=$?
+  strip_times
+}
+
+# strip_times: $scratch/out from $scratch/out.raw, each summary line's wall time removed.
+strip_times() {
+  sed -E 's/^(  [^ ].*) \(([0-9]+h[0-9]{2}m[0-9]{2}s|[0-9]+m[0-9]{2}s|[0-9]+s)\)$/\1/' "$scratch/out.raw" >"$scratch/out" \
+    || lib_die "could not read the output of test-all.sh"
 }
 
 # line_of <ERE>: the number of the first line of the last output that matches, or nothing.

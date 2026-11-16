@@ -6,6 +6,8 @@
 /*.node
 # scripts/addon-hashes.sh: the SHA-256 of each built addon (feature 0007 F07).
 /addon-sha256.json
+# scripts/addon-reuse.sh: the inputs key of the last build under scripts/test-all.sh.
+/addon-inputs.sha256
 # tsc output of src/*.ts (the package entry and the backend adapter).
 /index.js
 /index.d.ts

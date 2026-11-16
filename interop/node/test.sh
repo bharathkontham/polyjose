@@ -2,9 +2,10 @@
 # Two-way interop of @polyjose/node with panva/jose 6.x (feature 0010 I1), run by
 # `scripts/test-all.sh node` as its interop-jose step, from the repository root or anywhere:
 #   1. TypeScript only: no .js, .mjs or .cjs here outside node_modules (ADR 0047);
-#   2. @polyjose/node from this tree: bindings/node/scripts/build.sh, idempotent, so after
-#      bindings/node/test.sh it reuses that build (cargo and the addon are up to date) and on its
-#      own it builds the package first; never the registry package;
+#   2. @polyjose/node from this tree: bindings/node/scripts/build.sh, idempotent; under
+#      scripts/test-all.sh (POLYJOSE_ADDON_REUSE=1) it reuses the addon bindings/node/test.sh just
+#      built (bindings/node/scripts/addon-reuse.sh), and on its own it builds the package first;
+#      never the registry package;
 #   3. npm ci --ignore-scripts here, from the committed lockfile: jose only, no install scripts;
 #   4. tsc --noEmit with bindings/js's compiler and options (tsconfig.json);
 #   5. node --test over interop.test.ts, with Node's built-in type stripping (Node >= 24).

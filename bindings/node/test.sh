@@ -12,7 +12,10 @@
 #      can only skip; feature 0007 B01);
 #   5. the rust-core reference run, target/conformance/rust-core.json (cargo test --locked
 #      -p polyjose --test conformance, default features, ADR 0034 §4; --locked: review-code.md SF-3): api.test reads Error::CODES from it,
-#      and scripts/conformance-parity.sh compares node.json with it;
+#      and scripts/conformance-parity.sh compares node.json with it. Skipped only when
+#      scripts/test-all.sh says its own rust step wrote it in the same run and passed
+#      (POLYJOSE_RUST_CORE_FRESH=1, set only then; cargo test --workspace runs the same test with
+#      the same, default, features of polyjose) and the file exists;
 #   6. node --test over the compiled tests, as an explicit file list (a directory argument fails
 #      on Node 24, research §8): dist/<name>.test.js for every test/<name>.test.ts except
 #      package.test.ts, which scripts/pack.sh runs on the tarball it packs (T04, feature 0017).
@@ -52,7 +55,11 @@ case $names_last in
 esac
 
 echo "==> @polyjose/node: rust-core reference results (ADR 0034 §4)"
-(cd ../.. && cargo test --locked --quiet -p polyjose --test conformance)
+if [ "${POLYJOSE_RUST_CORE_FRESH:-}" = 1 ] && [ -f ../../target/conformance/rust-core.json ]; then
+  echo "target/conformance/rust-core.json: written by scripts/test-all.sh's rust step in this run, which passed (POLYJOSE_RUST_CORE_FRESH=1); not run again"
+else
+  (cd ../.. && cargo test --locked --quiet -p polyjose --test conformance)
+fi
 
 echo "==> @polyjose/node: node --test (compiled output)"
 tests=()

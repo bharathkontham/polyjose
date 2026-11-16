@@ -23,18 +23,77 @@
 #   SKIPPED-RUNNER (<runner>: host:<token>)      <token> is [a-z0-9-]+, e.g. host:no-chrome
 # The runner is then reported SKIPPED under parity, never as passing. Any other line starting with
 # SKIPPED-RUNNER, or one naming a required runner or a runner not on the platform's line, FAILs.
+#
+# Timing: each summary line of a step that ran ends with its wall time, e.g. `rust: PASS (8m12s)`
+# (a step recorded without running, such as `deny: SKIPPED (cargo-deny missing; CI runs it)`, has
+# none), and the summary ends with `Total: <wall time of the whole run>`.
+#
+# Parallel platforms: consecutive wasm, node, android and swift arguments (the default set after
+# rust) run as three concurrent lanes, wasm then node in one lane (both rebuild bindings/js/dist
+# and run npm ci in bindings/js, so they never run at the same time; bindings/wasm/test.sh),
+# android and swift in one lane each. Each platform's output goes to its own log, printed whole and
+# in argument order once the platform finished, and its summary lines and exit status are the ones
+# a sequential run gives. rust and tooling always run on their own, in argument order (tooling's
+# self-tests copy the tree and build, so they never overlap the platforms). All lanes share the
+# one cargo target directory, so they reuse the rust block's builds; cargo's lock serialises only
+# builds of the same profile directory (measured 2026-11-15, chore/test-speed, warm runs of the
+# default set: 805 s shared, 822 s with a target directory per lane, which also costs a cold
+# build in every new worktree and about 4 GB). TEST_ALL_SERIAL=1 runs every platform one after
+# the other, as before.
+#
+# Two steps reuse work of this run (chore/test-speed): POLYJOSE_ADDON_REUSE=1 lets
+# bindings/node/scripts/build.sh reuse the @polyjose/node addon when its inputs are unchanged
+# (bindings/node/scripts/addon-reuse.sh; interop-jose's build after the node suite's, and the next
+# run's), and POLYJOSE_RUST_CORE_FRESH=1, set only after the rust step passed and wrote
+# target/conformance/rust-core.json, lets bindings/node/test.sh skip its own rust-core reference
+# run. POLYJOSE_FORCE_REBUILD=1 always rebuilds the addon.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 platforms=("$@"); [ ${#platforms[@]} -eq 0 ] && platforms=(rust wasm node android swift)
 # The Swift (iOS) platform's key is swift (ADR 0046 §1); apple, its key before, is an alias of it.
 for i in "${!platforms[@]}"; do [ "${platforms[$i]}" = apple ] && platforms[i]=swift; done
-summary=""; status=0
+# Every name is checked before anything runs (the platforms may run in parallel lanes below).
+for p in "${platforms[@]}"; do
+  case $p in rust | wasm | node | android | swift | tooling) ;;
+    *) echo "unknown platform: $p (rust, wasm, node, android, swift, tooling)"; exit 2 ;;
+  esac
+done
+# The work-reuse switches (header): the addon reuse for this run's builds; the rust-core switch
+# only once this run's rust step passed (never inherited from the caller's environment).
+export POLYJOSE_ADDON_REUSE=1
+unset POLYJOSE_RUST_CORE_FRESH
+summary=""; status=0; tab=$(printf '\t')
 # passed and ran: the steps that reported PASS, and PASS or FAIL (not SKIPPED), as |<name>|...; a
 # platform's status is that of its step of the same name (rust: the cargo fmt/clippy/test step).
 passed="|"; ran="|"
+# duration <seconds>: as 45s, 8m12s or 1h02m03s.
+duration() {
+  local s=$1
+  if [ "$s" -ge 3600 ]; then printf '%dh%02dm%02ds' $((s / 3600)) $((s % 3600 / 60)) $((s % 60))
+  elif [ "$s" -ge 60 ]; then printf '%dm%02ds' $((s / 60)) $((s % 60))
+  else printf '%ds' "$s"; fi
+}
+# step_start: $SECONDS when the step being run printed its `==>` line (begin_step), or empty when
+# no step is running; record takes the step's wall time from it.
+step_start=""
+begin_step() { echo "==> $1"; step_start=$SECONDS; }
+# records_file: set inside a parallel lane, where record appends `<name><TAB><result><TAB><time>`
+# to the platform's records file instead, which the main shell replays (add_record) in order. A
+# write that fails ends the lane, so its platform FAILs (show_block); a lost line never passes.
+records_file=""
 record() {
+  local took=""
+  if [ -n "$step_start" ]; then took=$(duration $((SECONDS - step_start))); step_start=""; fi
+  if [ -n "$records_file" ]; then
+    printf '%s\t%s\t%s\n' "$1" "$2" "$took" >>"$records_file" || { echo "test-all.sh: could not write $records_file"; exit 1; }
+    return 0
+  fi
+  add_record "$1" "$2" "$took"
+}
+# add_record <name> <result> [<wall time>]: one summary line, and the step's verdict.
+add_record() {
   summary="$summary
-  $1: $2"
+  $1: $2${3:+ ($3)}"
   [ "$2" = FAIL ] && status=1
   [ "$2" = PASS ] && passed="$passed$1|"
   case $2 in PASS | FAIL) ran="$ran$1|" ;; esac
@@ -50,7 +109,7 @@ has_wasm_suite() {
        dev && /package[[:space:]]*=[[:space:]]*"wasm-bindgen-test"/ { found = 1 }
        END { exit !found }' bindings/wasm/Cargo.toml
 }
-run() { local name=$1; shift; echo "==> $name"; if "$@"; then record "$name" PASS; else record "$name" FAIL; fi; }
+run() { local name=$1; shift; begin_step "$name"; if "$@"; then record "$name" PASS; else record "$name" FAIL; fi; }
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/test-all.XXXXXX") || { echo "mktemp failed"; exit 2; }
 # Fail closed (feature 0013 F10, pipeline rule 9): macOS /bin/bash 3.2 runs an EXIT trap with
 # $? = 0 after a syntax error when errexit is on (bash 5 keeps 2), so a guard broken by an edit
@@ -58,7 +117,21 @@ scratch=$(mktemp -d "${TMPDIR:-/tmp}/test-all.XXXXXX") || { echo "mktemp failed"
 # turns 0 into 2 when the script stopped before it. Every scripts/*.sh with an EXIT trap does the
 # same (scripts/tests/syntax/guards.sh).
 completed=""
-trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-all.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
+# lane_pids: the running parallel lanes (run_group), each the leader of its own process group.
+# stop_lanes ends each lane's whole group (the platform scripts and their children too) and waits
+# for the lanes, so nothing is left running or writing into $scratch when it is removed.
+lane_pids=""
+# shellcheck disable=SC2329 # called by the EXIT trap below
+stop_lanes() {
+  local p
+  [ -n "${lane_pids:-}" ] || return 0
+  for p in $lane_pids; do kill -TERM -"$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null; done
+  # shellcheck disable=SC2086
+  wait $lane_pids 2>/dev/null
+  lane_pids=""
+  return 0
+}
+trap 'rc=$?; stop_lanes; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { echo "test-all.sh: stopped before its last line (a syntax error?): failing closed" >&2; rc=2; }; exit "$rc"' EXIT
 # Each binding feature owns its platform's suite as one script (feature 0013 T04, ADR 0030 §1), so
 # the four can change their test commands without editing this file. platform_script prints it.
 platform_script() {
@@ -118,7 +191,7 @@ dispatch() {
 # that are not a platform's own suite (interop-jose); a missing script FAILs.
 run_script() {
   local name=$1 script=$2 out last rc
-  echo "==> $name ($script)"
+  begin_step "$name ($script)"
   if [ ! -e "$script" ] && [ ! -L "$script" ]; then echo "$script not found"; record "$name" FAIL; return 0; fi
   if [ ! -f "$script" ] || [ ! -x "$script" ]; then
     echo "$script exists but is not an executable file (chmod +x $script)"; record "$name" FAIL; return 0
@@ -170,7 +243,7 @@ run_negative_tests() {
     found=1; name="negative: ${t#scripts/tests/}"
     case $negatives_done in *"|$t|"*) continue ;; esac
     negatives_done="$negatives_done$t|"
-    echo "==> $name"
+    begin_step "$name"
     if [ ! -x "$t" ]; then echo "$t is not executable"; record "$name" FAIL; continue; fi
     out="$scratch/negative-$(printf '%s' "${t#scripts/tests/}" | tr '/ ' '__').out"
     "$t" </dev/null 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
@@ -209,7 +282,7 @@ run_api_names() {
   for f in scripts/check-binding-api.d/*.sh; do
     [ -e "$f" ] || continue # bash 3.2 has no nullglob by default: an unmatched glob stays literal
     found=1; mode=${f##*/}; mode=${mode%.sh}
-    echo "==> api-names: $mode"
+    begin_step "api-names: $mode"
     out="$scratch/api-names-$mode.out"
     scripts/check-binding-api.sh "$mode" </dev/null 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
     last=$(awk 'NF { line = $0 } END { sub(/\r$/, "", line); sub(/[ \t]+$/, "", line); print line }' "$out")
@@ -235,7 +308,7 @@ run_api_names() {
 # FAILs, and so does a missing script. Needs cargo (the caller skips it without).
 run_ffi_generated_names() {
   local name="api-names: ffi-generated" script=bindings/ffi/tests/generated-names.sh out rc skipped
-  echo "==> $name"
+  begin_step "$name"
   if [ ! -f "$script" ]; then echo "$script not found"; record "$name" FAIL; return 0; fi
   out="$scratch/ffi-generated.out"
   "${BASH:-bash}" "$script" </dev/null 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
@@ -257,7 +330,7 @@ run_ffi_generated_names() {
 syntax_globs='scripts/*.sh scripts/check-binding-api.d/*.sh bindings/*/test.sh bindings/*/tests/*.sh bindings/*/scripts/*.sh platforms/*/test.sh interop/*/test.sh'
 run_syntax() {
   local g f n=0 bad=0 list="$scratch/syntax.list"
-  echo "==> syntax"
+  begin_step syntax
   : >"$list"
   # Unquoted on purpose: each pattern is expanded; bash 3.2 has no nullglob, so an unmatched one
   # stays literal and is dropped by the -f test.
@@ -278,7 +351,9 @@ rm -rf "$results_dir" || { echo "could not clear $results_dir"; exit 2; }
 
 run_syntax
 
-for p in "${platforms[@]}"; do
+# run_platform <name>: one platform's block (or tooling's), its steps in order.
+run_platform() {
+  local p=$1
   case $p in
     rust)
       # No cargo config file in the repository, and none set by a script or workflow; it could
@@ -330,7 +405,12 @@ for p in "${platforms[@]}"; do
       # The negative tests of the test-vectors-off guard only (rust_negative_tests above); every
       # other gate's are the `tooling` argument's.
       if have cargo; then run_negative_tests "$rust_negative_tests"
-      else record negative-tests "SKIPPED (cargo missing)"; fi ;;
+      else record negative-tests "SKIPPED (cargo missing)"; fi
+      # This run's rust step passed and wrote the default-features reference, the one
+      # bindings/node/test.sh would compute again (cargo test -p polyjose --test conformance).
+      case $passed in *"|rust|"*)
+        if [ -f "$results_dir/rust-core.json" ]; then export POLYJOSE_RUST_CORE_FRESH=1; fi ;;
+      esac ;;
     tooling)
       # The gate scripts' own negative tests (scripts/tests/*/*.sh), e.g. that check-deps.sh
       # still rejects RSA private-key use and the guarded groups' second paths. Not a platform and
@@ -371,9 +451,89 @@ for p in "${platforms[@]}"; do
       if dispatch swift; then :
       elif have swift && [ -f Package.swift ]; then run swift bash -c 'swift test'
       else record swift "SKIPPED (swift or Package.swift missing)"; fi ;;
-    *) echo "unknown platform: $p (rust, wasm, node, android, swift, tooling)"; exit 2 ;;
+  esac
+}
+
+# run_lane <lane> <platform>...: in a background subshell, each platform's block in turn, its output
+# in $scratch/block-<platform>.log and its summary lines in block-<platform>.records, then
+# block-<platform>.done.
+run_lane() {
+  local p
+  shift
+  for p in "$@"; do
+    records_file="$scratch/block-$p.records"
+    : >"$records_file" || exit 1
+    run_platform "$p" >"$scratch/block-$p.log" 2>&1
+    : >"$scratch/block-$p.done"
+  done
+}
+# show_block <platform> <pid of its lane>: waits for the platform's block, prints its log and
+# replays its summary lines; a lane that stopped before the block finished FAILs the platform.
+show_block() {
+  local p=$1 pid=$2 name result took own=0
+  while [ ! -f "$scratch/block-$p.done" ] && kill -0 "$pid" 2>/dev/null; do sleep 1; done
+  [ ! -f "$scratch/block-$p.log" ] || cat "$scratch/block-$p.log"
+  if [ -f "$scratch/block-$p.records" ]; then
+    while IFS="$tab" read -r name result took; do
+      add_record "$name" "$result" "$took"
+      [ "$name" != "$p" ] || own=1
+    done <"$scratch/block-$p.records"
+  fi
+  if [ ! -f "$scratch/block-$p.done" ]; then
+    echo "test-all.sh: the $p block stopped before it finished (its lane exited)"
+    add_record "$p" FAIL
+  elif [ "$own" -eq 0 ]; then
+    # Every block records its platform's own step; a block without it lost its records.
+    echo "test-all.sh: the $p block finished without a summary line for $p"
+    add_record "$p" FAIL
+  fi
+}
+# run_group <platform>...: consecutive wasm, node, android and swift arguments, in parallel lanes
+# (header), or one after the other with TEST_ALL_SERIAL=1, when a platform is named twice, or when
+# they make a single lane.
+run_group() {
+  local p js="" android="" swift="" seen="|" dup=0 lanes=0 desc="" pid pid_js="" pid_android="" pid_swift=""
+  for p in "$@"; do
+    case $seen in *"|$p|"*) dup=1 ;; esac
+    seen="$seen$p|"
+    case $p in wasm | node) js="$js $p" ;; android) android=android ;; swift) swift=swift ;; esac
+  done
+  for p in "${js# }" "$android" "$swift"; do [ -z "$p" ] || { lanes=$((lanes + 1)); desc="$desc${desc:+ | }$p"; }; done
+  if [ "${TEST_ALL_SERIAL:-}" = 1 ] || [ "$dup" -eq 1 ] || [ "$lanes" -lt 2 ]; then
+    for p in "$@"; do run_platform "$p"; done
+    return 0
+  fi
+  echo "test-all.sh: running $desc in parallel lanes (TEST_ALL_SERIAL=1 runs them one at a time)"
+  # set -m (bash 3.2 too) starts each lane as the leader of its own process group, which
+  # stop_lanes can end as a whole; it is on only while the lanes start.
+  set -m
+  # Word splitting of $js on purpose: its platforms, in argument order.
+  # shellcheck disable=SC2086
+  if [ -n "$js" ]; then (run_lane js $js) </dev/null >"$scratch/lane-js.err" 2>&1 & pid_js=$!; lane_pids="$lane_pids $pid_js"; fi
+  if [ -n "$android" ]; then (run_lane android android) </dev/null >"$scratch/lane-android.err" 2>&1 & pid_android=$!; lane_pids="$lane_pids $pid_android"; fi
+  if [ -n "$swift" ]; then (run_lane swift swift) </dev/null >"$scratch/lane-swift.err" 2>&1 & pid_swift=$!; lane_pids="$lane_pids $pid_swift"; fi
+  set +m
+  for p in "$@"; do
+    case $p in wasm | node) pid=$pid_js ;; android) pid=$pid_android ;; *) pid=$pid_swift ;; esac
+    show_block "$p" "$pid"
+  done
+  # shellcheck disable=SC2086
+  wait $lane_pids 2>/dev/null
+  lane_pids=""
+  for p in js android swift; do [ ! -s "$scratch/lane-$p.err" ] || cat "$scratch/lane-$p.err"; done
+  return 0
+}
+
+group=()
+for p in "${platforms[@]}"; do
+  case $p in
+    wasm | node | android | swift) group+=("$p") ;;
+    *)
+      if [ ${#group[@]} -gt 0 ]; then run_group "${group[@]}"; group=(); fi
+      run_platform "$p" ;;
   esac
 done
+if [ ${#group[@]} -gt 0 ]; then run_group "${group[@]}"; fi
 
 # Conformance parity (ADR 0034 §5), after every platform suite. First, each platform that passed
 # must have written the results files of its runners (results_runners above), and when the rust
@@ -412,7 +572,7 @@ declarations() {
       } else { gsub(/\t/, " "); print "bad\t" $0 }
     }' "$1"
 }
-waived_results=""; tab=$(printf '\t')
+waived_results=""
 # not_missing: copies the `SKIPPED (no results: <runner>)` lines on stdin, except a missing runner's.
 # (A function: bash 3.2 cannot parse a case pattern inside $(...).)
 not_missing() {
@@ -422,7 +582,7 @@ not_missing() {
     case $missing_runners in *" $r "*) ;; *) printf '%s\n' "$line" ;; esac
   done
 }
-echo "==> parity"
+begin_step parity
 checked="|"
 for p in "${platforms[@]}"; do
   case $checked in *"|$p|"*) continue ;; esac
@@ -507,4 +667,5 @@ summary="$summary$missing_results$waived_results"
 $skipped_runners"
 
 printf "\nSummary:%b\n" "$summary"
+echo "Total: $(duration "$SECONDS")"
 completed=1; exit "$status"
