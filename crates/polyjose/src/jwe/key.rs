@@ -62,8 +62,15 @@ pub(crate) enum RecipientKey {
     P521Secret(p521::SecretKey),
     /// ECDH-ES on X25519 (RFC 8037 §3.2): the recipient's public key.
     X25519Public(x25519_dalek::PublicKey),
-    /// ECDH-ES on X25519: our private key.
-    X25519Secret(x25519_dalek::StaticSecret),
+    /// ECDH-ES on X25519 (RFC 8037 §3.2, RFC 7518 §4.6): our private key.
+    ///
+    /// Boxed so that moving a `RecipientKey` (into the decrypt candidate
+    /// list and through `jwe::core`'s candidate steps) moves a pointer, not
+    /// the scalar: each by-value move of an inline `StaticSecret` left a
+    /// stale copy on the stack that no drop reaches (feature 0025 B01,
+    /// measured by `bindings/wasm/tests/memory.rs`). The one copy is on the
+    /// heap, and `StaticSecret` wipes it on drop (`zeroize` feature).
+    X25519Secret(Box<x25519_dalek::StaticSecret>),
 }
 
 impl RecipientKey {
@@ -344,9 +351,9 @@ fn okp_key(key: &OkpKey, direction: Direction) -> Result<RecipientKey> {
             // The copy is wiped when it goes out of scope; the
             // `StaticSecret` wipes its own on drop (`zeroize` feature).
             let d = Zeroizing::new(<[u8; 32]>::try_from(d).map_err(|_| unusable())?);
-            Ok(RecipientKey::X25519Secret(
+            Ok(RecipientKey::X25519Secret(Box::new(
                 x25519_dalek::StaticSecret::from(*d),
-            ))
+            )))
         }
     }
 }
@@ -575,7 +582,8 @@ mod tests {
     fn debug_names_the_variant_only() {
         let key = RecipientKey::Symmetric(Zeroizing::new(vec![0xC5; 16]));
         assert_eq!(format!("{key:?}"), "RecipientKey::Symmetric(<redacted>)");
-        let key = RecipientKey::X25519Secret(x25519_dalek::StaticSecret::from([0xC5; 32]));
+        let key =
+            RecipientKey::X25519Secret(Box::new(x25519_dalek::StaticSecret::from([0xC5; 32])));
         let debug = format!("{key:?}");
         assert_eq!(debug, "RecipientKey::X25519Secret(<redacted>)");
         assert!(!debug.contains("197"));
@@ -752,7 +760,7 @@ mod tests {
             };
             assert_eq!(secret.to_bytes()[..], d[..], "{alg}");
             // RFC 7748 §6.1: Bob's private key gives Bob's public key.
-            let public = x25519_dalek::PublicKey::from(&secret);
+            let public = x25519_dalek::PublicKey::from(&*secret);
             assert_eq!(public.as_bytes()[..], x[..], "{alg}");
         }
     }
@@ -1097,9 +1105,9 @@ mod tests {
             RecipientKey::from_jwk(&symmetric, &A::Pbes2Hs256A128KW, &GCM128, Decrypt),
             RecipientKey::from_jwk(&rsa(""), &A::RsaOaep256, &GCM128, Encrypt),
             RecipientKey::from_jwk(&x25519_private(""), &A::EcdhEs, &GCM128, Encrypt),
-            Ok(RecipientKey::X25519Secret(
+            Ok(RecipientKey::X25519Secret(Box::new(
                 x25519_dalek::StaticSecret::from(marker),
-            )),
+            ))),
         ];
         let mut keys: Vec<RecipientKey> = keys
             .into_iter()

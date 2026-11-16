@@ -627,8 +627,13 @@ expect_fail "the core's rsa dependency renamed through [workspace.dependencies]"
   "^  - polyjose \\(crates/polyjose/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
 
 new_case renamed-dev-dependency
-append_to bindings/ffi/Cargo.toml $'\n[dev-dependencies]\n'"$rsa_pub"
-relock
+# The ffi binding may already have a [dev-dependencies] table (0025 T02): add to it, else create it.
+if grep -qx '\[dev-dependencies\]' "$case_dir/bindings/ffi/Cargo.toml"; then
+  replace_in bindings/ffi/Cargo.toml $'\n[dev-dependencies]\n' $'\n[dev-dependencies]\n'"$rsa_pub"$'\n'
+else
+  append_to bindings/ffi/Cargo.toml $'\n[dev-dependencies]\n'"$rsa_pub"
+  relock
+fi
 expect_fail "package = \"rsa\" renamed in a binding's [dev-dependencies]" \
   "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dev-dependencies\\]$" "$rename_fail"
 
