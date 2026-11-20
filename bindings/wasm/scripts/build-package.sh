@@ -11,10 +11,10 @@
 #      [package.metadata.wasm-pack.profile.release] in bindings/wasm/Cargo.toml), into a staging
 #      directory under the workspace target/; prints the .wasm's raw, gzip -9 and brotli -q 11
 #      sizes. The budget is 1 MiB raw (ADR 0031 §3);
-#   3. the shared facade, built in bindings/js as bindings/js/test.sh does (npm ci, generate
+#   3. the shared facade, built in bindings/ts-common as bindings/ts-common/test.sh does (npm ci, generate
 #      src/error-codes.ts, tsc -p .); its sources are never edited;
-#   4. this package's TypeScript (bindings/wasm/js/*.ts, *.mts), compiled with bindings/js's
-#      pinned tsc and the ADR 0047 options (extending bindings/js/tsconfig.json), in a staging
+#   4. this package's TypeScript (bindings/wasm/js/*.ts, *.mts), compiled with bindings/ts-common's
+#      pinned tsc and the ADR 0047 options (extending bindings/ts-common/tsconfig.json), in a staging
 #      copy laid out like the package so its imports resolve. With them, the machine-generated
 #      integrity.ts (0006 F05, audit L1): the package version, read back from the generated
 #      package.json, and the SHA-384 of the final (post-wasm-opt) .wasm, which the entries check
@@ -68,7 +68,7 @@ done
 
 wasm=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
 repo=$(cd "$wasm/../.." && pwd -P) || exit 1
-js=$repo/bindings/js
+js=$repo/bindings/ts-common
 stage=$repo/target/wasm-package
 pkg=$wasm/pkg
 dist=$repo/dist/npm
@@ -144,13 +144,13 @@ echo "$me: polyjose_wasm_bg.wasm: raw $raw bytes, gzip -9 $gz bytes, brotli -q 1
 
 # --- 3. The shared facade ----------------------------------------------------------------------
 
-echo "==> $me: bindings/js facade (npm ci, generate ErrorCode, tsc)"
-(cd "$js" && npm ci --no-audit --no-fund --loglevel=error) || die "npm ci failed in bindings/js"
-(cd "$js" && node tools/gen-error-codes.ts) || die "node tools/gen-error-codes.ts failed in bindings/js"
+echo "==> $me: bindings/ts-common facade (npm ci, generate ErrorCode, tsc)"
+(cd "$js" && npm ci --no-audit --no-fund --loglevel=error) || die "npm ci failed in bindings/ts-common"
+(cd "$js" && node tools/gen-error-codes.ts) || die "node tools/gen-error-codes.ts failed in bindings/ts-common"
 rm -rf "$js/dist"
-(cd "$js" && ./node_modules/.bin/tsc -p .) || die "tsc failed in bindings/js"
+(cd "$js" && ./node_modules/.bin/tsc -p .) || die "tsc failed in bindings/ts-common"
 facade=$js/dist/src
-[ -f "$facade/api.js" ] && [ -f "$facade/api.d.ts" ] || die "tsc did not generate bindings/js/dist/src/api.js(.d.ts)"
+[ -f "$facade/api.js" ] && [ -f "$facade/api.d.ts" ] || die "tsc did not generate bindings/ts-common/dist/src/api.js(.d.ts)"
 
 # --- 4. This package's TypeScript --------------------------------------------------------------
 
@@ -204,7 +204,7 @@ export const WASM_SHA384 = "$wasm_sha384";
 EOF
 sources+=(integrity.ts)
 files_json=$(printf '"%s", ' "${sources[@]}"); files_json=${files_json%, }
-# The ADR 0047 options come from bindings/js/tsconfig.json. Added here: the DOM library, which
+# The ADR 0047 options come from bindings/ts-common/tsconfig.json. Added here: the DOM library, which
 # the generated glue's declarations use (RequestInfo, Response, URL, BufferSource, WebAssembly),
 # and legacy module detection, so wasm-import.ts (no import or export) is a script whose ambient
 # module types the workerd entry's static .wasm import.

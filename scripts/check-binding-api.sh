@@ -12,7 +12,7 @@
 #      well-formed names, no duplicates, no field outside a record;
 #   2. its code list equals polyjose::Error::CODES, in order (ADR 0030 §5): the quoted strings of
 #      the `pub const CODES: &'static [&'static str] = &[ ... ];` block of
-#      crates/polyjose/src/error.rs, read as text (the parse bindings/js/tools/gen-error-codes.ts
+#      crates/polyjose/src/error.rs, read as text (the parse bindings/ts-common/tools/gen-error-codes.ts
 #      also uses), so no cargo build is needed.
 #
 # Each mode derives its binding's names in the inventory's normal form, one per line:

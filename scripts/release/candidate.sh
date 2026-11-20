@@ -15,7 +15,7 @@
 # bharathkontham/polyjose), python3, tar, diff, sha256sum or shasum, and cargo for the pinned
 # toolchain.
 #
-# platforms/swift/release-candidate.json (written by the release agent in the release PR, in the
+# bindings/swift/release-candidate.json (written by the release agent in the release PR, in the
 # commit that also writes Package.swift's url and checksum):
 #   { "run_id": <the candidate release.yml run>, "commit": "<its 40-hex commit>",
 #     "sha256": "<64-hex SHA-256 of its PolyjoseFFI.xcframework.zip>" }
@@ -25,7 +25,7 @@
 #      with success, at the recorded commit (GitHub REST API, GET /repos/{owner}/{repo}/actions/
 #      runs/{run_id});
 #   2. the tag commit differs from the candidate commit only in Package.swift and
-#      platforms/swift/release-candidate.json, and the Package.swift change touches only its
+#      bindings/swift/release-candidate.json, and the Package.swift change touches only its
 #      `url:` and `checksum:` lines. So every artifact was built and tested from exactly the tree
 #      being tagged, except for the two files that can only be written after the build, and that
 #      none of the reused artifacts reads. (ADR 0037 §2 says the trees are equal; they cannot be,
@@ -59,7 +59,7 @@ version=${tag#v}
 gh_repo=${GITHUB_REPOSITORY:-bharathkontham/polyjose}
 artifacts="crate npm-node npm-wasm maven-repo apple-xcframework"
 cd "$repo"
-json=platforms/swift/release-candidate.json
+json=bindings/swift/release-candidate.json
 [ -f "$json" ] || rel_die "$json is missing: the release PR must record the candidate run (run_id, commit, sha256)"
 read -r run_id commit recorded < <(python3 -I -c 'import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -88,7 +88,7 @@ echo "  ok   a successful workflow_dispatch of release.yml in $gh_repo at the re
 git cat-file -e "$commit^{commit}" 2>/dev/null || git fetch --quiet --no-tags origin "$commit" ||
   rel_die "cannot fetch the candidate commit $commit"
 changed=$(git diff --name-only "$commit" HEAD)
-other=$(printf '%s\n' "$changed" | grep -vxE 'Package\.swift|platforms/swift/release-candidate\.json' | grep . || true)
+other=$(printf '%s\n' "$changed" | grep -vxE 'Package\.swift|bindings/swift/release-candidate\.json' | grep . || true)
 [ -z "$other" ] || rel_die "the tag differs from the candidate commit in more than Package.swift and $json:
 $other"
 swift_lines=$(git diff -U0 "$commit" HEAD -- Package.swift | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' || true)

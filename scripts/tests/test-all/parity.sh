@@ -20,8 +20,8 @@ new_case pass
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 writes_results bindings/wasm/test.sh rust-core
 writes_own_results bindings/wasm/test.sh wasm
-fixture platforms/android/test.sh 0 'fixture android suite ran'
-writes_own_results platforms/android/test.sh android
+fixture bindings/kotlin/test.sh 0 'fixture android suite ran'
+writes_own_results bindings/kotlin/test.sh android
 parity_fixture 0 'SKIPPED (no results: node)' 'SKIPPED (no results: swift-macos)' 'parity: 6 runners match rust-core'
 run_test_all wasm android
 check "parity runs when rust-core.json exists and passes on exit 0" 0 \
@@ -50,8 +50,8 @@ new_case stale
 mkdir -p "$case_dir/target/conformance"
 echo '{}' >"$case_dir/target/conformance/rust-core.json"
 echo '{}' >"$case_dir/target/conformance/node.json"
-fixture platforms/android/test.sh 0 'fixture android suite ran'
-writes_own_results platforms/android/test.sh android
+fixture bindings/kotlin/test.sh 0 'fixture android suite ran'
+writes_own_results bindings/kotlin/test.sh android
 parity_fixture 0 'parity: ok'
 run_test_all android
 check "results left by an earlier run are cleared, so parity has no reference" 0 \

@@ -24,7 +24,7 @@
 // - zip: "DEF" (RFC 7516 §4.1.3): the bindings build without polyjose's `deflate` feature.
 // - Unencoded payloads, b64: false (RFC 7797): jose rejects them in the compact form (research.md
 //   §2.1), and this suite tests the compact serializations only.
-import { assert, fs, path, process, test } from "../../bindings/js/dist/node/builtins.js";
+import { assert, fs, path, process, test } from "../../bindings/ts-common/dist/node/builtins.js";
 import * as pj from "../../bindings/node/index.js";
 import type { JwkObject } from "../../bindings/node/index.js";
 import * as jose from "jose";

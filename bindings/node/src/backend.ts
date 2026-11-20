@@ -1,5 +1,5 @@
 /**
- * The napi-rs backend of `@polyjose/node` (ADR 0031 §1-§2, `bindings/js/BACKEND.md`; packaging as
+ * The napi-rs backend of `@polyjose/node` (ADR 0031 §1-§2, `bindings/ts-common/BACKEND.md`; packaging as
  * superseded by ADR 0066: one package that ships the addon of all seven targets, ADR 0073 §2).
  *
  * The native addon `polyjose.<platform>.node` already is the backend contract: one function per
@@ -54,7 +54,7 @@ import type { Backend } from "./facade/backend.js";
 import type * as Binding from "./binding.js";
 
 // Node built-ins without @types/node (ADR 0047: typescript is the only dev-dependency), as in
-// bindings/js/node/builtins.ts; process.getBuiltinModule exists from Node 22.3, under the 22.12 floor.
+// bindings/ts-common/node/builtins.ts; process.getBuiltinModule exists from Node 22.3, under the 22.12 floor.
 interface NodeRequire {
   (id: string): unknown;
   readonly cache: Readonly<Record<string, { readonly exports?: unknown } | undefined>>;

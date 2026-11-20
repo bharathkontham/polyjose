@@ -5,7 +5,7 @@
 #     platform's output printed whole and in argument order, even when a later one finishes first;
 #     the output, summary and exit status equal a TEST_ALL_SERIAL=1 run's, apart from the line that
 #     announces the lanes and the times;
-#   - wasm and node, which share bindings/js, never run at the same time;
+#   - wasm and node, which share bindings/ts-common, never run at the same time;
 #   - a failing platform FAILs the run as in a sequential run, and a lane that dies before its
 #     platform finished FAILs that platform (never a pass), and so does a lane whose summary line
 #     could not be written or was lost;
@@ -28,12 +28,12 @@ export LC_ALL=C
 all_fixtures() {
   fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
   fixture bindings/node/test.sh 0 'fixture node suite ran'
-  fixture platforms/android/test.sh "$1" 'fixture android suite ran'
-  fixture platforms/swift/test.sh 0 'fixture swift suite ran'
+  fixture bindings/kotlin/test.sh "$1" 'fixture android suite ran'
+  fixture bindings/swift/test.sh 0 'fixture swift suite ran'
   writes_own_results bindings/wasm/test.sh wasm
   writes_own_results bindings/node/test.sh node
-  writes_own_results platforms/android/test.sh android
-  writes_own_results platforms/swift/test.sh swift
+  writes_own_results bindings/kotlin/test.sh android
+  writes_own_results bindings/swift/test.sh swift
 }
 
 # same_as_serial <description> <platform>...: runs them again with TEST_ALL_SERIAL=1 and compares:
@@ -62,13 +62,13 @@ same_as_serial() {
 new_case lanes
 all_fixtures 0
 # android finishes last; its output still comes before swift's.
-fixture_append platforms/android/test.sh 'sleep 2'
+fixture_append bindings/kotlin/test.sh 'sleep 2'
 run_test_all wasm node android swift
 check "the four platforms run in three lanes and pass" 0 \
   '^test-all\.sh: running wasm node \| android \| swift in parallel lanes \(TEST_ALL_SERIAL=1 runs them one at a time\)$' \
   '^  wasm: PASS$' '^  node: PASS$' '^  android: PASS$' '^  swift: PASS$' '^  parity: '
 check_order "android's output comes before swift's though it finished later" \
-  '^fixture android suite ran$' '^==> swift \(platforms/swift/test\.sh\)$'
+  '^fixture android suite ran$' '^==> swift \(bindings/swift/test\.sh\)$'
 check_order "wasm's output before node's (one lane, in argument order)" \
   '^fixture wasm suite ran$' '^==> rsa-oaep-oracle$'
 check_order "the summary keeps argument order" '^  android: PASS$' '^  swift: PASS$'
@@ -100,14 +100,14 @@ new_case fail
 all_fixtures 1
 run_test_all wasm node android swift
 check "a failing platform in a lane FAILs the run; the others still pass" 1 \
-  '^  android: FAIL$' '^  wasm: PASS$' '^  swift: PASS$' 'platforms/android/test\.sh exited 1'
+  '^  android: FAIL$' '^  wasm: PASS$' '^  swift: PASS$' 'bindings/kotlin/test\.sh exited 1'
 same_as_serial "a failing run equals its TEST_ALL_SERIAL=1 run" wasm node android swift
 
 new_case lane-dies
 all_fixtures 0
 # The fixture's parent is its lane's shell (test-all.sh's run_script): killing it ends the lane.
 # shellcheck disable=SC2016 # expanded by the fixture, not here
-fixture_append platforms/android/test.sh 'kill -9 $PPID'
+fixture_append bindings/kotlin/test.sh 'kill -9 $PPID'
 run_test_all wasm node android swift
 check "a lane that dies before its platform finished FAILs that platform" 1 \
   '^test-all\.sh: the android block stopped before it finished \(its lane exited\)$' '^  android: FAIL$' \
@@ -135,7 +135,7 @@ lost_records() {
   new_case "$1"
   all_fixtures 0
   mkdir -p "$scratch/tmp-$1"
-  fixture_append platforms/android/test.sh "T=$scratch/tmp-$1; $2"
+  fixture_append bindings/kotlin/test.sh "T=$scratch/tmp-$1; $2"
   local saved=${TMPDIR:-}
   export TMPDIR="$scratch/tmp-$1"
   run_test_all wasm node android swift
@@ -156,7 +156,7 @@ check_absent "never as passing" '^  android: PASS$'
 new_case stopped
 all_fixtures 0
 # The android suite starts a child that would outlive a lane killed alone, and records its pid.
-fixture_append platforms/android/test.sh "sleep 120 & echo \$! >$scratch/child.pid; wait"
+fixture_append bindings/kotlin/test.sh "sleep 120 & echo \$! >$scratch/child.pid; wait"
 rm -f "$scratch/child.pid"
 (cd "$case_dir" && exec "${BASH:-bash}" scripts/test-all.sh wasm node android swift) </dev/null >"$scratch/out.raw" 2>&1 &
 tpid=$!
@@ -181,7 +181,7 @@ fi
 
 new_case times
 all_fixtures 0
-rm -f "$case_dir/platforms/swift/test.sh" "$case_dir/Package.swift"
+rm -f "$case_dir/bindings/swift/test.sh" "$case_dir/Package.swift"
 run_test_all wasm android swift
 tests_run=$((tests_run + 1))
 if grep -Eq '^  wasm: PASS \([0-9]+s\)$' "$scratch/out.raw" && grep -Eq '^  android: PASS \([0-9]+s\)$' "$scratch/out.raw" \

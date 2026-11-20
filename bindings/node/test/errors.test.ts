@@ -1,6 +1,6 @@
 // The facade's error mapping over the real napi backend (feature 0007 F06; ADR 0061, which
-// supersedes ADR 0031 §1 "Errors" in part; ADR 0030 §5; bindings/js/BACKEND.md "Errors"). The
-// shared facade tests (bindings/js/test/error-passthrough.test.ts) use a fake backend; these use
+// supersedes ADR 0031 §1 "Errors" in part; ADR 0030 §5; bindings/ts-common/BACKEND.md "Errors"). The
+// shared facade tests (bindings/ts-common/test/error-passthrough.test.ts) use a fake backend; these use
 // the errors the built addon really throws, so a napi-rs bump that renames a Status, or stops
 // setting `code` as an own data property, fails here:
 //   1. a core failure                          → PolyjoseError, code in errorCodes();
@@ -8,7 +8,7 @@
 //   3. anything else (another napi Status, an
 //      unknown code, an exception the addon
 //      propagates, a non-Error value)          → re-thrown unchanged: the same value.
-import { assert, test } from "../../js/dist/node/builtins.js";
+import { assert, test } from "../../ts-common/dist/node/builtins.js";
 import { backend } from "../backend.js";
 import { createApi, ERROR_CODES, PolyjoseError } from "../facade/api.js";
 import type { Backend } from "../facade/backend.js";

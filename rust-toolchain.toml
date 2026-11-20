@@ -16,5 +16,5 @@ targets = [
 # The aarch64 tvOS, visionOS and watchOS targets (device and simulator) are tier 2 with prebuilt std
 # since Rust 1.95.0, so every XCFramework slice builds on this stable toolchain except one:
 # arm64_32-apple-watchos is still tier 3 and is built with the nightly pinned in
-# platforms/swift/nightly-toolchain and `-Zbuild-std` (ADR 0032 §1, amending ADR 0004).
+# bindings/swift/nightly-toolchain and `-Zbuild-std` (ADR 0032 §1, amending ADR 0004).
 # No x86_64 Apple target: every prebuilt Apple binary is arm64 (Apple silicon) only (ADR 0073).

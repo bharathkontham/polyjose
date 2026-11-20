@@ -22,7 +22,7 @@ interface NodeCrypto {
   createHash(algorithm: "sha384"): NodeHash;
 }
 
-/** `process.getBuiltinModule` (Node ≥ 22.3), as `bindings/js/node/builtins.ts` uses it. */
+/** `process.getBuiltinModule` (Node ≥ 22.3), as `bindings/ts-common/node/builtins.ts` uses it. */
 interface NodeProcess {
   getBuiltinModule(id: "node:fs"): NodeFs;
   getBuiltinModule(id: "node:crypto"): NodeCrypto;

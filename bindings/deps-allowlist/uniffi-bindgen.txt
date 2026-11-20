@@ -37,7 +37,7 @@
 #   with uniffi_bindgen turns on indexmap's `serde` feature, so serde is reachable through its
 #   indexmap (in polyjose-ffi's tree, the same uniffi_pipeline reaches no serde).
 
-# UniFFI runtime and pipeline, as in ffi.txt: uniffi, uniffi_core (anyhow, bytes, once_cell,
+# UniFFI runtime and pipeline, as in uniffi.txt: uniffi, uniffi_core (anyhow, bytes, once_cell,
 # static_assertions) and uniffi_pipeline (heck, indexmap with equivalent and hashbrown, tempfile with
 # fastrand, rustix, errno, linux-raw-sys, bitflags, windows-sys, windows-link).
 uniffi
@@ -60,7 +60,7 @@ bitflags
 windows-sys
 windows-link
 
-# UniFFI proc-macros, as in ffi.txt: uniffi_macros, uniffi_internal_macros and uniffi_meta, with
+# UniFFI proc-macros, as in uniffi.txt: uniffi_macros, uniffi_internal_macros and uniffi_meta, with
 # toml (toml_datetime, toml_parser, toml_writer, serde_spanned, winnow), serde (serde_core,
 # serde_derive), camino, fs-err and siphasher.
 uniffi_macros

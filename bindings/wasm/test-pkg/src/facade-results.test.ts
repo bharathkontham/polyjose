@@ -1,6 +1,6 @@
 /**
  * [WASM-pkg-node] The facade's results on the installed package after 0013 F09, which made the
- * facade read a backend result by its **own** members only (`bindings/js/BACKEND.md` "Results"):
+ * facade read a backend result by its **own** members only (`bindings/ts-common/BACKEND.md` "Results"):
  * a JWS verify and a JWE decrypt of the RFCs' own examples still return exactly the RFC's values,
  * with exactly the members present that the result has, and no absent optional member.
  *

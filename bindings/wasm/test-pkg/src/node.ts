@@ -2,7 +2,7 @@
  * Typed access to the Node built-ins the test-pkg drivers and tests use.
  *
  * test-pkg has one npm dependency, `miniflare` (0006 T04), so there is no `@types/node`. As in
- * `bindings/js/node/builtins.ts`, each module is fetched with `process.getBuiltinModule`
+ * `bindings/ts-common/node/builtins.ts`, each module is fetched with `process.getBuiltinModule`
  * (Node >= 22.3, inside the ADR 0031 floor of 22.12) and typed here with only the members we
  * call. The browser page (`page.ts`), the worker (`worker.ts`) and `results.ts` never import
  * this file: they run in Chrome and workerd.

@@ -17,7 +17,7 @@
 //     the scripts run passes `--locked`, and every `npm ci` passes `--ignore-scripts`.
 // The YAML is read with the minimal line reader below (indentation, keys, flow mappings), enough
 // for the shape this workflow uses; no YAML dependency (ADR 0047: typescript is the only one).
-import { assert, fs, os, path, test } from "../../js/dist/node/builtins.js";
+import { assert, fs, os, path, test } from "../../ts-common/dist/node/builtins.js";
 
 interface NodeUrl {
   fileURLToPath(url: string): string;
@@ -479,7 +479,7 @@ test("every npm ci in the build scripts passes --ignore-scripts", () => {
       assert.match(line, /\bnpm[ \t]+ci\b[^;&|)]*[ \t]--ignore-scripts\b/, `${name}: npm ci without --ignore-scripts: ${line.trim()}`);
     }
   }
-  assert.equal(runs, 4, "test.sh and build.sh each run npm ci in bindings/node and bindings/js");
+  assert.equal(runs, 4, "test.sh and build.sh each run npm ci in bindings/node and bindings/ts-common");
 });
 
 // --- The PE import reader (review-code.md SF-1) -----------------------------------------------------

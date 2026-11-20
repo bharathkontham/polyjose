@@ -14,7 +14,7 @@
 #      inventory's operations that exist in node (none marked `only` other modes) plus the host
 #      idiom of NODE_INDEX_IDIOM, and it must re-export the facade's records
 #      (`export type * from "./facade/api.js"`; their names are the js mode's,
-#      checked on the same bindings/js sources). A difference is reported as an `error` line that
+#      checked on the same bindings/ts-common sources). A difference is reported as an `error` line that
 #      names index.d.ts;
 #   3. the error codes, in order: the ERROR_CODES tuple of facade/error-codes.d.ts, the copy of the
 #      facade the package ships and index.d.ts re-exports (ADR 0030 §5).
@@ -57,9 +57,9 @@ mode_derive() {
   done
   node_stale "$pkg/binding.d.ts" "$pkg"/src/*.rs "$pkg/Cargo.toml" "$pkg/build.rs"
   node_stale "$pkg/index.d.ts" "$pkg"/src/*.ts "$pkg/binding.d.ts" "$pkg/facade/api.d.ts"
-  node_stale "$pkg/facade/api.d.ts" "$repo"/bindings/js/src/*.ts
+  node_stale "$pkg/facade/api.d.ts" "$repo"/bindings/ts-common/src/*.ts
   node_stale "$pkg/facade/error-codes.d.ts" "$repo/crates/polyjose/src/error.rs" \
-    "$repo/bindings/js/tools/gen-error-codes.ts"
+    "$repo/bindings/ts-common/tools/gen-error-codes.ts"
 
   # 1. binding.d.ts: operations, records and fields.
   cat >"$mode_scratch/binding.awk" <<'AWK'

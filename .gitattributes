@@ -1,3 +1,9 @@
 # The conformance vectors are hashed byte for byte into vectors_digest (ADR 0060), which every
 # platform's results must match. Never convert their line endings (Windows checkouts use CRLF).
 conformance/vectors/** -text
+
+# Generated files, committed (collapsed in GitHub diffs, left out of language stats).
+# Polyjose.swift is UniFFI output (bindings/swift/scripts/check-generated.sh proves it current);
+# the lockfiles are npm output.
+bindings/swift/Sources/Polyjose/Polyjose.swift linguist-generated=true
+**/package-lock.json linguist-generated=true

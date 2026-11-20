@@ -1,0 +1,58 @@
+# The hosted iOS test app of AppleKey (ADR 0072 §6.1, feature 0025 T03): a minimal host app and a
+# test bundle hosted in it, so the tests run with the simulated `application-identifier` Xcode
+# signs into the app and can store, find and delete Keychain keys (un-hosted, or with
+# CODE_SIGNING_ALLOWED=NO, every Keychain call is -34018). The test bundle links the local Polyjose
+# package (../../..); the app links nothing of polyjose.
+#
+# PolyjoseHosted.xcodeproj is generated from this file once, with XcodeGen 2.46.0
+# (`xcodegen generate` in this directory), and committed: bindings/swift/scripts/test-simulators.sh
+# and the device runbook need only Xcode. After editing this file, regenerate and commit both.
+name: PolyjoseHosted
+options:
+  bundleIdPrefix: dev.polyjose.hosted
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: "YES"
+    CODE_SIGN_STYLE: Automatic
+packages:
+  polyjose:
+    path: ../../..
+targets:
+  PolyjoseHostApp:
+    type: application
+    platform: iOS
+    sources: [HostApp]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.polyjose.hosted.app
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        # Apple: required if the app uses APIs that access Face ID; without it iOS terminated the
+        # app at testDeviceBiometryCurrentSet (iPhone 16, iOS 27.0.1).
+        INFOPLIST_KEY_NSFaceIDUsageDescription: "The polyjose test app uses Face ID to test keys that need biometric authentication."
+        TARGETED_DEVICE_FAMILY: "1"
+  PolyjoseHostedTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: PolyjoseHostApp
+      - package: polyjose
+        product: Polyjose
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.polyjose.hosted.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  PolyjoseHosted:
+    build:
+      targets:
+        PolyjoseHostApp: all
+    test:
+      targets:
+        - PolyjoseHostedTests
+      gatherCoverageData: false

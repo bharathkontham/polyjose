@@ -1,5 +1,5 @@
 /**
- * `@polyjose/node`: the shared facade (`bindings/js`, ADR 0031 §1, ADR 0047) bound once to the
+ * `@polyjose/node`: the shared facade (`bindings/ts-common`, ADR 0031 §1, ADR 0047) bound once to the
  * napi-rs backend (ADR 0031 §2), re-exported as the package's API (BACKEND.md, "A package entry").
  *
  * Every operation of ADR 0030 §4 returns a Promise and runs on the libuv thread pool; a core

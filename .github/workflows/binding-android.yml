@@ -14,14 +14,14 @@
 # because in a called workflow github.workflow names the caller, so a group here could cancel the
 # caller's run.
 #
-# Each step calls a platforms/android/scripts/ci-*.sh script or one of the repository's guards in
+# Each step calls a bindings/kotlin/scripts/ci-*.sh script or one of the repository's guards in
 # scripts/, and every script also runs locally. Every job that runs ./gradlew first checks the
 # Gradle wrapper jar against its pinned SHA-256 (ci_check_gradle_wrapper of ci-lib.sh; feature 0008
 # F06, F09, audit M2). The RSA symbol guard (ADR 0021, ADR 0049 §1) reads every library this
 # workflow ships: the four Android triples in the guards job, and the host polyjose-ffi on the
 # linux-x86-64, linux-aarch64 and win32-x86-64 runners (darwin-aarch64's is ci.yml's macOS run;
 # feature 0008 F09, audit L2).
-# platforms/android/scripts/ci-check-workflow.sh checks this file (the triggers, the permissions,
+# bindings/kotlin/scripts/ci-check-workflow.sh checks this file (the triggers, the permissions,
 # the pinned actions and the absence of credentials, publishing and signing).
 #
 # Every action is pinned to a full commit SHA; the trailing comment is the release tag that SHA
@@ -94,7 +94,7 @@ jobs:
       # Before anything that runs ./gradlew (audit M2).
       - name: Gradle wrapper hash
         run: |
-          . platforms/android/scripts/ci-lib.sh
+          . bindings/kotlin/scripts/ci-lib.sh
           ci_check_gradle_wrapper
 
       # llvm-tools: the toolchain's llvm-nm and llvm-ar, for scripts/check-rsa-symbols.sh (as in ci.yml).
@@ -138,7 +138,7 @@ jobs:
       - name: Build and test the host library
         env:
           PREFIX: ${{ matrix.prefix }}
-        run: platforms/android/scripts/ci-host-natives.sh "$PREFIX"
+        run: bindings/kotlin/scripts/ci-host-natives.sh "$PREFIX"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -215,7 +215,7 @@ jobs:
       # Before anything that runs ./gradlew (audit M2).
       - name: Gradle wrapper hash
         run: |
-          . platforms/android/scripts/ci-lib.sh
+          . bindings/kotlin/scripts/ci-lib.sh
           ci_check_gradle_wrapper
 
       - name: Install toolchain (rust-toolchain.toml)
@@ -234,10 +234,10 @@ jobs:
           java-version: "21"
 
       - name: Android SDK, NDK, emulator and system image
-        run: platforms/android/scripts/ci-android-sdk.sh --emulator
+        run: bindings/kotlin/scripts/ci-android-sdk.sh --emulator
 
       - name: Instrumented suite on the emulator
-        run: platforms/android/scripts/ci-emulator.sh
+        run: bindings/kotlin/scripts/ci-emulator.sh
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -258,7 +258,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: android-emulator-junit
-          path: platforms/android/polyjose/build/outputs/androidTest-results/
+          path: bindings/kotlin/android/build/outputs/androidTest-results/
           if-no-files-found: warn
 
   # The release AAR and the four-platform jar (ADR 0033 §4), from the libraries above, checked by
@@ -283,7 +283,7 @@ jobs:
       # Before anything that runs ./gradlew (audit M2).
       - name: Gradle wrapper hash
         run: |
-          . platforms/android/scripts/ci-lib.sh
+          . bindings/kotlin/scripts/ci-lib.sh
           ci_check_gradle_wrapper
 
       - name: Install toolchain (rust-toolchain.toml)
@@ -302,7 +302,7 @@ jobs:
           java-version: "21"
 
       - name: Android SDK and NDK
-        run: platforms/android/scripts/ci-android-sdk.sh
+        run: bindings/kotlin/scripts/ci-android-sdk.sh
 
       # One jvm-natives-<prefix>/ folder per platform.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -318,7 +318,7 @@ jobs:
           merge-multiple: true
 
       - name: Assemble and check the AAR and the jar
-        run: platforms/android/scripts/ci-assemble-jar.sh target/ci-natives --require-all --jni-libs target/ci-jnilibs
+        run: bindings/kotlin/scripts/ci-assemble-jar.sh target/ci-natives --require-all --jni-libs target/ci-jnilibs
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -382,4 +382,4 @@ jobs:
           merge-multiple: true
 
       - name: Conformance parity
-        run: platforms/android/scripts/ci-parity.sh target/ci-results
+        run: bindings/kotlin/scripts/ci-parity.sh target/ci-results

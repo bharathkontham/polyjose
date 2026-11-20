@@ -4,7 +4,7 @@
 //! napi-rs puts the status string of a `napi::Error<S: AsRef<str>>` on the JS error's `code`
 //! (0007 research §2). [`Code`] is that status: it can only be built from a [`SurfaceError`], so
 //! every code a Promise rejects with is one of `errorCodes()`. The facade turns the object into
-//! its `PolyjoseError` (ADR 0031 §1, `bindings/js/BACKEND.md`).
+//! its `PolyjoseError` (ADR 0031 §1, `bindings/ts-common/BACKEND.md`).
 //!
 //! `Task::compute` can only fail with a `napi::Status` (a custom code there becomes
 //! `GenericFailure`, research §3), so each task's `compute` returns `Ok(SurfaceResult<_>)` and

@@ -8,7 +8,7 @@
 //!
 //! The rules are those of every binding runner (conformance/README.md "Rules for every runner"):
 //!
-//! - every vector file is checked against `conformance/schema.json` itself, with a small checker
+//! - every vector file is checked against `conformance/schema/vectors.schema.json` itself, with a small checker
 //!   of exactly the JSON Schema 2020-12 keywords the schema uses (any other keyword, or a pattern
 //!   it doesn't know, fails the run), plus the cross-member rules the schema can't state;
 //! - a vector is skipped only when its `features` lists one this build lacks (ADR 0034 §3), or
@@ -72,13 +72,13 @@ fn parse_file(bytes: &[u8]) -> Result<Value, String> {
 }
 
 fn schema() -> Value {
-    let path = conformance_dir().join("schema.json");
+    let path = conformance_dir().join("schema/vectors.schema.json");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     parse_file(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 // ---------------------------------------------------------------------------------------------
-// The schema checker: the JSON Schema 2020-12 keywords schema.json uses, and no others
+// The schema checker: the JSON Schema 2020-12 keywords vectors.schema.json uses, and no others
 // ---------------------------------------------------------------------------------------------
 
 const ANNOTATIONS: &[&str] = &["$schema", "title", "description"];
@@ -106,7 +106,7 @@ const KEYWORDS: &[&str] = &[
     "else",
 ];
 
-/// Whether `s` matches `pattern`, for the three patterns `schema.json` uses (the
+/// Whether `s` matches `pattern`, for the three patterns `vectors.schema.json` uses (the
 /// `$defs/text`, `$defs/hex` and `$defs/base64url` patterns). Any other pattern is an error, so
 /// a schema change can't be ignored by this checker.
 fn pattern_matches(pattern: &str, s: &str) -> Result<bool, String> {
@@ -387,7 +387,7 @@ fn run_vector(
         Ok(value) => value,
         Err(e) => {
             return Status::Fail(format!(
-                "{name}: not a valid JSON text ({e}); see conformance/schema.json"
+                "{name}: not a valid JSON text ({e}); see conformance/schema/vectors.schema.json"
             ));
         }
     };
@@ -1684,7 +1684,7 @@ fn conformance_vectors() {
 // The runner's own checks
 // ---------------------------------------------------------------------------------------------
 
-/// Every keyword and pattern of `schema.json` is one the checker implements, so no rule of the
+/// Every keyword and pattern of `vectors.schema.json` is one the checker implements, so no rule of the
 /// schema is silently ignored.
 #[test]
 fn the_schema_uses_only_what_the_checker_implements() {

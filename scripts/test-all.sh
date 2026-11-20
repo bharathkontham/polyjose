@@ -14,8 +14,8 @@
 # A platform whose toolchain or test suite is missing is reported as SKIPPED with the reason,
 # never silently passed; a suite that exists always runs and can FAIL.
 # wasm, node, android and swift run their binding's own script when it exists (bindings/wasm/test.sh,
-# bindings/node/test.sh, platforms/android/test.sh, platforms/swift/test.sh; see dispatch below).
-# node also runs the shared facade's suite (bindings/js/test.sh, step js-facade) and interop-jose.
+# bindings/node/test.sh, bindings/kotlin/test.sh, bindings/swift/test.sh; see dispatch below).
+# node also runs the shared facade's suite (bindings/ts-common/test.sh, step ts-common) and interop-jose.
 # After the suites, scripts/conformance-parity.sh compares their conformance results (ADR 0034 §5),
 # and each platform that passed must have written the results files of its runners (results_runners).
 # A platform script may waive one of its host-optional runners (marked ? in results_runners) with a
@@ -29,8 +29,8 @@
 # none), and the summary ends with `Total: <wall time of the whole run>`.
 #
 # Parallel platforms: consecutive wasm, node, android and swift arguments (the default set after
-# rust) run as three concurrent lanes, wasm then node in one lane (both rebuild bindings/js/dist
-# and run npm ci in bindings/js, so they never run at the same time; bindings/wasm/test.sh),
+# rust) run as three concurrent lanes, wasm then node in one lane (both rebuild bindings/ts-common/dist
+# and run npm ci in bindings/ts-common, so they never run at the same time; bindings/wasm/test.sh),
 # android and swift in one lane each. Each platform's output goes to its own log, printed whole and
 # in argument order once the platform finished, and its summary lines and exit status are the ones
 # a sequential run gives. rust and tooling always run on their own, in argument order (tooling's
@@ -138,8 +138,8 @@ platform_script() {
   case $1 in
     wasm) echo bindings/wasm/test.sh ;;
     node) echo bindings/node/test.sh ;;
-    android) echo platforms/android/test.sh ;;
-    swift) echo platforms/swift/test.sh ;;
+    android) echo bindings/kotlin/test.sh ;;
+    swift) echo bindings/swift/test.sh ;;
     *) return 1 ;;
   esac
 }
@@ -297,7 +297,7 @@ run_api_names() {
 }
 
 # The UniFFI-generated Kotlin and Swift names (feature 0013 F05, review S4; T12; ADR 0030 §2, §3,
-# §8; ADR 0032 §3): bindings/ffi/tests/generated-names.sh builds polyjose-ffi and the bindgen,
+# §8; ADR 0032 §3): bindings/uniffi/tests/generated-names.sh builds polyjose-ffi and the bindgen,
 # generates both languages, requires every bindings/api-inventory.txt entry in each (required
 # fields such as allowedAlgs with no default) and type-checks the Swift under Swift 6. It stands in
 # for the kotlin and swift modes of check-binding-api.sh, so features 0008 and 0009 remove this
@@ -307,7 +307,7 @@ run_api_names() {
 # is reported as SKIPPED, never as passing (pipeline rule 9); any other line starting with SKIPPED
 # FAILs, and so does a missing script. Needs cargo (the caller skips it without).
 run_ffi_generated_names() {
-  local name="api-names: ffi-generated" script=bindings/ffi/tests/generated-names.sh out rc skipped
+  local name="api-names: ffi-generated" script=bindings/uniffi/tests/generated-names.sh out rc skipped
   begin_step "$name"
   if [ ! -f "$script" ]; then echo "$script not found"; record "$name" FAIL; return 0; fi
   out="$scratch/ffi-generated.out"
@@ -327,7 +327,7 @@ run_ffi_generated_names() {
 # error fails the gate here even where the broken script itself would exit 0 (macOS /bin/bash 3.2
 # runs an EXIT trap with $? = 0 after one). Under -n, bash 3.2 does not parse inside $(...),
 # which bash 5 and the shellcheck run of each change do.
-syntax_globs='scripts/*.sh scripts/check-binding-api.d/*.sh bindings/*/test.sh bindings/*/tests/*.sh bindings/*/scripts/*.sh platforms/*/test.sh interop/*/test.sh'
+syntax_globs='scripts/*.sh scripts/check-binding-api.d/*.sh bindings/*/test.sh bindings/*/tests/*.sh bindings/*/scripts/*.sh interop/*/test.sh'
 run_syntax() {
   local g f n=0 bad=0 list="$scratch/syntax.list"
   begin_step syntax
@@ -428,12 +428,12 @@ run_platform() {
       # private key, which no Rust code reads. It needs only node, not the binding's toolchain.
       if have node; then run rsa-oaep-oracle node conformance/tools/rsa-oaep-oracle.mjs
       else record rsa-oaep-oracle "SKIPPED (node missing)"; fi
-      # The shared TypeScript facade's own suite (bindings/js/test.sh: the TypeScript-only rule,
+      # The shared TypeScript facade's own suite (bindings/ts-common/test.sh: the TypeScript-only rule,
       # the misuse type-checks, node --test over its compiled tests), which neither package's suite
-      # runs. Its own step, before the node suite: both build bindings/js/dist, so they must never
+      # runs. Its own step, before the node suite: both build bindings/ts-common/dist, so they must never
       # run at the same time (bindings/wasm/test.sh), and here they run one after the other.
-      if have node && have npm; then run_script js-facade bindings/js/test.sh
-      else record js-facade "SKIPPED (node or npm missing)"; fi
+      if have node && have npm; then run_script ts-common bindings/ts-common/test.sh
+      else record ts-common "SKIPPED (node or npm missing)"; fi
       # `npm pkg get` prints {} for a missing key; an unreadable package.json is not skipped, so it FAILs.
       if dispatch node; then :
       elif ! have npm || ! have cargo; then record node "SKIPPED (npm or cargo missing)"
@@ -445,7 +445,7 @@ run_platform() {
       run_script interop-jose interop/node/test.sh ;;
     android)
       if dispatch android; then :
-      elif have cargo-ndk && [ -x platforms/android/gradlew ]; then run android bash -c 'cd platforms/android && ./gradlew test'
+      elif have cargo-ndk && [ -x bindings/kotlin/gradlew ]; then run android bash -c 'cd bindings/kotlin && ./gradlew test'
       else record android "SKIPPED (cargo-ndk or Gradle project missing)"; fi ;;
     swift)
       if dispatch swift; then :

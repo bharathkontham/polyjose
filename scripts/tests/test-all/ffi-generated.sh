@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test of the `api-names: ffi-generated` step of `scripts/test-all.sh rust` (feature 0013 F05,
-# review S4): it runs bindings/ffi/tests/generated-names.sh (feature 0013 T12), the check that the
+# review S4): it runs bindings/uniffi/tests/generated-names.sh (feature 0013 T12), the check that the
 # UniFFI-generated Kotlin and Swift have every bindings/api-inventory.txt name and that the Swift
 # type-checks, under the bash that runs test-all.sh. Its exit status decides PASS or FAIL (exit 2,
 # a setup error such as a failed bindgen build, FAILs too); `SKIPPED (<reason>)` on a line of its
@@ -17,7 +17,7 @@ export LC_ALL=C
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-names=bindings/ffi/tests/generated-names.sh
+names=bindings/uniffi/tests/generated-names.sh
 
 # rust_case <name>: a new case with a hermetic rust block whose parity holds.
 rust_case() {

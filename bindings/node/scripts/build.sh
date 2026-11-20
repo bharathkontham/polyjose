@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds @polyjose/node in place, for the host target (ADR 0031 §2, ADR 0047):
-#   1. the shared facade: bindings/js's error codes (tools/gen-error-codes.ts, from Error::CODES)
-#      and tsc into bindings/js/dist/; bindings/js stays the facade's only source;
+#   1. the shared facade: bindings/ts-common's error codes (tools/gen-error-codes.ts, from Error::CODES)
+#      and tsc into bindings/ts-common/dist/; bindings/ts-common stays the facade's only source;
 #   2. the addon and its declarations: napi build --platform --release --no-js --dts binding.d.ts
 #      (polyjose.<platform>.node, binding.d.ts). --no-js: no napi-rs loader is generated, since
 #      backend.js loads the pinned addon itself (feature 0017); extra arguments go to napi build,
@@ -15,24 +15,24 @@
 #      (the host's), the addon hash pin that backend.js checks before it loads anything (feature
 #      0007 F07); the packed package gets its own map from scripts/pack-main.sh over exactly the
 #      addons it ships;
-#   4. facade/: the compiled facade (.js and the generated .d.ts) copied from bindings/js/dist/src;
+#   4. facade/: the compiled facade (.js and the generated .d.ts) copied from bindings/ts-common/dist/src;
 #   5. tsc: src/*.ts to the package root (index.js, backend.js and their .d.ts), then test/*.ts to
 #      dist/.
 # Idempotent: each step deletes and regenerates its own output. Everything it writes is
-# git-ignored. typescript comes from bindings/js (its only dev-dependency, pinned in its lockfile)
+# git-ignored. typescript comes from bindings/ts-common (its only dev-dependency, pinned in its lockfile)
 # and @napi-rs/cli from this package's lockfile; when either is not installed yet, `npm ci
 # --ignore-scripts` installs it, running no dependency's install script (review-code.md N2). It
 # never publishes: npm publish and napi pre-publish belong to the human-approved release (Gate 3).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-js=../js
+js=../ts-common
 tsc=$js/node_modules/.bin/tsc
 napi=node_modules/.bin/napi
 
 [ -x "$tsc" ] || (cd "$js" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error)
 [ -x "$napi" ] || npm ci --ignore-scripts --no-audit --no-fund --loglevel=error
 
-echo "==> @polyjose/node build: the shared facade (bindings/js)"
+echo "==> @polyjose/node build: the shared facade (bindings/ts-common)"
 (cd "$js" && node tools/gen-error-codes.ts && rm -rf dist && node_modules/.bin/tsc -p .)
 
 echo "==> @polyjose/node build: napi build --platform --release --no-js $*"
@@ -55,7 +55,7 @@ if [ "$reuse" = build ]; then
   scripts/addon-reuse.sh save "$key" "$@" || echo "addon-reuse: could not record the addon's inputs; the next build compiles the addon again"
 fi
 
-echo "==> @polyjose/node build: facade/ (compiled .js and .d.ts of bindings/js/dist/src)"
+echo "==> @polyjose/node build: facade/ (compiled .js and .d.ts of bindings/ts-common/dist/src)"
 rm -rf facade
 mkdir facade
 cp "$js"/dist/src/*.js "$js"/dist/src/*.d.ts facade/

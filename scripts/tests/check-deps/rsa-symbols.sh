@@ -426,28 +426,30 @@ pub fn evil(p: rsa::BoxedUint, q: rsa::BoxedUint, e: rsa::BoxedUint) -> bool {
 #[cfg(target_os = "android")]
 #[used]
 static KEEP: fn(rsa::BoxedUint, rsa::BoxedUint, rsa::BoxedUint) -> bool = evil;'
-  for crate_dir in ffi surface; do
-    new_case "android-only-$crate_dir"
+  # The folder of each crate under bindings/, and the crate name after polyjose- (ADR 0074).
+  for crate_dir in uniffi surface; do
+    case $crate_dir in uniffi) crate_name=ffi ;; *) crate_name=$crate_dir ;; esac
+    new_case "android-only-$crate_name"
     append_to "bindings/$crate_dir/Cargo.toml" "$android_rsa"
     append_to "bindings/$crate_dir/src/lib.rs" "$android_body"
     relock
-    crate=polyjose_$crate_dir
+    crate=polyjose_$crate_name
     targets=$android
-    if [ "$crate_dir" = ffi ]; then configs="polyjose-ffi-$android polyjose-ffi-$android-release"; else configs="polyjose-ffi-$android"; fi
+    if [ "$crate_name" = ffi ]; then configs="polyjose-ffi-$android polyjose-ffi-$android-release"; else configs="polyjose-ffi-$android"; fi
     for config in $configs; do
       case $config in *-release) label="polyjose-ffi --release ($android)" ;; *) label="polyjose-ffi ($android)" ;; esac
       only=$config
-      dump_dir="$scratch/dump-$crate_dir-$config"
-      expect_fail "Android-only RsaPrivateKey in polyjose-$crate_dir, --target $android, $config" \
+      dump_dir="$scratch/dump-$crate_name-$config"
+      expect_fail "Android-only RsaPrivateKey in polyjose-$crate_name, --target $android, $config" \
         "matches rsa::private_key::PrivateKey>::from_p_q: RSA key generation" \
         "$sym_fail in the objects of $crate \\($(printf '%s' "$label" | sed 's/[().]/\\&/g')\\)"
       # The target's own objects were read: polyjose's dump for the triple has its RSA verification.
-      expect_symbol "Android-only plant in polyjose-$crate_dir, $config" "rsa::public_key::PublicKey"
+      expect_symbol "Android-only plant in polyjose-$crate_name, $config" "rsa::public_key::PublicKey"
       dump_dir=""
     done
     targets=""
     # The documented residual: without --target, no configuration compiles the plant.
-    if [ "$crate_dir" = ffi ]; then
+    if [ "$crate_name" = ffi ]; then
       only="polyjose-ffi polyjose-ffi-release"
       expect_pass "Android-only RsaPrivateKey in polyjose-ffi, no --target (documented residual: the caller passes the target)"
       tests_run=$((tests_run + 1))

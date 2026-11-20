@@ -12,10 +12,10 @@
 # Checked:
 #   - [workspace.package] version of Cargo.toml, and the version of every workspace member
 #     (`cargo metadata --no-deps --locked`); the Gradle build reads the same field
-#     (platforms/android/build-logic PackagingPlugin), so the AAR and the jar follow it;
+#     (bindings/kotlin/build-logic PackagingPlugin), so the AAR and the jar follow it;
 #   - bindings/node/package.json: version (the one Node package; it has no optionalDependencies
 #     since 0.1.2, feature 0017);
-#   - bindings/js/package.json: version (the shared facade, not published);
+#   - bindings/ts-common/package.json: version (the shared facade, not published);
 #   - bindings/wasm/package.template.json keeps its "@VERSION@" placeholder (build-package.sh
 #     fills it from Cargo.toml);
 #   - Package.swift: the binaryTarget url is .../releases/download/v<version>/PolyjoseFFI.xcframework.zip;
@@ -23,7 +23,7 @@
 #     workspace member it locks (polyjose at least; the fuzz workspace has its own lockfile, which
 #     a version bump must refresh too);
 #   - the install snippets: every `dev.polyjose:<artifact>:<version>` coordinate of
-#     platforms/android/README.md and every `from: "<version>"` of platforms/swift/README.md
+#     bindings/kotlin/README.md and every `from: "<version>"` of bindings/swift/README.md
 #     (at least one each).
 #
 # Exit status: 0 all equal; 1 a mismatch (each printed); 2 usage. Needs cargo and python3.
@@ -77,7 +77,7 @@ for p in json.load(sys.stdin)["packages"]:
     print(p["name"], p["version"])')
 
 check "bindings/node/package.json version" "$(json bindings/node/package.json 'd["version"]')"
-check "bindings/js/package.json version" "$(json bindings/js/package.json 'd["version"]')"
+check "bindings/ts-common/package.json version" "$(json bindings/ts-common/package.json 'd["version"]')"
 if [ "$(json bindings/wasm/package.template.json 'd["version"]')" = "@VERSION@" ]; then
   echo "  ok   bindings/wasm/package.template.json: @VERSION@ (filled from Cargo.toml)"
 else
@@ -125,9 +125,9 @@ check_snippets() {
   done < <(sed -n "$3" "$1")
   [ "$found" -eq 1 ] || { echo "  FAIL $1: no $2 found"; bad=1; }
 }
-check_snippets platforms/android/README.md "dev.polyjose coordinate" \
+check_snippets bindings/kotlin/README.md "dev.polyjose coordinate" \
   's/.*"dev\.polyjose:[a-z-]*:\([^"]*\)".*/\1/p'
-check_snippets platforms/swift/README.md 'SPM from: version' \
+check_snippets bindings/swift/README.md 'SPM from: version' \
   's/.*\.package(url: "[^"]*", from: "\([^"]*\)").*/\1/p'
 
 if [ -n "$notes" ]; then

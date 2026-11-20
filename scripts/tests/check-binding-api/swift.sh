@@ -15,7 +15,7 @@ export LC_ALL=C
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-src=platforms/swift/Sources/Polyjose
+src=bindings/swift/Sources/Polyjose
 gen=$src/Polyjose.swift
 # lib.sh copies the inputs of the other modes; this mode also reads the Swift sources.
 mkdir -p "$base/$src" || lib_die "could not create $base/$src"

@@ -2,7 +2,7 @@
 # Negative tests of the wasm mode of scripts/check-binding-api.sh (feature 0006 T03; ADR 0031 §3,
 # ADR 0047). The mode builds the package with bindings/wasm/scripts/build-package.sh --no-pack and
 # checks pkg/: the glue's `export function` names must equal the inventory's operations, and
-# pkg/facade/ must hold exactly (byte-identical) the .js and .d.ts of bindings/js/dist/src/.
+# pkg/facade/ must hold exactly (byte-identical) the .js and .d.ts of bindings/ts-common/dist/src/.
 #
 # Each case replaces the build script in the copy by a stub that writes a pkg/ and a dist/src/
 # from the inventory (so no wasm-pack run is needed), then changes one thing. The stub is a
@@ -26,7 +26,7 @@ new_stub_case() {
 #!/usr/bin/env bash
 set -e
 here=\$(cd "\$(dirname "\$0")/../../.." && pwd -P)
-pkg=\$here/bindings/wasm/pkg src=\$here/bindings/js/dist/src
+pkg=\$here/bindings/wasm/pkg src=\$here/bindings/ts-common/dist/src
 rm -rf "\$pkg" "\$src"; mkdir -p "\$pkg/facade" "\$src"
 for f in api types normalize backend error-codes; do
   echo "// \$f" >"\$src/\$f.js"; echo "export {};" >"\$src/\$f.d.ts"
@@ -99,7 +99,7 @@ check_diffs "a glue function named like a Kotlin/Swift-only platform-key operati
 
 new_stub_case facade-modified 0 'echo "// tampered" >>"$pkg/facade/api.js"'
 run_check wasm
-check "a modified facade file fails" 1 'pkg/facade/api.js differs from bindings/js/dist/src/api.js' '^check-binding-api: wasm: FAIL$'
+check "a modified facade file fails" 1 'pkg/facade/api.js differs from bindings/ts-common/dist/src/api.js' '^check-binding-api: wasm: FAIL$'
 
 new_stub_case facade-missing 0 'rm "$pkg/facade/normalize.d.ts"'
 run_check wasm
@@ -107,7 +107,7 @@ check "a missing facade file fails" 1 'pkg/facade/normalize.d.ts missing' '^chec
 
 new_stub_case facade-extra 0 'echo "// x" >"$pkg/facade/extra.js"'
 run_check wasm
-check "an extra facade file fails" 1 'pkg/facade/extra.js is not a .js or .d.ts of bindings/js/dist/src' '^check-binding-api: wasm: FAIL$'
+check "an extra facade file fails" 1 'pkg/facade/extra.js is not a .js or .d.ts of bindings/ts-common/dist/src' '^check-binding-api: wasm: FAIL$'
 
 new_stub_case no-facade-dir 0 'rm -rf "$pkg/facade"'
 run_check wasm

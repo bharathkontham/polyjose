@@ -1,7 +1,7 @@
 // The built @polyjose/node package (ADR 0031 §1-§3, ADR 0034 §8), run with `node --test` against
 // the compiled output: its ESM and CommonJS (require(esm)) entries, its error mapping, its
 // manifest and the committed npm/<platform>/ directories.
-import { assert, fs, path, test } from "../../js/dist/node/builtins.js";
+import { assert, fs, path, test } from "../../ts-common/dist/node/builtins.js";
 import * as esm from "@polyjose/node";
 import { ERROR_CODES, PolyjoseError, base64urlDecode, errorCodes, jwkParse } from "@polyjose/node";
 import { backend } from "../backend.js";

@@ -35,8 +35,8 @@ target=$(cd "$repo" && cargo metadata --format-version 1 --no-deps | sed -n 's/.
 gen=generated/polyjose_ffi.kt
 mkdir -p "$base/generated" || lib_die "mkdir"
 cp "$scratch/kotlin/dev/polyjose/polyjose_ffi.kt" "$base/$gen" || lib_die "could not copy the generated Kotlin"
-(cd "$repo" && tar -cf - platforms/android/src) | (cd "$base" && tar -xf -) || lib_die "could not copy platforms/android/src"
-hand=platforms/android/polyjose/src/main/kotlin/dev/polyjose
+(cd "$repo" && tar -cf - bindings/kotlin/shared) | (cd "$base" && tar -xf -) || lib_die "could not copy bindings/kotlin/shared"
+hand=bindings/kotlin/android/src/main/kotlin/dev/polyjose
 mkdir -p "$base/$hand" || lib_die "mkdir"
 list=scripts/check-binding-api.d/kotlin.host-types
 # The cases start from the list's header only, with no hand-written class in the polyjose module,

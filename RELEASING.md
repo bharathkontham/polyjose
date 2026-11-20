@@ -48,24 +48,24 @@ Before the tag (items 1–6) and before Gate 3 (items 7–8):
 5. [ ] An orchestrator short check of `publish.yml` (secrets, pins, gating, inputs, permissions). Needed only when `publish.yml` or `scripts/release/` changed since the last release.
 6. [ ] Version and changelog: `scripts/release/check-version.sh X.Y.Z --notes "$(mktemp)"` passes.
 7. [ ] The tag run is green and the draft holds every asset (step 5 below).
-8. [ ] Only when the release changes platform-key code (`PlatformKey`, `AppleKey`, `AndroidKeystoreKey`, or the core's platform-key paths): the device runbooks `platforms/swift/DEVICE-TESTS.md` and `platforms/android/DEVICE-TESTS.md` have been run on real devices for this release.
+8. [ ] Only when the release changes platform-key code (`PlatformKey`, `AppleKey`, `AndroidKeystoreKey`, or the core's platform-key paths): the device runbooks `bindings/swift/DEVICE-TESTS.md` and `bindings/kotlin/DEVICE-TESTS.md` have been run on real devices for this release.
 
 ## 4. Release steps
 
-1. **Version and CHANGELOG PR** (release agent, branch `chore/release-X.Y.Z`). Bump every version carrier that [`check-version.sh`](scripts/release/check-version.sh) checks: the manifests, `Cargo.lock` and `fuzz/Cargo.lock`, and the install snippets in `platforms/android/README.md` and `platforms/swift/README.md`. Set the `Package.swift` url to `.../releases/download/vX.Y.Z/PolyjoseFFI.xcframework.zip`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`, which becomes the release notes.
+1. **Version and CHANGELOG PR** (release agent, branch `chore/release-X.Y.Z`). Bump every version carrier that [`check-version.sh`](scripts/release/check-version.sh) checks: the manifests, `Cargo.lock` and `fuzz/Cargo.lock`, and the install snippets in `bindings/kotlin/README.md` and `bindings/swift/README.md`. Set the `Package.swift` url to `.../releases/download/vX.Y.Z/PolyjoseFFI.xcframework.zip`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`, which becomes the release notes.
    - **Before dispatching the candidate**, on the version-bump tree, run these three locally. Each has failed a candidate run before, and a candidate attempt costs about 20 minutes:
      ```sh
      scripts/release/check-version.sh X.Y.Z             # every version carrier holds X.Y.Z
      scripts/test-all.sh node                           # the Node and facade tests, which read the version
-     platforms/android/scripts/check-artifacts.sh       # the AAR and jar contents and size limits
+     bindings/kotlin/scripts/check-artifacts.sh       # the AAR and jar contents and size limits
      ```
 2. **Candidate** (owner's go-ahead): `gh workflow run release.yml --repo bharathkontham/polyjose --ref chore/release-X.Y.Z -f mode=candidate`. It builds everything unsigned and creates no release. When it is green:
    - `gh run download <run-id> --name apple-xcframework`
    - write the zip's SHA-256 into `Package.swift`'s `checksum:`
-   - write `platforms/swift/release-candidate.json` with exactly `{"run_id": <run-id>, "commit": "<the run's 40-hex head sha>", "sha256": "<zip sha256>"}`
+   - write `bindings/swift/release-candidate.json` with exactly `{"run_id": <run-id>, "commit": "<the run's 40-hex head sha>", "sha256": "<zip sha256>"}`
    - commit only those two files, then run the checklist (items 1–6).
 3. **Merge** the release PR (owner review, then git-ops). Nothing else may land on `main` between the candidate commit and the tag (section 5).
-4. **Tag** (release agent): `git tag -a vX.Y.Z -m "polyjose X.Y.Z"` on the merged commit, then `git push origin vX.Y.Z`. Then, with the owner's go-ahead, run the tag-mode dispatch **from the tag ref**: `gh workflow run release.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f mode=tag -f tag=vX.Y.Z`. It builds and tests nothing again (ADR 0068 §1). Its `candidate` job takes every artifact (the crate, `@polyjose/node`, `@polyjose/wasm`, the Maven repository and the Apple zip) from the candidate run recorded in `platforms/swift/release-candidate.json`. [`candidate.sh`](scripts/release/candidate.sh) first checks that the run is a successful `workflow_dispatch` of `release.yml` in this repository at the recorded commit, and that the tag differs from that commit only by the tree rule (section 5). Only the `.crate` is re-packaged at the tag, without a compile, and it must equal the candidate's except `.cargo_vcs_info.json`. Then the run signs in `release-signing`, attests the reused bytes, and creates the draft.
+4. **Tag** (release agent): `git tag -a vX.Y.Z -m "polyjose X.Y.Z"` on the merged commit, then `git push origin vX.Y.Z`. Then, with the owner's go-ahead, run the tag-mode dispatch **from the tag ref**: `gh workflow run release.yml --repo bharathkontham/polyjose --ref vX.Y.Z -f mode=tag -f tag=vX.Y.Z`. It builds and tests nothing again (ADR 0068 §1). Its `candidate` job takes every artifact (the crate, `@polyjose/node`, `@polyjose/wasm`, the Maven repository and the Apple zip) from the candidate run recorded in `bindings/swift/release-candidate.json`. [`candidate.sh`](scripts/release/candidate.sh) first checks that the run is a successful `workflow_dispatch` of `release.yml` in this repository at the recorded commit, and that the tag differs from that commit only by the tree rule (section 5). Only the `.crate` is re-packaged at the tag, without a compile, and it must equal the candidate's except `.cargo_vcs_info.json`. Then the run signs in `release-signing`, attests the reused bytes, and creates the draft.
 5. **Check the draft** (release agent): the tag run is green, and `gh release view vX.Y.Z --repo bharathkontham/polyjose --json isDraft,assets` shows a draft with every asset. The draft is verified once, by `publish.yml`'s `assets` job, which every publish job needs (ADR 0068 §3). It runs [`verify-draft.sh`](scripts/release/verify-draft.sh), which checks `SHA256SUMS.asc` against the committed key and every asset against `SHA256SUMS`. A local verification is no longer part of the routine. It stays available as a manual tool, in a fresh directory (listing a draft needs push access):
    ```sh
    d=$(mktemp -d)
@@ -89,6 +89,6 @@ Optional: `publish.yml` also accepts a disposable `dryrun-vX.Y.Z[-N]` draft, wit
 ## 5. Rules the workflows enforce
 
 - **A `v*` tag is never moved, deleted or re-pushed,** and `release.yml` refuses to re-release a tag. If a tag run, the dry run or a publish job fails because of a bug, the fix ships as the next patch version.
-- `platforms/swift/release-candidate.json` has exactly the keys `run_id`, `commit` and `sha256`. Between the candidate commit and the tag, only `Package.swift`'s `url:`/`checksum:` lines and that file may change (the tree rule), since the tag run reuses every candidate artifact. Otherwise, re-run the candidate and re-record both files.
+- `bindings/swift/release-candidate.json` has exactly the keys `run_id`, `commit` and `sha256`. Between the candidate commit and the tag, only `Package.swift`'s `url:`/`checksum:` lines and that file may change (the tree rule), since the tag run reuses every candidate artifact. Otherwise, re-run the candidate and re-record both files.
 - Candidate artifacts expire after about 90 days (GitHub's default retention; the workflows set none), and the tag run needs all of them. If the candidate is older, re-run it before tagging.
 - `publish.yml` re-runs are idempotent on crates.io and npm: a version already published with the same bytes is skipped, and one with other bytes fails. A Maven re-upload creates a second deployment, which the owner drops in the Portal.
