@@ -100,7 +100,7 @@ const RuntimeError = (globalThis as unknown as { WebAssembly: { RuntimeError: ne
 async function runnerResult(thrown: unknown) {
   const dir = path.resolve(process.cwd(), "test/fixtures/vectors");
   const vf: VectorFile = { path: "jws/verify-json-reject.json", json: fs.readFileSync(path.join(dir, "jws/verify-json-reject.json"), "utf8") };
-  const schema = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../conformance/schema.json"), "utf8")) as unknown;
+  const schema = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../conformance/schema/vectors.schema.json"), "utf8")) as unknown;
   const fake = toyBackend({ jwsVerifyJson: () => { throw thrown; } });
   const [r] = await runVectors(createApi(fake.backend), [vf], { schema, features: [] });
   assert.ok(r !== undefined);

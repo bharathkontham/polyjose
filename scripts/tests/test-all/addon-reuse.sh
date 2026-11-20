@@ -167,7 +167,7 @@ rebuilt "after it" 'no addon-inputs\.sha256'
 # --- build.sh ------------------------------------------------------------------------------------------
 
 new_case build
-mkdir -p "$(pkg)/node_modules/.bin" "$case_dir/bindings/js/node_modules/.bin"
+mkdir -p "$(pkg)/node_modules/.bin" "$case_dir/bindings/ts-common/node_modules/.bin"
 # shellcheck disable=SC2016 # expanded by the stubs, not here
 {
   echo '#!/bin/sh'
@@ -180,9 +180,9 @@ mkdir -p "$(pkg)/node_modules/.bin" "$case_dir/bindings/js/node_modules/.bin"
 # shellcheck disable=SC2016 # expanded by the stubs, not here
 {
   echo '#!/bin/sh'
-  echo 'case $PWD in */bindings/js) mkdir -p dist/src && echo "export {};" >dist/src/api.js && echo "export {};" >dist/src/api.d.ts ;; esac'
-} >"$case_dir/bindings/js/node_modules/.bin/tsc"
-chmod +x "$(pkg)/node_modules/.bin/napi" "$case_dir/bindings/js/node_modules/.bin/tsc"
+  echo 'case $PWD in */bindings/ts-common) mkdir -p dist/src && echo "export {};" >dist/src/api.js && echo "export {};" >dist/src/api.d.ts ;; esac'
+} >"$case_dir/bindings/ts-common/node_modules/.bin/tsc"
+chmod +x "$(pkg)/node_modules/.bin/napi" "$case_dir/bindings/ts-common/node_modules/.bin/tsc"
 export STUB_LOG="$scratch/napi.log" STUB_EDIT="$scratch/edit-during-build"
 : >"$STUB_LOG"
 

@@ -11,7 +11,7 @@
 //! cover them.
 //!
 //! The mapping is conformance/README.md "Binding runners", call by call, and mirrors the JS
-//! runner (`bindings/js/conformance/runner.ts`) and the `rust-surface` runner
+//! runner (`bindings/ts-common/conformance/runner.ts`) and the `rust-surface` runner
 //! (`bindings/surface/tests/conformance.rs`). The rules are those of every runner
 //! (README "Rules for every runner"):
 //!
@@ -20,7 +20,7 @@
 //!   system to walk). Each is parsed with `JSON.parse` (`js_sys::JSON::parse`). `JSON.parse` keeps
 //!   the last of duplicate members, but vector files must be I-JSON (RFC 7493 §2.3), so a file
 //!   with more `:` member separators than parsed members fails.
-//! - **Schema.** Every file is checked against `conformance/schema.json` by a checker of exactly
+//! - **Schema.** Every file is checked against `conformance/schema/vectors.schema.json` by a checker of exactly
 //!   the JSON Schema 2020-12 keywords the schema uses (any other keyword fails), plus the
 //!   cross-member rules the schema can't state. JavaScript reads `1300819439.0` as an integer, so
 //!   `"type": "integer"` can't tell the spellings apart here; the Rust runner's binding-readiness
@@ -64,8 +64,8 @@ use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 #[cfg(feature = "browser")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-/// `conformance/schema.json`, the vector format (README "Members").
-const SCHEMA: &str = include_str!("../../../conformance/schema.json");
+/// `conformance/schema/vectors.schema.json`, the vector format (README "Members").
+const SCHEMA: &str = include_str!("../../../conformance/schema/vectors.schema.json");
 
 /// The prefix of the one results line that `bindings/wasm/test.sh` extracts.
 const MARKER: &str = "POLYJOSE-CONFORMANCE-RESULTS ";
@@ -205,7 +205,7 @@ fn array_of(values: Vec<JsValue>) -> JsValue {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The schema checker: the JSON Schema 2020-12 keywords schema.json uses, and no others
+// The schema checker: the JSON Schema 2020-12 keywords vectors.schema.json uses, and no others
 // ---------------------------------------------------------------------------------------------
 
 const ANNOTATIONS: &[&str] = &["$schema", "title", "description"];
@@ -586,7 +586,7 @@ fn run_vector(
         Ok(value) => value,
         Err(e) => {
             return Status::Fail(format!(
-                "{name}: not a valid JSON text ({}); see conformance/schema.json",
+                "{name}: not a valid JSON text ({}); see conformance/schema/vectors.schema.json",
                 get_any(&e, "message")
                     .and_then(|m| m.as_string())
                     .unwrap_or_default()
@@ -1805,8 +1805,8 @@ struct Report {
 }
 
 fn run_all(enabled: &[&str]) -> Report {
-    let schema =
-        JSON::parse(SCHEMA).unwrap_or_else(|_| panic!("conformance/schema.json is not JSON"));
+    let schema = JSON::parse(SCHEMA)
+        .unwrap_or_else(|_| panic!("conformance/schema/vectors.schema.json is not JSON"));
     let defs = get(&schema, "$defs").unwrap_or_else(|| Object::new().into());
     let mut report = Report::default();
     if vectors::VECTORS.is_empty() {

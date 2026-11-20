@@ -4,13 +4,13 @@
 # Mode "wasm" of scripts/check-binding-api.sh: the @polyjose/wasm package (feature 0006 T03;
 # ADR 0031 §3, ADR 0047). It builds the package directory first, with
 #   bindings/wasm/scripts/build-package.sh --no-pack
-# (wasm-pack, the bindings/js facade, the TypeScript entries; no tarball), and then checks the
+# (wasm-pack, the bindings/ts-common facade, the TypeScript entries; no tarball), and then checks the
 # assembled bindings/wasm/pkg/:
 #   - operations: every `export function <name>` of the wasm-bindgen glue's generated
 #     declarations, pkg/polyjose_wasm.d.ts, except the glue's own `initSync` (the default export,
 #     `__wbg_init`, is not a named function export). The adapter exports one camelCase function per
 #     inventory operation (ADR 0030 §2), which the shared facade calls through the backend;
-#   - byte identity: pkg/facade/ holds exactly the .js and .d.ts files of bindings/js/dist/src/
+#   - byte identity: pkg/facade/ holds exactly the .js and .d.ts files of bindings/ts-common/dist/src/
 #     (the tsc output the script copied, ADR 0047), each byte-identical to it, so the package ships
 #     the facade unchanged (ADR 0031 §1).
 # Records, fields and codes are the facade's (mode "js"), so this mode checks operations only.
@@ -54,22 +54,22 @@ mode_derive() {
   [ -s "$out" ] || mode_fail "no export function found in pkg/polyjose_wasm.d.ts (has the glue changed?)"
 
   # Byte identity of the copied facade (both directions: nothing missing, nothing extra).
-  local src=$repo/bindings/js/dist/src name
-  [ -d "$src" ] || mode_fail "bindings/js/dist/src missing after the build"
+  local src=$repo/bindings/ts-common/dist/src name
+  [ -d "$src" ] || mode_fail "bindings/ts-common/dist/src missing after the build"
   [ -d "$pkg/facade" ] || { echo "error pkg/facade/ missing (the facade is copied there, ADR 0031 §1)" >>"$out"; return 0; }
   (cd "$src" && find . -type f \( -name '*.js' -o -name '*.d.ts' \) | sort) >"$mode_scratch/facade.src"
   (cd "$pkg/facade" && find . -type f | sort) >"$mode_scratch/facade.pkg"
-  [ -s "$mode_scratch/facade.src" ] || mode_fail "no .js or .d.ts in bindings/js/dist/src"
+  [ -s "$mode_scratch/facade.src" ] || mode_fail "no .js or .d.ts in bindings/ts-common/dist/src"
   {
     comm -23 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
-      echo "error pkg/facade/${name#./} missing (bindings/js/dist/src/${name#./} is not shipped)"
+      echo "error pkg/facade/${name#./} missing (bindings/ts-common/dist/src/${name#./} is not shipped)"
     done
     comm -13 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
-      echo "error pkg/facade/${name#./} is not a .js or .d.ts of bindings/js/dist/src"
+      echo "error pkg/facade/${name#./} is not a .js or .d.ts of bindings/ts-common/dist/src"
     done
     comm -12 "$mode_scratch/facade.src" "$mode_scratch/facade.pkg" | while IFS= read -r name; do
       cmp -s "$src/$name" "$pkg/facade/$name" \
-        || echo "error pkg/facade/${name#./} differs from bindings/js/dist/src/${name#./} (the facade ships unchanged)"
+        || echo "error pkg/facade/${name#./} differs from bindings/ts-common/dist/src/${name#./} (the facade ships unchanged)"
     done
   } >>"$out"
 }

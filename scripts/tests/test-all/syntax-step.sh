@@ -2,7 +2,7 @@
 # Test of the `syntax` step of scripts/test-all.sh (feature 0013 F10; pipeline rule 9): before any
 # other step, and for any platforms named, it runs `bash -n` (test-all.sh's own bash) over
 # scripts/*.sh, scripts/check-binding-api.d/*.sh, scripts/tests/**/*.sh, and, when present,
-# bindings/*/test.sh, bindings/*/tests/*.sh, bindings/*/scripts/*.sh and platforms/*/test.sh. A file
+# bindings/*/test.sh, bindings/*/tests/*.sh and bindings/*/scripts/*.sh. A file
 # that does not parse FAILs the step, which names it, and the run; the other steps still run. So a
 # syntax error that a script's own exit status would hide (macOS /bin/bash 3.2 exits 0 from an EXIT
 # trap after one) still fails the gate.
@@ -28,8 +28,8 @@ broken_file() {
 
 # android_fixture: the copy's android suite is a passing fixture that writes its runners' results.
 android_fixture() {
-  fixture platforms/android/test.sh 0 'fixture android suite ran'
-  writes_own_results platforms/android/test.sh android
+  fixture bindings/kotlin/test.sh 0 'fixture android suite ran'
+  writes_own_results bindings/kotlin/test.sh android
 }
 
 # --- A tree that parses ---------------------------------------------------------------------------------
@@ -68,10 +68,10 @@ broken_case modes scripts/check-binding-api.d/f10-broken.sh
 broken_case tests scripts/tests/f10/broken.sh
 broken_case tests-nested scripts/tests/f10/deeper/broken.sh
 broken_case tests-space "scripts/tests/f10 dir/broken.sh"
-broken_case binding-suite bindings/js/test.sh
-broken_case binding-tests bindings/ffi/tests/f10-broken.sh
+broken_case binding-suite bindings/ts-common/test.sh
+broken_case binding-tests bindings/uniffi/tests/f10-broken.sh
 broken_case binding-scripts bindings/f10/scripts/broken.sh
-broken_case platform-suite platforms/f10/test.sh
+broken_case platform-suite bindings/swift/test.sh
 
 # The gate itself: a syntax error in test-all.sh stops it with bash's own status 2 (it is parsed
 # before its trap is installed; one after the trap is scripts/tests/syntax/guards.sh's case).
@@ -95,7 +95,7 @@ check "a syntax error in test-all.sh itself exits 2, never 0" 2 'syntax error'
 new_case not-shell
 mkdir -p "$case_dir/scripts/tests/f10"
 printf 'if then\n' >"$case_dir/scripts/tests/f10/notes.txt"
-printf 'if then\n' >"$case_dir/bindings/js/f10.sh"
+printf 'if then\n' >"$case_dir/bindings/ts-common/f10.sh"
 android_fixture
 run_test_all android
 check "files outside the listed globs are not checked" 0 '^  syntax: PASS$'

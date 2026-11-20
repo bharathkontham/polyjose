@@ -1,4 +1,4 @@
-// Type-level usage of the facade (ADR 0047). Checked by `tsc` (`npx tsc --noEmit -p bindings/js`),
+// Type-level usage of the facade (ADR 0047). Checked by `tsc` (`npx tsc --noEmit -p bindings/ts-common`),
 // never executed: `usage` is not called. Each `@ts-expect-error` line must fail to type-check,
 // or tsc reports the directive as unused, so misuse is proven to be rejected.
 import { createApi, PolyjoseError, ERROR_CODES } from "../src/api.js";

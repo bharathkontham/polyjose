@@ -1,10 +1,10 @@
 /**
- * Checks a parsed vector against `conformance/schema.json` (JSON Schema draft 2020-12), as every
+ * Checks a parsed vector against `conformance/schema/vectors.schema.json` (JSON Schema draft 2020-12), as every
  * runner must (conformance/README.md "Rules for every runner": a file that is not schema-valid
  * fails, including a misspelled member anywhere).
  *
  * The bindings have no runtime dependencies (ADR 0016, ADR 0031), so this is a small checker of
- * exactly the keywords schema.json uses: `$ref` (local `#/$defs/...`), `type`, `enum`, `const`,
+ * exactly the keywords vectors.schema.json uses: `$ref` (local `#/$defs/...`), `type`, `enum`, `const`,
  * `properties`, `required`, `additionalProperties` (boolean or schema), `items`, `minItems`,
  * `maxItems`, `uniqueItems`, `minimum`, `maximum`, `minLength`, `pattern`, `allOf`, `oneOf`,
  * `if`/`then`/`else`, and the annotations `$schema`, `title`, `description`. Any other keyword

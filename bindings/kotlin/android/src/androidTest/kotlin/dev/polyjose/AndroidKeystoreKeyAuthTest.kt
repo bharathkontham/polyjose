@@ -21,7 +21,7 @@ import org.junit.Test
  * this class, and clears the PIN on exit. Otherwise it excludes this class and reports the live
  * check `SKIPPED (no secure lock screen on the AVD)`; the pure mapping test
  * ([AndroidKeystoreKeyTableTest]) still covers the code path. Nothing here authenticates: a real
- * prompt is a step of `platforms/android/DEVICE-TESTS.md`.
+ * prompt is a step of `bindings/kotlin/DEVICE-TESTS.md`.
  */
 class AndroidKeystoreKeyAuthTest {
     private val store: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

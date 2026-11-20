@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Local verification of .github/workflows/binding-apple.yml, the Swift (iOS) workflow (feature 0009
 # T05). The workflow is never dispatched without the owner and PR CI is off (ADR 0044, pipeline
-# rule 8), so this script is what checks it. Run by platforms/swift/test.sh, or directly.
+# rule 8), so this script is what checks it. Run by bindings/swift/test.sh, or directly.
 #
 # Usage:
-#   platforms/swift/scripts/tests/ci-workflow.sh               check the workflow, then the
+#   bindings/swift/scripts/tests/ci-workflow.sh               check the workflow, then the
 #                                                              self-test below
-#   platforms/swift/scripts/tests/ci-workflow.sh --check <f>   check another file as if it were the
+#   bindings/swift/scripts/tests/ci-workflow.sh --check <f>   check another file as if it were the
 #                                                              workflow (scripts resolve against
 #                                                              this checkout); no self-test
 #
@@ -44,7 +44,7 @@
 #                conformance`), then parity, none of them conditional. The test.sh step first
 #                empties target/conformance/, so that parity sees only this job's results, and
 #                requires test.sh's PASS line.
-#   modes        release mode installs the pinned nightly (platforms/swift/nightly-toolchain) with
+#   modes        release mode installs the pinned nightly (bindings/swift/nightly-toolchain) with
 #                rust-src, builds with build-xcframework.sh --release and runs package.sh without
 #                --allow-dev; ci mode runs package.sh too (it may pass --allow-dev); --allow-dev
 #                appears only in steps conditional on ci mode; rust-cache
@@ -413,7 +413,7 @@ fi
 
 # --- scripts --------------------------------------------------------------------------------
 scripts_ok=1
-for p in $(grep -oE '(platforms|scripts)/[A-Za-z0-9_./-]+\.sh' "$code" | sort -u) platforms/swift/nightly-toolchain; do
+for p in $(grep -oE '(bindings|scripts)/[A-Za-z0-9_./-]+\.sh' "$code" | sort -u) bindings/swift/nightly-toolchain; do
   if [ ! -f "$root/$p" ]; then
     scripts_ok=0
     bad "scripts" "$p does not exist"
@@ -422,8 +422,8 @@ for p in $(grep -oE '(platforms|scripts)/[A-Za-z0-9_./-]+\.sh' "$code" | sort -u
     bad "scripts" "$p has a #! line but is not executable"
   fi
 done
-for p in scripts/check-no-cargo-config.sh platforms/swift/test.sh \
-  platforms/swift/scripts/build-xcframework.sh platforms/swift/scripts/package.sh \
+for p in scripts/check-no-cargo-config.sh bindings/swift/test.sh \
+  bindings/swift/scripts/build-xcframework.sh bindings/swift/scripts/package.sh \
   scripts/conformance-parity.sh; do
   if [ "$(step_index "$p")" = 0 ]; then
     scripts_ok=0
@@ -448,7 +448,7 @@ else
 fi
 
 # --- order ----------------------------------------------------------------------------------
-i_test=$(step_index "platforms/swift/test.sh")
+i_test=$(step_index "bindings/swift/test.sh")
 i_core=$(step_index "cargo test --locked -p polyjose --test conformance")
 i_parity=$(step_index "scripts/conformance-parity.sh")
 order_ok=1
@@ -469,7 +469,7 @@ else
     order_ok=0
     bad "order" "the test.sh step must empty target/conformance/ first (a restored cache could hold old results)"
   fi
-  if ! run_has "$(step_file "$i_test")" 'platforms/swift/test.sh: PASS'; then
+  if ! run_has "$(step_file "$i_test")" 'bindings/swift/test.sh: PASS'; then
     order_ok=0
     bad "order" "the test.sh step must require test.sh's PASS line (it prints SKIPPED and exits 0 without its tools)"
   fi
@@ -493,29 +493,29 @@ for s in $steps; do
       [ "$cond" = "inputs.mode == 'ci'" ] ||
         { modes_ok=0; bad "modes" "rust-cache must run in ci mode only (release builds restore no cache)"; } ;;
   esac
-  if [ "$cond" = "inputs.mode == 'ci'" ] && run_has "$s" 'platforms/swift/scripts/package.sh'; then
+  if [ "$cond" = "inputs.mode == 'ci'" ] && run_has "$s" 'bindings/swift/scripts/package.sh'; then
     ci_package=1
   fi
   [ "$cond" = "inputs.mode == 'release'" ] || continue
   if run_has "$s" 'rustup toolchain install' &&
-    run_has "$s" 'platforms/swift/nightly-toolchain' &&
+    run_has "$s" 'bindings/swift/nightly-toolchain' &&
     run_has "$s" '--component rust-src'; then
     release_nightly=1
   fi
-  run_has "$s" 'platforms/swift/scripts/build-xcframework.sh --release' && release_build=1
-  if run_has "$s" 'platforms/swift/scripts/package.sh' &&
+  run_has "$s" 'bindings/swift/scripts/build-xcframework.sh --release' && release_build=1
+  if run_has "$s" 'bindings/swift/scripts/package.sh' &&
     ! run_has "$s" '--allow-dev'; then
     release_package=1
   fi
 done
 [ "$release_nightly" = 1 ] ||
-  { modes_ok=0; bad "modes" "release mode must install the toolchain of platforms/swift/nightly-toolchain with --component rust-src"; }
+  { modes_ok=0; bad "modes" "release mode must install the toolchain of bindings/swift/nightly-toolchain with --component rust-src"; }
 [ "$release_build" = 1 ] ||
-  { modes_ok=0; bad "modes" "release mode must run platforms/swift/scripts/build-xcframework.sh --release"; }
+  { modes_ok=0; bad "modes" "release mode must run bindings/swift/scripts/build-xcframework.sh --release"; }
 [ "$release_package" = 1 ] ||
-  { modes_ok=0; bad "modes" "release mode must run platforms/swift/scripts/package.sh without --allow-dev"; }
+  { modes_ok=0; bad "modes" "release mode must run bindings/swift/scripts/package.sh without --allow-dev"; }
 [ "$ci_package" = 1 ] ||
-  { modes_ok=0; bad "modes" "ci mode must run platforms/swift/scripts/package.sh too (the apple-xcframework artifact)"; }
+  { modes_ok=0; bad "modes" "ci mode must run bindings/swift/scripts/package.sh too (the apple-xcframework artifact)"; }
 [ "$modes_ok" = 1 ] && ok "modes: release installs the nightly with rust-src, builds with --release, packages without --allow-dev; ci mode packages too; --allow-dev and rust-cache in ci mode only"
 
 # --- expressions ----------------------------------------------------------------------------
@@ -786,7 +786,7 @@ CANON
 canon 'Install the pinned nightly (release mode)' <<'CANON'
         if: inputs.mode == 'release'
         run: |
-          nightly=$(tr -d '[:space:]' < platforms/swift/nightly-toolchain)
+          nightly=$(tr -d '[:space:]' < bindings/swift/nightly-toolchain)
           rustup toolchain install "$nightly" --profile minimal --component rust-src
           rustc "+$nightly" --version
 CANON
@@ -806,20 +806,20 @@ canon 'actionlint 1.7.12' <<'CANON'
           "$dir/actionlint" -version
           echo "$dir" >>"$GITHUB_PATH"
 CANON
-canon 'XCFramework (release mode, platforms/swift/scripts/build-xcframework.sh --release)' <<'CANON'
+canon 'XCFramework (release mode, bindings/swift/scripts/build-xcframework.sh --release)' <<'CANON'
         if: inputs.mode == 'release'
-        run: platforms/swift/scripts/build-xcframework.sh --release
+        run: bindings/swift/scripts/build-xcframework.sh --release
 CANON
 canon 'iOS Simulator runtime' <<'CANON'
         id: ios-runtime
         timeout-minutes: 30
         run: |
-          runtime=$(sed -n 's/^runtime_id=//p' platforms/swift/scripts/test-simulators.sh)
+          runtime=$(sed -n 's/^runtime_id=//p' bindings/swift/scripts/test-simulators.sh)
           if [ -z "$runtime" ]; then
             echo "::error::no runtime_id in test-simulators.sh"
             exit 1
           fi
-          . platforms/swift/scripts/simulator-lib.sh
+          . bindings/swift/scripts/simulator-lib.sh
           xcrun simctl list runtimes -j >"$RUNNER_TEMP/runtimes.json"
           if sim_runtime_available "$RUNNER_TEMP/runtimes.json" "$runtime"; then
             echo "$runtime is installed"
@@ -834,12 +834,12 @@ canon 'iOS Simulator runtime' <<'CANON'
             fi
           fi
 CANON
-canon 'platforms/swift/test.sh (macOS host and the iOS Simulator)' <<'CANON'
+canon 'bindings/swift/test.sh (macOS host and the iOS Simulator)' <<'CANON'
         run: |
           rm -rf target/conformance
-          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
-          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then
-            echo "::error::platforms/swift/test.sh did not end with its PASS line"
+          bindings/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "bindings/swift/test.sh: PASS" ]; then
+            echo "::error::bindings/swift/test.sh did not end with its PASS line"
             exit 1
           fi
 CANON
@@ -886,11 +886,11 @@ canon 'conformance parity' <<'CANON'
 CANON
 canon 'package.sh (release mode)' <<'CANON'
         if: inputs.mode == 'release'
-        run: platforms/swift/scripts/package.sh
+        run: bindings/swift/scripts/package.sh
 CANON
 canon 'package.sh (ci mode, a development build allowed)' <<'CANON'
         if: inputs.mode == 'ci'
-        run: platforms/swift/scripts/package.sh --allow-dev
+        run: bindings/swift/scripts/package.sh --allow-dev
 CANON
 canon 'the checkout is unchanged' <<'CANON'
         run: git diff --exit-code --stat HEAD
@@ -993,7 +993,7 @@ for s in $steps; do
       # shellcheck disable=SC2016 # literal workflow text
       [ "$(step_with "$s" save-if)" = '${{ github.ref == '"'refs/heads/main'"' }}' ] ||
         { actions_ok=0; bad "actions" "rust-cache must save only on main (save-if: \${{ github.ref == 'refs/heads/main' }})"; }
-      if [ "$i" -lt "$(canon_step "Install toolchain (rust-toolchain.toml)")" ] || [ "$i" -gt "$(canon_step "platforms/swift/test.sh (macOS host and the iOS Simulator)")" ]; then
+      if [ "$i" -lt "$(canon_step "Install toolchain (rust-toolchain.toml)")" ] || [ "$i" -gt "$(canon_step "bindings/swift/test.sh (macOS host and the iOS Simulator)")" ]; then
         actions_ok=0; bad "actions" "rust-cache must come after the toolchain install and before test.sh"
       fi ;;
     actions/setup-node)
@@ -1133,13 +1133,13 @@ else
   checkout_pin='      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
   cache_pin='      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3'
   upload_pin='      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2'
-  test_step='      - name: platforms/swift/test.sh (macOS host and the iOS Simulator)'
+  test_step='      - name: bindings/swift/test.sh (macOS host and the iOS Simulator)'
   # shellcheck disable=SC2016 # literal workflow text
   mode_env='      MODE: ${{ inputs.mode }}'
   runs_on='    runs-on: xcode-27'
   parity_run='        run: scripts/conformance-parity.sh'
   core_run='        run: cargo test --locked -p polyjose --test conformance'
-  release_package='        run: platforms/swift/scripts/package.sh'
+  release_package='        run: bindings/swift/scripts/package.sh'
 
   mutate name "" "name: Swift (iOS)" "name: binding-apple" "a name without Swift (iOS)"
   mutate triggers "" "  workflow_dispatch:" "  pull_request:\n  workflow_dispatch:" "a pull_request trigger"
@@ -1169,20 +1169,20 @@ else
   mutate artifacts "          name: conformance-swift-macos" "          if-no-files-found: error" "          if-no-files-found: warn" "if-no-files-found: warn"
   mutate artifacts "          name: apple-xcframework" "          if-no-files-found: error" "          if-no-files-found: error\n\n$upload_pin\n        with:\n          name: conformance-rust-core\n          path: target/conformance/rust-core.json\n          if-no-files-found: error" "an extra artifact"
   mutate scripts "" "$parity_run" "        run: scripts/conformance-parity-all.sh" "a script that does not exist"
-  mutate modes "" "        run: platforms/swift/scripts/package.sh --allow-dev" "        run: echo packaged" "no ci-mode package.sh step"
+  mutate modes "" "        run: bindings/swift/scripts/package.sh --allow-dev" "        run: echo packaged" "no ci-mode package.sh step"
   mutate "one job" "          name: apple-xcframework" "          if-no-files-found: error" "          if-no-files-found: error\n\n  other:\n    runs-on: macos-latest\n    timeout-minutes: 5\n    steps:\n      - run: echo other" "a second job"
   mutate "one job" "" "$runs_on" "    runs-on: ubuntu-latest" "a Linux runner"
   mutate order "" "$core_run" "        run: cargo test --locked -p polyjose" "no rust-core reference"
   mutate order "" "$core_run" "        if: inputs.mode == 'release'\n$core_run" "a conditional rust-core reference"
   mutate order "" "      - name: conformance parity" "      - name: conformance parity\n        if: inputs.mode == 'release'" "a conditional parity check"
   # shellcheck disable=SC2016 # literal workflow text
-  mutate order "" '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then' "          if false; then" "test.sh's PASS line not required"
+  mutate order "" '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "bindings/swift/test.sh: PASS" ]; then' "          if false; then" "test.sh's PASS line not required"
   mutate order "" "          rm -rf target/conformance" "          mkdir -p target/conformance" "results files left from a restored cache"
   mutate modes "" "$release_package" "$release_package --allow-dev" "--allow-dev in release mode"
   mutate modes "      - name: package.sh (ci mode, a development build allowed)" "        if: inputs.mode == 'ci'" "        if: always()" "the --allow-dev step in every mode"
   # shellcheck disable=SC2016 # literal workflow text
   mutate modes "" '          rustup toolchain install "$nightly" --profile minimal --component rust-src' '          rustup toolchain install "$nightly" --profile minimal' "the nightly without rust-src"
-  mutate modes "" "        run: platforms/swift/scripts/build-xcframework.sh --release" "        run: platforms/swift/scripts/build-xcframework.sh" "the release build without --release"
+  mutate modes "" "        run: bindings/swift/scripts/build-xcframework.sh --release" "        run: bindings/swift/scripts/build-xcframework.sh" "the release build without --release"
   mutate modes "$cache_pin" "        if: inputs.mode == 'ci'" "        if: always()" "rust-cache in release mode"
   mutate expressions "" "$parity_run" "        run: echo \"\${{ inputs.mode }}\" && scripts/conformance-parity.sh" "an expression in a run script"
   mutate xcode "" "      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer" "      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer" "an unversioned Xcode"
@@ -1246,16 +1246,16 @@ else
   mutate steps "" "$core_run" "$core_run || true" "rust-core || true"
   mutate steps "" "$core_run" "        run: echo cargo test --locked -p polyjose --test conformance" "rust-core only echoed"
   mutate steps "" "$release_package" "$release_package || true" "release package.sh || true"
-  mutate steps "" "$release_package" "        run: echo platforms/swift/scripts/package.sh" "release package.sh only echoed"
-  mutate steps "" "        run: platforms/swift/scripts/build-xcframework.sh --release" "        run: echo platforms/swift/scripts/build-xcframework.sh --release" "the release build only echoed"
-  mutate steps "" "$release_package" "        run: |\n          platforms/swift/scripts/package.sh --allow-d\\\\\n          ev" "--allow-dev split over a line continuation"
+  mutate steps "" "$release_package" "        run: echo bindings/swift/scripts/package.sh" "release package.sh only echoed"
+  mutate steps "" "        run: bindings/swift/scripts/build-xcframework.sh --release" "        run: echo bindings/swift/scripts/build-xcframework.sh --release" "the release build only echoed"
+  mutate steps "" "$release_package" "        run: |\n          bindings/swift/scripts/package.sh --allow-d\\\\\n          ev" "--allow-dev split over a line continuation"
   # shellcheck disable=SC2016 # literal workflow text
-  mutate steps "" '          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' '          platforms/swift/scripts/test-simulators.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' "test.sh replaced while its PASS text stays"
+  mutate steps "" '          bindings/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' '          bindings/swift/scripts/test-simulators.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' "test.sh replaced while its PASS text stays"
   # shellcheck disable=SC2016 # literal workflow text
-  mutate steps "" '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then' '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ] && false; then' "the PASS check ending in && false"
+  mutate steps "" '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "bindings/swift/test.sh: PASS" ]; then' '          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "bindings/swift/test.sh: PASS" ] && false; then' "the PASS check ending in && false"
   mutate steps "" "          rm -rf target/conformance" "          echo rm -rf target/conformance" "the results reset only echoed"
   # shellcheck disable=SC2016 # literal workflow text
-  mutate steps "" '          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' '          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"\n          rm -rf target/conformance' "the results reset after test.sh"
+  mutate steps "" '          bindings/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"' '          bindings/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"\n          rm -rf target/conformance' "the results reset after test.sh"
   mutate steps '            echo "::error::release mode requires the iOS Simulator run; test-simulators.sh skipped it (no iOS 27.2 runtime on the runner)"' "            exit 1" "            exit 0" "the release iOS check exiting 0 on a skip line"
   mutate steps '            echo "::error::release mode requires target/conformance/swift-ios-sim.json"' "            exit 1" "            exit 0" "the release iOS check exiting 0 on a missing file"
   # shellcheck disable=SC2016 # literal workflow text

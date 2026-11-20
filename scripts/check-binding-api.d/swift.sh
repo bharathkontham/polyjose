@@ -3,8 +3,8 @@
 # and sets repo, mode_scratch and camel_awk
 # Mode "swift" of scripts/check-binding-api.sh: the Swift (iOS) binding's public API, the Swift
 # module Polyjose of the root Package.swift (ADR 0032 §3-§4). Its sources are
-# platforms/swift/Sources/Polyjose/*.swift: the committed UniFFI-generated Polyjose.swift (kept
-# fresh by platforms/swift/scripts/check-generated.sh) and any hand-written extension (ADR 0030 §1
+# bindings/swift/Sources/Polyjose/*.swift: the committed UniFFI-generated Polyjose.swift (kept
+# fresh by bindings/swift/scripts/check-generated.sh) and any hand-written extension (ADR 0030 §1
 # allows "a few", and each one is public API, so it must be in the inventory too). A text parse,
 # so no build is needed:
 #   1. comments (`//`, `/* */`, nested) and string literals are blanked, keeping the line breaks;
@@ -74,11 +74,11 @@ SWIFT_REDACTED_RECORDS="JweDecrypted JweEncryptOptions JweRecipient JwsSigner Jw
 SWIFT_REDACTION_MEMBERS="CustomStringConvertible:description:String CustomDebugStringConvertible:debugDescription:String CustomReflectable:customMirror:Mirror"
 
 mode_derive() {
-  local out=$1 src=$repo/platforms/swift/Sources/Polyjose f
-  [ -d "$src" ] || skip "platforms/swift/Sources/Polyjose missing"
+  local out=$1 src=$repo/bindings/swift/Sources/Polyjose f
+  [ -d "$src" ] || skip "bindings/swift/Sources/Polyjose missing"
   set -- "$src"/*.swift
-  [ -e "$1" ] || skip "no .swift files in platforms/swift/Sources/Polyjose"
-  [ -f "$src/Polyjose.swift" ] || mode_fail "platforms/swift/Sources/Polyjose/Polyjose.swift (the generated API) is missing"
+  [ -e "$1" ] || skip "no .swift files in bindings/swift/Sources/Polyjose"
+  [ -f "$src/Polyjose.swift" ] || mode_fail "bindings/swift/Sources/Polyjose/Polyjose.swift (the generated API) is missing"
 
   # 1. Blank comments and string literals, keeping every line (and so the brace structure).
   cat >"$mode_scratch/strip.awk" <<'AWK'
@@ -363,5 +363,5 @@ AWK
     -v redaction_file="$SWIFT_REDACTION_FILE" -v redacted_records="$SWIFT_REDACTED_RECORDS" \
     -v redaction_members="$SWIFT_REDACTION_MEMBERS" \
     -f "$mode_scratch/swift.awk" "$mode_scratch"/*.stripped >"$out" || return 1
-  grep -q '^op ' "$out" || mode_fail "no public func found in platforms/swift/Sources/Polyjose (has the layout changed?)"
+  grep -q '^op ' "$out" || mode_fail "no public func found in bindings/swift/Sources/Polyjose (has the layout changed?)"
 }

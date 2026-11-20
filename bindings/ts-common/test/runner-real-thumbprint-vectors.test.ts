@@ -9,7 +9,7 @@ import { runVectors, type VectorFile } from "../conformance/runner.js";
 import { toyBackend } from "./toy-backend.js";
 
 const VECTORS = path.resolve(process.cwd(), "../../conformance/vectors/jwk-thumbprint");
-const SCHEMA: unknown = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../conformance/schema.json"), "utf8"));
+const SCHEMA: unknown = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../conformance/schema/vectors.schema.json"), "utf8"));
 
 function real(name: string): VectorFile {
   return { path: `jwk-thumbprint/${name}`, json: fs.readFileSync(path.join(VECTORS, name), "utf8") };

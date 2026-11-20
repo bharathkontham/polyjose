@@ -1,6 +1,6 @@
 /**
  * The Node side of the Chrome and workerd runs (`chrome.ts`, `workerd.ts`): it reads the vectors
- * the way `bindings/js/conformance/node-main.ts` does, resolves the package entry the runtime
+ * the way `bindings/ts-common/conformance/node-main.ts` does, resolves the package entry the runtime
  * would pick, and checks and writes the results document the runtime returns
  * (`target/conformance/<runner>.json`, ADR 0034 §2).
  */
@@ -27,7 +27,7 @@ function collect(dir: string, base: string, files: string[], links: string[]): v
 }
 
 /**
- * `conformance/vectors/**\/*.json` and `conformance/schema.json` under `root`, as node-main reads
+ * `conformance/vectors/**\/*.json` and `conformance/schema/vectors.schema.json` under `root`, as node-main reads
  * them (conformance/README.md "Rules for every runner"): an unreadable file or a symbolic link
  * is a `fail`, never skipped, and gets no digest line (ADR 0060 §2). Each file is read once, as
  * bytes, and handed to the runtime as those bytes (base64), which it both hashes for
@@ -36,7 +36,7 @@ function collect(dir: string, base: string, files: string[], links: string[]): v
  */
 export function collectVectors(root: string): VectorInput {
   const vectorsDir = path.join(root, "conformance", "vectors");
-  const schema: unknown = JSON.parse(fs.readFileSync(path.join(root, "conformance", "schema.json"), "utf8"));
+  const schema: unknown = JSON.parse(fs.readFileSync(path.join(root, "conformance", "schema", "vectors.schema.json"), "utf8"));
   const names: string[] = [];
   const links: string[] = [];
   collect(vectorsDir, vectorsDir, names, links);

@@ -42,7 +42,7 @@ class SmokeTest {
     private companion object {
         fun pathProperty(name: String): File {
             val value = System.getProperty(name)
-                ?: error("system property $name is not set (platforms/android/polyjose-jvm/build.gradle.kts)")
+                ?: error("system property $name is not set (bindings/kotlin/jvm/build.gradle.kts)")
             return File(value)
         }
 

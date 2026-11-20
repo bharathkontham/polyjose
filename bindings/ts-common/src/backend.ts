@@ -1,7 +1,7 @@
 /**
  * The backend contract: what each native layer (`@polyjose/node`'s napi-rs loader,
  * `@polyjose/wasm`'s wasm-bindgen glue) exports for the facade (ADR 0031 §1). Documented in
- * `bindings/js/BACKEND.md`.
+ * `bindings/ts-common/BACKEND.md`.
  *
  * - Every ADR 0030 §4 operation, camelCase, with the ADR's argument order.
  * - JSON-valued arguments and result fields are JSON **text**; the facade does the

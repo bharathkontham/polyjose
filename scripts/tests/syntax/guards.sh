@@ -25,7 +25,7 @@
 #     check-test-vectors-off.sh, check-rsa-symbols.sh (--only polyjose-all-features) and
 #     fixed-adapter-unreachable.sh run in a copy of the working tree, sharing the checkout's target
 #     directory;
-#   - bindings/ffi/tests/generated-names.sh and its selftest build and generate the bindings, too
+#   - bindings/uniffi/tests/generated-names.sh and its selftest build and generate the bindings, too
 #     slow to repeat for each case: their copies get the syntax errors at early positions only, and
 #     the positive control there is the copy with `completed=1; exit 0` injected at the same
 #     position, which must exit 0 after reaching it (their own full run is the hand-off check).
@@ -59,32 +59,32 @@ no_trap_scripts="conformance-parity.sh fuzz.sh"
 # The other scripts with an EXIT trap (paths from the repository root): test scripts that follow the
 # rule as the scripts/*.sh do, and sourced test helpers whose finish sets the sentinel (F11, F14).
 test_trap_scripts="scripts/tests/syntax/guards.sh scripts/tests/check-test-vectors-off/fixed-adapter-unreachable.sh
-  bindings/ffi/tests/generated-names.sh bindings/ffi/tests/generated-names-selftest.sh
+  bindings/uniffi/tests/generated-names.sh bindings/uniffi/tests/generated-names-selftest.sh
   bindings/wasm/scripts/check-workflow.sh
   bindings/wasm/scripts/chromedriver.sh
   bindings/wasm/test.sh
   scripts/tests/check-deps/rsa-symbols.sh
   scripts/tests/check-no-cargo-config/bindings.sh
   scripts/tests/deny/cc-wrapper.sh
-  platforms/swift/scripts/build-xcframework.sh
-  platforms/swift/scripts/check-generated.sh
-  platforms/swift/scripts/package.sh
-  platforms/swift/scripts/test-simulator-lib.sh
-  platforms/swift/scripts/test-simulators.sh
-  platforms/swift/scripts/test-xcframework-stale.sh
-  platforms/swift/scripts/tests/ci-workflow.sh
+  bindings/swift/scripts/build-xcframework.sh
+  bindings/swift/scripts/check-generated.sh
+  bindings/swift/scripts/package.sh
+  bindings/swift/scripts/test-simulator-lib.sh
+  bindings/swift/scripts/test-simulators.sh
+  bindings/swift/scripts/test-xcframework-stale.sh
+  bindings/swift/scripts/tests/ci-workflow.sh
   bindings/node/scripts/pack.sh
   bindings/node/scripts/pack-main.sh
   bindings/node/scripts/smoke-install.sh
   bindings/node/test/fixtures/glibc/regen.sh
   bindings/node/test/fixtures/pe/regen.sh
   scripts/tests/check-binding-api/node.sh
-  platforms/android/scripts/ci-check-workflow-test.sh
-  platforms/android/scripts/ci-emulator.sh
-  platforms/android/scripts/run-instrumented.sh"
+  bindings/kotlin/scripts/ci-check-workflow-test.sh
+  bindings/kotlin/scripts/ci-emulator.sh
+  bindings/kotlin/scripts/run-instrumented.sh"
 sourced_helpers="scripts/tests/check-deps/lib.sh scripts/tests/check-binding-api/lib.sh
   scripts/tests/conformance-parity/lib.sh scripts/tests/test-all/lib.sh scripts/tests/third-party-notices/lib.sh
-  platforms/swift/scripts/tests/lib.sh"
+  bindings/swift/scripts/tests/lib.sh"
 
 # --- The rule, read from the real scripts --------------------------------------------------------------
 
@@ -117,7 +117,7 @@ while IFS= read -r f; do
   if listed "$name" "$test_trap_scripts"; then pass "$name installs an EXIT trap and is a test trap script here"
   elif listed "$name" "$sourced_helpers"; then pass "$name installs an EXIT trap and is a sourced helper here"
   else fail "$name installs an EXIT trap but is in neither test_trap_scripts nor sourced_helpers (add the sentinel and list it)"; fi
-done < <(for d in scripts/tests bindings platforms; do
+done < <(for d in scripts/tests bindings; do
   [ -d "$repo/$d" ] || continue
   find "$repo/$d" \( -name node_modules -o -name target -o -name build -o -name .build -o -name .gradle \) -prune \
     -o -type f -name '*.sh' -print
@@ -283,19 +283,19 @@ setup_check_deps_lib() { probe scripts/tests/check-deps; }
 invoke_check_deps_lib() { "$BASH" scripts/tests/check-deps/probe.sh; }
 setup_check_binding_api_lib() {
   probe scripts/tests/check-binding-api scripts/check-binding-api.sh scripts/check-binding-api.d \
-    bindings/api-inventory.txt bindings/surface/src crates/polyjose/src/error.rs bindings/js/package.json
+    bindings/api-inventory.txt bindings/surface/src crates/polyjose/src/error.rs bindings/ts-common/package.json
 }
 invoke_check_binding_api_lib() { "$BASH" scripts/tests/check-binding-api/probe.sh; }
 setup_parity_lib() { probe scripts/tests/conformance-parity scripts/conformance-parity.sh; }
 invoke_parity_lib() { "$BASH" scripts/tests/conformance-parity/probe.sh; }
 
-# The bindings/ffi/tests scripts, for their early positions (guard_early).
-setup_generated_names() { copy bindings/ffi/tests/generated-names.sh bindings/api-inventory.txt; }
-invoke_generated_names() { "$BASH" bindings/ffi/tests/generated-names.sh; }
+# The bindings/uniffi/tests scripts, for their early positions (guard_early).
+setup_generated_names() { copy bindings/uniffi/tests/generated-names.sh bindings/api-inventory.txt; }
+invoke_generated_names() { "$BASH" bindings/uniffi/tests/generated-names.sh; }
 setup_generated_names_selftest() {
-  copy bindings/ffi/tests/generated-names-selftest.sh bindings/ffi/tests/generated-names.sh bindings/api-inventory.txt
+  copy bindings/uniffi/tests/generated-names-selftest.sh bindings/uniffi/tests/generated-names.sh bindings/api-inventory.txt
 }
-invoke_generated_names_selftest() { "$BASH" bindings/ffi/tests/generated-names-selftest.sh; }
+invoke_generated_names_selftest() { "$BASH" bindings/uniffi/tests/generated-names-selftest.sh; }
 
 # The injected lines: what bash rejects, after a marker that shows the copy got there.
 token_error='echo F10-REACHED
@@ -435,10 +435,10 @@ for helper in check_deps:check-deps check_binding_api:check-binding-api parity:c
   guard "$dir/lib.sh (an error in it)" "${helper%%:*}_lib" "$dir/lib.sh" 2 after "$trap_anchor"
 done
 # shellcheck disable=SC2016 # an ERE for the script's text, not an expansion
-guard_early bindings/ffi/tests/generated-names.sh generated_names bindings/ffi/tests/generated-names.sh 2 \
+guard_early bindings/uniffi/tests/generated-names.sh generated_names bindings/uniffi/tests/generated-names.sh 2 \
   after "$trap_anchor" before '^cd "\$repo" \|\| exit 2$'
-guard_early bindings/ffi/tests/generated-names-selftest.sh generated_names_selftest \
-  bindings/ffi/tests/generated-names-selftest.sh 2 after "$trap_anchor" after '^failed=0$'
+guard_early bindings/uniffi/tests/generated-names-selftest.sh generated_names_selftest \
+  bindings/uniffi/tests/generated-names-selftest.sh 2 after "$trap_anchor" after '^failed=0$'
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"

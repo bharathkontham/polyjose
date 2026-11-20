@@ -17,17 +17,17 @@
 # a Windows-only target; and napi-build, the legitimate build crate, dropped from node.txt.
 # Check 8, the binding part (security audit L2 of feature 0013, second recommendation): neither
 # polyjose-surface nor polyjose-ffi may have a build script. Cases: a bare build.rs (no
-# build-dependencies) in bindings/surface and in bindings/ffi, a `build = "<file>"` key in each
+# build-dependencies) in bindings/surface and in bindings/uniffi, a `build = "<file>"` key in each
 # manifest, and the reproduction above, which check 8 now reports too. bindings/node keeps
 # napi-build's build.rs (ADR 0031): the unchanged tree passes and says so.
 # Check 14: serde, serde_json, serde_derive, serde-wasm-bindgen or any other serde-family crate in the
 # normal tree of a bindings/* package fails, unless every path to it goes through a crate that a
-# `# serde-only-below:` line of the package's allowlist names (ffi.txt: UniFFI's proc-macro;
+# `# serde-only-below:` line of the package's allowlist names (uniffi.txt: UniFFI's proc-macro;
 # uniffi-bindgen.txt: the proc-macro and the bindgen CLI, feature 0013 T10) and comment lines
 # explain. Cases: serde_json added to polyjose-node (the criterion's reproduction), also with the
 # allowlist widened so only check 14 is left; serde_json as a direct dependency of polyjose-ffi, and
 # of polyjose-uniffi-bindgen, whose allowlist lists it below the bindgen; uniffi_macros dropped from
-# ffi.txt's line, or the line removed; the line with no explanation, unneeded, or naming a crate
+# uniffi.txt's line, or the line removed; the line with no explanation, unneeded, or naming a crate
 # outside the tree; and a core dependency on semver, reported by the core's check 5 only.
 # Checks 6 and 7 (delta audit D1 of feature 0013): a path fork named zeroize in polyjose-surface,
 # kept out of the workspace by a root `exclude`, fails both; the same fork outside the repository
@@ -105,7 +105,7 @@ with open(path, "w", encoding="utf-8") as f:
 new_case clean
 expect_pass "unchanged tree"
 expect_also "check 8 names the binding crates it holds to no build script, and node's allowed one" \
-  '^ok: no build script in polyjose-surface \(bindings/surface\), polyjose-ffi \(bindings/ffi\); bindings/node keeps napi-build.s build\.rs \(ADR 0031\)'
+  '^ok: no build script in polyjose-surface \(bindings/surface\), polyjose-ffi \(bindings/uniffi\); bindings/node keeps napi-build.s build\.rs \(ADR 0031\)'
 if [ ! -d "$repo/bindings/surface" ]; then
   expect_also "surface.txt is skipped while bindings/surface does not exist" \
     '^skip: bindings/deps-allowlist/surface\.txt: bindings/surface does not exist'
@@ -282,10 +282,10 @@ expect_also "the file is named" '^  - bindings/surface/build\.rs exists$'
 expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/surface/build\.rs \(cargo metadata\)$'
 
 new_case ffi-build-rs
-append_to bindings/ffi/build.rs 'fn main() {}'
+append_to bindings/uniffi/build.rs 'fn main() {}'
 expect_fail "a bare build.rs (no build-dependencies) in polyjose-ffi" \
-  "^FAIL: polyjose-ffi \\(bindings/ffi\\) $build_script" "$build_script"
-expect_also "the file is named" '^  - bindings/ffi/build\.rs exists$'
+  "^FAIL: polyjose-ffi \\(bindings/uniffi\\) $build_script" "$build_script"
+expect_also "the file is named" '^  - bindings/uniffi/build\.rs exists$'
 
 new_case surface-build-key
 append_to bindings/surface/gen.rs 'fn main() {}'
@@ -297,11 +297,11 @@ expect_also "the key is named" '^  - package\.build[? ]'
 expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/surface/gen\.rs \(cargo metadata\)$'
 
 new_case ffi-build-key
-append_to bindings/ffi/tools/gen.rs 'fn main() {}'
-replace_in bindings/ffi/Cargo.toml $'\npublish = false\n' $'\npublish = false\nbuild = "tools/gen.rs"\n'
+append_to bindings/uniffi/tools/gen.rs 'fn main() {}'
+replace_in bindings/uniffi/Cargo.toml $'\npublish = false\n' $'\npublish = false\nbuild = "tools/gen.rs"\n'
 expect_fail "a build = \"tools/gen.rs\" key in polyjose-ffi's manifest" \
-  "^FAIL: polyjose-ffi \\(bindings/ffi\\) $build_script" "$build_script"
-expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/ffi/tools/gen\.rs \(cargo metadata\)$'
+  "^FAIL: polyjose-ffi \\(bindings/uniffi\\) $build_script" "$build_script"
+expect_also "cargo metadata's build target is named" '^  - build script .*/bindings/uniffi/tools/gen\.rs \(cargo metadata\)$'
 
 # --- Check 14: no serde in the bindings -------------------------------------------------------------------
 
@@ -322,11 +322,11 @@ expect_fail "serde_json in polyjose-node and in node.txt" \
 # A direct serde_json in polyjose-ffi (whose tree has none since T10) fails check 14 by its path, and
 # check 13 as an unlisted crate.
 new_case ffi-serde-json
-add_dependency bindings/ffi/Cargo.toml 'serde_json = "1"'
+add_dependency bindings/uniffi/Cargo.toml 'serde_json = "1"'
 expect_fail "serde_json as a direct dependency of polyjose-ffi" \
   "FAIL: serde_json $serde \\(ADR 0030 §1: no serde in the bindings\\): polyjose-ffi -> serde_json$" \
   "$serde|$not_allowed"
-expect_also "check 13 also rejects it" "FAIL: the tree of polyjose-ffi \\(bindings/ffi\\) $not_allowed"
+expect_also "check 13 also rejects it" "FAIL: the tree of polyjose-ffi \\(bindings/uniffi\\) $not_allowed"
 
 # uniffi-bindgen.txt lists serde_json (below the bindgen CLI's cargo_metadata); a direct path avoids
 # every crate of its line, so check 14 alone fails.
@@ -345,8 +345,8 @@ expect_fail "a core change that a binding's build unifies serde onto" \
   'FAIL: semver \(guarded group dalek-build\)' 'FAIL: semver \(guarded group dalek-build\)'
 
 new_case ffi-below-narrowed
-set_directive bindings/deps-allowlist/ffi.txt '# serde-only-below: uniffi_core'
-expect_fail "uniffi_macros dropped from ffi.txt's serde-only-below line" \
+set_directive bindings/deps-allowlist/uniffi.txt '# serde-only-below: uniffi_core'
+expect_fail "uniffi_macros dropped from uniffi.txt's serde-only-below line" \
   "FAIL: serde $serde \\(ADR 0030 §1: no serde in the bindings\\): polyjose-ffi -> uniffi -> uniffi_macros -> serde$" "$serde"
 
 new_case ffi-below-removed
@@ -359,8 +359,8 @@ end = start + 1
 while end < len(lines) and lines[end].startswith("#"):
     end += 1
 open(p, "w").write("\n".join(lines[:start] + lines[end:]))
-' "$case_dir/bindings/deps-allowlist/ffi.txt"
-expect_fail "ffi.txt without its serde-only-below line" "FAIL: serde $serde" "$serde"
+' "$case_dir/bindings/deps-allowlist/uniffi.txt"
+expect_fail "uniffi.txt without its serde-only-below line" "FAIL: serde $serde" "$serde"
 
 new_case ffi-below-unexplained
 python3 -I -c '
@@ -370,7 +370,7 @@ lines = open(p).read().split("\n")
 i = next(i for i, l in enumerate(lines) if l.startswith("# serde-only-below:"))
 lines.insert(i + 1, "")
 open(p, "w").write("\n".join(lines))
-' "$case_dir/bindings/deps-allowlist/ffi.txt"
+' "$case_dir/bindings/deps-allowlist/uniffi.txt"
 expect_fail "a serde-only-below line with no comment explaining it" \
   "${format}serde-only-below must be followed by comment lines that explain" "$format"
 
@@ -381,7 +381,7 @@ expect_fail "a serde-only-below line in an allowlist whose tree has no serde" \
   "serde-only-below"
 
 new_case ffi-below-outside
-set_directive bindings/deps-allowlist/ffi.txt '# serde-only-below: uniffi_macros napi'
+set_directive bindings/deps-allowlist/uniffi.txt '# serde-only-below: uniffi_macros napi'
 expect_fail "a serde-only-below line naming a crate outside the tree" \
   "FAIL: bindings/deps-allowlist/ffi\\.txt: serde-only-below names napi, which is not in the tree of polyjose-ffi" \
   "serde-only-below"

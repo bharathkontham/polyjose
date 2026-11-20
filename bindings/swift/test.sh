@@ -3,39 +3,39 @@
 # swift` (feature 0013 T04's dispatcher) or directly, from any directory.
 #
 # Steps, each failing the suite on error:
-#   0. platforms/swift/scripts/tests/ci-workflow.sh: the Swift (iOS) workflow,
+#   0. bindings/swift/scripts/tests/ci-workflow.sh: the Swift (iOS) workflow,
 #      .github/workflows/binding-apple.yml, has only its two triggers and the mode input, reads the
 #      repository only, pins its actions and calls scripts that exist, and actionlint accepts it,
 #      with the script's self-test (feature 0009 T05; the workflow is never run on PRs, ADR 0044).
 #      Needs actionlint;
-#   1. (re)builds platforms/swift/build/PolyjoseFFI.xcframework with
-#      platforms/swift/scripts/build-xcframework.sh when it is missing or stale, and prints why:
+#   1. (re)builds bindings/swift/build/PolyjoseFFI.xcframework with
+#      bindings/swift/scripts/build-xcframework.sh when it is missing or stale, and prints why:
 #      its polyjose-build.txt records the commit it was built from, and it is stale when that
 #      commit is missing or unknown, or the Rust inputs differ from it in a later commit or in the
-#      working tree (platforms/swift/scripts/xcframework-stale.sh, whose own test runs first). An
+#      working tree (bindings/swift/scripts/xcframework-stale.sh, whose own test runs first). An
 #      old library would otherwise pass: it reports the same version and vectors digest. A build
 #      made while any file is uncommitted is stamped so, and is rebuilt (incrementally) next time;
-#   2. platforms/swift/scripts/check-generated.sh: the committed Polyjose.swift is what the bindgen
+#   2. bindings/swift/scripts/check-generated.sh: the committed Polyjose.swift is what the bindgen
 #      generates (ADR 0032 §4);
 #   3. `swift test` at the repository root with POLYJOSE_LOCAL_XCFRAMEWORK=1, in Swift 6 language
 #      mode with warnings as errors, which runs every conformance vector on the macOS host and
 #      writes target/conformance/swift-macos.json (ADR 0034 §2, ADR 0060; POLYJOSE_CONFORMANCE_OUT).
 #      The suite fails unless that file was written. The test's one-line copy of the document
 #      (POLYJOSE-CONFORMANCE-RESULTS ...) is left out of this script's output;
-#   4. the packaging tests, platforms/swift/scripts/tests/test-*.sh (feature 0009 T04): the guards
+#   4. the packaging tests, bindings/swift/scripts/tests/test-*.sh (feature 0009 T04): the guards
 #      of package.sh on stand-in XCFrameworks, and the zip package.sh makes from the build of step 1
 #      (contents, notices, checksum, binaryTarget stanza, a consumer `swift run`), each into its own
 #      temporary directory, so dist/apple/ is not written;
-#   5. platforms/swift/scripts/test-simulators.sh, when it exists (feature 0009 T03: the iOS
+#   5. bindings/swift/scripts/test-simulators.sh, when it exists (feature 0009 T03: the iOS
 #      Simulator run, swift-ios-sim; feature 0025 T03: the hosted AppleKey tests,
-#      platforms/swift/HostedTests, on the same simulator).
+#      bindings/swift/HostedTests, on the same simulator).
 #
 # Not on macOS, or without swift, the suite cannot run: it prints `SKIPPED (<reason>)` as its last
 # line and exits 0, which scripts/test-all.sh reports as SKIPPED, never as passing.
 # Bash 3.2 compatible (macOS /bin/bash).
 set -euo pipefail
 
-me=platforms/swift/test.sh
+me=bindings/swift/test.sh
 swift_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$swift_dir/../.." && pwd)"
 cd "$root"

@@ -3,13 +3,13 @@
 # and sets repo, mode_scratch and camel_awk
 # Mode "kotlin" of scripts/check-binding-api.sh: the UniFFI-generated Kotlin of the Android and JVM
 # artifacts (package dev.polyjose, ADR 0033 §1), shared unchanged by :polyjose and :polyjose-jvm.
-# Nothing generated is committed, so this mode generates it the way platforms/android's
-# `uniffiGenerate` task does, into its scratch directory (platforms/android/build is left alone):
+# Nothing generated is committed, so this mode generates it the way bindings/kotlin's
+# `uniffiGenerate` task does, into its scratch directory (bindings/kotlin/build is left alone):
 #   1. cargo build --release --lib -p polyjose-ffi (the host cdylib, under $CARGO_TARGET_DIR or
 #      target/);
 #   2. cargo run -p polyjose-uniffi-bindgen -- generate <that library> --language kotlin
 #      --no-format (library mode, UniFFI 0.32).
-# Without cargo, or without the bindings/ffi and bindings/uniffi-bindgen packages, the mode is
+# Without cargo, or without the bindings/uniffi and bindings/uniffi-bindgen packages, the mode is
 # SKIPPED, never passed. CHECK_BINDING_API_KOTLIN_SOURCE=<file> parses that generated file
 # instead (no cargo needed); the mode then says so in a derived-source line on stderr.
 #
@@ -35,8 +35,9 @@
 #     §5), which must also declare `fun code()` (the exported accessor, ADR 0033 §3).
 #
 # Hand-written Kotlin (MODE_HOST_TYPES): the sources the artifacts compile besides the generated
-# file, platforms/android/src/shared/kotlin, platforms/android/polyjose/src/main/kotlin and
-# platforms/android/polyjose-jvm/src/main/kotlin (*.kt, by the same parse). Each public top-level
+# file, bindings/kotlin/shared/kotlin and bindings/kotlin/android/src/main/kotlin (*.kt, by the
+# same parse; the JVM module has no main sources of its own, so a new source folder of a module
+# must be added to KOTLIN_HAND_WRITTEN). Each public top-level
 # declaration (not private or internal) must be a type listed in kotlin.host-types; it is then a
 # `hosttype`, and its public members (not private, internal or protected) are `hostmember`s:
 #   - the `fun`, `val`, `var` and `constructor` declarations of its body (depth 1), and those of
@@ -56,7 +57,7 @@ MODE_KINDS="op record field code interface method enum case"
 MODE_HOST_TYPES=1
 KOTLIN_RUNTIME="RustBuffer InternalException Disposable NoHandle use PolyjoseException"
 # The hand-written Kotlin source directories (see the header), relative to the repository root.
-KOTLIN_HAND_WRITTEN="platforms/android/src/shared/kotlin platforms/android/polyjose/src/main/kotlin platforms/android/polyjose-jvm/src/main/kotlin"
+KOTLIN_HAND_WRITTEN="bindings/kotlin/shared/kotlin bindings/kotlin/android/src/main/kotlin"
 
 mode_derive() {
   local out=$1 source=${CHECK_BINDING_API_KOTLIN_SOURCE:-} lib target dir f
@@ -65,7 +66,7 @@ mode_derive() {
     echo "check-binding-api: kotlin: parsing $source (CHECK_BINDING_API_KOTLIN_SOURCE)" >&2
   else
     command -v cargo >/dev/null 2>&1 || skip "cargo missing (the Kotlin is generated from the polyjose-ffi library)"
-    [ -f "$repo/bindings/ffi/Cargo.toml" ] || skip "bindings/ffi missing"
+    [ -f "$repo/bindings/uniffi/Cargo.toml" ] || skip "bindings/uniffi missing"
     [ -f "$repo/bindings/uniffi-bindgen/Cargo.toml" ] || skip "bindings/uniffi-bindgen missing"
     case $(uname -s) in
       Darwin) lib=libpolyjose_ffi.dylib ;;

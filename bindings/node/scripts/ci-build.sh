@@ -61,7 +61,7 @@ case $target in
   aarch64-pc-windows-msvc) platform=win32-arm64-msvc ;;
   *) die "unknown target '$target' (not in package.json napi.targets)" ;;
 esac
-# The shared runner's rule for a suffix (bindings/js/conformance/node-main.ts): never a path.
+# The shared runner's rule for a suffix (bindings/ts-common/conformance/node-main.ts): never a path.
 [[ $label =~ ^[a-z0-9][a-z0-9_.-]*$ ]] || die "label '$label' is not a CI target label ([a-z0-9][a-z0-9_.-]*)"
 
 command -v node >/dev/null 2>&1 || die "node not found on PATH"

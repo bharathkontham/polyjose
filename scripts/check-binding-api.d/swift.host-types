@@ -1,4 +1,4 @@
-# Hand-written public Swift types of the module Polyjose (platforms/swift/Sources/Polyjose, any file
+# Hand-written public Swift types of the module Polyjose (bindings/swift/Sources/Polyjose, any file
 # but the generated Polyjose.swift), with their public members (scripts/check-binding-api.sh,
 # "Host-type lists"; ADR 0071 §5). The swift mode fails on any hand-written public type or member
 # not listed here, and on a listed one the sources lack.

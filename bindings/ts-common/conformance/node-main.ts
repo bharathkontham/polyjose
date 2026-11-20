@@ -7,7 +7,7 @@
  *
  * ```ts
  * import * as api from "@polyjose/node";
- * import { main } from "<bindings/js>/dist/conformance/node-main.js";
+ * import { main } from "<bindings/ts-common>/dist/conformance/node-main.js";
  * process.exitCode = await main(api, { runner: "node", root: "<repo root>" });
  * // A CI matrix run: target/conformance/node-x86_64-unknown-linux-musl.json, runner "node".
  * process.exitCode = await main(api, { runner: "node", suffix: "x86_64-unknown-linux-musl", root });
@@ -99,7 +99,7 @@ export async function runConformance(api: PolyjoseApi, options: ConformanceOptio
     throw new TypeError("polyjose: suffix must be a CI target name (lowercase letters, digits, '_', '.', '-')");
   }
   const vectorsDir = path.join(options.root, "conformance", "vectors");
-  const schema: unknown = JSON.parse(fs.readFileSync(path.join(options.root, "conformance", "schema.json"), "utf8"));
+  const schema: unknown = JSON.parse(fs.readFileSync(path.join(options.root, "conformance", "schema", "vectors.schema.json"), "utf8"));
   const names: string[] = [];
   const links: string[] = [];
   collect(vectorsDir, vectorsDir, names, links);

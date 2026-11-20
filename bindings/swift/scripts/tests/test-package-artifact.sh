@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The packaged Swift (iOS) artifact (ADR 0032 §4, §6; ADR 0020 §4; ADR 0011), made by
-# platforms/swift/scripts/package.sh from the real platforms/swift/build/PolyjoseFFI.xcframework
+# bindings/swift/scripts/package.sh from the real bindings/swift/build/PolyjoseFFI.xcframework
 # into a scratch output directory (the checkout's dist/apple/ is not touched). Checks:
 #   - the zip holds one top-level PolyjoseFFI.xcframework/ with the 5 libraries of ADR 0032 §1
 #     (each with its headers and module map), THIRD-PARTY-NOTICES.txt and LICENSE, and no
@@ -16,14 +16,14 @@
 #     which SwiftPM extracts the way it extracts the release asset.
 # A development build (`arm64_32: missing`) is packaged with --allow-dev and checked for its
 # `watchos-arm64` library instead. Takes a minute or two: two consumer builds.
-# Usage: platforms/swift/scripts/tests/test-package-artifact.sh (needs macOS with Xcode, cargo,
-# python3 and a built XCFramework: platforms/swift/scripts/build-xcframework.sh).
+# Usage: bindings/swift/scripts/tests/test-package-artifact.sh (needs macOS with Xcode, cargo,
+# python3 and a built XCFramework: bindings/swift/scripts/build-xcframework.sh).
 set -uo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
 xcf="$swift_dir/build/PolyjoseFFI.xcframework"
-[ -f "$xcf/polyjose-build.txt" ] || lib_die "no built XCFramework at $xcf (run platforms/swift/scripts/build-xcframework.sh)"
+[ -f "$xcf/polyjose-build.txt" ] || lib_die "no built XCFramework at $xcf (run bindings/swift/scripts/build-xcframework.sh)"
 libraries=$release_libraries
 allow=""
 if grep -qx 'arm64_32: missing' "$xcf/polyjose-build.txt"; then

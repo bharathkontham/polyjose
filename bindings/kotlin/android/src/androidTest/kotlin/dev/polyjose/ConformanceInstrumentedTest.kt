@@ -22,7 +22,7 @@ import org.junit.Test
  * ADR 0034, ADR 0060): the generated Kotlin API, `libpolyjose_ffi.so` through JNA, on the
  * `polyjose-api36` emulator. AndroidJUnitRunner runs it as a plain JUnit 4 class.
  *
- * The test APK's assets hold everything under `conformance/vectors/`, and `conformance/schema.json`,
+ * The test APK's assets hold everything under `conformance/vectors/`, and `conformance/schema/vectors.schema.json`,
  * copied byte for byte from the checkout (`polyjose/build.gradle.kts`), so the asset paths under
  * `conformance/vectors` are the vector ids of ADR 0034 §1 / ADR 0045 §4 and the schema is never
  * listed as a vector.
@@ -103,7 +103,7 @@ class ConformanceInstrumentedTest {
     private companion object {
         const val TAG = "polyjose-conformance"
         const val VECTORS = "conformance/vectors"
-        const val SCHEMA = "conformance/schema.json"
+        const val SCHEMA = "conformance/schema/vectors.schema.json"
         const val RESULTS_FILE = "android-emulator.json"
 
         /** The instrumentation argument AGP's connected test sets to the device dir it pulls afterwards. */

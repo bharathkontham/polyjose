@@ -1,6 +1,6 @@
 /**
  * [WASM-pkg-node] A polluted `Object.prototype` on the installed package: verified results hold
- * only what the token and the core produced (`bindings/js/BACKEND.md` "Results").
+ * only what the token and the core produced (`bindings/ts-common/BACKEND.md` "Results").
  *
  * - **Data pollution** (security audit 0006 M1, closed by 0013 F09). A pollution bug elsewhere in
  *   the app (a JSON deep-merge writing `__proto__`) leaves writable data members on

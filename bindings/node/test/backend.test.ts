@@ -1,5 +1,5 @@
 // The raw napi backend of @polyjose/node, below the facade (`backend.js`, the typed addon;
-// bindings/js/BACKEND.md), run with `node --test` against the compiled package (ADR 0047). The
+// bindings/ts-common/BACKEND.md), run with `node --test` against the compiled package (ADR 0047). The
 // facade copies every byte input and builds fresh plain records before the backend is reached
 // (0013 B06), so the public-API tests cannot see what the adapter itself does. These can:
 //   - copy at call time (review-code.md SF-5 a): the adapter copies a caller's Buffer while the
@@ -15,7 +15,7 @@
 //     conversion cannot make the adapter read freed memory. Run in a child process with
 //     --expose-gc, so a crash fails the test instead of the runner.
 // No assertion reads a clock (pipeline rule 8).
-import { assert, path, test } from "../../js/dist/node/builtins.js";
+import { assert, path, test } from "../../ts-common/dist/node/builtins.js";
 import * as facade from "@polyjose/node";
 import type { JwkObject } from "@polyjose/node";
 import { backend } from "../backend.js";

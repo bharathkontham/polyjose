@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Checks that the committed platforms/swift/Sources/Polyjose/Polyjose.swift is exactly what
+# Checks that the committed bindings/swift/Sources/Polyjose/Polyjose.swift is exactly what
 # uniffi-bindgen generates from the current polyjose-ffi (ADR 0032 §4: the generated Swift is
 # committed because SwiftPM cannot run the bindgen, and this check keeps it fresh).
 #
-# Usage: platforms/swift/scripts/check-generated.sh
+# Usage: bindings/swift/scripts/check-generated.sh
 #
-# Regenerates the Swift sources the way platforms/swift/scripts/build-xcframework.sh does (ADR
+# Regenerates the Swift sources the way bindings/swift/scripts/build-xcframework.sh does (ADR
 # 0032 §2): the macOS arm64 cdylib (`cargo rustc --locked -p polyjose-ffi --release --target
 # aarch64-apple-darwin --crate-type cdylib`, with the same deployment targets, so the two scripts
 # share one cargo build), then `uniffi-bindgen generate --language swift --no-format` in library
@@ -15,7 +15,7 @@
 # Fails (exit 1) when:
 #   - the regenerated Polyjose.swift differs from the committed one (the diff is printed, with the
 #     command that updates the committed file);
-#   - platforms/swift/build/PolyjoseFFI.xcframework exists and one of its libraries carries a
+#   - bindings/swift/build/PolyjoseFFI.xcframework exists and one of its libraries carries a
 #     PolyjoseFFI.h that differs from the regenerated header: the XCFramework was built from other
 #     Rust sources than the Swift it would be linked with (rerun build-xcframework.sh).
 # Exit 2 on a setup error (no cargo, a failed build or generation).
@@ -29,7 +29,7 @@ swift_dir="$(dirname "$script_dir")"
 root="$(cd "$swift_dir/../.." && pwd)"
 cd "$root"
 
-committed="platforms/swift/Sources/Polyjose/Polyjose.swift"
+committed="bindings/swift/Sources/Polyjose/Polyjose.swift"
 xcframework="$swift_dir/build/PolyjoseFFI.xcframework"
 [ -f "$committed" ] || { echo "$me: $committed is missing"; exit 1; }
 command -v cargo >/dev/null 2>&1 || { echo "$me: error: cargo is not on PATH"; exit 2; }
@@ -64,8 +64,8 @@ failed=0
 if ! diff -u "$committed" "$scratch/generated/Polyjose.swift" >"$scratch/swift.diff"; then
   cat "$scratch/swift.diff"
   echo "$me: FAIL: $committed is not what uniffi-bindgen generates from polyjose-ffi."
-  echo "$me: update it with: platforms/swift/scripts/build-xcframework.sh &&"
-  echo "$me:   cp platforms/swift/build/generated/Polyjose.swift $committed"
+  echo "$me: update it with: bindings/swift/scripts/build-xcframework.sh &&"
+  echo "$me:   cp bindings/swift/build/generated/Polyjose.swift $committed"
   failed=1
 fi
 
@@ -77,7 +77,7 @@ if [ -d "$xcframework" ]; then
   done
   if [ -n "$stale" ]; then
     echo "$me: FAIL: the XCFramework's C header differs from the current polyjose-ffi in:$stale"
-    echo "$me: rebuild it with: platforms/swift/scripts/build-xcframework.sh"
+    echo "$me: rebuild it with: bindings/swift/scripts/build-xcframework.sh"
     failed=1
   fi
 fi

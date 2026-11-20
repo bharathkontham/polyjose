@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// The runner's checker of `conformance/schema.json` (conformance/README.md "Rules for every
+/// The runner's checker of `conformance/schema/vectors.schema.json` (conformance/README.md "Rules for every
 /// runner": a misspelled member anywhere fails the vector).
 final class SchemaCheckTests: XCTestCase {
     private func schema() throws -> SchemaChecker {

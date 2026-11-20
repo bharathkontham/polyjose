@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Sourced by platforms/swift/test.sh (and its test, test-xcframework-stale.sh): decides whether
-# platforms/swift/build/PolyjoseFFI.xcframework is stale, i.e. built from other Rust inputs than
+# Sourced by bindings/swift/test.sh (and its test, test-xcframework-stale.sh): decides whether
+# bindings/swift/build/PolyjoseFFI.xcframework is stale, i.e. built from other Rust inputs than
 # the checkout's, so that test.sh never tests an old library. Parity cannot catch that: an old
 # library reports the same polyjose version and the same vectors digest (ADR 0060).
 #
@@ -18,7 +18,9 @@
 #
 # Bash 3.2 compatible (macOS /bin/bash). Needs git.
 
-XCFRAMEWORK_INPUTS="Cargo.toml Cargo.lock rust-toolchain.toml crates bindings platforms/swift/nightly-toolchain platforms/swift/scripts/build-xcframework.sh"
+# The Rust crates are the core, the surface, the UniFFI adapter and the bindgen that writes the
+# headers; the host packages under bindings/ (Swift, Kotlin, TypeScript) are not inputs (ADR 0074).
+XCFRAMEWORK_INPUTS="Cargo.toml Cargo.lock rust-toolchain.toml crates bindings/surface bindings/uniffi bindings/uniffi-bindgen bindings/swift/nightly-toolchain bindings/swift/scripts/build-xcframework.sh"
 
 xcframework_stale() {
   local root=$1 xcframework=$2 stamp line commit changed dirty

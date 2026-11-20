@@ -2,7 +2,7 @@
 # One entry of the host-natives matrix of .github/workflows/binding-android.yml (feature 0008 T05;
 # ADR 0033 §4, §5; ADR 0034 §2; ADR 0037 §1). Runs locally the same way.
 #
-#   platforms/android/scripts/ci-host-natives.sh <host-prefix>
+#   bindings/kotlin/scripts/ci-host-natives.sh <host-prefix>
 #
 # <host-prefix> is this machine's JNA resource prefix (darwin-aarch64, linux-x86-64, linux-aarch64
 # or win32-x86-64); any other value is a usage error, so a matrix entry on the wrong runner fails

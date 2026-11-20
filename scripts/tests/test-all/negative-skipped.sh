@@ -53,7 +53,7 @@ new_case default-set
 rust_fixtures 0 rust-core rust-surface
 parity_fixture 0 'parity: ok'
 for p in wasm node android swift; do
-  case $p in wasm | node) script=bindings/$p/test.sh ;; *) script=platforms/$p/test.sh ;; esac
+  case $p in wasm | node | swift) script=bindings/$p/test.sh ;; android) script=bindings/kotlin/test.sh ;; esac
   fixture "$script" 0 "fixture $p suite ran"
   writes_own_results "$script" "$p"
 done

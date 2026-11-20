@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The Kotlin/Android suite: what `scripts/test-all.sh android` runs (feature 0013 T04 dispatch).
 #
-#   platforms/android/test.sh        (from any directory; test-all.sh runs it from the repo root)
+#   bindings/kotlin/test.sh        (from any directory; test-all.sh runs it from the repo root)
 #
 # 0. `scripts/ci-check-workflow.sh` and its negative suite `scripts/ci-check-workflow-test.sh`
 #    (feature 0008 T05, F06): .github/workflows/binding-android.yml stays dispatch-only, with no
@@ -69,7 +69,7 @@ fi
 
 instrumented=scripts/run-instrumented.sh
 if [ ! -f "$instrumented" ] || [ -L "$instrumented" ] || [ ! -x "$instrumented" ]; then
-  echo "platforms/android/$instrumented is missing or not an executable regular file"; exit 1
+  echo "bindings/kotlin/$instrumented is missing or not an executable regular file"; exit 1
 fi
 echo "==> android: $instrumented"
 exec "./$instrumented"

@@ -2,7 +2,7 @@
 
 These are shared test vectors. **Every platform's test suite runs all of them**: Rust, WASM, Node, Kotlin/Android and Swift (ADR 0008, layer 4). That's how polyjose guarantees identical behaviour everywhere.
 
-The format is defined by [`schema.json`](schema.json) (JSON Schema draft 2020-12). Each `*.json` file under `vectors/`, at any depth, holds **exactly one vector**:
+The format is defined by [`schema/vectors.schema.json`](schema/vectors.schema.json) (JSON Schema draft 2020-12). Each `*.json` file under `vectors/`, at any depth, holds **exactly one vector**:
 
 ```json
 {
@@ -63,7 +63,7 @@ The five members below are required, `features` and `features_absent` are option
 | `util.decode_jws` | `jws` (any string) ([below](#utildecode_protected_header-utildecode_jws-utildecode_jwt)) | `protected` (a JSON object), `payload_b64u` | yes |
 | `util.decode_jwt` | `token` (any string) ([below](#utildecode_protected_header-utildecode_jws-utildecode_jwt)) | `header`, `claims` (JSON objects) | yes |
 
-`schema.json` may also reserve an operation for a later feature: its name is in the `operation` enum, but its input and output members are defined only by the feature that implements it, which adds them to `schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails. No operation is reserved today.
+`vectors.schema.json` may also reserve an operation for a later feature: its name is in the `operation` enum, but its input and output members are defined only by the feature that implements it, which adds them to `vectors.schema.json` and to every runner. Until then no runner implements it, so a vector that uses it fails. No operation is reserved today.
 
 A success expectation lists **exactly** the outputs: a runner fails a vector whose operation produced an output the expectation leaves out, as well as one that lacks an expected output.
 
@@ -417,12 +417,12 @@ Each platform's runner (Rust: `crates/polyjose/tests/conformance.rs`) must:
 - load every `*.json` file under `vectors/`, recursively (a glob of `conformance/vectors/**`, never a list of directories), `third_party/` included, so a new directory such as `jws-limits/` is picked up without a runner change;
 - parse vector files with an input limit of at least 4 MiB, or with the platform's native JSON parser. Vector files are trusted test data, and a vector of a JWS just over the library's 1 MiB default `max_input_len` (ADR 0026 §7) is itself over 1 MiB. The library under test keeps its own defaults;
 - **fail** on a file that is not schema-valid, including a misspelled or unknown member anywhere: every object the schema defines is closed;
-- **fail** on a vector whose `operation` it does not implement, whether `schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks or whose `features_absent` it has, reported SKIPPED by name ([Features](#features));
+- **fail** on a vector whose `operation` it does not implement, whether `vectors.schema.json` reserves it or not. The only vectors not run are those whose `features` the build lacks or whose `features_absent` it has, reported SKIPPED by name ([Features](#features));
 - **fail** when it finds no vector files, so a wrong path can't pass vacuously;
 - run every vector and report every failure, not only the first, each naming the file and its `source`;
 - write one results file, `target/conformance/<runner>.json`, with an entry for every vector file ([Binding runners](#binding-runners), ADR 0034 §2), and the [vector-set digest](#the-vector-set-digest) of the files it read (ADR 0060).
 
-The Rust runner also checks `schema.json` against its own tables (`schema_and_runner_agree`), so the schema and the runner can't drift apart.
+The Rust runner also checks `vectors.schema.json` against its own tables (`schema_and_runner_agree`), so the schema and the runner can't drift apart.
 
 ## Binding runners
 
@@ -436,11 +436,11 @@ Which operation families each platform's runner runs today. A cell that isn't "r
 |---|---|---|---|---|---|
 | Rust | `crates/polyjose/tests/conformance.rs` | runs | runs | runs | runs |
 | Rust surface | `bindings/surface/tests/conformance.rs` (`polyjose-surface`, ADR 0030) | runs | runs | runs | runs |
-| WASM | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/wasm` (0006): `wasm-node`, `wasm-chrome` (wasm-bindgen-test) and `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` (the packed tarball) | runs | runs | runs | runs |
-| Node | the shared JS runner (`bindings/js/conformance/`) over `@polyjose/node` (0007): `node` | runs | runs | runs | runs |
-| Kotlin (JVM) | `platforms/android/shared-test/kotlin` (`dev.polyjose.conformance`), hosted by `polyjose-jvm`'s `ConformanceTest` | runs | runs | runs | runs |
-| Kotlin (Android) | the same runner, hosted by `:polyjose`'s `ConformanceInstrumentedTest` on the emulator (`platforms/android/scripts/run-instrumented.sh`) | runs | runs | runs | runs |
-| Swift (iOS) | `platforms/swift/Tests/PolyjoseTests/ConformanceRunner.swift` (0009): `swift-macos` on the macOS host, `swift-ios-sim` on the iOS 27.2 Simulator | runs | runs | runs | runs |
+| WASM | the shared JS runner (`bindings/ts-common/conformance/`) over `@polyjose/wasm` (0006): `wasm-node`, `wasm-chrome` (wasm-bindgen-test) and `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` (the packed tarball) | runs | runs | runs | runs |
+| Node | the shared JS runner (`bindings/ts-common/conformance/`) over `@polyjose/node` (0007): `node` | runs | runs | runs | runs |
+| Kotlin (JVM) | `bindings/kotlin/shared-test/kotlin` (`dev.polyjose.conformance`), hosted by `polyjose-jvm`'s `ConformanceTest` | runs | runs | runs | runs |
+| Kotlin (Android) | the same runner, hosted by `:polyjose`'s `ConformanceInstrumentedTest` on the emulator (`bindings/kotlin/scripts/run-instrumented.sh`) | runs | runs | runs | runs |
+| Swift (iOS) | `bindings/swift/Tests/PolyjoseTests/ConformanceRunner.swift` (0009): `swift-macos` on the macOS host, `swift-ios-sim` on the iOS 27.2 Simulator | runs | runs | runs | runs |
 
 `jwks.select`, and `jwk.thumbprint`'s optional `hash`, run through the surface (`rust-surface`, 0013 T14) and in every binding runner above (the shared JS runner, the Kotlin runner and the Swift runner implement both).
 
@@ -455,13 +455,13 @@ Every runner writes `target/conformance/<runner>.json` at the **repository root*
 | `rust-core` | `crates/polyjose/tests/conformance.rs` (`conformance_vectors`), built with the default features: **the reference run** (ADR 0034 §4) | 0013 T02 |
 | `rust-surface` | `bindings/surface/tests/conformance.rs`, the same files through `polyjose-surface` only (ADR 0030) | 0013 T11 |
 | `wasm-node`, `wasm-chrome` | the wasm-bindgen-test runs of the WASM adapter (`wasm-pack test --node`, `--headless --chrome`) | 0006 |
-| `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` | the packed `@polyjose/wasm` tarball through the shared JS facade and its runner (`bindings/js/conformance/`) | 0006 |
+| `wasm-pkg-node`, `wasm-pkg-chrome`, `wasm-pkg-workerd` | the packed `@polyjose/wasm` tarball through the shared JS facade and its runner (`bindings/ts-common/conformance/`) | 0006 |
 | `node` | `@polyjose/node` through the shared JS facade and its runner | 0007 |
 | `jvm` | the generated Kotlin API on the host JVM through JNA (`./gradlew :polyjose-jvm:test`), over `conformance/vectors/` read from the checkout | 0008 T02 |
-| `android-emulator` | the same Kotlin runner on the Android emulator (AVD `polyjose-api36`, arm64-v8a), over the vectors bundled as test-APK assets (`platforms/android/scripts/run-instrumented.sh`). Host-optional: with no SDK, AVD or booted emulator, `platforms/android/test.sh` waives it with `SKIPPED-RUNNER (android-emulator: host:<token>)` | 0008 T03 |
-| `swift-macos`, `swift-ios-sim` | the Swift API on the macOS host (`swift test`, `platforms/swift/test.sh`) and on a disposable iPhone simulator on the iOS 27.2 runtime (`xcodebuild test`, `platforms/swift/scripts/test-simulators.sh`). `swift-tvos-sim` stays a name in the schema but is not run: the Swift tests run on macOS and the iOS Simulator only (ADR 0046 §2, §4), so parity lists it as `SKIPPED (no results: swift-tvos-sim)` | 0009 |
+| `android-emulator` | the same Kotlin runner on the Android emulator (AVD `polyjose-api36`, arm64-v8a), over the vectors bundled as test-APK assets (`bindings/kotlin/scripts/run-instrumented.sh`). Host-optional: with no SDK, AVD or booted emulator, `bindings/kotlin/test.sh` waives it with `SKIPPED-RUNNER (android-emulator: host:<token>)` | 0008 T03 |
+| `swift-macos`, `swift-ios-sim` | the Swift API on the macOS host (`swift test`, `bindings/swift/test.sh`) and on a disposable iPhone simulator on the iOS 27.2 runtime (`xcodebuild test`, `bindings/swift/scripts/test-simulators.sh`). `swift-tvos-sim` stays a name in the schema but is not run: the Swift tests run on macOS and the iOS Simulator only (ADR 0046 §2, §4), so parity lists it as `SKIPPED (no results: swift-tvos-sim)` | 0009 |
 
-- **Off-host runs** (a browser page, workerd, the emulator, a simulator) hand their results to the host-side driver, which writes the file on the host. On the iOS Simulator, the Swift conformance test prints the document as one line starting with `POLYJOSE-CONFORMANCE-RESULTS `. It also writes a copy to the host path that the driver passes as `TEST_RUNNER_POLYJOSE_CONFORMANCE_OUT`. `platforms/swift/scripts/test-simulators.sh` extracts the line and requires it to equal that copy byte for byte. It also requires the line's `vectors_digest` to equal the [shell reference](#the-vector-set-digest) over the checkout, and only then writes `swift-ios-sim.json`.
+- **Off-host runs** (a browser page, workerd, the emulator, a simulator) hand their results to the host-side driver, which writes the file on the host. On the iOS Simulator, the Swift conformance test prints the document as one line starting with `POLYJOSE-CONFORMANCE-RESULTS `. It also writes a copy to the host path that the driver passes as `TEST_RUNNER_POLYJOSE_CONFORMANCE_OUT`. `bindings/swift/scripts/test-simulators.sh` extracts the line and requires it to equal that copy byte for byte. It also requires the line's `vectors_digest` to equal the [shell reference](#the-vector-set-digest) over the checkout, and only then writes `swift-ios-sim.json`.
 - **CI matrix runs** append their target to the file name: `node-x86_64-unknown-linux-musl.json`, `jvm-linux-x86-64.json`. The file's `runner` member stays the bare name (`node`), and the parity check compares the file like `<runner>`.
 - **Rust builds with features** (`cargo test -p polyjose --all-features`, as `scripts/test-all.sh rust` runs) write `rust-core-<features>.json`, the enabled feature names joined by `-` (for example `rust-core-deflate-fixed-rng.json`). They aren't the reference, and the parity check ignores them. Only the default-features build writes `rust-core.json`.
 - **`rust-surface`** never enables `fixed-rng`: the surface has no reproducible encryption (ADR 0005), so those vectors are always skipped with `feature:fixed-rng`, as in every binding. It enables `deflate` exactly when the core under it has it, which it finds out through the surface (a `compress` encryption succeeds, or is `UnsupportedAlgorithm`). Only the binding configuration, no `deflate`, writes `rust-surface.json`. A build in which Cargo turns the core's `deflate` on (`cargo test --workspace --all-features`) still runs and checks every vector but writes no results file, since its skip set is not the bindings' (ADR 0034 §3).
@@ -510,10 +510,10 @@ Each runner uses **its platform's own SHA-256, never polyjose's API under test**
 | Runner(s) | SHA-256 | Where |
 |---|---|---|
 | `rust-core`, `rust-surface`, `wasm-node`, `wasm-chrome` | the `sha2` crate, called directly as a test oracle (a dev-dependency where the crate lacks it, ADR 0016 §5) | `crates/polyjose/tests/conformance.rs`, `bindings/surface/tests/conformance.rs`; 0006 for `wasm-*` |
-| `node`, `wasm-pkg-node` | `node:crypto` `createHash("sha256")`. `node-main.ts` reads each file once as bytes, hashes them, and only then decodes them as UTF-8 for the runner | `bindings/js/conformance/node-main.ts` |
-| `wasm-pkg-chrome`, `wasm-pkg-workerd` | `crypto.subtle.digest("SHA-256", bytes)`: the driver fetches each file as bytes and calls `vectorsDigest(files, subtleSha256)` from `bindings/js/conformance/runner.ts` | 0006 |
+| `node`, `wasm-pkg-node` | `node:crypto` `createHash("sha256")`. `node-main.ts` reads each file once as bytes, hashes them, and only then decodes them as UTF-8 for the runner | `bindings/ts-common/conformance/node-main.ts` |
+| `wasm-pkg-chrome`, `wasm-pkg-workerd` | `crypto.subtle.digest("SHA-256", bytes)`: the driver fetches each file as bytes and calls `vectorsDigest(files, subtleSha256)` from `bindings/ts-common/conformance/runner.ts` | 0006 |
 | `jvm`, `android-emulator` | `java.security.MessageDigest.getInstance("SHA-256")` | 0008 |
-| `swift-macos`, `swift-ios-sim` | CryptoKit `SHA256`, over the bytes bundled in the test bundle (`Bundle.module`), hashed before parsing; `swift-tvos-sim` too if that run is ever brought back (ADR 0046) | `platforms/swift/Tests/PolyjoseTests/VectorCorpus.swift` |
+| `swift-macos`, `swift-ios-sim` | CryptoKit `SHA256`, over the bytes bundled in the test bundle (`Bundle.module`), hashed before parsing; `swift-tvos-sim` too if that run is ever brought back (ADR 0046) | `bindings/swift/Tests/PolyjoseTests/VectorCorpus.swift` |
 
 **Every new runner (features 0006 to 0009) computes the digest from its first commit and unit-tests the worked example below.** A runner that can't compute it can't write a valid results file, so it fails parity; it is never skipped.
 
@@ -525,7 +525,7 @@ jws-x/c.json#0→aa25e978046d680ef8740d837e6de5bc1e2a2dc6089dbda1012544b538d53f6
 jws/b.json#0→ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
 ```
 
-and `vectors_digest` is `9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1`. The tests `vectors_digest_follows_the_adr_0060_worked_example` (both Rust runners) and `bindings/js/test/vectors-digest.test.ts` check it.
+and `vectors_digest` is `9a06f1efdd269176088cb0e6bfc6a7e4d4f74aa3d1b1b8fc6c879fdbb82ac7d1`. The tests `vectors_digest_follows_the_adr_0060_worked_example` (both Rust runners) and `bindings/ts-common/test/vectors-digest.test.ts` check it.
 
 **Shell reference**, an oracle independent of every runner (it assumes no newline or backslash in a file name, which the corpus never has; on Linux use `sha256sum` for `shasum -a 256`). When two digests differ, compare these per-file lines on both sides to find the file.
 
@@ -538,7 +538,7 @@ find . -type f -name '*.json' | sed 's|^\./||' |
 
 ### The skip rule
 
-A vector is skipped **only** when its `features` lists a feature the runner's build doesn't enable (ADR 0034 §3), or its `features_absent` lists one the build enables (ADR 0056). `reason` is `feature:` followed by the missing `features` names in the vector's order, then each enabled `features_absent` name as `!<name>` in its order, comma-separated: `feature:fixed-rng`, `feature:deflate,fixed-rng`, `feature:!deflate`, `feature:fixed-rng,!deflate`. The vector is still validated against `schema.json` first, and a schema-invalid one is a `fail`.
+A vector is skipped **only** when its `features` lists a feature the runner's build doesn't enable (ADR 0034 §3), or its `features_absent` lists one the build enables (ADR 0056). `reason` is `feature:` followed by the missing `features` names in the vector's order, then each enabled `features_absent` name as `!<name>` in its order, comma-separated: `feature:fixed-rng`, `feature:deflate,fixed-rng`, `feature:!deflate`, `feature:fixed-rng,!deflate`. The vector is still validated against `vectors.schema.json` first, and a schema-invalid one is a `fail`.
 
 The binding configuration for 0.1.0 is the core's default features: never `fixed-rng` (ADR 0005), and no `deflate` (ADR 0030 §4). So every binding skips exactly the vectors the `rust-core` reference skips, with the same reasons. An unknown operation, an operation the runner hasn't mapped, an unreadable or unparseable file, an exception in the harness, and a host-side error that isn't a polyjose error (implementer note 8) are each a **`fail`**, never a skip.
 

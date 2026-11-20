@@ -11,7 +11,7 @@
  * `WebAssembly.RuntimeError` thrown from the glue call. Peak memory is about 120 MB.
  *
  * The facade passes an error that is neither a core failure nor an argument error through
- * unchanged (feature 0013 F12, ADR 0061; `bindings/js/src/api.ts` `mapError`), so through the
+ * unchanged (feature 0013 F12, ADR 0061; `bindings/ts-common/src/api.ts` `mapError`), so through the
  * API the trap rejects with the `WebAssembly.RuntimeError` itself, and every later call with
  * the backend's refusal, a plain `Error`. Both are checked by class and by message. The
  * `backend` case calls `backend.js` directly (by file URL, as the audit's scenario does): the

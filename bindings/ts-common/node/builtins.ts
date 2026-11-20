@@ -2,7 +2,7 @@
  * Typed access to the few Node built-ins the tests, `conformance/node-main.ts` and the
  * build tools use.
  *
- * `bindings/js` has exactly one dev-dependency, `typescript` (ADR 0047), so there is no
+ * `bindings/ts-common` has exactly one dev-dependency, `typescript` (ADR 0047), so there is no
  * `@types/node`. Instead of hand-written ambient declarations, each module is fetched with
  * `process.getBuiltinModule` (Node >= 22.3, inside the ADR 0031 floor of 22.12) and typed
  * here with only the members we call. Nothing under `src/` or `conformance/runner.ts`

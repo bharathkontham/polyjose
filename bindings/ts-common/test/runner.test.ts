@@ -7,7 +7,7 @@ import { coded, type Fake } from "./fake-backend.js";
 import { toyBackend } from "./toy-backend.js";
 
 const FIXTURES = path.resolve(process.cwd(), "test/fixtures/vectors");
-const SCHEMA: unknown = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../conformance/schema.json"), "utf8"));
+const SCHEMA: unknown = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../conformance/schema/vectors.schema.json"), "utf8"));
 
 function fixtureFiles(dir = FIXTURES): VectorFile[] {
   const out: VectorFile[] = [];

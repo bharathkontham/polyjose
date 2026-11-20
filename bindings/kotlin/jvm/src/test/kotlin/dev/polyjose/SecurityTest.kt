@@ -208,7 +208,7 @@ class SecurityTest {
     }
 
     private fun pathProperty(name: String): Path = Paths.get(
-        System.getProperty(name) ?: error("system property $name is not set (platforms/android/polyjose-jvm/build.gradle.kts)"),
+        System.getProperty(name) ?: error("system property $name is not set (bindings/kotlin/jvm/build.gradle.kts)"),
     )
 
     private companion object {

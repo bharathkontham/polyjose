@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared helpers for the packaging tests of platforms/swift/scripts/package.sh (ADR 0032 §6,
+# Shared helpers for the packaging tests of bindings/swift/scripts/package.sh (ADR 0032 §6,
 # ADR 0020 §4). Sourced by the tests/test-*.sh files, not run.
 #
 # Every test writes only to its own scratch directory, which is removed on exit together with any
@@ -59,7 +59,7 @@ make_fake_cargo() {
   mkdir -p "$fake_cargo_dir"
   cat >"$fake_cargo_dir/cargo" <<'EOF'
 #!/bin/bash
-# Stand-in cargo of platforms/swift/scripts/tests/lib.sh (make_fake_cargo).
+# Stand-in cargo of bindings/swift/scripts/tests/lib.sh (make_fake_cargo).
 set -uo pipefail
 real=${POLYJOSE_FAKE_CARGO_REAL:?}
 if [ "${1:-}" = tree ]; then

@@ -8,7 +8,7 @@ import XCTest
 /// `AppleKey` with permanent keys (ADR 0072 §1, §6.1; feature 0025 T03), in a test bundle hosted in
 /// an app, which is what lets a test store Keychain items on the iOS Simulator.
 ///
-/// platforms/swift/scripts/test-simulators.sh runs this bundle twice on one disposable simulator,
+/// bindings/swift/scripts/test-simulators.sh runs this bundle twice on one disposable simulator,
 /// passing POLYJOSE_HOSTED_PHASE and POLYJOSE_HOSTED_STATE (a directory on the host; without it,
 /// as on a device, a directory in the app's container):
 /// - run 1 (`testRun1…`, and every test but `testRun2…`) generates a Secure Enclave ES256 key, a
@@ -17,13 +17,13 @@ import XCTest
 /// - run 2 (`testRun2…`), a new process, opens each by tag, gets the recorded public JWK, signs,
 ///   deletes, and then `open` is `KeyNotFound`.
 /// Outside that script the two phases skip. Tests that need a person (keys that prompt) skip
-/// off-device; platforms/swift/DEVICE-TESTS.md runs them on an iPhone.
+/// off-device; bindings/swift/DEVICE-TESTS.md runs them on an iPhone.
 final class AppleKeyHostedTests: XCTestCase {
     /// In every tag, so a test can check that no tag reaches an error or a printed form.
     static let marker = "hosted-marker-7f3a"
     static let payload = Data("hosted AppleKey".utf8)
     static let secureEnclaveSkip = "SecureEnclave.isAvailable is false here, so the Secure Enclave rows are SKIPPED, not run"
-    static let personSkip = "needs a device and a person (platforms/swift/DEVICE-TESTS.md)"
+    static let personSkip = "needs a device and a person (bindings/swift/DEVICE-TESTS.md)"
 
     struct Fixture: Sendable {
         let tag: String
@@ -43,7 +43,7 @@ final class AppleKeyHostedTests: XCTestCase {
     func stateDirectory(phase: String) throws -> URL {
         try XCTSkipUnless(
             Self.environment["POLYJOSE_HOSTED_PHASE"] == phase,
-            "run \(phase) of the persistence test, run by platforms/swift/scripts/test-simulators.sh")
+            "run \(phase) of the persistence test, run by bindings/swift/scripts/test-simulators.sh")
         if let path = Self.environment["POLYJOSE_HOSTED_STATE"] { return URL(fileURLWithPath: path, isDirectory: true) }
         // On a device (DEVICE-TESTS.md), where no host path is reachable: the app's own container,
         // which a reinstall by the next `xcodebuild test` keeps.

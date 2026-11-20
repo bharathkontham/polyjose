@@ -3,7 +3,7 @@
 # (feature 0008 T05; ADR 0033 §1, §2). Uses only the SDK's own sdkmanager and cargo, no third-party
 # action.
 #
-#   platforms/android/scripts/ci-android-sdk.sh [--emulator]
+#   bindings/kotlin/scripts/ci-android-sdk.sh [--emulator]
 #
 # 1. With sdkmanager from $ANDROID_HOME (or $ANDROID_SDK_ROOT)/cmdline-tools/latest/bin, installs
 #    each pinned package that is not installed yet (ci-lib.sh): platform-tools,

@@ -16,7 +16,7 @@ import { toyBackend } from "./toy-backend.js";
 import { plant } from "./traps.js";
 
 const FIXTURES = path.resolve(process.cwd(), "test/fixtures/vectors");
-const SCHEMA: unknown = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../conformance/schema.json"), "utf8"));
+const SCHEMA: unknown = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../conformance/schema/vectors.schema.json"), "utf8"));
 
 function fixtureFiles(dir = FIXTURES): VectorFile[] {
   const out: VectorFile[] = [];

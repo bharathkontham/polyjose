@@ -3,7 +3,7 @@ import Polyjose
 
 /// The Swift conformance runner (ADR 0008 layer 4, ADR 0034). It runs each vector file through the
 /// **generated Swift API** (what users call), operation by operation as the Rust reference runner
-/// `crates/polyjose/tests/conformance.rs` and the shared JS runner `bindings/js/conformance/
+/// `crates/polyjose/tests/conformance.rs` and the shared JS runner `bindings/ts-common/conformance/
 /// runner.ts` do, mapped by conformance/README.md "Binding runners" (Operation mapping), and
 /// returns one ADR 0034 §2 result per file.
 ///
@@ -83,7 +83,7 @@ struct ConformanceRunner {
             text = JSONText(bytes: bytes, root: try JSONScanner.scan(bytes))
             value = try JSONValue.parse(file.bytes)
         } catch {
-            return fail("not a valid JSON text (\(error)); see conformance/schema.json")
+            return fail("not a valid JSON text (\(error)); see conformance/schema/vectors.schema.json")
         }
         if let name = value["operation"]?.stringValue { op = name }
         if let s = value["source"]?.stringValue, s.contains(where: { !$0.isWhitespace }) { source = s }

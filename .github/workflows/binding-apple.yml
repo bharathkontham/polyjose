@@ -1,10 +1,10 @@
 # Swift (iOS) binding (feature 0009 T05; ADR 0032 §1, §5, §6, ADR 0037 §1, ADR 0046, ADR 0060).
 #
 # Builds the XCFramework (every slice of ADR 0032 §1), runs the Swift (iOS) suite on the macOS host
-# and the iOS Simulator (platforms/swift/test.sh: swift-macos and swift-ios-sim; no tvOS run, ADR
-# 0046 §2), packages dist/apple/ (platforms/swift/scripts/package.sh), and checks conformance
+# and the iOS Simulator (bindings/swift/test.sh: swift-macos and swift-ios-sim; no tvOS run, ADR
+# 0046 §2), packages dist/apple/ (bindings/swift/scripts/package.sh), and checks conformance
 # parity against a rust-core reference made in this job. All of the build and test logic is in the
-# scripts, so a local `platforms/swift/test.sh` and a run of this workflow check the same things.
+# scripts, so a local `bindings/swift/test.sh` and a run of this workflow check the same things.
 # The file name stays binding-apple.yml because ADR 0037 and feature 0012 T03 refer to it; the
 # binding is called Swift (iOS) everywhere else (ADR 0046 §1).
 #
@@ -28,7 +28,7 @@
 #     polyjose-build.txt says `arm64_32: missing`), so package.sh runs with --allow-dev. That zip
 #     is a CI artifact only and must never be released (ADR 0032 §1). rust-cache restores the
 #     cargo cache; only runs on main save it.
-#   - release: also installs the nightly named in platforms/swift/nightly-toolchain with rust-src,
+#   - release: also installs the nightly named in bindings/swift/nightly-toolchain with rust-src,
 #     builds with build-xcframework.sh --release (which fails without the arm64_32 slice), and
 #     runs package.sh without --allow-dev, so a development or stale build is refused. No cache is
 #     restored: the release artifacts are built from the checkout alone.
@@ -63,7 +63,7 @@
 # ci.yml and binding-node.yml use; bump them together. actionlint, which test.sh's workflow check
 # needs, is fetched as its release binary and checked against a pinned SHA-256.
 #
-# platforms/swift/scripts/tests/ci-workflow.sh checks this file on every test.sh run (triggers,
+# bindings/swift/scripts/tests/ci-workflow.sh checks this file on every test.sh run (triggers,
 # mode input, permissions, forbidden strings, pins, artifacts, scripts, order, modes, actionlint).
 name: Swift (iOS)
 
@@ -154,11 +154,11 @@ jobs:
           cargo --version
 
       # Release mode only: the one nightly step of ADR 0032 §1, for arm64_32-apple-watchos
-      # (-Zbuild-std needs rust-src). The toolchain is named once, in platforms/swift/nightly-toolchain.
+      # (-Zbuild-std needs rust-src). The toolchain is named once, in bindings/swift/nightly-toolchain.
       - name: Install the pinned nightly (release mode)
         if: inputs.mode == 'release'
         run: |
-          nightly=$(tr -d '[:space:]' < platforms/swift/nightly-toolchain)
+          nightly=$(tr -d '[:space:]' < bindings/swift/nightly-toolchain)
           rustup toolchain install "$nightly" --profile minimal --component rust-src
           rustc "+$nightly" --version
 
@@ -175,7 +175,7 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
-      # test.sh runs platforms/swift/scripts/tests/ci-workflow.sh, which needs actionlint. The
+      # test.sh runs bindings/swift/scripts/tests/ci-workflow.sh, which needs actionlint. The
       # release binary is checked against its published SHA-256 (actionlint_1.7.12_checksums.txt;
       # the same digest GitHub records for the asset).
       - name: actionlint 1.7.12
@@ -197,9 +197,9 @@ jobs:
       # Release mode: every slice, and a failure instead of a development build when the arm64_32
       # slice cannot be built. test.sh then finds the XCFramework up to date. In ci mode test.sh
       # builds it itself.
-      - name: XCFramework (release mode, platforms/swift/scripts/build-xcframework.sh --release)
+      - name: XCFramework (release mode, bindings/swift/scripts/build-xcframework.sh --release)
         if: inputs.mode == 'release'
-        run: platforms/swift/scripts/build-xcframework.sh --release
+        run: bindings/swift/scripts/build-xcframework.sh --release
 
       # When the image lacks the runtime test-simulators.sh uses, try to download it. The runtime
       # id is read from that script, so it is named in one place. A failed download is a warning
@@ -209,12 +209,12 @@ jobs:
         id: ios-runtime
         timeout-minutes: 30
         run: |
-          runtime=$(sed -n 's/^runtime_id=//p' platforms/swift/scripts/test-simulators.sh)
+          runtime=$(sed -n 's/^runtime_id=//p' bindings/swift/scripts/test-simulators.sh)
           if [ -z "$runtime" ]; then
             echo "::error::no runtime_id in test-simulators.sh"
             exit 1
           fi
-          . platforms/swift/scripts/simulator-lib.sh
+          . bindings/swift/scripts/simulator-lib.sh
           xcrun simctl list runtimes -j >"$RUNNER_TEMP/runtimes.json"
           if sim_runtime_available "$RUNNER_TEMP/runtimes.json" "$runtime"; then
             echo "$runtime is installed"
@@ -234,12 +234,12 @@ jobs:
       # (swift-ios-sim). test.sh prints SKIPPED and exits 0 when its tools are missing, so the step
       # requires its PASS line. target/conformance/ is emptied first (as scripts/test-all.sh does),
       # so parity sees only this job's results files, even after rust-cache restored target/.
-      - name: platforms/swift/test.sh (macOS host and the iOS Simulator)
+      - name: bindings/swift/test.sh (macOS host and the iOS Simulator)
         run: |
           rm -rf target/conformance
-          platforms/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
-          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "platforms/swift/test.sh: PASS" ]; then
-            echo "::error::platforms/swift/test.sh did not end with its PASS line"
+          bindings/swift/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+          if [ "$(tail -n 1 "$RUNNER_TEMP/swift-test.log")" != "bindings/swift/test.sh: PASS" ]; then
+            echo "::error::bindings/swift/test.sh did not end with its PASS line"
             exit 1
           fi
 
@@ -306,11 +306,11 @@ jobs:
 
       - name: package.sh (release mode)
         if: inputs.mode == 'release'
-        run: platforms/swift/scripts/package.sh
+        run: bindings/swift/scripts/package.sh
 
       - name: package.sh (ci mode, a development build allowed)
         if: inputs.mode == 'ci'
-        run: platforms/swift/scripts/package.sh --allow-dev
+        run: bindings/swift/scripts/package.sh --allow-dev
 
       # The builds and tests must not change a tracked file (Cargo.lock, the generated Swift).
       - name: the checkout is unchanged

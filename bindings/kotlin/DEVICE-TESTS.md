@@ -21,7 +21,7 @@ tree (`git -C polyjose rev-parse HEAD^{tree}`).
 
 ## The automated suite on the device
 
-From `platforms/android`, with the device connected:
+From `bindings/kotlin`, with the device connected:
 
 ```sh
 ./gradlew --no-daemon :polyjose:connectedDebugAndroidTest \
@@ -29,7 +29,7 @@ From `platforms/android`, with the device connected:
 adb logcat -d -s polyjose-t04:I
 ```
 
-Expected: every test passes (`polyjose/build/reports/androidTests/connected/debug/index.html`);
+Expected: every test passes (`android/build/reports/androidTests/connected/debug/index.html`);
 `AndroidKeystoreKeyAuthTest` passes because the device has a secure lock screen. The `polyjose-t04`
 log lines are the values steps 1, 2 and 5 record.
 

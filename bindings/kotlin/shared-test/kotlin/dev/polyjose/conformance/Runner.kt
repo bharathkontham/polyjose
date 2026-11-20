@@ -11,15 +11,15 @@ import java.nio.charset.CodingErrorAction
  * (`:polyjose-jvm`, runner `jvm`) and the Android instrumented test (`:polyjose`, runner
  * `android-emulator`). It runs every vector file through the **generated Kotlin API** (what users
  * call), mirroring the Rust reference runner `crates/polyjose/tests/conformance.rs` and the shared
- * JS runner `bindings/js/conformance/runner.ts` operation by operation, and returns the ADR 0034 §2
+ * JS runner `bindings/ts-common/conformance/runner.ts` operation by operation, and returns the ADR 0034 §2
  * results document with the ADR 0060 `vectors_digest`.
  *
  * It uses no JVM-only API (no `java.nio.file`, no `java.io.File`): the host hands it the files'
- * bytes ([VectorInput]) and the text of `conformance/schema.json`, and writes the document.
+ * bytes ([VectorInput]) and the text of `conformance/schema/vectors.schema.json`, and writes the document.
  *
  * Rules (conformance/README.md "Rules for every runner", "Binding runners"):
  * - a file that isn't strict UTF-8 JSON (duplicate members included, RFC 7493 §2.3) or isn't
- *   valid against `schema.json` fails, whether or not it would be skipped;
+ *   valid against `vectors.schema.json` fails, whether or not it would be skipped;
  * - a vector whose `features` this build lacks is `skipped` with `feature:<names>` (ADR 0034 §3),
  *   and one whose `features_absent` this build has with `!<name>` after them (ADR 0056 §2). The
  *   binding configuration enables none ([BINDING_FEATURES]); nothing else is ever skipped;
@@ -73,9 +73,9 @@ object Runner {
         } catch (e: CharacterCodingException) {
             return fail("not UTF-8 (RFC 8259 §8.1): ${e.javaClass.simpleName}")
         } catch (e: JsonSyntaxError) {
-            return fail("not a valid JSON text (${e.message}); see conformance/schema.json")
+            return fail("not a valid JSON text (${e.message}); see conformance/schema/vectors.schema.json")
         } catch (e: Exception) {
-            return fail("not a valid JSON text (${e.javaClass.simpleName}: ${e.message}); see conformance/schema.json")
+            return fail("not a valid JSON text (${e.javaClass.simpleName}: ${e.message}); see conformance/schema/vectors.schema.json")
         }
         val value = text.value
         if (value is Map<*, *>) {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Checks a parsed vector against `conformance/schema.json` (JSON Schema draft 2020-12), as every
+/// Checks a parsed vector against `conformance/schema/vectors.schema.json` (JSON Schema draft 2020-12), as every
 /// runner must (conformance/README.md "Rules for every runner": a file that is not schema-valid
 /// fails, including a misspelled member anywhere). The Swift form of the JS runner's `schema.ts`.
 ///

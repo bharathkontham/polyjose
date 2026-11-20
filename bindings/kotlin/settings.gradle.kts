@@ -42,7 +42,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "polyjose-android"
+rootProject.name = "polyjose-kotlin"
 
 include(":polyjose", ":polyjose-jvm")
 // The project names (and so every task path and the AAR and jar file names) are the published

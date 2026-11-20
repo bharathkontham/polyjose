@@ -5,7 +5,7 @@ import XCTest
 /// Runs every conformance vector through the Swift API (ADR 0008 layer 4, ADR 0034) and writes the
 /// ADR 0034 §2 results document:
 /// - to the file named by `POLYJOSE_CONFORMANCE_OUT`, when set (the macOS run:
-///   platforms/swift/test.sh sets it to `target/conformance/swift-macos.json`);
+///   bindings/swift/test.sh sets it to `target/conformance/swift-macos.json`);
 /// - and to standard output as one line, prefixed `POLYJOSE-CONFORMANCE-RESULTS `, which the
 ///   simulator driver extracts (feature 0009 T03), since a simulator has no checkout to write to.
 ///

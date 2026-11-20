@@ -1,6 +1,6 @@
 # The sample's own rules: only its entry point, as a real app's reachable code would be. Nothing
 # here keeps polyjose or JNA; that is the job of the AAR's consumer rules under test
-# (polyjose/consumer-rules.pro, ADR 0033 §2).
+# (android/consumer-rules.pro, ADR 0033 §2).
 -keep class dev.polyjose.sample.R8Probe { public *; }
 
 # The test APK's androidx.test runs against the app's copy of the Kotlin standard library (AGP

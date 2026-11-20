@@ -202,7 +202,7 @@ source set (package `dev.polyjose`) is compiled into two artifacts:
 | `:polyjose` | Android AAR `dev.polyjose:polyjose` (minSdk 23, compileSdk 36) | `jni/<abi>/libpolyjose_ffi.so` for arm64-v8a, armeabi-v7a, x86_64, x86 |
 | `:polyjose-jvm` | desktop JVM jar `dev.polyjose:polyjose-jvm` | host libraries under JNA's resource prefixes: `darwin-aarch64/`, `linux-aarch64/`, `linux-x86-64/`, `win32-x86-64/`. The macOS library is Apple silicon only (ADR 0073); a local build packs only this host's library |
 
-The UniFFI adapter itself (`bindings/ffi`, its `uniffi.toml` and the `polyjose-uniffi-bindgen`
+The UniFFI adapter itself (`bindings/uniffi`, its `uniffi.toml` and the `polyjose-uniffi-bindgen`
 package) belongs to feature 0013; nothing here edits it.
 
 ### Requirements
@@ -260,7 +260,7 @@ date. The modules depend on these tasks; nothing generated is committed.
   `AndroidKeystoreKeyAuthTest` (user authentication; it needs a secure lock screen, see below).
   An emulator's Keystore is software: a pass proves function, not hardware. A real device is
   [DEVICE-TESTS.md](DEVICE-TESTS.md). The
-  `conformanceAssets` task copies `conformance/vectors/` and `conformance/schema.json` byte for byte
+  `conformanceAssets` task copies `conformance/vectors/` and `conformance/schema/vectors.schema.json` byte for byte
   into the test APK's assets under `conformance/`; the device hashes the bytes it parses for
   `vectors_digest` (ADR 0060), so a bundle that differs from the checkout fails parity.
 - Both test source sets include `shared-test/kotlin`, the conformance runner they share.
@@ -274,7 +274,7 @@ date. The modules depend on these tasks; nothing generated is committed.
    is ready: `sys.boot_completed` is 1, `init.svc.bootanim` is `stopped` (when the image has it) and
    `pm path android` answers, so a cold boot does not reach Gradle before the package manager.
 2. It runs `./gradlew :polyjose:connectedDebugAndroidTest` on that serial and judges the run by the
-   JUnit XML under `polyjose/build/outputs/androidTest-results/connected/` (AGP can exit 0 when the
+   JUnit XML under `android/build/outputs/androidTest-results/connected/` (AGP can exit 0 when the
    instrumentation crashed): a failure, an error, a skipped test or a missing file fails it.
 3. On an emulator it started, and only there, it sets a lock PIN (`adb shell locksettings`) for
    `AndroidKeystoreKeyAuthTest` and clears it on exit, also on failure. On an emulator it didn't

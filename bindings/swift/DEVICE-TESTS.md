@@ -16,7 +16,7 @@ changes platform-key code (RELEASING.md). It records what happened; it doesn't a
 ```sh
 source .toolchain-env.sh   # in the polyjose workspace; otherwise set up Xcode yourself
 cd polyjose
-platforms/swift/scripts/build-xcframework.sh
+bindings/swift/scripts/build-xcframework.sh
 git rev-parse HEAD^{tree}   # the tree, for the STATE.md row
 ```
 
@@ -25,7 +25,7 @@ Set these once in the shell:
 ```sh
 DEVICE=<the iPhone's identifier, from: xcrun devicectl list devices>
 TEAM=<your team ID>
-PROJECT=platforms/swift/HostedTests/PolyjoseHosted.xcodeproj
+PROJECT=bindings/swift/HostedTests/PolyjoseHosted.xcodeproj
 T=PolyjoseHostedTests/AppleKeyHostedTests
 hosted() {
   POLYJOSE_LOCAL_XCFRAMEWORK=1 xcodebuild test -project "$PROJECT" -scheme PolyjoseHosted \
@@ -36,7 +36,7 @@ hosted() {
 
 The project signs the host app `dev.polyjose.hosted.app` and the test bundle
 `dev.polyjose.hosted.tests` with automatic signing. If Xcode reports that an identifier is not
-available to your team, change both in `platforms/swift/HostedTests/project.yml` and in the
+available to your team, change both in `bindings/swift/HostedTests/project.yml` and in the
 project (or regenerate it with `xcodegen generate`), and don't commit that change.
 
 The host app sets `NSFaceIDUsageDescription` (the build setting
@@ -47,7 +47,7 @@ NSFaceIDUsageDescription key".
 
 ## 1. Keys that persist (no prompt)
 
-The same two runs as `platforms/swift/scripts/test-simulators.sh`, on the device. Run 1 generates a
+The same two runs as `bindings/swift/scripts/test-simulators.sh`, on the device. Run 1 generates a
 Secure Enclave ES256 key, a Keychain ES384 key and a Keychain RS256 key and leaves them; run 2, a new
 process, finds each by its tag, signs, deletes it, and checks that it is gone. On a device the
 public JWKs of run 1 are kept in the app's own container.

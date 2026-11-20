@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The Swift (iOS) binding on the iOS Simulator, and the Apple device link checks (ADR 0032 §5 as
-# amended by ADR 0046 §2-§4; feature 0009 T03). Run by platforms/swift/test.sh after `swift test`,
+# amended by ADR 0046 §2-§4; feature 0009 T03). Run by bindings/swift/test.sh after `swift test`,
 # or directly, from any directory.
 #
 # Steps, each failing the script on error:
-#   0. platforms/swift/scripts/test-simulator-lib.sh, the fixture tests of the helpers below
+#   0. bindings/swift/scripts/test-simulator-lib.sh, the fixture tests of the helpers below
 #      (simulator-lib.sh).
 #   1. iOS device link check: `xcodebuild build-for-testing` for `generic/platform=iOS` with
 #      CODE_SIGNING_ALLOWED=NO (iOS is the main target, ADR 0046 §1). Build only, no test run.
@@ -32,7 +32,7 @@
 #        checkout's conformance/vectors/, so the iOS test bundle matches the checkout byte for byte.
 #        scripts/conformance-parity.sh then compares the file with rust-core.json.
 #   4. The hosted AppleKey tests (ADR 0072 §6.1; feature 0025 T03) on the same simulator: the
-#      committed Xcode project platforms/swift/HostedTests/PolyjoseHosted.xcodeproj, a minimal host
+#      committed Xcode project bindings/swift/HostedTests/PolyjoseHosted.xcodeproj, a minimal host
 #      app with a test bundle hosted in it that links the local Polyjose package, so its tests can
 #      store Keychain keys. Never with CODE_SIGNING_ALLOWED=NO: that removes the simulated
 #      entitlement Xcode signs into the app, and every Keychain call is then -34018 (measured).
@@ -47,7 +47,7 @@
 #      `secure-enclave: simulator (host pass-through), not hardware evidence` or
 #      `secure-enclave: SKIPPED (SecureEnclave.isAvailable is false on the simulator)` (ADR 0072
 #      §6.2). The tests of keys that prompt skip off-device ("needs a device and a person");
-#      platforms/swift/DEVICE-TESTS.md runs them on an iPhone.
+#      bindings/swift/DEVICE-TESTS.md runs them on an iPhone.
 #
 # Simulator hygiene (a shared machine): the script creates one simulator device with
 # `xcrun simctl create`, uses it by UDID, and on exit (also on failure or interrupt) shuts it down
@@ -65,7 +65,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-me=platforms/swift/scripts/test-simulators.sh
+me=bindings/swift/scripts/test-simulators.sh
 scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$scripts/../../.." && pwd)"
 cd "$root"
@@ -186,10 +186,10 @@ else
   mv "$extracted" "$results"
   echo "$me: wrote $results (vectors_digest $digest, equal to the checkout's)"
 
-  echo "==> $me: hosted AppleKey tests, two runs on the same simulator (platforms/swift/HostedTests)"
+  echo "==> $me: hosted AppleKey tests, two runs on the same simulator (bindings/swift/HostedTests)"
   hosted_class=PolyjoseHostedTests.AppleKeyHostedTests
   hosted_tests=PolyjoseHostedTests/AppleKeyHostedTests
-  xcb_project=(-project "$root/platforms/swift/HostedTests/PolyjoseHosted.xcodeproj" -scheme PolyjoseHosted
+  xcb_project=(-project "$root/bindings/swift/HostedTests/PolyjoseHosted.xcodeproj" -scheme PolyjoseHosted
     -derivedDataPath "$work/DerivedData-hosted")
   export TEST_RUNNER_POLYJOSE_HOSTED_STATE="$work/hosted-state"
   mkdir -p "$TEST_RUNNER_POLYJOSE_HOSTED_STATE"
@@ -213,7 +213,7 @@ else
     echo "$me: the Secure Enclave hosted tests must pass, or skip, in both runs"; exit 1
   fi
   for test in testDeviceUserPresence testDeviceBiometryCurrentSet testDeviceReusedContext; do
-    echo "  $test: $(test_case_result "$logs/hosted-run1.log" "$hosted_class" "$test") (needs a device and a person: platforms/swift/DEVICE-TESTS.md)"
+    echo "  $test: $(test_case_result "$logs/hosted-run1.log" "$hosted_class" "$test") (needs a device and a person: bindings/swift/DEVICE-TESTS.md)"
   done
   echo "$me: PASS"
 fi

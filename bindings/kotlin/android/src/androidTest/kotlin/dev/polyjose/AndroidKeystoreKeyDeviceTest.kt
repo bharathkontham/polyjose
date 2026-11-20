@@ -21,7 +21,7 @@ import org.junit.Test
 class PromptTestActivity : Activity()
 
 /**
- * Manual steps 3 and 4 of `platforms/android/DEVICE-TESTS.md` (feature 0025 T04; ADR 0072 §4): a
+ * Manual steps 3 and 4 of `bindings/kotlin/DEVICE-TESTS.md` (feature 0025 T04; ADR 0072 §4): a
  * person answers a real prompt on a device with a secure lock screen and an enrolled biometric.
  * Never part of an automated run: `scripts/run-instrumented.sh` excludes this class, and it is
  * run only with `-e class dev.polyjose.AndroidKeystoreKeyDeviceTest#<test>` and the instrumentation

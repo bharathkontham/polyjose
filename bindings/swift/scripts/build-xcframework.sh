@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds platforms/swift/build/PolyjoseFFI.xcframework, the static XCFramework of the Swift (iOS)
+# Builds bindings/swift/build/PolyjoseFFI.xcframework, the static XCFramework of the Swift (iOS)
 # binding (ADR 0032 §1-§3, ADR 0046 §3), from polyjose-ffi.
 #
-# Usage: platforms/swift/scripts/build-xcframework.sh [--release]
+# Usage: bindings/swift/scripts/build-xcframework.sh [--release]
 #
 #   --release  fail unless every library, including arm64_32-apple-watchos, can be built. Without
 #              it, a machine without the pinned nightly gets a development build (see below).
@@ -20,7 +20,7 @@
 #   watchos-arm64_arm64_32      aarch64-apple-watchos + arm64_32-apple-watchos
 #   watchos-arm64-simulator     aarch64-apple-watchos-sim
 # Every target is tier 2 on the stable toolchain of rust-toolchain.toml (the aarch64 watchOS
-# targets since Rust 1.95.0) except arm64_32-apple-watchos, which is tier 3 and is built with the nightly named in platforms/swift/nightly-toolchain and
+# targets since Rust 1.95.0) except arm64_32-apple-watchos, which is tier 3 and is built with the nightly named in bindings/swift/nightly-toolchain and
 # `-Zbuild-std=std,panic_abort` (ADR 0032 §1, amending ADR 0004).
 #
 # Development build: when that nightly (with rust-src) is not installed, the watchOS device
@@ -54,7 +54,7 @@
 # Headers (ADR 0032 §2): polyjose-uniffi-bindgen generates the Swift sources from the macOS
 # arm64 dylib in library mode; PolyjoseFFI.h and module.modulemap go under
 # Headers/PolyjoseFFI/ of every library (a subdirectory avoids header collisions with other
-# XCFrameworks). The generated Polyjose.swift is left in platforms/swift/build/generated/.
+# XCFrameworks). The generated Polyjose.swift is left in bindings/swift/build/generated/.
 #
 # Checks (any failure exits non-zero): each per-target archive cargo builds is under 10 MB; its
 # stripped copy has no __DWARF section left and contains polyjose-ffi's UniFFI exports but no
@@ -97,7 +97,7 @@ generated="$build_dir/generated"
 target_dir="${CARGO_TARGET_DIR:-target}"
 case "$target_dir" in /*) ;; *) target_dir="$root/$target_dir" ;; esac
 nightly="$(tr -d '[:space:]' < "$swift_dir/nightly-toolchain")"
-[ -n "$nightly" ] || die "platforms/swift/nightly-toolchain is empty"
+[ -n "$nightly" ] || die "bindings/swift/nightly-toolchain is empty"
 nightly_install="rustup toolchain install $nightly --profile minimal --component rust-src"
 
 # ADR 0032 §1: the platform minimums of Package.swift. Exported for the whole run, so every cargo

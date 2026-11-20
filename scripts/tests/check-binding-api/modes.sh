@@ -50,7 +50,7 @@ only_modes() {
 }
 
 # all_modes_case <name> [<base>]: a case whose modes are exactly the real surface (passes) and js
-# (skips: bindings/js is removed) and the fixtures kotlin (passes) and swift (skips), whatever other
+# (skips: bindings/ts-common is removed) and the fixtures kotlin (passes) and swift (skips), whatever other
 # modes the tree has.
 all_modes_case() {
   new_case "$@"
@@ -58,10 +58,10 @@ all_modes_case() {
   fixture_mode kotlin "$echo_mode"
   fixture_mode swift 'MODE_KINDS="op"
 mode_derive() { skip "swift missing"; }'
-  rm -rf "$case_dir/bindings/js"
+  rm -rf "$case_dir/bindings/ts-common"
 }
 all_modes_lines=('^check-binding-api: kotlin: PASS ' '^check-binding-api: surface: PASS '
-  '^SKIPPED \(js: bindings/js/package\.json missing\)$' '^SKIPPED \(swift: swift missing\)$')
+  '^SKIPPED \(js: bindings/ts-common/package\.json missing\)$' '^SKIPPED \(swift: swift missing\)$')
 
 all_modes_case all-modes
 run_check

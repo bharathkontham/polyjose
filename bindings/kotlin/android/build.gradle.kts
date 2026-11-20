@@ -101,8 +101,8 @@ android {
 /**
  * The test APK's conformance assets (ADR 0033 §5, ADR 0060 §2), read on the device through
  * `InstrumentationRegistry.getInstrumentation().context.assets`: everything under
- * `conformance/vectors/` at `conformance/vectors/`, and `conformance/schema.json` at
- * `conformance/schema.json`, as in the checkout. The prefix keeps the vectors apart from the
+ * `conformance/vectors/` at `conformance/vectors/`, and `conformance/schema/vectors.schema.json` at
+ * `conformance/schema/vectors.schema.json`, as in the checkout. The prefix keeps the vectors apart from the
  * framework's own assets and the schema outside the vector listing, so the asset paths under
  * `conformance/vectors` are the vector ids (ADR 0045 §4). Copied without filters, so the bytes stay
  * those of the checkout; the device hashes the bytes it parses, and a bundle that differs fails
@@ -124,7 +124,7 @@ abstract class ConformanceAssets @Inject constructor(private val fs: FileSystemO
     fun sync() {
         fs.sync {
             from(vectors) { into("conformance/vectors") }
-            from(schema) { into("conformance") }
+            from(schema) { into("conformance/schema") }
             into(outputDir)
         }
     }
@@ -132,7 +132,7 @@ abstract class ConformanceAssets @Inject constructor(private val fs: FileSystemO
 
 val conformanceAssets = tasks.register<ConformanceAssets>("conformanceAssets") {
     vectors = layout.dir(provider { repoRoot.resolve("conformance/vectors") })
-    schema = layout.file(provider { repoRoot.resolve("conformance/schema.json") })
+    schema = layout.file(provider { repoRoot.resolve("conformance/schema/vectors.schema.json") })
 }
 
 /**

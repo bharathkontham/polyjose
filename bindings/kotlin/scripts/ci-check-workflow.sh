@@ -3,7 +3,7 @@
 # 2026-11-07; ADR 0044, ADR 0037 §1). actionlint is not used: this is a line-based check of the
 # subset of YAML the workflow is written in, and it fails closed on anything outside that subset.
 #
-#   platforms/android/scripts/ci-check-workflow.sh [<workflow>]     (default: binding-android.yml)
+#   bindings/kotlin/scripts/ci-check-workflow.sh [<workflow>]     (default: binding-android.yml)
 #
 # The rules (comments are ignored, except the pin comments of `uses:` lines):
 #   trigger      exactly one top-level `on:` key, in block form, whose children are exactly
@@ -54,7 +54,7 @@
 #                continue-on-error, environment) fails; an env: name equal to one of them in another case (SHELL:)
 #                fails too, so rename it.
 #   scripts      the steps call each of ci-host-natives.sh, ci-android-sdk.sh, ci-emulator.sh,
-#                ci-assemble-jar.sh and ci-parity.sh, and every platforms/android/scripts/ci-*.sh
+#                ci-assemble-jar.sh and ci-parity.sh, and every bindings/kotlin/scripts/ci-*.sh
 #                the workflow names is a regular file (no symlink) and executable, except
 #                ci-lib.sh, which the steps source and which is not.
 #
@@ -487,14 +487,14 @@ if [ -n "$problems" ]; then
 fi
 
 # --- scripts -----------------------------------------------------------------------------------
-named=$(grep -v '^[[:space:]]*#' "$wf" | grep -oE 'platforms/android/scripts/ci-[A-Za-z0-9_-]+\.sh' | sort -u)
+named=$(grep -v '^[[:space:]]*#' "$wf" | grep -oE 'bindings/kotlin/scripts/ci-[A-Za-z0-9_-]+\.sh' | sort -u)
 for s in ci-host-natives.sh ci-android-sdk.sh ci-emulator.sh ci-assemble-jar.sh ci-parity.sh; do
-  printf '%s\n' "$named" | grep -qx "platforms/android/scripts/$s" || fail "scripts: no step calls platforms/android/scripts/$s"
+  printf '%s\n' "$named" | grep -qx "bindings/kotlin/scripts/$s" || fail "scripts: no step calls bindings/kotlin/scripts/$s"
 done
 # ci-lib.sh is sourced, never run (the Gradle wrapper hash steps, feature 0008 F09), so it is the
 # one that must be a regular file but not executable.
 for s in $named; do
-  if [ "$s" = platforms/android/scripts/ci-lib.sh ]; then
+  if [ "$s" = bindings/kotlin/scripts/ci-lib.sh ]; then
     [ -f "$ci_repo/$s" ] && [ ! -L "$ci_repo/$s" ] || fail "scripts: $s is not a regular file"
   else
     [ -f "$ci_repo/$s" ] && [ ! -L "$ci_repo/$s" ] && [ -x "$ci_repo/$s" ] || fail "scripts: $s is not an executable regular file"

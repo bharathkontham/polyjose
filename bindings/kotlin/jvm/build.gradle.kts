@@ -13,7 +13,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     // Group, workspace version, thirdPartyNotices and the POM (build-logic).
     id("polyjose.packaging")
-    // vanniktech 0.37.0's base plugin; see polyjose/build.gradle.kts.
+    // vanniktech 0.37.0's base plugin; see android/build.gradle.kts.
     id("com.vanniktech.maven.publish.base")
 }
 
@@ -117,7 +117,7 @@ val thirdPartyNotices = tasks.named<ThirdPartyNotices>("thirdPartyNotices") {
     targets.addAll(jarPlatforms.map { jnaPlatforms.getValue(it) })
 }
 
-// Java 17 bytecode (class-file major version 61), like the AAR (polyjose/build.gradle.kts), so the
+// Java 17 bytecode (class-file major version 61), like the AAR (android/build.gradle.kts), so the
 // jar loads on Java 17 and newer; the compiler itself runs on the JDK 21 toolchain (ADR 0033 §1).
 // `-Xjdk-release=17` compiles against the Java 17 class library, so no Java 18+ API can be called.
 // Orchestrator decision 2026-11-07 (feature 0008 F04, review S7). check-artifacts.sh asserts 61.

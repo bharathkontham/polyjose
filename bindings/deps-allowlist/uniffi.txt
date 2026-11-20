@@ -1,4 +1,4 @@
-# Crates allowed in the normal and build dependency tree of polyjose-ffi (bindings/ffi, the UniFFI
+# Crates allowed in the normal and build dependency tree of polyjose-ffi (bindings/uniffi, the UniFFI
 # adapter shared by Kotlin and Swift) beyond the core's: what
 #   cargo tree -p polyjose-ffi -e normal,build --target all --prefix none
 # lists (also with --no-default-features and --all-features), other than workspace packages, crates

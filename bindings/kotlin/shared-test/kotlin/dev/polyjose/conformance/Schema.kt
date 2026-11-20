@@ -1,12 +1,12 @@
 package dev.polyjose.conformance
 
 /**
- * Checks a parsed vector against `conformance/schema.json` (JSON Schema draft 2020-12), as every
+ * Checks a parsed vector against `conformance/schema/vectors.schema.json` (JSON Schema draft 2020-12), as every
  * runner must: a file that is not schema-valid fails, a misspelled member anywhere included
  * (conformance/README.md "Rules for every runner").
  *
- * The same small checker as the JS runner's `bindings/js/conformance/schema.ts`, of exactly the
- * keywords schema.json uses: `$ref` (local `#/$defs/...`), `type`, `enum`, `const`, `properties`,
+ * The same small checker as the JS runner's `bindings/ts-common/conformance/schema.ts`, of exactly the
+ * keywords vectors.schema.json uses: `$ref` (local `#/$defs/...`), `type`, `enum`, `const`, `properties`,
  * `required`, `additionalProperties` (boolean or schema), `items`, `minItems`, `maxItems`,
  * `uniqueItems`, `minimum`, `maximum`, `minLength`, `pattern`, `allOf`, `oneOf`,
  * `if`/`then`/`else`, and the annotations `$schema`, `title`, `description`. Any other keyword

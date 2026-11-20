@@ -11,7 +11,7 @@
 //     the one addon-sha256.json pins for the host, loads, from a private copy, and nothing planted
 //     in an ancestor node_modules, on NODE_PATH, at NAPI_RS_NATIVE_LIBRARY_PATH or as a WASI
 //     candidate ever runs. Each case runs in a child process on a temporary copy of the package.
-import { assert, path, test } from "../../js/dist/node/builtins.js";
+import { assert, path, test } from "../../ts-common/dist/node/builtins.js";
 import { PLATFORMS, backend, detectPlatform } from "../backend.js";
 
 // Node built-ins without @types/node (ADR 0047), typed with only what this file calls.

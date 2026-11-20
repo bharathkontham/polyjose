@@ -8,7 +8,7 @@ import XCTest
 /// `AppleKey` (ADR 0072 §1, feature 0025 T03) on macOS (`swift test`) and the iOS Simulator (the
 /// package scheme), with non-permanent keys: an unsigned or un-hosted test binary cannot store a
 /// Keychain item (-34018, ADR 0072 §6.1). Permanent keys, `open` and `delete` are tested by the
-/// hosted test app, platforms/swift/HostedTests.
+/// hosted test app, bindings/swift/HostedTests.
 final class AppleKeyTests: XCTestCase {
     static let marker = "apple-key-marker-5c1e"
     static let payload = Data("hardware-backed keys".utf8)

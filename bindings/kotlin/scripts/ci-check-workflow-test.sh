@@ -3,10 +3,10 @@
 # .github/workflows/binding-android.yml must pass, and each mutated copy of it (in a temporary
 # directory, never in the checkout) must fail with the rule it breaks.
 #
-#   platforms/android/scripts/ci-check-workflow-test.sh
+#   bindings/kotlin/scripts/ci-check-workflow-test.sh
 #
 # Some forbidden names are assembled from pieces, so that this file itself does not trip
-# scripts/check-artifacts.sh's grep for Central and signing configuration in platforms/android.
+# scripts/check-artifacts.sh's grep for Central and signing configuration in bindings/kotlin.
 # Exit status: 0 every case behaved; 1 a case did not (each printed with FAIL); 2 setup error.
 # The cases hold literal ${{ }} and $VAR text for the workflow, never for this shell.
 # shellcheck disable=SC2016
@@ -172,7 +172,7 @@ expect_fail "expressions: the github.* object filter" "whole github context" ins
 expect_fail "expressions: fromJSON(toJSON(github))" "whole github context" insert_after "$env_anchor" '          X: ${{ fromJSON(toJSON(github)).sha }}'
 expect_pass "expressions: a github property stays allowed" insert_after "$env_anchor" '          X: ${{ github.sha }}\n          Y: ${{ toJSON(github.event.inputs) }}'
 expect_fail "expressions: an input inside run:" "inside a run: script" replace_line "$run_anchor" '          case ${{ inputs.mode }} in'
-expect_fail "expressions: inline run: with \${{ }}" "inside a run: script" replace_line "        run: platforms/android/scripts/ci-parity.sh target/ci-results" '        run: platforms/android/scripts/ci-parity.sh ${{ github.workspace }}/target/ci-results'
+expect_fail "expressions: inline run: with \${{ }}" "inside a run: script" replace_line "        run: bindings/kotlin/scripts/ci-parity.sh target/ci-results" '        run: bindings/kotlin/scripts/ci-parity.sh ${{ github.workspace }}/target/ci-results'
 
 # Structure.
 expect_fail "structure: an anchor" "structure: YAML anchor" insert_after "$env_anchor" "          X: &x 1"
@@ -181,10 +181,10 @@ expect_fail "structure: a second document" "structure: a second YAML document" a
 expect_fail "structure: tab indentation" "structure: tab indentation" append "\tx: 1"
 
 # Scripts.
-expect_fail "scripts: a step that is gone" "scripts: no step calls platforms/android/scripts/ci-parity.sh" \
-  replace_line "        run: platforms/android/scripts/ci-parity.sh target/ci-results" "        run: scripts/conformance-parity.sh"
+expect_fail "scripts: a step that is gone" "scripts: no step calls bindings/kotlin/scripts/ci-parity.sh" \
+  replace_line "        run: bindings/kotlin/scripts/ci-parity.sh target/ci-results" "        run: scripts/conformance-parity.sh"
 expect_fail "scripts: a script that does not exist" "is not an executable regular file" \
-  replace_line "        run: platforms/android/scripts/ci-parity.sh target/ci-results" "        run: platforms/android/scripts/ci-parity.sh target/ci-results && platforms/android/scripts/ci-missing.sh"
+  replace_line "        run: bindings/kotlin/scripts/ci-parity.sh target/ci-results" "        run: bindings/kotlin/scripts/ci-parity.sh target/ci-results && bindings/kotlin/scripts/ci-missing.sh"
 
 # Per-action with: allow-list (F08, security audit L3): a checkout of another repository, ref or
 # credential runs the attacker's ci-*.sh in every later step.

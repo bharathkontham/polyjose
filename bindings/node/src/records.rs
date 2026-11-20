@@ -2,7 +2,7 @@
 //! logic (ADR 0030 §1, "the adapter test").
 //!
 //! - **Names.** JS sees `camelCase` fields (`allowedAlgs`, `keyUse`, `maxPbes2Count`), exactly as
-//!   `bindings/js/BACKEND.md` lists them. napi-rs splits names at digits (`protectedB64U`), so
+//!   `bindings/ts-common/BACKEND.md` lists them. napi-rs splits names at digits (`protectedB64U`), so
 //!   the fields holding a digit carry an explicit `js_name`.
 //! - **Inputs** (`object_to_js = false`) are read on the JS thread and converted at once, in the
 //!   `#[napi]` function, into the surface record that the task owns. Two ways:
@@ -30,7 +30,7 @@
 //!   - an absent optional field is `None` and reaches the surface as `None`, which calls no core
 //!     setter (ADR 0030 §3). An absent boolean flag (`detached`, `compress`, `omitTyp`, …) is the
 //!     flag not set, `false`, which likewise calls no core setter: the surface's own reading of
-//!     ADR 0030 §3, and the same as UniFFI's `default = false` (`bindings/ffi`).
+//!     ADR 0030 §3, and the same as UniFFI's `default = false` (`bindings/uniffi`).
 //! - **Outputs** (`object_from_js = false`) are built on the JS thread in `resolve`
 //!   (`ToJs`); secret bytes (`payload`, `plaintext`, `aad`) are copied into new JS memory from
 //!   the surface's borrowed, zeroizing buffer, which is wiped when the surface record drops

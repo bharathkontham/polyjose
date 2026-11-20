@@ -6,6 +6,22 @@ All notable changes to polyjose are documented in this file. The format is based
 
 ## [Unreleased]
 
+### Changed
+
+- **Repository layout; no API change.** Every binding now lives under `bindings/`:
+  - `platforms/android` → `bindings/kotlin`, with the modules in `android/` (AAR), `jvm/` (jar) and `shared/`;
+  - `platforms/swift` → `bindings/swift`;
+  - `bindings/ffi` → `bindings/uniffi`;
+  - `bindings/js` → `bindings/ts-common`, whose private, never-published package is renamed `@polyjose/ts-common`.
+
+  New `ARCHITECTURE.md` and expanded `CONTRIBUTING.md`.
+
+  No public API, behaviour, crate, npm package, Maven coordinate, Swift product or module changed. In the published artifacts:
+  - the native libraries in the AAR, the JVM jar and the XCFramework embed source-file paths that now read `bindings/uniffi/…`;
+  - comments in the npm packages' compiled facade and in the Maven sources jars name the new paths.
+
+  If you build polyjose from source with your own scripts, update their paths.
+
 ## [0.4.0] - 2026-11-16
 
 Platform-held keys: sign and decrypt with a private key that the operating system holds and never exports, such as a Secure Enclave, Apple Keychain or Android Keystore key. This is a minor release because, on 0.x, a change to a binding's public API bumps the minor version: the Rust crate, Kotlin and Swift add the `PlatformKey` interface and its operations, and every binding adds three error codes. No existing function, type or signature changed, and verification and decryption with a JWK return the same results as in 0.3.0.

@@ -11,15 +11,15 @@
 . "$(dirname "${BASH_SOURCE[0]}")/../check-deps/lib.sh"
 
 # The node platform's interop-jose step (feature 0010 I1) builds @polyjose/node and runs jose, and
-# its js-facade step runs npm ci and tsc in bindings/js: in the base copy each is a passing stub, so
+# its ts-common step runs npm ci and tsc in bindings/ts-common: in the base copy each is a passing stub, so
 # the cases stay hermetic and build nothing.
 if [ -f "$base/interop/node/test.sh" ]; then
   printf '#!/bin/sh\necho "fixture interop-jose ran"\n' >"$base/interop/node/test.sh" \
     || lib_die "could not stub interop/node/test.sh in the base copy"
 fi
-if [ -f "$base/bindings/js/test.sh" ]; then
-  printf '#!/bin/sh\necho "fixture js-facade ran"\n' >"$base/bindings/js/test.sh" \
-    || lib_die "could not stub bindings/js/test.sh in the base copy"
+if [ -f "$base/bindings/ts-common/test.sh" ]; then
+  printf '#!/bin/sh\necho "fixture ts-common ran"\n' >"$base/bindings/ts-common/test.sh" \
+    || lib_die "could not stub bindings/ts-common/test.sh in the base copy"
 fi
 
 gate_name=test-all.sh
@@ -123,7 +123,7 @@ with open(path, "w", encoding="utf-8") as f:
 
 # rust_fixtures <exit status of cargo test --workspace> [<results file stem>...]: makes
 # `test-all.sh rust` cheap and hermetic in the copy. Every gate script of the rust block is a passing
-# fixture (bindings/ffi/tests/generated-names.sh too; a case replaces it to test that step), one
+# fixture (bindings/uniffi/tests/generated-names.sh too; a case replaces it to test that step), one
 # passing fixture stands in for scripts/tests/ (so a `tooling` case does not run this test) and one
 # for the negative tests the rust block keeps (scripts/tests/check-test-vectors-off/), and a
 # cargo stub,
@@ -138,7 +138,7 @@ rust_fixtures() {
     scripts/check-deps.sh scripts/check-rsa-symbols.sh; do
     fixture "$script" 0 "fixture ${script#scripts/} ran"
   done
-  fixture bindings/ffi/tests/generated-names.sh 0 'fixture generated-names ran' 'generated-names: PASS'
+  fixture bindings/uniffi/tests/generated-names.sh 0 'fixture generated-names ran' 'generated-names: PASS'
   rm -rf "$case_dir/scripts/tests" || lib_die "could not remove the copy's scripts/tests"
   fixture scripts/tests/fixture/ok.sh 0 'fixture negative test ran'
   fixture scripts/tests/check-test-vectors-off/ok.sh 0 'fixture test-vectors-off negative test ran'

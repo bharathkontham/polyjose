@@ -1,11 +1,11 @@
 # shellcheck shell=bash
 # The variables below are read by the scripts that source this file.
 # shellcheck disable=SC2034
-# Shared by the platforms/android/scripts/ci-*.sh scripts of .github/workflows/binding-android.yml
+# Shared by the bindings/kotlin/scripts/ci-*.sh scripts of .github/workflows/binding-android.yml
 # (feature 0008 T05; ADR 0033 §4, §5; ADR 0037 §1). Sourced, never run: it defines variables and
 # functions and changes nothing. Runs on macOS /bin/bash 3.2, Linux bash and Git Bash on Windows.
 #
-#   ci_android  platforms/android (absolute)       ci_repo  the repository root (absolute)
+#   ci_android  bindings/kotlin (absolute)       ci_repo  the repository root (absolute)
 #   ci_out      where the scripts put what the workflow uploads, one folder per artifact named as
 #               the artifact (ADR 0037 §1: jvm-natives-<prefix>, conformance-<runner>, android-aar,
 #               jvm-jar, maven-repo): $POLYJOSE_CI_OUT, default target/ci at the repository root.
@@ -15,7 +15,7 @@ ci_repo=$(cd "$ci_android/../.." && pwd -P) || exit 2
 ci_out=${POLYJOSE_CI_OUT:-$ci_repo/target/ci}
 
 # The four JNA resource prefixes of the release jar (ADR 0033 §3a, §4; ADR 0073 §2: macOS is Apple
-# silicon only), as polyjose-jvm/build.gradle.kts.
+# silicon only), as jvm/build.gradle.kts.
 ci_prefixes="darwin-aarch64 linux-aarch64 linux-x86-64 win32-x86-64"
 
 # Pinned Android SDK packages (installed by ci-android-sdk.sh): the compile SDK of
@@ -40,9 +40,9 @@ ci_die() { echo "${0##*/}: $*" >&2; exit 2; }
 ci_gradle_wrapper_version=9.8.2
 ci_gradle_wrapper_sha256=3b8a25775a69158b5ad2b1d17a80a88dc7b40a352a73eb27d06c612a7ce68e98
 
-# ci_check_gradle_wrapper [<jar>]: returns 0 when the jar (default: platforms/android's
+# ci_check_gradle_wrapper [<jar>]: returns 0 when the jar (default: bindings/kotlin's
 # gradle/wrapper/gradle-wrapper.jar) has the pinned SHA-256; otherwise prints why and returns 1.
-# Called before any `./gradlew` (platforms/android/test.sh; the workflow jobs, feature 0008 F08).
+# Called before any `./gradlew` (bindings/kotlin/test.sh; the workflow jobs, feature 0008 F08).
 ci_check_gradle_wrapper() {
   local jar=${1:-$ci_android/gradle/wrapper/gradle-wrapper.jar} sum
   [ -f "$jar" ] || { echo "gradle wrapper: no jar at $jar"; return 1; }

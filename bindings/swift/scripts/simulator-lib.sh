@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Helpers of platforms/swift/scripts/test-simulators.sh (feature 0009 T03), sourced; tested on
-# fixtures by platforms/swift/scripts/test-simulator-lib.sh. Needs plutil and shasum (macOS).
+# Helpers of bindings/swift/scripts/test-simulators.sh (feature 0009 T03), sourced; tested on
+# fixtures by bindings/swift/scripts/test-simulator-lib.sh. Needs plutil and shasum (macOS).
 # Bash 3.2 compatible. Callers set LC_ALL=C.
 
 # sim_runtime_available <runtimes.json> <runtime identifier>: succeeds when the document

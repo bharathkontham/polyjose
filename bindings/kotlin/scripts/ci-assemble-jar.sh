@@ -5,7 +5,7 @@
 # Nothing is published or signed: the only repository is the file repository build/repo. Run
 # ci-android-sdk.sh first (NDK, build-tools, cargo-ndk).
 #
-#   platforms/android/scripts/ci-assemble-jar.sh <natives-dir> [--require-all] [--jni-libs <dir>]
+#   bindings/kotlin/scripts/ci-assemble-jar.sh <natives-dir> [--require-all] [--jni-libs <dir>]
 #
 # <natives-dir> holds one jvm-natives-<prefix>/<library> folder per platform, the layout of the
 # downloaded jvm-natives-* artifacts and of ci-host-natives.sh's output (ci-lib.sh); other entries
@@ -15,7 +15,7 @@
 #    The prefix this host builds itself (its own; nothing is cross-built, ADR 0073 §2) is rebuilt
 #    by Gradle and not passed in, since the jar build rejects a platform it
 #    gets twice; step 3 compares the rebuilt library with the CI one. Every other prefix is passed
-#    to the jar build with -Ppolyjose.jvmNativesDir (T04's hook in polyjose-jvm/build.gradle.kts).
+#    to the jar build with -Ppolyjose.jvmNativesDir (T04's hook in jvm/build.gradle.kts).
 # 2. `./gradlew --no-daemon :polyjose:assembleRelease :polyjose-jvm:jar
 #    :sample-minified:assembleRelease publishAllPublicationsToBuildLocalRepository`, then
 #    `scripts/check-artifacts.sh --no-build` (AAR contents, 16 KB alignment, size, notices, the
@@ -34,7 +34,7 @@
 #    emulator job's android-jnilibs artifact (ci-emulator.sh step 6): <abi>/libpolyjose_ffi.so for
 #    the four ABIs and a SHA256SUMS of exactly those four, recorded from the test APK the device
 #    ran. Each file must match its SHA256SUMS line before the build; the build packs them through
-#    -Ppolyjose.jniLibsDir (polyjose/build.gradle.kts) instead of building with cargo-ndk; after
+#    -Ppolyjose.jniLibsDir (android/build.gradle.kts) instead of building with cargo-ndk; after
 #    it, each jni/<abi>/libpolyjose_ffi.so in the AAR must be byte for byte the tested file.
 #    --require-all (CI) requires --jni-libs. Without it the AAR packs this host's build/jniLibs.
 # 4. Outputs, one folder per artifact (ADR 0037 §1): <out>/android-aar/polyjose-<v>.aar,
@@ -147,8 +147,8 @@ echo "==> ci-assemble-jar: scripts/check-artifacts.sh --no-build"
 "$ci_android/scripts/check-artifacts.sh" --no-build || fail "scripts/check-artifacts.sh"
 
 # 3. The jar carries what CI built, and every platform when required.
-jar=$ci_android/polyjose-jvm/build/libs/polyjose-jvm-$version.jar
-aar=$ci_android/polyjose/build/outputs/aar/polyjose-release.aar
+jar=$ci_android/jvm/build/libs/polyjose-jvm-$version.jar
+aar=$ci_android/android/build/outputs/aar/polyjose-release.aar
 [ -f "$jar" ] || fail "no $jar"
 [ -f "$aar" ] || fail "no $aar"
 work=$ci_android/build/ci-assemble-jar

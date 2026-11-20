@@ -3,9 +3,9 @@
 # the release AAR, the desktop JVM jar, the minified sample APK and the build-local Maven
 # publication. Nothing is published: the only repository is the file repository build/repo.
 #
-#   platforms/android/scripts/check-artifacts.sh [--no-build]
+#   bindings/kotlin/scripts/check-artifacts.sh [--no-build]
 #
-# Without --no-build it first runs, from platforms/android and without a Gradle daemon:
+# Without --no-build it first runs, from bindings/kotlin and without a Gradle daemon:
 #   :polyjose:assembleRelease :polyjose-jvm:jar :sample-minified:assembleRelease
 #   publishAllPublicationsToBuildLocalRepository
 # The R8 sample's instrumented test needs the emulator and is not run here
@@ -114,7 +114,7 @@ fi
 # A command-line flag (--dependency-verification / -F) or the org.gradle.dependency.verification
 # property would switch the check to lenient or off for that build.
 lenient=$(git -C "$repo" grep -nIE -e '(--dependency-verification|[[:space:]]-F)[= ]+(off|lenient)' \
-  -e 'org\.gradle\.dependency\.verification' -- . ":!platforms/android/scripts/check-artifacts.sh" 2>/dev/null)
+  -e 'org\.gradle\.dependency\.verification' -- . ":!bindings/kotlin/scripts/check-artifacts.sh" 2>/dev/null)
 if [ -z "$lenient" ]; then
   pass "Gradle: no tracked file turns dependency verification off or lenient"
 else
@@ -234,7 +234,7 @@ abi_triple() {
 
 # --- AAR ----------------------------------------------------------------------------------------
 echo "==> AAR"
-aar="$android/polyjose/build/outputs/aar/polyjose-release.aar"
+aar="$android/android/build/outputs/aar/polyjose-release.aar"
 abis="arm64-v8a armeabi-v7a x86 x86_64"
 if [ ! -f "$aar" ]; then
   fail "AAR: $aar does not exist"
@@ -244,7 +244,7 @@ else
     if grep -qx "$entry" "$work/aar.list"; then pass "AAR: $entry"; else fail "AAR: no $entry"; fi
   done
   mkdir -p "$work/aar" && unzip -q -o "$aar" -d "$work/aar"
-  if cmp -s "$work/aar/proguard.txt" "$android/polyjose/consumer-rules.pro"; then
+  if cmp -s "$work/aar/proguard.txt" "$android/android/consumer-rules.pro"; then
     pass "AAR: proguard.txt is consumer-rules.pro"
   else
     fail "AAR: proguard.txt is not consumer-rules.pro"
@@ -324,7 +324,7 @@ fi
 
 # --- JVM jar ------------------------------------------------------------------------------------
 echo "==> JVM jar"
-jar="$android/polyjose-jvm/build/libs/polyjose-jvm-$version.jar"
+jar="$android/jvm/build/libs/polyjose-jvm-$version.jar"
 # JNA's resource prefix for a Rust target triple (ADR 0033 §3a).
 triple_of() {
   case $1 in
@@ -497,7 +497,7 @@ hits=$(git -C "$android" ls-files -co --exclude-standard | grep -vx "$self" | wh
   [ -f "$f" ] && grep -nHE 'publishToMavenCentral|mavenCentralUsername|mavenCentralPassword|mavenCentralPublishing|mavenCentralAutomaticPublishing|SONATYPE_|centralPortal|signingInMemoryKey[A-Za-z]*[[:space:]]*=|signing\.(password|secretKeyRingFile)' "$f"
 done)
 if [ -z "$hits" ]; then
-  pass "grep: no Central credential, Central publishing or signing secret in platforms/android"
+  pass "grep: no Central credential, Central publishing or signing secret in bindings/kotlin"
 else
   fail "grep: Central or signing configuration found: $hits"
 fi

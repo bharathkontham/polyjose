@@ -85,7 +85,7 @@ set_runners wasm wasm-node 'wasm-chrome?'
 set_runners android jvm 'android-emulator?'
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 writes_results bindings/wasm/test.sh wasm-node
-fixture platforms/android/test.sh 0 'SKIPPED-RUNNER (wasm-chrome: host:no-chrome)' 'SKIPPED (no emulator)'
+fixture bindings/kotlin/test.sh 0 'SKIPPED-RUNNER (wasm-chrome: host:no-chrome)' 'SKIPPED (no emulator)'
 parity_fixture 0 'parity: ok'
 run_test_all node wasm android
 check "a SKIPPED platform's declaration does not waive another platform's optional runner" 1 \
@@ -98,8 +98,8 @@ set_runners wasm wasm-node 'wasm-chrome?'
 set_runners android jvm 'android-emulator?'
 fixture bindings/wasm/test.sh 0 'fixture wasm suite ran'
 writes_results bindings/wasm/test.sh wasm-node
-fixture platforms/android/test.sh 0 'fixture android suite ran' 'SKIPPED-RUNNER (wasm-chrome: host:no-chrome)'
-writes_results platforms/android/test.sh jvm android-emulator
+fixture bindings/kotlin/test.sh 0 'fixture android suite ran' 'SKIPPED-RUNNER (wasm-chrome: host:no-chrome)'
+writes_results bindings/kotlin/test.sh jvm android-emulator
 parity_fixture 0 'parity: ok'
 run_test_all node wasm android
 check "a passing sibling's declaration for another platform's runner FAILs, and waives nothing" 1 \
@@ -110,8 +110,8 @@ check "a passing sibling's declaration for another platform's runner FAILs, and 
 new_case unrelated-file
 ref_by_node
 set_runners android jvm 'android-emulator?'
-fixture platforms/android/test.sh 0 'fixture android suite ran'
-writes_results platforms/android/test.sh android-emulator-extra swift-macos jvmx
+fixture bindings/kotlin/test.sh 0 'fixture android suite ran'
+writes_results bindings/kotlin/test.sh android-emulator-extra swift-macos jvmx
 parity_fixture 0 'parity: ok'
 run_test_all node android
 check "files of unrelated runners (jvmx) do not satisfy jvm" 1 \

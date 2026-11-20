@@ -11,7 +11,7 @@
 #     runs the Rust workspace tests on Linux (the rust job),
 #     checks and checksums them, attests them, and uploads them as the `release-assets` workflow
 #     artifact. No release is created. The release agent then records this run in
-#     platforms/swift/release-candidate.json and the Apple zip's checksum in Package.swift (ADR 0037
+#     bindings/swift/release-candidate.json and the Apple zip's checksum in Package.swift (ADR 0037
 #     §2 option 4a).
 #   - tag: dispatched with "Use workflow from" = the tag vX.Y.Z and input tag = the same vX.Y.Z.
 #     The verify job requires github.ref to be refs/tags/<tag>, the tag commit to be on main, the
@@ -260,7 +260,7 @@ jobs:
     with:
       mode: release
 
-  # Tag mode only: every artifact of the candidate run in platforms/swift/release-candidate.json,
+  # Tag mode only: every artifact of the candidate run in bindings/swift/release-candidate.json,
   # never rebuilt (ADR 0068 §1, extending ADR 0037 §2 option 4a). scripts/release/candidate.sh
   # checks the run (a successful workflow_dispatch of release.yml in this repository at the
   # recorded commit) and the tree rule (decisions.md 2026-11-08, H3) before it downloads anything,

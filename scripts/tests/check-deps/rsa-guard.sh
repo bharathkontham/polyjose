@@ -120,8 +120,8 @@ append_to bindings/wasm/src/lib.rs 'use rsa::RsaPrivateKey;'
 expect_fail "RsaPrivateKey in a binding" "bindings/wasm/src/lib.rs:[0-9]+: RsaPrivateKey" "$src_fail"
 
 new_case binding-new-file
-append_to bindings/ffi/src/sign/rsa.rs 'pub fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
-expect_fail "rsa SigningKey in a new binding file" "bindings/ffi/src/sign/rsa.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
+append_to bindings/uniffi/src/sign/rsa.rs 'pub fn s(k: rsa::pkcs1v15::SigningKey<rsa::sha2::Sha256>) {}'
+expect_fail "rsa SigningKey in a new binding file" "bindings/uniffi/src/sign/rsa.rs:[0-9]+: SigningKey in a file that uses the rsa crate" "$src_fail"
 
 # --- Check 9: what ADR 0067 §6 still forbids inside the RSA files ----------------------------------
 rsa_rs=crates/polyjose/src/jws/rsa.rs
@@ -617,9 +617,9 @@ expect_fail "package = \"rsa\" renamed in a binding, used as rsa_pub::pkcs1v15::
 
 new_case renamed-workspace-dependency
 replace_in Cargo.toml "$rsa_line" "$rsa_line"$'\n'"$rsa_pub"
-replace_in bindings/ffi/Cargo.toml 'polyjose.workspace = true' $'polyjose.workspace = true\nrsa_pub.workspace = true'
+replace_in bindings/uniffi/Cargo.toml 'polyjose.workspace = true' $'polyjose.workspace = true\nrsa_pub.workspace = true'
 expect_fail "package = \"rsa\" renamed in [workspace.dependencies], inherited by a binding" \
-  "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
+  "^  - polyjose-ffi \\(bindings/uniffi/Cargo.toml\\): rsa as rsa_pub in \\[dependencies\\]$" "$rename_fail"
 
 # cargo refuses a second name for a package a crate already depends on, so the core's own rsa
 # dependency is the one renamed (each edit relocks, so the workspace keeps `rsa` too).
@@ -631,14 +631,14 @@ expect_fail "the core's rsa dependency renamed through [workspace.dependencies]"
 
 new_case renamed-dev-dependency
 # The ffi binding may already have a [dev-dependencies] table (0025 T02): add to it, else create it.
-if grep -qx '\[dev-dependencies\]' "$case_dir/bindings/ffi/Cargo.toml"; then
-  replace_in bindings/ffi/Cargo.toml $'\n[dev-dependencies]\n' $'\n[dev-dependencies]\n'"$rsa_pub"$'\n'
+if grep -qx '\[dev-dependencies\]' "$case_dir/bindings/uniffi/Cargo.toml"; then
+  replace_in bindings/uniffi/Cargo.toml $'\n[dev-dependencies]\n' $'\n[dev-dependencies]\n'"$rsa_pub"$'\n'
 else
-  append_to bindings/ffi/Cargo.toml $'\n[dev-dependencies]\n'"$rsa_pub"
+  append_to bindings/uniffi/Cargo.toml $'\n[dev-dependencies]\n'"$rsa_pub"
   relock
 fi
 expect_fail "package = \"rsa\" renamed in a binding's [dev-dependencies]" \
-  "^  - polyjose-ffi \\(bindings/ffi/Cargo.toml\\): rsa as rsa_pub in \\[dev-dependencies\\]$" "$rename_fail"
+  "^  - polyjose-ffi \\(bindings/uniffi/Cargo.toml\\): rsa as rsa_pub in \\[dev-dependencies\\]$" "$rename_fail"
 
 new_case renamed-target-dependency
 append_to bindings/node/Cargo.toml $'\n[target."cfg(unix)".dependencies]\nr = { package = "rsa", version = "'"$rsa_req"'", default-features = false }'
@@ -662,7 +662,7 @@ replace_in Cargo.toml "$rsa_line" "$(printf '%s\n' "$rsa_line" | sed 's/features
 expect_fail "rsa feature getrandom instead of pkcs1v15" "^  - rsa $rsa_locked_ere with features: getrandom$" "$feature_fail"
 
 new_case rsa-feature-binding
-replace_in bindings/ffi/Cargo.toml $'[dependencies]\n' $'[dependencies]\nrsa = { workspace = true, features = ["std"] }\n'
+replace_in bindings/uniffi/Cargo.toml $'[dependencies]\n' $'[dependencies]\nrsa = { workspace = true, features = ["std"] }\n'
 expect_fail "rsa feature std from a binding" "^  - rsa $rsa_locked_ere with features: std$" "$feature_fail"
 
 finish

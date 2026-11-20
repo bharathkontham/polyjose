@@ -1,10 +1,10 @@
-// The runner's JSON Schema check, over the subset conformance/schema.json uses
+// The runner's JSON Schema check, over the subset conformance/schema/vectors.schema.json uses
 // (conformance/README.md: every runner fails a file that is not schema-valid).
 import { assert, fs, path, process, test } from "../node/builtins.js";
 import { schemaViolation } from "../conformance/schema.js";
 
 const REPO = path.resolve(process.cwd(), "../..");
-const SCHEMA: unknown = JSON.parse(fs.readFileSync(path.join(REPO, "conformance/schema.json"), "utf8"));
+const SCHEMA: unknown = JSON.parse(fs.readFileSync(path.join(REPO, "conformance/schema/vectors.schema.json"), "utf8"));
 
 function vectorFiles(dir: string, out: string[] = []): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -15,7 +15,7 @@ function vectorFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-test("every committed vector is valid against conformance/schema.json", () => {
+test("every committed vector is valid against conformance/schema/vectors.schema.json", () => {
   const files = vectorFiles(path.join(REPO, "conformance/vectors"));
   assert.ok(files.length > 800, `found ${files.length} vector files`);
   const invalid = files

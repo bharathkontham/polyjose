@@ -37,7 +37,7 @@ class ConformanceTest {
         val results = pathProperty("polyjose.conformanceResults")
         Files.deleteIfExists(results)
         val vectors = pathProperty("polyjose.vectors")
-        val schema = String(Files.readAllBytes(vectors.resolveSibling("schema.json")), Charsets.UTF_8)
+        val schema = String(Files.readAllBytes(vectors.resolveSibling("schema").resolve("vectors.schema.json")), Charsets.UTF_8)
 
         val document = Runner.run("jvm", loadVectorFiles(vectors), schema)
 
@@ -179,10 +179,10 @@ class ConformanceTest {
         """{"source":"polyjose","description":"d","operation":"b64url.decode","input":{"b64u":"$b64u"},"expect":$expect}"""
 
     private fun schemaText(): String =
-        String(Files.readAllBytes(pathProperty("polyjose.vectors").resolveSibling("schema.json")), Charsets.UTF_8)
+        String(Files.readAllBytes(pathProperty("polyjose.vectors").resolveSibling("schema").resolve("vectors.schema.json")), Charsets.UTF_8)
 
     private fun pathProperty(name: String): Path = Paths.get(
-        System.getProperty(name) ?: error("system property $name is not set (platforms/android/polyjose-jvm/build.gradle.kts)"),
+        System.getProperty(name) ?: error("system property $name is not set (bindings/kotlin/jvm/build.gradle.kts)"),
     )
 
     private fun write(dir: Path, path: String, hex: String) {

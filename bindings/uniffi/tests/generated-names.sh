@@ -2,7 +2,7 @@
 # Regenerates the Kotlin and Swift sources of polyjose-ffi and checks that they contain every name
 # of bindings/api-inventory.txt (feature 0013 T12; ADR 0030 §2, §4, §8), then typechecks the Swift.
 #
-#   bindings/ffi/tests/generated-names.sh [<inventory>]
+#   bindings/uniffi/tests/generated-names.sh [<inventory>]
 #
 # <inventory> defaults to bindings/api-inventory.txt; another file is for testing this script.
 #
@@ -11,8 +11,8 @@
 #
 # Steps:
 #   1. builds polyjose-ffi alone (`-p polyjose-ffi`, so uniffi's `cli` feature is not unified into
-#      it, bindings/ffi/Cargo.toml) and the polyjose-uniffi-bindgen CLI, in two cargo invocations;
-#   2. generates Kotlin (`--no-format`) and Swift from the built library, with bindings/ffi/uniffi.toml
+#      it, bindings/uniffi/Cargo.toml) and the polyjose-uniffi-bindgen CLI, in two cargo invocations;
+#   2. generates Kotlin (`--no-format`) and Swift from the built library, with bindings/uniffi/uniffi.toml
 #      (Kotlin package dev.polyjose, Swift module Polyjose, ADR 0032 §2, ADR 0033), into a scratch
 #      directory that is removed on exit;
 #   3. derives from each generated file, in the inventory's normal form, the operations (top-level

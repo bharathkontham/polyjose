@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests of platforms/swift/scripts/simulator-lib.sh, the helpers of test-simulators.sh (feature
+# Tests of bindings/swift/scripts/simulator-lib.sh, the helpers of test-simulators.sh (feature
 # 0009 T03), on fixtures only: no simulator, no xcodebuild. Run first by test-simulators.sh.
 #   - sim_runtime_available / sim_iphone_type over `xcrun simctl list runtimes -j` documents;
 #   - vectors_digest_reference on the ADR 0060 §4 worked example;

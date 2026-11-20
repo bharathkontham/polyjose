@@ -28,6 +28,6 @@ zeroize.workspace = true
 # Test-only oracle, never shipped (ADR 0016 §5): the Rust PlatformKey of tests/platform_key.rs
 # computes the ECDH shared secret Z with `p256::ecdh` (RFC 7518 §4.6.2), the step a host key
 # performs (ADR 0071 §4). The core already depends on the same pinned crate (ADR 0002), so the
-# shipped tree, which bindings/deps-allowlist/ffi.txt governs, is unchanged.
+# shipped tree, which bindings/deps-allowlist/uniffi.txt governs, is unchanged.
 [dev-dependencies]
 p256.workspace = true

@@ -7,7 +7,7 @@
 #      built (bindings/node/scripts/addon-reuse.sh), and on its own it builds the package first;
 #      never the registry package;
 #   3. npm ci --ignore-scripts here, from the committed lockfile: jose only, no install scripts;
-#   4. tsc --noEmit with bindings/js's compiler and options (tsconfig.json);
+#   4. tsc --noEmit with bindings/ts-common's compiler and options (tsconfig.json);
 #   5. node --test over interop.test.ts, with Node's built-in type stripping (Node >= 24).
 # Prints `SKIPPED (<reason>)` as its last line and exits 0 when node, npm or cargo is missing;
 # exits non-zero on any failure.
@@ -36,7 +36,7 @@ echo "==> interop-jose: npm ci (jose, from package-lock.json)"
 npm ci --ignore-scripts --no-audit --no-fund --loglevel=error
 
 echo "==> interop-jose: tsc --noEmit"
-../../bindings/js/node_modules/.bin/tsc -p tsconfig.json
+../../bindings/ts-common/node_modules/.bin/tsc -p tsconfig.json
 
 echo "==> interop-jose: node --test (jose $(node -p 'require("./node_modules/jose/package.json").version'))"
 node --test --test-reporter=spec interop.test.ts

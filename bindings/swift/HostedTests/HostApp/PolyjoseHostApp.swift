@@ -1,4 +1,4 @@
-// The host app of the hosted AppleKey tests (platforms/swift/HostedTests/project.yml). It shows one
+// The host app of the hosted AppleKey tests (bindings/swift/HostedTests/project.yml). It shows one
 // line and does nothing else; the tests run inside its process.
 import SwiftUI
 

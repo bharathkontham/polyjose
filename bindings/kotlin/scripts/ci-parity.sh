@@ -3,7 +3,7 @@
 # ADR 0060): every Kotlin runner's results from the CI run against a fresh rust-core reference of
 # the same checkout. Runs locally the same way.
 #
-#   platforms/android/scripts/ci-parity.sh <results-dir> [<expected-file>...]
+#   bindings/kotlin/scripts/ci-parity.sh <results-dir> [<expected-file>...]
 #
 # <results-dir> holds the downloaded conformance-* artifacts' files, flat (download-artifact with
 # merge-multiple): jvm-<prefix>.json from each host-natives entry and android-emulator-ci.json from

@@ -4,7 +4,7 @@
 # T03's scripts/run-instrumented.sh, which this script wraps and does not change. Run
 # ci-android-sdk.sh --emulator first.
 #
-#   platforms/android/scripts/ci-emulator.sh
+#   bindings/kotlin/scripts/ci-emulator.sh
 #
 # Environment (each optional):
 #   POLYJOSE_CI_SYSTEM_IMAGE  the system image (default system-images;android-36;google_apis;x86_64,
@@ -64,7 +64,7 @@ emulator=$sdk/emulator/emulator
 results=$ci_repo/target/conformance
 out=$ci_out/conformance-android-emulator
 jni_out=$ci_out/android-jnilibs
-apk=$ci_android/polyjose/build/outputs/apk/androidTest/debug/polyjose-debug-androidTest.apk
+apk=$ci_android/android/build/outputs/apk/androidTest/debug/polyjose-debug-androidTest.apk
 rm -f "$results/android-emulator.json" "$results/android-emulator-ci.json"
 rm -rf "$out" "$jni_out"
 command -v unzip >/dev/null 2>&1 || ci_die "unzip not found"

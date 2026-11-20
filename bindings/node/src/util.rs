@@ -2,7 +2,7 @@
 //! `base64urlEncode`, `base64urlDecode`, and the unverified decode utilities (ADR 0069):
 //! `decodeProtectedHeaderUnverified`, `decodeJwsUnverified`, `decodeJwtUnverified`.
 //!
-//! `version` and `errorCodes` are synchronous (`bindings/js/BACKEND.md`); the others are
+//! `version` and `errorCodes` are synchronous (`bindings/ts-common/BACKEND.md`); the others are
 //! `AsyncTask`s like every other operation (ADR 0031 §2, ADR 0069 E1).
 
 use napi::bindgen_prelude::AsyncTask;

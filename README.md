@@ -39,11 +39,11 @@ crates/polyjose/         core library (no unsafe)
 bindings/surface/        the binding-facing API over the core, shared by every binding crate
 bindings/node/           napi-rs addon (@polyjose/node)
 bindings/wasm/           wasm-bindgen package (@polyjose/wasm)
-bindings/js/             TypeScript facade shared by the Node and WASM packages (not published on its own)
-bindings/ffi/            UniFFI cdylib/staticlib → Kotlin + Swift
+bindings/ts-common/      TypeScript facade shared by the Node and WASM packages (not published on its own)
+bindings/uniffi/         UniFFI cdylib/staticlib → Kotlin + Swift
 bindings/uniffi-bindgen/ the pinned UniFFI generator for the Kotlin and Swift sources
-platforms/android/       Gradle library (AAR, JVM jar) + tests
-platforms/swift/         Swift Package + XCTest (iOS first)
+bindings/kotlin/         Gradle library (AAR in android/, JVM jar in jvm/, shared/ sources) + tests
+bindings/swift/          Swift Package + XCTest (iOS first)
 conformance/             shared test vectors, consumed by every platform's test suite
 interop/                 two-way interop tests against other JOSE libraries (panva/jose)
 fuzz/                    cargo-fuzz targets (scripts/fuzz.sh); its own workspace
@@ -51,7 +51,7 @@ scripts/                 test-all.sh, the dependency and release guards, build h
 dist/                    build output (packed release artifacts), git-ignored
 ```
 
-The Rust code of the Kotlin and Swift bindings is `bindings/ffi`; their packages, generated sources and tests are in `platforms/android` and `platforms/swift`.
+The Rust code of the Kotlin and Swift bindings is `bindings/uniffi`; their packages, generated sources and tests are in `bindings/kotlin` and `bindings/swift`.
 
 ## Test everything
 ```sh

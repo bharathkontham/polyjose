@@ -34,7 +34,7 @@
       "pattern": "^[0-9a-f]{64}$"
     },
     "features": {
-      "description": "The vector feature names (conformance/README.md, Features) this build enables, in the order of conformance/schema.json's features enum. The bindings and the rust-core reference build enable none (ADR 0034 §3, §4).",
+      "description": "The vector feature names (conformance/README.md, Features) this build enables, in the order of conformance/schema/vectors.schema.json's features enum. The bindings and the rust-core reference build enable none (ADR 0034 §3, §4).",
       "type": "array",
       "uniqueItems": true,
       "items": { "enum": ["deflate", "fixed-rng"] }

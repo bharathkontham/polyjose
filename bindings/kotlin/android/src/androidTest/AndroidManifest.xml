@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The test APK only (feature 0025 T04): the permission and the empty activity that
-     AndroidKeystoreKeyDeviceTest, a manual step of platforms/android/DEVICE-TESTS.md, shows its
+     AndroidKeystoreKeyDeviceTest, a manual step of bindings/kotlin/DEVICE-TESTS.md, shows its
      prompts from. The AAR's own manifest requests no permissions. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />

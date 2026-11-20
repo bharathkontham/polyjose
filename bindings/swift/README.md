@@ -27,7 +27,7 @@ targets: [
 The XCFramework is attached to each
 [GitHub release](https://github.com/bharathkontham/polyjose/releases), and the package's
 `Package.swift` points at it with a checksum. iOS 16 and macOS 13 or later, with Swift tools 6.0;
-see [Platforms](https://github.com/bharathkontham/polyjose/blob/main/platforms/swift/README.md#platforms).
+see [Platforms](https://github.com/bharathkontham/polyjose/blob/main/bindings/swift/README.md#platforms).
 
 ## Import
 
@@ -217,9 +217,9 @@ So an app can keep a watchOS deployment target as low as 9: older releases use t
 
 How the Swift package is built, tested and packaged:
 - `scripts/build-xcframework.sh` builds `build/PolyjoseFFI.xcframework` (gitignored), a static XCFramework with 5 libraries: iOS (`ios-arm64`), iOS Simulator (`ios-arm64-simulator`, arm64), macOS (`macos-arm64`, arm64), watchOS (`watchos-arm64_arm64_32`, arm64 + arm64_32) and watchOS Simulator (`watchos-arm64-simulator`, arm64) (ADR 0032, ADR 0073). No x86_64 library is built.
-  - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `-Zbuild-std`. Install it with `rustup toolchain install "$(cat platforms/swift/nightly-toolchain)" --profile minimal --component rust-src`.
+  - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `-Zbuild-std`. Install it with `rustup toolchain install "$(cat bindings/swift/nightly-toolchain)" --profile minimal --component rust-src`.
   - Without that nightly the script makes a development build: the watchOS library is arm64 only, `PolyjoseFFI.xcframework/polyjose-build.txt` says `arm64_32: missing`, and the build must not be released. `--release` fails instead.
-  - Deployment minimums: see [OS minimums](https://github.com/bharathkontham/polyjose/blob/main/platforms/swift/README.md#os-minimums).
+  - Deployment minimums: see [OS minimums](https://github.com/bharathkontham/polyjose/blob/main/bindings/swift/README.md#os-minimums).
   - The libraries ship without debug info. The script strips every archive with `xcrun strip -S` before it assembles the XCFramework, because the release profile's `strip` does not apply to static libraries and the debug info would triple the download. Symbols are kept, so linking is unaffected, and polyjose frames in your app's crash reports show function names but not file and line.
 - `uniffi-bindgen generate --language swift` writes the Swift sources (the build leaves them in `build/generated/`)
 - Tests: XCTest on the macOS host (`swift test`) and on the iOS Simulator, running the conformance vectors. The watchOS libraries are built and link-checked (`scripts/test-simulators.sh`) but not separately tested, because the Swift code is the same on every Apple platform.

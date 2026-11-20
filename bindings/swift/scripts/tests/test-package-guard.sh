@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The guards of platforms/swift/scripts/package.sh (ADR 0032 §1, §6), on stand-in XCFrameworks
+# The guards of bindings/swift/scripts/package.sh (ADR 0032 §1, §6), on stand-in XCFrameworks
 # built in a scratch directory; the real build is not read. Covers:
 #   - the script never publishes: no `gh`, no `git push`, nothing that uploads (ADR 0037 §2: only
 #     the release workflow's draft job creates a release; feature 0009 T04);
@@ -13,7 +13,7 @@
 #   - a zip of 25 MB or more is refused (feature 0009 T04, the hard size stop);
 #   - a refusal leaves the output directory as it was;
 #   - with --allow-dev, a development build is packaged, with its `watchos-arm64` library.
-# Usage: platforms/swift/scripts/tests/test-package-guard.sh (needs macOS, cargo, swift, python3).
+# Usage: bindings/swift/scripts/tests/test-package-guard.sh (needs macOS, cargo, swift, python3).
 set -uo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"

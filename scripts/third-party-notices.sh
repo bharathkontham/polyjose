@@ -31,7 +31,7 @@
 # script takes no --features argument. The artifact must therefore be built with
 # `-p <package>` and default features, the 0.1.0 configuration of every binding (ADR 0034 §3).
 # A build with other features, or `cargo build --workspace` (which unifies features such as
-# uniffi's `cli` into the shipped library, see bindings/ffi/Cargo.toml), links crates these
+# uniffi's `cli` into the shipped library, see bindings/uniffi/Cargo.toml), links crates these
 # notices would not list.
 #
 # For each crate: name, version, the SPDX license expression from `cargo metadata`, the

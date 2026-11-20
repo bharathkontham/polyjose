@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Test of xcframework_stale (platforms/swift/scripts/xcframework-stale.sh), the decision of
-# platforms/swift/test.sh to rebuild the XCFramework. Each case builds a scratch git repository
+# Test of xcframework_stale (bindings/swift/scripts/xcframework-stale.sh), the decision of
+# bindings/swift/test.sh to rebuild the XCFramework. Each case builds a scratch git repository
 # with the inputs and a stand-in XCFramework whose polyjose-build.txt records a commit, then checks
-# the verdict and its reason. The real checkout is never touched. Run by platforms/swift/test.sh;
-# usage: platforms/swift/scripts/test-xcframework-stale.sh (bash 3.2 and 5; needs git).
+# the verdict and its reason. The real checkout is never touched. Run by bindings/swift/test.sh;
+# usage: bindings/swift/scripts/test-xcframework-stale.sh (bash 3.2 and 5; needs git).
 set -euo pipefail
 
 # shellcheck source=xcframework-stale.sh
@@ -22,14 +22,14 @@ g() { git -C "$repo" -c user.name=test -c user.email=test@invalid -c commit.gpgs
 # new_repo: a repository with every input and a non-input file, one commit, and a fresh stamp.
 new_repo() {
   repo="$scratch/repo-$run"
-  mkdir -p "$repo/crates/polyjose/src" "$repo/bindings/ffi" "$repo/platforms/swift/scripts" "$repo/docs"
+  mkdir -p "$repo/crates/polyjose/src" "$repo/bindings/uniffi" "$repo/bindings/swift/scripts" "$repo/docs"
   echo '[workspace]' >"$repo/Cargo.toml"
   echo 'lock' >"$repo/Cargo.lock"
   echo 'toolchain' >"$repo/rust-toolchain.toml"
   echo 'pub fn f() {}' >"$repo/crates/polyjose/src/lib.rs"
-  echo 'ffi' >"$repo/bindings/ffi/lib.rs"
-  echo 'nightly' >"$repo/platforms/swift/nightly-toolchain"
-  echo 'build' >"$repo/platforms/swift/scripts/build-xcframework.sh"
+  echo 'ffi' >"$repo/bindings/uniffi/lib.rs"
+  echo 'nightly' >"$repo/bindings/swift/nightly-toolchain"
+  echo 'build' >"$repo/bindings/swift/scripts/build-xcframework.sh"
   echo 'notes' >"$repo/docs/notes.md"
   printf 'build/\n' >"$repo/.gitignore"
   g init -q
@@ -65,6 +65,22 @@ echo dirty >>"$repo/docs/notes.md"
 expect "a changed or dirty file that is not an input keeps it fresh" fresh '^$'
 
 new_repo
+mkdir -p "$repo/bindings/swift/Sources" "$repo/bindings/kotlin" "$repo/bindings/ts-common"
+echo 'swift' >"$repo/bindings/swift/Sources/Polyjose.swift"
+echo 'kotlin' >"$repo/bindings/kotlin/build.gradle.kts"
+g add -A
+g commit -q -m "host packages only"
+echo 'ts' >"$repo/bindings/ts-common/api.ts"
+expect "a change under the host packages in bindings/ (Swift, Kotlin, TypeScript) keeps it fresh" fresh '^$'
+
+new_repo
+mkdir -p "$repo/bindings/surface"
+echo 'surface' >"$repo/bindings/surface/lib.rs"
+g add -A
+g commit -q -m "surface"
+expect "a change in bindings/surface is stale" stale '^inputs changed since the build commit [0-9a-f]+: bindings/surface/lib\.rs$'
+
+new_repo
 echo lock2 >"$repo/Cargo.lock"
 g commit -q -am "one Cargo.lock line"
 expect "an input changed in a later commit is stale" stale '^inputs changed since the build commit [0-9a-f]+: Cargo\.lock$'
@@ -74,8 +90,8 @@ echo 'pub fn g() {}' >>"$repo/crates/polyjose/src/lib.rs"
 expect "an uncommitted change in an input is stale" stale '^uncommitted changes in the inputs: crates/polyjose/src/lib\.rs$'
 
 new_repo
-echo new >"$repo/bindings/ffi/new.rs"
-expect "an untracked file in an input is stale" stale '^uncommitted changes in the inputs: bindings/ffi/new\.rs$'
+echo new >"$repo/bindings/uniffi/new.rs"
+expect "an untracked file in an input is stale" stale '^uncommitted changes in the inputs: bindings/uniffi/new\.rs$'
 
 new_repo
 rm "$xcf/polyjose-build.txt"

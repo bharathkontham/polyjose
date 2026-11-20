@@ -3,7 +3,7 @@
 # ADR 0034 §2, ADR 0060): the shared Kotlin conformance runner as `android-emulator`, plus the
 # on-device security tests, through the generated Kotlin API and libpolyjose_ffi.so over JNA.
 #
-#   platforms/android/scripts/run-instrumented.sh      (from any directory; test.sh runs it)
+#   bindings/kotlin/scripts/run-instrumented.sh      (from any directory; test.sh runs it)
 #
 # 1. Device. An emulator that `adb devices` lists as `device` is used as it is and never stopped
 #    (the machine is shared). Otherwise this script boots the AVD headless on a free console port,
@@ -40,7 +40,7 @@
 #    level the Keystore reports, the RSA-OAEP-256 result) are printed after the run.
 # 4. The results document: the test writes it to the test app's files dir and to AGP's additional
 #    test output dir on the device, which AGP pulls to
-#    polyjose/build/outputs/connected_android_test_additional_output/ before it uninstalls the test
+#    android/build/outputs/connected_android_test_additional_output/ before it uninstalls the test
 #    APK; this script copies it to target/conformance/android-emulator.json (repository root,
 #    ADR 0034 §2). FAIL when it was not pulled or is not android-emulator's document.
 #
@@ -68,7 +68,7 @@ case $boot_timeout in '' | *[!0-9]*)
   echo "POLYJOSE_EMULATOR_BOOT_TIMEOUT must be a whole number of seconds, not \"$boot_timeout\""; exit 2 ;;
 esac
 results=$repo/target/conformance/android-emulator.json
-outputs=$android_dir/polyjose/build/outputs
+outputs=$android_dir/android/build/outputs
 xml_dir=$outputs/androidTest-results/connected
 r8_xml_dir=$android_dir/sample-minified/build/outputs/androidTest-results/connected
 pulled_dir=$outputs/connected_android_test_additional_output

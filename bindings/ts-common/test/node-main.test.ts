@@ -9,11 +9,11 @@ import { toyBackend } from "./toy-backend.js";
 const FIXTURES = path.resolve(process.cwd(), "test/fixtures/vectors");
 const REPO = path.resolve(process.cwd(), "../..");
 
-/** A scratch repo root with conformance/schema.json and a copy of some fixture files. */
+/** A scratch repo root with conformance/schema/vectors.schema.json and a copy of some fixture files. */
 function scratchRoot(copy: (rel: string) => boolean = () => true): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "polyjose-js-runner-"));
   fs.mkdirSync(path.join(root, "conformance/vectors"), { recursive: true });
-  fs.writeFileSync(path.join(root, "conformance/schema.json"), fs.readFileSync(path.join(REPO, "conformance/schema.json"), "utf8"));
+  fs.writeFileSync(path.join(root, "conformance/schema/vectors.schema.json"), fs.readFileSync(path.join(REPO, "conformance/schema/vectors.schema.json"), "utf8"));
   const walk = (dir: string): void => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);

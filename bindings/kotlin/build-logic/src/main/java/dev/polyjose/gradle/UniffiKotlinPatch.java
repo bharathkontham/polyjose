@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  *       property, else the bare name {@code polyjose_ffi} that JNA resolves through {@code
  *       jna.library.path}, the working directory and the OS search paths before the jar) becomes
  *       a call to the hand-written {@code PolyjoseNativeLoader.libraryName} in {@code
- *       src/shared/kotlin} (ADR 0030 §1: a few hand-written members). On the JVM that returns the
+ *       shared/kotlin} (ADR 0030 §1: a few hand-written members). On the JVM that returns the
  *       absolute path of the jar's own hash-checked library; on Android the bare name (I2).
  *   <li><b>Redaction (ADR 0065 decision 1, 2; ADR 0030 §7.5).</b> Each record of {@link
  *       #redactedFields()} gets an {@code override fun toString()} that prints every field as the
@@ -39,7 +39,7 @@ import java.util.regex.Pattern;
  * expected ones; any other loading call ({@code System.loadLibrary}, {@code Native.load}, {@code
  * NativeLibrary.getInstance}, ...) appears; a listed record or field is missing, has an
  * unsupported type, or already overrides {@code toString}; or the set of record fields whose
- * KDoc (from {@code bindings/ffi/src/records.rs}) calls them secret is not exactly {@link
+ * KDoc (from {@code bindings/uniffi/src/records.rs}) calls them secret is not exactly {@link
  * #redactedFields()}. So a UniFFI upgrade cannot silently drop the hook, and a new secret field
  * in records.rs cannot print unredacted.
  */
@@ -108,7 +108,7 @@ public final class UniffiKotlinPatch {
 
     /** The first line of the patched file. */
     static final String HEADER = """
-            // Patched by platforms/android/build-logic UniffiKotlinPatch (feature 0008 F05): findLibraryName
+            // Patched by bindings/kotlin/build-logic UniffiKotlinPatch (feature 0008 F05): findLibraryName
             // loads only the jar's hash-checked library (security audit M1), and the ADR 0065 records
             // redact their secret fields in toString(). The unpatched file is build/generated/uniffi/raw.
             """;
@@ -199,7 +199,7 @@ public final class UniffiKotlinPatch {
         if (!documented.equals(expected)) {
             throw fail("the record fields documented as secret " + documented
                     + " are not ADR 0065's redacted fields " + expected
-                    + " (update UniffiKotlinPatch and ADR 0065 together with bindings/ffi/src/records.rs)");
+                    + " (update UniffiKotlinPatch and ADR 0065 together with bindings/uniffi/src/records.rs)");
         }
 
         StringBuilder out = new StringBuilder(s);

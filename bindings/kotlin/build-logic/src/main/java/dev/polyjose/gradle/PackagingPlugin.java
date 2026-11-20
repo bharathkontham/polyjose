@@ -30,7 +30,7 @@ public class PackagingPlugin implements Plugin<Project> {
 
     @Override
     public void apply(Project project) {
-        // The polyjose repository root, two levels above this Gradle build (platforms/android).
+        // The polyjose repository root, two levels above this Gradle build (bindings/kotlin).
         File root;
         try {
             root = new File(project.getRootDir(), "../..").getCanonicalFile();

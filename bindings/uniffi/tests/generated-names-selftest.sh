@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Tests of bindings/ffi/tests/generated-names.sh (feature 0013 T12): the check passes on the real
+# Tests of bindings/uniffi/tests/generated-names.sh (feature 0013 T12): the check passes on the real
 # inventory and fails, naming the entry for both languages, on inventory copies that ask for a
 # name or a field form the generated Kotlin and Swift do not have.
 #
-#   bindings/ffi/tests/generated-names-selftest.sh
+#   bindings/uniffi/tests/generated-names-selftest.sh
 #
 # Each case writes a mutated copy of bindings/api-inventory.txt into a scratch directory (removed
 # on exit) and runs the check on it; the repository's inventory is never changed. Runs on macOS

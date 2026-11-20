@@ -5,7 +5,7 @@
 # package (../../..); the app links nothing of polyjose.
 #
 # PolyjoseHosted.xcodeproj is generated from this file once, with XcodeGen 2.46.0
-# (`xcodegen generate` in this directory), and committed: platforms/swift/scripts/test-simulators.sh
+# (`xcodegen generate` in this directory), and committed: bindings/swift/scripts/test-simulators.sh
 # and the device runbook need only Xcode. After editing this file, regenerate and commit both.
 name: PolyjoseHosted
 options:

@@ -7,7 +7,7 @@
  *
  * Rules (conformance/README.md "Rules for every runner"):
  * - a file that isn't strict JSON (duplicate members included, RFC 7493 §2.3) or isn't valid
- *   against `schema.json` fails, whether or not it would be skipped;
+ *   against `vectors.schema.json` fails, whether or not it would be skipped;
  * - a vector whose `features` this build lacks is `skipped` with `reason: "feature:<names>"`
  *   (ADR 0034 §3), and one whose `features_absent` this build has with `!<name>` after them
  *   (`feature:!deflate`, ADR 0056 §2); nothing else is ever skipped;
@@ -37,7 +37,7 @@ export interface VectorFile {
 }
 
 export interface RunOptions {
-  /** The parsed `conformance/schema.json`; required, so no vector runs unchecked. */
+  /** The parsed `conformance/schema/vectors.schema.json`; required, so no vector runs unchecked. */
   readonly schema: unknown;
   /** The vector-file feature names this build enables (`"deflate"`, `"fixed-rng"`); bindings: none. */
   readonly features?: readonly string[];
@@ -214,7 +214,7 @@ async function runOne(api: PolyjoseApi, file: VectorFile, options: RunOptions): 
     tree = scanJson(file.json);
     value = JSON.parse(file.json);
   } catch (e) {
-    return fail(`not a valid JSON text (${message(e)}); see conformance/schema.json`);
+    return fail(`not a valid JSON text (${message(e)}); see conformance/schema/vectors.schema.json`);
   }
   if (isObject(value)) {
     if (typeof value["operation"] === "string") op = value["operation"];
