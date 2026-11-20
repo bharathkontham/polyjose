@@ -208,8 +208,8 @@ package) belongs to feature 0013; nothing here edits it.
 ### Requirements
 
 JDK 21, the Rust toolchain of `rust-toolchain.toml`, and for the AAR the Android SDK (36), NDK
-28.2 and `cargo-ndk`. The Gradle wrapper is committed, so no Gradle install is needed. In this
-workspace: `source /Users/bharath/bharathwork/joserust/.toolchain-env.sh`.
+28.2 and `cargo-ndk`. The Gradle wrapper is committed, so no Gradle install is needed. Source your
+toolchain environment (JDK 21, Android SDK/NDK, cargo-ndk) before running the commands below.
 
 ### Commands (from this directory)
 
