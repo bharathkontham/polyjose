@@ -1,14 +1,14 @@
 // The node conformance run (ADR 0034 §2): every conformance/vectors/**/*.json through the built
-// @polyjose/node API, by the shared runner of bindings/js (conformance/node-main.ts), writing
+// @polyjose/node API, by the shared runner of bindings/ts-common (conformance/node-main.ts), writing
 // target/conformance/node.json for scripts/conformance-parity.sh (ADR 0034 §5).
 //
 // A CI matrix run (scripts/ci-build.sh, T05) sets POLYJOSE_CONFORMANCE_SUFFIX to its matrix label,
 // e.g. `x86_64-unknown-linux-musl`; the file is then target/conformance/node-<label>.json, the
 // `<runner>-<suffix>` name of ADR 0034 §2, and its `runner` member stays `node`. Unset, the name is
 // node.json. A set but malformed label (empty, a path, upper case) fails the test.
-import { assert, fs, path, test } from "../../js/dist/node/builtins.js";
+import { assert, fs, path, test } from "../../ts-common/dist/node/builtins.js";
 import * as api from "@polyjose/node";
-import { main, type ConformanceOptions } from "../../js/dist/conformance/node-main.js";
+import { main, type ConformanceOptions } from "../../ts-common/dist/conformance/node-main.js";
 
 interface NodeUrl {
   fileURLToPath(url: string): string;

@@ -3,7 +3,7 @@
 # `scripts/test-all.sh node` from the repository root:
 #   1. TypeScript only: no hand-written .js, .mjs or .cjs (ADR 0047; the only JavaScript is the
 #      tsc output, generated and git-ignored);
-#   2. npm ci here (@napi-rs/cli) and in bindings/js (typescript), from the committed lockfiles,
+#   2. npm ci here (@napi-rs/cli) and in bindings/ts-common (typescript), from the committed lockfiles,
 #      with --ignore-scripts: no dependency's install script ever runs (review-code.md N2);
 #   3. scripts/build.sh (facade, host addon and loader, tsc);
 #   4. the API name check, scripts/check-binding-api.sh node (ADR 0030 §8), on the declarations the
@@ -37,9 +37,9 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ -n "$tracked" ]; then echo "tracked JavaScript in bindings/node: $tracked"; exit 1; fi
 fi
 
-echo "==> @polyjose/node: npm ci (bindings/node, bindings/js)"
+echo "==> @polyjose/node: npm ci (bindings/node, bindings/ts-common)"
 npm ci --ignore-scripts --no-audit --no-fund --loglevel=error
-(cd ../js && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error)
+(cd ../ts-common && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error)
 
 echo "==> @polyjose/node: build"
 scripts/build.sh

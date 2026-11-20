@@ -3,7 +3,7 @@
 //! A mechanical adapter over `polyjose-surface`: every export is a type conversion and one
 //! surface call, with no JSON parsing, policy, defaults or crypto of its own (ADR 0030 §1, "the
 //! adapter test"). The exported names, argument order and record fields are the backend contract
-//! of the shared JS facade (`bindings/js/BACKEND.md`, `bindings/js/src/backend.ts`); napi-rs
+//! of the shared JS facade (`bindings/ts-common/BACKEND.md`, `bindings/ts-common/src/backend.ts`); napi-rs
 //! turns the `snake_case` Rust names into those `camelCase` names.
 //!
 //! - [`util`]: `version` and `errorCodes` (synchronous), `base64urlEncode`, `base64urlDecode`;
@@ -24,7 +24,7 @@
 //! the addon `polyjose.<platform>.node`, ships in the package because the facade calls it through
 //! `backend.js`, which loads it (feature 0017), but it is **not a supported
 //! API**: it checks only what napi's conversions check, and trusts the facade for the rest
-//! (`bindings/js/BACKEND.md`). Called directly, it:
+//! (`bindings/ts-common/BACKEND.md`). Called directly, it:
 //! - **wraps integers** (review-code.md N8): napi converts every `u32` and `i64` field with
 //!   Node-API's own coercion, so `-1` becomes `4294967295`, `2**32` becomes `0` and `1.5` is
 //!   truncated. The facade checks every size, count and `now` first;

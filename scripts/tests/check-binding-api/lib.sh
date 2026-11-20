@@ -2,13 +2,13 @@
 # Shared helpers for the negative tests of scripts/check-binding-api.sh. Sourced, not run.
 #
 # Each case copies what the name check reads (the script and its modes, the inventory, the
-# surface sources, the core's error.rs and the bindings/js sources) into a temporary directory,
+# surface sources, the core's error.rs and the bindings/ts-common sources) into a temporary directory,
 # changes one thing in the copy by exact text replacement, runs the copy's check under the bash
 # that runs the test ($BASH), and checks the exit status and the output. A failing case must print
 # exactly the expected difference lines, so no other check is what caught the change. The real
 # checkout is never modified.
 #
-# The js cases need node and npm. They reuse bindings/js/node_modules when its tsc runs on this
+# The js cases need node and npm. They reuse bindings/ts-common/node_modules when its tsc runs on this
 # machine, and otherwise install it once with npm ci into the scratch directory (a Linux container
 # cannot run a macOS tsc binary).
 #
@@ -34,10 +34,10 @@ trap 'rc=$?; rm -rf "$scratch"; [ -n "${completed:-}" ] || [ "$rc" -ne 0 ] || { 
 # A pristine copy that each case starts from (working-tree files, so uncommitted changes count).
 base="$scratch/base"
 mkdir -p "$base" || lib_die "could not create $base"
-(cd "$repo" && tar --exclude 'bindings/js/node_modules' --exclude 'bindings/js/dist' \
-  --exclude 'bindings/js/src/error-codes.ts' -cf - \
+(cd "$repo" && tar --exclude 'bindings/ts-common/node_modules' --exclude 'bindings/ts-common/dist' \
+  --exclude 'bindings/ts-common/src/error-codes.ts' -cf - \
   scripts/check-binding-api.sh scripts/check-binding-api.d bindings/api-inventory.txt \
-  bindings/surface/src crates/polyjose/src/error.rs bindings/js) | (cd "$base" && tar -xf -) \
+  bindings/surface/src crates/polyjose/src/error.rs bindings/ts-common) | (cd "$base" && tar -xf -) \
   || lib_die "could not copy the inputs of the name check to $base"
 
 # Expected counts come from the copied sources, never from numbers written into a case, so a code
@@ -77,17 +77,17 @@ inventory_count() {
   ' "$base/bindings/api-inventory.txt" || lib_die "could not count the inventory's $1 entries"
 }
 
-# js_modules: a bindings/js/node_modules whose tsc runs here, set up on first use (needs node, npm).
+# js_modules: a bindings/ts-common/node_modules whose tsc runs here, set up on first use (needs node, npm).
 js_modules=""
 need_js_modules() {
   [ -z "$js_modules" ] || return 0
-  if "$repo/bindings/js/node_modules/.bin/tsc" --version >/dev/null 2>&1; then
-    js_modules=$repo/bindings/js/node_modules
+  if "$repo/bindings/ts-common/node_modules/.bin/tsc" --version >/dev/null 2>&1; then
+    js_modules=$repo/bindings/ts-common/node_modules
     return 0
   fi
   mkdir -p "$scratch/js-install" || lib_die "could not create $scratch/js-install"
-  cp "$repo/bindings/js/package.json" "$repo/bindings/js/package-lock.json" "$scratch/js-install/" \
-    || lib_die "could not copy bindings/js/package*.json"
+  cp "$repo/bindings/ts-common/package.json" "$repo/bindings/ts-common/package-lock.json" "$scratch/js-install/" \
+    || lib_die "could not copy bindings/ts-common/package*.json"
   (cd "$scratch/js-install" && npm ci --no-audit --no-fund --loglevel=error) >"$scratch/npm.log" 2>&1 \
     || { cat "$scratch/npm.log" >&2; lib_die "npm ci failed for the js cases"; }
   js_modules=$scratch/js-install/node_modules
@@ -101,10 +101,10 @@ new_case() {
   cp -R "${2:-$base}" "$case_dir" || lib_die "could not copy ${2:-the base}"
 }
 
-# use_js_modules: links the case's bindings/js/node_modules to $js_modules.
+# use_js_modules: links the case's bindings/ts-common/node_modules to $js_modules.
 use_js_modules() {
   need_js_modules
-  ln -s "$js_modules" "$case_dir/bindings/js/node_modules" || lib_die "could not link node_modules"
+  ln -s "$js_modules" "$case_dir/bindings/ts-common/node_modules" || lib_die "could not link node_modules"
 }
 
 # edit <path in the copy> <old> <new>: replaces the one occurrence of <old> with <new>.

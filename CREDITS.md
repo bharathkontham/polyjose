@@ -777,4 +777,4 @@ crate, so `scripts/check-deps.sh` does not check this section. Versions are from
 |---|---|---|---|---|
 | [napi-rs](https://github.com/napi-rs/napi-rs) | `napi`, `napi-derive`, `napi-build` | 3.16.1, 3.7.0, 2.6.0 | `bindings/node` (Node.js addon) | MIT |
 | [wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen) | `wasm-bindgen` | 0.2.130 | `bindings/wasm` (WebAssembly package) | MIT OR Apache-2.0 |
-| [UniFFI](https://github.com/mozilla/uniffi-rs) | `uniffi` | 0.32.2 | `bindings/ffi` (Kotlin and Swift) and `bindings/uniffi-bindgen` | MPL-2.0 |
+| [UniFFI](https://github.com/mozilla/uniffi-rs) | `uniffi` | 0.32.2 | `bindings/uniffi` (Kotlin and Swift) and `bindings/uniffi-bindgen` | MPL-2.0 |

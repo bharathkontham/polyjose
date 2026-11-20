@@ -341,7 +341,7 @@ jobs:
           if-no-files-found: error
 
       # The engines floor itself, exactly (review-code.md SF-7). The build above needs Node 22.18 or
-      # later (bindings/js's gen-error-codes.ts uses type stripping), so `22` gives the newest 22.x;
+      # later (bindings/ts-common's gen-error-codes.ts uses type stripping), so `22` gives the newest 22.x;
       # this leg then installs 22.12.0 and runs the already compiled tests on it, against the addon
       # built above: test.sh's list (every dist/*.test.js except package.test.js, which pack.sh
       # runs), with its own results label. Nothing is built or installed on 22.12.0.

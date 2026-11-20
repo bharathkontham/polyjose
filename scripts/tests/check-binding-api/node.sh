@@ -105,10 +105,10 @@ check_last_line "binding.d.ts older than an adapter source is SKIPPED as stale" 
 check_absent "a stale build is not reported as passing" 'PASS'
 
 node_case stale-facade
-touch -t 209901010000 "$case_dir/bindings/js/src/types.ts"
+touch -t 209901010000 "$case_dir/bindings/ts-common/src/types.ts"
 run_check node
-check_last_line "the shipped facade older than bindings/js/src is SKIPPED as stale" 0 \
-  'SKIPPED (node: bindings/node/facade/api.d.ts is older than bindings/js/src/types.ts (stale build: run bindings/node/scripts/build.sh))'
+check_last_line "the shipped facade older than bindings/ts-common/src is SKIPPED as stale" 0 \
+  'SKIPPED (node: bindings/node/facade/api.d.ts is older than bindings/ts-common/src/types.ts (stale build: run bindings/node/scripts/build.sh))'
 
 # --- binding.d.ts ------------------------------------------------------------------------------------
 

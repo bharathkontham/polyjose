@@ -16,9 +16,9 @@
 #      `npm ci --ignore-scripts` (miniflare, pinned), then the tarball installed with
 #      `npm install --no-save --ignore-scripts` (it is rebuilt with a new integrity on every build,
 #      so it can't be in the lock file);
-#   4. the shared facade and runner, compiled from bindings/js with its pinned tsc into the staging
-#      copy's js/ (bindings/js/dist is never touched), and test-pkg/src compiled with the same tsc
-#      and the ADR 0047 options (extending bindings/js/tsconfig.json);
+#   4. the shared facade and runner, compiled from bindings/ts-common with its pinned tsc into the staging
+#      copy's js/ (bindings/ts-common/dist is never touched), and test-pkg/src compiled with the same tsc
+#      and the ADR 0047 options (extending bindings/ts-common/tsconfig.json);
 #   5. Node: node --test over the compiled tests -> target/conformance/wasm-pkg-node.json;
 #   6. Chrome: a static page under headless Chrome -> wasm-pkg-chrome.json; without Chrome the run
 #      is SKIPPED and this script prints `SKIPPED-RUNNER (wasm-pkg-chrome: host:no-chrome)`, the
@@ -38,7 +38,7 @@ die() { echo "$me: $*" >&2; exit 2; }
 
 here=$(cd "$(dirname "$0")" && pwd -P) || exit 2
 repo=$(cd "$here/../../.." && pwd -P) || exit 2
-js=$repo/bindings/js
+js=$repo/bindings/ts-common
 stage=$repo/target/wasm-test-pkg
 results=$repo/target/conformance
 
@@ -84,18 +84,18 @@ cmp -s "$here/package-lock.json" "$stage/package-lock.json" || die "npm changed 
 
 # --- 4. TypeScript -----------------------------------------------------------------------------
 
-echo "==> $me: the shared facade and runner (bindings/js, its pinned tsc)"
+echo "==> $me: the shared facade and runner (bindings/ts-common, its pinned tsc)"
 if [ ! -x "$js/node_modules/.bin/tsc" ]; then
-  (cd "$js" && npm ci --no-audit --no-fund --loglevel=error) || die "npm ci failed in bindings/js"
+  (cd "$js" && npm ci --no-audit --no-fund --loglevel=error) || die "npm ci failed in bindings/ts-common"
 fi
 tsc=$js/node_modules/.bin/tsc
-(cd "$js" && node tools/gen-error-codes.ts) || die "node tools/gen-error-codes.ts failed in bindings/js"
-"$tsc" -p "$js" --outDir "$stage/js" || die "tsc failed for bindings/js"
+(cd "$js" && node tools/gen-error-codes.ts) || die "node tools/gen-error-codes.ts failed in bindings/ts-common"
+"$tsc" -p "$js" --outDir "$stage/js" || die "tsc failed for bindings/ts-common"
 [ -f "$stage/js/conformance/runner.js" ] && [ -f "$stage/js/conformance/node-main.js" ] \
   || die "tsc did not produce js/conformance/{runner,node-main}.js"
 
 echo "==> $me: tsc (test-pkg/src, ADR 0047 options)"
-# The ADR 0047 options come from bindings/js/tsconfig.json. Added: the DOM library, for the page
+# The ADR 0047 options come from bindings/ts-common/tsconfig.json. Added: the DOM library, for the page
 # (document, fetch) and the worker (Request, Response); the installed package's declarations use
 # it too. `types` stays [] (no @types/node): Node built-ins are typed in src/node.ts.
 cat >"$stage/tsconfig.json" <<EOF

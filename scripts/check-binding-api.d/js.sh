@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034,SC2154 # sourced by scripts/check-binding-api.sh, which reads MODE_KINDS
 # and sets repo, mode_scratch and camel_awk
-# Mode "js" of scripts/check-binding-api.sh: the TypeScript facade bindings/js, shared unchanged by
+# Mode "js" of scripts/check-binding-api.sh: the TypeScript facade bindings/ts-common, shared unchanged by
 # @polyjose/node and @polyjose/wasm (ADR 0031 §1). Its public contract is the tsc-generated
 # declarations (ADR 0047: there is no hand-written index.d.ts), so this mode builds them first:
-#   1. npm ci in bindings/js if its node_modules has no tsc (typescript, the only dev-dependency,
-#      pinned in package-lock.json), as bindings/js/test.sh does;
+#   1. npm ci in bindings/ts-common if its node_modules has no tsc (typescript, the only dev-dependency,
+#      pinned in package-lock.json), as bindings/ts-common/test.sh does;
 #   2. node tools/gen-error-codes.ts (writes the git-ignored src/error-codes.ts from Error::CODES);
-#   3. tsc -p . --emitDeclarationOnly into this mode's scratch directory (bindings/js/dist/ is
+#   3. tsc -p . --emitDeclarationOnly into this mode's scratch directory (bindings/ts-common/dist/ is
 #      left alone).
 # Without node or npm the mode is SKIPPED, never passed.
 #
@@ -32,20 +32,20 @@ JS_IDIOM="PolyjoseApi PolyjoseApi.PolyjoseError JsonObject JwkObject JwkSetObjec
 mode_expect() { sed 's/=false$/?/'; }
 
 mode_derive() {
-  local out=$1 js=$repo/bindings/js dist=$mode_scratch/dist f
+  local out=$1 js=$repo/bindings/ts-common dist=$mode_scratch/dist f
   for f in package.json package-lock.json tsconfig.json tools/gen-error-codes.ts src/api.ts src/types.ts; do
-    [ -f "$js/$f" ] || skip "bindings/js/$f missing"
+    [ -f "$js/$f" ] || skip "bindings/ts-common/$f missing"
   done
   command -v node >/dev/null 2>&1 || skip "node missing"
   command -v npm >/dev/null 2>&1 || skip "npm missing"
   if [ ! -x "$js/node_modules/.bin/tsc" ]; then
     (cd "$js" && npm ci --no-audit --no-fund --loglevel=error) >"$mode_scratch/npm.log" 2>&1 \
-      || { cat "$mode_scratch/npm.log"; mode_fail "npm ci failed in bindings/js"; }
+      || { cat "$mode_scratch/npm.log"; mode_fail "npm ci failed in bindings/ts-common"; }
   fi
   (cd "$js" && node tools/gen-error-codes.ts) >"$mode_scratch/gen.log" 2>&1 \
-    || { cat "$mode_scratch/gen.log"; mode_fail "node tools/gen-error-codes.ts failed in bindings/js"; }
+    || { cat "$mode_scratch/gen.log"; mode_fail "node tools/gen-error-codes.ts failed in bindings/ts-common"; }
   (cd "$js" && ./node_modules/.bin/tsc -p . --outDir "$dist" --emitDeclarationOnly --declarationMap false) \
-    >"$mode_scratch/tsc.log" 2>&1 || { cat "$mode_scratch/tsc.log"; mode_fail "tsc failed in bindings/js"; }
+    >"$mode_scratch/tsc.log" 2>&1 || { cat "$mode_scratch/tsc.log"; mode_fail "tsc failed in bindings/ts-common"; }
   for f in api.d.ts types.d.ts error-codes.d.ts; do
     [ -f "$dist/src/$f" ] || mode_fail "tsc did not generate src/$f"
   done

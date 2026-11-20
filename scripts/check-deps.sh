@@ -24,7 +24,7 @@
 #   7. the workspace root Cargo.toml has a [patch] or [replace] section, or a [workspace] exclude;
 #   8. crates/polyjose has a build script (build.rs, or a `build` key in [package]) or any
 #      build-dependency ([build-dependencies] or [target.*.build-dependencies]); or
-#      bindings/surface or bindings/ffi has a build script (build.rs, a `build` key, or a
+#      bindings/surface or bindings/uniffi has a build script (build.rs, a `build` key, or a
 #      custom-build target in cargo metadata; security audit L2 of feature 0013);
 #   9. a Rust file of the workspace (crates/polyjose/src, bindings/, and every other workspace
 #      member's directory and target directories, from cargo metadata) uses an RSA item that stays
@@ -619,7 +619,7 @@ for dep in pkgs[0]["dependencies"]:
 #    bindings/wasm has no build script today and is not covered here (check 13 pins its build
 #    edges too). A crate named here that is not a workspace package fails: the check cannot vouch
 #    for it, so the list must be updated.
-no_build_script_dirs="bindings/surface bindings/ffi"
+no_build_script_dirs="bindings/surface bindings/uniffi"
 nbs_checked="" # "<package> (<dir>), ...": what the ok line names
 check_bindings_no_build_script() {
   local dir pkg checked=""
@@ -1296,7 +1296,7 @@ check_binding_allowlists() {
 #     tree of a workspace package under bindings/ (`cargo tree -e normal --all-features --target
 #     all`), unless every path to it goes through a crate named on the `# serde-only-below:` line of
 #     the package's allowlist. That line exists only for a path that is build-time only, which the
-#     comment lines under it must explain (check 13 rejects the line without them): in ffi.txt,
+#     comment lines under it must explain (check 13 rejects the line without them): in uniffi.txt,
 #     UniFFI's proc-macro and its bindgen CLI (feature 0013 T10 moves the CLI into its own package).
 #     The line must also stay exact: it fails when the tree has no serde-family crate at all, or
 #     when it names a crate the tree does not contain. Each failure prints a shortest offending path.

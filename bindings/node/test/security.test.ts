@@ -7,7 +7,7 @@
 //   - the security decisions (allow-lists, RSA key binding and redaction, no SHA-1) reach JS unchanged, for
 //     the JS call shapes the conformance vectors cannot express, such as a missing allowedAlgs.
 // No assertion reads a clock (pipeline rule 8): event-loop progress is a count of timer ticks.
-import { assert, fs, path, test } from "../../js/dist/node/builtins.js";
+import { assert, fs, path, test } from "../../ts-common/dist/node/builtins.js";
 import {
   ERROR_CODES,
   PolyjoseError,

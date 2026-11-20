@@ -15,7 +15,7 @@
 //   - addon-sha256.json pins exactly the addon in the tarball, by its SHA-256 (F07);
 //   - installing the tarball alone into a temporary directory, offline, gives a package that
 //     `import`s by name and round-trips jwsSignCompact and jwsVerifyCompact.
-import { assert, fs, os, path, test } from "../../js/dist/node/builtins.js";
+import { assert, fs, os, path, test } from "../../ts-common/dist/node/builtins.js";
 import type * as Api from "@polyjose/node";
 
 interface ExecOptions {

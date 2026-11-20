@@ -2,10 +2,10 @@
  * The results document of ADR 0034 §2, built inside the runtime under test: the Chrome page
  * (`page.ts`) and the worker (`worker.ts`) both call {@link resultsDocument} with the vectors the
  * Node host collected (`host.ts`), so all three package runs share the shared JS runner
- * (`bindings/js/conformance/runner.ts`) and this file. No Node imports: it runs in browsers and
+ * (`bindings/ts-common/conformance/runner.ts`) and this file. No Node imports: it runs in browsers and
  * workerd.
  *
- * The document is the one `bindings/js/conformance/node-main.ts` writes for `wasm-pkg-node`:
+ * The document is the one `bindings/ts-common/conformance/node-main.ts` writes for `wasm-pkg-node`:
  * `{ runner, polyjose, vectors_digest, features, error_codes, results }`, results sorted by id,
  * features `[]` (the bindings enable no vector feature, ADR 0034 §3), and `error_codes` from the
  * binding (ADR 0034 §8). `vectors_digest` (ADR 0060 §1-§3) is computed here, in the runtime, with
@@ -29,7 +29,7 @@ export interface VectorBytes {
   readonly base64: string;
 }
 
-/** What the host hands the runtime: the parsed `conformance/schema.json` and the vector files. */
+/** What the host hands the runtime: the parsed `conformance/schema/vectors.schema.json` and the vector files. */
 export interface VectorInput {
   readonly schema: unknown;
   readonly files: readonly VectorBytes[];

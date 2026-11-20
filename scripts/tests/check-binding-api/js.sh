@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Negative tests of the js mode of scripts/check-binding-api.sh (feature 0013 T13; ADR 0030 §2,
-# §8; ADR 0047): the names in the tsc-generated declarations of bindings/js must equal the
+# §8; ADR 0047): the names in the tsc-generated declarations of bindings/ts-common must equal the
 # inventory, so an extra or renamed operation, record or field in the TypeScript sources fails
 # with exactly that difference; a tsc error fails; without node, npm or the sources the mode is
 # SKIPPED, never passed.
@@ -14,13 +14,13 @@ export LC_ALL=C
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-api=bindings/js/src/api.ts
-types=bindings/js/src/types.ts
+api=bindings/ts-common/src/api.ts
+types=bindings/ts-common/src/types.ts
 
 # facade_only: removes the facade's tests and conformance runner from the copy. A case whose change
 # they would no longer compile against (a rename, a required flag) stands for a change made
 # consistently everywhere, so tsc passes and only the name check can catch it.
-facade_only() { rm -rf "${case_dir:?}/bindings/js/test" "${case_dir:?}/bindings/js/conformance"; }
+facade_only() { rm -rf "${case_dir:?}/bindings/ts-common/test" "${case_dir:?}/bindings/ts-common/conformance"; }
 
 # --- Missing inputs ----------------------------------------------------------------------------------
 
@@ -39,10 +39,10 @@ check_last_line "without node the js mode is SKIPPED with the reason" 0 'SKIPPED
 check_absent "a skipped js mode is not reported as passing" 'PASS'
 
 new_case no-sources
-rm -rf "${case_dir:?}/bindings/js"
+rm -rf "${case_dir:?}/bindings/ts-common"
 run_check js
-check_last_line "without bindings/js the js mode is SKIPPED with the reason" 0 \
-  'SKIPPED (js: bindings/js/package.json missing)'
+check_last_line "without bindings/ts-common the js mode is SKIPPED with the reason" 0 \
+  'SKIPPED (js: bindings/ts-common/package.json missing)'
 
 if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
   echo "note: node or npm missing; the cases that build the declarations did not run"
@@ -61,9 +61,9 @@ run_check js
 check_last_line "the facade's declarations match the inventory" 0 \
   "check-binding-api: js: PASS ($(inventory_count op js) operations, $(inventory_count record js) records, $(inventory_count field js) fields, $n_codes codes)"
 dist_ok=1
-[ ! -e "$case_dir/bindings/js/dist" ] || dist_ok=0
-report "the declarations are built in the mode's scratch directory, not bindings/js/dist" "$dist_ok" \
-  "the check wrote bindings/js/dist"
+[ ! -e "$case_dir/bindings/ts-common/dist" ] || dist_ok=0
+report "the declarations are built in the mode's scratch directory, not bindings/ts-common/dist" "$dist_ok" \
+  "the check wrote bindings/ts-common/dist"
 
 # --- Operations --------------------------------------------------------------------------------------
 
@@ -163,7 +163,7 @@ edit $types '  alg: string;
   payload: Uint8Array;
   broken: NoSuchType;'
 run_check js
-check "a TypeScript error fails the mode" 1 'error TS' '^check-binding-api: js: tsc failed in bindings/js$' '^check-binding-api: js: FAIL$'
+check "a TypeScript error fails the mode" 1 'error TS' '^check-binding-api: js: tsc failed in bindings/ts-common$' '^check-binding-api: js: FAIL$'
 
 new_case no-reexport
 use_js_modules

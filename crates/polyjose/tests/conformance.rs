@@ -2,7 +2,7 @@
 //!
 //! Loads every `*.json` file under `conformance/vectors/` (recursively,
 //! `third_party/` included), checks each against the rules of
-//! `conformance/schema.json`, runs it through the public API and collects
+//! `conformance/schema/vectors.schema.json`, runs it through the public API and collects
 //! every failure before failing. A failure message names the file and the
 //! vector's `source`.
 //!
@@ -52,7 +52,7 @@
 //!   it is never counted as passing.
 //!
 //! The schema is enforced by a strict hand-written check (no JSON Schema
-//! crate, ADR 0016). `schema_and_runner_agree` parses `schema.json` and
+//! crate, ADR 0016). `schema_and_runner_agree` parses `vectors.schema.json` and
 //! fails if its operations, member names, member kinds, `required` lists,
 //! `allOf` signer rules, patterns or error codes drift from the tables
 //! below. `jws_and_keys_vectors_are_binding_ready`, `jwe_vectors_are_binding_ready`
@@ -127,7 +127,7 @@ fn feature_names() -> Vec<&'static str> {
     FEATURES.iter().map(|(name, _)| *name).collect()
 }
 
-/// Every operation `schema.json` names, in schema order. Only those with an
+/// Every operation `vectors.schema.json` names, in schema order. Only those with an
 /// [`OpSpec`] have a defined input and expectation; the others are reserved
 /// for the features that will define them.
 const OPERATIONS: &[&str] = &[
@@ -1345,7 +1345,7 @@ fn usable_source(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Checks one parsed vector file against the rules of `schema.json`.
+/// Checks one parsed vector file against the rules of `vectors.schema.json`.
 fn validate(value: &Value) -> Result<Vector, String> {
     let root = value
         .as_object()
@@ -3071,8 +3071,9 @@ fn check_vector_traced(
     enabled: &[&str],
     trace: &mut Trace,
 ) -> Result<Passed, String> {
-    let value = parse_vector_file(bytes)
-        .map_err(|e| format!("{name}: not a valid JSON text ({e}); see conformance/schema.json"))?;
+    let value = parse_vector_file(bytes).map_err(|e| {
+        format!("{name}: not a valid JSON text ({e}); see conformance/schema/vectors.schema.json")
+    })?;
     trace.source = usable_source(&value);
     trace.op = value
         .get("operation")
@@ -3479,11 +3480,11 @@ fn every_implemented_operation_has_vectors() {
 }
 
 // ---------------------------------------------------------------------------
-// schema.json and this runner must say the same thing.
+// vectors.schema.json and this runner must say the same thing.
 // ---------------------------------------------------------------------------
 
 fn schema() -> Value {
-    let bytes = std::fs::read(conformance_dir().join("schema.json")).unwrap();
+    let bytes = std::fs::read(conformance_dir().join("schema/vectors.schema.json")).unwrap();
     json::parse(&bytes).expect("schema.json is I-JSON")
 }
 
@@ -3659,7 +3660,7 @@ fn check_def(defs: &Value, shape: &Shape, ok: bool, used: &mut Vec<String>) {
     }
 }
 
-/// Drift guard: the hand-written validator implements exactly schema.json.
+/// Drift guard: the hand-written validator implements exactly vectors.schema.json.
 #[test]
 fn schema_and_runner_agree() {
     let schema = schema();

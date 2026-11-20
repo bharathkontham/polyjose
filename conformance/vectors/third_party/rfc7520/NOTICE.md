@@ -25,7 +25,7 @@ directories listed below, are converted from:
 In `jws/`, every key, header, payload, signature and serialization in a
 vector is copied octet for octet from the RFC's figures; each vector's
 `source` names the section and figure. Only the vector format
-(`conformance/schema.json`) is polyjose's. The JSON objects, JWKs and
+(`conformance/schema/vectors.schema.json`) is polyjose's. The JSON objects, JWKs and
 base64url values taken from the RFC are Code Components under Section 4 of
 the IETF Trust Legal Provisions.
 

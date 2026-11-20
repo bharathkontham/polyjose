@@ -50,8 +50,8 @@
 # A workerd (miniflare) failure is a failure, never a waiver.
 #
 # Ends with `wasm: PASS (…)`, or `SKIPPED (wasm-pack missing)`, or exits 1. Results files left by
-# an earlier run are removed first. Don't run it at the same time as bindings/js/test.sh: build-package.sh rebuilds
-# bindings/js/dist. Runs on macOS /bin/bash 3.2 and Linux bash.
+# an earlier run are removed first. Don't run it at the same time as bindings/ts-common/test.sh: build-package.sh rebuilds
+# bindings/ts-common/dist. Runs on macOS /bin/bash 3.2 and Linux bash.
 set -uo pipefail
 export LC_ALL=C
 # tests_ran (below) parses cargo's output, so it must be plain text: CARGO_TERM_COLOR=always (as

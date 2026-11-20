@@ -2,9 +2,9 @@
 //!
 //! A mechanical adapter over `polyjose-surface`: one `#[wasm_bindgen(js_name = …)]` export per
 //! ADR 0030 §4 operation, named and ordered as the JS backend contract
-//! (`bindings/js/BACKEND.md`), each body a type conversion and one surface call, with no JSON
+//! (`bindings/ts-common/BACKEND.md`), each body a type conversion and one surface call, with no JSON
 //! parsing, policy, defaults or crypto of its own (ADR 0030 §1, "the adapter test"). The shared
-//! TypeScript facade (`bindings/js`) wraps these exports into the public, Promise-returning API.
+//! TypeScript facade (`bindings/ts-common`) wraps these exports into the public, Promise-returning API.
 //!
 //! - [`util`], [`jwk`], [`keys`], [`jws`], [`jwe`], [`jwt`]: the operations.
 //! - `read`: plain JS option objects to surface records with `js_sys::Reflect`; a wrong type is a
