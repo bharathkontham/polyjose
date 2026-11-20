@@ -71,7 +71,7 @@ val rustLibraryInputs: FileCollection = files(
     repoRoot.resolve("Cargo.toml"),
     repoRoot.resolve("Cargo.lock"),
     repoRoot.resolve("rust-toolchain.toml"),
-    listOf("crates/polyjose", "bindings/surface", "bindings/ffi").map { crate ->
+    listOf("crates/polyjose", "bindings/surface", "bindings/uniffi").map { crate ->
         fileTree(repoRoot.resolve(crate)) { include("Cargo.toml", "build.rs", "src/**") }
     },
 )
@@ -85,7 +85,7 @@ val cargoHostBuild = tasks.register<Exec>("cargoHostBuild") {
     outputs.file(hostLibrary).withPropertyName("hostLibrary")
     workingDir(repoRoot)
     // `-p polyjose-ffi` alone, so uniffi's `cli` feature (bindgen only) is never unified into the
-    // shipped library (bindings/ffi/Cargo.toml). `--locked`: a Cargo.lock that does not match the
+    // shipped library (bindings/uniffi/Cargo.toml). `--locked`: a Cargo.lock that does not match the
     // manifests fails the build instead of being re-resolved, so the library holds exactly the
     // reviewed crate versions that scripts/third-party-notices.sh (`--locked`) lists.
     commandLine("cargo", "build", "--locked", "--release", "--lib", "-p", "polyjose-ffi")
@@ -122,10 +122,10 @@ val uniffiGenerate = tasks.register<Exec>("uniffiGenerate") {
     description = "Generates the Kotlin sources (package dev.polyjose) from the host library in UniFFI library mode " +
         "(ADR 0033 §1a) and patches them (feature 0008 F05: hash-checked loader, ADR 0065 redaction)."
     inputs.files(cargoBindgenBuild).withPropertyName("bindgenLibrary").withPathSensitivity(PathSensitivity.NONE)
-    // The bindgen CLI and the generator settings (bindings/ffi/uniffi.toml, found through cargo
+    // The bindgen CLI and the generator settings (bindings/uniffi/uniffi.toml, found through cargo
     // metadata: Kotlin package dev.polyjose).
     inputs.files(
-        repoRoot.resolve("bindings/ffi/uniffi.toml"),
+        repoRoot.resolve("bindings/uniffi/uniffi.toml"),
         fileTree(repoRoot.resolve("bindings/uniffi-bindgen")) { include("Cargo.toml", "src/**") },
     ).withPropertyName("bindgen").withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.files(buildLogicJar).withPropertyName("patch").withPathSensitivity(PathSensitivity.NONE)

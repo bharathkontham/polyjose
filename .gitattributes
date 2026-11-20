@@ -3,7 +3,7 @@
 conformance/vectors/** -text
 
 # Generated files, committed (collapsed in GitHub diffs, left out of language stats).
-# Polyjose.swift is UniFFI output (platforms/swift/scripts/check-generated.sh proves it current);
+# Polyjose.swift is UniFFI output (bindings/swift/scripts/check-generated.sh proves it current);
 # the lockfiles are npm output.
-platforms/swift/Sources/Polyjose/Polyjose.swift linguist-generated=true
+bindings/swift/Sources/Polyjose/Polyjose.swift linguist-generated=true
 **/package-lock.json linguist-generated=true

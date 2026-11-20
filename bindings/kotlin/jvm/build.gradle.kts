@@ -145,7 +145,7 @@ sourceSets {
         kotlin.srcDir(files(sharedBuild.dir("generated/uniffi/kotlin")).builtBy(":uniffiGenerate"))
         // The hand-written loader and redaction helpers the patched sources call (ADR 0030 §1,
         // feature 0008 F05), shared with `:polyjose`, and this jar's native hashes.
-        kotlin.srcDir(rootDir.resolve("src/shared/kotlin"))
+        kotlin.srcDir(rootDir.resolve("shared/kotlin"))
         kotlin.srcDir(nativeHashes.flatMap { it.outputDir })
     }
     test {

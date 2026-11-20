@@ -88,7 +88,7 @@ android {
         named("main") {
             // The hand-written loader and redaction helpers the patched generated sources call
             // (ADR 0030 §1, ADR 0065; feature 0008 F05), shared with `:polyjose-jvm`.
-            kotlin.directories.add(rootDir.resolve("src/shared/kotlin").path)
+            kotlin.directories.add(rootDir.resolve("shared/kotlin").path)
         }
         named("androidTest") {
             // The conformance runner shared with the JVM tests (feature 0008 T02).

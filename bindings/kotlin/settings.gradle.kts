@@ -45,6 +45,10 @@ dependencyResolutionManagement {
 rootProject.name = "polyjose-android"
 
 include(":polyjose", ":polyjose-jvm")
+// The project names (and so every task path and the AAR and jar file names) are the published
+// contract; the folders say which module is which (ADR 0074).
+project(":polyjose").projectDir = file("android")
+project(":polyjose-jvm").projectDir = file("jvm")
 
 // An app that minifies with R8 and runs polyjose calls on the emulator, proving that the AAR's
 // consumer-rules.pro keeps what JNA and UniFFI need (ADR 0033 §2). Never published.
