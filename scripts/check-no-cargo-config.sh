@@ -20,9 +20,8 @@
 #      the untracked/ignored listing; a *tracked* file under target/ still fails). Cargo reads a
 #      config only from its working directory and the directories above it, and no gate, script
 #      or CI step runs cargo inside a build directory.
-#   2. No file under scripts/, .github/ or bindings/ except bindings/kotlin and bindings/swift (and
-#      except this script) passes `--config` or
-#      cargo's `-Z` (an unstable flag), writes a `.cargo/config*` or `$CARGO_HOME/config*` file, or
+#   2. No file under scripts/, .github/ or bindings/ (all of it; except this script) passes `--config`
+#      or cargo's `-Z` (an unstable flag), writes a `.cargo/config*` or `$CARGO_HOME/config*` file, or
 #      assigns an environment variable that does what a config file would: `CARGO_SOURCE_*`,
 #      `CARGO_TARGET_<triple>_{RUSTFLAGS,RUSTDOCFLAGS,LINKER,RUNNER}`, `CARGO_BUILD_{RUSTFLAGS,
 #      RUSTDOCFLAGS,RUSTC,RUSTC_WRAPPER,RUSTC_WORKSPACE_WRAPPER,RUSTDOC}`, `CARGO_ENCODED_RUSTFLAGS`,
@@ -34,6 +33,21 @@
 #      assignment is `NAME=`, `NAME+=`, `NAME<<` (GitHub's $GITHUB_ENV), `NAME:` (a YAML env key or a
 #      JavaScript property) or `${NAME:=`. check-test-vectors-off.sh separately checks *RUSTFLAGS
 #      in the environment.
+#      Every git-listed file (tracked or untracked, not ignored) is read as text, binary ones too
+#      (the PE fixtures of bindings/node), with its NUL bytes dropped first: one-true-awk (macOS)
+#      ends a line at a NUL, which would hide the rest of it, and bash drops NULs when it runs a
+#      script (a sourced file stops at its first NUL, so it runs less, not more). There is no
+#      skip by content or extension. The one file not read is the Gradle wrapper
+#      bindings/kotlin/gradle/wrapper/gradle-wrapper.jar, by that exact path and only while it starts
+#      with a zip signature (`PK\3\4`): java runs it, not a shell, and its compressed bytes match the
+#      patterns at random. Anything else at that path is read.
+#      `-Z` is not matched where it is the exact command `unzip -Z1` (zipinfo's one-name-per-line
+#      listing, in the Kotlin and Swift packaging checks) at the start of a line, after indentation,
+#      in a shell script (*.sh), on a line that does not continue the one above it (that ends in
+#      `\`). Only that command is removed from a copy of the line, and the rest is still tested for
+#      `-Z`; all other patterns read the whole line. So `unzip -Z1 a && cargo -Zx`, `-Zx` at the
+#      start of a line, `cargo +nightly -Zx`, `foo; unzip -Z1`, `unzip -Z1x`, and `unzip -Z1` as an
+#      argument on a continuation line all fail. (`-Z1` itself is no cargo or rustc flag.)
 #      bindings/ is read because the shipped @polyjose/wasm build takes extra Cargo arguments on
 #      its command line (security audit L2 of feature 0006): anything added there reaches the
 #      published .wasm and no other guard. The exceptions (`allowed` below) are allowed by path
@@ -48,6 +62,12 @@
 #        RUSTFLAGS line of bindings/node/scripts/ci-build.sh and the regex of
 #        bindings/node/test/ci.test.ts that asserts it (0006 F10; owner decision at Gate 2,
 #        brain decisions.md 2026-11-08). Every other RUSTFLAGS line fails as before.
+#      - ADR 0032 §1's nightly build of the tier 3 `arm64_32-apple-watchos` slice: the one
+#        `-Zbuild-std=std,panic_abort` line of bindings/swift/scripts/build-xcframework.sh (its
+#        continuation line, and every other line, is read as usual);
+#      - the sentence of bindings/swift/README.md that documents that line (it names `-Zbuild-std`
+#        in prose). An exact-line entry, not a skip of Markdown files: a skip by extension would
+#        also cover a script named *.md, and an edited sentence fails until this entry follows it.
 #
 # Not covered (residual risk; cargo also reads these, but they are not in the repository): a config
 # in a directory above the checkout (e.g. ~/.cargo/config.toml), $CARGO_HOME/config.toml, CARGO_*
@@ -56,8 +76,9 @@
 # which no text scan can see; also a `WASM_CARGO_ARGS` change made without assigning the name
 # (`read -a`, `declare`, an array built through a nameref), and a guarded variable set without an
 # assignment (`read RUSTFLAGS`, `printf -v`, then a bare `export`). Changes to scripts/, .github/,
-# bindings/ and rust-toolchain.toml go through owner review for that reason. The script prints a note for configs and variables it finds
-# outside the repository, without failing.
+# all of bindings/ (bindings/kotlin and bindings/swift included) and rust-toolchain.toml go through
+# owner review for that reason. The script prints a note for configs and variables it finds outside
+# the repository, without failing.
 #
 # Exit status: 0 clean, 1 a config or setting was found, 2 the check could not run (fails closed).
 # Runs on macOS /bin/bash 3.2 and Linux bash.
@@ -135,21 +156,36 @@ crt_line='  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-st
 crt_test_file=bindings/node/test/ci.test.ts
 # shellcheck disable=SC2016 # the exact text of the lines, not expansions
 crt_test_line='    /^\s*export RUSTFLAGS="\$\{RUSTFLAGS:\+\$RUSTFLAGS \}-C target-feature=\+crt-static"$/,'
+# ADR 0032 §1: the nightly -Zbuild-std build of the tier 3 arm64_32-apple-watchos slice, and the
+# README sentence that documents it.
+xcf_file=bindings/swift/scripts/build-xcframework.sh
+# shellcheck disable=SC2016,SC1003 # the exact text of the line (a final backslash), not expansions
+xcf_line='    cargo "+$nightly" rustc --locked -Zbuild-std=std,panic_abort -p polyjose-ffi --release \'
+xcf_doc_file=bindings/swift/README.md
+# shellcheck disable=SC2016 # the exact text of the lines, not expansions
+xcf_doc_line='  - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `-Zbuild-std`. Install it with `rustup toolchain install "$(cat bindings/swift/nightly-toolchain)" --profile minimal --component rust-src`.'
 # "<path><TAB><line>" per line, for awk.
-allowed=$(printf '%s\t%s\n' "$allowed_file" "$allowed_line" "$crt_file" "$crt_line" "$crt_test_file" "$crt_test_line")
-# bindings/kotlin and bindings/swift were under platforms/ and never scanned; widening the scan to
-# them is in the backlog of feature 0030 (backlog.md).
-git ls-files -z --cached --others --exclude-standard -- scripts .github bindings \
-  ':(exclude)bindings/kotlin' ':(exclude)bindings/swift' >"$work/build-files.z" \
+allowed=$(printf '%s\t%s\n' "$allowed_file" "$allowed_line" "$crt_file" "$crt_line" "$crt_test_file" "$crt_test_line" \
+  "$xcf_file" "$xcf_line" "$xcf_doc_file" "$xcf_doc_line")
+# The Gradle wrapper (a zip that java runs), the one file not read while it is a zip (see the header).
+wrapper_jar=bindings/kotlin/gradle/wrapper/gradle-wrapper.jar
+git ls-files -z --cached --others --exclude-standard -- scripts .github bindings >"$work/build-files.z" \
   || die "git ls-files (scripts, .github, bindings) failed"
 : >"$work/settings"
 while IFS= read -r -d '' file; do
   [ "$file" = "$self" ] && continue
   [ -f "$file" ] || continue # tracked but deleted from the working tree
+  if [ "$file" = "$wrapper_jar" ]; then
+    sig=$(head -c 4 "$file" | od -An -tx1 | tr -d ' \n') || die "could not read $file"
+    [ "$sig" = 504b0304 ] && continue
+  fi
   case $file in bindings/*) binding=1 ;; *) binding=0 ;; esac
   case $file in *.rs | *.ts | *.mts | *.cts | *.js | *.mjs | *.cjs | *.kt | *.kts | *.java | *.swift) slashes=1 ;; *) slashes=0 ;; esac
-  # The allowed lines go through the environment: awk -v would interpret their backslashes.
-  ALLOWED=$allowed awk -v names="$names" -v file="$file" -v binding="$binding" -v slashes="$slashes" '
+  case $file in *.sh) shell=1 ;; *) shell=0 ;; esac
+  # NUL bytes are dropped first (see the header). The allowed lines go through the environment:
+  # awk -v would interpret their backslashes.
+  tr -d '\000' <"$file" | ALLOWED=$allowed awk -v names="$names" -v file="$file" -v binding="$binding" \
+    -v slashes="$slashes" -v shell="$shell" '
     BEGIN {
       q = "[\"" sprintf("%c", 39) "]?"
       eq = "(^|[^A-Za-z0-9_])(" names ")" q "[[:space:]]*([+]?=|<<)"
@@ -157,6 +193,7 @@ while IFS= read -r -d '' file; do
       brace = "[{](" names "):="
       flag = "(^|[^A-Za-z0-9_-])--config([=[:space:]\"" sprintf("%c", 39) "]|$)"
       unstable = "(^|[^A-Za-z0-9_-])-Z"
+      unzip = "^[[:space:]]*unzip -Z1([[:space:]]|$)"
       reads = "[$][{]#?WASM_CARGO_ARGS[[]@[]][}]"
       # The allowed lines of this file (the path is everything before the first tab).
       n = split(ENVIRON["ALLOWED"], entries, "\n"); nallowed = 0
@@ -165,22 +202,26 @@ while IFS= read -r -d '' file; do
         if (t > 1 && substr(entries[i], 1, t - 1) == file) allowed_line[++nallowed] = substr(entries[i], t + 1)
       }
     }
+    # A line continues the one above it if that one ends in a backslash (comment lines count too).
+    { continued = prev_backslash; prev_backslash = ($0 ~ /\\$/) }
     /^[[:space:]]*#/ { next }
     slashes && /^[[:space:]]*\/\// { next }
     nallowed {
       for (i = 1; i <= nallowed; i++) if (!seen_allowed[i] && $0 == allowed_line[i]) { seen_allowed[i] = 1; next }
     }
     binding { rest = $0; gsub(reads, "", rest) }
-    (binding && rest ~ "WASM_CARGO_ARGS") || $0 ~ flag || $0 ~ unstable || $0 ~ eq || $0 ~ colon || $0 ~ brace \
+    # The unzip carve-out (see the header): only the -Z test reads this copy.
+    { z = $0; if (shell && !continued) sub(unzip, " ", z) }
+    (binding && rest ~ "WASM_CARGO_ARGS") || $0 ~ flag || z ~ unstable || $0 ~ eq || $0 ~ colon || $0 ~ brace \
       || tolower($0) ~ "([.]cargo|cargo_home[}]?)/config" {
       printf "%s:%d: %s\n", file, FNR, $0
-    }' "$file" >>"$work/settings" || die "could not scan $file"
+    }' >>"$work/settings" || die "could not scan $file"
 done <"$work/build-files.z"
 if [ -s "$work/settings" ]; then
-  fail "scripts, workflows or bindings set cargo configuration outside a config file (--config, -Z, a .cargo/config write, a CARGO_*/RUST* variable, or WASM_CARGO_ARGS, other than the allowed lines of ADR 0059 and 0007 SF-1):"
+  fail "scripts, workflows or bindings set cargo configuration outside a config file (--config, -Z, a .cargo/config write, a CARGO_*/RUST* variable, or WASM_CARGO_ARGS, other than the allowed lines of ADR 0059, 0007 SF-1 and ADR 0032 §1):"
   sed 's/^/  - /' "$work/settings"
 else
-  echo "ok: no script, workflow or binding passes --config or -Z, writes a cargo config or sets a cargo config variable (bindings/: only the allowed lines of ADR 0059 and 0007 SF-1)"
+  echo "ok: no script, workflow or binding passes --config or -Z, writes a cargo config or sets a cargo config variable (bindings/: only the allowed lines of ADR 0059, 0007 SF-1 and ADR 0032 §1)"
 fi
 
 # --- Notes: cargo configuration outside the repository (not checked, never fails) ------------------

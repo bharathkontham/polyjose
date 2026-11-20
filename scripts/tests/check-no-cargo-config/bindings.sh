@@ -34,6 +34,19 @@
 #  12. must fail: either line at another path, either one with a changed flag (`+crt-static,-foo`,
 #      another `-C`), either one a second time, and another RUSTFLAGS line in ci-build.sh (an
 #      assignment, and a `+=` one).
+# bindings/kotlin and bindings/swift (feature 0030 T06; read since then):
+#  13. must pass: ADR 0032 §1's `-Zbuild-std` line of bindings/swift/scripts/build-xcframework.sh and
+#      the README sentence about it, once each (the unchanged tree), the Gradle wrapper jar and the
+#      PE fixtures of bindings/node (the unchanged tree), and `unzip -Z1` at the start of a shell line;
+#  14. must fail: a RUSTFLAGS assignment and a `-Z` flag in a script under each tree, a `-Z` in a
+#      Gradle commandLine; the allowed line twice, changed, with another `-Z`, in another file, and
+#      a `-Z` on its continuation line; the README sentence changed, twice, in another file;
+#  15. must fail, the unzip carve-out's edges: `unzip -Z1 a && cargo -Z...`, `unzip -Z1` as a
+#      cargo argument, after `;`, with more attached (`-Z1build-std`), on a continuation line, and
+#      in a non-shell file; `-Z` at the start of a line, after `+nightly`, after other arguments;
+#  16. must fail: a text file at the Gradle wrapper jar's path, a zip-signed file at another path;
+#      a RUSTFLAGS assignment after a NUL byte (under bindings/wasm too), a NUL inside the name and
+#      a `-Z` after a NUL (one-true-awk ends a line at a NUL; the gate drops NULs first).
 #
 # The planted flags and variable names are assembled from pieces below, because this file is under
 # scripts/, which the gate scans: its own text must hold none of them.
@@ -274,6 +287,134 @@ expect_fail "another $rf line in $crt_file" \
 crt_case crt-append-assign
 append_to "$crt_file" "$rf+=\" -C link-arg=/f10\""
 expect_fail "a $rf+= line in $crt_file" "^  - bindings/node/scripts/ci-build\\.sh:[0-9]+: $rf\\+=" "$rule2"
+
+# --- bindings/kotlin and bindings/swift (feature 0030 T06) ------------------------------------------
+
+# ADR 0032 §1's nightly line and the README sentence about it, each in the tree once (or every case
+# below tests nothing).
+xcf_file=bindings/swift/scripts/build-xcframework.sh
+xcf_line="    cargo \"+\$nightly\" rustc --locked ${zf}build-std=std,panic_abort -p polyjose-ffi --release \\"
+readme_file=bindings/swift/README.md
+# shellcheck disable=SC2016 # the exact text of the line, not expansions
+readme_line='  - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `'"$zf"'build-std`. Install it with `rustup toolchain install "$(cat bindings/swift/nightly-toolchain)" --profile minimal --component rust-src`.'
+for pair in "$xcf_file:$xcf_line" "$readme_file:$readme_line"; do
+  tests_run=$((tests_run + 1))
+  if [ "$(grep -cFx -- "${pair#*:}" "$repo/${pair%%:*}" 2>/dev/null || true)" = 1 ]; then
+    echo "ok   - ${pair%%:*} holds its allowed $zf line once"
+  else
+    echo "FAIL - ${pair%%:*} does not hold its allowed $zf line exactly once"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
+unzip_z="unzip ${zf}1"
+jar=bindings/kotlin/gradle/wrapper/gradle-wrapper.jar
+
+new_case kotlin-swift-unzip
+append_to bindings/kotlin/scripts/t06.sh "  $unzip_z \"\$aar\" >\"\$work/aar.list\"
+$unzip_z \"\$zip\""
+append_to bindings/swift/scripts/t06.sh "$unzip_z \"\$zip\" >\"\$scratch/entries.txt\" 2>/dev/null || true"
+expect_pass "$unzip_z at the start of a shell line under bindings/kotlin and bindings/swift"
+
+for tree in kotlin swift; do
+  new_case "$tree-rustflags"
+  append_to "bindings/$tree/scripts/t06.sh" "$rf='--cfg x' cargo build -p polyjose-ffi"
+  expect_fail "a $rf assignment under bindings/$tree" "^  - bindings/$tree/scripts/t06\\.sh:1: $rf=" "$rule2"
+
+  new_case "$tree-z"
+  append_to "bindings/$tree/scripts/t06.sh" "cargo +nightly build ${zf}build-std=std -p polyjose-ffi"
+  expect_fail "a $zf flag under bindings/$tree" "^  - bindings/$tree/scripts/t06\\.sh:1: cargo \\+nightly build " "$rule2"
+done
+
+new_case kotlin-gradle-z
+append_to bindings/kotlin/t06.gradle.kts 'tasks.register<Exec>("t06") { commandLine("cargo", "'"${zf}"'build-std", "build") }'
+expect_fail "a $zf argument in a Gradle commandLine" "^  - bindings/kotlin/t06\\.gradle\\.kts:1: " "$rule2"
+
+# The allowed nightly line: once passes (the unchanged tree); twice, changed or elsewhere fails.
+new_case xcf-twice
+edit_in "$xcf_file" "$xcf_line" "$xcf_line
+$xcf_line"
+expect_fail "the ADR 0032 nightly line twice in $xcf_file" "^  - bindings/swift/scripts/build-xcframework\\.sh:[0-9]+:     cargo " "$rule2"
+
+new_case xcf-changed
+edit_in "$xcf_file" "$xcf_line" "${xcf_line/panic_abort/panic_abort,core}"
+expect_fail "the ADR 0032 nightly line with another build-std value" \
+  "^  - bindings/swift/scripts/build-xcframework\\.sh:[0-9]+: .*panic_abort,core" "$rule2"
+
+new_case xcf-extra-flag
+edit_in "$xcf_file" "$xcf_line" "${xcf_line/--locked/--locked ${zf}unstable-options}"
+expect_fail "the ADR 0032 nightly line with another $zf flag" \
+  "^  - bindings/swift/scripts/build-xcframework\\.sh:[0-9]+: .*unstable-options" "$rule2"
+
+new_case xcf-other-file
+append_to bindings/swift/scripts/package.sh "$xcf_line"
+expect_fail "the ADR 0032 nightly line in another file" "^  - bindings/swift/scripts/package\\.sh:[0-9]+:     cargo " "$rule2"
+
+new_case xcf-continuation
+edit_in "$xcf_file" "$xcf_line" "$xcf_line
+      ${zf}unstable-options \\"
+expect_fail "a $zf flag on the allowed line's continuation line" \
+  "^  - bindings/swift/scripts/build-xcframework\\.sh:[0-9]+:       ${zf}unstable-options" "$rule2"
+
+# The allowed README sentence: changed, twice or elsewhere fails.
+new_case readme-changed
+edit_in "$readme_file" "$readme_line" "${readme_line/build-std/build-std,unstable-options}"
+expect_fail "the README's $zf sentence changed" "^  - bindings/swift/README\\.md:[0-9]+: .*build-std,unstable" "$rule2"
+
+new_case readme-twice
+append_to "$readme_file" "$readme_line"
+expect_fail "the README's $zf sentence twice" "^  - bindings/swift/README\\.md:[0-9]+:   - Every Rust target" "$rule2"
+
+new_case readme-other-file
+append_to bindings/kotlin/README.md "$readme_line"
+expect_fail "the README's $zf sentence in another file" "^  - bindings/kotlin/README\\.md:[0-9]+:   - Every Rust target" "$rule2"
+
+# The unzip carve-out is the exact command at the start of a shell line, not on a continuation line;
+# a cargo -Z anywhere else on the line still fails.
+unzip_case() { # <name> <description> <text> <ERE of the reported line>
+  new_case "$1"
+  append_to bindings/kotlin/scripts/t06.sh "$3"
+  expect_fail "$2" "^  - bindings/kotlin/scripts/t06\\.sh:[0-9]+: $4" "$rule2"
+}
+unzip_case unzip-then-cargo "$unzip_z, then a cargo $zf on the same line" \
+  "$unzip_z a.zip && cargo build ${zf}build-std" "unzip "
+unzip_case unzip-cargo-arg "$unzip_z inside a cargo command (not at the start of the line)" \
+  "cargo +nightly build -p x $unzip_z" "cargo "
+unzip_case unzip-after-semicolon "$unzip_z after a ;" "true; $unzip_z a.zip" "true; "
+unzip_case unzip-attached "$unzip_z with more attached (${zf}1build-std)" "$unzip_z""build-std a.zip" "unzip "
+unzip_case unzip-continuation "$unzip_z on a continuation line (an argument of the command above)" \
+  "cargo +nightly build -p polyjose-ffi \\
+  $unzip_z" "  unzip "
+unzip_case z-line-start "$zf at the start of a line" "${zf}build-std=std \\" "${zf}build-std"
+unzip_case z-plus-nightly "$zf after +nightly" "cargo +nightly ${zf}unstable-options build" "cargo \\+nightly "
+unzip_case z-after-args "$zf after other cargo arguments" "cargo build --release -p x ${zf}x" "cargo build "
+
+new_case unzip-not-shell
+append_to bindings/kotlin/t06.gradle.kts "// unzip in Kotlin is not a shell line
+val cmd = \"$unzip_z\""
+expect_fail "$unzip_z in a non-shell file" "^  - bindings/kotlin/t06\\.gradle\\.kts:2: " "$rule2"
+
+# The Gradle wrapper jar is skipped by its exact path, and only while it is a zip; a text file there,
+# or a jar at another path, is scanned.
+new_case jar-text
+rm -f "$case_dir/$jar"
+append_to "$jar" "$rf=--cfg cargo build"
+expect_fail "a text file at the Gradle wrapper jar's path" "^  - ${jar//./\\.}:1: $rf=" "$rule2"
+
+new_case jar-other-path
+printf 'PK\003\004%s=x cargo build\n' "$rf" >"$case_dir/bindings/kotlin/gradle/wrapper/t06.jar"
+expect_fail "a zip-signed file at another path" "^  - bindings/kotlin/gradle/wrapper/t06\\.jar:1: " "$rule2"
+
+# NUL bytes cannot hide a line's rest from the scan (one-true-awk stops a record at a NUL; bash
+# drops NULs when it runs a script).
+new_case nul-hides-rest
+printf 'echo a\000; %s=x cargo build\n' "$rf" >>"$case_dir/bindings/wasm/scripts/t06.sh"
+expect_fail "a $rf assignment after a NUL byte (bindings/wasm, scanned before T06)" \
+  "^  - bindings/wasm/scripts/t06\\.sh:1: echo a; $rf=" "$rule2"
+
+new_case nul-splits-name
+printf 'RUST\000FLAGS=x cargo build\nok\000 %sbuild-std\n' "$zf" >>"$case_dir/bindings/kotlin/scripts/t06.sh"
+expect_fail "a NUL byte inside a variable name" "^  - bindings/kotlin/scripts/t06\\.sh:1: $rf=" "$rule2"
+expect_also "and a $zf after a NUL byte" "^  - bindings/kotlin/scripts/t06\\.sh:2: ok ${zf}build-std"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
