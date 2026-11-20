@@ -1,8 +1,22 @@
-# polyjose for Android, Kotlin and the JVM
+# polyjose for Android, Kotlin, the JVM and Java
 
 polyjose's Kotlin library: JOSE (JWS, JWE, JWK and JWT; RFC 7515 to 7519) from the pure-Rust
-polyjose core, in the package `dev.polyjose`. Verify and decrypt always take an explicit algorithm
-allow-list, and `none` is never accepted (RFC 8725).
+polyjose core, in the package `dev.polyjose`, for Android and for the desktop and server JVM.
+Verify and decrypt always take an explicit algorithm allow-list, and `none` is never accepted
+(RFC 8725). The API is generated Kotlin. Java code can call it, but awkwardly (mangled names for
+members that take `UInt`, no default arguments); see
+[Not supported → Java](https://polyjose.dev/security/not-supported/#java).
+
+| Folder | Gradle project | Published as |
+|---|---|---|
+| `android/` | `:polyjose` | `dev.polyjose:polyjose` (Android AAR) |
+| `jvm/` | `:polyjose-jvm` | `dev.polyjose:polyjose-jvm` (jar, desktop and server JVM) |
+| `shared/` | — | hand-written Kotlin compiled into both (native loader, redaction) |
+| `shared-test/` | — | test sources compiled into both test suites, including the Kotlin conformance runner |
+| `sample-minified/` | `:sample-minified` | not published: an R8-minified probe app for `consumer-rules.pro` |
+| `build-logic/` | included build | the Gradle plugin for packaging (POM, coordinates), native hashes, notices and the generated-Kotlin patch |
+
+The Rust adapter these modules load is `bindings/uniffi`; this build generates the Kotlin from it.
 
 ## Install
 
@@ -26,8 +40,8 @@ import dev.polyjose.*
 ```
 
 Calls are synchronous and throw `PolyjoseException`. On Android, call them off the main thread.
-Java can call them too, as static methods of `dev.polyjose.Polyjose_ffiKt`, but Kotlin is the
-supported language.
+Java can call them too, as static methods of `dev.polyjose.Polyjose_ffiKt`, but awkwardly (see
+above); Kotlin is the supported language.
 
 ## Quick start
 

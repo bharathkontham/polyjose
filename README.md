@@ -35,27 +35,26 @@ polyjose writes no cryptographic primitives of its own. It composes pure-Rust pr
 
 ## Layout
 ```
-crates/polyjose/         core library (no unsafe)
-bindings/surface/        the binding-facing API over the core, shared by every binding crate
-bindings/node/           napi-rs addon (@polyjose/node)
-bindings/wasm/           wasm-bindgen package (@polyjose/wasm)
-bindings/ts-common/      TypeScript facade shared by the Node and WASM packages (not published on its own)
-bindings/uniffi/         UniFFI cdylib/staticlib → Kotlin + Swift
-bindings/uniffi-bindgen/ the pinned UniFFI generator for the Kotlin and Swift sources
-bindings/kotlin/         Gradle library (AAR in android/, JVM jar in jvm/, shared/ sources) + tests
-bindings/swift/          Swift Package + XCTest (iOS first)
-conformance/             shared test vectors, consumed by every platform's test suite
-interop/                 two-way interop tests against other JOSE libraries (panva/jose)
-fuzz/                    cargo-fuzz targets (scripts/fuzz.sh); its own workspace
-scripts/                 test-all.sh, the dependency and release guards, build helpers
+crates/polyjose/         the core library (no unsafe); the only crate on crates.io
+bindings/                everything that exposes the core to another language:
+  surface/               every operation once, in plain Rust, for the adapters
+  node/  wasm/           napi-rs and wasm-bindgen adapters, each with its npm package
+  ts-common/             TypeScript shared by @polyjose/node and @polyjose/wasm (not published)
+  uniffi/  uniffi-bindgen/  UniFFI adapter for Kotlin and Swift, and its pinned generator
+  kotlin/                Gradle build: Android AAR (android/), JVM jar (jvm/), shared sources
+  swift/                 Swift package sources, tests and XCFramework scripts (Package.swift is at the root)
+conformance/             shared test vectors and schemas, run by every platform
+interop/                 two-way interop tests against panva/jose
+fuzz/                    cargo-fuzz targets; its own workspace
+scripts/                 test-all.sh, the guards, release scripts
 dist/                    build output (packed release artifacts), git-ignored
 ```
 
-The Rust code of the Kotlin and Swift bindings is `bindings/uniffi`; their packages, generated sources and tests are in `bindings/kotlin` and `bindings/swift`.
+[ARCHITECTURE.md](https://github.com/bharathkontham/polyjose/blob/main/ARCHITECTURE.md) explains the layers, where each binding lives, and how each kind of test is run.
 
 ## Test everything
 ```sh
-scripts/test-all.sh            # rust + wasm + node + android + apple (skips platforms whose toolchain is missing, and says so)
+scripts/test-all.sh            # rust + wasm + node + android + swift (skips platforms whose toolchain is missing, and says so)
 scripts/test-all.sh rust node  # only some platforms
 scripts/test-all.sh tooling    # the self-tests of the guard scripts; slow, only needed when scripts/ or .github/ change
 ```
