@@ -383,7 +383,7 @@ expect_fail "a serde-only-below line in an allowlist whose tree has no serde" \
 new_case ffi-below-outside
 set_directive bindings/deps-allowlist/uniffi.txt '# serde-only-below: uniffi_macros napi'
 expect_fail "a serde-only-below line naming a crate outside the tree" \
-  "FAIL: bindings/deps-allowlist/ffi\\.txt: serde-only-below names napi, which is not in the tree of polyjose-ffi" \
+  "FAIL: bindings/deps-allowlist/uniffi\\.txt: serde-only-below names napi, which is not in the tree of polyjose-ffi" \
   "serde-only-below"
 
 finish
