@@ -215,6 +215,15 @@ So an app can keep a watchOS deployment target as low as 9: older releases use t
 
 ## Building from source
 
+| Path | What it is |
+|---|---|
+| `Package.swift` (repo root) | the SwiftPM manifest; Swift Package Manager needs it at the repository root |
+| `Sources/Polyjose/` | `Polyjose.swift` (UniFFI-generated from `bindings/uniffi`, committed) and the hand-written `AppleKey.swift` and `Redaction.swift` |
+| `Tests/PolyjoseTests/` | XCTest suites, including the Swift conformance runner; `Resources/` links to `conformance/` |
+| `HostedTests/` | AppleKey tests inside a host app on the simulator (Keychain entitlement) |
+| `scripts/` | XCFramework build, generated-code check, packaging, simulator runs; `scripts/tests/` tests those scripts |
+| `test.sh` | the whole suite (`scripts/test-all.sh swift`) |
+
 How the Swift package is built, tested and packaged:
 - `scripts/build-xcframework.sh` builds `build/PolyjoseFFI.xcframework` (gitignored), a static XCFramework with 5 libraries: iOS (`ios-arm64`), iOS Simulator (`ios-arm64-simulator`, arm64), macOS (`macos-arm64`, arm64), watchOS (`watchos-arm64_arm64_32`, arm64 + arm64_32) and watchOS Simulator (`watchos-arm64-simulator`, arm64) (ADR 0032, ADR 0073). No x86_64 library is built.
   - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `-Zbuild-std`. Install it with `rustup toolchain install "$(cat bindings/swift/nightly-toolchain)" --profile minimal --component rust-src`.
