@@ -131,7 +131,7 @@ Each guard runs in every `test-all.sh rust` run; their own self-tests are `test-
 - `scripts/check-binding-api.sh`: each binding's exported names (operations, records, fields, error codes) equal `bindings/api-inventory.txt`, one mode per binding in `scripts/check-binding-api.d/`.
 - `scripts/check-rsa-symbols.sh`: on compiled output, RSA private-key operations go only through the `rsa` crate's blinded entry points; no key generation, `RSA1_5` or unblinded path.
 - `scripts/check-test-vectors-off.sh`: nothing that builds a binding can enable the core's `insecure-test-vectors` feature (a deterministic RNG for reproducing published vectors).
-- `scripts/check-no-cargo-config.sh`: no cargo configuration file in the repository, and none set by a script or workflow, so no source replacement, rustflags or wrapper can sneak in.
+- `scripts/check-no-cargo-config.sh`: no cargo configuration file in the repository, and none set by a script, workflow or binding (every file under `scripts/`, `.github/` and `bindings/`, the Kotlin and Swift trees included, read as text with NUL bytes dropped; only the Gradle wrapper jar is not read), so no source replacement, rustflags (also after `cargo rustc --`), wrapper, profile or toolchain override, or prebuilt AAR libraries (`polyjose.jniLibsDir` in a `.properties` file) can sneak in. The few allowed lines are listed by path and exact text in the script's header.
 - `cargo deny --all-features check` ([deny.toml](deny.toml)): no C or assembly crypto crate (OpenSSL, `ring`, `aws-lc`), allowed licenses only, crates.io as the only source.
 
 ## 8. Generated code

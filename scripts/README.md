@@ -9,7 +9,7 @@ Repo-wide scripts. Each package's own scripts live in its folder (`bindings/*/sc
 - `check-binding-api.sh` with one mode per binding in `check-binding-api.d/`: exported names against `bindings/api-inventory.txt`.
 - `check-rsa-symbols.sh`: RSA private-key operations only through the `rsa` crate's blinded paths, checked on compiled output.
 - `check-test-vectors-off.sh`: no build of a binding can enable the deterministic test RNG.
-- `check-no-cargo-config.sh`: no cargo configuration file or override anywhere.
+- `check-no-cargo-config.sh`: no cargo configuration file anywhere, and no override in any file under `scripts/`, `.github/` or `bindings/` (all of it, Kotlin and Swift included; besides the script itself, the Gradle wrapper jar is the one file not read): no `--config`, unstable cargo flag, rustc arguments after the double dash of `cargo rustc`, cargo or rustup variable, or `polyjose.jniLibsDir` in a `.properties` file. Lines split at CR too, and `#` is a comment only in shell, YAML, TOML, properties and extensionless files.
 
 **Other scripts:** `conformance-parity.sh` (every runner's results equal `rust-core`'s), `third-party-notices.sh` (the notices file of each binary artifact, with the license texts in `licenses/`), `fuzz.sh` (the cargo-fuzz targets in `fuzz/`, before a release), and `release/` (assembling, checking and publishing release artifacts; see [RELEASING.md](../RELEASING.md)).
 
