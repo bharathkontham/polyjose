@@ -683,5 +683,51 @@ polyjose.other=1"
 append_to bindings/kotlin/t06.md "$jl=<dir>"
 expect_pass "other properties, and $jl=<dir> in a Markdown file"
 
+# G. Round-2 tester pins (feature 0030 T06, second task test): behaviours that held under probing.
+quoted_case r2-flow-map "$yml" "    env: {$rf: x}" "a flow mapping env: {$rf: x} in a workflow"
+new_case r2-kotlin-rawstring-line-where
+plant bindings/kotlin/t06.kt 'val s = """\n//usr/bin/env %s=-Cx cargo build\n"""\n' "$rf"
+expect_fail "the same line is reported at line 2" "^  - bindings/kotlin/t06\\.kt:2: //usr/bin/env" "$rule2"
+quoted_case r2-dashdash-nightly scripts/t06.sh "cargo +nightly $rustc_word $dd -Clinker=x" "cargo +nightly $rustc_word $dd"
+quoted_case r2-dashdash-two-spaces scripts/t06.sh "cargo  $rustc_word $dd -Clinker=x" "cargo, two spaces, $rustc_word $dd"
+new_case r2-dashdash-tab
+plant scripts/t06.sh 'cargo\t%s\t%s\t-Clinker=x\n' "$rustc_word" "$dd"
+expect_fail "cargo, tab, $rustc_word, tab, $dd" "^  - scripts/t06\\.sh:1: cargo" "$rule2"
+quoted_case r2-dashdash-env scripts/t06.sh "env X=1 cargo $rustc_word -p a $dd -Clinker=x" "env X=1 cargo $rustc_word ... $dd"
+quoted_case r2-dashdash-nested bindings/kotlin/t06.gradle.kts \
+  "commandLine($qcargo, \"$rustc_word\", listOf(\"a\", foo(bar(\"b\"))), \"a)b\", \"$dd\", \"-C\")" \
+  "a Gradle commandLine with nested brackets and a string holding ) before \"$dd\""
+quoted_case r2-dashdash-escaped-quote bindings/kotlin/t06.gradle.kts \
+  "commandLine($qcargo, \"$rustc_word\", \"\\\")\", \"$dd\", \"-C\")" \
+  "a Gradle commandLine with an escaped quote and ) in a string before \"$dd\""
+quoted_case r2-dashdash-char-literal bindings/kotlin/t06.gradle.kts \
+  "commandLine($qcargo, \"$rustc_word\", ')', \"$dd\", \"-C\")" \
+  "a Gradle commandLine with a Kotlin char literal ')' before \"$dd\""
+new_case r2-dashdash-unbalanced-eof
+append_to bindings/kotlin/t06.gradle.kts "commandLine($qcargo, \"$rustc_word\", \"x\"
+foo
+cargo $rustc_word $dd -C linker=x"
+expect_fail "an unclosed commandLine( at the end of the file (fails closed)" "^  - bindings/kotlin/t06\\.gradle\\.kts:3: cargo" "$rule2"
+new_case r2-cfg-line-variants
+edit_in "$cfg_file" "$cfg_line" "$cfg_line"$'\r'
+expect_fail "the check-test-vectors-off.sh cargo $rustc_word line with a CR at its end" "^  - scripts/check-test-vectors-off\\.sh:[0-9]+: if ! cfgs=" "$rule2"
+new_case r2-cfg-line-altered
+edit_in "$cfg_file" "$cfg_line" "${cfg_line/--print cfg/-C linker=x}"
+expect_fail "the check-test-vectors-off.sh line with another rustc argument" "^  - scripts/check-test-vectors-off\\.sh:[0-9]+: if ! cfgs=" "$rule2"
+new_case r2-cfg-line-twice
+edit_in "$cfg_file" "$cfg_line" "$cfg_line"$'\n'"$cfg_line"
+expect_fail "the check-test-vectors-off.sh line twice" "^  - scripts/check-test-vectors-off\\.sh:[0-9]+: if ! cfgs=" "$rule2"
+new_case r2-utf8-lookalikes-pass
+plant bindings/node/t06.js 'caf\303\205 \342\204\205 \342\200\246 \303\205\302\250 x\n'
+expect_pass "UTF-8 text with bytes next to the NEL, LS and PS sequences but no line break"
+new_case r2-continuation-breaks-pass
+append_to scripts/t06.sh "cargo $rustc_word --lib \\
+  # a comment line ends the continuation
+  $dd not-a-cargo-argument
+cargo $rustc_word --lib \\
+
+$dd another"
+expect_pass "$dd after a comment line or a blank line that ends a cargo $rustc_word continuation (a separate command)"
+
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
