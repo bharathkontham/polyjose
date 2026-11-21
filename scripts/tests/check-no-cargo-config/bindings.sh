@@ -459,5 +459,18 @@ println("set '"$rf"' before building")
 append_to bindings/swift/scripts/t06.sh "echo '$rf is read by cargo'; echo \"${ch}_DIR\""
 expect_pass "a quoted non-guarded name, a guarded name inside a longer string, and a // comment in .kts"
 
+# Tester additions (feature 0030 T06 task test): behaviours that held on the tested tree.
+unzip_case unzip-two-spaces "unzip  ${zf}1 (two spaces: not the exact command)" "unzip  ${zf}1 a.zip" "unzip "
+unzip_case unzip-semicolon-cargo "$unzip_z;cargo ${zf}x (no space after the ;)" "$unzip_z;cargo build ${zf}x" "unzip "
+new_case xcf-altered-before-original
+edit_in "$xcf_file" "$xcf_line" "${xcf_line//panic_abort/panic_abort,x}
+$xcf_line"
+expect_fail "an altered copy of the ADR 0032 nightly line before the original" \
+  "^  - bindings/swift/scripts/build-xcframework\\.sh:[0-9]+:     cargo .*panic_abort,x" "$rule2"
+quoted_case quoted-yaml-key .github/workflows/t06.yml '      "'"$rf"'": --cfg x' "a double-quoted $rf key of a workflow env map"
+quoted_case quoted-xcscheme bindings/swift/t06.xcscheme '<EnvironmentVariable key = "'"$rf"'" value = "--cfg x">' \
+  "an Xcode scheme EnvironmentVariable key naming $rf"
+quoted_case quoted-swift-raw bindings/swift/Sources/t06.swift 'env[#"'"$rf"'"#] = "--cfg x"' "a Swift raw string naming $rf"
+
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
