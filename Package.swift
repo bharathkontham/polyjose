@@ -31,7 +31,7 @@ let ffiTarget: Target =
         name: "PolyjoseFFI",
         // Set by each release PR (see the header).
         url: "https://github.com/bharathkontham/polyjose/releases/download/v0.5.0/PolyjoseFFI.xcframework.zip",
-        checksum: "073ab40354c8fde0d9552f0e8d0129446b6f7957bca00a4916f258298f09323c"
+        checksum: "3ad9927cd42743a3ccef57f80e823ba1dff5decd8d132817b10cd5b77d17a7dd"
     )
 
 let package = Package(
