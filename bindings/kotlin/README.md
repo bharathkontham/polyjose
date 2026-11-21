@@ -22,9 +22,9 @@ The Rust adapter these modules load is `bindings/uniffi`; this build generates t
 
 ```kotlin
 dependencies {
-    implementation("dev.polyjose:polyjose:0.4.0")      // Android AAR, minSdk 23
+    implementation("dev.polyjose:polyjose:0.5.0")      // Android AAR, minSdk 23
     // or, for the desktop and server JVM:
-    implementation("dev.polyjose:polyjose-jvm:0.4.0")  // jar with macOS, Linux and Windows natives
+    implementation("dev.polyjose:polyjose-jvm:0.5.0")  // jar with macOS, Linux and Windows natives
 }
 ```
 

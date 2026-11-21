@@ -1076,7 +1076,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "polyjose"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "polyjose-ffi"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "p256",
  "polyjose",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "polyjose-node"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "polyjose-surface"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "p256",
  "polyjose",
@@ -1142,14 +1142,14 @@ dependencies = [
 
 [[package]]
 name = "polyjose-uniffi-bindgen"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "uniffi",
 ]
 
 [[package]]
 name = "polyjose-wasm"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "getrandom",
  "js-sys",
