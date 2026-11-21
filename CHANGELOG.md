@@ -24,7 +24,7 @@ A new repository layout: every binding now lives under `bindings/` (ADR 0074). N
   - comments in the npm packages' compiled facade and in the Maven sources jars name the new paths.
 
   If you build polyjose from source with your own scripts, update their paths.
-- **Build guard (contributors only).** `scripts/check-no-cargo-config.sh`, which keeps any Cargo configuration out of the repository and its scripts, now also scans `bindings/kotlin` and `bindings/swift` and catches more spellings of a Cargo `--config` or rustc argument (quoted names, comments, argument lists and `@` argument files). Nothing published changes.
+- **Build guard (contributors only).** `scripts/check-no-cargo-config.sh`, which keeps any Cargo configuration out of the repository and its scripts, now also scans `bindings/kotlin` and `bindings/swift` and catches more spellings of a Cargo `--config` or rustc argument (quoted names, comments, argument lists and `@` argument files). It now reads argument lists by file: in a file that names both cargo and rustc, a quoted `--` or `@` argument fails, and `cargo rustc -- …` is caught under any name for cargo (`"$CARGO" rustc -- …`); it also no longer aborts under mawk on long lines. Nothing published changes.
 
 ### API by platform
 
