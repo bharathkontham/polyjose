@@ -31,8 +31,13 @@
 #      extension) those starting with `//` (doc comments such as bindings/wasm/tests/memory.rs's
 #      manual commands; in a shell script a `//` line is a path, and is read). An
 #      assignment is `NAME=`, `NAME+=`, `NAME<<` (GitHub's $GITHUB_ENV), `NAME:` (a YAML env key or a
-#      JavaScript property) or `${NAME:=`. check-test-vectors-off.sh separately checks *RUSTFLAGS
-#      in the environment.
+#      JavaScript property) or `${NAME:=`. A line also fails if it holds one of these names as the
+#      whole of a quoted string, `"NAME"` or `'NAME'` (also `\"NAME\"`, escaped inside a string),
+#      whatever surrounds it: that is how Gradle (`environment("NAME", ...)`,
+#      `environment["NAME"] = ...`, `put("NAME", ...)`, `mapOf("NAME" to ...)`) and Swift
+#      (`env["NAME"] = ...`) set a child process's environment, and how a shell names a variable
+#      to `printf -v` or `export`. A name inside a longer string (`"set NAME first"`) is not one.
+#      check-test-vectors-off.sh separately checks *RUSTFLAGS in the environment.
 #      Every git-listed file (tracked or untracked, not ignored) is read as text, binary ones too
 #      (the PE fixtures of bindings/node), with its NUL bytes dropped first: one-true-awk (macOS)
 #      ends a line at a NUL, which would hide the rest of it, and bash drops NULs when it runs a
@@ -191,6 +196,9 @@ while IFS= read -r -d '' file; do
       eq = "(^|[^A-Za-z0-9_])(" names ")" q "[[:space:]]*([+]?=|<<)"
       colon = "(^|[^A-Za-z0-9_{])(" names ")" q "[[:space:]]*:"
       brace = "[{](" names "):="
+      # A guarded name as a whole quoted string, the closing quote optionally escaped (see the header).
+      sq = sprintf("%c", 39)
+      quoted = "\"(" names ")(\\\\)?\"|" sq "(" names ")(\\\\)?" sq
       flag = "(^|[^A-Za-z0-9_-])--config([=[:space:]\"" sprintf("%c", 39) "]|$)"
       unstable = "(^|[^A-Za-z0-9_-])-Z"
       unzip = "^[[:space:]]*unzip -Z1([[:space:]]|$)"
@@ -213,7 +221,7 @@ while IFS= read -r -d '' file; do
     # The unzip carve-out (see the header): only the -Z test reads this copy.
     { z = $0; if (shell && !continued) sub(unzip, " ", z) }
     (binding && rest ~ "WASM_CARGO_ARGS") || $0 ~ flag || z ~ unstable || $0 ~ eq || $0 ~ colon || $0 ~ brace \
-      || tolower($0) ~ "([.]cargo|cargo_home[}]?)/config" {
+      || $0 ~ quoted || tolower($0) ~ "([.]cargo|cargo_home[}]?)/config" {
       printf "%s:%d: %s\n", file, FNR, $0
     }' >>"$work/settings" || die "could not scan $file"
 done <"$work/build-files.z"

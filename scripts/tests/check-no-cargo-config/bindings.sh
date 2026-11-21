@@ -47,6 +47,13 @@
 #  16. must fail: a text file at the Gradle wrapper jar's path, a zip-signed file at another path;
 #      a RUSTFLAGS assignment after a NUL byte (under bindings/wasm too), a NUL inside the name and
 #      a `-Z` after a NUL (one-true-awk ends a line at a NUL; the gate drops NULs first).
+# A guarded name as the whole of a quoted string (feature 0030 T06):
+#  17. must fail: `environment("NAME", ...)`, `environment["NAME"] = ...`, `put("NAME", ...)`,
+#      `mapOf("NAME" to ...)` and a CARGO_TARGET_<triple>_LINKER name in a .kts file under
+#      bindings/kotlin; `env["NAME"] = ...` and an escaped `\"NAME\"` in a .swift file; a double- and
+#      a single-quoted name in a .sh file under bindings/swift; a single-quoted name under scripts/;
+#  18. must pass: quoted non-guarded names (CARGO_MANIFEST_DIR, NAME_NOTE, CARGO_HOME_DIR), a guarded
+#      name inside a longer quoted string, and a `//` comment line in a .kts file.
 #
 # The planted flags and variable names are assembled from pieces below, because this file is under
 # scripts/, which the gate scans: its own text must hold none of them.
@@ -415,6 +422,42 @@ new_case nul-splits-name
 printf 'RUST\000FLAGS=x cargo build\nok\000 %sbuild-std\n' "$zf" >>"$case_dir/bindings/kotlin/scripts/t06.sh"
 expect_fail "a NUL byte inside a variable name" "^  - bindings/kotlin/scripts/t06\\.sh:1: $rf=" "$rule2"
 expect_also "and a $zf after a NUL byte" "^  - bindings/kotlin/scripts/t06\\.sh:2: ok ${zf}build-std"
+
+# A guarded name as a whole quoted string: how Gradle and Swift set a process environment variable
+# (`environment("NAME", ...)`, `env["NAME"] = ...`), none of which the assignment rules see.
+rw="RUST""C_WRAPPER"
+ch="CARGO""_HOME"
+tl="CARGO_TARGET_AARCH64_LINUX_ANDROID""_LINKER"
+quoted_case() { # <name> <file> <text> <description>
+  new_case "$1"
+  append_to "$2" "$3"
+  expect_fail "$4" "^  - ${2//./\\.}:1: " "$rule2"
+}
+kts=bindings/kotlin/t06.gradle.kts
+quoted_case quoted-environment-call "$kts" 'tasks.register<Exec>("t06") { environment("'"$rf"'", "--cfg x") }' \
+  "environment(\"$rf\", ...) in a .kts file"
+quoted_case quoted-environment-index "$kts" 'val e = environment; e["'"$rw"'"] = "/tmp/wrap"' \
+  "environment[\"$rw\"] = ... in a .kts file"
+quoted_case quoted-put "$kts" 'environment.put("'"$ch"'", "/tmp/home")' "put(\"$ch\", ...) in a .kts file"
+quoted_case quoted-map-of "$kts" 'val e = mapOf("'"$rf"'" to "--cfg x")' "mapOf(\"$rf\" to ...) in a .kts file"
+quoted_case quoted-family "$kts" 'environment("'"$tl"'", "/tmp/cc")' \
+  "a CARGO_TARGET_<triple>_LINKER name, quoted, in a .kts file"
+quoted_case quoted-swift-env bindings/swift/Sources/t06.swift 'env["'"$rf"'"] = "--cfg x"' \
+  "env[\"$rf\"] = ... in a .swift file"
+quoted_case quoted-swift-escaped bindings/swift/Sources/t06.swift 'let s = "env[\"'"$rf"'\"] = 1"' \
+  "an escaped quoted name inside a .swift string"
+quoted_case quoted-sh-double bindings/swift/scripts/t06.sh 'printf -v "'"$rf"'" %s "--cfg x"' \
+  "printf -v \"$rf\" in a .sh file under bindings/swift"
+quoted_case quoted-sh-single bindings/swift/scripts/t06.sh "printf -v '$rw' %s /tmp/wrap" \
+  "a single-quoted name in a .sh file under bindings/swift"
+quoted_case quoted-scripts scripts/t06.sh "export '$ch'" "a single-quoted name in a scripts/ file"
+
+new_case quoted-look-alikes
+append_to "$kts" 'tasks.register<Exec>("t06") { environment("CARGO_MANIFEST_DIR", "x"); environment("'"$rf"'_NOTE", "x") }
+println("set '"$rf"' before building")
+// environment("'"$rf"'", "--cfg x")'
+append_to bindings/swift/scripts/t06.sh "echo '$rf is read by cargo'; echo \"${ch}_DIR\""
+expect_pass "a quoted non-guarded name, a guarded name inside a longer string, and a // comment in .kts"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
