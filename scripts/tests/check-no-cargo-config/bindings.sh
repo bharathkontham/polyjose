@@ -68,9 +68,9 @@
 #      quoted in Gradle); polyjose.jniLibsDir set in .properties files (`=`, `:`, whitespace);
 #  20. must pass: CRLF line ends; `#` comments in .sh, .yml, .toml, .properties and an
 #      extensionless file; `//` prose naming the variables; `${NAME:-x}` and `${NAME:+x}`;
-#      conditional settings of other names; `--` after cargo test, run and clippy and after a
-#      closed cargo rustc list; a read of RUSTUP_TOOLCHAIN; other properties, and the
-#      polyjose.jniLibsDir text in Markdown.
+#      conditional settings of other names; `--` after cargo test, run and clippy (shell lines,
+#      and a quoted cargo run list in a file without a rustc word); a read of RUSTUP_TOOLCHAIN;
+#      other properties, and the polyjose.jniLibsDir text in Markdown.
 # Fix round 3 (feature 0030 T06: follow-up audit of 0a7be3ae, bug B02, round-2 tester (c)):
 #  21. must fail: a `#` piece after a CR, a `#` line continuing `echo x\`, a `#` after a form feed,
 #      a vertical tab or a leading CR (shell code, not comments); B02's `# note )` inside a Python
@@ -78,15 +78,28 @@
 #      starting with `@` after cargo rustc/rustdoc (on its line, a continuation line, a Gradle
 #      list); a CR or LS between a name and its `=` or `:`; polyjose.jniLibsDir then a `\`;
 #  22. must pass: indented `#` comments naming a variable in a .sh file; a balanced `# (see note)`
-#      in a Python list without `--`, and a `# )` comment and a `--` after the list closes; `@` on
-#      lines that are not a cargo rustc command (`git show @{u}`, `"@here"`).
+#      in a Python list without `--`, and a `# )` comment after the list closes; `@` on lines
+#      that are not a cargo rustc command (`git show @{u}`, a quoted `@here`) in a file without
+#      a rustc word.
 # Fix round 4 (feature 0030 T06: final audit B-1, L-1, L-4):
 #  23. must fail: a quoted cargo in a call that closes, then the real argv list on the same line and
 #      `--` on the next (Kotlin `if (listOf(...))`, JavaScript `assert(...)`); a list that closes
 #      with a new one opening later on its line; a `'"'` string before a `# " ]` comment in a Python
 #      list; a guarded name as a JavaScript template literal (also with an escaped closing backtick);
-#  24. must pass: a cargo rustc list closed on its line (another call after it), then an unrelated
-#      `--` in a later list; template literals holding a non-guarded name or a longer text.
+#      since T07 (the file-level rule), also a cargo rustc list closed on its line, then an
+#      unrelated quoted `--` in a later list (a must-pass of the bracket tracker before);
+#  24. must pass: template literals holding a non-guarded name or a longer text.
+# Feature 0030 T07 (audit of d1e1b3af H-1, M-1, L-1): argument lists by file, no bracket tracking.
+#  25. must fail: every proof of concept of H-1 (a `/'/` regex in .mjs, a `==~ /'/` in .gradle) and
+#      M-1 (a Kotlin `"""` string, a template literal, a Python `'''` string, a `/"/` regex) with
+#      a quoted `--` on the next line; a shell array of a quoted cargo and rustc, then a quoted
+#      `--` on the next line; a quoted `--` far from the cargo command, in a comment, after a
+#      quoted path to cargo, and with the two words in upper case; a `--` in a JavaScript template
+#      literal; each new allowed line in another file or twice; a double-quoted guarded name in
+#      Markdown;
+#  26. must pass: the L-1 Markdown line (backtick-quoted RUSTFLAGS and CARGO_HOME); a quoted cargo
+#      with a quoted `--` and a quoted `@` in non-shell files without a rustc or rustdoc word, and a
+#      `rustc --` list in a file without a cargo word.
 #
 # The planted flags and variable names are assembled from pieces below, because this file is under
 # scripts/, which the gate scans: its own text must hold none of them.
@@ -512,6 +525,9 @@ dd="-""-"
 rustc_word="rust""c"
 rustdoc_word="rust""doc"
 qcargo="\"car""go\""
+# Since T07 a quote directly before `@` or `--` in this file (which names cargo and rustc) would fail
+# the gate on the tree, so `@` comes from a variable too.
+at=@
 yml=.github/workflows/t06.yml
 # plant <path in the copy> <printf format> [<arguments>...]: appends printf's output (CRs and other
 # bytes append_to cannot write).
@@ -648,11 +664,9 @@ cargo run -p polyjose-uniffi-bindgen $dd generate x
 cargo clippy --workspace $dd -D warnings"
 append_to "$kts" "commandLine(
     $qcargo, \"run\", \"-p\", \"polyjose-uniffi-bindgen\",
-    \"$dd\", \"generate\", \"$rustc_word\",
-)
-commandLine($qcargo, \"$rustc_word\", \"-p\", \"x\")
-val sep = listOf(\"$dd\")"
-expect_pass "$dd after cargo test, run and clippy; after a closed cargo $rustc_word argument list"
+    \"$dd\", \"generate\",
+)"
+expect_pass "$dd after cargo test, run and clippy; a quoted cargo run list with \"$dd\" in a file without a $rustc_word word"
 cfg_file=scripts/check-test-vectors-off.sh
 # shellcheck disable=SC2016 # the exact text of the line, not expansions
 cfg_line='if ! cfgs=$(cargo '"$rustc_word"' --locked -q -p polyjose --lib '"$dd"' --print cfg 2>&1); then'
@@ -736,13 +750,15 @@ expect_fail "the check-test-vectors-off.sh line twice" "^  - scripts/check-test-
 new_case r2-utf8-lookalikes-pass
 plant bindings/node/t06.js 'caf\303\205 \342\204\205 \342\200\246 \303\205\302\250 x\n'
 expect_pass "UTF-8 text with bytes next to the NEL, LS and PS sequences but no line break"
+# The `--` lines are indented: since T07 round 2 (audit L-2) a line that starts with `--` fails in a
+# file that names cargo and rustc.
 new_case r2-continuation-breaks-pass
 append_to scripts/t06.sh "cargo $rustc_word --lib \\
   # a comment line ends the continuation
   $dd not-a-cargo-argument
 cargo $rustc_word --lib \\
 
-$dd another"
+  $dd another"
 expect_pass "$dd after a comment line or a blank line that ends a cargo $rustc_word continuation (a separate command)"
 
 # H. Fix round 3 (feature 0030 T06: follow-up audit of 0a7be3ae F1-F5, bug B02, round-2 tester (c)).
@@ -795,9 +811,8 @@ append_to bindings/node/scripts/t06.py "subprocess.run([
   # (see note)
   \"-p\", \"x\",
 ])
-# note ) after the list
-sep = [\"$dd\"]"
-expect_pass "a balanced # (see note) in a Python list without $dd; a # ) comment and a $dd after it closes"
+# note ) after the list"
+expect_pass "a balanced # (see note) in a Python list without $dd; a # ) comment after it closes"
 
 # F4: an `@` argument file after cargo rustc or rustdoc (rustc reads arguments from it, no `--`).
 quoted_case f4-at-line scripts/t06.sh "cargo $rustc_word --lib @flags.txt" "F4: cargo $rustc_word --lib @flags.txt"
@@ -806,12 +821,12 @@ append_to bindings/swift/scripts/t06.sh "cargo $rustc_word --lib \\
   @flags.txt"
 expect_fail "F4: @flags.txt on the continuation line of a cargo $rustc_word command" \
   "^  - bindings/swift/scripts/t06\\.sh:2:   @flags" "$rule2"
-quoted_case f4-at-list "$kts" "commandLine($qcargo, \"$rustdoc_word\", \"-p\", \"x\", \"@flags\")" \
-  "F4: \"@flags\" in a Gradle commandLine of cargo $rustdoc_word"
+quoted_case f4-at-list "$kts" "commandLine($qcargo, \"$rustdoc_word\", \"-p\", \"x\", \"${at}flags\")" \
+  "F4: \"${at}flags\" in a Gradle commandLine of cargo $rustdoc_word"
 new_case f4-at-pass
-append_to scripts/t06.sh "git show @{u}
-echo \"@here\""
-expect_pass "@ on lines that are not a cargo $rustc_word command (git show @{u}, \"@here\")"
+append_to scripts/t06.sh "git show ${at}{u}
+echo \"${at}here\""
+expect_pass "$at on lines that are not a cargo $rustc_word command (git show ${at}{u}, \"${at}here\")"
 
 # F5: the assignment rules read a line's pieces joined, so a CR or LS between a name and its = or :
 # (whitespace in JavaScript) still matches.
@@ -887,10 +902,12 @@ append_to "$kts" "run1([$qcargo, \"build\",
   \"$dd\", \"-Cx\")"
 expect_fail "B-1: a list that closes, then run2($qcargo, \"$rustc_word\", on its line, then \"$dd\" next" \
   "^  - ${kts//./\\.}:3:   \"$dd\"" "$rule2"
-new_case j-b1-pass
+# Was a must-pass of the bracket tracker; since T07 the file-level rule fails it (fails closed).
+new_case j-b1-closed-then-unrelated
 append_to "$kts" "commandLine($qcargo, \"$rustc_word\", \"-p\", \"x\"); exec(listOf(\"git\"))
 val a = listOf(\"git\", \"$dd\")"
-expect_pass "a cargo $rustc_word list closed on its line (another call after it), then an unrelated \"$dd\" list"
+expect_fail "a cargo $rustc_word list closed on its line, then an unrelated \"$dd\" list (the file-level rule)" \
+  "^  - ${kts//./\\.}:2: val a" "$rule2"
 # L-1: both string kinds are taken out in one pass.
 new_case j-l1-python
 plant bindings/node/scripts/t06.py 'cmd = [%s, "%s", %s"%s and "--lib",  # " ]\n   "%s", "-Cx"]\n' \
@@ -905,6 +922,196 @@ plant_case j-l4-escaped bindings/wasm/js/t06.mjs '1: eval' \
 new_case j-l4-pass
 plant bindings/node/test/t06.ts 'const d = process.env[\140CARGO_MANIFEST_DIR\140];\nconsole.log(\140set %s first\140, \140%s_NOTE\140);\n' "$rf" "$rf"
 expect_pass "template literals with a non-guarded name, a guarded name in a longer text, and NAME_NOTE"
+
+# K. Feature 0030 T07 (audit of d1e1b3af H-1, M-1, L-1): in a file that names cargo and rustc or
+# rustdoc, every line with a quoted `--` or `@` fails, with no bracket or string tracking.
+sqt="'"
+# H-1: an apostrophe in a regex or slashy literal swallowed the next string's opening quote.
+plant_case k-h1-mjs bindings/node/scripts/t07.mjs "2:   \"$dd\"" "H-1: a /'/ regex, then a string holding ' ]], then \"$dd\" in .mjs" \
+  'run([%s, "%s", name.replace(/%s/, ""), "a%s ]]",\n  "%s", "-C", "x"]);\n' "$qcargo" "$rustc_word" "$sqt" "$sqt" "$dd"
+plant_case k-h1-gradle bindings/kotlin/t07.gradle "2:   \"$dd\"" "H-1: a ==~ /'/ slashy string, then \"b' )\", then \"$dd\" in .gradle" \
+  'exec { commandLine(%s, "%s", n ==~ /%s/ ? "a" : "b%s )",\n  "%s", "-Cx") }\n' "$qcargo" "$rustc_word" "$sqt" "$sqt" "$dd"
+# M-1: literals the stripper did not know.
+plant_case k-m1-kts-raw bindings/kotlin/t07.gradle.kts "2:     \"$dd\"" "M-1: a Kotlin \"\"\" string holding \"], then \"$dd\"" \
+  'commandLine(%s, "%s", """ "] """,\n    "%s", "-Cx")\n' "$qcargo" "$rustc_word" "$dd"
+plant_case k-m1-mjs-template bindings/wasm/js/t07.mjs "2:   \"$dd\"" "M-1: a template literal holding ], then \"$dd\" in .mjs" \
+  'run([%s, "%s", \140x]\140,\n  "%s", "-C", "x"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case k-m1-py bindings/node/scripts/t07.py "2:    \"$dd\"" "M-1: a Python ''' string holding '], then \"$dd\"" \
+  'cmd = [%s, "%s", %s %s] %s,\n   "%s", "-Cx"]\n' "$qcargo" "$rustc_word" "$sqt$sqt$sqt" "$sqt" "$sqt$sqt$sqt" "$dd"
+plant_case k-m1-mjs-dq-regex bindings/node/scripts/t07.mjs "2:   \"$dd\"" "M-1: a /\"/ regex, then a string holding \" ]], then \"$dd\" in .mjs" \
+  'run([%s, "%s", name.replace(/"/, %s%s), %s" ]]%s,\n  "%s", "-C", "x"]);\n' "$qcargo" "$rustc_word" "$sqt" "$sqt" "$sqt" "$sqt" "$dd"
+# Other forms the file-level rule reads.
+plant_case k-shell-array scripts/t07.sh "2:   \"$dd\"" "a shell array (%s \"$rustc_word\" ..., then \"$dd\" on the next line)" \
+  'cmd=(%s "%s" --lib\n  "%s" -Cx)\n' "$qcargo" "$rustc_word" "$dd"
+plant_case k-far-away bindings/kotlin/t07.kts "1: val sep" "a \"$dd\" in a separate statement above the cargo $rustc_word list" \
+  'val sep = "%s"\nfun f() = 1\ncommandLine(%s, "%s", sep, "-Cx")\n' "$dd" "$qcargo" "$rustc_word"
+plant_case k-comment bindings/kotlin/t07.kts "2: // then" "a \"$dd\" in a comment of a file naming cargo and $rustc_word" \
+  'val a = %s\n// then "%s" is prose\nval b = "%s"\n' "$qcargo" "$dd" "$rustc_word"
+plant_case k-path-cargo bindings/node/scripts/t07.mjs "2:   \"$rustc_word\"" "a quoted path to cargo, then \"$dd\"" \
+  'spawn("/usr/local/bin/cargo", [\n  "%s", "%s", "-Cx"]);\n' "$rustc_word" "$dd"
+plant_case k-upper-case bindings/node/scripts/t07.py "3:   \"$dd\"" "the two words in upper case in a comment, then \"$dd\"" \
+  '# CARGO RUSTDOC wrapper\nrun(args + [\n  "%s", "-Cx"])\n' "$dd"
+plant_case k-template-dashdash bindings/wasm/js/t07.mjs "2:   .$dd" "a template literal holding $dd in a cargo $rustc_word list" \
+  'run([%s, "%s",\n  \140%s\140, "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case k-md-double-quoted bindings/kotlin/t07.md "1: Set" "a double-quoted $rf in Markdown" 'Set "%s" in CI.\n' "$rf"
+# The allowed non-argument lines: once each in the tree; twice or elsewhere fails.
+esc_file=scripts/check-rsa-symbols.sh
+# shellcheck disable=SC2016 # the exact text of the line, not expansions
+esc_line='LEGACY_ESCAPES = [("$SP$", "'"$at"'"), ("$BP$", "*"), ("$RF$", "&"), ("$LT$", "<"), ("$GT$", ">"),'
+napi_note_line='        // napi build passes the options after `'"$dd"'` on to cargo build (and to its cargo metadata).'
+# shellcheck disable=SC2016 # the exact text of the line, not expansions
+napi_msg_line='        assert.match(napiLine, /[ \t]'"$dd"'[ \t]+--locked\b/, `${name}: napi build without \`'"$dd"' --locked\`: ${napiLine.trim()}`);'
+for pair in "$esc_file:$esc_line" "$crt_test_file:$napi_note_line" "$crt_test_file:$napi_msg_line"; do
+  tests_run=$((tests_run + 1))
+  if [ "$(grep -cFx -- "${pair#*:}" "$repo/${pair%%:*}" 2>/dev/null || true)" = 1 ]; then
+    echo "ok   - ${pair%%:*} holds an allowed non-argument line once"
+  else
+    echo "FAIL - ${pair%%:*} does not hold its allowed non-argument line exactly once: ${pair#*:}"
+    tests_failed=$((tests_failed + 1))
+  fi
+done
+new_case k-allowed-twice
+append_to "$esc_file" "$esc_line"
+append_to "$crt_test_file" "$napi_note_line
+$napi_msg_line"
+expect_fail "the LEGACY_ESCAPES line a second time in $esc_file" "^  - ${esc_file//./\\.}:[0-9]+: LEGACY_ESCAPES" "$rule2"
+expect_also "the napi comment line a second time in $crt_test_file" "^  - ${crt_test_file//./\\.}:[0-9]+:         // napi build"
+expect_also "the napi assertion line a second time in $crt_test_file" "^  - ${crt_test_file//./\\.}:[0-9]+:         assert[.]match"
+new_case k-allowed-other-file
+append_to bindings/node/test/t07.ts "// cargo $rustc_word
+$esc_line
+$napi_note_line
+$napi_msg_line"
+expect_fail "the LEGACY_ESCAPES line in another file" "^  - bindings/node/test/t07\\.ts:2: LEGACY_ESCAPES" "$rule2"
+expect_also "the napi comment line in another file" "^  - bindings/node/test/t07\\.ts:3: "
+expect_also "the napi assertion line in another file" "^  - bindings/node/test/t07\\.ts:4: "
+# Must pass: the L-1 line, and the rule's two conditions.
+new_case k-l1-md-pass
+plant bindings/kotlin/t07.md '# Notes\n\nSet \140%s\140 only in CI. See \140%s\140.\n' "$rf" "$ch"
+expect_pass "L-1: backtick-quoted $rf and $ch in a Markdown file (inline code)"
+new_case k-no-rustc-pass
+plant bindings/wasm/js/t07.mjs 'run([%s, "build", "%s", "x"]);\nimport w from "%spolyjose/wasm";\n' "$qcargo" "$dd" "$at"
+plant bindings/kotlin/t07.kts 'commandLine(%s, "build",\n  "%s", "x")\nval at = "%sflags"\n' "$qcargo" "$dd" "$at"
+expect_pass "a quoted cargo with \"$dd\" and a quoted $at in .mjs and .kts files without a $rustc_word or $rustdoc_word word"
+new_case k-no-cargo-pass
+plant bindings/node/scripts/t07.mjs 'spawnSync("%s", [\n  "%s", "-C", "x"]);\n' "$rustc_word" "$dd"
+expect_pass "a quoted \"$dd\" on the line after a $rustc_word word, in a file without a cargo word"
+# On the rustc line itself it fails since T07 round 2 (audit L-1: no cargo word needed on the line).
+plant_case k-no-cargo-same-line bindings/node/scripts/t07.mjs "1: spawnSync" "a quoted \"$dd\" after a $rustc_word word on its line, no cargo word" \
+  'spawnSync("%s", ["%s", "-C", "x"]);\n' "$rustc_word" "$dd"
+
+# L. T07 tester pins: the mechanics of the file-level rule (hits kept until the end of the file).
+# The words may come after the quoted `--` (the verdict is made at the end of the file).
+plant_case l-words-after bindings/node/scripts/t07b.mjs "1: x\\(\"$dd\"\\)" "a quoted $dd line above the cargo and $rustc_word words of its file" \
+  'x("%s")\nconst a = %s;\nconst b = "%s";\n' "$dd" "$qcargo" "$rustc_word"
+plant_case l-rustdoc-at bindings/kotlin/t07b.kts "2:   \"${at}flags\"" "a quoted ${at}flags in a file with cargo and $rustdoc_word" \
+  'commandLine(%s, "%s",\n  "%sflags")\n' "$qcargo" "$rustdoc_word" "$at"
+# Line breaks other than LF, and NUL, do not hide the quoted `--` from the rule.
+plant_case l-cr bindings/node/scripts/t07c.mjs "1: const a = \\[.*<CR>x\\(\"$dd\"\\)" "a CR before a quoted $dd on one line (reported as <CR>)" \
+  'const a = [%s, "%s"];\rx("%s")\n' "$qcargo" "$rustc_word" "$dd"
+plant_case l-nel bindings/node/scripts/t07d.mjs "1: const a = \\[.*x\\(\"$dd\"\\)" "a NEL before a quoted $dd on one line" \
+  'const a = [%s, "%s"];\302\205x("%s")\n' "$qcargo" "$rustc_word" "$dd"
+plant_case l-ls bindings/node/scripts/t07e.mjs "1: const a = \\[.*\"$dd\"" "an LS before a quoted $dd on one line" \
+  'const a = [%s, "%s"];\342\200\250"%s"\n' "$qcargo" "$rustc_word" "$dd"
+plant_case l-nul bindings/node/scripts/t07f.mjs "2: \"$dd\"" "a quoted $dd with a NUL byte inside (dropped before the scan)" \
+  'const a = [%s, "%s"];\n"-\0-"\n' "$qcargo" "$rustc_word"
+# A file with hits of an older rule and of the new rule: all reported, in line order, once each.
+new_case l-mixed
+plant bindings/node/scripts/t07g.py 'x = [%s, "%s",\n  "%s", "-Cx"]\nexport %s=-Cy\ny = "%sf"\ncargo %s %s -Cz\n' "$qcargo" "$rustc_word" "$dd" "$rf" "$at" "$rustc_word" "$dd"
+expect_fail "a file with a quoted $dd, an assignment, a quoted $at and a cargo command line with $dd" \
+  "^  - bindings/node/scripts/t07g\\.py:2: " "$rule2"
+tests_run=$((tests_run + 1))
+got=$(grep '^  - bindings/node/scripts/t07g.py:' "$scratch/out" | sed 's/^[^:]*:\([0-9]*\):.*/\1/' | tr '\n' ' ')
+if [ "$got" = "2 3 4 5 " ]; then
+  echo "ok   - the four hits are reported in line order, each once"
+else
+  echo "FAIL - the four hits of t07g.py: wanted lines '2 3 4 5 ', got '$got'"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+# Without cargo and rustc words the quoted `--` is not reported, but an older rule's hit on another
+# line of the file still is.
+new_case l-older-without-words
+plant bindings/node/scripts/t07h.mjs 'run(["build", "%s"]);\nexport %s=-Cx\n' "$dd" "$rf"
+expect_fail "an assignment in a file whose quoted $dd has no cargo and $rustc_word words" "^  - bindings/node/scripts/t07h\\.mjs:2: export $rf" "$rule2"
+tests_run=$((tests_run + 1))
+if ! grep -q 't07h\.mjs:1:' "$scratch/out"; then
+  echo "ok   - and its quoted $dd line is not reported"
+else
+  echo "FAIL - the quoted $dd line of t07h.mjs is reported without cargo and $rustc_word words"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+# The scan stops (exit 2) when the awk does not handle the line-break bytes, and prints no hit as if
+# the scan had read the file: the BEGIN self-check is made to fail in a copy of the gate.
+new_case l-awk-selfcheck
+plant bindings/node/scripts/t07i.mjs 'const a = [%s, "%s"];\n"%s"\nexport %s=-Cx\n' "$qcargo" "$rustc_word" "$dd" "$rf"
+edit_in scripts/check-no-cargo-config.sh 'if (cr != "\r"' 'if (cr == "\r"'
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" = 2 ] && grep -q 'does not handle the line-break bytes' "$scratch/out" \
+  && ! grep -q 't07i\.mjs:' "$scratch/out" && ! grep -q 'rustc arguments after' "$scratch/out"; then
+  echo "ok   - a failing awk self-check exits 2 and reports no hit of the file as a result"
+else
+  echo "FAIL - a failing awk self-check: exit $rc (expected 2), no hit lines expected"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+
+# M. T07 round 2 (security audit of the file-level rule: M-1, L-1, L-2).
+# M-1: a reported line is joined with `:`, not sprintf'd (mawk stops on a sprintf over ~8 KB).
+xs=$(printf '%9000s' ''); xs=${xs// /x}
+new_case m-long-pass
+plant bindings/x/bin.node 'MZ%s"%syyy\n' "$xs" "$at"
+expect_pass "a 9000-byte line with a quoted $at in a file without cargo and $rustc_word words (mawk: no sprintf limit)"
+new_case m-long-hit
+plant bindings/node/scripts/t07l.mjs 'run([%s, "%s",\n%s"%s", "-Cx"]);\nexport %s=%s\n' "$qcargo" "$rustc_word" "$xs" "$dd" "$rf" "$xs"
+expect_fail "a 9000-byte line with a quoted $dd in a cargo $rustc_word file (reported, exit 1 not 2)" \
+  "^  - bindings/node/scripts/t07l\\.mjs:2: x+\"$dd\"" "$rule2"
+expect_also "and a 9000-byte $rf assignment line" "^  - bindings/node/scripts/t07l\\.mjs:3: export $rf=x+$"
+# L-1: cargo through a variable on a shell or workflow line (any case, or no cargo word at all).
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-cargo-var scripts/t07m.sh "1: \"[$]CARGO\" $rustc_word" "\"\$CARGO\" $rustc_word --lib $dd -C debuginfo=2" \
+  '"$CARGO" %s --lib %s -C debuginfo=2\n' "$rustc_word" "$dd"
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-cargo-bin scripts/t07m.sh "1: \"[$][{]CARGO_BIN[}]\" $rustc_word" "\"\${CARGO_BIN}\" $rustc_word --lib $dd -Cx (no cargo word)" \
+  '"${CARGO_BIN}" %s --lib %s -Cx\n' "$rustc_word" "$dd"
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-gha-env "$yml" "1:       - run: " "\${{ env.CARGO }} $rustc_word --lib $dd -Cx in a workflow" \
+  '      - run: ${{ env.CARGO }} %s --lib %s -Cx\n' "$rustc_word" "$dd"
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-cargo-var-at scripts/t07m.sh "1: [$]CARGO $rustc_word" "\$CARGO $rustc_word --lib ${at}flags" \
+  '$CARGO %s --lib %sflags\n' "$rustc_word" "$at"
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-rustc-continuation scripts/t07m.sh "2:   $dd -Cx" "$dd on the continuation line of \"\${CARGO_BIN}\" $rustc_word --lib \\" \
+  '"${CARGO_BIN}" %s --lib \\\n  %s -Cx\n' "$rustc_word" "$dd"
+new_case m-rustc-lookalikes-pass
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant scripts/t07m.sh '%s --version\n%s -vV | sed -n "s/^host: //p"\nrust=$(%s --print sysroot)\n"$CARGO" test -p a %s --nocapture\n' \
+  "$rustc_word" "$rustc_word" "$rustc_word" "$dd"
+expect_pass "$rustc_word --version, -vV and --print sysroot lines, and \"\$CARGO\" test ... $dd"
+# L-2: a quote, backslashes, then `--` or `@`, and the rest of a string continued on the next line.
+plant_case m-l2-backslash-dd bindings/node/scripts/t07n.mjs "2:   \"[\\\\]$dd\"" "a quoted \\$dd in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-backslash-at bindings/node/scripts/t07n.mjs "2:   \"[\\\\]${at}flags" "a quoted \\${at}flags.txt in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\%sflags.txt"]);\n' "$qcargo" "$rustc_word" "$at"
+plant_case m-l2-continued-py bindings/node/scripts/t07n.py "3: $dd\"" "a Python string continued by \\ onto a line starting with $dd" \
+  'cmd = [%s, "%s", "--lib",\n  "\\\n%s", "-Cx"]\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-continued-mjs bindings/node/scripts/t07n.mjs "3: $dd\"" "a JavaScript string continued by \\ onto a line starting with $dd" \
+  'run([%s, "%s", "--lib",\n  "\\\n%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-kts-raw bindings/kotlin/t07n.gradle.kts "2: $dd\"\"\"" "a Kotlin \"\"\" string whose next line starts with $dd" \
+  'tasks.register<Exec>("b") { commandLine(%s, "%s", """\n%s""".trim(), "-Cx") }\n' "$qcargo" "$rustc_word" "$dd"
+# Re-audit of 7295f00c: a CR, NEL, LS or PS inside the LF line also counts as a line start (they
+# continue a string in JavaScript; CR also in Python).
+plant_case m-l2-cr-dd bindings/node/scripts/t07o.mjs "2:   \"[\\\\]<CR>$dd\"" "a quoted \\ then a CR then $dd in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\\r%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-nel-dd bindings/node/scripts/t07o.mjs "2:   \"[\\\\].+$dd\"" "a quoted \\ then a NEL then $dd in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\\302\205%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-ls-dd bindings/node/scripts/t07o.mjs "2:   \"[\\\\].+$dd\"" "a quoted \\ then an LS (U+2028) then $dd in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\\342\200\250%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-ps-at bindings/node/scripts/t07o.mjs "2:   \"[\\\\].+${at}flags" "a quoted \\ then a PS (U+2029) then ${at}flags in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\\342\200\251%sflags"]);\n' "$qcargo" "$rustc_word" "$at"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
