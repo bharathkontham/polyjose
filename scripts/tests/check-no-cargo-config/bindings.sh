@@ -71,6 +71,15 @@
 #      conditional settings of other names; `--` after cargo test, run and clippy and after a
 #      closed cargo rustc list; a read of RUSTUP_TOOLCHAIN; other properties, and the
 #      polyjose.jniLibsDir text in Markdown.
+# Fix round 3 (feature 0030 T06: follow-up audit of 0a7be3ae, bug B02, round-2 tester (c)):
+#  21. must fail: a `#` piece after a CR, a `#` line continuing `echo x\`, a `#` after a form feed,
+#      a vertical tab or a leading CR (shell code, not comments); B02's `# note )` inside a Python
+#      argv list and a Ruby `# see )` before `--`, and the balanced `# (see note)` variant; a word
+#      starting with `@` after cargo rustc/rustdoc (on its line, a continuation line, a Gradle
+#      list); a CR or LS between a name and its `=` or `:`; polyjose.jniLibsDir then a `\`;
+#  22. must pass: indented `#` comments naming a variable in a .sh file; a balanced `# (see note)`
+#      in a Python list without `--`, and a `# )` comment and a `--` after the list closes; `@` on
+#      lines that are not a cargo rustc command (`git show @{u}`, `"@here"`).
 #
 # The planted flags and variable names are assembled from pieces below, because this file is under
 # scripts/, which the gate scans: its own text must hold none of them.
@@ -728,6 +737,88 @@ cargo $rustc_word --lib \\
 
 $dd another"
 expect_pass "$dd after a comment line or a blank line that ends a cargo $rustc_word continuation (a separate command)"
+
+# H. Fix round 3 (feature 0030 T06: follow-up audit of 0a7be3ae F1-F5, bug B02, round-2 tester (c)).
+# A `#` is a comment only as the first piece of a line that does not continue the one above, after
+# spaces and tabs only: a shell ends a line at LF only, and FF, VT and CR are no blanks to it.
+plant_case f1-cr-hash bindings/kotlin/scripts/t06.sh '1: : <CR>#; export' \
+  "F1: ': <CR>#; export $rf=-Cx' in a .sh file (a CR does not end a shell line)" ': \r#; export %s=-Cx\n' "$rf"
+plant_case f2-continued-hash bindings/swift/scripts/t06.sh '2: #; export' \
+  "F2: a # line after 'echo x\\' (it continues the command, no comment)" 'echo x\\\n#; export %s=-Cx\n' "$rf"
+plant_case f2-ff-indent scripts/t06.sh '1: .#; export' \
+  "F2: a # after a form feed (not a shell comment)" '\f#; export %s=-Cx\n' "$rf"
+plant_case f2-vt-indent bindings/node/scripts/t06.sh '1: .#; export' \
+  "F2: a # after a vertical tab (not a shell comment)" '\v#; export %s=-Cx\n' "$rf"
+plant_case f2-cr-indent bindings/wasm/scripts/t06.sh '1: <CR>#; export' \
+  "F2: a # after a CR at the start of a line (not a shell comment)" '\r#; export %s=-Cx\n' "$rf"
+new_case hash-indented-pass
+plant bindings/kotlin/scripts/t06.sh '  # export %s=x before running\n\t# %s: x\n' "$rf" "$rw"
+expect_pass "indented # comments (spaces, a tab) naming a variable in a .sh file"
+
+# B02: closing brackets are counted without any comment style, whatever the file type.
+new_case b02-python-unbalanced
+append_to bindings/node/scripts/t06.py "subprocess.run([
+  $qcargo,
+  \"$rustc_word\",
+  # note )
+  \"$dd\",
+  \"-C\", \"linker=x\",
+])"
+expect_fail "B02: a # comment holding ) inside a Python argv list, then \"$dd\"" \
+  "^  - bindings/node/scripts/t06\\.py:5:   \"$dd\"" "$rule2"
+new_case b02-ruby-inline
+append_to bindings/swift/scripts/t06.rb "system($qcargo, \"$rustc_word\", # see )
+  \"$dd\", \"-C\", \"linker=x\")"
+expect_fail "B02: a Ruby # comment holding ) after \"$rustc_word\", then \"$dd\" on the next line" \
+  "^  - bindings/swift/scripts/t06\\.rb:2:   \"$dd\"" "$rule2"
+new_case b02-python-balanced
+append_to bindings/node/scripts/t06.py "subprocess.run([
+  $qcargo,
+  \"$rustc_word\",
+  # (see note)
+  \"$dd\",
+  \"-C\", \"linker=x\",
+])"
+expect_fail "B02: a balanced # (see note) comment inside a Python argv list, then \"$dd\"" \
+  "^  - bindings/node/scripts/t06\\.py:5:   \"$dd\"" "$rule2"
+new_case b02-pass
+append_to bindings/node/scripts/t06.py "subprocess.run([
+  $qcargo,
+  \"$rustc_word\",
+  # (see note)
+  \"-p\", \"x\",
+])
+# note ) after the list
+sep = [\"$dd\"]"
+expect_pass "a balanced # (see note) in a Python list without $dd; a # ) comment and a $dd after it closes"
+
+# F4: an `@` argument file after cargo rustc or rustdoc (rustc reads arguments from it, no `--`).
+quoted_case f4-at-line scripts/t06.sh "cargo $rustc_word --lib @flags.txt" "F4: cargo $rustc_word --lib @flags.txt"
+new_case f4-at-continuation
+append_to bindings/swift/scripts/t06.sh "cargo $rustc_word --lib \\
+  @flags.txt"
+expect_fail "F4: @flags.txt on the continuation line of a cargo $rustc_word command" \
+  "^  - bindings/swift/scripts/t06\\.sh:2:   @flags" "$rule2"
+quoted_case f4-at-list "$kts" "commandLine($qcargo, \"$rustdoc_word\", \"-p\", \"x\", \"@flags\")" \
+  "F4: \"@flags\" in a Gradle commandLine of cargo $rustdoc_word"
+new_case f4-at-pass
+append_to scripts/t06.sh "git show @{u}
+echo \"@here\""
+expect_pass "@ on lines that are not a cargo $rustc_word command (git show @{u}, \"@here\")"
+
+# F5: the assignment rules read a line's pieces joined, so a CR or LS between a name and its = or :
+# (whitespace in JavaScript) still matches.
+plant_case f5-cr-eq bindings/node/test/t06.ts '1: process[.]env[.]' \
+  "F5: process.env.$rf<CR>= ... in a .ts file" 'process.env.%s\r= "-Cx";\n' "$rf"
+plant_case f5-ls-eq bindings/wasm/js/t06.mjs '1: process[.]env[.]' \
+  "F5: process.env.$rf<LS>= ... in a .mjs file" 'process.env.%s\342\200\250= "-Cx";\n' "$rf"
+plant_case f5-cr-colon bindings/node/test/t06.ts '1: spawn' \
+  "F5: { $rf<CR>: ... } in a .ts object" 'spawn("x", { env: { %s\r: "-Cx" } });\n' "$rf"
+
+# Round-2 tester (c): polyjose.jniLibsDir, a backslash continuation, then the separator.
+new_case jnilibs-backslash
+plant bindings/kotlin/gradle.properties '%s\\\n=/tmp/libs\n' "$jl"
+expect_fail "$jl, a \\ continuation, then =" "^  - bindings/kotlin/gradle\\.properties:[0-9]+: ${jl//./\\.}\\\\$" "$rule2"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
