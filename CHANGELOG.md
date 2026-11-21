@@ -4,7 +4,9 @@ All notable changes to polyjose are documented in this file. The format is based
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and polyjose follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-11-21
+
+A new repository layout: every binding now lives under `bindings/` (ADR 0074). Nothing in the public API or in behaviour changed, and verification and decryption return the same results as in 0.4.0. This is a minor release because the layout of a source checkout changed, which is what SPM consumers and build-from-source scripts see; on 0.x, Cargo and npm treat a minor bump as the compatibility boundary, so a `^0.4.0` requirement stays on 0.4.0 until you change it.
 
 ### Changed
 
@@ -12,7 +14,8 @@ All notable changes to polyjose are documented in this file. The format is based
   - `platforms/android` → `bindings/kotlin`, with the modules in `android/` (AAR), `jvm/` (jar) and `shared/`;
   - `platforms/swift` → `bindings/swift`;
   - `bindings/ffi` → `bindings/uniffi`;
-  - `bindings/js` → `bindings/ts-common`, whose private, never-published package is renamed `@polyjose/ts-common`.
+  - `bindings/js` → `bindings/ts-common`, whose private, never-published package is renamed `@polyjose/ts-common`;
+  - `conformance/schema.json` → `conformance/schema/vectors.schema.json`.
 
   New `ARCHITECTURE.md` and expanded `CONTRIBUTING.md`.
 
@@ -21,6 +24,16 @@ All notable changes to polyjose are documented in this file. The format is based
   - comments in the npm packages' compiled facade and in the Maven sources jars name the new paths.
 
   If you build polyjose from source with your own scripts, update their paths.
+- **Build guard (contributors only).** `scripts/check-no-cargo-config.sh`, which keeps any Cargo configuration out of the repository and its scripts, now also scans `bindings/kotlin` and `bindings/swift` and catches more spellings of a Cargo `--config` or rustc argument (quoted names, comments, argument lists and `@` argument files). Nothing published changes.
+
+### API by platform
+
+No function, type, signature or error code changed on any platform (`bindings/api-inventory.txt` changes only in a comment).
+
+- **Rust (`polyjose`):** unchanged.
+- **Node.js (`@polyjose/node`) and Web (`@polyjose/wasm`):** unchanged.
+- **Android and the JVM (`dev.polyjose:polyjose`, `polyjose-jvm`):** unchanged; the same Maven coordinates.
+- **Swift (`Polyjose`):** unchanged; the same product and module. `Package.swift` points at the 0.5.0 XCFramework.
 
 ## [0.4.0] - 2026-11-16
 
