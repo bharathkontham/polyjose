@@ -820,5 +820,46 @@ new_case jnilibs-backslash
 plant bindings/kotlin/gradle.properties '%s\\\n=/tmp/libs\n' "$jl"
 expect_fail "$jl, a \\ continuation, then =" "^  - bindings/kotlin/gradle\\.properties:[0-9]+: ${jl//./\\.}\\\\$" "$rule2"
 
+# I. Round-3 tester pins (feature 0030 T06, third task test): behaviours that held under probing.
+new_case i-kts-line-comment-closer
+append_to "$kts" "commandLine($qcargo, \"$rustc_word\",
+  // )
+  \"$dd\", \"-C\", \"linker=x\")"
+expect_fail "a // comment holding ) inside a Gradle list, then \"$dd\"" "^  - ${kts//./\\.}:3:   \"$dd\"" "$rule2"
+new_case i-kts-block-comment-closer
+append_to "$kts" "commandLine($qcargo, \"$rustc_word\",
+  /* ) */
+  \"$dd\", \"-C\", \"linker=x\")"
+expect_fail "a /* ) */ comment inside a Gradle list, then \"$dd\"" "^  - ${kts//./\\.}:3:   \"$dd\"" "$rule2"
+new_case i-kts-string-closer
+append_to "$kts" "commandLine($qcargo, \"$rustc_word\",
+  \"a)\",
+  \"$dd\", \"-C\", \"linker=x\")"
+expect_fail "a \")\" string inside a Gradle list, then \"$dd\"" "^  - ${kts//./\\.}:3:   \"$dd\"" "$rule2"
+new_case i-python-bracket-comment
+append_to bindings/node/scripts/t06.py "subprocess.run([
+  $qcargo,
+  \"$rustc_word\",
+  # ]
+  \"$dd\",
+])"
+expect_fail "a # ] comment inside a Python argv list, then \"$dd\"" "^  - bindings/node/scripts/t06\\.py:5:   \"$dd\"" "$rule2"
+plant_case i-ls-hash-extensionless scripts/t06-noext '1: : .*#; export' \
+  "a # after an LS in a file without an extension (shell code: LS is no line end for the shell)" ': \342\200\250#; export %s=-Cx\n' "$rf"
+plant_case i-nel-colon bindings/node/test/t06.ts '1: spawn' \
+  "{ $rf<NEL>: ... } in a .ts object" 'spawn("x", { env: { %s\302\205: "-Cx" } });\n' "$rf"
+quoted_case i-at-nightly scripts/t06.sh "cargo +nightly $rustc_word @flags.txt" "an @ argument file after cargo +nightly $rustc_word"
+quoted_case i-at-rustdoc scripts/t06.sh "cargo $rustdoc_word @flags.txt" "an @ argument file after cargo $rustdoc_word"
+new_case i-at-pass
+append_to scripts/t06.sh "cargo build -p x @flags.txt
+cargo test @flags.txt"
+expect_pass "an @ word on cargo build and cargo test lines (no rustc argument file)"
+new_case i-crlf-pass
+plant scripts/t06.sh 'echo ok\r\n# note\r\nls\r\n'
+expect_pass "a CRLF-ended script with only allowed lines"
+new_case i-crlf-fail
+plant scripts/t06.sh 'echo ok\r\nexport %s=x\r\n' "$rf"
+expect_fail "a CRLF-ended script with an assignment on its second line" "^  - scripts/t06\\.sh:2: export $rf=x" "$rule2"
+
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
