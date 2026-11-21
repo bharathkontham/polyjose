@@ -53,8 +53,10 @@
 #      .pbxproj or an XcodeGen project.yml); `${NAME:-x}` and `${NAME:+x}` are reads. These rules read
 #      a line's pieces joined by spaces, so a CR, NEL, LS or PS between a name and its `=` or `:`
 #      (whitespace in JavaScript) still counts. A line also fails if it holds one of these names as
-#      the whole of a quoted string, `"NAME"` or `'NAME'`
-#      (also `\"NAME\"`, escaped inside a string), whatever surrounds it: that is how Gradle
+#      the whole of a quoted string, `"NAME"`, `'NAME'` or a JavaScript template literal
+#      (backtick-quoted, `process.env[<backtick>NAME<backtick>] = ...`; in every file type, 0 hits on
+#      the tree when added), also with the closing quote escaped (`\"NAME\"` inside a string),
+#      whatever surrounds it: that is how Gradle
 #      (`environment("NAME", ...)`, `environment["NAME"] = ...`, `put("NAME", ...)`,
 #      `mapOf("NAME" to ...)`) and Swift (`env["NAME"] = ...`) set a child process's environment,
 #      and how a shell names a variable to `printf -v` or `export`. A name inside a longer string
@@ -64,10 +66,14 @@
 #      hands to rustc without `--`: `cargo rustc --lib @flags.txt`, `"@flags"`), reads what follows
 #      `rustc` or `rustdoc` on the line of a cargo command, on the lines that continue it (that end
 #      in `\`), and, from a quoted `"cargo"` on (a Gradle commandLine, a Python argv list), on every
-#      line up to the bracket that closes its list. Opening brackets are counted on the text as it
-#      is; closing ones on a copy without `"..."` and `'...'` strings (backslash escapes understood)
-#      and without anything from a `/*`, `//` or `#` to the end of the line (a `/* */` on one line
-#      only), in every file type, so a misparse keeps the list open longer, never shorter (bug B02).
+#      line up to the bracket that closes its list. Each line's depth is the larger of two counts,
+#      so a misparse keeps the list open longer, never shorter: (a) from the first quoted cargo on,
+#      opening brackets on the text as it is minus closing ones on a copy without `"..."` and `'...'`
+#      strings (one pass for both kinds, backslash escapes understood) and without anything from a
+#      `/*`, `//` or `#` to the end of the line (a `/* */` on one line only), in every file type (bug
+#      B02); (b) a walk over that copy from the depth the line starts at, where a quoted cargo opens
+#      a list again once the last one closed, so `f("cargo") ...; run("cargo", "rustc",` then `"--"`
+#      on the next line is read (round-4 audit B-1).
 #      `--` after `cargo test`, `run`, `clippy` or `fuzz` is not matched: what follows goes to the
 #      test binary, the program run, clippy's lint pass or libFuzzer, not into a built artifact.
 #      Every git-listed file (tracked or untracked, not ignored) is read as text, binary ones too
@@ -140,6 +146,13 @@
 #     `ci_check_gradle_wrapper` (bindings/kotlin/scripts/ci-lib.sh) checks before every `./gradlew`
 #     of bindings/kotlin/test.sh and binding-android.yml (scripts/test-all.sh's own
 #     `./gradlew test`, run only when bindings/kotlin/test.sh is missing, does not call it);
+#   - a `#` line inside a multi-line quoted string of the shell script itself (code to the shell
+#     when it is run as code later, e.g. by `eval`), not only text handed to another language;
+#   - cargo through a front end that is not the `cargo` word: `cargo-ndk ndk ... rustc -- ...` and
+#     `cross rustc -- ...` (`cargo ndk ... rustc --lib -- -Cx` is read);
+#   - a workflow step's PowerShell backtick or cmd `^` line continuation (only `\` continues a
+#     cargo command), lower-case action inputs such as `with: rustflags:`, and a name split by a
+#     backslash-newline in a shell script;
 #   - lower-case names on Windows runners (environment names are case-insensitive there), `.plist`
 #     keys (`<key>NAME</key>`: an environment for a launched app, not a build), and
 #     `polyjose.jniLibsDir` set by `-P` (bindings/kotlin/scripts/ci-assemble-jar.sh does so for the
@@ -147,7 +160,10 @@
 #     `ORG_GRADLE_PROJECT_*` or ~/.gradle/gradle.properties.
 # The other way (fails closed): `#` comment lines of file types not listed above (.py, .rb, .gradle,
 # .mk, .bash, .zsh) are read, so a commented-out assignment there fails, as does a `#` line in a
-# listed type when it continues a line ending in `\`.
+# listed type when it continues a line ending in `\`; a guarded name as Markdown inline code (in
+# backticks) fails; on a cargo rustc or rustdoc line, a trailing comment word starting with `@`
+# fails; and an unbalanced opening bracket in a comment or string inside a quoted-cargo list keeps
+# the list open, so a later unrelated `--` fails.
 # Changes to scripts/, .github/, all of bindings/ (bindings/kotlin and bindings/swift included) and
 # rust-toolchain.toml go through owner review for that reason. The script prints a note for configs
 # and variables it finds outside the repository, without failing.
@@ -270,7 +286,7 @@ while IFS= read -r -d '' file; do
   tr -d '\000' <"$file" | ALLOWED=$allowed awk -v names="$names" -v file="$file" -v binding="$binding" \
     -v shell="$shell" -v props="$props" -v hash="$hash" '
     BEGIN {
-      sq = sprintf("%c", 39); cr = sprintf("%c", 13); mark = sprintf("%c", 1)
+      sq = sprintf("%c", 39); bt = sprintf("%c", 96); cr = sprintf("%c", 13); mark = sprintf("%c", 1)
       # The line breaks other than LF of the languages read (see the header): CR, and NEL, LS and PS
       # in UTF-8. A line is tested as the pieces between them.
       nel = sprintf("%c%c", 194, 133); ls = sprintf("%c%c%c", 226, 128, 168); ps = sprintf("%c%c%c", 226, 128, 169)
@@ -290,7 +306,7 @@ while IFS= read -r -d '' file; do
       colon = "(^|[^A-Za-z0-9_{]|(^|[^$])[{])(" names ")" cond q "[[:space:]]*:"
       brace = "[{](" names "):="
       # A guarded name as a whole quoted string, the closing quote optionally escaped (see the header).
-      quoted = "\"(" names ")(\\\\)?\"|" sq "(" names ")(\\\\)?" sq
+      quoted = "\"(" names ")(\\\\)?\"|" sq "(" names ")(\\\\)?" sq "|" bt "(" names ")(\\\\)?" bt
       flag = "(^|[^A-Za-z0-9_-])--config([=[:space:]\"" sq "]|$)"
       unstable = "(^|[^A-Za-z0-9_-])-Z"
       unzip = "^[[:space:]]*unzip -Z1([[:space:]]|$)"
@@ -357,13 +373,26 @@ while IFS= read -r -d '' file; do
       # cargo on: a misparse can only keep the list open longer (bug B02).
       code = live; gsub(qcargo, mark, code)
       if (depth >= 0 || index(code, mark)) {
-        shut = code; gsub(dstr, "", shut); gsub(sstr, "", shut)
+        # Both string kinds in one pass, so a double quote inside a single-quoted string (or the
+        # reverse) cannot pair with the wrong quote (L-1).
+        shut = code; gsub(dstr "|" sstr, "", shut)
         gsub("/[*]([^*]|[*]+[^*/])*[*]+/", "", shut); sub("/[*].*", "", shut); sub("//.*", "", shut); sub("#.*", "", shut)
+        # Also the sequential walk over that copy from the depth the line starts at (closed: from its
+        # first quoted cargo on), where a quoted cargo after the list closes opens a new one, and
+        # the larger depth wins: a list that closes on this line then a new one that opens (B-1).
+        seq = depth; nshut = length(shut)
+        for (i = 1; i <= nshut; i++) {
+          c = substr(shut, i, 1)
+          if (c == mark) { if (seq < 0) seq = 0 }
+          else if (seq >= 0 && (c == "(" || c == "[" || c == "{")) seq++
+          else if (seq >= 0 && (c == ")" || c == "]" || c == "}")) seq--
+        }
         if (depth < 0) {
           depth = 0; code = substr(code, index(code, mark) + 1)
           shut = index(shut, mark) ? substr(shut, index(shut, mark) + 1) : ""
         }
         depth += gsub(/[([{]/, "", code) - gsub(/[])}]/, "", shut)
+        if (seq > depth) depth = seq
         if (depth < 0) depth = -1
       }
       rustc_open = seen_rustc && (cargo_open || depth >= 0)

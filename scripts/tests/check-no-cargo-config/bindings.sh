@@ -80,6 +80,13 @@
 #  22. must pass: indented `#` comments naming a variable in a .sh file; a balanced `# (see note)`
 #      in a Python list without `--`, and a `# )` comment and a `--` after the list closes; `@` on
 #      lines that are not a cargo rustc command (`git show @{u}`, `"@here"`).
+# Fix round 4 (feature 0030 T06: final audit B-1, L-1, L-4):
+#  23. must fail: a quoted cargo in a call that closes, then the real argv list on the same line and
+#      `--` on the next (Kotlin `if (listOf(...))`, JavaScript `assert(...)`); a list that closes
+#      with a new one opening later on its line; a `'"'` string before a `# " ]` comment in a Python
+#      list; a guarded name as a JavaScript template literal (also with an escaped closing backtick);
+#  24. must pass: a cargo rustc list closed on its line (another call after it), then an unrelated
+#      `--` in a later list; template literals holding a non-guarded name or a longer text.
 #
 # The planted flags and variable names are assembled from pieces below, because this file is under
 # scripts/, which the gate scans: its own text must hold none of them.
@@ -860,6 +867,44 @@ expect_pass "a CRLF-ended script with only allowed lines"
 new_case i-crlf-fail
 plant scripts/t06.sh 'echo ok\r\nexport %s=x\r\n' "$rf"
 expect_fail "a CRLF-ended script with an assignment on its second line" "^  - scripts/t06\\.sh:2: export $rf=x" "$rule2"
+
+# J. Fix round 4 (feature 0030 T06: final audit B-1, L-1, L-4).
+# B-1: the depth is also walked from the line's start, so a list that opens after another one closed
+# on the same line stays open.
+new_case j-b1-kts-if
+append_to "$kts" "if (listOf($qcargo).isNotEmpty()) commandLine($qcargo, \"$rustc_word\",
+    \"$dd\", \"-Cx\")"
+expect_fail "B-1: listOf($qcargo) in an if, then commandLine($qcargo, \"$rustc_word\", and \"$dd\" next" \
+  "^  - ${kts//./\\.}:2:     \"$dd\"" "$rule2"
+new_case j-b1-js-assert
+append_to bindings/node/scripts/t06.mjs "assert(ok(which($qcargo))); run([$qcargo, \"$rustc_word\",
+  \"$dd\", \"-C\", \"x\"])"
+expect_fail "B-1: assert(ok(which($qcargo))); run([$qcargo, \"$rustc_word\", then \"$dd\" next" \
+  "^  - bindings/node/scripts/t06\\.mjs:2:   \"$dd\"" "$rule2"
+new_case j-b1-reopen
+append_to "$kts" "run1([$qcargo, \"build\",
+  \"--release\"])); run2($qcargo, \"$rustc_word\",
+  \"$dd\", \"-Cx\")"
+expect_fail "B-1: a list that closes, then run2($qcargo, \"$rustc_word\", on its line, then \"$dd\" next" \
+  "^  - ${kts//./\\.}:3:   \"$dd\"" "$rule2"
+new_case j-b1-pass
+append_to "$kts" "commandLine($qcargo, \"$rustc_word\", \"-p\", \"x\"); exec(listOf(\"git\"))
+val a = listOf(\"git\", \"$dd\")"
+expect_pass "a cargo $rustc_word list closed on its line (another call after it), then an unrelated \"$dd\" list"
+# L-1: both string kinds are taken out in one pass.
+new_case j-l1-python
+plant bindings/node/scripts/t06.py 'cmd = [%s, "%s", %s"%s and "--lib",  # " ]\n   "%s", "-Cx"]\n' \
+  "$qcargo" "$rustc_word" "'" "'" "$dd"
+expect_fail "L-1: a single-quoted double quote, then a # \" ] comment, in a Python list, then \"$dd\" next" \
+  "^  - bindings/node/scripts/t06\\.py:2:    \"$dd\"" "$rule2"
+# L-4: a guarded name as a JavaScript or TypeScript template literal (\140 is the backtick).
+plant_case j-l4-ts bindings/node/test/t06.ts '1: process[.]env[[].RUST' \
+  "L-4: process.env[<backtick>$rf<backtick>] = ... in a .ts file" 'process.env[\140%s\140] = "-Cx";\n' "$rf"
+plant_case j-l4-escaped bindings/wasm/js/t06.mjs '1: eval' \
+  "L-4: an escaped closing backtick around $rf inside a template literal" 'eval(\140process.env[\\\140%s\\\140] = 1\140);\n' "$rf"
+new_case j-l4-pass
+plant bindings/node/test/t06.ts 'const d = process.env[\140CARGO_MANIFEST_DIR\140];\nconsole.log(\140set %s first\140, \140%s_NOTE\140);\n' "$rf" "$rf"
+expect_pass "template literals with a non-guarded name, a guarded name in a longer text, and NAME_NOTE"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
