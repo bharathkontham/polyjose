@@ -51,8 +51,8 @@
 //! # Telling the shadow stack from the heap
 //!
 //! rustc links `wasm32-unknown-unknown` with wasm-ld `--stack-first -z stack-size=1048576`
-//! (`rustc -Z unstable-options --print target-spec-json --target wasm32-unknown-unknown`,
-//! `pre-link-args`). Linear memory is laid out as:
+//! (`pre-link-args` of `rustc --print target-spec-json --target wasm32-unknown-unknown`, an unstable
+//! option on nightly). Linear memory is laid out as:
 //!
 //! 1. the shadow stack, `[0, 1 MiB)`, growing down from `__stack_pointer`'s initial value;
 //! 2. the static data;
@@ -71,12 +71,13 @@
 //! `test.sh` runs the dev profile. Stack fragments depend on code generation, so each stack
 //! exception gives two counts. One is for the dev profile. The other is for the release profile
 //! with the package's `opt-level = "z"` (`scripts/build-package.sh`, ADR 0059), the code the
-//! shipped `.wasm` is made of before wasm-opt. These commands check the release counts:
+//! shipped `.wasm` is made of before wasm-opt. These commands check the release counts, with
+//! `<args>` the words of ADR 0059's line in `scripts/wasm-cargo-args.sh` (`test.sh` runs the first):
 //!
 //! ```text
-//! wasm-pack test --release --node -- --config 'profile.release.opt-level="z"' --test memory
+//! wasm-pack test --release --node -- <args> --test memory
 //! wasm-pack test --release --headless --chrome --chromedriver <driver> --features browser \
-//!     --config 'profile.release.opt-level="z"' --test memory
+//!     <args> --test memory
 //! ```
 //!
 //! A plain `--release` (opt-level 3) is not one of the measured builds, and its stack counts

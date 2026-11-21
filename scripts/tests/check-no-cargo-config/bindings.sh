@@ -2,20 +2,20 @@
 # Negative test of rule 2 of scripts/check-no-cargo-config.sh for bindings/** (feature 0006 F06,
 # security audit L2): Cargo configuration passed on a command line (`--config`, `-Z`), a CARGO_* or
 # RUST* variable assignment, or a `.cargo/config` write in any file under bindings/ fails, as under
-# scripts/ and .github/. The one exception is ADR 0059's line in
-# bindings/wasm/scripts/wasm-cargo-args.sh, which build-package.sh and test.sh source, allowed by
-# path and exact text, once; `WASM_CARGO_ARGS` may be read but not assigned anywhere else under
-# bindings/, so that line is the whole of the shipped build's extra Cargo arguments (which
-# scripts/check-rsa-symbols.sh reads too). The two others (0006 F10; 0007 review SF-1, pending
-# owner Gate 2) are @polyjose/node's static-CRT RUSTFLAGS line in bindings/node/scripts/ci-build.sh
-# and the regex of bindings/node/test/ci.test.ts that asserts it, by path and exact text, once each.
+# scripts/ and .github/. The exceptions are allowed by path and exact text, once each: ADR 0059's
+# line in bindings/wasm/scripts/wasm-cargo-args.sh, which build-package.sh and test.sh source
+# (`WASM_CARGO_ARGS` may be read but not assigned anywhere else under bindings/, so that line is
+# the whole of the shipped build's extra Cargo arguments, which scripts/check-rsa-symbols.sh reads
+# too); @polyjose/node's static-CRT RUSTFLAGS line in bindings/node/scripts/ci-build.sh and the
+# regex of bindings/node/test/ci.test.ts that asserts it (0006 F10; 0007 review SF-1); ADR 0032
+# §1's `-Zbuild-std` line and its README sentence (bindings/swift); and check-test-vectors-off.sh's
+# `cargo rustc -- --print cfg` line.
 #
 # Must pass:
 #   1. the unchanged tree, which holds the ADR 0059 line;
-#   2. look-alikes under bindings/: a `#` comment line with `--config`, `//` and `//!` comment
-#      lines with `--config`, `-Z` and a RUSTFLAGS assignment in Rust and TypeScript files (as in
-#      tests/memory.rs's docs), a `[A-Z]` regex, an `env!` of CARGO_MANIFEST_DIR and a read of
-#      `${WASM_CARGO_ARGS[@]}` and `${#WASM_CARGO_ARGS[@]}`.
+#   2. look-alikes under bindings/: a `#` comment line of a shell script with `--config`, a `[A-Z]`
+#      regex, an `env!` of CARGO_MANIFEST_DIR and a read of `${WASM_CARGO_ARGS[@]}` and
+#      `${#WASM_CARGO_ARGS[@]}` (`//` comment lines are read since the T06 fix round: 19 below).
 # Must fail, on rule 2 only, naming the file and line:
 #   3. the audit's plant: the ADR 0059 line plus a `build.rustflags` --cfg and a `[patch]`;
 #   4. the ADR 0059 line with another value (opt-level "s"), and emptied (`WASM_CARGO_ARGS=()`);
@@ -43,7 +43,8 @@
 #      a `-Z` on its continuation line; the README sentence changed, twice, in another file;
 #  15. must fail, the unzip carve-out's edges: `unzip -Z1 a && cargo -Z...`, `unzip -Z1` as a
 #      cargo argument, after `;`, with more attached (`-Z1build-std`), on a continuation line, and
-#      in a non-shell file; `-Z` at the start of a line, after `+nightly`, after other arguments;
+#      at the start of a line of a .kts file and of a workflow; `-Z` at the start of a line, after
+#      `+nightly`, after other arguments;
 #  16. must fail: a text file at the Gradle wrapper jar's path, a zip-signed file at another path;
 #      a RUSTFLAGS assignment after a NUL byte (under bindings/wasm too), a NUL inside the name and
 #      a `-Z` after a NUL (one-true-awk ends a line at a NUL; the gate drops NULs first).
@@ -52,8 +53,24 @@
 #      `mapOf("NAME" to ...)` and a CARGO_TARGET_<triple>_LINKER name in a .kts file under
 #      bindings/kotlin; `env["NAME"] = ...` and an escaped `\"NAME\"` in a .swift file; a double- and
 #      a single-quoted name in a .sh file under bindings/swift; a single-quoted name under scripts/;
-#  18. must pass: quoted non-guarded names (CARGO_MANIFEST_DIR, NAME_NOTE, CARGO_HOME_DIR), a guarded
-#      name inside a longer quoted string, and a `//` comment line in a .kts file.
+#  18. must pass: quoted non-guarded names (CARGO_MANIFEST_DIR, NAME_NOTE, CARGO_HOME_DIR) and a
+#      guarded name inside a longer quoted string.
+# The T06 fix round (bug B01; security audit B1, B2, L1-L3; review of 9ac6d193):
+#  19. must fail: B01's `// note<CR>` then code in .kts, .swift, .java, .ts and .mjs files; a YAML
+#      `#` comment, a CR, NEL or LS, then a guarded key; a properties `#` comment, a CR, then
+#      polyjose.jniLibsDir=; `unzip -Z1` after `\`+CR and after a lone CR; the allowed nightly line
+#      ending in CR; lines starting with `#` in Swift, TypeScript and Rust; a `//` line in a Kotlin
+#      string run by bash, and `//`/`//!` comment lines with `--config`, `-Z` or an assignment;
+#      `{NAME: x}` in YAML and TypeScript; Xcode conditional names (.xcconfig, .pbxproj, XcodeGen);
+#      `cargo rustc`/`rustdoc` with `--` on its line, on a continuation line (also of the allowed
+#      nightly line), in one- and multi-line Gradle commandLine lists; the allowed `--print cfg`
+#      line twice, changed or elsewhere; CARGO_PROFILE_*, CARGO_ALIAS_*, RUSTUP_TOOLCHAIN (also
+#      quoted in Gradle); polyjose.jniLibsDir set in .properties files (`=`, `:`, whitespace);
+#  20. must pass: CRLF line ends; `#` comments in .sh, .yml, .toml, .properties and an
+#      extensionless file; `//` prose naming the variables; `${NAME:-x}` and `${NAME:+x}`;
+#      conditional settings of other names; `--` after cargo test, run and clippy and after a
+#      closed cargo rustc list; a read of RUSTUP_TOOLCHAIN; other properties, and the
+#      polyjose.jniLibsDir text in Markdown.
 #
 # The planted flags and variable names are assembled from pieces below, because this file is under
 # scripts/, which the gate scans: its own text must hold none of them.
@@ -151,10 +168,7 @@ append_to bindings/wasm/test.sh "# a comment may name cargo $cfg 'profile.releas
 n=\${#WASM_CARGO_ARGS[@]}; args=(\"\${WASM_CARGO_ARGS[@]}\"); echo \"\$n \${args[*]}\""
 append_to bindings/wasm/test-pkg/src/f06-look-alike.ts 'export const upper = /[A-Z]+/; // [a-zA-Z0-9_-Z]'
 append_to bindings/wasm/src/f06_look_alike.rs 'pub const DIR: &str = env!("CARGO_MANIFEST_DIR");'
-append_to bindings/wasm/src/f06_look_alike.rs "//! wasm-pack test --release -- $cfg 'profile.release.opt-level=\"z\"' --test memory
-    // rustc $zf unstable-options --print target-spec-json, with $rf=--cfg"
-append_to bindings/wasm/test-pkg/src/f06-look-alike.ts "  // $rf='--cfg x' cargo build $cfg 'build.rustc-wrapper=\"w\"'"
-expect_pass "comments, regexes, env!(CARGO_MANIFEST_DIR) and reads of WASM_CARGO_ARGS under bindings/"
+expect_pass "a # comment in a shell script, regexes, env!(CARGO_MANIFEST_DIR) and reads of WASM_CARGO_ARGS under bindings/"
 
 # --- Must fail ------------------------------------------------------------------------------------
 
@@ -395,10 +409,12 @@ unzip_case z-line-start "$zf at the start of a line" "${zf}build-std=std \\" "${
 unzip_case z-plus-nightly "$zf after +nightly" "cargo +nightly ${zf}unstable-options build" "cargo \\+nightly "
 unzip_case z-after-args "$zf after other cargo arguments" "cargo build --release -p x ${zf}x" "cargo build "
 
+# Review of 9ac6d193 (2): the carve-out is for *.sh files only, even at the start of a line.
 new_case unzip-not-shell
-append_to bindings/kotlin/t06.gradle.kts "// unzip in Kotlin is not a shell line
-val cmd = \"$unzip_z\""
-expect_fail "$unzip_z in a non-shell file" "^  - bindings/kotlin/t06\\.gradle\\.kts:2: " "$rule2"
+append_to bindings/kotlin/t06.gradle.kts "$unzip_z a.zip"
+append_to .github/workflows/t06.yml "          $unzip_z a.zip"
+expect_fail "$unzip_z a.zip at the start of a line of a .kts file" "^  - bindings/kotlin/t06\\.gradle\\.kts:1: unzip " "$rule2"
+expect_also "and of a workflow run block" "^  - \\.github/workflows/t06\\.yml:1:           unzip "
 
 # The Gradle wrapper jar is skipped by its exact path, and only while it is a zip; a text file there,
 # or a jar at another path, is scanned.
@@ -454,10 +470,9 @@ quoted_case quoted-scripts scripts/t06.sh "export '$ch'" "a single-quoted name i
 
 new_case quoted-look-alikes
 append_to "$kts" 'tasks.register<Exec>("t06") { environment("CARGO_MANIFEST_DIR", "x"); environment("'"$rf"'_NOTE", "x") }
-println("set '"$rf"' before building")
-// environment("'"$rf"'", "--cfg x")'
+println("set '"$rf"' before building")'
 append_to bindings/swift/scripts/t06.sh "echo '$rf is read by cargo'; echo \"${ch}_DIR\""
-expect_pass "a quoted non-guarded name, a guarded name inside a longer string, and a // comment in .kts"
+expect_pass "a quoted non-guarded name and a guarded name inside a longer string"
 
 # Tester additions (feature 0030 T06 task test): behaviours that held on the tested tree.
 unzip_case unzip-two-spaces "unzip  ${zf}1 (two spaces: not the exact command)" "unzip  ${zf}1 a.zip" "unzip "
@@ -471,6 +486,202 @@ quoted_case quoted-yaml-key .github/workflows/t06.yml '      "'"$rf"'": --cfg x'
 quoted_case quoted-xcscheme bindings/swift/t06.xcscheme '<EnvironmentVariable key = "'"$rf"'" value = "--cfg x">' \
   "an Xcode scheme EnvironmentVariable key naming $rf"
 quoted_case quoted-swift-raw bindings/swift/Sources/t06.swift 'env[#"'"$rf"'"#] = "--cfg x"' "a Swift raw string naming $rf"
+
+# --- Fix round (feature 0030 T06: bug B01, security audit B1/B2/L1-L3, review of 9ac6d193) ---------
+pt="CARGO_PRO""FILE_RELEASE_LTO"
+al="CARGO_ALI""AS_B"
+tc="RUSTUP_TOOL""CHAIN"
+jl="polyjose.jniLibs""Dir"
+dd="-""-"
+rustc_word="rust""c"
+rustdoc_word="rust""doc"
+qcargo="\"car""go\""
+yml=.github/workflows/t06.yml
+# plant <path in the copy> <printf format> [<arguments>...]: appends printf's output (CRs and other
+# bytes append_to cannot write).
+plant() {
+  local path=$1; shift
+  mkdir -p "$(dirname "$case_dir/$path")" || lib_die "could not create the directory of $path"
+  # shellcheck disable=SC2059 # the format is the test's text
+  printf "$@" >>"$case_dir/$path" || lib_die "could not write $path in the copy"
+}
+plant_case() { # <name> <path> <ERE of the reported line after "path:"> <description> <printf format> [<arguments>...]
+  local name=$1 path=$2 want=$3 desc=$4; shift 4
+  new_case "$name"
+  plant "$path" "$@"
+  expect_fail "$desc" "^  - ${path//./\\.}:$want" "$rule2"
+}
+
+# A. A line break other than LF (CR; NEL, LS, PS) starts a new line for the comment skip (B01, B1).
+plant_case b01-kts bindings/kotlin/build-logic/t06.kts '1: // note<CR>environment' \
+  "B01: // note<CR> then environment(\"$rf\", ...) in a .kts file" '// note\renvironment("%s", "x")\n' "$rf"
+plant_case b01-swift bindings/swift/Sources/t06.swift '1: // note<CR>setenv' \
+  "B01: // note<CR> then setenv(\"$rf\", ...) in a .swift file" '// note\rsetenv("%s", "x", 1)\n' "$rf"
+plant_case b01-java bindings/kotlin/jvm/src/T06.java '1: // note<CR>' \
+  "B01: // note<CR> then a ProcessBuilder environment write in a .java file" '// note\rpb.environment().put("%s", "x");\n' "$rf"
+plant_case b01-ts bindings/node/test/t06.ts '1: // note<CR>' \
+  "B01: // note<CR> then process.env.$rf = ... in a .ts file" '// note\rprocess.env.%s = "x";\n' "$rf"
+plant_case b01-js bindings/wasm/js/t06.mjs '1: // note<CR>' \
+  "B01: // note<CR> then process.env.$rf = ... in a .mjs file" '// note\rprocess.env.%s = "x";\n' "$rf"
+plant_case cr-yaml-comment "$yml" '1: # c<CR>' \
+  "B1: a YAML # comment, a lone CR, then a $rw: key" '# c\r      %s: evil\n' "$rw"
+plant_case cr-properties-comment bindings/kotlin/gradle.properties '[0-9]+: # c<CR>' \
+  "a properties # comment, a lone CR, then $jl=" '# c\r%s=/tmp/libs\n' "$jl"
+plant_case ls-yaml-comment "$yml" '1: # c' \
+  "a YAML # comment, a U+2028 LINE SEPARATOR, then a $rw: key" '# c\342\200\250      %s: evil\n' "$rw"
+plant_case nel-yaml-comment "$yml" '1: # c' \
+  "a YAML # comment, a U+0085 NEXT LINE, then a $rw: key" '# c\302\205      %s: evil\n' "$rw"
+plant_case unzip-after-backslash-cr bindings/kotlin/scripts/t06.sh '2: unzip ' \
+  "$unzip_z after a line ending in a backslash and a CR (fails closed)" 'cargo build \\\r\n%s a.zip\n' "$unzip_z"
+plant_case unzip-after-lone-cr bindings/kotlin/scripts/t06.sh '1: true<CR>unzip ' \
+  "$unzip_z after a lone CR (in bash an argument of the command before it)" 'true\r%s a.zip\n' "$unzip_z"
+new_case xcf-crlf
+edit_in "$xcf_file" "$xcf_line" "$xcf_line"$'\r'
+expect_fail "the ADR 0032 nightly line ending in CR (not the exact line)" \
+  "^  - bindings/swift/scripts/build-xcframework\\.sh:[0-9]+:     cargo .*<CR>$" "$rule2"
+new_case crlf-pass
+plant "$yml" '# %s: x\r\non: push\r\n' "$rf"
+plant bindings/kotlin/t06.gradle.kts 'val a = 1\r\n// cargo reads %s\r\n' "$rf"
+expect_pass "CRLF line ends: a YAML # comment naming a guarded key, Kotlin code and a // comment"
+
+# A. `#` starts a comment only in *.sh, *.yml, *.yaml, *.toml, *.properties and files without an
+# extension (B1): a Swift raw string, a JavaScript private field, a Rust attribute are code.
+quoted_case hash-swift-raw bindings/swift/Sources/t06.swift '#"'"$rf"'"#: "--cfg x",' \
+  "a line starting with a Swift raw string #\"$rf\"#"
+quoted_case hash-ts-private bindings/node/test/t06.ts '#a = (process.env.'"$rf"' = "x");' \
+  "a line starting with a TypeScript private field that assigns process.env.$rf"
+quoted_case hash-rust-attr bindings/uniffi/src/t06.rs '#[allow(unused)] fn f() { std::env::set_var("'"$rf"'", "x") }' \
+  "a line starting with a Rust attribute"
+new_case hash-comments-pass
+append_to bindings/kotlin/scripts/t06.sh "# $rf=x cargo build"
+append_to "$yml" "# $rw: x"
+append_to bindings/uniffi/t06.toml "# $rf = \"x\""
+append_to bindings/kotlin/gradle.properties "# $jl=/tmp/libs"
+append_to bindings/kotlin/scripts/t06tool "  # $rf=x"
+expect_pass "# comment lines in .sh, .yml, .toml, .properties and an extensionless file"
+
+# A. `//` lines are read in every file type (B1: a // line can be inside a string handed to a shell).
+new_case slash-in-kotlin-string
+append_to bindings/kotlin/t06.gradle.kts 'tasks.register<Exec>("t06") { commandLine("bash", "-c", """
+//usr/bin/env '"$rf"'=--cfg=x cargo build
+""") }'
+expect_fail "a // line inside a Kotlin multi-line string run by bash" \
+  "^  - bindings/kotlin/t06\\.gradle\\.kts:2: //usr/bin/env $rf=" "$rule2"
+new_case slash-comments-read
+append_to bindings/wasm/src/f06_look_alike.rs "//! wasm-pack test --release -- $cfg 'profile.release.opt-level=\"z\"' --test memory
+    // rustc ${zf} unstable-options --print target-spec-json"
+append_to bindings/wasm/test-pkg/src/f06-look-alike.ts "  // $rf='--cfg x' cargo build"
+expect_fail "a //! line with $cfg in a .rs file" "^  - bindings/wasm/src/f06_look_alike\\.rs:1: //! " "$rule2"
+expect_also "a // line with $zf in a .rs file" "^  - bindings/wasm/src/f06_look_alike\\.rs:2:     // rustc "
+expect_also "a // line with a $rf assignment in a .ts file" "^  - bindings/wasm/test-pkg/src/f06-look-alike\\.ts:1:   // $rf="
+new_case slash-prose-pass
+append_to bindings/kotlin/t06.gradle.kts "// cargo reads $rf and $rw from the environment"
+append_to bindings/wasm/src/f06_look_alike.rs "//! See $rf in the cargo book."
+expect_pass "// comments that name guarded variables in prose"
+
+# B. A YAML flow mapping or JavaScript object `{NAME:` (security audit B2); `${NAME:-x}` is a read.
+quoted_case yaml-flow-map "$yml" "      env: {$rf: x}" "a YAML flow mapping env: {$rf: x}"
+quoted_case ts-object-tight bindings/node/test/t06.ts "spawn(\"x\", { env: {$rw: \"w\"} });" \
+  "a TypeScript object {$rw: ...} without a space"
+new_case brace-read-pass
+append_to bindings/kotlin/scripts/t06.sh "echo \"\${$rf:-unset}\" \"\${$ch:+set}\""
+expect_pass "\${$rf:-unset} and \${$ch:+set} (reads) in a shell script"
+
+# C. An Xcode conditional setting name, NAME[sdk=...] (task tester (c)2).
+quoted_case xcode-cond-xcconfig bindings/swift/t06.xcconfig "${rf}[sdk=iphoneos*] = -Cx" \
+  "an .xcconfig ${rf}[sdk=iphoneos*] setting"
+quoted_case xcode-cond-pbxproj bindings/swift/HostedTests/t06.pbxproj "				\"${rf}[sdk=iphoneos*]\" = \"-Cx\";" \
+  "a .pbxproj \"${rf}[sdk=iphoneos*]\" setting"
+quoted_case xcode-cond-xcodegen bindings/swift/HostedTests/t06.yml "        ${rf}[sdk=iphoneos*][arch=arm64]: -Cx" \
+  "an XcodeGen ${rf}[sdk=iphoneos*][arch=arm64] setting (two conditions)"
+new_case xcode-cond-pass
+append_to bindings/swift/t06.xcconfig "OTHER_SWIFT_FLAGS[sdk=iphoneos*] = -DX
+${rf}_NOTE[sdk=iphoneos*] = x"
+expect_pass "conditional settings of names that are not guarded"
+
+# D. rustc arguments after a standalone `--` of cargo rustc or cargo rustdoc (security audit L1).
+quoted_case rustc-dashdash bindings/swift/scripts/t06.sh "cargo $rustc_word -p polyjose-ffi --release $dd -C linker=/tmp/x" \
+  "cargo $rustc_word ... $dd -C linker=..."
+quoted_case rustdoc-dashdash scripts/t06.sh "cargo +nightly $rustdoc_word -p polyjose $dd --cfg x" \
+  "cargo +nightly $rustdoc_word ... $dd --cfg x"
+new_case rustc-continuation
+append_to bindings/kotlin/scripts/t06.sh "cargo $rustc_word -p polyjose-ffi \\
+  --release \\
+  $dd -C linker=/tmp/x"
+expect_fail "$dd on the second continuation line of a cargo $rustc_word command" \
+  "^  - bindings/kotlin/scripts/t06\\.sh:3:   $dd -C" "$rule2"
+new_case xcf-continuation-dashdash
+# shellcheck disable=SC2016 # the exact text of the line, not expansions
+edit_in "$xcf_file" '      --target "$triple" --crate-type staticlib >&2' \
+  "      --target \"\$triple\" --crate-type staticlib $dd -C linker=/tmp/x >&2"
+expect_fail "$dd -C on the continuation line of the allowed ADR 0032 nightly line" \
+  "^  - bindings/swift/scripts/build-xcframework\\.sh:[0-9]+:       --target .* $dd -C linker" "$rule2"
+quoted_case gradle-rustc-oneline "$kts" "commandLine($qcargo, \"$rustc_word\", \"-p\", \"x\", \"$dd\", \"-C\", \"linker=/tmp/x\")" \
+  "a one-line Gradle commandLine($qcargo, \"$rustc_word\", ..., \"$dd\", ...)"
+new_case gradle-rustc-multiline
+append_to "$kts" "commandLine(
+    $qcargo, /* ) */
+    \"$rustc_word\", \"-p\", \"x\", // a comment's )
+    \"$dd\", \"-C\", \"linker=/tmp/x\",
+)"
+expect_fail "a multi-line Gradle commandLine with \"$dd\" two lines below $qcargo (a ) in comments between)" \
+  "^  - bindings/kotlin/t06\\.gradle\\.kts:4:     \"$dd\"" "$rule2"
+new_case dashdash-pass
+append_to bindings/kotlin/scripts/t06.sh "cargo test -p polyjose $dd --nocapture
+cargo run -p polyjose-uniffi-bindgen $dd generate x
+cargo clippy --workspace $dd -D warnings"
+append_to "$kts" "commandLine(
+    $qcargo, \"run\", \"-p\", \"polyjose-uniffi-bindgen\",
+    \"$dd\", \"generate\", \"$rustc_word\",
+)
+commandLine($qcargo, \"$rustc_word\", \"-p\", \"x\")
+val sep = listOf(\"$dd\")"
+expect_pass "$dd after cargo test, run and clippy; after a closed cargo $rustc_word argument list"
+cfg_file=scripts/check-test-vectors-off.sh
+# shellcheck disable=SC2016 # the exact text of the line, not expansions
+cfg_line='if ! cfgs=$(cargo '"$rustc_word"' --locked -q -p polyjose --lib '"$dd"' --print cfg 2>&1); then'
+tests_run=$((tests_run + 1))
+if [ "$(grep -cFx -- "$cfg_line" "$repo/$cfg_file" 2>/dev/null || true)" = 1 ]; then
+  echo "ok   - $cfg_file holds its allowed cargo $rustc_word $dd line once"
+else
+  echo "FAIL - $cfg_file does not hold its allowed cargo $rustc_word $dd line exactly once"
+  tests_failed=$((tests_failed + 1))
+fi
+new_case cfg-line-twice
+append_to "$cfg_file" "$cfg_line"
+expect_fail "the allowed cargo $rustc_word $dd --print cfg line twice" "^  - scripts/check-test-vectors-off\\.sh:[0-9]+: if ! cfgs=" "$rule2"
+new_case cfg-line-changed
+edit_in "$cfg_file" "$cfg_line" "${cfg_line/--print cfg/--print cfg -C linker=/tmp/x}"
+expect_fail "the allowed cargo $rustc_word $dd line with -C linker= added" \
+  "^  - scripts/check-test-vectors-off\\.sh:[0-9]+: .*-C linker=/tmp/x" "$rule2"
+new_case cfg-line-other-file
+append_to scripts/t06.sh "$cfg_line"
+expect_fail "the allowed cargo $rustc_word $dd line in another file" "^  - scripts/t06\\.sh:1: if ! cfgs=" "$rule2"
+
+# E. CARGO_PROFILE_*, CARGO_ALIAS_* and RUSTUP_TOOLCHAIN (security audit L2).
+quoted_case name-profile scripts/t06.sh "$pt=off cargo build --release" "$pt= (a CARGO_PROFILE_* variable)"
+quoted_case name-alias bindings/kotlin/scripts/t06.sh "export $al=$rustc_word" "export $al= (a CARGO_ALIAS_* variable)"
+quoted_case name-toolchain bindings/swift/scripts/t06.sh "$tc=nightly cargo build" "$tc=nightly cargo build"
+quoted_case name-toolchain-gradle "$kts" "environment(\"$tc\", \"nightly\")" "environment(\"$tc\", ...) in a .kts file"
+new_case names-pass
+append_to bindings/kotlin/scripts/t06.sh "echo \"\$$tc\"
+CARGO_PKG_VERSION=1 PROFILE=release rustup show"
+expect_pass "a read of \$$tc and other CARGO_ names"
+
+# F. polyjose.jniLibsDir set in a .properties file (security audit L3); reading it stays allowed.
+new_case jnilibs-gradle-properties
+append_to bindings/kotlin/gradle.properties "$jl=/tmp/libs"
+expect_fail "$jl= in bindings/kotlin/gradle.properties" "^  - bindings/kotlin/gradle\\.properties:[0-9]+: $jl=" "$rule2"
+new_case jnilibs-separators
+append_to bindings/kotlin/android/t06.properties "$jl : /tmp/libs
+  $jl /tmp/libs"
+expect_fail "$jl with a ':' separator in another .properties file" "^  - bindings/kotlin/android/t06\\.properties:1: " "$rule2"
+expect_also "and with a whitespace separator" "^  - bindings/kotlin/android/t06\\.properties:2: "
+new_case jnilibs-pass
+append_to bindings/kotlin/gradle.properties "${jl}Note=x
+polyjose.other=1"
+append_to bindings/kotlin/t06.md "$jl=<dir>"
+expect_pass "other properties, and $jl=<dir> in a Markdown file"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"

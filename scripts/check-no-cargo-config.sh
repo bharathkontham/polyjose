@@ -21,42 +21,63 @@
 #      config only from its working directory and the directories above it, and no gate, script
 #      or CI step runs cargo inside a build directory.
 #   2. No file under scripts/, .github/ or bindings/ (all of it; except this script) passes `--config`
-#      or cargo's `-Z` (an unstable flag), writes a `.cargo/config*` or `$CARGO_HOME/config*` file, or
-#      assigns an environment variable that does what a config file would: `CARGO_SOURCE_*`,
+#      or cargo's `-Z` (an unstable flag), passes rustc arguments after a standalone `--` of
+#      `cargo rustc` or `cargo rustdoc` (what RUSTFLAGS would do), writes a `.cargo/config*` or
+#      `$CARGO_HOME/config*` file, sets the Gradle property `polyjose.jniLibsDir` in a *.properties
+#      file (it packages prebuilt native libraries into the AAR instead of cargo's; reading it, as
+#      bindings/kotlin/android/build.gradle.kts does, is fine), or assigns an environment variable
+#      that does what a config file would: `CARGO_SOURCE_*`,
 #      `CARGO_TARGET_<triple>_{RUSTFLAGS,RUSTDOCFLAGS,LINKER,RUNNER}`, `CARGO_BUILD_{RUSTFLAGS,
 #      RUSTDOCFLAGS,RUSTC,RUSTC_WRAPPER,RUSTC_WORKSPACE_WRAPPER,RUSTDOC}`, `CARGO_ENCODED_RUSTFLAGS`,
 #      `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`,
-#      `RUSTC_BOOTSTRAP`, `CARGO_UNSTABLE_*` or `CARGO_HOME`. Comment lines are skipped: those
-#      starting with `#`, and in Rust, TypeScript/JavaScript, Kotlin, Java and Swift files (by
-#      extension) those starting with `//` (doc comments such as bindings/wasm/tests/memory.rs's
-#      manual commands; in a shell script a `//` line is a path, and is read). An
-#      assignment is `NAME=`, `NAME+=`, `NAME<<` (GitHub's $GITHUB_ENV), `NAME:` (a YAML env key or a
-#      JavaScript property) or `${NAME:=`. A line also fails if it holds one of these names as the
-#      whole of a quoted string, `"NAME"` or `'NAME'` (also `\"NAME\"`, escaped inside a string),
-#      whatever surrounds it: that is how Gradle (`environment("NAME", ...)`,
-#      `environment["NAME"] = ...`, `put("NAME", ...)`, `mapOf("NAME" to ...)`) and Swift
-#      (`env["NAME"] = ...`) set a child process's environment, and how a shell names a variable
-#      to `printf -v` or `export`. A name inside a longer string (`"set NAME first"`) is not one.
-#      check-test-vectors-off.sh separately checks *RUSTFLAGS in the environment.
+#      `RUSTC_BOOTSTRAP`, `CARGO_UNSTABLE_*`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `CARGO_HOME` or
+#      `RUSTUP_TOOLCHAIN` (it overrides the toolchain rust-toolchain.toml pins).
+#      Lines: each LF-ended line is also split at CR, NEL, LS and PS (U+0085, U+2028, U+2029 in
+#      UTF-8), which end a line in Java, Kotlin, Swift, JavaScript or YAML (bug B01: `// note<CR>`
+#      then code), and every piece is tested; a hit prints the whole line, a CR shown as `<CR>`.
+#      A piece starting with `#` is skipped as a comment only in *.sh, *.yml, *.yaml, *.toml and
+#      *.properties files and files without an extension (gradlew): elsewhere `#` starts code (a
+#      Swift raw string `#"NAME"#`, a JavaScript private field, a Rust attribute). `//` lines are
+#      read in every file: one can sit in a string that a shell runs, and comments name these
+#      variables in prose, not as assignments (bindings/wasm/tests/memory.rs's manual commands
+#      say `<args>` for the ADR 0059 words).
+#      An assignment is `NAME=`, `NAME+=`, `NAME<<` (GitHub's $GITHUB_ENV), `NAME:` (a YAML env key,
+#      also in a flow mapping `{NAME: x}`, or a JavaScript property) or `${NAME:=`, NAME optionally
+#      followed by Xcode conditions (`NAME[sdk=iphoneos*][arch=arm64] = ...` in an .xcconfig, a
+#      .pbxproj or an XcodeGen project.yml); `${NAME:-x}` and `${NAME:+x}` are reads. A line also
+#      fails if it holds one of these names as the whole of a quoted string, `"NAME"` or `'NAME'`
+#      (also `\"NAME\"`, escaped inside a string), whatever surrounds it: that is how Gradle
+#      (`environment("NAME", ...)`, `environment["NAME"] = ...`, `put("NAME", ...)`,
+#      `mapOf("NAME" to ...)`) and Swift (`env["NAME"] = ...`) set a child process's environment,
+#      and how a shell names a variable to `printf -v` or `export`. A name inside a longer string
+#      (`"set NAME first"`) is not one. check-test-vectors-off.sh separately checks *RUSTFLAGS in
+#      the environment.
+#      The `--` rule reads the line of a cargo command, the lines that continue it (that end in
+#      `\`), and, from a quoted `"cargo"` on (a Gradle commandLine, a Python argv list), every line
+#      up to the bracket that closes its list (brackets counted outside strings and comments).
+#      `--` after `cargo test`, `run`, `clippy` or `fuzz` is not matched: what follows goes to the
+#      test binary, the program run, clippy's lint pass or libFuzzer, not into a built artifact.
 #      Every git-listed file (tracked or untracked, not ignored) is read as text, binary ones too
 #      (the PE fixtures of bindings/node), with its NUL bytes dropped first: one-true-awk (macOS)
 #      ends a line at a NUL, which would hide the rest of it, and bash drops NULs when it runs a
 #      script (a sourced file stops at its first NUL, so it runs less, not more). There is no
-#      skip by content or extension. The one file not read is the Gradle wrapper
-#      bindings/kotlin/gradle/wrapper/gradle-wrapper.jar, by that exact path and only while it starts
-#      with a zip signature (`PK\3\4`): java runs it, not a shell, and its compressed bytes match the
-#      patterns at random. Anything else at that path is read.
+#      skip by content or extension. Besides this script, the one file not read is the Gradle
+#      wrapper bindings/kotlin/gradle/wrapper/gradle-wrapper.jar, by that exact path and only while
+#      it starts with a zip signature (`PK\3\4`): java runs it, not a shell, and its compressed bytes
+#      match the patterns at random. Anything else at that path is read.
 #      `-Z` is not matched where it is the exact command `unzip -Z1` (zipinfo's one-name-per-line
 #      listing, in the Kotlin and Swift packaging checks) at the start of a line, after indentation,
 #      in a shell script (*.sh), on a line that does not continue the one above it (that ends in
-#      `\`). Only that command is removed from a copy of the line, and the rest is still tested for
-#      `-Z`; all other patterns read the whole line. So `unzip -Z1 a && cargo -Zx`, `-Zx` at the
-#      start of a line, `cargo +nightly -Zx`, `foo; unzip -Z1`, `unzip -Z1x`, and `unzip -Z1` as an
-#      argument on a continuation line all fail. (`-Z1` itself is no cargo or rustc flag.)
+#      `\`, CRs after it ignored, so `\`+CR counts as continuing: fails closed), and not after a
+#      CR on its line. Only that command is removed from a copy of the line, and the rest is still
+#      tested for `-Z`; all other patterns read the whole line. So `unzip -Z1 a && cargo -Zx`, `-Zx`
+#      at the start of a line, `cargo +nightly -Zx`, `foo; unzip -Z1`, `unzip -Z1x`, and `unzip -Z1`
+#      as an argument on a continuation line all fail. (`-Z1` itself is no cargo or rustc flag.)
 #      bindings/ is read because the shipped @polyjose/wasm build takes extra Cargo arguments on
 #      its command line (security audit L2 of feature 0006): anything added there reaches the
 #      published .wasm and no other guard. The exceptions (`allowed` below) are allowed by path
-#      and exact text, each at most once in its file (absent is fine):
+#      and exact text (a CR at the end is a change), each at most once in its file (absent is fine);
+#      an allowed line is not reported, and a cargo command on it still continues to the next line:
 #      - ADR 0059's line in bindings/wasm/scripts/wasm-cargo-args.sh, which build-package.sh and
 #        test.sh source; no other line under bindings/ may assign `WASM_CARGO_ARGS` (reading
 #        `${WASM_CARGO_ARGS[@]}` or `${#WASM_CARGO_ARGS[@]}` is fine), so that line is all of the
@@ -72,7 +93,9 @@
 #        continuation line, and every other line, is read as usual);
 #      - the sentence of bindings/swift/README.md that documents that line (it names `-Zbuild-std`
 #        in prose). An exact-line entry, not a skip of Markdown files: a skip by extension would
-#        also cover a script named *.md, and an edited sentence fails until this entry follows it.
+#        also cover a script named *.md, and an edited sentence fails until this entry follows it;
+#      - the `cargo rustc ... -- --print cfg` line of scripts/check-test-vectors-off.sh: rustc
+#        prints its cfgs and stops, building nothing (that check's own probe).
 #
 # Not covered (residual risk; cargo also reads these, but they are not in the repository): a config
 # in a directory above the checkout (e.g. ~/.cargo/config.toml), $CARGO_HOME/config.toml, CARGO_*
@@ -80,10 +103,31 @@
 # command line, and a variable name built at run time (or an env map from a `${{ }}` expression),
 # which no text scan can see; also a `WASM_CARGO_ARGS` change made without assigning the name
 # (`read -a`, `declare`, an array built through a nameref), and a guarded variable set without an
-# assignment (`read RUSTFLAGS`, `printf -v`, then a bare `export`). Changes to scripts/, .github/,
-# all of bindings/ (bindings/kotlin and bindings/swift included) and rust-toolchain.toml go through
-# owner review for that reason. The script prints a note for configs and variables it finds outside
-# the repository, without failing.
+# assignment (`read RUSTFLAGS`, `printf -v`, then a bare `export`). Further, by design or because
+# a line scan cannot see them:
+#   - PATH and the variables not listed above (RUSTUP_HOME, ANDROID_NDK_HOME and other toolchain
+#     or NDK locations), which choose which cargo, rustc or linker runs;
+#   - names, flags or property keys written with escapes or assembled at run time (`"RUST" +
+#     "FLAGS"`, `\u{46}`, `$'\x46'`, a `\` inside a .properties key), cargo named through a variable
+#     (`"$cargo" rustc -- ...`), and an argument list whose brackets hide in unusual quoting or
+#     in a block comment over several lines;
+#   - a `#` line of a heredoc or multi-line string in a *.sh or *.yml file that is handed to a
+#     language where `#` is code;
+#   - files outside scripts/, .github/ and bindings/ that a scanned script sources or runs, and the
+#     root Package.swift;
+#   - bindings/swift/nightly-toolchain, which names the nightly beside rust-toolchain.toml;
+#   - the Gradle wrapper jar's content: its control is the SHA-256 pin that
+#     `ci_check_gradle_wrapper` (bindings/kotlin/scripts/ci-lib.sh) checks before every `./gradlew`
+#     of bindings/kotlin/test.sh and binding-android.yml (scripts/test-all.sh's own
+#     `./gradlew test`, run only when bindings/kotlin/test.sh is missing, does not call it);
+#   - lower-case names on Windows runners (environment names are case-insensitive there), `.plist`
+#     keys (`<key>NAME</key>`: an environment for a launched app, not a build), and
+#     `polyjose.jniLibsDir` set by `-P` (bindings/kotlin/scripts/ci-assemble-jar.sh does so for the
+#     release AAR, with the libraries the emulator job tested and their SHA256SUMS),
+#     `ORG_GRADLE_PROJECT_*` or ~/.gradle/gradle.properties.
+# Changes to scripts/, .github/, all of bindings/ (bindings/kotlin and bindings/swift included) and
+# rust-toolchain.toml go through owner review for that reason. The script prints a note for configs
+# and variables it finds outside the repository, without failing.
 #
 # Exit status: 0 clean, 1 a config or setting was found, 2 the check could not run (fails closed).
 # Runs on macOS /bin/bash 3.2 and Linux bash.
@@ -149,6 +193,7 @@ names='CARGO_SOURCE_[A-Za-z0-9_]+|CARGO_TARGET_[A-Za-z0-9_]+_(RUSTFLAGS|RUSTDOCF
 names="$names"'|CARGO_BUILD_(RUSTFLAGS|RUSTDOCFLAGS|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|RUSTDOC)'
 names="$names"'|CARGO_ENCODED_RUSTFLAGS|CARGO_ENCODED_RUSTDOCFLAGS|RUSTFLAGS|RUSTDOCFLAGS'
 names="$names"'|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|RUSTDOC|RUSTC_BOOTSTRAP|CARGO_UNSTABLE_[A-Za-z0-9_]+|CARGO_HOME'
+names="$names"'|CARGO_PROFILE_[A-Za-z0-9_]+|CARGO_ALIAS_[A-Za-z0-9_]+|RUSTUP_TOOLCHAIN'
 # The exceptions, by path and exact text; each line is allowed at most once in its file.
 # ADR 0059: the one command-line Cargo override of the shipped wasm build.
 allowed_file=bindings/wasm/scripts/wasm-cargo-args.sh
@@ -169,9 +214,14 @@ xcf_line='    cargo "+$nightly" rustc --locked -Zbuild-std=std,panic_abort -p po
 xcf_doc_file=bindings/swift/README.md
 # shellcheck disable=SC2016 # the exact text of the lines, not expansions
 xcf_doc_line='  - Every Rust target is tier 2 on the stable toolchain of `rust-toolchain.toml` (the aarch64 watchOS targets since Rust 1.95), except `arm64_32-apple-watchos` (Apple Watch Series 4–8, SE 1–2, Ultra 1). That one is tier 3 and is built with the nightly pinned in `nightly-toolchain` and `-Zbuild-std`. Install it with `rustup toolchain install "$(cat bindings/swift/nightly-toolchain)" --profile minimal --component rust-src`.'
+# check-test-vectors-off.sh's `cargo rustc -- --print cfg`: rustc prints its cfgs and stops, building
+# nothing (the check that the test-vectors cfg is off).
+cfg_file=scripts/check-test-vectors-off.sh
+# shellcheck disable=SC2016 # the exact text of the line, not expansions
+cfg_line='if ! cfgs=$(cargo rustc --locked -q -p polyjose --lib -- --print cfg 2>&1); then'
 # "<path><TAB><line>" per line, for awk.
 allowed=$(printf '%s\t%s\n' "$allowed_file" "$allowed_line" "$crt_file" "$crt_line" "$crt_test_file" "$crt_test_line" \
-  "$xcf_file" "$xcf_line" "$xcf_doc_file" "$xcf_doc_line")
+  "$xcf_file" "$xcf_line" "$xcf_doc_file" "$xcf_doc_line" "$cfg_file" "$cfg_line")
 # The Gradle wrapper (a zip that java runs), the one file not read while it is a zip (see the header).
 wrapper_jar=bindings/kotlin/gradle/wrapper/gradle-wrapper.jar
 git ls-files -z --cached --others --exclude-standard -- scripts .github bindings >"$work/build-files.z" \
@@ -185,24 +235,45 @@ while IFS= read -r -d '' file; do
     [ "$sig" = 504b0304 ] && continue
   fi
   case $file in bindings/*) binding=1 ;; *) binding=0 ;; esac
-  case $file in *.rs | *.ts | *.mts | *.cts | *.js | *.mjs | *.cjs | *.kt | *.kts | *.java | *.swift) slashes=1 ;; *) slashes=0 ;; esac
   case $file in *.sh) shell=1 ;; *) shell=0 ;; esac
+  case $file in *.properties) props=1 ;; *) props=0 ;; esac
+  # The file types where a line starting with `#` is a comment (see the header): no other skips it.
+  case $file in
+    *.sh | *.yml | *.yaml | *.toml | *.properties) hash=1 ;;
+    *) case ${file##*/} in *.*) hash=0 ;; *) hash=1 ;; esac ;;
+  esac
   # NUL bytes are dropped first (see the header). The allowed lines go through the environment:
   # awk -v would interpret their backslashes.
   tr -d '\000' <"$file" | ALLOWED=$allowed awk -v names="$names" -v file="$file" -v binding="$binding" \
-    -v slashes="$slashes" -v shell="$shell" '
+    -v shell="$shell" -v props="$props" -v hash="$hash" '
     BEGIN {
-      q = "[\"" sprintf("%c", 39) "]?"
-      eq = "(^|[^A-Za-z0-9_])(" names ")" q "[[:space:]]*([+]?=|<<)"
-      colon = "(^|[^A-Za-z0-9_{])(" names ")" q "[[:space:]]*:"
+      sq = sprintf("%c", 39); cr = sprintf("%c", 13); mark = sprintf("%c", 1)
+      # The line breaks other than LF of the languages read (see the header): CR, and NEL, LS and PS
+      # in UTF-8. A line is tested as the pieces between them.
+      breaks = cr "|" sprintf("%c%c", 194, 133) "|" sprintf("%c%c%c", 226, 128, 168) "|" sprintf("%c%c%c", 226, 128, 169)
+      q = "[\"" sq "]?"
+      # An Xcode conditional setting name, NAME[sdk=iphoneos*] (any number of conditions).
+      cond = "([[][^]]*[]])*"
+      eq = "(^|[^A-Za-z0-9_])(" names ")" cond q "[[:space:]]*([+]?=|<<)"
+      # `{NAME:` is a YAML flow map or a JavaScript object; only `${NAME:` (a shell read) is not.
+      colon = "(^|[^A-Za-z0-9_{]|(^|[^$])[{])(" names ")" cond q "[[:space:]]*:"
       brace = "[{](" names "):="
       # A guarded name as a whole quoted string, the closing quote optionally escaped (see the header).
-      sq = sprintf("%c", 39)
       quoted = "\"(" names ")(\\\\)?\"|" sq "(" names ")(\\\\)?" sq
-      flag = "(^|[^A-Za-z0-9_-])--config([=[:space:]\"" sprintf("%c", 39) "]|$)"
+      flag = "(^|[^A-Za-z0-9_-])--config([=[:space:]\"" sq "]|$)"
       unstable = "(^|[^A-Za-z0-9_-])-Z"
       unzip = "^[[:space:]]*unzip -Z1([[:space:]]|$)"
       reads = "[$][{]#?WASM_CARGO_ARGS[[]@[]][}]"
+      # cargo and rustc or rustdoc as words (a path before them is fine), a standalone `--`, cargo as
+      # a quoted string (replaced by mark), and the strings that are taken out before brackets are
+      # counted (never one that holds mark).
+      cargo = "(^|[^A-Za-z0-9_.-])cargo([^A-Za-z0-9_/-]|$)"
+      rustcw = "(^|[^A-Za-z0-9_.-])(rustc|rustdoc)([^A-Za-z0-9_/-]|$)"
+      dashdash = "(^|[^A-Za-z0-9_-])--([^A-Za-z0-9_-]|$)"
+      qcargo = "\"cargo\"|" sq "cargo" sq
+      dstr = "\"([^\"\\\\" mark "]|\\\\.)*\""; sstr = sq "([^" sq "\\\\" mark "]|\\\\.)*" sq
+      jnilibs = "^[[:space:]]*polyjose[.]jniLibsDir([=:[:space:]]|$)"
+      depth = -1
       # The allowed lines of this file (the path is everything before the first tab).
       n = split(ENVIRON["ALLOWED"], entries, "\n"); nallowed = 0
       for (i = 1; i <= n; i++) {
@@ -210,26 +281,61 @@ while IFS= read -r -d '' file; do
         if (t > 1 && substr(entries[i], 1, t - 1) == file) allowed_line[++nallowed] = substr(entries[i], t + 1)
       }
     }
-    # A line continues the one above it if that one ends in a backslash (comment lines count too).
-    { continued = prev_backslash; prev_backslash = ($0 ~ /\\$/) }
-    /^[[:space:]]*#/ { next }
-    slashes && /^[[:space:]]*\/\// { next }
-    nallowed {
-      for (i = 1; i <= nallowed; i++) if (!seen_allowed[i] && $0 == allowed_line[i]) { seen_allowed[i] = 1; next }
+    # A line continues the one above it if that one ends in a backslash, line breaks after it
+    # ignored (comment lines count too). A cargo command stays open across such lines.
+    {
+      raw = $0; t = raw; sub("(" breaks ")+$", "", t)
+      continued = prev_backslash; prev_backslash = (t ~ /\\$/); in_cargo = continued && cargo_open
     }
-    binding { rest = $0; gsub(reads, "", rest) }
-    # The unzip carve-out (see the header): only the -Z test reads this copy.
-    { z = $0; if (shell && !continued) sub(unzip, " ", z) }
-    (binding && rest ~ "WASM_CARGO_ARGS") || $0 ~ flag || z ~ unstable || $0 ~ eq || $0 ~ colon || $0 ~ brace \
-      || $0 ~ quoted || tolower($0) ~ "([.]cargo|cargo_home[}]?)/config" {
-      printf "%s:%d: %s\n", file, FNR, $0
+    {
+      # An allowed line is tested like any other, and not reported; the cargo state goes on through it.
+      allowed_now = 0
+      for (i = 1; i <= nallowed; i++) if (!seen_allowed[i] && raw == allowed_line[i]) { seen_allowed[i] = 1; allowed_now = 1; break }
+      n = split(raw, piece, breaks); hit = 0; live = ""
+      for (p = 1; p <= n; p++) {
+        line = piece[p]
+        if (hash && line ~ /^[[:space:]]*#/) continue
+        live = live " " line
+        rest = line; if (binding) gsub(reads, "", rest)
+        # The unzip carve-out (see the header): only the -Z test reads this copy.
+        z = line; if (shell && p == 1 && !continued) sub(unzip, " ", z)
+        if ((binding && rest ~ "WASM_CARGO_ARGS") || line ~ flag || z ~ unstable || line ~ eq || line ~ colon \
+          || line ~ brace || line ~ quoted || tolower(line) ~ "([.]cargo|cargo_home[}]?)/config" \
+          || (props && line ~ jnilibs)) hit = 1
+      }
+      # rustc arguments after a standalone `--` of `cargo rustc` or `cargo rustdoc`: on its line, on
+      # the lines that continue it, and inside the brackets of an argument list that starts with a
+      # quoted cargo (Gradle commandLine, a Python argv list), counted without strings and comments.
+      after = (in_cargo || depth >= 0) ? live : ""
+      if (match(live, cargo)) after = after " " substr(live, RSTART + RLENGTH - 1)
+      tail = ""
+      if (rustc_open) tail = after
+      else if (match(after, rustcw)) tail = substr(after, RSTART + RLENGTH - 1)
+      if (tail ~ dashdash) hit = 1
+      seen_rustc = rustc_open || after ~ rustcw
+      cargo_open = prev_backslash && (in_cargo || live ~ cargo)
+      code = live; gsub(qcargo, mark, code)
+      if (depth >= 0 || index(code, mark)) {
+        gsub(dstr, "", code); gsub(sstr, "", code)
+        # Then the comments, whose brackets would close the list early: /* */, //, and # (hash files).
+        gsub("/[*]([^*]|[*]+[^*/])*[*]+/", "", code); sub("/[*].*", "", code); sub("//.*", "", code)
+        if (hash) sub("(^|[[:space:]])#.*", "", code)
+      } else code = ""
+      for (i = 1; i <= length(code); i++) {
+        c = substr(code, i, 1)
+        if (c == mark) { if (depth < 0) depth = 0 }
+        else if (depth >= 0 && (c == "(" || c == "[" || c == "{")) depth++
+        else if (depth >= 0 && (c == ")" || c == "]" || c == "}")) depth--
+      }
+      rustc_open = seen_rustc && (cargo_open || depth >= 0)
+      if (hit && !allowed_now) { gsub(cr, "<CR>", raw); printf "%s:%d: %s\n", file, FNR, raw }
     }' >>"$work/settings" || die "could not scan $file"
 done <"$work/build-files.z"
 if [ -s "$work/settings" ]; then
-  fail "scripts, workflows or bindings set cargo configuration outside a config file (--config, -Z, a .cargo/config write, a CARGO_*/RUST* variable, or WASM_CARGO_ARGS, other than the allowed lines of ADR 0059, 0007 SF-1 and ADR 0032 §1):"
+  fail "scripts, workflows or bindings set cargo configuration outside a config file (--config, -Z, rustc arguments after cargo rustc --, a .cargo/config write, a CARGO_*/RUST* variable, polyjose.jniLibsDir in a .properties file, or WASM_CARGO_ARGS, other than the allowed lines of ADR 0059, 0007 SF-1, ADR 0032 §1 and check-test-vectors-off.sh):"
   sed 's/^/  - /' "$work/settings"
 else
-  echo "ok: no script, workflow or binding passes --config or -Z, writes a cargo config or sets a cargo config variable (bindings/: only the allowed lines of ADR 0059, 0007 SF-1 and ADR 0032 §1)"
+  echo "ok: no script, workflow or binding passes --config, -Z or rustc arguments after cargo rustc --, writes a cargo config, sets a cargo config variable or polyjose.jniLibsDir (only the allowed lines of ADR 0059, 0007 SF-1, ADR 0032 §1 and check-test-vectors-off.sh)"
 fi
 
 # --- Notes: cargo configuration outside the repository (not checked, never fails) ------------------
