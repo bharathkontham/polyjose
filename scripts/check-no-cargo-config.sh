@@ -66,22 +66,29 @@
 #      The `--` rule, and with it a word starting with `@` (an argument file, which `cargo rustc`
 #      hands to rustc without `--`: `cargo rustc --lib @flags.txt`, `"@flags"`), has two parts, in
 #      every file type:
-#      (a) a command line: what follows `rustc` or `rustdoc` on the line of a `cargo` word and on the
-#          lines that continue it (that end in `\`). `--` after `cargo test`, `run`, `clippy` or
-#          `fuzz` is not matched there: what follows goes to the test binary, the program run,
-#          clippy's lint pass or libFuzzer, not into a built artifact;
+#      (a) a command line: what follows a `rustc` or `rustdoc` word on its line, and on the lines
+#          that continue it (that end in `\`) once a `cargo` word (any case: `"$CARGO"`,
+#          `${{ env.CARGO }}`) or a rustc or rustdoc word opened the command. No cargo word is
+#          needed on the rustc line, so cargo through another name is read too (`"${CARGO_BIN}"
+#          rustc -- ...`, `cross rustc -- ...`, `cargo-ndk ... rustc -- ...`; T07 round 2, audit
+#          L-1). `--` after `cargo test`, `run`, `clippy` or `fuzz` is not matched there: what
+#          follows goes to the test binary, the program run, clippy's lint pass or libFuzzer, not
+#          into a built artifact;
 #      (b) an argument list (a Gradle commandLine, a Python argv list, a JavaScript or shell array),
 #          by file, with no bracket or string tracking (feature 0030 T07; four rounds of bracket
 #          tracking each left a way to close a list early): if the file holds a `cargo` word and a
 #          `rustc` or `rustdoc` word anywhere (any case, on any lines, comments and strings
 #          included; quoted, bare, `"/usr/bin/cargo"` or `$cargo` all count, `cargo-ndk`,
-#          `.cargo` and `CARGO_HOME` do not), every line of it that holds a quote followed by `--`
-#          and then anything but a letter, digit, `_` or `-` (`"--"`, `'--'`, `\"--\"`, `"-- -Cx"`),
-#          or a quote followed by `@` (`"@flags"`, `"@" + path`), fails, whatever else is on the
-#          line. A quote is `"` or `'`, and a backtick (a JavaScript template literal) except in
-#          *.sh and *.md files, where it is a command substitution or inline code. This fails
-#          closed: such a `--` or `@` unrelated to cargo fails too (`listOf("--")` after a closed
-#          cargo rustc list, a comment), so a file that needs one either keeps the two words out
+#          `.cargo` and `CARGO_HOME` do not), every line of it that holds a quote, or a quote and
+#          backslashes, or the start of the line, followed by `--` and then anything but a letter,
+#          digit, `_` or `-`, or followed by `@`, fails, whatever else is on the line: `"--"`,
+#          `'--'`, `\"--\"`, `"-- -Cx"`, `"\--"`, `"@flags"`, `"\@flags"`, `"@" + path`, and the
+#          rest of a string continued on the next line (`"\` then `--",`; `"""` then `--"""`;
+#          audit L-2 of T07). A quote is `"` or `'`, and a backtick (a JavaScript template
+#          literal) except in *.sh and *.md files, where it is a command substitution or inline
+#          code. This fails closed: such a `--` or `@` unrelated to cargo fails too (`listOf("--")`
+#          after a closed cargo rustc list, a comment, a line that starts with `-- ` or with an
+#          `@` annotation or decorator), so a file that needs one either keeps the two words out
 #          or has the line allowed below.
 #      Every git-listed file (tracked or untracked, not ignored) is read as text, binary ones too
 #      (the PE fixtures of bindings/node), with its NUL bytes dropped first: one-true-awk (macOS)
@@ -138,20 +145,27 @@
 #   - PATH and the variables not listed above (RUSTUP_HOME, ANDROID_NDK_HOME and other toolchain
 #     or NDK locations), which choose which cargo, rustc or linker runs;
 #   - names, flags or property keys written with escapes or assembled at run time (`"RUST" +
-#     "FLAGS"`, `\u{46}`, `$'\x46'`, a `\` inside a .properties key), and cargo or rustc named
-#     only through something that is not the word (`"$CARGO" rustc`, `exe`, `"car" + "go"`, a
-#     path from the environment: in such a file part (b) of the `--` rule does not apply);
+#     "FLAGS"`, `\u{46}`, `$'\x46'`, a `\` inside a .properties key);
 #   - a `#` line of a heredoc or multi-line string in a *.sh or *.yml file that is handed to a
 #     language where `#` is code, and an extensionless script in such a language (its lines that
 #     start with `#` are skipped);
-#   - `--` or `@` arguments of cargo rustc that are not quoted on their own line in the file that
-#     names cargo and rustc: built at run time (`"-" + "-"`, `"--"`, `"${dd}"`), from a
-#     variable (`"${extra[@]}"`) or another file (an imported constant, a sourced script), unquoted
-#     on a line without the cargo command (an unquoted shell array over several lines, a YAML
-#     block sequence item `- --`, Ruby `%w[...]` or Perl `qw(...)` over several lines, XML
-#     `<arg>--</arg>`, a Groovy slashy string, a YAML folded or plain multi-line `run:` without
-#     `\`), or after a quote kind not listed (a backtick in a *.sh file); and toolchain selection
-#     without RUSTUP_TOOLCHAIN (`cargo +nightly ...`, `rustup override set`, `rustup default`);
+#   - `--` and `@` arguments that neither part of the `--` rule reads (known limits of T07,
+#     documented, not chased: a rule failing every standalone `--` in a file that names cargo and
+#     rustc would fail 58 lines of the current tree):
+#     - with a quoted cargo rustc list on line 1, later lines such as `/--/.source` and
+#       `" --".trim()` (.mjs), `*%w[-- -Cx]` and `%w[ @flags ]` (.rb), `qw(-- -Cx)` (.pl), `/--/`
+#       (.gradle), a YAML flow sequence `--, -Cx]`, an unquoted shell array `-- -Cx)` over several
+#       lines, a YAML block sequence item `- --`, XML `<arg>--</arg>`;
+#     - flags built at run time (`"-" + "-"`, `"\x2d-"`, `String.fromCharCode(45, 45)`,
+#       `"${dd}"`), from a variable (`"${extra[@]}"`) or from another file (an imported constant,
+#       a sourced script);
+#     - cargo or rustc named only indirectly in a file (`process.env.CARGO`, `cargoBin`, `exe`,
+#       `"car" + "go"`, `"rust" + "c"`, a path from the environment): part (b) needs both words;
+#     - a backtick-quoted `--` in a *.sh file (a `node -e '...'` script) or a *.md file (the
+#       Markdown exemption of the backtick), and a YAML folded or plain multi-line `run:` without
+#       `\`;
+#   - toolchain selection without RUSTUP_TOOLCHAIN (`cargo +nightly ...`, `rustup override set`,
+#     `rustup default`);
 #   - a name and its `=` or `:` on different LF lines, Dockerfile `ENV NAME value` and Makefile
 #     `NAME ?= value`;
 #   - files outside scripts/, .github/ and bindings/ that a scanned script sources or runs, and the
@@ -163,8 +177,6 @@
 #     `./gradlew test`, run only when bindings/kotlin/test.sh is missing, does not call it);
 #   - a `#` line inside a multi-line quoted string of the shell script itself (code to the shell
 #     when it is run as code later, e.g. by `eval`), not only text handed to another language;
-#   - cargo through a front end that is not the `cargo` word: `cargo-ndk ndk ... rustc -- ...` and
-#     `cross rustc -- ...` (`cargo ndk ... rustc --lib -- -Cx` is read);
 #   - a workflow step's PowerShell backtick or cmd `^` line continuation (only `\` continues a
 #     cargo command), lower-case action inputs such as `with: rustflags:`, and a name split by a
 #     backslash-newline in a shell script;
@@ -177,8 +189,10 @@
 # .mk, .bash, .zsh) are read, so a commented-out assignment there fails, as does a `#` line in a
 # listed type when it continues a line ending in `\`; a guarded name as inline code (in backticks)
 # fails outside *.md files; on a cargo rustc or rustdoc line, a trailing comment word starting with
-# `@` fails; and in a file that names cargo and rustc or rustdoc, every quoted `--` or `@` fails,
-# also one in a comment, in prose or in a call that has nothing to do with cargo.
+# `@` fails; a standalone `--` after a rustc or rustdoc word fails without any cargo word too (a
+# direct rustc call, prose on a code line); and in a file that names cargo and rustc or rustdoc,
+# every quoted `--` or `@` fails, also one in a comment, in prose or in a call that has nothing to
+# do with cargo, as does a line starting with `-- ` or `@`.
 # Changes to scripts/, .github/, all of bindings/ (bindings/kotlin and bindings/swift included) and
 # rust-toolchain.toml go through owner review for that reason. The script prints a note for configs
 # and variables it finds outside the repository, without failing.
@@ -236,8 +250,8 @@ cargo_configs "$work/found.z" filesystem 1
 if [ -s "$work/configs" ]; then
   fail "cargo config files in the repository (found by: tracked/untracked/ignored = git, filesystem = find):"
   sort "$work/configs" | awk -F '\t' '
-    $1 != last { if (NR > 1) printf "\n"; printf "  - %s (%s", $1, $2; last = $1; next }
-    { printf ", %s", $2 } END { if (NR) printf ")\n" }'
+    $1 != last { if (NR > 1) print out ")"; out = "  - " $1 " (" $2; last = $1; next }
+    { out = out ", " $2 } END { if (NR) print out ")" }'
 else
   echo "ok: no .cargo/config or .cargo/config.toml anywhere in the repository (git: tracked, untracked, ignored; filesystem)"
 fi
@@ -346,9 +360,10 @@ while IFS= read -r -d '' file; do
       dashdash = "(^|[^A-Za-z0-9_-])--([^A-Za-z0-9_-]|$)"
       # A word starting with `@`: an argument file that cargo rustc and rustdoc hand to rustc.
       atword = "(^|[[:space:]\"" sq "\\\\])@"
-      # Part (b) of the `--` rule (see the header): a quote, then `--` that ends there, or `@`.
+      # Part (b) of the `--` rule (see the header): a quote and any backslashes, or the start of the
+      # line, then `--` that ends there, or `@`.
       quote = "[\"" sq ((shell || md) ? "" : bt) "]"
-      arglist = quote "(--([^A-Za-z0-9_-]|$)|@)"
+      arglist = "(^|" quote "\\\\*)(--([^A-Za-z0-9_-]|$)|@)"
       jnilibs = "^[[:space:]]*polyjose[.]jniLibsDir([=:[:space:]\\\\]|$)"
       # The allowed lines of this file (the path is everything before the first tab).
       n = split(ENVIRON["ALLOWED"], entries, "\n"); nallowed = 0
@@ -387,13 +402,16 @@ while IFS= read -r -d '' file; do
       # (a) of the `--` rule: rustc arguments after a standalone `--` of `cargo rustc` or `cargo
       # rustdoc`, or in an `@` argument file, on its line and on the lines that continue it.
       after = in_cargo ? live : ""
-      if (match(live, cargo)) after = after " " substr(live, RSTART + RLENGTH - 1)
+      if (match(tolower(live), cargo)) after = after " " substr(live, RSTART + RLENGTH - 1)
       tail = ""
       if (rustc_open) tail = after
       else if (match(after, rustcw)) tail = substr(after, RSTART + RLENGTH - 1)
       if (tail ~ dashdash || tail ~ atword) hit = 1
-      seen_rustc = rustc_open || after ~ rustcw
-      cargo_open = prev_backslash && (in_cargo || live ~ cargo)
+      # Also after a rustc or rustdoc word with no cargo word before it (cargo through a variable:
+      # `"$CARGO_BIN" rustc -- ...`), and such a line opens a continued command as cargo does.
+      if (match(live, rustcw)) { tail = substr(live, RSTART + RLENGTH - 1); if (tail ~ dashdash || tail ~ atword) hit = 1 }
+      seen_rustc = rustc_open || live ~ rustcw
+      cargo_open = prev_backslash && (in_cargo || tolower(live) ~ cargo || live ~ rustcw)
       rustc_open = seen_rustc && cargo_open
       # (b): whether the file names cargo and rustc or rustdoc is known only at its end, so a line
       # with a quoted `--` or `@` is kept until then; every other hit is kept too, to print in order.
@@ -401,7 +419,7 @@ while IFS= read -r -d '' file; do
       if (low ~ cargo) has_cargo = 1
       if (low ~ rustcw) has_rustc = 1
       if (!allowed_now && (hit || raw ~ arglist)) {
-        gsub(cr, "<CR>", raw); report[++nreport] = sprintf("%s:%d: %s", file, FNR, raw); by_file_only[nreport] = !hit
+        gsub(cr, "<CR>", raw); report[++nreport] = file ":" FNR ": " raw; by_file_only[nreport] = !hit
       }
     }
     END {

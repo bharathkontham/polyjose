@@ -750,13 +750,15 @@ expect_fail "the check-test-vectors-off.sh line twice" "^  - scripts/check-test-
 new_case r2-utf8-lookalikes-pass
 plant bindings/node/t06.js 'caf\303\205 \342\204\205 \342\200\246 \303\205\302\250 x\n'
 expect_pass "UTF-8 text with bytes next to the NEL, LS and PS sequences but no line break"
+# The `--` lines are indented: since T07 round 2 (audit L-2) a line that starts with `--` fails in a
+# file that names cargo and rustc.
 new_case r2-continuation-breaks-pass
 append_to scripts/t06.sh "cargo $rustc_word --lib \\
   # a comment line ends the continuation
   $dd not-a-cargo-argument
 cargo $rustc_word --lib \\
 
-$dd another"
+  $dd another"
 expect_pass "$dd after a comment line or a blank line that ends a cargo $rustc_word continuation (a separate command)"
 
 # H. Fix round 3 (feature 0030 T06: follow-up audit of 0a7be3ae F1-F5, bug B02, round-2 tester (c)).
@@ -992,8 +994,11 @@ plant bindings/wasm/js/t07.mjs 'run([%s, "build", "%s", "x"]);\nimport w from "%
 plant bindings/kotlin/t07.kts 'commandLine(%s, "build",\n  "%s", "x")\nval at = "%sflags"\n' "$qcargo" "$dd" "$at"
 expect_pass "a quoted cargo with \"$dd\" and a quoted $at in .mjs and .kts files without a $rustc_word or $rustdoc_word word"
 new_case k-no-cargo-pass
-plant bindings/node/scripts/t07.mjs 'spawnSync("%s", ["%s", "-C", "x"]);\n' "$rustc_word" "$dd"
-expect_pass "a quoted \"$dd\" in a $rustc_word list of a file without a cargo word"
+plant bindings/node/scripts/t07.mjs 'spawnSync("%s", [\n  "%s", "-C", "x"]);\n' "$rustc_word" "$dd"
+expect_pass "a quoted \"$dd\" on the line after a $rustc_word word, in a file without a cargo word"
+# On the rustc line itself it fails since T07 round 2 (audit L-1: no cargo word needed on the line).
+plant_case k-no-cargo-same-line bindings/node/scripts/t07.mjs "1: spawnSync" "a quoted \"$dd\" after a $rustc_word word on its line, no cargo word" \
+  'spawnSync("%s", ["%s", "-C", "x"]);\n' "$rustc_word" "$dd"
 
 # L. T07 tester pins: the mechanics of the file-level rule (hits kept until the end of the file).
 # The words may come after the quoted `--` (the verdict is made at the end of the file).
@@ -1053,6 +1058,50 @@ else
   sed 's/^/       /' "$scratch/out"
   tests_failed=$((tests_failed + 1))
 fi
+
+# M. T07 round 2 (security audit of the file-level rule: M-1, L-1, L-2).
+# M-1: a reported line is joined with `:`, not sprintf'd (mawk stops on a sprintf over ~8 KB).
+xs=$(printf '%9000s' ''); xs=${xs// /x}
+new_case m-long-pass
+plant bindings/x/bin.node 'MZ%s"%syyy\n' "$xs" "$at"
+expect_pass "a 9000-byte line with a quoted $at in a file without cargo and $rustc_word words (mawk: no sprintf limit)"
+new_case m-long-hit
+plant bindings/node/scripts/t07l.mjs 'run([%s, "%s",\n%s"%s", "-Cx"]);\nexport %s=%s\n' "$qcargo" "$rustc_word" "$xs" "$dd" "$rf" "$xs"
+expect_fail "a 9000-byte line with a quoted $dd in a cargo $rustc_word file (reported, exit 1 not 2)" \
+  "^  - bindings/node/scripts/t07l\\.mjs:2: x+\"$dd\"" "$rule2"
+expect_also "and a 9000-byte $rf assignment line" "^  - bindings/node/scripts/t07l\\.mjs:3: export $rf=x+$"
+# L-1: cargo through a variable on a shell or workflow line (any case, or no cargo word at all).
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-cargo-var scripts/t07m.sh "1: \"[$]CARGO\" $rustc_word" "\"\$CARGO\" $rustc_word --lib $dd -C debuginfo=2" \
+  '"$CARGO" %s --lib %s -C debuginfo=2\n' "$rustc_word" "$dd"
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-cargo-bin scripts/t07m.sh "1: \"[$][{]CARGO_BIN[}]\" $rustc_word" "\"\${CARGO_BIN}\" $rustc_word --lib $dd -Cx (no cargo word)" \
+  '"${CARGO_BIN}" %s --lib %s -Cx\n' "$rustc_word" "$dd"
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-gha-env "$yml" "1:       - run: " "\${{ env.CARGO }} $rustc_word --lib $dd -Cx in a workflow" \
+  '      - run: ${{ env.CARGO }} %s --lib %s -Cx\n' "$rustc_word" "$dd"
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-cargo-var-at scripts/t07m.sh "1: [$]CARGO $rustc_word" "\$CARGO $rustc_word --lib ${at}flags" \
+  '$CARGO %s --lib %sflags\n' "$rustc_word" "$at"
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant_case m-rustc-continuation scripts/t07m.sh "2:   $dd -Cx" "$dd on the continuation line of \"\${CARGO_BIN}\" $rustc_word --lib \\" \
+  '"${CARGO_BIN}" %s --lib \\\n  %s -Cx\n' "$rustc_word" "$dd"
+new_case m-rustc-lookalikes-pass
+# shellcheck disable=SC2016 # the planted text, not expansions
+plant scripts/t07m.sh '%s --version\n%s -vV | sed -n "s/^host: //p"\nrust=$(%s --print sysroot)\n"$CARGO" test -p a %s --nocapture\n' \
+  "$rustc_word" "$rustc_word" "$rustc_word" "$dd"
+expect_pass "$rustc_word --version, -vV and --print sysroot lines, and \"\$CARGO\" test ... $dd"
+# L-2: a quote, backslashes, then `--` or `@`, and the rest of a string continued on the next line.
+plant_case m-l2-backslash-dd bindings/node/scripts/t07n.mjs "2:   \"[\\\\]$dd\"" "a quoted \\$dd in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-backslash-at bindings/node/scripts/t07n.mjs "2:   \"[\\\\]${at}flags" "a quoted \\${at}flags.txt in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\%sflags.txt"]);\n' "$qcargo" "$rustc_word" "$at"
+plant_case m-l2-continued-py bindings/node/scripts/t07n.py "3: $dd\"" "a Python string continued by \\ onto a line starting with $dd" \
+  'cmd = [%s, "%s", "--lib",\n  "\\\n%s", "-Cx"]\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-continued-mjs bindings/node/scripts/t07n.mjs "3: $dd\"" "a JavaScript string continued by \\ onto a line starting with $dd" \
+  'run([%s, "%s", "--lib",\n  "\\\n%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-kts-raw bindings/kotlin/t07n.gradle.kts "2: $dd\"\"\"" "a Kotlin \"\"\" string whose next line starts with $dd" \
+  'tasks.register<Exec>("b") { commandLine(%s, "%s", """\n%s""".trim(), "-Cx") }\n' "$qcargo" "$rustc_word" "$dd"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
