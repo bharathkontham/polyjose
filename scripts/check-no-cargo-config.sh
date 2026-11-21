@@ -35,7 +35,9 @@
 #      `RUSTUP_TOOLCHAIN` (it overrides the toolchain rust-toolchain.toml pins).
 #      Lines: each LF-ended line is also split at CR, NEL, LS and PS (U+0085, U+2028, U+2029 in
 #      UTF-8), which end a line in Java, Kotlin, Swift, JavaScript or YAML (bug B01: `// note<CR>`
-#      then code), and every piece is tested; a hit prints the whole line, a CR shown as `<CR>`.
+#      then code), and every piece is tested (the assignment rules and part (a) of the `--` rule
+#      read the pieces joined by spaces; part (b) reads the whole line, where each of these breaks
+#      also counts as a line start); a hit prints the whole line, a CR shown as `<CR>`.
 #      The scan stops (exit status 2) if the awk in use does not build and split at those bytes as
 #      expected (an awk in a multibyte locale).
 #      A line starting with `#` is skipped as a comment only in *.sh, *.yml, *.yaml, *.toml and
@@ -80,13 +82,14 @@
 #          `rustc` or `rustdoc` word anywhere (any case, on any lines, comments and strings
 #          included; quoted, bare, `"/usr/bin/cargo"` or `$cargo` all count, `cargo-ndk`,
 #          `.cargo` and `CARGO_HOME` do not), every line of it that holds a quote, or a quote and
-#          backslashes, or the start of the line, followed by `--` and then anything but a letter,
-#          digit, `_` or `-`, or followed by `@`, fails, whatever else is on the line: `"--"`,
-#          `'--'`, `\"--\"`, `"-- -Cx"`, `"\--"`, `"@flags"`, `"\@flags"`, `"@" + path`, and the
-#          rest of a string continued on the next line (`"\` then `--",`; `"""` then `--"""`;
-#          audit L-2 of T07). A quote is `"` or `'`, and a backtick (a JavaScript template
-#          literal) except in *.sh and *.md files, where it is a command substitution or inline
-#          code. This fails closed: such a `--` or `@` unrelated to cargo fails too (`listOf("--")`
+#          backslashes, or the start of the line or a CR, NEL, LS or PS in it, followed by `--` and
+#          then anything but a letter, digit, `_` or `-`, or followed by `@`, fails, whatever else
+#          is on the line: `"--"`, `'--'`, `\"--\"`, `"-- -Cx"`, `"\--"`, `"@flags"`, `"\@flags"`,
+#          `"@" + path`, and the rest of a string continued on the next line (`"\` then `--",`;
+#          `"""` then `--"""`) or after a CR, LS or PS on its LF line (`"\<CR>--"`, which continue a
+#          string in JavaScript, CR also in Python; audit L-2 of T07 and its re-audit). A quote is
+#          `"` or `'`, and a backtick (a JavaScript template literal) except in *.sh and *.md
+#          files, where it is a command substitution or inline code. This fails closed: such a `--` or `@` unrelated to cargo fails too (`listOf("--")`
 #          after a closed cargo rustc list, a comment, a line that starts with `-- ` or with an
 #          `@` annotation or decorator), so a file that needs one either keeps the two words out
 #          or has the line allowed below.
@@ -164,6 +167,8 @@
 #     - a backtick-quoted `--` in a *.sh file (a `node -e '...'` script) or a *.md file (the
 #       Markdown exemption of the backtick), and a YAML folded or plain multi-line `run:` without
 #       `\`;
+#     - a YAML double-quoted scalar continued with `\`: YAML drops the next line's indentation, so
+#       an indented `--"` there is not read (only a `--` at the very start of a line is);
 #   - toolchain selection without RUSTUP_TOOLCHAIN (`cargo +nightly ...`, `rustup override set`,
 #     `rustup default`);
 #   - a name and its `=` or `:` on different LF lines, Dockerfile `ENV NAME value` and Makefile
@@ -189,10 +194,14 @@
 # .mk, .bash, .zsh) are read, so a commented-out assignment there fails, as does a `#` line in a
 # listed type when it continues a line ending in `\`; a guarded name as inline code (in backticks)
 # fails outside *.md files; on a cargo rustc or rustdoc line, a trailing comment word starting with
-# `@` fails; a standalone `--` after a rustc or rustdoc word fails without any cargo word too (a
-# direct rustc call, prose on a code line); and in a file that names cargo and rustc or rustdoc,
-# every quoted `--` or `@` fails, also one in a comment, in prose or in a call that has nothing to
-# do with cargo, as does a line starting with `-- ` or `@`.
+# `@` fails; a standalone `--` or a word starting with `@` after a rustc or rustdoc word fails
+# without any cargo word on the line too (a direct rustc call, prose on a code line); and in a file
+# that names cargo and rustc or rustdoc, every quoted `--` or `@` fails, also one in a comment, in
+# prose or in a call that has nothing to do with cargo, as does a line starting with `-- ` or `@`.
+# Examples that fail for these reasons: `Built by rustc for @polyjose/node.` (any file), `rustc
+# --version \` then `  && cargo test -- --nocapture`, `echo rustc; cargo doc -- x`,
+# `rustc -vV | grep -- host`, and `@testable import Polyjose` at column 0 of a Swift file that
+# names cargo and rustc.
 # Changes to scripts/, .github/, all of bindings/ (bindings/kotlin and bindings/swift included) and
 # rust-toolchain.toml go through owner review for that reason. The script prints a note for configs
 # and variables it finds outside the repository, without failing.
@@ -360,10 +369,10 @@ while IFS= read -r -d '' file; do
       dashdash = "(^|[^A-Za-z0-9_-])--([^A-Za-z0-9_-]|$)"
       # A word starting with `@`: an argument file that cargo rustc and rustdoc hand to rustc.
       atword = "(^|[[:space:]\"" sq "\\\\])@"
-      # Part (b) of the `--` rule (see the header): a quote and any backslashes, or the start of the
-      # line, then `--` that ends there, or `@`.
+      # Part (b) of the `--` rule (see the header): a quote and any backslashes, the start of the
+      # line or a CR, NEL, LS or PS, then `--` that ends there, or `@`.
       quote = "[\"" sq ((shell || md) ? "" : bt) "]"
-      arglist = "(^|" quote "\\\\*)(--([^A-Za-z0-9_-]|$)|@)"
+      arglist = "(^|" breaks "|" quote "\\\\*)(--([^A-Za-z0-9_-]|$)|@)"
       jnilibs = "^[[:space:]]*polyjose[.]jniLibsDir([=:[:space:]\\\\]|$)"
       # The allowed lines of this file (the path is everything before the first tab).
       n = split(ENVIRON["ALLOWED"], entries, "\n"); nallowed = 0

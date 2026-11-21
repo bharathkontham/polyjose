@@ -1102,6 +1102,16 @@ plant_case m-l2-continued-mjs bindings/node/scripts/t07n.mjs "3: $dd\"" "a JavaS
   'run([%s, "%s", "--lib",\n  "\\\n%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
 plant_case m-l2-kts-raw bindings/kotlin/t07n.gradle.kts "2: $dd\"\"\"" "a Kotlin \"\"\" string whose next line starts with $dd" \
   'tasks.register<Exec>("b") { commandLine(%s, "%s", """\n%s""".trim(), "-Cx") }\n' "$qcargo" "$rustc_word" "$dd"
+# Re-audit of 7295f00c: a CR, NEL, LS or PS inside the LF line also counts as a line start (they
+# continue a string in JavaScript; CR also in Python).
+plant_case m-l2-cr-dd bindings/node/scripts/t07o.mjs "2:   \"[\\\\]<CR>$dd\"" "a quoted \\ then a CR then $dd in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\\r%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-nel-dd bindings/node/scripts/t07o.mjs "2:   \"[\\\\].+$dd\"" "a quoted \\ then a NEL then $dd in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\\302\205%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-ls-dd bindings/node/scripts/t07o.mjs "2:   \"[\\\\].+$dd\"" "a quoted \\ then an LS (U+2028) then $dd in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\\342\200\250%s", "-Cx"]);\n' "$qcargo" "$rustc_word" "$dd"
+plant_case m-l2-ps-at bindings/node/scripts/t07o.mjs "2:   \"[\\\\].+${at}flags" "a quoted \\ then a PS (U+2029) then ${at}flags in a cargo $rustc_word list" \
+  'run([%s, "%s", "--lib",\n  "\\\342\200\251%sflags"]);\n' "$qcargo" "$rustc_word" "$at"
 
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
