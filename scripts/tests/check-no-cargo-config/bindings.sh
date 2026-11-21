@@ -995,5 +995,64 @@ new_case k-no-cargo-pass
 plant bindings/node/scripts/t07.mjs 'spawnSync("%s", ["%s", "-C", "x"]);\n' "$rustc_word" "$dd"
 expect_pass "a quoted \"$dd\" in a $rustc_word list of a file without a cargo word"
 
+# L. T07 tester pins: the mechanics of the file-level rule (hits kept until the end of the file).
+# The words may come after the quoted `--` (the verdict is made at the end of the file).
+plant_case l-words-after bindings/node/scripts/t07b.mjs "1: x\\(\"$dd\"\\)" "a quoted $dd line above the cargo and $rustc_word words of its file" \
+  'x("%s")\nconst a = %s;\nconst b = "%s";\n' "$dd" "$qcargo" "$rustc_word"
+plant_case l-rustdoc-at bindings/kotlin/t07b.kts "2:   \"${at}flags\"" "a quoted ${at}flags in a file with cargo and $rustdoc_word" \
+  'commandLine(%s, "%s",\n  "%sflags")\n' "$qcargo" "$rustdoc_word" "$at"
+# Line breaks other than LF, and NUL, do not hide the quoted `--` from the rule.
+plant_case l-cr bindings/node/scripts/t07c.mjs "1: const a = \\[.*<CR>x\\(\"$dd\"\\)" "a CR before a quoted $dd on one line (reported as <CR>)" \
+  'const a = [%s, "%s"];\rx("%s")\n' "$qcargo" "$rustc_word" "$dd"
+plant_case l-nel bindings/node/scripts/t07d.mjs "1: const a = \\[.*x\\(\"$dd\"\\)" "a NEL before a quoted $dd on one line" \
+  'const a = [%s, "%s"];\302\205x("%s")\n' "$qcargo" "$rustc_word" "$dd"
+plant_case l-ls bindings/node/scripts/t07e.mjs "1: const a = \\[.*\"$dd\"" "an LS before a quoted $dd on one line" \
+  'const a = [%s, "%s"];\342\200\250"%s"\n' "$qcargo" "$rustc_word" "$dd"
+plant_case l-nul bindings/node/scripts/t07f.mjs "2: \"$dd\"" "a quoted $dd with a NUL byte inside (dropped before the scan)" \
+  'const a = [%s, "%s"];\n"-\0-"\n' "$qcargo" "$rustc_word"
+# A file with hits of an older rule and of the new rule: all reported, in line order, once each.
+new_case l-mixed
+plant bindings/node/scripts/t07g.py 'x = [%s, "%s",\n  "%s", "-Cx"]\nexport %s=-Cy\ny = "%sf"\ncargo %s %s -Cz\n' "$qcargo" "$rustc_word" "$dd" "$rf" "$at" "$rustc_word" "$dd"
+expect_fail "a file with a quoted $dd, an assignment, a quoted $at and a cargo command line with $dd" \
+  "^  - bindings/node/scripts/t07g\\.py:2: " "$rule2"
+tests_run=$((tests_run + 1))
+got=$(grep '^  - bindings/node/scripts/t07g.py:' "$scratch/out" | sed 's/^[^:]*:\([0-9]*\):.*/\1/' | tr '\n' ' ')
+if [ "$got" = "2 3 4 5 " ]; then
+  echo "ok   - the four hits are reported in line order, each once"
+else
+  echo "FAIL - the four hits of t07g.py: wanted lines '2 3 4 5 ', got '$got'"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+# Without cargo and rustc words the quoted `--` is not reported, but an older rule's hit on another
+# line of the file still is.
+new_case l-older-without-words
+plant bindings/node/scripts/t07h.mjs 'run(["build", "%s"]);\nexport %s=-Cx\n' "$dd" "$rf"
+expect_fail "an assignment in a file whose quoted $dd has no cargo and $rustc_word words" "^  - bindings/node/scripts/t07h\\.mjs:2: export $rf" "$rule2"
+tests_run=$((tests_run + 1))
+if ! grep -q 't07h\.mjs:1:' "$scratch/out"; then
+  echo "ok   - and its quoted $dd line is not reported"
+else
+  echo "FAIL - the quoted $dd line of t07h.mjs is reported without cargo and $rustc_word words"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+# The scan stops (exit 2) when the awk does not handle the line-break bytes, and prints no hit as if
+# the scan had read the file: the BEGIN self-check is made to fail in a copy of the gate.
+new_case l-awk-selfcheck
+plant bindings/node/scripts/t07i.mjs 'const a = [%s, "%s"];\n"%s"\nexport %s=-Cx\n' "$qcargo" "$rustc_word" "$dd" "$rf"
+edit_in scripts/check-no-cargo-config.sh 'if (cr != "\r"' 'if (cr == "\r"'
+tests_run=$((tests_run + 1))
+rc=0
+(cd "$case_dir" && run_gate) >"$scratch/out" 2>&1 || rc=$?
+if [ "$rc" = 2 ] && grep -q 'does not handle the line-break bytes' "$scratch/out" \
+  && ! grep -q 't07i\.mjs:' "$scratch/out" && ! grep -q 'rustc arguments after' "$scratch/out"; then
+  echo "ok   - a failing awk self-check exits 2 and reports no hit of the file as a result"
+else
+  echo "FAIL - a failing awk self-check: exit $rc (expected 2), no hit lines expected"
+  sed 's/^/       /' "$scratch/out"
+  tests_failed=$((tests_failed + 1))
+fi
+
 echo "$((tests_run - tests_failed))/$tests_run cases passed"
 completed=1; exit "$((tests_failed > 0))"
